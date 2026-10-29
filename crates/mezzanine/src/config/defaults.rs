@@ -1080,6 +1080,8 @@ approval_policy = "ask"
 sandbox = "bubblewrap"
 # Optional pane-derived variable names shared by native and sandboxed actions.
 # Values remain redacted and are never inherited from the Mez daemon environment.
+# Native /cd with no operand or ~/ uses this workload's forwarded HOME.
+# Omitting HOME requires an explicit directory; pane HOME is not a fallback.
 env_whitelist = ["PATH", "HOME", "SHELL", "TMPDIR", "XDG_CACHE_HOME"]
 # Add names such as `ACME_HOME` here only when the workload requires them.
 # Managed skills/macros access is additive; it does not count as an explicit

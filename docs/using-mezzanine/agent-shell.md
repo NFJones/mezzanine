@@ -20,10 +20,16 @@ the pane's process screen. While visible, ordinary pane input goes to the agent
 shell. Multiplexer bindings, pane navigation, resizing, and copy mode remain
 available. Use `Ctrl+A ?` to inspect effective bindings if yours differ.
 
-The agent works from the pane working directory, its conversation state,
+The agent initially works from the pane working directory, its conversation state,
 configured instructions, and explicit action results. It does not passively
 receive your full terminal screen, scrollback, or other panes. Include relevant
 output in your request or ask the agent to inspect it explicitly.
+
+In native shell mode, use `/cd [directory]` while idle to change only the
+agent's workspace and future native launch directories. The existing pane
+process stays in its own directory. See [native workspace navigation](../agent/commands-skills-and-macros.md#change-the-native-workspace)
+for literal path syntax, authorized context preparation and cancellation.
+The optional `--sync-pane` replacement form is currently unavailable.
 
 Type a request and press Enter. Use `Ctrl+J` for a newline without submitting.
 In native shell mode, `Ctrl+V` pastes host clipboard text into the prompt,

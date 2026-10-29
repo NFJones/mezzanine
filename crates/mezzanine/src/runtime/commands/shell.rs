@@ -516,6 +516,51 @@ impl RuntimeSessionService {
             ));
         }
         let slash_invocation = parse_slash_command(input).ok().flatten();
+        if let Some(invocation) = slash_invocation
+            .as_ref()
+            .filter(|invocation| invocation.name == "cd")
+        {
+            if origin == AgentShellCommandOrigin::TrustedPaneStatusAction {
+                return Err(MezError::forbidden(
+                    "native navigation requires authenticated user input",
+                ));
+            }
+            if let Err(error) = self.check_native_directory_request(&pane_id, &invocation.args) {
+                return Ok(agent_shell_invalid_command_response_json(
+                    &pane_id, input, &error,
+                ));
+            }
+        }
+        if self.native_directory_command_is_pending(&pane_id) {
+            if slash_invocation
+                .as_ref()
+                .is_some_and(|invocation| invocation.name == "stop")
+            {
+                self.agent.cancel_agent_command(&pane_id);
+                let outcome = AgentShellCommandOutcome::Mutated {
+                    command: "stop".to_string(),
+                    body: "native navigation cancelled; no prepared directory was adopted"
+                        .to_string(),
+                    visibility: AgentShellVisibility::Visible,
+                };
+                return Ok(runtime_agent_shell_command_response_json(
+                    &pane_id,
+                    input,
+                    Some(&outcome),
+                ));
+            }
+            if slash_invocation.as_ref().is_none_or(|invocation| {
+                invocation.effect != mez_agent::slash::SlashCommandEffect::ReadOnly
+            }) {
+                return Ok(agent_shell_invalid_command_response_json(
+                    &pane_id,
+                    input,
+                    &MezError::conflict(
+                        "native navigation is active; use /stop before another prompt or mutation",
+                    ),
+                ));
+            }
+        }
         if self.agent_is_compacting(&pane_id)
             && slash_invocation.as_ref().is_some_and(|invocation| {
                 !matches!(
@@ -670,12 +715,12 @@ impl RuntimeSessionService {
             }
         };
         if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) = outcome.as_ref()
-            // Ordinary control reads retain their inline result. Saved fork is
-            // the sole control mutation accepted asynchronously: its result is
+            // Ordinary control reads retain their inline result. Explicit worker
+            // mutations use the same asynchronous command claim; their result is
             // delivered through the same visible shell and exact command claim.
             // Never conflate trusted status actions with authenticated control.
             && (origin.is_authenticated_primary_input()
-                || (matches!(command.as_str(), "fork" | "reset-status")
+                || (matches!(command.as_str(), "fork" | "reset-status" | "cd")
                     && origin == AgentShellCommandOrigin::AuthenticatedControlRequest))
             // The deferred decision is service-state aware: a command whose read
             // cannot complete off the actor keeps its synchronous body.
@@ -871,6 +916,13 @@ impl RuntimeSessionService {
                         input,
                         Some(&resume_outcome),
                     )
+                } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
+                    outcome.as_ref()
+                    && command == "cd"
+                {
+                    return Err(MezError::invalid_state(
+                        "native navigation requires the deferred command executor",
+                    ));
                 } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
                     outcome.as_ref()
                     && command == "fork"

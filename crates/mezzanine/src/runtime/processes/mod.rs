@@ -55,7 +55,7 @@ pub(crate) use pane_process_identity::{
     RuntimePaneShellIdentityUnknown, RuntimeShellIdentityUnknownReason,
 };
 #[cfg(test)]
-pub(crate) use spawned_shell::execute_native_shell_dispatch;
+pub(crate) use spawned_shell::{SpawnedShellExecutor, execute_native_shell_dispatch};
 pub(crate) use spawned_shell::{
     execute_native_shell_dispatch_with_progress, execute_pane_status_provider_launch,
 };

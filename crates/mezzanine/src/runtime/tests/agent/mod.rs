@@ -18,6 +18,7 @@ mod mcp_schema;
 mod model_selection;
 mod native_directory;
 mod native_instructions;
+mod native_navigation;
 mod overlay_refresh;
 mod presentation;
 mod prompt;

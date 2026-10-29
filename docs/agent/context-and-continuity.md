@@ -63,7 +63,9 @@ For authenticated `agent/shell/command` control requests, a stored `/fork`
 acknowledges acceptance with a mutation result and null body/turn. Observe the
 visible source shell for eventual success or failure; that initial response is
 not completion. Reusing its idempotency key returns the original acknowledgment
-without creating another fork. Other control commands keep their inline results.
+without creating another fork. Native `/cd` also acknowledges deferred acceptance;
+observe the visible shell
+for its final navigation result. Acceptance alone does not prove cwd changed.
 When manual compaction folds a selective summary into its prefix, it uses that
 summary once instead of resending the covered raw text. Later summaries stay in
 the retained history. Selection preserves whole turns and whole ranges, and its

@@ -364,6 +364,12 @@ pub(crate) struct RuntimeAgentComponent {
     agent_shell_mode: ShellMode,
     /// Explicit pane-local shell execution mode overrides.
     agent_shell_mode_overrides: BTreeMap<String, ShellMode>,
+    /// Retained mode incarnation tokens fence navigation across ABA changes.
+    native_directory_mode_epochs: BTreeMap<String, std::sync::Arc<()>>,
+    /// Default-mode incarnation independently invalidates captured requests.
+    native_directory_default_mode_epoch: std::sync::Arc<()>,
+    /// Acceptance-frozen navigation inputs, bounded to one retained entry per pane.
+    native_directory_commands: BTreeMap<String, crate::runtime::commands::NativeDirectoryWork>,
     /// Mode-specific startup state for runtime-created agent panes.
     agent_surface_startups: BTreeMap<String, startup::RuntimeAgentSurfaceStartup>,
     /// User-controlled host power policy for active agent turns.
@@ -950,6 +956,123 @@ impl RuntimeAgentComponent {
             .unwrap_or_default()
     }
 
+    /// Captures pane/default mode lifetimes; retained Arc identity cannot ABA
+    /// while an outstanding worker still owns its original tokens.
+    pub(crate) fn native_directory_mode_epoch(
+        &mut self,
+        pane: &str,
+    ) -> (std::sync::Arc<()>, std::sync::Arc<()>) {
+        (
+            self.native_directory_mode_epochs
+                .entry(pane.to_string())
+                .or_default()
+                .clone(),
+            self.native_directory_default_mode_epoch.clone(),
+        )
+    }
+
+    /// Compares mode lifetimes without a saturating numeric epoch or authority
+    /// from configuration text, saved labels or worker-reported mode values.
+    pub(crate) fn native_directory_mode_is_current(
+        &self,
+        pane: &str,
+        local: &std::sync::Arc<()>,
+        default: &std::sync::Arc<()>,
+    ) -> bool {
+        self.native_directory_mode_epochs
+            .get(pane)
+            .is_some_and(|current| std::sync::Arc::ptr_eq(current, local))
+            && std::sync::Arc::ptr_eq(&self.native_directory_default_mode_epoch, default)
+    }
+
+    /// Retains acceptance inputs under the exact newly allocated command claim.
+    pub(crate) fn retain_native_directory_work(
+        &mut self,
+        pane: &str,
+        generation: u64,
+        mut work: crate::runtime::commands::NativeDirectoryWork,
+    ) {
+        work.operation = generation;
+        self.native_directory_commands
+            .insert(pane.to_string(), work);
+    }
+
+    /// Returns only the requested acceptance generation, never rebasing a path.
+    pub(crate) fn native_directory_work(
+        &self,
+        pane: &str,
+        generation: u64,
+    ) -> Option<crate::runtime::commands::NativeDirectoryWork> {
+        self.native_directory_commands
+            .get(pane)
+            .filter(|work| work.operation == generation)
+            .cloned()
+    }
+
+    /// Reports active navigation using the existing lifecycle's current claim.
+    pub(crate) fn native_directory_command_is_pending(&self, pane: &str) -> bool {
+        self.native_directory_commands
+            .get(pane)
+            .is_some_and(|work| {
+                self.agent_command_lifecycles.get(pane).is_some_and(|life| {
+                    life.command_id == work.operation
+                        && life.conversation_id == work.conversation
+                        && !life.phase.is_terminal()
+                })
+            })
+    }
+
+    /// Refuses navigation while turns or retained native/provider dependencies
+    /// still use this pane, including workers whose ledger turn already settled.
+    pub(crate) fn native_directory_dependencies_active(&self, pane: &str) -> bool {
+        let turns = self
+            .agent_turn_ledger
+            .turns()
+            .iter()
+            .filter(|turn| turn.pane_id == pane)
+            .collect::<Vec<_>>();
+        let owns = |id: &String| turns.iter().any(|turn| turn.turn_id == *id);
+        turns.iter().any(|turn| {
+            matches!(
+                turn.state,
+                AgentTurnState::Queued | AgentTurnState::Running | AgentTurnState::Blocked
+            )
+        }) || self.agent_compacting_panes.contains_key(pane)
+            || self.agent_remembering_panes.contains_key(pane)
+            || self.pending_agent_compaction_tasks.contains_key(pane)
+            || self
+                .claimed_agent_compaction_tasks
+                .keys()
+                .any(|(owner, _)| owner == pane)
+            || self
+                .pending_manual_compaction_preparations
+                .keys()
+                .any(|(owner, _)| owner == pane)
+            || self
+                .pending_manual_compaction_requests
+                .keys()
+                .any(|(owner, _)| owner == pane)
+            || self.pending_agent_provider_tasks.iter().any(owns)
+            || self.claimed_agent_provider_tasks.keys().any(owns)
+            || self
+                .pending_native_shell_dispatches
+                .keys()
+                .any(|(turn, _)| owns(turn))
+            || self
+                .claimed_native_shell_dispatches
+                .keys()
+                .any(|(turn, _)| owns(turn))
+            || self
+                .pending_approved_external_actions
+                .keys()
+                .any(|(turn, _)| owns(turn))
+            || self
+                .claimed_approved_external_actions
+                .keys()
+                .any(|(turn, _)| owns(turn))
+            || self.pending_agent_provider_persistence.iter().any(owns)
+    }
+
     /// Starts one deferred slash-command claim and returns its generation.
     ///
     /// Generations only move forward, so a stale worker outcome can never be
@@ -970,7 +1093,8 @@ impl RuntimeAgentComponent {
         }
         let generation = self
             .agent_command_claim_generation(pane_id)
-            .saturating_add(1);
+            .checked_add(1)
+            .ok_or_else(|| MezError::invalid_state("interactive command generation exhausted"))?;
         self.agent_command_claim_generations
             .insert(pane_id.to_string(), generation);
         self.agent_command_lifecycles.insert(
@@ -1048,6 +1172,7 @@ impl RuntimeAgentComponent {
             return false;
         }
         lifecycle.phase = phase;
+        self.native_directory_commands.remove(pane_id);
         self.finish_deferred_steering_command(pane_id, conversation_id, command_id, phase);
         true
     }
@@ -1109,6 +1234,7 @@ impl RuntimeAgentComponent {
 
     /// Cancels any non-terminal command whose pane has been removed.
     pub(crate) fn cancel_agent_command(&mut self, pane_id: &str) -> bool {
+        self.native_directory_commands.remove(pane_id);
         self.pending_status_reports
             .retain(|(pane, _), _| pane != pane_id);
         let Some(lifecycle) = self.agent_command_lifecycles.get_mut(pane_id) else {
@@ -1149,6 +1275,7 @@ impl RuntimeAgentComponent {
             self.pending_status_reports
                 .remove(&(pane_id.to_string(), command_id));
             lifecycle.phase = RuntimeAgentCommandLifecyclePhase::Cancelled;
+            self.native_directory_commands.remove(pane_id);
             self.finish_deferred_steering_command(
                 pane_id,
                 conversation_id,
@@ -1162,6 +1289,7 @@ impl RuntimeAgentComponent {
 
     /// Cancels every deferred command during terminal runtime shutdown.
     pub(crate) fn cancel_all_agent_commands(&mut self) -> usize {
+        self.native_directory_commands.clear();
         self.pending_status_reports.clear();
         let mut count = 0usize;
         for lifecycle in self.agent_command_lifecycles.values_mut() {
@@ -4727,6 +4855,7 @@ impl RuntimeSessionService {
     /// Replaces the configured default agent shell execution mode.
     pub(crate) fn set_agent_default_shell_mode(&mut self, mode: ShellMode) {
         self.agent.agent_shell_mode = mode;
+        self.agent.native_directory_default_mode_epoch = std::sync::Arc::new(());
     }
 
     /// Returns an explicit pane-local shell mode override.
@@ -4736,6 +4865,9 @@ impl RuntimeSessionService {
 
     /// Replaces or clears one pane-local shell mode override.
     pub(crate) fn set_agent_shell_mode_override(&mut self, pane_id: &str, mode: Option<ShellMode>) {
+        self.agent
+            .native_directory_mode_epochs
+            .insert(pane_id.to_string(), std::sync::Arc::new(()));
         if let Some(mode) = mode {
             self.agent
                 .agent_shell_mode_overrides
@@ -4756,6 +4888,7 @@ impl RuntimeSessionService {
 
     /// Clears one pane-local shell mode override during pane teardown.
     pub(crate) fn clear_agent_shell_mode_override(&mut self, pane_id: &str) {
+        self.agent.native_directory_mode_epochs.remove(pane_id);
         self.agent.agent_shell_mode_overrides.remove(pane_id);
     }
 

@@ -64,6 +64,8 @@ use mez_agent::{
 mod activity;
 mod approval;
 mod artifacts;
+mod cd;
+pub(crate) use cd::{NativeDirectoryRead, NativeDirectoryWork};
 mod compaction;
 pub(crate) use compaction::{
     RuntimeManualCompactionPreparation, RuntimeManualCompactionRequestWork,
@@ -1618,6 +1620,11 @@ impl RuntimeSessionService {
 
     /// Checks prompt submission policy independently of historical storage reads.
     fn check_agent_prompt_submission(&mut self, pane_id: &str, prompt: &str) -> Result<()> {
+        if self.native_directory_command_is_pending(pane_id) {
+            return Err(MezError::conflict(
+                "native navigation is active; a new prompt cannot use its outgoing directory",
+            ));
+        }
         self.ensure_completion_admission_open()?;
         self.refresh_project_config_layers_for_pane(pane_id)?;
         if let Some(project_trust_request) = self

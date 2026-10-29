@@ -688,6 +688,8 @@ bypass_mode = false
 # working directory, and path authority. [] forwards no optional values.
 # Seatbelt forwards selected XDG paths unchanged, but scopes still govern access.
 # Values are always redacted and unselected variables are never forwarded.
+# Native /cd with no operand or ~/ uses this workload's forwarded HOME.
+# Omitting HOME requires an explicit directory; pane HOME is not a fallback.
 env_whitelist = ["PATH", "HOME", "SHELL", "TMPDIR", "XDG_CACHE_HOME"]
 # Add names such as `ACME_HOME` here only when the workload requires them.
 

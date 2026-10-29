@@ -13840,6 +13840,31 @@ The baseline command capabilities are:
   Mutations MUST require authenticated primary-client input, while unsupported
   modes, duplicate or unknown flags, and extra positional arguments MUST fail
   without changing state.
+- `/cd [directory]`: Change only the visible native agent conversation's
+  effective working directory. The command MUST be provider-free, nonqueueable
+  and unavailable in pane shell mode. It MUST NOT change process-global cwd,
+  inject pane input, retire the pane process or overwrite actual pane cwd
+  observations. Subsequent native launches and agent workspace consumers MUST
+  use the accepted directory. Hiding/reentering the same conversation retains
+  it; the override is runtime-only and is not restored from saved history.
+  No operand uses the native workload's usable home; relative operands use the
+  current agent directory. `~` and `~/` are supported, while named-user homes,
+  `-`/OLDPWD, shell expansion, substitution, globbing and CDPATH are not.
+  Quotes/backslashes group literal data; `--` ends option parsing. Invalid,
+  control-bearing, inaccessible or non-directory targets MUST fail unchanged.
+  Preparation MUST refresh permitted target instructions and already-trusted
+  project configuration off actor. Successful empty discovery clears stale
+  guidance; unavailable or unauthorized discovery MUST NOT masquerade as empty.
+  Navigation MUST NOT trust a project or enlarge inherited child grants.
+  Busy turns, native workers, compaction, history preparation and competing
+  mutations MUST prevent admission. Adoption MUST recheck exact operation,
+  conversation, source directory generation, native root, configuration and
+  mode lifetime. Stop/cancellation and stale results MUST leave cwd unchanged.
+  `/cd --sync-pane [directory]` is recognized but currently unavailable and MUST
+  fail before any replacement. Help MUST explain that a fresh shell would lose
+  shell-local variables/functions/aliases, jobs and unsaved interactive state.
+  No synchronized shell replacement or directory-specific completion is claimed
+  by this initial command implementation.
 - Bare `/resume`: Show resumable saved agent sessions in the shared interactive
   record-browser table keyed by conversation UUID. The table MUST default to
   sessions whose saved project matches the active pane project; `a` MUST

@@ -499,7 +499,7 @@ fn authorize(scopes: &PathScopes, cwd: &Path, target: &Path, writable: bool) -> 
 
 /// Rechecks each held directory against its captured physical location. Grants
 /// do not follow directory relocation into a newly unauthorized location.
-fn revalidate_ancestry(physical: &PhysicalPath) -> Result<()> {
+pub(super) fn revalidate_ancestry(physical: &PhysicalPath) -> Result<()> {
     for witness in &physical.directories {
         let current = resolve_physical(
             Path::new("/"),

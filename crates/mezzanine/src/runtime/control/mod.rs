@@ -368,6 +368,16 @@ impl RuntimeSessionService {
                 ),
             );
         }
+        if let Some(directory) = self.native_agent_working_directory(pane_id) {
+            insert_context_block_by_placement(
+                &mut blocks,
+                ContextBlock::reference_event(
+                    ContextSourceKind::Configuration,
+                    "current native agent working directory",
+                    format!("Current native agent working directory: {:?}", directory),
+                ),
+            );
+        }
         let instruction_files = self
             .pane_agent_instruction_files(pane_id)
             .map(<[_]>::to_vec);

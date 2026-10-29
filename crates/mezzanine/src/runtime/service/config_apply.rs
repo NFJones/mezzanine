@@ -722,18 +722,9 @@ impl RuntimeSessionService {
             let mut configured_permissions =
                 runtime_configured_permissions_from_config(&structured)?;
             if let Some(config_root) = self.integration.config_root() {
-                for directory_name in [
-                    crate::integrations::skills::SKILLS_DIRECTORY_NAME,
-                    crate::integrations::macros::MACROS_DIRECTORY_NAME,
-                ] {
-                    let scope = config_root
-                        .join(directory_name)
-                        .to_string_lossy()
-                        .into_owned();
-                    configured_permissions
-                        .resources
-                        .add_managed_catalog_scope(scope);
-                }
+                configured_permissions
+                    .resources
+                    .add_managed_catalog_scopes(config_root);
             }
             if let Some(active) = self.integration.live_approval_bypass_override() {
                 configured_permissions

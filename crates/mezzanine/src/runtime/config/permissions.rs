@@ -102,10 +102,23 @@ impl Default for ResourceAuthorityConfig {
 }
 
 impl ResourceAuthorityConfig {
+    /// Adds current controller catalog roots with the same provenance used by
+    /// runtime config application and read-only target-context preparation.
+    /// Existing declarations remain explicit; callers rebuild this object when
+    /// switching config roots rather than carrying old automatic grants.
+    pub(crate) fn add_managed_catalog_scopes(&mut self, config_root: &Path) {
+        for name in [
+            crate::integrations::skills::SKILLS_DIRECTORY_NAME,
+            crate::integrations::macros::MACROS_DIRECTORY_NAME,
+        ] {
+            self.add_managed_catalog_scope(config_root.join(name).to_string_lossy().into_owned());
+        }
+    }
+
     /// Adds the existing catalog-maintenance grant without relabeling an
     /// already declared user scope. Explicitly naming a catalog root remains
     /// an explicit policy choice and therefore continues to suppress fallback.
-    pub(crate) fn add_managed_catalog_scope(&mut self, scope: String) {
+    fn add_managed_catalog_scope(&mut self, scope: String) {
         if !self.read_scopes.contains(&scope) && !self.write_scopes.contains(&scope) {
             self.managed_catalog_scopes.insert(scope.clone());
         }

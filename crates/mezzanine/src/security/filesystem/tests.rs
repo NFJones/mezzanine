@@ -66,6 +66,110 @@ impl Drop for Fixture {
     }
 }
 
+/// Instruction preparation retains physical source identity separately from its
+/// logical scope. Missing files and directories are positive non-file results;
+/// a permitted same-project link reads only its resolved regular source.
+#[test]
+fn instruction_reads_preserve_scope_and_positive_empty_evidence() {
+    let fixture = Fixture::new();
+    let scope = fixture.directory.join("nested");
+    fs::create_dir(&scope).unwrap();
+    let source = fixture.directory.join("shared.md");
+    fs::write(&source, "shared guidance").unwrap();
+    let link = scope.join("AGENTS.md");
+    symlink(&source, &link).unwrap();
+    let file = super::read_scoped_instruction_file(&fixture.scopes, link.to_str().unwrap(), &scope)
+        .unwrap()
+        .unwrap();
+    assert_eq!(file.path, source.to_str().unwrap());
+    assert_eq!(file.scope_root, scope.to_str().unwrap());
+    assert_eq!(file.content, "shared guidance");
+    assert!(!file.truncated);
+    for path in [scope.join("missing"), scope] {
+        assert!(
+            super::read_scoped_instruction_file(
+                &fixture.scopes,
+                path.to_str().unwrap(),
+                &fixture.directory
+            )
+            .unwrap()
+            .is_none()
+        );
+    }
+}
+
+/// Prefix reads are bounded independently of original file size, preserve valid
+/// UTF-8 at a split codepoint and report original size/truncation. Invalid bytes
+/// inside the retained prefix fail rather than becoming lossy model guidance.
+#[test]
+fn instruction_reads_bound_prefix_without_lossy_content() {
+    let fixture = Fixture::new();
+    let path = fixture.directory.join("AGENTS.md");
+    let limit = super::instructions::INSTRUCTION_FILE_READ_LIMIT as usize;
+    let content = format!("{}界", "a".repeat(limit - 1));
+    fs::write(&path, &content).unwrap();
+    let file = super::read_scoped_instruction_file(
+        &fixture.scopes,
+        path.to_str().unwrap(),
+        &fixture.directory,
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(file.bytes, content.len());
+    assert!(file.truncated);
+    assert_eq!(file.content, "a".repeat(limit - 1));
+    fs::write(&path, [0xff, b'x']).unwrap();
+    assert!(
+        super::read_scoped_instruction_file(
+            &fixture.scopes,
+            path.to_str().unwrap(),
+            &fixture.directory
+        )
+        .is_err()
+    );
+}
+
+/// Instruction discovery cannot read through an out-of-scope link or an empty
+/// grant, and rejects FIFO nodes from metadata without blocking for a writer.
+/// Error diagnostics never include the denied source's body.
+#[test]
+fn instruction_reads_reject_scope_escape_and_special_nodes() {
+    let fixture = Fixture::new();
+    let outside = Fixture::new();
+    let secret = outside.directory.join("secret");
+    fs::write(&secret, "not-readable-guidance").unwrap();
+    let link = fixture.directory.join("AGENTS.md");
+    symlink(&secret, &link).unwrap();
+    let error = super::read_scoped_instruction_file(
+        &fixture.scopes,
+        link.to_str().unwrap(),
+        &fixture.directory,
+    )
+    .unwrap_err();
+    assert!(!error.message().contains("not-readable-guidance"));
+    fs::remove_file(&link).unwrap();
+    fs::write(&link, "ordinary").unwrap();
+    let empty = host_resolved_path_scopes(fixture.root.cwd(), &[], &[], &[]).unwrap();
+    assert!(
+        super::read_scoped_instruction_file(&empty, link.to_str().unwrap(), &fixture.directory)
+            .is_err()
+    );
+    fs::remove_file(&link).unwrap();
+    let fifo = CString::new(link.as_os_str().as_bytes()).unwrap();
+    // SAFETY: the NUL-terminated path belongs exclusively to this fixture.
+    assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) }, 0);
+    let started = std::time::Instant::now();
+    assert!(
+        super::read_scoped_instruction_file(
+            &fixture.scopes,
+            link.to_str().unwrap(),
+            &fixture.directory
+        )
+        .is_err()
+    );
+    assert!(started.elapsed() < std::time::Duration::from_secs(1));
+}
+
 /// Exact CRLF and missing-newline preimages survive capture; publication
 /// preserves executable bits but suppresses setuid/setgid/sticky privilege bits.
 #[test]

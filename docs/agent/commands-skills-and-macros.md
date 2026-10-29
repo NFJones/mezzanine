@@ -37,6 +37,7 @@ other panes and global multiplexer controls remain available.
 | Inspect or change authority and execution mode | `/status`, `/permissions`, `/approval`, `/approve`, `/show-approvals`, `/sandbox`, `/shell-mode` |
 | Control the current task | `/plan`, `/directive`, `/objective`, `/loop`, `/stop` |
 | Manage conversations | `/new`, `/clear`, `/fork`, `/resume`, `/name-session` |
+| Change the native agent workspace | `/cd [directory]` |
 | Inspect or preserve context | `/compact`, `/context-doc`, `/show-context`, `/copy`, `/copy-context`, `/copy-patches`, `/copy-trace-log`, `/list-modified-files` |
 | Select model behavior | `/model`, `/routing`, `/latency`, `/thinking`, `/personality`, `/list-personalities` |
 | Work with local stores | `/memory`, `/remember`, `/show-memories`, `/issue`, `/show-issues` |
@@ -68,6 +69,42 @@ profiles, and managed-home cache operations remain CLI-only under `mez sandbox`.
 `/shell-mode native` or `/shell-mode pane` changes the pane's shell transport;
 add `--global` to persist the fallback for panes without an override. Transport
 does not change approval or [sandbox authority](../safety-and-trust/sandboxing.md).
+
+### Change the native workspace
+
+In native shell mode, `/cd [directory]` changes the agent's workspace and future
+native command launch directories. The pane process stays where it is. This
+command does not call a model, send a `cd` into your terminal or change another
+pane's directory. It requires an idle agent; stop active work first.
+
+```text
+/cd ../another-project
+/cd 'directory with spaces'
+/cd -- ./-literal-name
+/cd ~/
+```
+
+With no operand, Mez uses the native workload's usable HOME, selected through
+the existing `permissions.env_whitelist` policy from the server snapshot.
+The command adds no fallback to the pane's HOME or the live server environment
+when that workload value is unavailable. Relative paths use the current agent directory.
+Quotes and backslashes encode literal paths; `$`, backticks, globs and shell
+operators are data. Named-user `~user`, `-`/OLDPWD and CDPATH are unsupported.
+Both forms reject in pane shell mode.
+
+Mez prepares authorized project instructions and already-trusted configuration
+before publishing the directory. It does not grant project trust or expand a
+child agent's frozen scopes. Failed, cancelled or stale preparation keeps the
+old directory. `/stop` cancels pending navigation; a late worker cannot adopt it.
+Successful empty instruction discovery clears old guidance. The override lasts
+for the current live conversation, including hide/reentry and its owned loops;
+it is not saved-directory restoration after restart or manual resume.
+
+`/cd --sync-pane [directory]` is recognized but **not implemented**: it fails
+without replacing a shell. A future fresh-shell replacement would discard
+shell-local variables, functions, aliases, jobs and unsaved interactive state,
+and would run normal startup files again. Directory-only Tab completion is also
+not supplied by this initial command implementation.
 
 ### Keep or inspect task history
 

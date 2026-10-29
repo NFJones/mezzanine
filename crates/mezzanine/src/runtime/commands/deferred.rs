@@ -27,6 +27,8 @@ use crate::runtime::{
 /// Prepared-input family one moved slash command consumes off the actor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RuntimeAgentCommandFamily {
+    /// Native cwd, project configuration and instruction preparation.
+    NativeDirectory,
     /// Captured status diagnostics and rolling accounting history.
     Status,
     /// Durable external pane-view resets; no SQLite runs on the actor.
@@ -71,6 +73,7 @@ pub(crate) fn off_actor_command_family(
     input: &str,
 ) -> Option<RuntimeAgentCommandFamily> {
     match command {
+        "cd" => Some(RuntimeAgentCommandFamily::NativeDirectory),
         "status" | "agent-status" => Some(RuntimeAgentCommandFamily::Status),
         "reset-status" => Some(RuntimeAgentCommandFamily::ResetStatus),
         "list-skills" | "list-macros" => Some(RuntimeAgentCommandFamily::Catalog),
@@ -220,7 +223,16 @@ impl RuntimeSessionService {
                 .map(|session| session.session_id.clone())
                 .ok_or_else(|| MezError::invalid_state("agent shell session not found for pane"))?
         };
+        let navigation = if command == "cd" {
+            Some(self.capture_native_directory_work(pane_id, input)?)
+        } else {
+            None
+        };
         let claim_generation = self.begin_agent_command_claim(pane_id, &conversation_id)?;
+        if let Some(navigation) = navigation {
+            self.agent
+                .retain_native_directory_work(pane_id, claim_generation, navigation);
+        }
         if let Some(report) = status_report {
             self.retain_pending_status_report(pane_id, claim_generation, report);
         }
@@ -290,6 +302,21 @@ impl RuntimeSessionService {
         // Each family names exactly what the worker may read; a command with no
         // family has no off-actor executor yet and keeps executing inline.
         let prepared = match family {
+            RuntimeAgentCommandFamily::NativeDirectory => {
+                match self.native_directory_work_for_claim(pane_id, claim_generation) {
+                    Ok(work) => RuntimeAgentCommandPrepared::NativeDirectory(Box::new(work)),
+                    Err(error) => {
+                        return self.fail_agent_command_before_claim(
+                            pane_id,
+                            conversation_id,
+                            command,
+                            input,
+                            claim_generation,
+                            error.message(),
+                        );
+                    }
+                }
+            }
             RuntimeAgentCommandFamily::ResetStatus => {
                 let Some(owner) = self.take_pending_status_report(pane_id, claim_generation) else {
                     return self.fail_agent_command_before_claim(
@@ -717,6 +744,15 @@ impl RuntimeSessionService {
         work: &RuntimeAgentCommandAsyncWork,
     ) -> RuntimeAgentCommandAsyncOutcome {
         let body = match &work.prepared {
+            RuntimeAgentCommandPrepared::NativeDirectory(navigation) => {
+                return match navigation.prepare() {
+                    Ok(read) => RuntimeAgentCommandAsyncOutcome::NativeDirectory(Box::new(read)),
+                    Err(error) => RuntimeAgentCommandAsyncOutcome::Failed {
+                        message: error.message().to_string(),
+                        kind: error.kind(),
+                    },
+                };
+            }
             RuntimeAgentCommandPrepared::ResetStatus { reset, .. } => match reset.execute() {
                 Ok(()) => "pane_token_usage_reset=true durable=true".to_string(),
                 Err(error) => {
@@ -1100,6 +1136,9 @@ impl RuntimeSessionService {
         outcome: RuntimeAgentCommandAsyncOutcome,
     ) -> Result<RuntimeAgentCommandAsyncOutcome> {
         let (body, failed, record_browser) = match outcome {
+            navigation @ RuntimeAgentCommandAsyncOutcome::NativeDirectory(_) => {
+                return Ok(navigation);
+            }
             RuntimeAgentCommandAsyncOutcome::Response { body } => (body, false, None),
             RuntimeAgentCommandAsyncOutcome::Failed { message, kind } => (
                 RuntimeSessionService::deferred_agent_command_failure_body(work, &message, kind),
@@ -1233,10 +1272,18 @@ impl RuntimeSessionService {
         } else {
             outcome
         };
+        let outcome = if let RuntimeAgentCommandAsyncOutcome::NativeDirectory(read) = outcome {
+            self.native_directory_command_response(work, &read)
+        } else {
+            outcome
+        };
         let is_failure = matches!(outcome, RuntimeAgentCommandAsyncOutcome::Failed { .. });
         let parent_browser_stack = self
             .take_pending_record_browser_overlay_claim_stack(&work.pane_id, work.claim_generation);
         let body = match outcome {
+            RuntimeAgentCommandAsyncOutcome::NativeDirectory(_) => {
+                unreachable!("native directory adoption converted above")
+            }
             RuntimeAgentCommandAsyncOutcome::Response { body } => body,
             RuntimeAgentCommandAsyncOutcome::SavedFork(_) => {
                 unreachable!("fork adoption handled above")
@@ -1401,7 +1448,15 @@ impl RuntimeSessionService {
             } else {
                 outcome
             };
+            let outcome = if let RuntimeAgentCommandAsyncOutcome::NativeDirectory(read) = outcome {
+                self.native_directory_command_response(&work, &read)
+            } else {
+                outcome
+            };
             let body = match outcome {
+                RuntimeAgentCommandAsyncOutcome::NativeDirectory(_) => {
+                    unreachable!("native directory adoption converted above")
+                }
                 RuntimeAgentCommandAsyncOutcome::SavedFork(_) => {
                     unreachable!("fork adoption settled above")
                 }

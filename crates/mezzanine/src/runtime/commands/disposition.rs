@@ -101,6 +101,7 @@ pub(super) const COMMAND_EXECUTION_METADATA: &[CommandExecutionMetadata] = &[
     Entry::inline("approve", None),
     Entry::inline("sandbox", None),
     Entry::inline("shell-mode", None),
+    Entry::deferred("cd", true, None),
     Entry::inline("objective", None),
     Entry::inline("compact", Some(Awaited::Compact)),
     Entry::inline("copy", None),
@@ -297,6 +298,7 @@ mod tests {
         assert_eq!(
             off_actor,
             BTreeSet::from([
+                "cd",
                 "list-skills",
                 "list-macros",
                 "auth-status",

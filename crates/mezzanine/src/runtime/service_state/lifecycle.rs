@@ -216,6 +216,8 @@ pub(crate) struct RuntimeAgentCommandAsyncWork {
 /// makes an accidental dependency on actor state a compile error.
 #[derive(Debug, Clone)]
 pub(crate) enum RuntimeAgentCommandPrepared {
+    /// Acceptance-frozen native cwd/config/instruction read preparation.
+    NativeDirectory(Box<crate::runtime::commands::NativeDirectoryWork>),
     /// Acceptance-frozen status snapshot; only its worker queries history.
     Status(Box<crate::runtime::commands::RuntimeStatusReportWork>),
     /// Captured reset points committed off actor, plus the existing exact-pane
@@ -505,6 +507,8 @@ pub(crate) struct RuntimeDirectResumeRead {
 /// failure through the same invalid-command response path.
 #[derive(Debug)]
 pub(crate) enum RuntimeAgentCommandAsyncOutcome {
+    /// Prepared native directory data awaiting exact actor-owned adoption.
+    NativeDirectory(Box<crate::runtime::commands::NativeDirectoryRead>),
     /// Command response body the actor returns to the caller.
     Response {
         /// Body produced by the deferred execution.

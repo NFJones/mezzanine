@@ -11,11 +11,12 @@
 )]
 pub(crate) mod capability;
 mod identity;
+mod instructions;
+pub(crate) use instructions::read_scoped_instruction_file;
 mod resolution;
 
 pub(crate) use identity::stat_device;
 pub(crate) use resolution::host_resolved_path_scopes;
-#[cfg(any(test, target_os = "macos"))]
 pub(crate) use resolution::resolve_host_path;
 
 #[cfg(test)]

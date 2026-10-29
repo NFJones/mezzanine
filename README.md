@@ -43,6 +43,10 @@ Mezzanine is a terminal multiplexer with a built-in pane-local agent. Keep a
 shell, logs, editor, and agent conversation together in one recoverable session
 while you inspect, edit, and validate work.
 
+In native mode, `/cd` moves the agent workspace independently of the pane
+process. See [workspace navigation](docs/agent/commands-skills-and-macros.md#change-the-native-workspace)
+for its scope and current limitations.
+
 Published agent objectives update immediately; their optional saved-session
 display mirrors use bounded background persistence so cache contention does not
 freeze unrelated work. See [messaging](docs/agent/subagents-and-messaging.md).

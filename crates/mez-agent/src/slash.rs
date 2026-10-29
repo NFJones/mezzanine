@@ -88,6 +88,7 @@ pub fn baseline_slash_commands() -> Vec<SlashCommandSpec> {
         slash("list-agents", &[], SlashCommandEffect::ReadOnly, true),
         slash("sandbox", &[], SlashCommandEffect::PolicyMutation, true),
         slash("shell-mode", &[], SlashCommandEffect::PolicyMutation, true),
+        slash("cd", &[], SlashCommandEffect::SessionMutation, false),
         slash("list-macros", &[], SlashCommandEffect::ReadOnly, true),
         slash("list-skills", &[], SlashCommandEffect::ReadOnly, true),
         slash(
