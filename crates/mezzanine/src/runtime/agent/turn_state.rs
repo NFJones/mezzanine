@@ -4,7 +4,8 @@
 //! They are private fields of `RuntimeAgentComponent`; crate-local accessors
 //! keep their ownership explicit while callers migrate toward narrower turn
 //! lifecycle operations. Native workspace intent is selected through the exact
-//! session owner without rewriting observed pane cwd or borrowing another pane.
+//! session owner or installed same-pane loop binding without rewriting observed
+//! pane cwd or borrowing another pane.
 
 use super::{RuntimeAgentComponent, RuntimeSessionService};
 use mez_agent::{AgentContext, AgentShellStore, AgentTurnExecution, AgentTurnLedger};
@@ -28,7 +29,8 @@ impl RuntimeSessionService {
     }
 
     /// Returns the agent workspace directory without rewriting pane observations.
-    /// Exact native navigation intent wins only in Native mode; initial state,
+    /// Exact native navigation intent (including controller-owned ephemeral
+    /// loop work) wins only in Native mode; initial state,
     /// other modes and panes without an agent retain the existing best-known
     /// pane-directory fallback. The launch owner independently qualifies its
     /// initial native root context; this getter grants no filesystem authority.
@@ -36,16 +38,39 @@ impl RuntimeSessionService {
         &self,
         pane_id: &str,
     ) -> Option<std::path::PathBuf> {
-        if self.effective_agent_shell_mode_for_pane(pane_id)
-            == crate::runtime::config::ShellMode::Native
-            && let Some(directory) = self
-                .agent_shell_store()
-                .get(pane_id)
-                .and_then(|session| session.native_working_directory())
-        {
+        if let Some(directory) = self.native_agent_working_directory(pane_id) {
             return Some(directory.to_path_buf());
         }
         self.pane_current_working_directory(pane_id)
+    }
+
+    /// Selects explicit native workspace data for an exact session owner or
+    /// the current work CID installed by its same-pane loop controller. The
+    /// frozen parent workspace survives private history isolation; copied
+    /// transcript-source labels, unrelated CIDs and other panes do not inherit
+    /// it. This selection grants no filesystem, cleanup or parent-turn rights.
+    pub(crate) fn native_agent_working_directory(&self, pane_id: &str) -> Option<&std::path::Path> {
+        if self.effective_agent_shell_mode_for_pane(pane_id)
+            != crate::runtime::config::ShellMode::Native
+        {
+            return None;
+        }
+        let session = self.agent_shell_store().get(pane_id)?;
+        if session.pane_id != pane_id {
+            return None;
+        }
+        if let Some(directory) = session.native_working_directory() {
+            return Some(directory);
+        }
+        let controller = self.agent_loop_state(pane_id)?;
+        if !session.ephemeral
+            || controller.invoking_pane_id != pane_id
+            || controller.execution_pane_id != pane_id
+            || controller.work_conversation_id.as_deref() != Some(session.session_id.as_str())
+        {
+            return None;
+        }
+        controller.parent_native_working_directory.as_deref()
     }
 
     /// Returns the canonical agent turn ledger for read-only inspection.

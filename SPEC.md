@@ -8196,6 +8196,11 @@ iteration in a fresh empty conversation instead of reusing the current pane
 conversation or forking the parent transcript. New-mode work conversations
 MUST also be ephemeral and MUST start with no transcript entries or parent
 transcript source.
+History isolation MUST NOT discard an explicit native agent working directory:
+work conversations installed by the same-pane loop controller MUST use its
+captured parent workspace for agent context and native launches. Transcript
+source labels alone MUST NOT inherit that workspace, and pane-process cwd and
+filesystem/cleanup permissions MUST remain independently owned.
 Fork-mode work conversations MUST be ephemeral: they MUST NOT be persisted as
 saved agent conversations, MUST NOT appear in `/resume` pickers, and MUST NOT
 replace the parent conversation in active-session

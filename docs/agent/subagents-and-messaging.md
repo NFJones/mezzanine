@@ -321,6 +321,9 @@ the goal met or the limit is reached. Quote goals that contain spaces:
 By default, iterations reuse the current conversation. `--fork` starts each
 from the same captured parent baseline; `--new` starts each with an empty
 conversation. Neither mode resets files or reverses previous side effects.
+A same-pane loop retains its parent's explicit native agent workspace across
+these temporary conversations. History isolation does not move the pane shell
+or grant additional filesystem permissions.
 With routing enabled, Mez classifies the logical job once and pins one worker
 profile across its internal iterations; the invoking conversation presents the
 final result. Use `/stop` when the loop's work is no longer wanted, and inspect

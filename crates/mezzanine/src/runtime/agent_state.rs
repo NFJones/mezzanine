@@ -561,6 +561,12 @@ pub struct RuntimeAgentLoopState {
     /// Parent conversation id restored after fresh loop iterations and used as
     /// the fork source when applicable.
     pub parent_conversation_id: String,
+    /// Exact parent's native workspace captured before ephemeral rebinding.
+    /// This is launch/workspace data, never filesystem or cleanup authority.
+    pub parent_native_working_directory: Option<std::path::PathBuf>,
+    /// Ephemeral conversation installed by this controller's latest successful
+    /// work binding. History/source labels cannot substitute for this identity.
+    pub work_conversation_id: Option<String>,
     /// Durable parent transcript count to restore after ephemeral loop forks.
     pub parent_transcript_entries: u64,
     /// Frozen logical archive frontier, independent of retained replay rows.

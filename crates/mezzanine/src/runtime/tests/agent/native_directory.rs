@@ -254,3 +254,145 @@ fn native_agent_directory_keeps_external_accounting_on_pane_origin() {
     );
     let _ = fs::remove_dir_all(root);
 }
+
+/// Fresh loop conversations change model-history ownership but must preserve
+/// the native workspace captured by their actual controller. Both fork and new
+/// modes use a runtime-owned binding; neither transcript-source labels nor a
+/// copied parent intent authorize an independently rebound conversation.
+#[test]
+fn native_agent_directory_follows_exact_loop_work_binding() {
+    for mode in ["--fork", "--new", ""] {
+        let root = temp_root("native-directory-loop");
+        fs::create_dir_all(&root).unwrap();
+        let root = fs::canonicalize(root).unwrap();
+        let pane = root.join("pane");
+        let target = root.join("target");
+        for path in [&pane, &target] {
+            fs::create_dir(path).unwrap();
+        }
+        let mut service = test_runtime_service();
+        service.set_agent_native_shell_mode_for_tests("%1");
+        service.set_pane_current_working_directory("%1", pane.clone());
+        service.set_pane_screen(
+            "%1".to_string(),
+            TerminalScreen::new(Size::new(80, 24).unwrap(), 100).unwrap(),
+        );
+        service
+            .agent_shell_store_mut()
+            .enter_or_resume("%1")
+            .unwrap();
+        let session = service
+            .agent_shell_store_mut()
+            .ensure_session("%1")
+            .unwrap();
+        session
+            .record_native_working_directory(target.clone(), 0)
+            .unwrap();
+        let parent = session.session_id.clone();
+        service
+            .execute_agent_shell_loop_command(
+                "%1",
+                &format!("/loop {mode} --limit 1 inspect this workspace"),
+            )
+            .unwrap();
+        assert_eq!(
+            service.agent_effective_working_directory("%1"),
+            Some(target.clone()),
+            "{mode}"
+        );
+        assert_eq!(
+            service.pane_current_working_directory("%1"),
+            Some(pane.clone())
+        );
+        service.set_agent_shell_mode_override("%1", Some(crate::runtime::config::ShellMode::Pane));
+        assert_eq!(
+            service.agent_effective_working_directory("%1"),
+            Some(pane.clone())
+        );
+        service.set_agent_native_shell_mode_for_tests("%1");
+        assert_eq!(
+            service.agent_effective_working_directory("%1"),
+            Some(target.clone())
+        );
+        if !mode.is_empty() {
+            service
+                .agent_loop_state_mut("%1")
+                .unwrap()
+                .execution_pane_id = "%2".to_string();
+            assert_eq!(service.native_agent_working_directory("%1"), None);
+            service
+                .agent_loop_state_mut("%1")
+                .unwrap()
+                .execution_pane_id = "%1".to_string();
+        }
+        service
+            .agent_shell_store_mut()
+            .ensure_session("%1")
+            .unwrap()
+            .pane_id = "%2".to_string();
+        assert_eq!(service.native_agent_working_directory("%1"), None);
+        service
+            .agent_shell_store_mut()
+            .ensure_session("%1")
+            .unwrap()
+            .pane_id = "%1".to_string();
+        let session = service.agent_shell_store().get("%1").unwrap();
+        let work = session.session_id.clone();
+        let running = session.running_turn_id.clone().unwrap();
+        if !mode.is_empty() {
+            assert_ne!(work, parent);
+            assert!(session.ephemeral);
+            assert_eq!(session.native_working_directory(), None);
+        }
+        service
+            .agent_shell_store_mut()
+            .finish_turn("%1", &running)
+            .unwrap();
+        let state = service.agent_loop_state("%1").unwrap().clone();
+        service
+            .restore_agent_loop_parent_conversation("%1", &state, None)
+            .unwrap();
+        assert_eq!(
+            service.agent_shell_store().get("%1").unwrap().session_id,
+            parent
+        );
+        assert_eq!(
+            service.agent_effective_working_directory("%1"),
+            Some(target)
+        );
+        assert_eq!(
+            service.agent_loop_state("%1").unwrap().work_conversation_id,
+            None
+        );
+        if !mode.is_empty() {
+            // Even the previous exact work CID is retired on parent return.
+            service
+                .agent_shell_store_mut()
+                .bind_ephemeral_conversation_with_lineage_and_transcript_source(
+                    "%1",
+                    &work,
+                    0,
+                    None,
+                    Some(parent.clone()),
+                    0,
+                )
+                .unwrap();
+            assert_eq!(service.native_agent_working_directory("%1"), None);
+        }
+        // Matching source labels alone do not install work in the controller.
+        service
+            .agent_shell_store_mut()
+            .bind_ephemeral_conversation_with_lineage_and_transcript_source(
+                "%1",
+                "unrelated-attempt",
+                0,
+                None,
+                Some(parent),
+                0,
+            )
+            .unwrap();
+        assert_eq!(service.agent_effective_working_directory("%1"), Some(pane));
+        assert_eq!(service.native_agent_working_directory("%1"), None);
+        let _ = fs::remove_dir_all(root);
+    }
+}

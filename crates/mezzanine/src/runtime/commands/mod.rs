@@ -1027,6 +1027,9 @@ impl RuntimeSessionService {
             )
         })?;
         let parent_conversation_id = parent_session.session_id.clone();
+        let parent_native_working_directory = parent_session
+            .native_working_directory()
+            .map(std::path::Path::to_path_buf);
         let parent_transcript_entries = parent_session.transcript_entries;
         let parent_transcript_high_water = parent_session.transcript_high_water;
         let parent_display_name = parent_session.display_name.clone();
@@ -1045,6 +1048,8 @@ impl RuntimeSessionService {
             goal: parsed.goal,
             mode: parsed.mode,
             parent_conversation_id: parent_conversation_id.clone(),
+            parent_native_working_directory,
+            work_conversation_id: None,
             parent_transcript_entries,
             parent_transcript_high_water,
             parent_allowed_actions,
@@ -1221,6 +1226,16 @@ impl RuntimeSessionService {
         }
         self.agent_shell_store_mut()
             .restore_allowed_actions(pane_id, state.parent_allowed_actions.clone())?;
+        // Publish workspace inheritance only after this controller actually
+        // installed the ephemeral binding and committed its cleanup proofs.
+        // A different CID, even with identical history labels,
+        // cannot borrow the frozen parent workspace.
+        let installed = self
+            .agent_loop_state_mut_by_id(&state.loop_id)
+            .ok_or_else(|| {
+                MezError::invalid_state("loop controller disappeared during work binding")
+            })?;
+        installed.work_conversation_id = Some(binding.0.clone());
         Ok(binding)
     }
 
@@ -1285,6 +1300,9 @@ impl RuntimeSessionService {
             self.agent_shell_store_mut()
                 .restore_allowed_actions(pane_id, state.parent_allowed_actions.clone())?;
             self.install_primary_agent_name(pane_id, state.parent_display_name.clone())?;
+            if let Some(installed) = self.agent_loop_state_mut_by_id(&state.loop_id) {
+                installed.work_conversation_id = None;
+            }
             return Ok(());
         }
         let cleanup = self.prepare_owned_loop_cleanup_restore(state)?;
@@ -1373,6 +1391,9 @@ impl RuntimeSessionService {
             &state.parent_conversation_id,
             objective,
         )?;
+        if let Some(installed) = self.agent_loop_state_mut_by_id(&state.loop_id) {
+            installed.work_conversation_id = None;
+        }
         Ok(())
     }
 
@@ -2649,6 +2670,8 @@ mod tests {
             goal: None,
             mode: RuntimeAgentLoopMode::ReuseCurrentConversation,
             parent_conversation_id: "parent-conversation".to_string(),
+            parent_native_working_directory: None,
+            work_conversation_id: None,
             parent_transcript_entries: 0,
             parent_transcript_high_water: 0,
             parent_allowed_actions: AllowedActionSet::say_only(),
@@ -2670,6 +2693,8 @@ mod tests {
             goal: None,
             mode: RuntimeAgentLoopMode::ReuseCurrentConversation,
             parent_conversation_id: "parent-conversation".to_string(),
+            parent_native_working_directory: None,
+            work_conversation_id: None,
             parent_transcript_entries: 0,
             parent_transcript_high_water: 0,
             parent_allowed_actions: AllowedActionSet::say_only(),
@@ -2744,6 +2769,8 @@ mod tests {
             goal: Some("all checks pass".to_string()),
             mode: RuntimeAgentLoopMode::ReuseCurrentConversation,
             parent_conversation_id: "parent-conversation".to_string(),
+            parent_native_working_directory: None,
+            work_conversation_id: None,
             parent_transcript_entries: 0,
             parent_transcript_high_water: 0,
             parent_allowed_actions: AllowedActionSet::say_only(),

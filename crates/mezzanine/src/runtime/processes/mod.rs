@@ -3149,13 +3149,7 @@ impl RuntimeSessionService {
         pane_id: &str,
     ) -> Result<NativeShellContext> {
         let context = self.native_shell_context_for_pane(pane_id)?;
-        if self.effective_agent_shell_mode_for_pane(pane_id)
-            == crate::runtime::config::ShellMode::Native
-            && let Some(directory) = self
-                .agent_shell_store()
-                .get(pane_id)
-                .and_then(|session| session.native_working_directory())
-        {
+        if let Some(directory) = self.native_agent_working_directory(pane_id) {
             return context.with_agent_working_directory(directory);
         }
         Ok(context)
