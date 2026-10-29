@@ -697,6 +697,10 @@ impl RuntimeSessionService {
             deferred_agent_command_started,
             #[cfg(test)]
             deferred_agent_command_release,
+            #[cfg(test)]
+            deferred_agent_command_completion: self
+                .integration
+                .deferred_agent_command_completion_probe(),
             prepared,
         }))
     }
@@ -1556,6 +1560,7 @@ mod tests {
             display_wrap_column_cap: 80,
             deferred_agent_command_started: None,
             deferred_agent_command_release: None,
+            deferred_agent_command_completion: None,
             prepared: RuntimeAgentCommandPrepared::AuthStatus {
                 providers: Vec::new(),
                 auth_store: None,
@@ -1593,6 +1598,7 @@ mod tests {
             display_wrap_column_cap: 80,
             deferred_agent_command_started: None,
             deferred_agent_command_release: None,
+            deferred_agent_command_completion: None,
             prepared: RuntimeAgentCommandPrepared::Catalog {
                 config_root: None,
                 project_root: None,
@@ -1632,6 +1638,7 @@ mod tests {
             display_wrap_column_cap: 24,
             deferred_agent_command_started: None,
             deferred_agent_command_release: None,
+            deferred_agent_command_completion: None,
             prepared: RuntimeAgentCommandPrepared::Catalog {
                 config_root: None,
                 project_root: None,

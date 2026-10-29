@@ -73,6 +73,9 @@ pub(crate) struct RuntimeIntegrationComponent {
     deferred_agent_command_started: Option<Arc<tokio::sync::Notify>>,
     #[cfg(test)]
     deferred_agent_command_release: Option<Arc<tokio::sync::Notify>>,
+    /// Test receipts distinguish actual blocking work return from actor reply.
+    #[cfg(test)]
+    deferred_agent_command_completion: Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>,
     #[cfg(test)]
     prompt_history_preparation_started: Option<Arc<tokio::sync::Notify>>,
     #[cfg(test)]
@@ -117,6 +120,8 @@ impl RuntimeIntegrationComponent {
             deferred_agent_command_started: None,
             #[cfg(test)]
             deferred_agent_command_release: None,
+            #[cfg(test)]
+            deferred_agent_command_completion: None,
             #[cfg(test)]
             prompt_history_preparation_started: None,
             #[cfg(test)]
@@ -215,6 +220,25 @@ impl RuntimeIntegrationComponent {
             self.deferred_agent_command_started.clone(),
             self.deferred_agent_command_release.clone(),
         )
+    }
+
+    /// Installs independent blocking-return and actor-reply receipts for tests.
+    /// These do not turn cancellation or deadline outcomes into worker exits.
+    #[cfg(test)]
+    pub(crate) fn set_deferred_agent_command_completion_probe(
+        &mut self,
+        blocking_done: Arc<tokio::sync::Notify>,
+        settled: Arc<tokio::sync::Notify>,
+    ) {
+        self.deferred_agent_command_completion = Some((blocking_done, settled));
+    }
+
+    /// Copies the optional completion observations into exact claimed work.
+    #[cfg(test)]
+    pub(crate) fn deferred_agent_command_completion_probe(
+        &self,
+    ) -> Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)> {
+        self.deferred_agent_command_completion.clone()
     }
 
     /// Installs a deterministic prompt-history preparation gate for actor tests.

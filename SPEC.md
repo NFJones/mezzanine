@@ -13860,6 +13860,10 @@ The baseline command capabilities are:
   mutations MUST prevent admission. Adoption MUST recheck exact operation,
   conversation, source directory generation, native root, configuration and
   mode lifetime. Stop/cancellation and stale results MUST leave cwd unchanged.
+  Pending navigation MUST accept typed `/stop` across input packet boundaries
+  and treat Ctrl+C/Escape as cancellation rather than idle prompt exit. Targeted
+  interrupt input MUST cancel that pane's operation without changing focus or
+  stopping another conversation. Other command families retain their input lock.
   `/cd --sync-pane [directory]` is recognized but currently unavailable and MUST
   fail before any replacement. Help MUST explain that a fresh shell would lose
   shell-local variables/functions/aliases, jobs and unsaved interactive state.

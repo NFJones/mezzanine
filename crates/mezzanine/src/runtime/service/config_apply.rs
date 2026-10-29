@@ -228,6 +228,18 @@ impl RuntimeSessionService {
             .set_deferred_agent_command_probe(started, release);
     }
 
+    /// Observes blocking command return separately from its actor completion
+    /// reply, so cancellation tests need not guess from banners or elapsed time.
+    #[cfg(test)]
+    pub(crate) fn set_deferred_agent_command_completion_probe_for_tests(
+        &mut self,
+        blocking_done: std::sync::Arc<tokio::sync::Notify>,
+        settled: std::sync::Arc<tokio::sync::Notify>,
+    ) {
+        self.integration
+            .set_deferred_agent_command_completion_probe(blocking_done, settled);
+    }
+
     /// Injects a deterministic prompt-history worker gate for actor tests.
     #[cfg(test)]
     pub(crate) fn set_prompt_history_preparation_probe_for_tests(

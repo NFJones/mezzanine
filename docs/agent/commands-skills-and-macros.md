@@ -95,7 +95,10 @@ Both forms reject in pane shell mode.
 Mez prepares authorized project instructions and already-trusted configuration
 before publishing the directory. It does not grant project trust or expand a
 child agent's frozen scopes. Failed, cancelled or stale preparation keeps the
-old directory. `/stop` cancels pending navigation; a late worker cannot adopt it.
+old directory. While navigation is pending, type `/stop`, press Ctrl+C or press
+Escape to cancel it without hiding the conversation. A late worker cannot adopt
+the cancelled directory. New prompts and competing mutations still refuse;
+other command families retain their normal input lock.
 Successful empty instruction discovery clears old guidance. The override lasts
 for the current live conversation, including hide/reentry and its owned loops;
 it is not saved-directory restoration after restart or manual resume.

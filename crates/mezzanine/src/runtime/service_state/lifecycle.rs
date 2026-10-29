@@ -204,6 +204,13 @@ pub(crate) struct RuntimeAgentCommandAsyncWork {
     /// Test-only gate release paired with `deferred_agent_command_started`.
     #[cfg(test)]
     pub deferred_agent_command_release: Option<std::sync::Arc<tokio::sync::Notify>>,
+    /// Test-only distinct receipts for blocking computation return and the
+    /// subsequent actor completion reply. Neither is process-retirement proof.
+    #[cfg(test)]
+    pub deferred_agent_command_completion: Option<(
+        std::sync::Arc<tokio::sync::Notify>,
+        std::sync::Arc<tokio::sync::Notify>,
+    )>,
     /// Owned inputs the deferred execution reads instead of live actor state.
     pub prepared: RuntimeAgentCommandPrepared,
 }

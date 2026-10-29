@@ -614,11 +614,15 @@ async fn execute_deferred_agent_command(
             // setup/secondary-cleanup evidence observable independently.
             eprintln!("mezzanine saved fork worker: {message}");
         }
-        crate::runtime::RuntimeSessionService::project_deferred_agent_command_outcome(
+        let outcome = crate::runtime::RuntimeSessionService::project_deferred_agent_command_outcome(
             &execution_work,
             outcome,
-        )
-        .unwrap_or_else(
+        );
+        #[cfg(test)]
+        if let Some((blocking_done, _)) = &execution_work.deferred_agent_command_completion {
+            blocking_done.notify_one();
+        }
+        outcome.unwrap_or_else(
             |error| crate::runtime::RuntimeAgentCommandAsyncOutcome::Failed {
                 message: error.message().to_string(),
                 kind: error.kind(),
@@ -668,6 +672,8 @@ async fn execute_deferred_agent_command(
         bounded_deferred_agent_command_outcome(DEFERRED_AGENT_COMMAND_DEADLINE, &command, execution)
             .await
     };
+    #[cfg(test)]
+    let completion = work.deferred_agent_command_completion.clone();
     let settlement = handle.complete_agent_command_work(work, outcome);
     if is_fork {
         tokio::time::timeout(DEFERRED_AGENT_COMMAND_DEADLINE, settlement)
@@ -681,6 +687,10 @@ async fn execute_deferred_agent_command(
         settlement.await?;
     }
     cancellation.0.take();
+    #[cfg(test)]
+    if let Some((_, settled)) = completion {
+        settled.notify_one();
+    }
     Ok(())
 }
 

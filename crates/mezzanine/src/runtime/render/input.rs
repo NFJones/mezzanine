@@ -278,6 +278,9 @@ impl RuntimeSessionService {
     }
 
     /// Applies agent prompt input with the attached-terminal worker handoff policy.
+    /// Pending native navigation permits editing so split-packet `/stop` can
+    /// reach its existing command guard. Other command families retain their
+    /// composer lock; navigation still rejects new prompts and mutations.
     pub(super) fn apply_attached_agent_prompt_input_for_pane_inner(
         &mut self,
         primary_client_id: &mez_core::ids::ClientId,
@@ -289,7 +292,8 @@ impl RuntimeSessionService {
             return Ok(false);
         }
         self.clear_draft_selection(pane_id);
-        if self.agent_command_is_active(pane_id) {
+        let navigating = self.native_directory_command_is_pending(pane_id);
+        if self.agent_command_is_active(pane_id) && !navigating {
             self.show_primary_error_overlay(vec![
                 "command is still running in this pane".to_string(),
             ])?;
@@ -300,7 +304,7 @@ impl RuntimeSessionService {
         }
         if input == b"\x1b" {
             self.clear_agent_prompt_pending_ctrl_c_exit(pane_id);
-            if self.agent_shell_pane_has_active_turn(pane_id) {
+            if self.agent_shell_pane_has_active_turn(pane_id) || navigating {
                 return self.apply_agent_prompt_interrupt_or_exit(primary_client_id, pane_id);
             }
         }
@@ -581,12 +585,19 @@ impl RuntimeSessionService {
         primary_client_id: &mez_core::ids::ClientId,
         pane_id: &str,
     ) -> Result<bool> {
-        let command = if self.agent_shell_pane_has_active_turn(pane_id) {
+        let navigating = self.native_directory_command_is_pending(pane_id);
+        let command = if self.agent_shell_pane_has_active_turn(pane_id) || navigating {
             "/stop"
         } else {
             "/exit"
         };
-        let body = self.execute_agent_shell_command(primary_client_id, command)?;
+        let body = if navigating {
+            // Targeted prompt input may belong to an unfocused pane. The
+            // allowlisted exact-pane Stop route cannot cancel another owner.
+            self.execute_agent_shell_command_for_pane(primary_client_id, pane_id, command)?
+        } else {
+            self.execute_agent_shell_command(primary_client_id, command)?
+        };
         match runtime_agent_shell_display_output(
             &body,
             &self.presentation.settings.ui_theme,
@@ -611,7 +622,9 @@ impl RuntimeSessionService {
         pane_id: &str,
     ) -> Result<bool> {
         const CTRL_C_EXIT_CONFIRM_WINDOW_MS: u64 = 3_000;
-        if self.agent_shell_pane_has_active_turn(pane_id) {
+        if self.agent_shell_pane_has_active_turn(pane_id)
+            || self.native_directory_command_is_pending(pane_id)
+        {
             self.clear_agent_prompt_pending_ctrl_c_exit(pane_id);
             return self.apply_agent_prompt_interrupt_or_exit(primary_client_id, pane_id);
         }

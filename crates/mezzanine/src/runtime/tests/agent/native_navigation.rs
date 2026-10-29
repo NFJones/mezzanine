@@ -607,3 +607,77 @@ fn native_navigation_preserves_explicit_and_inherited_read_limits() {
         fixture.finish();
     }
 }
+
+/// Explicit-pane interrupt delivery must cancel that pane's navigation even
+/// while another pane is focused. It must neither hide nor redirect Stop to
+/// the focused conversation, and its late prepared result remains stale.
+#[test]
+fn native_navigation_interrupt_targets_its_owner_without_changing_focus() {
+    let mut fixture = NavigationFixture::new("native-navigation-targeted-interrupt");
+    let work = fixture.claim();
+    let outcome = RuntimeSessionService::execute_deferred_agent_command(&work);
+    assert!(matches!(
+        outcome,
+        RuntimeAgentCommandAsyncOutcome::NativeDirectory(_)
+    ));
+    let other = fixture
+        .service
+        .session_mut_for_tests()
+        .split_active_pane(&fixture.primary, mez_mux::layout::SplitDirection::Vertical)
+        .unwrap();
+    fixture
+        .service
+        .agent_shell_store_mut()
+        .enter_or_resume(other.as_str())
+        .unwrap();
+    let other_conversation = fixture
+        .service
+        .agent_shell_store()
+        .get(other.as_str())
+        .unwrap()
+        .session_id
+        .clone();
+    fixture
+        .service
+        .apply_attached_agent_prompt_input_for_pane(&fixture.primary, "%1", b"\x03")
+        .unwrap();
+    assert!(
+        !fixture
+            .service
+            .complete_agent_command_work(&work, outcome)
+            .unwrap()
+    );
+    assert_eq!(
+        fixture.service.agent_effective_working_directory("%1"),
+        Some(fixture.source.clone())
+    );
+    assert_eq!(
+        fixture
+            .service
+            .agent_shell_store()
+            .get("%1")
+            .unwrap()
+            .visibility,
+        AgentShellVisibility::Visible
+    );
+    assert_eq!(
+        fixture
+            .service
+            .agent_shell_store()
+            .get(other.as_str())
+            .unwrap()
+            .session_id,
+        other_conversation
+    );
+    assert_eq!(
+        fixture
+            .service
+            .session()
+            .active_pane_for(&fixture.primary)
+            .unwrap()
+            .id
+            .as_str(),
+        other.as_str()
+    );
+    fixture.finish();
+}

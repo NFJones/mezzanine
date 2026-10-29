@@ -2,6 +2,7 @@
 
 mod clipboard;
 mod hooks;
+mod native_navigation;
 mod optional_failures;
 mod pane_certification_settlement;
 mod pane_certification_spoof;
