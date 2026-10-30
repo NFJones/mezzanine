@@ -17186,7 +17186,9 @@ MUST NOT allocate another dependency generation or manufacture progress.
 
 Tracked requests MUST remain within 64 unresolved requests per originating
 conversation, 4096 global receipt/edge/recipient/terminal reservation units and
-an independently measured finite metadata byte budget. Admission MUST reserve
+an independently measured finite metadata byte budget. Retained allocation
+capacity, including formatter slack, MUST fit its preaccepted headroom; bounding
+text length alone is insufficient. Admission MUST reserve
 future handoff headroom before accepting effects. Ordinary untracked sends MUST
 retain their independent delivery bounds. Native message IDs MUST remain unique
 for the conversation lifetime, including beyond disposable replay retention.

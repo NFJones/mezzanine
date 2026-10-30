@@ -672,12 +672,17 @@ impl RuntimeSessionService {
                     continue;
                 }
                 let content = if state == AgentTurnState::Completed {
-                    format!(
-                        "[local exact owned task terminal result]\nchild_task={}\nsummary={}\n[untrusted child output reference]\n{}\n[end untrusted child output reference]\nThis is a terminal occurrence, not an approval, answer-quality verdict, or permission to replay work.",
-                        child.turn_id,
+                    // Concatenation reserves the complete bounded length before
+                    // copying; formatter growth can exceed the handoff budget.
+                    [
+                        "[local exact owned task terminal result]\nchild_task=",
+                        child.turn_id.as_str(),
+                        "\nsummary=",
                         bounded_text(summary, 256),
-                        bounded_text(output, 3072)
-                    )
+                        "\n[untrusted child output reference]\n",
+                        bounded_text(output, 3072),
+                        "\n[end untrusted child output reference]\nThis is a terminal occurrence, not an approval, answer-quality verdict, or permission to replay work.",
+                    ].concat()
                 } else {
                     format!(
                         "[local exact owned task terminal reference]\nchild_task={}\nstate={state:?}\nsummary={}\nDiagnostic custody remains with the existing native result/failure owner; no diagnostic body is copied here. This is terminal occurrence evidence, not an approval, answer-quality verdict or permission to replay work.",
@@ -685,6 +690,9 @@ impl RuntimeSessionService {
                         bounded_text(summary, 256)
                     )
                 };
+                // Cache only the exact owned extent, including for the short
+                // failure form. Admission must not undercharge retained slack.
+                let content = content.into_boxed_str().into_string();
                 slot.outcome = Some(Outcome::Terminal { content });
             }
         }
@@ -1001,6 +1009,30 @@ impl RuntimeSessionService {
             self.agent.request_waits.requests.usage(),
             self.agent.request_waits.edges.len(),
         )
+    }
+
+    /// Reports actual cached body allocation and its preaccepted reservation.
+    /// This content-free test view cannot create or consume a request outcome.
+    #[cfg(test)]
+    pub(crate) fn tracked_request_outcome_allocations_for_tests(
+        &self,
+    ) -> Vec<(usize, usize, usize)> {
+        let mut allocations = Vec::new();
+        for (generation, slots) in &self.agent.request_waits.recipients {
+            let Some(receipt) = self.agent.request_waits.requests.receipt(*generation) else {
+                continue;
+            };
+            for slot in slots {
+                if let Some(Outcome::Terminal { content }) = &slot.outcome {
+                    allocations.push((
+                        content.len(),
+                        content.capacity(),
+                        receipt.handoff_bytes_per_recipient(),
+                    ));
+                }
+            }
+        }
+        allocations
     }
 
     /// Narrows otherwise-empty admission policy for native preaccept controls.

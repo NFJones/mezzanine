@@ -550,7 +550,8 @@ addresses never grant task ownership or prove a substantive answer.
 
 Request receipts survive payload replay eviction independently of ordinary
 delivery custody, under finite count and metadata reservations made before
-acceptance. Source references stay exact through context and scheduler handoff.
+acceptance. Retained allocations count their actual owned capacity, rather than
+only the text length; cached output cannot retain uncharged formatting slack. Source references stay exact through context and scheduler handoff.
 After unrelated mail resumes the owner, the selected outcome still enters its
 next safe context boundary. Staging adds no scheduler slot and changes no settled
 call result. An older response is rejected through the existing context fence;

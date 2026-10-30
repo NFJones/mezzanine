@@ -1234,3 +1234,78 @@ fn request_bound_terminal_loop_continuation_preserves_exact_iteration_result() {
         service.terminate_all_pane_processes().unwrap();
     }
 }
+
+/// A genuine child can finish between accepted send and selected wait. Its
+/// retained result must charge actual owned String capacity, not only bounded
+/// text length: formatter growth can exceed the already reserved handoff bytes.
+/// ASCII and multibyte full-size outputs must fit before park, retain their
+/// exact attempt, then consume and release once through the normal wait owner.
+#[test]
+fn request_bound_terminal_cached_allocation_fits_preaccepted_handoff_headroom() {
+    for output in ["x".repeat(3072), "界".repeat(1024), "界".repeat(1025)] {
+        let (mut service, parent, _) = fixture();
+        service.configure_agent_scheduler_limit(2).unwrap();
+        let child = spawn_child(&mut service, &parent);
+        assert!(
+            service
+                .validate_native_agent_surface_startup(&child.pane_id)
+                .unwrap()
+        );
+        service.start_ready_agent_turns().unwrap();
+        let message = send(&mut service, &parent, &child.agent_id, true);
+        execute(
+            &mut service,
+            &child,
+            AgentAction {
+                id: "budgeted-terminal".into(),
+                payload: AgentActionPayload::Say {
+                    status: SayStatus::Final,
+                    text: output,
+                    content_type: mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE.into(),
+                },
+            },
+        );
+        let allocations = service.tracked_request_outcome_allocations_for_tests();
+        assert_eq!(
+            allocations.len(),
+            1,
+            "pre-park result must retain actual request custody"
+        );
+        let (length, capacity, reserved) = allocations[0];
+        assert!(
+            capacity <= reserved,
+            "cached terminal allocation exceeds its preaccepted headroom: length={length} capacity={capacity} reserved={reserved}"
+        );
+        assert_eq!(
+            capacity, length,
+            "cached outcome retains uncharged formatting slack"
+        );
+        wait(&mut service, &parent, &message, None);
+        assert_eq!(service.tracked_message_request_usage(), ((0, 0, 0), 0));
+        assert!(
+            service
+                .tracked_request_outcome_allocations_for_tests()
+                .is_empty()
+        );
+        let outcome: serde_json::Value = serde_json::from_str(
+            service.agent_turn_executions()[&parent.turn_id].action_results[0]
+                .structured_content_json
+                .as_deref()
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(outcome["state"], "peer_terminal");
+        assert_eq!(outcome["progress_witness"], true);
+        execute(
+            &mut service,
+            &parent,
+            AgentAction {
+                id: "close-budgeted-child".into(),
+                payload: AgentActionPayload::CloseAgent {
+                    agent_id: child.agent_id.clone(),
+                },
+            },
+        );
+        finish(&mut service, &parent);
+    }
+}
