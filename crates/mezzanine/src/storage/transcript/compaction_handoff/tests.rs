@@ -280,3 +280,103 @@ fn later_prefix_epoch_supersedes_terminal_certificates() {
         "later prefix"
     );
 }
+
+/// Missing and duplicated exact sources remain integrity conflicts at both
+/// prospective admission and committed publication. Diagnostics identify only
+/// phase and numeric source positions/counts; private source text and labels
+/// must never enter the error. The old epoch and archive remain untouched.
+#[test]
+fn occurrence_conflicts_report_phase_and_counts_without_source_payloads() {
+    let (store, rows) = fixture();
+    let handoff = TerminalCompactionHandoff::from_content(&rows[2].content)
+        .unwrap()
+        .unwrap();
+    for (count, source) in [
+        (0, vec![rows[1].clone()]),
+        (2, vec![rows[0].clone(), rows[0].clone(), rows[1].clone()]),
+    ] {
+        let admission =
+            terminal_handoff_source_is_contiguous(&rows[2].content, &source).unwrap_err();
+        let publication =
+            project_terminal_handoff("handoff-conversation", 10, &source, handoff.clone(), None)
+                .unwrap_err();
+        for (phase, error) in [
+            ("preappend", admission),
+            ("committed-publication", publication),
+        ] {
+            assert_eq!(error.kind(), crate::MezErrorKind::Conflict);
+            for expected in [
+                format!("phase={phase}"),
+                "witness_index=0".into(),
+                "source_index=0".into(),
+                "source_count=1".into(),
+                format!("match_count={count}"),
+            ] {
+                assert!(error.message().contains(&expected), "{}", error.message());
+            }
+            for private in ["identical text", "same label", "handoff-conversation"] {
+                assert!(!error.message().contains(private));
+            }
+        }
+    }
+    assert!(
+        store
+            .compaction_epoch("handoff-conversation")
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        !store
+            .transcript_path("handoff-conversation")
+            .unwrap()
+            .exists()
+    );
+    if store.root().exists() {
+        std::fs::remove_dir_all(store.root()).unwrap();
+    }
+}
+
+/// A sound group split across exact barriers is unsupported, while an ordinal
+/// gap is genuine corruption. The unsupported disposition must not disguise
+/// the latter or publish a partial selective summary over native evidence.
+#[test]
+fn split_group_admission_distinguishes_valid_layout_from_corrupt_ordinals() {
+    let (store, rows) = fixture();
+    for (ordinal, corrupt) in [(2, false), (3, true)] {
+        let extra = TranscriptContextEvent::execution_block_with_metadata(
+            mez_agent::ContextSourceKind::ActionResult,
+            "late result",
+            "private result",
+            mez_agent::ContextExecutionGroupId::new("first").unwrap(),
+            ordinal,
+            None,
+        )
+        .unwrap()
+        .to_transcript_content();
+        let mut logical = rows[..2].to_vec();
+        logical.push(row(3, "exact user barrier".into()));
+        logical.push(row(4, extra));
+        let result = terminal_handoff_source_is_contiguous(&rows[2].content, &logical);
+        if corrupt {
+            let error = result.unwrap_err();
+            assert_eq!(error.kind(), crate::MezErrorKind::Conflict);
+            assert!(
+                error
+                    .message()
+                    .contains("ordinals are incomplete or reordered")
+            );
+            assert!(!error.message().contains("private result"));
+        } else {
+            assert!(!result.unwrap());
+        }
+    }
+    assert!(
+        store
+            .compaction_epoch("handoff-conversation")
+            .unwrap()
+            .is_none()
+    );
+    if store.root().exists() {
+        std::fs::remove_dir_all(store.root()).unwrap();
+    }
+}

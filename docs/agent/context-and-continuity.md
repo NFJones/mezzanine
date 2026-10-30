@@ -307,12 +307,27 @@ survive subsequent turns and reopen once, without restoring covered raw groups
 or re-executing their actions. The archive itself is never truncated.
 
 Legacy/unowned source and archive layouts that cannot be represented safely by
-the selective epoch contract remain turn-local. In particular, interleaved
-display rows can make adjacent model-visible groups unmappable. Mez reports
+the selective epoch contract remain turn-local. Certificates and terminal rows
+share occurrence numbering over the complete restored chronology, so separate
+witnesses cannot restart a group's ordinals. Duplicate or contradictory witness
+sequences fail before certificate capture; the map cannot replace one witness's
+original payload with another witness's source. Compaction closes a group at its
+consumed frontier; it does not seal the canonical group forever. A later valid
+same-group occurrence can leave that group split across exact barriers or
+summary ranges. Such a layout cannot satisfy the complete-group selective
+contract and keeps raw replay authoritative before certificate append. Existing
+runtime ownership checks still reject late results lacking an owning assistant;
+this does not authorize replaying a provider response or an action.
+
+Interleaved display rows can likewise make adjacent model-visible groups unmappable. Mez reports
 that limitation before recording a publication certificate and keeps raw replay
 authoritative. A changed source/epoch or failed publication instead fails closed
 with an explicit persistence/history error; receipt recovery retries persistence,
-not provider actions. These guarantees do not assert that every old session is
+not provider actions. Missing or ambiguous source errors report capture, admission or
+committed-publication phase, witness/source indexes, source count and match count
+without including private source text or opaque provider/group labels. The typed
+occurrence encoding and handoff representation remain at their existing version.
+These guarantees do not assert that every old session is
 compactable, or that a larger follow-up prompt cannot legitimately need recovery.
 
 The context percentage is the latest positive ordinary execution sample divided

@@ -6,6 +6,8 @@
 
 use super::*;
 
+/// Late same-group evidence keeps its original full-chronology occurrence.
+mod occurrences;
 mod receive_admission;
 
 /// Mixed staging must abandon its original selective projection even when the

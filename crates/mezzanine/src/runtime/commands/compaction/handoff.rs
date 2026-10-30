@@ -3,7 +3,9 @@
 //! Private staging retains witnesses without granting publication authority.
 //! Acceptance transfers them to the turn; bookkeeping captures original live
 //! groups and an independently validated terminal witness before cleanup. No
-//! group identity is invented for legacy or unowned context.
+//! group identity is invented for legacy or unowned context. Certificates and
+//! transcript rows share a full-chronology occurrence map across witnesses;
+//! a consumed group frontier does not permanently seal later canonical events.
 
 use super::*;
 use crate::runtime::agent_state::{RuntimeCompactionWitness, RuntimeTurnCompactionHandoff};
@@ -106,11 +108,13 @@ impl RuntimeSessionService {
 
     /// Restores witnessed raw source for canonical persistence, not execution.
     /// Immutable chronological identities keep barriers and native groups ordered.
+    /// Duplicate witness sequences and changed live source fail before capture;
+    /// only the exact accepted summary at its own anchor may replace raw source.
     pub(in crate::runtime) fn terminal_compaction_source_chronology(
         &self,
         turn_id: &str,
         context: &AgentContext,
-    ) -> Vec<mez_agent::ConversationEvent> {
+    ) -> Result<Vec<mez_agent::ConversationEvent>> {
         let mut events = context
             .chronology()
             .iter()
@@ -118,13 +122,78 @@ impl RuntimeSessionService {
             .map(|event| (event.sequence(), event))
             .collect::<std::collections::BTreeMap<_, _>>();
         if let Some(handoff) = self.agent.agent_turn_compaction_handoffs.get(turn_id) {
-            for witness in &handoff.witnesses {
-                for event in &witness.source {
+            let mut witnessed = std::collections::BTreeSet::new();
+            for (witness_index, witness) in handoff.witnesses.iter().enumerate() {
+                for (source_index, event) in witness.source.iter().enumerate() {
+                    if !witnessed.insert(event.sequence()) {
+                        return Err(MezError::conflict(format!(
+                            "duplicate or conflicting terminal compaction source: phase=capture witness_index={witness_index} source_index={source_index} match_count=2"
+                        )));
+                    }
+                    if let Some(current) = events.get(&event.sequence()) {
+                        let accepted_summary = event.sequence().get() == witness.anchor
+                            && (current.block().source == ContextSourceKind::CompactionSelective
+                                || (current.block().source == ContextSourceKind::Memory
+                                    && current.block().label == "context compaction summary"))
+                            && current.block().content == witness.summary;
+                        if current != event && !accepted_summary {
+                            return Err(MezError::conflict(format!(
+                                "changed terminal compaction source: phase=capture witness_index={witness_index} source_index={source_index}"
+                            )));
+                        }
+                    }
                     events.insert(event.sequence(), event.clone());
                 }
             }
         }
-        events.into_values().collect()
+        Ok(events.into_values().collect())
+    }
+
+    /// Encodes typed execution occurrences once over the complete restored
+    /// chronology, including imported predecessors. Witness boundaries never
+    /// reset a group's ordinal. Both certificates and newly persisted rows use
+    /// this map; legacy/unowned blocks remain outside its typed authority.
+    /// Invalid payloads and exhausted ordinals fail before certificate admission.
+    pub(in crate::runtime) fn terminal_execution_occurrences(
+        chronology: &[mez_agent::ConversationEvent],
+    ) -> Result<std::collections::BTreeMap<u64, mez_agent::TranscriptContextEvent>> {
+        let mut ordinals = std::collections::BTreeMap::<_, u64>::new();
+        let mut occurrences = std::collections::BTreeMap::new();
+        for event in chronology {
+            let block = event.block();
+            if !matches!(
+                block.source,
+                ContextSourceKind::CommittedEvidence
+                    | ContextSourceKind::TranscriptAssistant
+                    | ContextSourceKind::TranscriptTool
+                    | ContextSourceKind::ActionResult
+                    | ContextSourceKind::McpServerReference
+                    | ContextSourceKind::McpServerSearchResult
+                    | ContextSourceKind::McpRetrievedManifest
+            ) {
+                continue;
+            }
+            let Some(group) = event.execution_group_id() else {
+                continue;
+            };
+            let ordinal = ordinals.entry(group.clone()).or_default();
+            *ordinal = ordinal.checked_add(1).ok_or_else(|| {
+                MezError::invalid_state("terminal execution occurrence ordinal exhausted")
+            })?;
+            let source = mez_agent::TranscriptContextEvent::execution_block_with_metadata(
+                block.source,
+                block.label.clone(),
+                block.content.clone(),
+                group.clone(),
+                *ordinal,
+                event.provider_owner().cloned(),
+            )
+            .ok_or_else(|| {
+                MezError::invalid_state("terminal execution occurrence cannot be encoded")
+            })?;
+            occurrences.insert(event.sequence().get(), source);
+        }
+        Ok(occurrences)
     }
 
     /// Encodes only accepted anchored summaries whose complete source has typed
@@ -136,6 +205,11 @@ impl RuntimeSessionService {
         let Some(handoff) = self.agent.agent_turn_compaction_handoffs.get(turn_id) else {
             return Ok(None);
         };
+        let context = self.agent_turn_contexts().get(turn_id).ok_or_else(|| {
+            MezError::conflict("accepted terminal compaction context is unavailable")
+        })?;
+        let chronology = self.terminal_compaction_source_chronology(turn_id, context)?;
+        let occurrences = Self::terminal_execution_occurrences(&chronology)?;
         let mut replacements = Vec::new();
         for witness in &handoff.witnesses {
             if self
@@ -155,26 +229,13 @@ impl RuntimeSessionService {
                     "accepted terminal compaction summary anchor changed",
                 ));
             }
-            let mut ordinals = std::collections::BTreeMap::new();
             let mut sources = Vec::new();
             for event in &witness.source {
-                let Some(group) = event.execution_group_id() else {
+                if event.execution_group_id().is_none() {
                     return Ok(None);
-                };
-                let ordinal = ordinals.entry(group.clone()).or_insert(0u64);
-                *ordinal = ordinal.saturating_add(1);
-                let block = event.block();
-                let source = mez_agent::TranscriptContextEvent::execution_block_with_metadata(
-                    block.source,
-                    block.label.clone(),
-                    block.content.clone(),
-                    group.clone(),
-                    *ordinal,
-                    event.provider_owner().cloned(),
-                )
-                .ok_or_else(|| {
-                    MezError::invalid_state("terminal compaction source cannot be encoded")
-                })?;
+                }
+                let source = occurrences.get(&event.sequence().get()).ok_or_else(||
+                    MezError::conflict("terminal compaction source occurrence is unavailable in canonical chronology"))?;
                 sources.push(source.to_transcript_content());
             }
             replacements.push(TerminalCompactionReplacement {
@@ -210,7 +271,7 @@ impl RuntimeSessionService {
                     .is_some_and(|session| session.session_id == turn.conversation_id)
                 {
                     self.append_agent_status_text_to_terminal_buffer(&turn.pane_id,
-                        "agent: terminal compaction handoff unsupported for interleaved archive source; raw replay remains authoritative")?;
+                        "agent: terminal compaction handoff unsupported for interleaved or split execution-group archive source; raw replay remains authoritative")?;
                     self.append_agent_trace_turn_event(&turn.pane_id, &turn.turn_id,
                         "context_compaction terminal_handoff supported=false reason=noncontiguous_archive_source")?;
                 } else {

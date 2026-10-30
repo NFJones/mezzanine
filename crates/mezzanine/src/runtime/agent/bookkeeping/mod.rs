@@ -1639,9 +1639,9 @@ impl RuntimeSessionService {
         let mut sequence = entries
             .last()
             .map_or(first_sequence, |entry| entry.sequence.saturating_add(1));
-        let mut group_ordinals = BTreeMap::<String, u64>::new();
         let mut active_user_seen = false;
-        let chronology = self.terminal_compaction_source_chronology(&turn.turn_id, context);
+        let chronology = self.terminal_compaction_source_chronology(&turn.turn_id, context)?;
+        let occurrences = Self::terminal_execution_occurrences(&chronology)?;
         for event in chronology
             .iter()
             .filter(|event| event.sequence().get() > imported_history_sequence_high_water)
@@ -1708,19 +1708,8 @@ impl RuntimeSessionService {
                     | ContextSourceKind::McpRetrievedManifest
             ) {
                 continue;
-            } else if let Some(group) = event.execution_group_id() {
-                let ordinal = group_ordinals
-                    .entry(group.as_str().to_string())
-                    .or_default();
-                *ordinal = ordinal.saturating_add(1);
-                TranscriptContextEvent::execution_block_with_metadata(
-                    block.source,
-                    block.label.clone(),
-                    block.content.clone(),
-                    group.clone(),
-                    *ordinal,
-                    event.provider_owner().cloned(),
-                )
+            } else if event.execution_group_id().is_some() {
+                occurrences.get(&event.sequence().get()).cloned()
             } else {
                 TranscriptContextEvent::execution_block(
                     block.source,

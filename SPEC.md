@@ -10996,7 +10996,19 @@ the prior epoch authoritative even if selected rows subsequently commit.
 An accepted turn-local replacement MAY subsequently acquire cross-turn
 durability through a distinct terminal handoff. That handoff MUST retain the
 accepted summary's chronological anchor and original source occurrences,
-including immutable execution-group identity and provider ownership. Terminal
+including immutable execution-group identity and provider ownership. Certificate
+source and terminal rows MUST use one occurrence map over the restored full
+chronology; witness boundaries MUST NOT reset per-group ordinals. A group closed
+at a consumed compaction frontier is not permanently sealed against later
+canonical occurrences. A sound group split across exact barriers or separate
+summary ranges is unsupported by the complete-group selective epoch contract;
+it MUST retain raw authority before certificate append. Missing, duplicate,
+changed, or noncontiguous ordinal evidence remains an integrity conflict.
+Conflicting or duplicate witness source sequences MUST fail before certificate
+capture; a canonical map MUST NOT substitute another witness's original payload.
+Conflict diagnostics MUST identify capture/admission/publication phase and numeric
+witness/source indexes and match counts without exposing private source payloads,
+opaque group/provider labels, or summaries. Terminal
 bookkeeping MUST persist required original live source through the ordinary
 exact append-receipt pipeline without replaying any actions. Only a complete
 committed source proof and an unchanged authoritative epoch may publish the

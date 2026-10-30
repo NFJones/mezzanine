@@ -6,7 +6,10 @@
 //! captured baseline and exact source under the epoch writer's conversation
 //! lock; append retries and restart recovery can repeat the transition safely.
 //! Fork capture uses the same source-proof derivation without publishing against
-//! the parent. Accepted authority travels in the child epoch; copied audit rows
+//! the parent. Prospective admission rejects genuine occurrence conflicts while
+//! classifying sound split-group layouts as unsupported raw-authoritative history.
+//! Exact lookup diagnostics expose only phase and numeric indexes/counts.
+//! Accepted authority travels in the child epoch; copied audit rows
 //! use a separate inert marker and cannot replay against renumbered child rows.
 
 use mez_agent::{
@@ -43,10 +46,26 @@ pub(crate) fn terminal_handoff_source_is_contiguous(
         ))
     })?;
     handoff.validate()?;
+    // Decode each row once: inspecting each group separately would repeatedly
+    // allocate large private payloads in multi-witness handoffs.
+    let mut group_history = std::collections::BTreeMap::<_, Vec<_>>::new();
+    for (index, row) in entries.iter().enumerate() {
+        if let Some(TranscriptContextEvent::ExecutionBlock {
+            execution_group_id: Some(group),
+            ordinal: Some(ordinal),
+            ..
+        }) = TranscriptContextEvent::from_transcript_content(&row.content)
+        {
+            group_history
+                .entry(group)
+                .or_default()
+                .push((index, ordinal));
+        }
+    }
     let mut contiguous = true;
-    for replacement in handoff.replacements {
+    for (witness_index, replacement) in handoff.replacements.iter().enumerate() {
         let mut indexes = Vec::new();
-        for source in &replacement.sources {
+        for (source_index, source) in replacement.sources.iter().enumerate() {
             let matches = entries
                 .iter()
                 .enumerate()
@@ -54,8 +73,12 @@ pub(crate) fn terminal_handoff_source_is_contiguous(
                 .map(|(index, _)| index)
                 .collect::<Vec<_>>();
             if matches.len() != 1 {
-                return Err(MezError::conflict(
-                    "terminal compaction source occurrence is missing or ambiguous",
+                return Err(source_occurrence_conflict(
+                    "preappend",
+                    witness_index,
+                    source_index,
+                    replacement.sources.len(),
+                    matches.len(),
                 ));
             }
             indexes.push(matches[0]);
@@ -68,8 +91,58 @@ pub(crate) fn terminal_handoff_source_is_contiguous(
         contiguous &= indexes
             .windows(2)
             .all(|pair| pair[0].checked_add(1) == Some(pair[1]));
+        // Every range must own complete groups. A valid late same-group segment
+        // across an exact barrier is not representable by the selective epoch;
+        // reject malformed ordinal history, but classify a sound split as
+        // unsupported before any publication certificate is appended.
+        let selected = indexes
+            .iter()
+            .copied()
+            .collect::<std::collections::BTreeSet<_>>();
+        let groups = replacement
+            .sources
+            .iter()
+            .filter_map(
+                |source| match TranscriptContextEvent::from_transcript_content(source) {
+                    Some(TranscriptContextEvent::ExecutionBlock {
+                        execution_group_id, ..
+                    }) => execution_group_id,
+                    _ => None,
+                },
+            )
+            .collect::<std::collections::BTreeSet<_>>();
+        for group in groups {
+            let mut expected = Some(1_u64);
+            if let Some(history) = group_history.get(&group) {
+                for &(index, ordinal) in history {
+                    if Some(ordinal) != expected {
+                        return Err(MezError::conflict(format!(
+                            "terminal compaction source group ordinals are incomplete or reordered: phase=preappend witness_index={witness_index} source_count={}",
+                            replacement.sources.len()
+                        )));
+                    }
+                    expected = ordinal.checked_add(1);
+                    contiguous &= selected.contains(&index);
+                }
+            }
+        }
     }
     Ok(contiguous)
+}
+
+/// Describes a failed exact occurrence lookup without exposing source payloads,
+/// opaque group/provider labels, summaries, or private context. Numeric indexes
+/// and counts distinguish candidate admission from committed publication.
+fn source_occurrence_conflict(
+    phase: &str,
+    witness_index: usize,
+    source_index: usize,
+    source_count: usize,
+    match_count: usize,
+) -> MezError {
+    MezError::conflict(format!(
+        "terminal compaction source occurrence is missing or ambiguous: phase={phase} witness_index={witness_index} source_index={source_index} source_count={source_count} match_count={match_count}"
+    ))
 }
 
 /// Accepted model replacement and its exact, occurrence-bearing source rows.
@@ -277,7 +350,7 @@ fn project_terminal_handoff(
 ) -> Result<Option<(AgentCompactionEpoch, Vec<TranscriptEntry>)>> {
     let mut additions = Vec::new();
     let mut frozen = Vec::new();
-    for replacement in &handoff.replacements {
+    for (witness_index, replacement) in handoff.replacements.iter().enumerate() {
         let starts = entries
             .iter()
             .enumerate()
@@ -287,8 +360,12 @@ fn project_terminal_handoff(
             .map(|(index, _)| index)
             .collect::<Vec<_>>();
         if starts.len() != 1 {
-            return Err(MezError::conflict(
-                "terminal compaction source occurrence is missing or ambiguous",
+            return Err(source_occurrence_conflict(
+                "committed-publication",
+                witness_index,
+                0,
+                replacement.sources.len(),
+                starts.len(),
             ));
         }
         let rows = entries
