@@ -1456,3 +1456,180 @@ fn request_bound_reply_retirement_uses_delivery_snapshot_for_ttl() {
         finish(&mut service, &parent);
     }
 }
+
+/// Two genuine requests can capture the same live owned attempt before it
+/// completes. Each selected request must receive that exact result and release
+/// its own reservation, while consumption of the first result prevents the
+/// cohort from counting the same terminal work as progress again. A duplicate
+/// native terminal observation between selections cannot reset that witness.
+#[test]
+fn request_bound_terminal_cohort_consumes_progress_once_across_requests() {
+    let (mut service, parent, _) = fixture();
+    let child = spawn_child(&mut service, &parent);
+    assert!(
+        service
+            .validate_native_agent_surface_startup(&child.pane_id)
+            .unwrap()
+    );
+    let first = send(&mut service, &parent, &child.agent_id, true);
+    let second = send(&mut service, &parent, &child.agent_id, true);
+    assert_ne!(first, second);
+    wait(&mut service, &parent, &first, None);
+    service
+        .complete_running_agent_turn_and_start_ready(
+            &child,
+            AgentTurnState::Completed,
+            "exact cohort task terminal",
+        )
+        .unwrap();
+    service
+        .deliver_pending_runtime_agent_messages(current_unix_millis())
+        .unwrap();
+    let outcome: serde_json::Value = serde_json::from_str(
+        service.agent_turn_executions()[&parent.turn_id].action_results[0]
+            .structured_content_json
+            .as_deref()
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(outcome["state"], "peer_terminal");
+    assert_eq!(outcome["progress_witness"], true);
+    let first_generation = outcome["dependency_generation"].clone();
+    assert_ne!(service.tracked_message_request_usage(), ((0, 0, 0), 0));
+    service
+        .emit_subagent_task_result_for_state(&child, AgentTurnState::Completed)
+        .unwrap();
+    wait(&mut service, &parent, &second, None);
+    service
+        .deliver_pending_runtime_agent_messages(current_unix_millis())
+        .unwrap();
+    let outcome: serde_json::Value = serde_json::from_str(
+        service.agent_turn_executions()[&parent.turn_id].action_results[0]
+            .structured_content_json
+            .as_deref()
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(outcome["state"], "peer_terminal");
+    assert_eq!(outcome["progress_witness"], false);
+    assert_ne!(outcome["dependency_generation"], first_generation);
+    assert_eq!(service.tracked_message_request_usage(), ((0, 0, 0), 0));
+    let context = &service.agent_turn_contexts()[&parent.turn_id];
+    let sources: Vec<_> = context
+        .blocks()
+        .iter()
+        .filter(|block| block.label.starts_with("request-handoff:"))
+        .collect();
+    assert_eq!(sources.len(), 2);
+    assert!(
+        sources
+            .iter()
+            .all(|block| block.content.contains(&child.turn_id))
+    );
+    execute(
+        &mut service,
+        &parent,
+        AgentAction {
+            id: "close-cohort-child".into(),
+            payload: AgentActionPayload::CloseAgent {
+                agent_id: child.agent_id.clone(),
+            },
+        },
+    );
+    finish(&mut service, &parent);
+}
+
+/// Tracking an idle persistent peer freezes registration-only evidence because
+/// no task is live at acceptance. Delivery may legitimately start a later
+/// receive-triggered task, but that task's successful terminal work must never
+/// be adopted by the original request. Only actual registration retirement
+/// then settles it as opaque unavailability with no new progress witness.
+#[test]
+fn request_bound_idle_peer_does_not_adopt_later_receive_task_terminal() {
+    let (mut service, parent, _, primary) = fixture_with_primary();
+    service.configure_agent_scheduler_limit(2).unwrap();
+    let initial = spawn_child(&mut service, &parent);
+    assert!(
+        service
+            .validate_native_agent_surface_startup(&initial.pane_id)
+            .unwrap()
+    );
+    service.start_ready_agent_turns().unwrap();
+    service
+        .complete_running_agent_turn_and_start_ready(
+            &initial,
+            AgentTurnState::Completed,
+            "leave persistent peer idle before acceptance",
+        )
+        .unwrap();
+    assert_eq!(
+        service
+            .agent_turn_ledger()
+            .latest_turn_for_pane(&initial.pane_id)
+            .unwrap()
+            .state,
+        AgentTurnState::Completed
+    );
+    let message = send(&mut service, &parent, &initial.agent_id, true);
+    service
+        .deliver_pending_runtime_agent_messages(current_unix_millis())
+        .unwrap();
+    let later = service
+        .agent_turn_ledger()
+        .latest_turn_for_pane(&initial.pane_id)
+        .unwrap()
+        .clone();
+    assert_ne!(later.turn_id, initial.turn_id);
+    assert_eq!(later.state, AgentTurnState::Running);
+    wait(&mut service, &parent, &message, None);
+    service
+        .complete_running_agent_turn_and_start_ready(
+            &later,
+            AgentTurnState::Completed,
+            "later unbound task must not satisfy earlier request",
+        )
+        .unwrap();
+    service
+        .deliver_pending_runtime_agent_messages(current_unix_millis())
+        .unwrap();
+    assert_eq!(
+        service
+            .agent_turn_ledger()
+            .turn(&parent.turn_id)
+            .unwrap()
+            .state,
+        AgentTurnState::Blocked,
+        "request adopted a task that was not live at acceptance"
+    );
+    assert_eq!(
+        service.agent_turn_executions()[&parent.turn_id].action_results[0].status,
+        ActionStatus::Running
+    );
+    assert!(
+        !service.agent_turn_contexts()[&parent.turn_id]
+            .blocks()
+            .iter()
+            .any(|block| block.label.starts_with("request-handoff:"))
+    );
+    assert_ne!(service.tracked_message_request_usage(), ((0, 0, 0), 0));
+    service
+        .dispatch_runtime_pane_close(
+            &primary,
+            &serde_json::json!({"pane_id":initial.pane_id,"force":true}).to_string(),
+        )
+        .unwrap();
+    service
+        .deliver_pending_runtime_agent_messages(current_unix_millis())
+        .unwrap();
+    let outcome: serde_json::Value = serde_json::from_str(
+        service.agent_turn_executions()[&parent.turn_id].action_results[0]
+            .structured_content_json
+            .as_deref()
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(outcome["state"], "peer_unavailable");
+    assert_eq!(outcome["progress_witness"], false);
+    assert_eq!(service.tracked_message_request_usage(), ((0, 0, 0), 0));
+    finish(&mut service, &parent);
+}
