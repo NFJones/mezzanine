@@ -1086,6 +1086,21 @@ fn runtime_restart_objective_metadata_failure_restores_prior_pane_state() {
 /// release also prevents predicted append cardinality from faking a frontier.
 #[test]
 fn runtime_restored_agent_metadata_marks_running_turn_interrupted() {
+    check_restored_running_turn_interruption(false);
+}
+
+/// A complete row larger than the bounded context preview must survive actual
+/// startup restoration and the subsequent routed interruption diagnostic append.
+/// The restored frontier, immutable prefix, lease release, and repeated restore
+/// are checked through the same runtime path as the ordinary-record control.
+#[test]
+fn runtime_restored_large_transcript_appends_interruption_without_replay() {
+    check_restored_running_turn_interruption(true);
+}
+
+/// Exercises restart adoption and diagnostic publication with an optional large
+/// durable prefix. Generated stores contain no provider or native action work.
+fn check_restored_running_turn_interruption(large_record: bool) {
     let mut service = test_runtime_service();
     let transcript_store = AgentTranscriptStore::new(temp_root("runtime-agent-active-interrupted"));
     service.set_agent_transcript_store(transcript_store.clone());
@@ -1099,6 +1114,23 @@ fn runtime_restored_agent_metadata_marks_running_turn_interrupted() {
         .unwrap()
         .session_id
         .clone();
+    let original = large_record.then(|| TranscriptEntry {
+        conversation_id: conversation_id.clone(),
+        sequence: 1,
+        created_at_unix_seconds: 1,
+        role: TranscriptRole::Assistant,
+        turn_id: "completed-before-restart".into(),
+        agent_id: "agent-%1".into(),
+        pane_id: "%1".into(),
+        content: "large complete durable source\n".repeat(120_000),
+    });
+    if let Some(row) = &original {
+        transcript_store.append(row).unwrap();
+        service
+            .agent_shell_store_mut()
+            .record_transcript_append("%1", std::slice::from_ref(row))
+            .unwrap();
+    }
     service
         .start_agent_turn(mez_agent::AgentTurnRecord {
             turn_id: "turn-running-restore".to_string(),
@@ -1155,13 +1187,17 @@ fn runtime_restored_agent_metadata_marks_running_turn_interrupted() {
     transcript_store.require_restart_replay_lease_for_tests();
     transcript_store.set_restart_intervening_append_for_tests(TranscriptEntry {
         conversation_id: conversation_id.clone(),
-        sequence: 1,
+        sequence: if large_record { 2 } else { 1 },
         created_at_unix_seconds: 1,
         role: TranscriptRole::Assistant,
         turn_id: "intervening-restart-writer".into(),
         agent_id: "agent-%other".into(),
         pane_id: "%other".into(),
-        content: "actual row between replay adoption and diagnostic allocation".into(),
+        content: if large_record {
+            "large complete row immediately before diagnostic allocation\n".repeat(60_000)
+        } else {
+            "actual row between replay adoption and diagnostic allocation".into()
+        },
     });
     let mut restored = test_runtime_service();
     restored.session.id = service.session().id.clone();
@@ -1219,6 +1255,27 @@ fn runtime_restored_agent_metadata_marks_running_turn_interrupted() {
         .unwrap();
     assert_eq!(restored_metadata[0].running_turn_id, None);
     assert_eq!(restored_metadata[0].running_turn_kind, None);
+    let durable = transcript_store.inspect(&conversation_id).unwrap();
+    assert_eq!(durable.len(), if large_record { 3 } else { 2 });
+    assert_eq!(
+        durable.iter().map(|row| row.sequence).collect::<Vec<_>>(),
+        if large_record {
+            vec![1, 2, 3]
+        } else {
+            vec![1, 2]
+        }
+    );
+    if let Some(original) = &original {
+        assert_eq!(
+            &durable[0], original,
+            "startup must preserve the large source"
+        );
+    }
+    if large_record {
+        assert!(durable[1].content.len() > 3 * 1024 * 1024);
+        assert_eq!(durable[1].turn_id, "intervening-restart-writer");
+        assert_eq!(durable[2].role, TranscriptRole::System);
+    }
     let restart_diagnostics = transcript_store
         .inspect(&conversation_id)
         .unwrap()

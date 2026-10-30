@@ -18,6 +18,8 @@ mod receipt_admission;
 mod replay_snapshot;
 /// Content edits cannot invalidate an authoritative selective compaction summary.
 mod selective_edit_fence;
+/// Held sequence lookups and competing appends preserve mutation ownership.
+mod sequence_coherence;
 
 use std::{
     collections::{BTreeMap, BTreeSet},
