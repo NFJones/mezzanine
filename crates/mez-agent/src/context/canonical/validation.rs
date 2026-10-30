@@ -308,6 +308,15 @@ impl super::AgentContext {
                 last_sequence = sequence.get();
             }
         }
+        if self
+            .pending_execution_groups
+            .iter()
+            .any(|group| !assistant_execution_groups.contains(group))
+        {
+            return Err(AgentContextError::new(
+                "context mutation removed a pending execution group",
+            ));
+        }
         if last_sequence >= self.next_event_sequence {
             return Err(AgentContextError::new(
                 "next context event sequence must exceed the committed high-water mark",

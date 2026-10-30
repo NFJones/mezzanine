@@ -75,6 +75,11 @@ the child has completed. A received result keeps its original task attempt and
 first exact value while awaiting settlement; a conflicting repeat cannot replace
 it. A pending received value cannot follow a redirected child attempt. Preparing
 that value does not mean it has been committed or that the parent may continue.
+The original execution group remains protected from context compaction until
+its last joined dependency settles or its owner is explicitly retired. Later
+mail does not close the group. Native provider history falls back to neutral
+history when a call is unanswered or when another conversation event separates
+it from its result; Mez preserves chronology rather than moving those events.
 
 A successful one-task child delivers its result before its pane closes. A
 failed or interrupted child pane stays available for diagnosis unless you close

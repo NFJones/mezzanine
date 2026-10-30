@@ -15,7 +15,10 @@ impl AgentContext {
     /// The live chronology must retain the complete frozen source unchanged.
     /// Arrivals keep their original identity, trust, retention and execution
     /// metadata. Validation is atomic; source rewrites or invalid ownership
-    /// leave this candidate unchanged. Stable-prefix refresh is independent.
+    /// leave this candidate unchanged. Runtime pending-group protection comes
+    /// from the current live owner, including releases; a candidate that already
+    /// removed newly protected source fails before adoption. Stable-prefix
+    /// refresh is independent.
     pub fn rebase_chronology_suffix(
         &mut self,
         frozen: &[ConversationEvent],
@@ -36,6 +39,9 @@ impl AgentContext {
         let suffix = &live.chronology[frozen.len()..];
         let mut candidate = self.clone();
         candidate.chronology.extend_from_slice(suffix);
+        candidate
+            .pending_execution_groups
+            .clone_from(&live.pending_execution_groups);
         candidate.next_event_sequence = candidate.next_event_sequence.max(live.next_event_sequence);
         candidate.rebuild_projections();
         candidate.validate_durable()?;

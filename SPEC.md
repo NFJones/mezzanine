@@ -13530,6 +13530,22 @@ context, persistence, presentation or wake settlement and grants no provider
 or scheduler authority. Source-group, action and result identity MUST still
 match before applying it to a live slot. A pending received result MUST NOT
 silently transfer into a redirected child attempt.
+The canonical context MUST protect each captured execution group from
+compaction while any joined dependency still owns that group, including after
+later peer mail or another response has arrived. Repeated capture MUST be
+idempotent; the last dependency's retirement or explicit owner/session cleanup
+MUST release that protection. Protection is runtime-only and grants no provider
+or action authority. Compaction application MUST recheck protection even for a
+plan frozen before the dependency was retained. Destructive context replacement
+MUST NOT silently discard protected source.
+Staged compaction adoption MUST refresh pending-group protection from the live
+runtime owner, including releases, and MUST reject a candidate that already
+removed newly protected source.
+Provider-native replay MUST require complete original call/result pairing.
+Incomplete DeepSeek calls MUST retain provider-neutral history. An original
+native group interrupted by other model-visible chronology MUST likewise use
+neutral history even after a late result completes the pair; replay MUST NOT
+move events or fabricate a native result to restore adjacency.
 Joined dependency records are result-correlation metadata and MUST NOT by
 themselves keep a successfully completed child session alive.
 In `detach` mode, the parent may continue immediately after spawn creation

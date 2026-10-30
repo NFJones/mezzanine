@@ -13,6 +13,21 @@ fn custody_fixture() -> (
     JoinedSubagentDependency,
     mez_agent::AgentTurnExecution,
 ) {
+    custody_fixture_with_actions(vec![runtime_spawn_agent_action(
+        "custody-original-spawn",
+        "inspect original task",
+    )])
+}
+
+/// Uses the same real spawn path for one or multiple original joined actions.
+fn custody_fixture_with_actions(
+    actions: Vec<mez_agent::AgentAction>,
+) -> (
+    RuntimeSessionService,
+    mez_agent::AgentTurnRecord,
+    JoinedSubagentDependency,
+    mez_agent::AgentTurnExecution,
+) {
     let mut service = test_runtime_service();
     service.set_agent_default_shell_mode(crate::runtime::config::ShellMode::Native);
     service
@@ -43,10 +58,7 @@ fn custody_fixture() -> (
             provider_transcript_events: Vec::new(),
             action_batch: Some(mez_agent::MaapBatch {
                 rationale: "one original child".into(),
-                actions: vec![runtime_spawn_agent_action(
-                    "custody-original-spawn",
-                    "inspect original task",
-                )],
+                actions,
             }),
         },
     };
@@ -417,4 +429,130 @@ fn runtime_joined_prepared_result_blocks_attempt_redirection_until_settlement() 
     assert!(std::sync::Arc::ptr_eq(&prepared, &duplicate));
     service.clear_all_joined_subagent_dependencies();
     service.terminate_all_pane_processes().unwrap();
+}
+
+/// Returns the fixture's actual typed original execution group, not an inferred
+/// action id, provider label or peer-message token.
+fn custody_original_group(
+    service: &RuntimeSessionService,
+    parent: &str,
+) -> mez_agent::ContextExecutionGroupId {
+    service
+        .agent_turn_contexts()
+        .get(parent)
+        .unwrap()
+        .chronology()
+        .iter()
+        .find_map(|event| event.execution_group_id().cloned())
+        .unwrap()
+}
+
+/// Two real child completions from one spawn batch share pending-context
+/// protection. Settling the first child cannot make the other child's original
+/// source compactable, and final settlement releases it before normal resume.
+/// Child startup and terminal responses use the actual native runtime boundary.
+#[test]
+fn runtime_joined_pending_group_survives_first_child_and_releases_after_last() {
+    let (mut service, parent, _, _) = custody_fixture_with_actions(vec![
+        runtime_spawn_agent_action("pending-child-one", "inspect one"),
+        runtime_spawn_agent_action("pending-child-two", "inspect two"),
+    ]);
+    let group = custody_original_group(&service, &parent.turn_id);
+    assert!(
+        service
+            .agent_turn_contexts()
+            .get(&parent.turn_id)
+            .unwrap()
+            .execution_group_is_pending(&group)
+    );
+    let children = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .filter(|turn| turn.turn_id != parent.turn_id)
+        .cloned()
+        .collect::<Vec<_>>();
+    assert_eq!(children.len(), 2);
+    for child in &children {
+        assert!(
+            service
+                .validate_native_agent_surface_startup(&child.pane_id)
+                .unwrap()
+        );
+    }
+    service.start_ready_agent_turns().unwrap();
+    for remaining in (0..2).rev() {
+        let child = service
+            .agent_turn_ledger()
+            .turns()
+            .iter()
+            .find(|turn| turn.turn_id != parent.turn_id && turn.state == AgentTurnState::Running)
+            .cloned()
+            .unwrap();
+        let provider = RuntimeBatchProvider {
+            response: runtime_say_response_for_agent(
+                &child.turn_id,
+                &child.agent_id,
+                "PENDING_GROUP_CHILD_DONE",
+                true,
+            ),
+        };
+        service
+            .execute_agent_turn_with_provider(
+                &child.turn_id,
+                &provider,
+                runtime_model_profile("runtime-batch", "test"),
+            )
+            .unwrap();
+        assert_eq!(service.joined_subagent_dependency_count(), remaining);
+        assert_eq!(
+            service
+                .agent_turn_contexts()
+                .get(&parent.turn_id)
+                .unwrap()
+                .execution_group_is_pending(&group),
+            remaining != 0
+        );
+    }
+    assert_eq!(
+        service
+            .agent_turn_ledger()
+            .turn(&parent.turn_id)
+            .unwrap()
+            .state,
+        AgentTurnState::Running
+    );
+    service.terminate_all_pane_processes().unwrap();
+}
+
+/// Session-wide dependency reset and terminal parent ownership cleanup both
+/// release their own context protection. No protected execution is left behind
+/// after its exact controller owner has deliberately retired the obligation.
+#[test]
+fn runtime_joined_pending_group_cleanup_releases_protection() {
+    for reset_all in [true, false] {
+        let (mut service, parent, _, _) = custody_fixture();
+        let group = custody_original_group(&service, &parent.turn_id);
+        assert!(
+            service
+                .agent_turn_contexts()
+                .get(&parent.turn_id)
+                .unwrap()
+                .execution_group_is_pending(&group)
+        );
+        if reset_all {
+            service.clear_all_joined_subagent_dependencies();
+        } else {
+            service.clear_agent_execution_group_ownership_for_turn(&parent.turn_id);
+        }
+        assert!(
+            !service
+                .agent_turn_contexts()
+                .get(&parent.turn_id)
+                .unwrap()
+                .execution_group_is_pending(&group)
+        );
+        service.clear_all_joined_subagent_dependencies();
+        service.terminate_all_pane_processes().unwrap();
+    }
 }

@@ -141,6 +141,11 @@ impl RuntimeSessionService {
                 ));
             }
         }
+        self.agent_turn_contexts_mut()
+            .get_mut(&turn.turn_id)
+            .ok_or_else(|| MezError::invalid_state("joined parent context is missing"))?
+            .retain_pending_execution_group(&group)
+            .map_err(|error| MezError::invalid_state(error.to_string()))?;
         if dependencies.iter().all(|dependency| {
             self.agent
                 .joined_parent_executions
@@ -223,9 +228,54 @@ impl RuntimeSessionService {
 
     /// Drops source only after its existing exact dependency no longer owns it.
     pub(super) fn prune_joined_parent_execution_custody(&mut self) {
+        let retired = self
+            .agent
+            .joined_parent_executions
+            .iter()
+            .filter(|(child, owner)| {
+                self.agent.joined_subagent_dependencies.get(*child) != Some(&owner.dependency)
+            })
+            .map(|(_, owner)| {
+                (
+                    owner.source.turn.turn_id.clone(),
+                    owner.source.group.clone(),
+                )
+            })
+            .collect::<std::collections::BTreeSet<_>>();
         self.agent.joined_parent_executions.retain(|child, owner| {
             self.agent.joined_subagent_dependencies.get(child) == Some(&owner.dependency)
         });
+        for (parent, group) in retired {
+            if !self
+                .agent
+                .joined_parent_executions
+                .values()
+                .any(|owner| owner.source.turn.turn_id == parent && owner.source.group == group)
+                && let Some(context) = self.agent_turn_contexts_mut().get_mut(&parent)
+            {
+                context.release_pending_execution_group(&group);
+            }
+        }
+    }
+
+    /// Retires a parent's source and pending-context protection at its existing
+    /// terminal ownership cleanup. Sibling joins of another parent are untouched.
+    pub(super) fn release_joined_parent_execution_custody_for_turn(&mut self, turn_id: &str) {
+        let groups = self
+            .agent
+            .joined_parent_executions
+            .values()
+            .filter(|owner| owner.parent_turn_id() == turn_id)
+            .map(|owner| owner.source.group.clone())
+            .collect::<std::collections::BTreeSet<_>>();
+        self.agent
+            .joined_parent_executions
+            .retain(|_, owner| owner.parent_turn_id() != turn_id);
+        if let Some(context) = self.agent_turn_contexts_mut().get_mut(turn_id) {
+            for group in groups {
+                context.release_pending_execution_group(&group);
+            }
+        }
     }
 
     /// Transfers custody only within the existing validated child redirection.

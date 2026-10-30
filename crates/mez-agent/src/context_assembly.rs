@@ -5,6 +5,8 @@
 //! typed cache identity, default action surfaces, and provider-specific
 //! request defaults. Product code supplies stable turn identity and prompt
 //! assets without exposing runtime records or filesystem access.
+//! Native continuity replaces neutral history only for complete, uninterrupted
+//! original call/result groups; late results never reorder the conversation.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -197,6 +199,8 @@ fn assemble_model_request_from_context_for_api(
 /// Completeness checks must see every event in a candidate group because an
 /// incompatible provider event invalidates native replay. Grouping first keeps
 /// those fail-closed checks while avoiding one complete-context scan per group.
+/// Groups interrupted by other model-visible chronology use neutral history:
+/// replaying their call and late result in place would break native adjacency.
 pub(crate) fn provider_native_execution_groups(
     context: &AgentContext,
     api: Option<ProviderApiCompatibility>,
@@ -206,11 +210,26 @@ pub(crate) fn provider_native_execution_groups(
         crate::ContextExecutionGroupId,
         Vec<(&ContextBlock, &crate::ContextBlockMetadata)>,
     >::new();
+    let mut last_group = None;
+    let mut departed_groups = BTreeSet::new();
+    let mut interleaved_groups = BTreeSet::new();
     for (index, block) in context.blocks().iter().enumerate() {
         let Some(metadata) = context.metadata_for_block(index) else {
             continue;
         };
-        let Some(group) = metadata.execution_group_id() else {
+        let current_group = metadata.execution_group_id();
+        if current_group != last_group {
+            if let Some(previous) = last_group {
+                departed_groups.insert(previous);
+            }
+            if let Some(group) = current_group
+                && departed_groups.contains(group)
+            {
+                interleaved_groups.insert(group);
+            }
+            last_group = current_group;
+        }
+        let Some(group) = current_group else {
             continue;
         };
         grouped
@@ -220,6 +239,7 @@ pub(crate) fn provider_native_execution_groups(
     }
     grouped
         .into_iter()
+        .filter(|(group, _)| !interleaved_groups.contains(group))
         .filter(|(_, events)| {
             events.iter().any(|(_, metadata)| {
                 metadata.provider_owner().is_some_and(|owner| {
@@ -234,10 +254,65 @@ pub(crate) fn provider_native_execution_groups(
             Some(ProviderApiCompatibility::OpenAiResponses) => {
                 openai_responses_native_group_is_complete(events, provider_id)
             }
+            Some(ProviderApiCompatibility::DeepSeekChatCompletions) => {
+                deepseek_native_group_is_complete(events, provider_id)
+            }
             _ => true,
         })
         .map(|(group, _)| group)
         .collect()
+}
+
+/// Requires one exact DeepSeek assistant declaration and its ordered results.
+/// An unanswered joined call keeps its neutral causal history visible during
+/// coordination; incomplete native history never suppresses that projection.
+/// Foreign ownership, malformed or duplicate ids and extra events fail closed.
+fn deepseek_native_group_is_complete(
+    events: &[(&ContextBlock, &crate::ContextBlockMetadata)],
+    provider_id: &str,
+) -> bool {
+    let mut expected_ids = None;
+    let mut result_ids = Vec::new();
+    for (block, metadata) in events {
+        let Some(owner) = metadata.provider_owner() else {
+            continue;
+        };
+        if !owner.matches_provider(
+            ProviderApiCompatibility::DeepSeekChatCompletions,
+            provider_id,
+        ) {
+            return false;
+        }
+        match crate::ProviderTranscriptEvent::from_transcript_content(&block.content) {
+            Some(crate::ProviderTranscriptEvent::DeepSeekAssistantToolCall {
+                tool_calls, ..
+            }) if expected_ids.is_none() => {
+                let Some(ids) = tool_calls
+                    .iter()
+                    .map(|call| {
+                        call.get("id")
+                            .and_then(serde_json::Value::as_str)
+                            .filter(|id| !id.is_empty())
+                            .map(str::to_string)
+                    })
+                    .collect::<Option<Vec<_>>>()
+                else {
+                    return false;
+                };
+                if ids.is_empty() || ids.iter().collect::<BTreeSet<_>>().len() != ids.len() {
+                    return false;
+                }
+                expected_ids = Some(ids);
+            }
+            Some(crate::ProviderTranscriptEvent::DeepSeekToolResult { tool_call_id, .. })
+                if expected_ids.is_some() =>
+            {
+                result_ids.push(tool_call_id);
+            }
+            _ => return false,
+        }
+    }
+    expected_ids.is_some_and(|ids| ids == result_ids)
 }
 
 /// Reports whether one generic Chat Completions execution group contains one
@@ -1240,6 +1315,287 @@ mod tests {
                 .content
                 .starts_with(crate::PROVIDER_TRANSCRIPT_EVENT_MARKER)
         }));
+    }
+
+    /// An outstanding joined call must use neutral history while its native
+    /// result is absent, even when a later peer question has already arrived.
+    /// Only the complete original call/result pair may replace that history;
+    /// duplicate, reordered, missing, malformed and foreign events fail closed.
+    #[test]
+    fn model_request_assembly_deepseek_requires_complete_original_call_chain() {
+        let call = ProviderTranscriptEvent::DeepSeekAssistantToolCall {
+            content: String::new(),
+            reasoning_content: Some("original private reasoning".into()),
+            tool_calls: vec![serde_json::json!({
+                "id": "joined-call", "type": "function",
+                "function": {"name": "submit_maap_action_batch", "arguments": "{}"}
+            })],
+        };
+        let result = ProviderTranscriptEvent::DeepSeekToolResult {
+            tool_call_id: "joined-call".into(),
+            content: "original child result".into(),
+        };
+        let foreign = ProviderTranscriptEvent::OpenAiFunctionCallOutput {
+            call_id: "joined-call".into(),
+            output: "foreign result".into(),
+        };
+        let mut duplicate_call = call.clone();
+        if let ProviderTranscriptEvent::DeepSeekAssistantToolCall { tool_calls, .. } =
+            &mut duplicate_call
+        {
+            tool_calls.push(tool_calls[0].clone());
+        }
+        let mut malformed_call = call.clone();
+        if let ProviderTranscriptEvent::DeepSeekAssistantToolCall { tool_calls, .. } =
+            &mut malformed_call
+        {
+            tool_calls[0].as_object_mut().unwrap().remove("id");
+        }
+        let cases = vec![
+            (vec![call.clone()], false, false),
+            (vec![call.clone(), result.clone()], true, false),
+            (vec![call.clone(), result.clone()], false, true),
+            (
+                vec![call.clone(), result.clone(), result.clone()],
+                false,
+                false,
+            ),
+            (vec![result.clone(), call.clone()], false, false),
+            (vec![call.clone(), foreign], false, false),
+            (
+                vec![duplicate_call, result.clone(), result.clone()],
+                false,
+                false,
+            ),
+            (vec![malformed_call], false, false),
+        ];
+        for (events, complete, interrupted) in cases {
+            let mut context = AgentContext::new_durable(vec![ContextBlock::user_event(
+                "user prompt",
+                "delegate",
+            )])
+            .unwrap();
+            let group = crate::ContextExecutionGroupId::new("original-join").unwrap();
+            context
+                .append_assistant_event("assistant", "NEUTRAL_JOIN_PENDING", group.clone())
+                .unwrap();
+            for (ordinal, event) in events.into_iter().enumerate() {
+                if interrupted && ordinal == 1 {
+                    context
+                        .append_peer_message_event(
+                            "interleaved question",
+                            "question before original result",
+                        )
+                        .unwrap();
+                }
+                let (api, provider_id) = if matches!(
+                    event,
+                    ProviderTranscriptEvent::OpenAiFunctionCallOutput { .. }
+                ) {
+                    (ProviderApiCompatibility::OpenAiResponses, "openai")
+                } else {
+                    (
+                        ProviderApiCompatibility::DeepSeekChatCompletions,
+                        "deepseek",
+                    )
+                };
+                context
+                    .append_evidence_event(
+                        ContextSourceKind::TranscriptTool,
+                        "native original",
+                        event.to_transcript_content(),
+                        group.clone(),
+                        Some(crate::ProviderContinuityOwner::new(api, provider_id).unwrap()),
+                        true,
+                    )
+                    .unwrap();
+            }
+            context
+                .append_peer_message_event("child question", "which format?")
+                .unwrap();
+            let request = assemble_model_request_from_context(
+                &model_profile("deepseek"),
+                ModelRequestIdentity {
+                    turn_id: "parent",
+                    agent_id: "parent-agent",
+                    pane_id: "%1",
+                },
+                &context,
+                &TestPromptAssets,
+            )
+            .unwrap();
+            assert_eq!(
+                request
+                    .messages
+                    .iter()
+                    .any(|m| m.content.contains("NEUTRAL_JOIN_PENDING")),
+                !complete
+            );
+            assert_eq!(
+                request.messages.iter().any(|m| m
+                    .content
+                    .starts_with(crate::PROVIDER_TRANSCRIPT_EVENT_MARKER)),
+                complete
+            );
+            assert!(
+                request
+                    .messages
+                    .iter()
+                    .any(|m| m.content.contains("which format?"))
+            );
+        }
+    }
+
+    /// A late result cannot make an interrupted native history valid in place.
+    /// All supported native families must retain neutral chronology if peer
+    /// mail or a separate assistant response appeared before that result.
+    /// Uninterrupted complete controls must still select native continuity.
+    #[test]
+    fn model_request_assembly_interleaved_original_results_use_neutral_history() {
+        let cases = vec![
+            (
+                ProviderApiCompatibility::DeepSeekChatCompletions,
+                "deepseek",
+                ProviderTranscriptEvent::DeepSeekAssistantToolCall {
+                    content: String::new(),
+                    reasoning_content: None,
+                    tool_calls: vec![
+                        serde_json::json!({"id":"native-original", "type":"function", "function":{"name":"submit_maap_action_batch", "arguments":"{}"}}),
+                    ],
+                },
+                ProviderTranscriptEvent::DeepSeekToolResult {
+                    tool_call_id: "native-original".into(),
+                    content: "done".into(),
+                },
+            ),
+            (
+                ProviderApiCompatibility::OpenAiChatCompletions,
+                "compatible",
+                ProviderTranscriptEvent::OpenAiChatCompletionsAssistantToolCall {
+                    provider_id: "compatible".into(),
+                    content: String::new(),
+                    tool_calls: vec![
+                        serde_json::json!({"id":"native-original", "type":"function", "function":{"name":"submit_maap_action_batch", "arguments":"{}"}}),
+                    ],
+                },
+                ProviderTranscriptEvent::OpenAiChatCompletionsToolResult {
+                    provider_id: "compatible".into(),
+                    tool_call_id: "native-original".into(),
+                    content: "done".into(),
+                },
+            ),
+            (
+                ProviderApiCompatibility::OpenAiResponses,
+                "openai",
+                ProviderTranscriptEvent::OpenAiResponseOutput {
+                    items: vec![
+                        serde_json::json!({"type":"function_call", "id":"fc-native-original", "call_id":"native-original", "name":"submit_maap_action_batch", "arguments":"{}"}),
+                    ],
+                },
+                ProviderTranscriptEvent::OpenAiFunctionCallOutput {
+                    call_id: "native-original".into(),
+                    output: "done".into(),
+                },
+            ),
+        ];
+        for (api, provider, call, result) in cases {
+            for interruption in 0..3 {
+                let mut context = AgentContext::new_durable(vec![ContextBlock::user_event(
+                    "user prompt",
+                    "delegate",
+                )])
+                .unwrap();
+                let group = crate::ContextExecutionGroupId::new("original-group").unwrap();
+                let owner = crate::ProviderContinuityOwner::new(api, provider).unwrap();
+                context
+                    .append_assistant_event("original", "ORIGINAL_NEUTRAL_ASSISTANT", group.clone())
+                    .unwrap();
+                context
+                    .append_evidence_event(
+                        ContextSourceKind::TranscriptTool,
+                        "original native call",
+                        call.to_transcript_content(),
+                        group.clone(),
+                        Some(owner.clone()),
+                        true,
+                    )
+                    .unwrap();
+                if interruption == 1 {
+                    context
+                        .append_peer_message_event("question", "question before result")
+                        .unwrap();
+                } else if interruption == 2 {
+                    context
+                        .append_assistant_event(
+                            "coordination",
+                            "COORDINATION_RESPONSE",
+                            crate::ContextExecutionGroupId::new("coordination-group").unwrap(),
+                        )
+                        .unwrap();
+                }
+                context
+                    .append_evidence_event(
+                        ContextSourceKind::ActionResult,
+                        "original result",
+                        "ORIGINAL_NEUTRAL_RESULT",
+                        group.clone(),
+                        None,
+                        true,
+                    )
+                    .unwrap();
+                context
+                    .append_evidence_event(
+                        ContextSourceKind::TranscriptTool,
+                        "original native result",
+                        result.to_transcript_content(),
+                        group,
+                        Some(owner),
+                        true,
+                    )
+                    .unwrap();
+                let request = assemble_model_request_from_context_with_api(
+                    &model_profile(provider),
+                    api,
+                    ModelRequestIdentity {
+                        turn_id: "parent",
+                        agent_id: "agent",
+                        pane_id: "%1",
+                    },
+                    &context,
+                    &TestPromptAssets,
+                )
+                .unwrap();
+                assert_eq!(
+                    request
+                        .messages
+                        .iter()
+                        .any(|m| m.content == call.to_transcript_content()),
+                    interruption == 0
+                );
+                assert_eq!(
+                    request
+                        .messages
+                        .iter()
+                        .any(|m| m.content.contains("ORIGINAL_NEUTRAL_ASSISTANT")),
+                    interruption != 0
+                );
+                assert_eq!(
+                    request
+                        .messages
+                        .iter()
+                        .any(|m| m.content.contains("ORIGINAL_NEUTRAL_RESULT")),
+                    interruption != 0
+                );
+                if interruption == 2 {
+                    assert!(
+                        request
+                            .messages
+                            .iter()
+                            .any(|m| m.content.contains("COORDINATION_RESPONSE"))
+                    );
+                }
+            }
+        }
     }
 
     /// Builds one minimal profile for lower request-assembly tests.

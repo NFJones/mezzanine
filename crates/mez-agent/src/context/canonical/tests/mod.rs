@@ -5,6 +5,7 @@ use super::*;
 use crate::{ActionContentBlock, ActionResult, ActionStatus, AgentPromptError};
 
 mod history;
+mod pending;
 mod projection;
 mod storage;
 mod summary_identity;

@@ -72,6 +72,9 @@ impl AgentContext {
             }
             if self.chronology[range.clone()].iter().any(|event| {
                 event.retention == ContextRetention::Exact
+                    || event
+                        .execution_group_id()
+                        .is_some_and(|group| self.execution_group_is_pending(group))
                     || (!event.recoverable_for_compaction
                         && !context_block_is_compaction_summary(event.block()))
             }) {
@@ -130,7 +133,11 @@ impl AgentContext {
             }
             let replaced = &self.chronology[range.clone()];
             if replaced.iter().any(|event| {
-                event.retention == ContextRetention::Exact || !event.recoverable_for_compaction
+                event.retention == ContextRetention::Exact
+                    || event
+                        .execution_group_id()
+                        .is_some_and(|group| self.execution_group_is_pending(group))
+                    || !event.recoverable_for_compaction
             }) {
                 return Err(AgentContextError::new(
                     "compaction cannot replace exact or unrecoverable chronological events",

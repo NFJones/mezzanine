@@ -10,6 +10,8 @@
 //! Product prompt assets,
 //! transcript persistence, and provider execution remain outside this crate
 //! and adapt these contracts at their composition boundaries.
+//! Runtime-owned pending execution groups protect unresolved source through
+//! compaction and staged adoption without entering transcript or model metadata.
 //! Prefix and selective summaries carry explicit provenance through ordinary
 //! block/message projection. Their reference semantics and visible bytes remain
 //! unchanged; neither arbitrary memory UUIDs nor summary presence imply a new
@@ -27,6 +29,7 @@ mod compaction;
 mod errors;
 mod history;
 mod messages;
+mod pending;
 mod projection;
 mod request;
 mod validation;
@@ -1066,6 +1069,8 @@ pub struct AgentContext {
     next_event_sequence: u64,
     /// Typed request metadata excluded from model-message projection.
     metadata: ModelContextMetadata,
+    /// Runtime-owned unresolved groups; never projected or transcript-serialized.
+    pending_execution_groups: BTreeSet<ContextExecutionGroupId>,
 }
 
 impl AgentContext {
@@ -1082,6 +1087,7 @@ impl AgentContext {
             block_metadata: Vec::new(),
             next_event_sequence: CONTEXT_EVENT_SEQUENCE_STRIDE,
             metadata: ModelContextMetadata::default(),
+            pending_execution_groups: BTreeSet::new(),
         }
     }
 

@@ -650,6 +650,9 @@ pub fn apply_model_context_compaction_plan(
         || selected.iter().any(|(_, event)| {
             event.sequence().get() > plan.consumed_sequence_high_water
                 || event.retention() == ContextRetention::Exact
+                || event
+                    .execution_group_id()
+                    .is_some_and(|group| context.execution_group_is_pending(group))
                 || !event.recoverable_for_compaction()
         })
     {
@@ -696,6 +699,9 @@ fn model_context_group_is_closed_and_consumed(
     let Some(group_id) = events[group.start].execution_group_id() else {
         return true;
     };
+    if context.execution_group_is_pending(group_id) {
+        return false;
+    }
     if group.end >= events.len()
         && !events[group.clone()]
             .iter()

@@ -1881,7 +1881,7 @@ impl RuntimeSessionService {
     /// Clears all joined child dependencies on session replacement.
     pub(crate) fn clear_all_joined_subagent_dependencies(&mut self) {
         self.agent.joined_subagent_dependencies.clear();
-        self.agent.joined_parent_executions.clear();
+        self.prune_joined_parent_execution_custody();
     }
 
     /// Returns the joined child count to crate-local regression tests.
@@ -4256,9 +4256,7 @@ impl RuntimeSessionService {
 
     /// Clears provider-execution identities and action ownership for one turn.
     pub(crate) fn clear_agent_execution_group_ownership_for_turn(&mut self, turn_id: &str) {
-        self.agent
-            .joined_parent_executions
-            .retain(|_, owner| owner.parent_turn_id() != turn_id);
+        self.release_joined_parent_execution_custody_for_turn(turn_id);
         self.agent.agent_execution_groups_by_turn.remove(turn_id);
         self.agent.agent_provider_tool_calls_by_turn.remove(turn_id);
     }
