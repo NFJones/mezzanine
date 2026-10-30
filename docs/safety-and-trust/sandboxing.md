@@ -132,7 +132,10 @@ Replace `PATH` with the project directory; omit it to use the current directory.
 homes; add `--yes` only after reviewing that broader candidate set. `--dry-run`
 remains non-mutating even with `--yes`. Maintenance is limited to the private
 managed-home root, rejects symlinks and unsupported entries, and skips homes
-locked by active workloads. There is no automatic periodic or age-based pruning
+locked by active workloads. Inspection, preparation and maintenance release their
+own locks when each operation ends, including when an incidental descriptor
+copy remains open. Independently acquired workload leases continue to protect
+active homes. There is no automatic periodic or age-based pruning
 or persisted quota policy. Trust revocation does attempt best-effort removal of
 the affected project's managed home; verify the outcome rather than assuming
 cleanup succeeded. Cleanup removes managed-home files and caches, not project files, and

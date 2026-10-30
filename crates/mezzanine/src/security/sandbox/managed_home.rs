@@ -4,8 +4,10 @@
 //! canonical project identity, backend, and fixed sandbox profile. A shared
 //! activity lock excludes maintenance for each workload, while a separate
 //! exclusive preparation lock serializes directory and metadata updates without
-//! upgrading the activity lock. The helper never copies host-home content and
-//! rejects symlinked storage components.
+//! upgrading the activity lock. Exclusive operation owners explicitly unlock
+//! before closing, so incidental fork/dup aliases cannot extend a completed
+//! inspection, preparation or maintenance scope. The helper never copies
+//! host-home content and rejects symlinked storage components.
 
 use std::fs;
 use std::io::ErrorKind;
@@ -79,6 +81,24 @@ impl Drop for SandboxManagedHomeActivityLock {
     /// Releases this workload's open-file-description lock before closing its
     /// descriptor. Fork/dup aliases must not extend the ended workload's lease;
     /// independently opened workload leases keep their own shared locks.
+    fn drop(&mut self) {
+        let _ = flock(&self._file, FlockOperation::Unlock);
+    }
+}
+
+/// Owns one exclusive preparation, inspection or maintenance operation.
+/// Workload leases use independently opened shared locks. An incidental clone
+/// must not retain an ended operation's exclusion or change those leases.
+#[derive(Debug)]
+struct ManagedHomeExclusiveLock {
+    /// The exact open-file description acquired by this operation.
+    _file: fs::File,
+}
+
+impl Drop for ManagedHomeExclusiveLock {
+    /// Ends this operation's open-file-description lock before close, even when
+    /// an incidental fork/dup alias remains. Unlock is best effort, matching the
+    /// workload lease guard; independent opens retain their own exclusions.
     fn drop(&mut self) {
         let _ = flock(&self._file, FlockOperation::Unlock);
     }
@@ -215,6 +235,7 @@ pub(crate) fn prepare_bubblewrap_managed_home_for_workload_with_identity(
             "managed Bubblewrap home preparation lock failed: {error}"
         ))
     })?;
+    let _preparation = ManagedHomeExclusiveLock { _file: preparation };
     let home = project_directory.join("home");
     for directory in [
         home.clone(),
@@ -289,6 +310,7 @@ pub(crate) fn prepare_seatbelt_managed_home_for_workload(
             "managed Seatbelt home preparation lock failed: {error}"
         ))
     })?;
+    let _preparation = ManagedHomeExclusiveLock { _file: preparation };
     let home = project_directory.join("home");
     ensure_managed_home_directories(&home)?;
     write_backend_managed_home_metadata(
@@ -925,6 +947,22 @@ fn list_backend_managed_homes(
     Ok(inspections)
 }
 
+/// Attempts a nonblocking exclusive lock on an already validated activity file.
+/// Returns `None` for contention and propagates other native errors with the
+/// code-owned context, without selecting another inode or converting a lease.
+fn acquire_managed_home_exclusive_lock(
+    file: fs::File,
+    error_context: &'static str,
+) -> Result<Option<ManagedHomeExclusiveLock>, SandboxCompileError> {
+    match flock(&file, FlockOperation::NonBlockingLockExclusive) {
+        Ok(()) => Ok(Some(ManagedHomeExclusiveLock { _file: file })),
+        Err(error) if error == rustix::io::Errno::WOULDBLOCK => Ok(None),
+        Err(error) => Err(managed_home_error(format!("{error_context}: {error}"))),
+    }
+}
+
+/// Reads activity without retaining a probe beyond the inspection call or
+/// changing the independently acquired workload locks that exclude deletion.
 fn managed_home_is_active(project_directory: &Path) -> Result<bool, SandboxCompileError> {
     let lock_path = project_directory.join(MANAGED_HOME_LOCK_FILE);
     let metadata = match fs::symlink_metadata(&lock_path) {
@@ -949,13 +987,8 @@ fn managed_home_is_active(project_directory: &Path) -> Result<bool, SandboxCompi
         .write(true)
         .open(&lock_path)
         .map_err(|error| managed_home_error(format!("managed home lock open failed: {error}")))?;
-    match flock(&file, FlockOperation::NonBlockingLockExclusive) {
-        Ok(()) => Ok(false),
-        Err(error) if error == rustix::io::Errno::WOULDBLOCK => Ok(true),
-        Err(error) => Err(managed_home_error(format!(
-            "managed home lock inspection failed: {error}"
-        ))),
-    }
+    let probe = acquire_managed_home_exclusive_lock(file, "managed home lock inspection failed")?;
+    Ok(probe.is_none())
 }
 
 fn measure_managed_tree(path: &Path) -> Result<u64, SandboxCompileError> {
@@ -1008,25 +1041,20 @@ fn maintain_managed_home(
         });
     }
     let project_directory = managed_home_project_directory(config_root, project_key);
-    let lock = open_managed_home_lock(&project_directory)?;
-    match flock(&lock, FlockOperation::NonBlockingLockExclusive) {
-        Ok(()) => {}
-        Err(error) if error == rustix::io::Errno::WOULDBLOCK => {
-            return Ok(SandboxManagedHomeMaintenance {
-                project_key: project_key.to_string(),
-                exists: true,
-                bytes: inspection.bytes,
-                active: true,
-                candidate: false,
-                removed: false,
-            });
-        }
-        Err(error) => {
-            return Err(managed_home_error(format!(
-                "managed home maintenance lock failed: {error}"
-            )));
-        }
-    }
+    let Some(_lock) = acquire_managed_home_exclusive_lock(
+        open_managed_home_lock(&project_directory)?,
+        "managed home maintenance lock failed",
+    )?
+    else {
+        return Ok(SandboxManagedHomeMaintenance {
+            project_key: project_key.to_string(),
+            exists: true,
+            bytes: inspection.bytes,
+            active: true,
+            candidate: false,
+            removed: false,
+        });
+    };
     if !dry_run {
         remove_managed_tree(&project_directory)?;
     }
@@ -1312,6 +1340,76 @@ mod tests {
         assert!(!home.host_path.exists());
         drop(duplicate);
         fs::remove_dir_all(root).unwrap();
+    }
+
+    /// A duplicate of the actual exclusive inspection descriptor must not
+    /// prolong its scope and make subsequent maintenance see a phantom workload.
+    /// The real probe acquisition path supplies the descriptor; native duplicate
+    /// and independent-open semantics establish contention without racing fork.
+    /// A separately acquired shared workload must still prevent deletion until
+    /// its own owner drops, while the ended probe's duplicate remains open.
+    #[test]
+    fn managed_home_probe_release_survives_duplicated_descriptor() {
+        /// Removes only this unique private fixture tree on success or panic.
+        struct Cleanup(PathBuf);
+        impl Drop for Cleanup {
+            /// Releases files after all later-declared lock owners are dropped.
+            fn drop(&mut self) {
+                let _ = fs::remove_dir_all(&self.0);
+            }
+        }
+        let root = std::env::temp_dir().join(format!(
+            "mez-managed-home-probe-{}-{:x}",
+            std::process::id(),
+            rand::random::<u64>()
+        ));
+        fs::create_dir(&root).unwrap();
+        let cleanup = Cleanup(fs::canonicalize(root).unwrap());
+        fs::set_permissions(&cleanup.0, fs::Permissions::from_mode(0o700)).unwrap();
+        let config_root = cleanup.0.join("config");
+        let project = cleanup.0.join("project");
+        fs::create_dir(&project).unwrap();
+        let home = prepare_bubblewrap_managed_home(&config_root, &project).unwrap();
+        let directory = managed_home_project_directory(&config_root, &home.project_key);
+        let probe = acquire_managed_home_exclusive_lock(
+            open_managed_home_lock(&directory).unwrap(),
+            "managed home lock inspection failed",
+        )
+        .unwrap()
+        .unwrap();
+        let duplicate = probe._file.try_clone().unwrap();
+        assert!(
+            inspect_bubblewrap_managed_home(&config_root, &project)
+                .unwrap()
+                .active
+        );
+        assert!(!remove_bubblewrap_managed_home(&config_root, &project).unwrap());
+        drop(probe);
+        assert!(
+            !inspect_bubblewrap_managed_home(&config_root, &project)
+                .unwrap()
+                .active,
+            "an ended inspection must not retain a maintenance exclusion"
+        );
+        let workload = lock_bubblewrap_managed_home(&config_root, &home.project_key).unwrap();
+        assert!(
+            acquire_managed_home_exclusive_lock(
+                open_managed_home_lock(&directory).unwrap(),
+                "managed home lock inspection failed"
+            )
+            .unwrap()
+            .is_none()
+        );
+        assert!(
+            inspect_bubblewrap_managed_home(&config_root, &project)
+                .unwrap()
+                .active
+        );
+        assert!(!remove_bubblewrap_managed_home(&config_root, &project).unwrap());
+        drop(workload);
+        assert!(remove_bubblewrap_managed_home(&config_root, &project).unwrap());
+        assert!(!home.host_path.exists());
+        drop(duplicate);
     }
 
     /// Verifies inspection reports lifecycle metadata and bytes without

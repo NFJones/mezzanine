@@ -8897,6 +8897,9 @@ same home MUST NOT upgrade or exclusively acquire that activity lock, and
 concurrent directory or metadata preparation MUST be serialized independently.
 Ending a workload lease MUST explicitly release its activity lock before
 closing the descriptor so incidental fork/dup aliases cannot extend the lease.
+Read-only activity probes and exclusive preparation or maintenance operations
+MUST also explicitly unlock at scope end, so incidental fork/dup aliases cannot
+prolong a completed operation's exclusion.
 Independently acquired workload locks MUST continue to protect active homes.
 Active homes MUST be reported and skipped. Trust revocation MUST use the same
 scoped maintenance boundary. This workflow MUST NOT add automatic cleanup or
