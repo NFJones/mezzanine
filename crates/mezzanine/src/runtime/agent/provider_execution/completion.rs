@@ -174,17 +174,20 @@ impl RuntimeSessionService {
                 ),
             )?;
         }
-        if let Err(error) = self.recover_request_wait_context_for_turn(&turn) {
-            let _ = self.append_agent_trace_turn_event(
-                &turn.pane_id,
-                turn_id,
-                &format!(
-                    "request_dependency context_commit_pending error={}",
-                    super::super::runtime_agent_terminal_preview(error.message())
-                ),
-            );
-        }
-        let request_context_pending = self.request_wait_context_pending_for_turn(&turn);
+        let request_context_pending = match self.recover_request_wait_context_for_turn(&turn) {
+            Ok(pending) => pending,
+            Err(error) => {
+                let _ = self.append_agent_trace_turn_event(
+                    &turn.pane_id,
+                    turn_id,
+                    &format!(
+                        "request_dependency context_commit_pending error={}",
+                        super::super::runtime_agent_terminal_preview(error.message())
+                    ),
+                );
+                true
+            }
+        };
         let owned_child_context_pending = self.owned_child_failure_context_pending_for_turn(&turn);
         let current_high_water_mark = self
             .agent_turn_contexts()

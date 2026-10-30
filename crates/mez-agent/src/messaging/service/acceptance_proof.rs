@@ -278,6 +278,54 @@ impl MessageService {
             && self.registration_floors.get(&proof.sender.0) == Some(&proof.sender.1)
     }
 
+    /// Checks bounded live pending custody for a qualifying reverse response.
+    /// This only defers lifecycle handoff: it neither offers nor commits mail,
+    /// retains another payload, acknowledges input, nor grants scheduling proof.
+    /// The predicate must mirror the trusted adapter's canonical reply filter.
+    /// Released/ACKed, expired, foreign/restored or replaced intervals return
+    /// false. An original sender retiring after acceptance preserves the source.
+    pub fn has_pending_acceptance_reply(
+        &self,
+        request: &MessageAcceptanceProof,
+        recipient: &AgentId,
+        now_ms: u64,
+        qualifies: impl Fn(&Envelope) -> bool,
+    ) -> bool {
+        if !self.acceptance_sender_is_current(request) {
+            return false;
+        }
+        let Some(cursor) = self.subscriptions.get(&request.sender.0) else {
+            return false;
+        };
+        self.pending
+            .range((
+                std::ops::Bound::Excluded(
+                    request
+                        .sequence
+                        .max(cursor.last_sequence)
+                        .max(self.acceptance_history_through),
+                ),
+                std::ops::Bound::Unbounded,
+            ))
+            .any(|(_, row)| {
+                let Some(floor) = row.sender_registered_after_sequence else {
+                    return false;
+                };
+                row.envelope.message_type == "send"
+                    && !expired(row, now_ms)
+                    && !self.recipient_is_terminal(row, &request.sender.0)
+                    && self.reply_acceptance_fields_match(
+                        request,
+                        recipient,
+                        row.sequence,
+                        (&row.envelope.sender.agent_id, floor),
+                        &row.recipient_bindings,
+                        row.envelope.correlation_id.as_deref(),
+                    )
+                    && qualifies(&row.envelope)
+            })
+    }
+
     /// Authenticates one later reverse occurrence against a frozen request.
     /// The reply must originate in the selected recipient's original interval,
     /// target the original sender's interval, and correlate to the accepted ID.
@@ -290,12 +338,36 @@ impl MessageService {
         recipient: &AgentId,
         reply: &MessageAcceptanceProof,
     ) -> bool {
+        Arc::ptr_eq(&self.acceptance_runtime, &reply.runtime)
+            && self.reply_acceptance_fields_match(
+                request,
+                recipient,
+                reply.sequence,
+                (&reply.sender.0, reply.sender.1),
+                &reply.recipients,
+                reply.correlation_id.as_deref(),
+            )
+    }
+
+    /// Compares real accepted sequence, correlation and both frozen intervals.
+    /// Callers separately establish live-source custody or opaque reply proof.
+    fn reply_acceptance_fields_match(
+        &self,
+        request: &MessageAcceptanceProof,
+        recipient: &AgentId,
+        sequence: MessageSequence,
+        sender: (&AgentId, MessageSequence),
+        recipients: &[(AgentId, MessageSequence)],
+        correlation: Option<&str>,
+    ) -> bool {
         Arc::ptr_eq(&self.acceptance_runtime, &request.runtime)
-            && Arc::ptr_eq(&self.acceptance_runtime, &reply.runtime)
-            && reply.sequence > request.sequence
-            && reply.correlation_id.as_deref() == Some(request.message_id.as_str())
-            && reply.sender.0 == *recipient
-            && request.recipients.contains(&reply.sender)
-            && reply.recipients.contains(&request.sender)
+            && sequence > request.sequence
+            && correlation == Some(request.message_id.as_str())
+            && sender.0 == recipient
+            && request
+                .recipients
+                .iter()
+                .any(|(id, floor)| id == sender.0 && *floor == sender.1)
+            && recipients.contains(&request.sender)
     }
 }

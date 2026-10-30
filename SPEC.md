@@ -17198,7 +17198,15 @@ same-runtime capabilities; missing proof MUST NOT be reconstructed from history.
 
 A matching response MUST be an authenticated original-recipient `send`
 occurrence, correlated to the exact accepted request ID and committed into
-canonical context. The runtime establishes occurrence, not answer quality. An
+canonical context. The runtime establishes occurrence, not answer quality. A
+qualifying reverse response accepted before its original sender retires MUST
+retain precedence while live in pending delivery custody. This check MUST NOT
+commit, offer, ACK or manufacture progress. Pending canonical input MUST defer
+new provider admission and invalidate an older response even if no context
+high-water mark advanced yet. Retirement and reply eligibility MUST use the
+same trusted native time snapshot at each delivery or provider boundary;
+expired input MUST NOT indefinitely defer unavailability, and clock rollback
+MUST NOT revive an already terminal response. An
 exact captured owned task's terminal result MAY instead supply an untrusted
 output reference without a model-authored reply. Genuine state-only successful
 completion MUST remain terminal success rather than intentional retirement.

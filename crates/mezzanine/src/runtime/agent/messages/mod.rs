@@ -64,7 +64,7 @@ impl RuntimeSessionService {
         self.recover_received_peer_message_turn_scheduling(now_ms)?;
         self.recover_joined_coordination_wakes()?;
         self.recover_owned_child_failures(now_ms)?;
-        self.recover_request_waits()?;
+        self.recover_request_waits_at(now_ms)?;
         // Presentation is a recoverable receiver-side projection. Once a
         // receipt and cursor exist, it must never block provider admission or
         // a parked peer wait from resuming; the retained receipt retries on the
@@ -205,6 +205,7 @@ impl RuntimeSessionService {
                 )?;
             }
         }
+        self.recover_request_waits_at(now_ms)?;
         self.recover_joined_coordination_wakes()?;
         Ok(committed)
     }

@@ -816,19 +816,20 @@ impl RuntimeSessionService {
         self.ensure_completion_provider_claim_ready(turn_id)?;
         // Context staging grants no new slot or sibling readiness. A failed
         // commit retains the same task and source for normal delivery retry.
-        if let Err(error) = self.recover_request_wait_context_for_turn(&turn) {
-            let _ = self.append_agent_trace_turn_event(
-                &turn.pane_id,
-                turn_id,
-                &format!(
-                    "request_dependency context_commit_pending error={}",
-                    super::runtime_agent_terminal_preview(error.message())
-                ),
-            );
-            return Ok(None);
-        }
-        if self.request_wait_context_pending_for_turn(&turn) {
-            return Ok(None);
+        match self.recover_request_wait_context_for_turn(&turn) {
+            Ok(false) => {}
+            Ok(true) => return Ok(None),
+            Err(error) => {
+                let _ = self.append_agent_trace_turn_event(
+                    &turn.pane_id,
+                    turn_id,
+                    &format!(
+                        "request_dependency context_commit_pending error={}",
+                        super::runtime_agent_terminal_preview(error.message())
+                    ),
+                );
+                return Ok(None);
+            }
         }
         Ok(Some(turn))
     }

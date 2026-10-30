@@ -815,3 +815,184 @@ async fn request_bound_actor_state_only_success_finishes_same_parent_without_chi
     assert_eq!(actor.service.agent_turn_ledger().turns().len(), 2);
     assert_eq!(generations, (1..=5).collect());
 }
+
+/// A selected response accepted before sender retirement may still await the
+/// delivery sweep while an unrelated-mail continuation is in flight. Actual
+/// pending custody must fence the old response even with no new context event;
+/// it cannot count as progress, ACK or satisfaction until canonical commit.
+/// After real delivery, the same parent consumes the reply and completes via
+/// typed persistence without replaying its request or creating another task.
+#[tokio::test(flavor = "current_thread")]
+async fn request_bound_actor_pending_original_reply_fences_completion_before_canonical_commit() {
+    use mez_agent::messaging::{Envelope, MessageScope, Recipient};
+    let (mut actor, parent, child, mut generations, _) =
+        actor_fixture_with_lifetime(1, Vec::new(), mez_agent::SubagentLifetime::Persistent).await;
+    let peer = actor
+        .service
+        .ensure_runtime_message_identity(
+            "agent-actor-retiring-answerer",
+            None,
+            "worker",
+            &[],
+            async_runtime_current_unix_millis(),
+        )
+        .unwrap();
+    let message = request(
+        &mut actor,
+        &parent,
+        peer.agent_id.as_str(),
+        &mut generations,
+    )
+    .await;
+    park(&mut actor, &parent, &message, &mut generations).await;
+    step(
+        &mut actor,
+        &child,
+        vec![done("pending-unrelated-child", "unrelated child done")],
+        &mut generations,
+    )
+    .await;
+    unrelated_mail(&mut actor, &parent);
+    let obsolete = claim(&mut actor, &parent).await;
+    assert!(generations.insert(obsolete.claim_generation));
+    let before = obsolete.context.durable().event_sequence_high_water_mark();
+    let execution = execute(
+        &obsolete,
+        &response(vec![done(
+            "pending-obsolete-final",
+            "OBSOLETE_BEFORE_AUTHENTIC_REPLY",
+        )]),
+    )
+    .await;
+    let now = async_runtime_current_unix_millis();
+    actor
+        .service
+        .message_service_mut()
+        .accept_at_with_scope(
+            &peer.agent_id,
+            Envelope {
+                protocol: "mmp/1",
+                id: "actual-original-interval-answer".into(),
+                message_type: "send".into(),
+                time: format!("fixture:{now}"),
+                sender: peer.clone(),
+                recipient: Recipient::Agent(AgentId::opaque(parent.agent_id.clone()).unwrap()),
+                correlation_id: Some(message),
+                ttl_ms: None,
+                content_type: "text/plain; charset=utf-8".into(),
+                payload: "ACTUAL_AUTHENTIC_ANSWER".into(),
+                extension_fields: Vec::new(),
+            },
+            MessageScope::Session,
+            now,
+        )
+        .unwrap();
+    assert!(
+        actor
+            .service
+            .retire_runtime_message_identity_after_native_commits(&peer.agent_id)
+            .unwrap()
+    );
+    assert_eq!(
+        actor.service.agent_turn_contexts()[&parent.turn_id].event_sequence_high_water_mark(),
+        before
+    );
+    assert_eq!(complete(&mut actor, &obsolete, execution.clone()).await, 1);
+    assert_eq!(complete(&mut actor, &obsolete, execution).await, 0);
+    assert_eq!(
+        actor
+            .service
+            .agent_turn_ledger()
+            .turn(&parent.turn_id)
+            .unwrap()
+            .state,
+        AgentTurnState::Running
+    );
+    assert!(
+        !actor.service.agent_turn_contexts()[&parent.turn_id]
+            .blocks()
+            .iter()
+            .any(|block| block.content.contains("OBSOLETE_BEFORE_AUTHENTIC_REPLY"))
+    );
+    assert!(
+        !actor.service.agent_turn_contexts()[&parent.turn_id]
+            .blocks()
+            .iter()
+            .any(|block| block.label.starts_with("request-handoff:"))
+    );
+    assert_ne!(
+        actor.service.tracked_message_request_usage(),
+        ((0, 0, 0), 0)
+    );
+    let (reply, receiver) = tokio::sync::oneshot::channel();
+    assert!(
+        !actor
+            .handle_request(AsyncRuntimeRequest::PrepareConfiguredAgentProviderTask {
+                agent_id: AgentId::opaque(parent.agent_id.clone()).unwrap(),
+                turn_id: parent.turn_id.clone(),
+                reply
+            })
+            .await
+    );
+    assert!(
+        receiver.await.unwrap().unwrap().is_none(),
+        "pending acceptance must not fabricate canonical input or an inference request"
+    );
+    actor
+        .service
+        .deliver_pending_runtime_agent_messages(async_runtime_current_unix_millis())
+        .unwrap();
+    let (dispatch, persisted) = step(
+        &mut actor,
+        &parent,
+        vec![record_evidence()],
+        &mut generations,
+    )
+    .await;
+    assert!(persisted > 0);
+    assert_memory_saved(&actor, &parent);
+    assert_eq!(
+        dispatch
+            .context
+            .durable()
+            .blocks()
+            .iter()
+            .filter(|block| block.label.starts_with("request-handoff:")
+                && block.content.contains("state=reply"))
+            .count(),
+        1
+    );
+    assert!(
+        dispatch
+            .context
+            .durable()
+            .blocks()
+            .iter()
+            .any(|block| block.content.contains("ACTUAL_AUTHENTIC_ANSWER"))
+    );
+    assert_eq!(
+        actor.service.tracked_message_request_usage(),
+        ((0, 0, 0), 0)
+    );
+    step(
+        &mut actor,
+        &parent,
+        vec![done(
+            "pending-parent-final",
+            "used authentic reply after retirement",
+        )],
+        &mut generations,
+    )
+    .await;
+    assert_eq!(
+        actor
+            .service
+            .agent_turn_ledger()
+            .turn(&parent.turn_id)
+            .unwrap()
+            .state,
+        AgentTurnState::Completed
+    );
+    assert_eq!(actor.service.agent_turn_ledger().turns().len(), 2);
+    assert_eq!(generations, (1..=7).collect());
+}

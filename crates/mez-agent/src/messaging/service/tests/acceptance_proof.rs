@@ -382,3 +382,133 @@ fn acceptance_proof_transaction_preserves_authentication_and_payload_limits() {
         .unwrap();
     assert_eq!(delivery.sequence, 1);
 }
+
+/// A genuine accepted reply from the original interval remains a delivery
+/// obligation after its sender retires. The read-only pending check must defer
+/// lifecycle handoff without creating offers/ACKs, and must stop after actual
+/// recipient acknowledgement or a trusted adapter rejects that message kind.
+#[test]
+fn acceptance_pending_reply_defers_retirement_without_delivery_authority() {
+    let mut service = MessageService::default();
+    let parent = service.register_agent(None, None, "parent", vec![]);
+    let peer = service.register_agent(None, None, "peer", vec![]);
+    service.subscribe(&parent.agent_id).unwrap();
+    let sent = service
+        .accept_at_with_scope(
+            &parent.agent_id,
+            mail(&parent, &peer.agent_id, "pending-request", None),
+            MessageScope::Session,
+            1,
+        )
+        .unwrap();
+    let proof = service
+        .acceptance_proof(&parent.agent_id, sent.sequence)
+        .unwrap();
+    let reply = service
+        .accept_at_with_scope(
+            &peer.agent_id,
+            mail(
+                &peer,
+                &parent.agent_id,
+                "pending-reply",
+                Some("pending-request"),
+            ),
+            MessageScope::Session,
+            2,
+        )
+        .unwrap();
+    service.retire_observational_identity(&peer.agent_id);
+    assert!(!service.acceptance_recipient_is_current(&proof, &peer.agent_id));
+    assert!(service.has_pending_acceptance_reply(&proof, &peer.agent_id, 3, |_| true));
+    assert!(!service.has_pending_acceptance_reply(&proof, &peer.agent_id, 3, |_| false));
+    assert!(
+        service
+            .offered_uncommitted_deliveries(&parent.agent_id)
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        service
+            .advance_subscription(&parent.agent_id, reply.sequence)
+            .is_err(),
+        "a read-only pending match must not invent an offer"
+    );
+    service.receive_subscribed(&parent.agent_id, 3, 10).unwrap();
+    assert!(service.has_pending_acceptance_reply(&proof, &peer.agent_id, 3, |_| true));
+    service
+        .advance_subscription(&parent.agent_id, reply.sequence)
+        .unwrap();
+    assert!(!service.has_pending_acceptance_reply(&proof, &peer.agent_id, 3, |_| true));
+}
+
+/// Foreign correlations, another sender, same-address replacement and restored
+/// history cannot reserve precedence over lifecycle outcomes. A genuinely
+/// matching source keeps ordinary strict acceptance-relative TTL semantics.
+#[test]
+fn acceptance_pending_reply_rejects_foreign_reused_expired_and_restored_sources() {
+    let mut service = MessageService::default();
+    let parent = service.register_agent(None, None, "parent", vec![]);
+    let peer = service.register_agent(None, None, "peer", vec![]);
+    let stranger = service.register_agent(None, None, "stranger", vec![]);
+    service.subscribe(&parent.agent_id).unwrap();
+    let sent = service
+        .accept_at_with_scope(
+            &parent.agent_id,
+            mail(&parent, &peer.agent_id, "pending-request", None),
+            MessageScope::Session,
+            1,
+        )
+        .unwrap();
+    let proof = service
+        .acceptance_proof(&parent.agent_id, sent.sequence)
+        .unwrap();
+    for (sender, id, correlation) in [
+        (&peer, "wrong-correlation", "other"),
+        (&stranger, "wrong-sender", "pending-request"),
+    ] {
+        service
+            .accept_at_with_scope(
+                &sender.agent_id,
+                mail(sender, &parent.agent_id, id, Some(correlation)),
+                MessageScope::Session,
+                2,
+            )
+            .unwrap();
+    }
+    assert!(!service.has_pending_acceptance_reply(&proof, &peer.agent_id, 3, |_| true));
+    let mut expiring = mail(
+        &peer,
+        &parent.agent_id,
+        "expiring-reply",
+        Some("pending-request"),
+    );
+    expiring.ttl_ms = Some(1);
+    service
+        .accept_at_with_scope(&peer.agent_id, expiring, MessageScope::Session, 3)
+        .unwrap();
+    assert!(service.has_pending_acceptance_reply(&proof, &peer.agent_id, 4, |_| true));
+    assert!(!service.has_pending_acceptance_reply(&proof, &peer.agent_id, 5, |_| true));
+    service.settle_delivery_outcomes_at(5).unwrap();
+    assert!(
+        !service.has_pending_acceptance_reply(&proof, &peer.agent_id, 4, |_| true),
+        "clock rollback cannot revive a terminal reply as pending precedence"
+    );
+    let restored = MessageService::from_snapshot_state(&service.snapshot_state()).unwrap();
+    assert!(!restored.has_pending_acceptance_reply(&proof, &peer.agent_id, 4, |_| true));
+    service.retire_observational_identity(&peer.agent_id);
+    service.ensure_agent_identity(peer.clone(), 6).unwrap();
+    service
+        .accept_at_with_scope(
+            &peer.agent_id,
+            mail(
+                &peer,
+                &parent.agent_id,
+                "replacement-reply",
+                Some("pending-request"),
+            ),
+            MessageScope::Session,
+            6,
+        )
+        .unwrap();
+    assert!(!service.has_pending_acceptance_reply(&proof, &peer.agent_id, 6, |_| true));
+}

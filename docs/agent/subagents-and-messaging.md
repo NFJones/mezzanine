@@ -322,7 +322,9 @@ loop goal; later iterations do not replace the selected dependency.
 If unrelated mail resumes you first, the selected dependency remains live. Its
 later outcome reaches your next safe model context without starting a concurrent
 request; an older in-flight response may be discarded so the next request can
-use that evidence.
+use that evidence. A matching response accepted before its sender retires remains
+eligible while awaiting delivery. It satisfies the dependency only after entering
+model context; an expired response does not keep the dependency waiting forever.
 
 Tracking reserves finite capacity before sending: at most 64 unresolved requests
 per conversation and 4096 global reservation units, with an independent metadata

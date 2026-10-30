@@ -302,14 +302,17 @@ impl RuntimeSessionService {
     }
 
     /// Recovers this active owner's exact outcome before request capture or the
-    /// consumed-context check. It never acquires a second scheduler slot.
+    /// consumed-context check. Returns whether canonical input still blocks
+    /// inference, using one native TTL snapshot; commit failures return an error.
+    /// It never acquires a second scheduler slot.
     pub(in crate::runtime::agent) fn recover_request_wait_context_for_turn(
         &mut self,
         turn: &AgentTurnRecord,
-    ) -> Result<()> {
-        self.record_request_registration_retirements();
+    ) -> Result<bool> {
+        let now_ms = super::super::current_unix_millis();
+        self.record_request_registration_retirements(now_ms);
         self.resume_targeted_request_wait(turn)?;
-        Ok(())
+        Ok(self.request_wait_context_pending_for_turn_at(turn, now_ms))
     }
 
     /// Checks only privately retained source identity and content. A failed
@@ -317,6 +320,16 @@ impl RuntimeSessionService {
     pub(in crate::runtime::agent) fn request_wait_context_pending_for_turn(
         &self,
         turn: &AgentTurnRecord,
+    ) -> bool {
+        self.request_wait_context_pending_for_turn_at(turn, super::super::current_unix_millis())
+    }
+
+    /// Checks pending canonical sources against the same native snapshot used
+    /// to recover retirement, without a second TTL boundary crossing.
+    fn request_wait_context_pending_for_turn_at(
+        &self,
+        turn: &AgentTurnRecord,
+        now_ms: u64,
     ) -> bool {
         let Some(edge) = self.agent.request_waits.edges.get(&turn.turn_id) else {
             return false;
@@ -330,7 +343,24 @@ impl RuntimeSessionService {
         else {
             return false;
         };
-        slot.outcome.is_some() && !self.request_handoff_is_committed(turn, slot)
+        if slot.outcome.is_some() {
+            return !self.request_handoff_is_committed(turn, slot);
+        }
+        let Some(receipt) = self.agent.request_waits.requests.receipt(edge.generation) else {
+            return false;
+        };
+        let Some(recipient) = receipt.proof().recipients().nth(edge.recipient) else {
+            return false;
+        };
+        // An accepted matching source is not progress or a committed reply.
+        // It keeps an old inference from overtaking canonical delivery, even
+        // if the source has not advanced the context frontier yet.
+        self.control.message_service().has_pending_acceptance_reply(
+            receipt.proof(),
+            recipient,
+            now_ms,
+            |envelope| !crate::runtime::control::runtime_owned_bridge_message(envelope),
+        )
     }
 
     /// Verifies a private canonical occurrence, never a historical label lookup.

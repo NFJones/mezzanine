@@ -154,7 +154,23 @@ fn reply(
     id: &str,
     correlation: Option<&str>,
 ) -> u64 {
-    let accepted = service
+    let sequence = accept_reply(service, parent, sender, id, correlation);
+    service
+        .deliver_pending_runtime_agent_messages(current_unix_millis())
+        .unwrap();
+    sequence
+}
+
+/// Accepts authenticated mail without offering, committing or acknowledging it.
+/// This preserves the real acceptance/retirement race for receiver tests.
+fn accept_reply(
+    service: &mut RuntimeSessionService,
+    parent: &AgentTurnRecord,
+    sender: &SenderIdentity,
+    id: &str,
+    correlation: Option<&str>,
+) -> u64 {
+    service
         .control
         .message_service_mut()
         .accept_at_with_scope(
@@ -177,11 +193,8 @@ fn reply(
             MessageScope::Session,
             current_unix_millis(),
         )
-        .unwrap();
-    service
-        .deliver_pending_runtime_agent_messages(current_unix_millis())
-        .unwrap();
-    accepted.sequence
+        .unwrap()
+        .sequence
 }
 
 /// Completes the original task after it receives evidence, proving recovery did
@@ -1306,6 +1319,140 @@ fn request_bound_terminal_cached_allocation_fits_preaccepted_handoff_headroom() 
                 },
             },
         );
+        finish(&mut service, &parent);
+    }
+}
+
+/// A reverse response accepted by the original recipient before retirement
+/// remains authentic while awaiting canonical commit. Availability recovery
+/// must not consume the receipt ahead of that real reply, both before parking
+/// and after an actual targeted wait; IDs and correlation alone grant no proof.
+#[test]
+fn request_bound_reply_accepted_before_sender_retirement_reaches_selected_wait() {
+    for before_park in [false, true] {
+        let (mut service, parent, peer) = fixture();
+        let message = send(&mut service, &parent, peer.agent_id.as_str(), true);
+        if !before_park {
+            wait(&mut service, &parent, &message, None);
+        }
+        let reply = accept_reply(
+            &mut service,
+            &parent,
+            &peer,
+            "original-interval-reply",
+            Some(&message),
+        );
+        assert!(
+            service
+                .retire_runtime_message_identity_after_native_commits(&peer.agent_id)
+                .unwrap()
+        );
+        assert!(
+            service
+                .message_service()
+                .live_acceptance_proof(reply)
+                .is_some()
+        );
+        if before_park {
+            wait(&mut service, &parent, &message, None);
+        }
+        service
+            .deliver_pending_runtime_agent_messages(current_unix_millis())
+            .unwrap();
+        let result = &service.agent_turn_executions()[&parent.turn_id].action_results[0];
+        let outcome: serde_json::Value =
+            serde_json::from_str(result.structured_content_json.as_deref().unwrap()).unwrap();
+        assert_eq!(
+            outcome["state"], "reply",
+            "registration retirement overtook an authentic accepted reverse reply"
+        );
+        assert_eq!(outcome["progress_witness"], true);
+        let context = &service.agent_turn_contexts()[&parent.turn_id];
+        assert_eq!(
+            context
+                .blocks()
+                .iter()
+                .filter(|b| b.label.starts_with("request-handoff:")
+                    && b.content
+                        .contains("Authenticated matching response committed"))
+                .count(),
+            1
+        );
+        assert!(
+            context
+                .blocks()
+                .iter()
+                .any(|b| b.content.contains("original-interval-reply"))
+        );
+        assert_eq!(service.tracked_message_request_usage(), ((0, 0, 0), 0));
+        finish(&mut service, &parent);
+    }
+}
+
+/// Receive selection and retirement deferral must use the same trusted delivery
+/// clock snapshot. A response still live at that snapshot's inclusive TTL edge
+/// cannot be discarded because a later wall-clock read classifies it expired.
+/// Only actual canonical commit qualifies the original registration's reply.
+#[test]
+fn request_bound_reply_retirement_uses_delivery_snapshot_for_ttl() {
+    for (now_ms, expected_state, progress, terminal_first) in [
+        (2, "reply", true, false),
+        (3, "peer_unavailable", false, false),
+        (2, "peer_unavailable", false, true),
+    ] {
+        let (mut service, parent, peer) = fixture();
+        let message = send(&mut service, &parent, peer.agent_id.as_str(), true);
+        wait(&mut service, &parent, &message, None);
+        service
+            .message_service_mut()
+            .accept_at_with_scope(
+                &peer.agent_id,
+                Envelope {
+                    protocol: "mmp/1",
+                    id: "delivery-clock-reply".into(),
+                    message_type: "send".into(),
+                    time: "fixture:1".into(),
+                    sender: peer.clone(),
+                    recipient: mez_agent::messaging::Recipient::Agent(
+                        AgentId::opaque(parent.agent_id.clone()).unwrap(),
+                    ),
+                    correlation_id: Some(message),
+                    ttl_ms: Some(1),
+                    content_type: "text/plain".into(),
+                    payload: "reply live at selected delivery clock".into(),
+                    extension_fields: Vec::new(),
+                },
+                MessageScope::Session,
+                1,
+            )
+            .unwrap();
+        assert!(
+            service
+                .retire_runtime_message_identity_after_native_commits(&peer.agent_id)
+                .unwrap()
+        );
+        if terminal_first {
+            service
+                .message_service_mut()
+                .settle_delivery_outcomes_at(3)
+                .unwrap();
+        }
+        service
+            .deliver_pending_runtime_agent_messages(now_ms)
+            .unwrap();
+        let outcome: serde_json::Value = serde_json::from_str(
+            service.agent_turn_executions()[&parent.turn_id].action_results[0]
+                .structured_content_json
+                .as_deref()
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            outcome["state"], expected_state,
+            "retirement recovery used a different clock than receive selection"
+        );
+        assert_eq!(outcome["progress_witness"], progress);
+        assert_eq!(service.tracked_message_request_usage(), ((0, 0, 0), 0));
         finish(&mut service, &parent);
     }
 }

@@ -816,8 +816,14 @@ impl RuntimeSessionService {
     /// Detects only authoritative ended registrations and commits typed evidence
     /// before trying the normal fair wait owner. Offline presence is not loss.
     pub(super) fn recover_request_waits(&mut self) -> Result<()> {
+        self.recover_request_waits_at(super::current_unix_millis())
+    }
+
+    /// Uses one trusted delivery snapshot for TTL eligibility and retirement,
+    /// so recovery cannot preempt a reply still live for the following fanout.
+    pub(super) fn recover_request_waits_at(&mut self, now_ms: u64) -> Result<()> {
         self.prune_request_wait_owners();
-        self.record_request_registration_retirements();
+        self.record_request_registration_retirements(now_ms);
         let turns = self
             .agent
             .request_waits
@@ -832,13 +838,19 @@ impl RuntimeSessionService {
     }
 
     /// Observes only original registration retirement; presence is not authority.
-    fn record_request_registration_retirements(&mut self) {
+    fn record_request_registration_retirements(&mut self, now_ms: u64) {
         for receipt in self.agent.request_waits.requests.receipts() {
             for (index, recipient) in receipt.proof().recipients().enumerate() {
                 if !self
                     .control
                     .message_service()
                     .acceptance_recipient_is_current(receipt.proof(), recipient)
+                    && !self.control.message_service().has_pending_acceptance_reply(
+                        receipt.proof(),
+                        recipient,
+                        now_ms,
+                        |envelope| !crate::runtime::control::runtime_owned_bridge_message(envelope),
+                    )
                     && let Some(slot) = self
                         .agent
                         .request_waits

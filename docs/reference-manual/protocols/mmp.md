@@ -540,6 +540,13 @@ conversation controls, not new MMP envelope fields. Tracking freezes the actual
 accepted recipient registrations and optional exact owned task at send time.
 An authenticated reverse `send` with `correlation_id` equal to the accepted
 request ID can supply response-occurrence evidence after canonical commit.
+A genuine response accepted before its sender retires keeps precedence while
+live in pending custody. Pending custody defers retirement and provider admission
+but cannot itself satisfy the wait, create an offer or ACK, or count as progress.
+An older in-flight response is fenced even before the context frontier advances.
+Delivery and retirement use one trusted native TTL snapshot; expired input no
+longer defers unavailability, including after an already recorded expiry and
+clock rollback.
 State-only successful completion is a terminal occurrence. A tracked exact loop
 iteration can supply its result while the logical loop continues; later tasks
 are never substituted for that captured iteration. Native terminal evidence is
