@@ -529,7 +529,7 @@ fn assistant_transcript_action_summary(action: &AgentAction) -> String {
             scope.as_deref().unwrap_or("project"),
             payload.len()
         ),
-        AgentActionPayload::Wait => "wait for MMP peer mail".to_string(),
+        AgentActionPayload::Wait { .. } => "wait for MMP peer mail".to_string(),
         AgentActionPayload::SpawnAgent {
             role,
             session_mode,

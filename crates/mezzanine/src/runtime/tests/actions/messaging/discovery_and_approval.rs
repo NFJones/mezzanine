@@ -403,6 +403,7 @@ fn block_runtime_send_message(
         id: "message-1".to_string(),
 
         payload: mez_agent::AgentActionPayload::SendMessage {
+            expect_reply: false,
             recipient: recipient.to_string(),
             scope: Some("session".to_string()),
             content_type: "text/plain; charset=utf-8".to_string(),

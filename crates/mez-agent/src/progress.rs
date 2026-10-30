@@ -658,7 +658,7 @@ fn streaming_action_has_safe_header(payload: &AgentActionPayload) -> bool {
         payload,
         AgentActionPayload::ApplyPatch { .. }
             | AgentActionPayload::ListAgents { .. }
-            | AgentActionPayload::Wait
+            | AgentActionPayload::Wait { .. }
             | AgentActionPayload::ConfigChange { .. }
             | AgentActionPayload::MemorySearch { .. }
             | AgentActionPayload::MemoryStore { .. }
@@ -1449,7 +1449,7 @@ mod tests {
         );
         let events = extractor.push_delta(r#"}]}"#);
         assert!(
-            matches!(&events[..], [StreamingPresentationEvent::ActionHeader { action_index: 1, header }, StreamingPresentationEvent::ActionComplete { action_index: 1 }] if matches!(&**header, StreamingActionHeader::Action { action } if matches!(&action.payload, AgentActionPayload::Wait)))
+            matches!(&events[..], [StreamingPresentationEvent::ActionHeader { action_index: 1, header }, StreamingPresentationEvent::ActionComplete { action_index: 1 }] if matches!(&**header, StreamingActionHeader::Action { action } if matches!(&action.payload, AgentActionPayload::Wait { .. })))
         );
     }
 

@@ -8,6 +8,69 @@ use crate::{
     apply_model_context_compaction_plan, plan_model_context_compaction_at_consumed_sequence,
 };
 
+/// Exact committed reply sources remain canonical while a request's wake queue
+/// is full. Both direct and previously frozen model compaction reject dropping
+/// them, with no model-visible metadata mutation; explicit release restores
+/// eligibility. A user event cannot be used as a fabricated peer-source pin.
+#[test]
+fn request_bound_pending_peer_source_survives_compaction_until_handoff() {
+    let mut context =
+        AgentContext::new_durable(vec![ContextBlock::user_event("user", "coordinate")]).unwrap();
+    let peer = context
+        .append_peer_message_event("actual reply", "untrusted response ".repeat(300))
+        .unwrap();
+    let user = context.chronology()[0].sequence();
+    let plan = plan_model_context_compaction_at_consumed_sequence(
+        &context,
+        100,
+        0,
+        context.event_sequence_high_water_mark(),
+    )
+    .unwrap();
+    assert!(plan.changes_context());
+    assert!(context.retain_pending_peer_message(user).is_err());
+    let visible = context.blocks().to_vec();
+    context.retain_pending_peer_message(peer).unwrap();
+    assert_eq!(context.blocks(), visible);
+    assert!(context.peer_message_is_pending(peer));
+    assert!(apply_model_context_compaction_plan(context.clone(), &plan, "summary").is_err());
+    let summary = ContextBlock::reference_event(
+        ContextSourceKind::CompactionSelective,
+        "summary",
+        "summarized",
+    );
+    let original = context.clone();
+    assert!(
+        context
+            .compact_execution_ranges(vec![(1..2, summary.clone())])
+            .is_err()
+    );
+    assert!(
+        context
+            .compact_execution_ranges_into_summary(std::iter::once(1..2).collect(), summary)
+            .is_err()
+    );
+    assert_eq!(context, original);
+    assert!(
+        context
+            .replace_after_compaction(vec![ContextBlock::user_event("user", "replacement")])
+            .is_err()
+    );
+    assert_eq!(context, original);
+    assert!(context.release_pending_peer_message(peer));
+    assert!(!context.release_pending_peer_message(peer));
+    assert!(
+        plan_model_context_compaction_at_consumed_sequence(
+            &context,
+            100,
+            0,
+            context.event_sequence_high_water_mark()
+        )
+        .unwrap()
+        .changes_context()
+    );
+}
+
 /// Builds a recoverable execution followed by exact mail, so the older heuristic
 /// would consider the execution closed despite a still-live runtime obligation.
 fn pending_context() -> (AgentContext, ContextExecutionGroupId) {

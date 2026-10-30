@@ -189,6 +189,7 @@ fn parked_terminal_sender_with_capacity(
                 actions: vec![mez_agent::AgentAction {
                     id: "send-terminal".into(),
                     payload: mez_agent::AgentActionPayload::SendMessage {
+                        expect_reply: false,
                         recipient: format!("agent:{}", target.agent_id),
                         scope: Some("session".into()),
                         content_type: "text/plain".into(),
@@ -219,7 +220,10 @@ fn parked_terminal_sender_with_capacity(
     provider.response.raw_text = "wait for the accepted request".into();
     provider.response.action_batch.as_mut().unwrap().actions = vec![mez_agent::AgentAction {
         id: "wait-terminal".into(),
-        payload: mez_agent::AgentActionPayload::Wait,
+        payload: mez_agent::AgentActionPayload::Wait {
+            for_message: None,
+            from_agent: None,
+        },
     }];
     service
         .execute_agent_turn_with_provider(
@@ -270,6 +274,7 @@ fn runtime_terminal_timer_hands_off_original_action_without_wake_and_releases_ca
     let action = mez_agent::AgentAction {
         id: "capacity-probe".into(),
         payload: mez_agent::AgentActionPayload::SendMessage {
+            expect_reply: false,
             recipient: format!("agent:{target}"),
             scope: Some("session".into()),
             content_type: "text/plain".into(),
@@ -654,6 +659,7 @@ fn runtime_terminal_review_earlier_unowned_receipts_cannot_hide_current_action()
     let action = mez_agent::AgentAction {
         id: "later-owned".into(),
         payload: mez_agent::AgentActionPayload::SendMessage {
+            expect_reply: false,
             recipient: format!("agent:{target}"),
             scope: Some("session".into()),
             content_type: "text/plain".into(),

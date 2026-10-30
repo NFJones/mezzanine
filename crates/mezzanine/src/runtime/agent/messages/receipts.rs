@@ -202,7 +202,8 @@ impl RuntimeSessionService {
         sequence: mez_agent::messaging::MessageSequence,
         turn: &AgentTurnRecord,
         envelope: Envelope,
-    ) {
+    ) -> Result<()> {
+        self.record_request_reply_commit(turn, sequence, &envelope)?;
         let identity =
             Self::received_peer_message_presentation_id(&recipient_agent_id, sequence, &envelope);
         if let Some(receipt) = self
@@ -211,7 +212,7 @@ impl RuntimeSessionService {
             .get_mut(&identity)
         {
             receipt.native_commit_proven = true;
-            return;
+            return Ok(());
         }
         let occurrence = self.capture_presentation_occurrence(
             mez_core::presentation::PresentationOccurrenceBasis::LocalAcceptance,
@@ -247,6 +248,7 @@ impl RuntimeSessionService {
                 presentation_eligible,
                 presentation_attempted: false,
             });
+        Ok(())
     }
 
     /// Captures durable recovery sources only after their delivery cursors commit.

@@ -209,6 +209,7 @@ impl RuntimeSessionService {
                     id: format!("macro-step-{}", next_step_index.saturating_add(1)),
 
                     payload: AgentActionPayload::SendMessage {
+                        expect_reply: false,
                         recipient: format!("agent:{child_agent_id}"),
                         scope: Some("project".to_string()),
                         content_type: "text/plain; charset=utf-8".to_string(),
@@ -291,6 +292,7 @@ impl RuntimeSessionService {
                     id: retry_action_id,
 
                     payload: AgentActionPayload::SendMessage {
+                        expect_reply: false,
                         recipient: format!("agent:{child_agent_id}"),
                         scope: Some("project".to_string()),
                         content_type: "text/plain; charset=utf-8".to_string(),

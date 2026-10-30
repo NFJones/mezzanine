@@ -283,7 +283,7 @@ pub fn plan_action_result(
             vec!["agent discovery accepted for runtime execution".to_string()],
             Some(r#"{"state":"pending_runtime_agent_discovery"}"#.to_string()),
         )),
-        AgentActionPayload::Wait => Ok(ActionResult::running(
+        AgentActionPayload::Wait { .. } => Ok(ActionResult::running(
             turn,
             action,
             vec!["entered idle state; MMP peer mail will resume this turn".to_string()],
@@ -747,7 +747,7 @@ pub fn action_auto_allow_reason(action: &AgentAction, input: ActionPlanningInput
     match &action.payload {
         AgentActionPayload::Say { text, .. } => text.clone(),
         AgentActionPayload::Abort { reason } => reason.clone(),
-        AgentActionPayload::Wait => "wait for MMP peer mail".to_string(),
+        AgentActionPayload::Wait { .. } => "wait for MMP peer mail".to_string(),
         AgentActionPayload::SendMessage {
             recipient,
             scope,
@@ -1453,6 +1453,7 @@ mod tests {
             id: "message-1".to_string(),
 
             payload: AgentActionPayload::SendMessage {
+                expect_reply: false,
                 recipient: recipient.to_string(),
                 scope: None,
                 content_type: "text/plain; charset=utf-8".to_string(),

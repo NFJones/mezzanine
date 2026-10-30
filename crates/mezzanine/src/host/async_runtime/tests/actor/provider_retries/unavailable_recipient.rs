@@ -89,6 +89,7 @@ async fn qualify_unavailable_recipient(
     let send = mez_agent::AgentAction {
         id: "msg-unavailable".into(),
         payload: mez_agent::AgentActionPayload::SendMessage {
+            expect_reply: false,
             recipient: "agent:agent-nowhere".into(),
             scope: Some(if single { "project" } else { "session" }.into()),
             content_type: "text/plain; charset=utf-8".into(),

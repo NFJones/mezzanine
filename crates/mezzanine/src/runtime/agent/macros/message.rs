@@ -60,6 +60,23 @@ impl RuntimeSessionService {
             )?));
         };
         let child_parent_agent_id = child_lineage.parent_agent_id.clone();
+        if matches!(
+            action.payload,
+            super::super::AgentActionPayload::SendMessage {
+                expect_reply: true,
+                ..
+            }
+        ) {
+            let mut result = ActionResult::failed(
+                parent_turn,
+                action,
+                ActionStatus::Failed,
+                "request_tracking_unavailable",
+                "request tracking is unavailable for a runtime-owned macro step; use its existing task-result gate with expect_reply=false",
+            )?;
+            result.structured_content_json = Some(r#"{"state":"request_tracking_unavailable","accepted":false,"delivery_applied":false}"#.into());
+            return Ok(Some(result));
+        }
         let child_display_name = child_lineage.display_name.clone();
         if child_parent_agent_id != parent_turn.agent_id
             || macro_owner.parent_agent_id != parent_turn.agent_id

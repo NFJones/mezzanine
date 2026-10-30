@@ -781,7 +781,10 @@ fn maap_close_agent_action_schema() -> serde_json::Value {
 fn maap_wait_action_schema() -> serde_json::Value {
     maap_action_object_schema(
         "wait",
-        [],
+        [
+            ("for_message", serde_json::json!({"type":["string","null"], "description":"Actual message_id returned by an earlier successful send_message with expect_reply=true in this conversation. Omit for ordinary peer-mail wait."})),
+            ("from_agent", serde_json::json!({"type":["string","null"], "description":"One acceptance-time recipient agent ID; required for fanout, inferred for one recipient. Requires for_message. Self selection is invalid."})),
+        ],
         &[],
     )
     .as_object()
@@ -805,6 +808,10 @@ fn maap_send_message_action_schema() -> serde_json::Value {
     maap_action_object_schema(
         "send_message",
         [
+            (
+                "expect_reply",
+                serde_json::json!({"type":"boolean", "default":false, "description":"Reserve bounded local request evidence at send acceptance for a later targeted wait. Default false keeps ordinary message behavior. Tracking capacity rejection applies before sending."}),
+            ),
             (
                 "recipient",
                 serde_json::json!({

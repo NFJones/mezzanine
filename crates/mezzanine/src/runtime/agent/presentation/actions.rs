@@ -138,7 +138,7 @@ impl RuntimeSessionService {
                 | AgentActionPayload::McpServerGet { .. }
                 | AgentActionPayload::McpCall { .. }
                 | AgentActionPayload::SendMessage { .. }
-                | AgentActionPayload::Wait
+                | AgentActionPayload::Wait { .. }
                 | AgentActionPayload::SpawnAgent { .. }
                 | AgentActionPayload::CloseAgent { .. }
                 | AgentActionPayload::ConfigChange { .. }

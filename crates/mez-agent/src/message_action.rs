@@ -123,6 +123,7 @@ mod tests {
         AgentAction {
             id: "message-1".to_string(),
             payload: AgentActionPayload::SendMessage {
+                expect_reply: false,
                 recipient: recipient.to_string(),
                 scope: None,
                 content_type: "text/plain; charset=utf-8".to_string(),

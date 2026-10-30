@@ -108,7 +108,10 @@ fn runtime_joined_parent_answers_child_before_completion_with_one_slot() {
     // MAAP wait is its own executable batch, following the accepted send.
     let wait = dialogue_provider(vec![mez_agent::AgentAction {
         id: "joined-dialogue-child-wait".into(),
-        payload: mez_agent::AgentActionPayload::Wait,
+        payload: mez_agent::AgentActionPayload::Wait {
+            for_message: None,
+            from_agent: None,
+        },
     }]);
     let wait_execution = service
         .execute_agent_turn_with_provider(
@@ -469,7 +472,10 @@ fn runtime_joined_dialogue_queue_full_retries_committed_question_after_sibling_p
         &first.turn_id,
         dialogue_provider(vec![mez_agent::AgentAction {
             id: "queue-child-wait".into(),
-            payload: mez_agent::AgentActionPayload::Wait,
+            payload: mez_agent::AgentActionPayload::Wait {
+                for_message: None,
+                from_agent: None,
+            },
         }]),
     );
     let sibling = children
@@ -622,7 +628,10 @@ fn runtime_joined_dialogue_repeated_questions_reuse_one_original_task() {
             &child.turn_id,
             dialogue_provider(vec![mez_agent::AgentAction {
                 id: format!("round-wait-{round}"),
-                payload: mez_agent::AgentActionPayload::Wait,
+                payload: mez_agent::AgentActionPayload::Wait {
+                    for_message: None,
+                    from_agent: None,
+                },
             }]),
         );
         assert!(service.agent_provider_task_is_pending(&parent.turn_id));

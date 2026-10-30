@@ -55,7 +55,7 @@ pub(crate) fn agent_action_execution_display_header(action: &AgentAction) -> Opt
             agent_action_display_preview(agent_type.as_deref().unwrap_or("primary")),
             agent_action_display_preview(scope.as_deref().unwrap_or("project"))
         ),
-        AgentActionPayload::Wait => "wait: peer reply requested".to_string(),
+        AgentActionPayload::Wait { .. } => "wait: peer reply requested".to_string(),
         AgentActionPayload::MemoryStore {
             kind,
             priority,
@@ -606,7 +606,13 @@ mod tests {
                 },
                 "list agents: type=subagent scope=project",
             ),
-            (AgentActionPayload::Wait, "wait: peer reply requested"),
+            (
+                AgentActionPayload::Wait {
+                    for_message: None,
+                    from_agent: None,
+                },
+                "wait: peer reply requested",
+            ),
         ] {
             let action = AgentAction {
                 id: "header-test".to_string(),

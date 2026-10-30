@@ -178,6 +178,7 @@ fn streamed_outbound_noop_case(
     let action = mez_agent::AgentAction {
         id: "accepted-noop-message".into(),
         payload: mez_agent::AgentActionPayload::SendMessage {
+            expect_reply: false,
             recipient,
             scope: Some("session".into()),
             content_type: content_type.into(),

@@ -716,7 +716,7 @@ fn runtime_capability_for_response(
             | mez_agent::AgentActionPayload::RequestCapability { .. }
             | mez_agent::AgentActionPayload::RequestSkills
             | mez_agent::AgentActionPayload::CallSkill { .. }
-            | mez_agent::AgentActionPayload::Wait
+            | mez_agent::AgentActionPayload::Wait { .. }
             | mez_agent::AgentActionPayload::Complete
             | mez_agent::AgentActionPayload::Abort { .. }
             | mez_agent::AgentActionPayload::MemorySearch { .. }
@@ -1472,6 +1472,7 @@ fn execute_runtime_send_message_to(
                     id: "msg-1".to_string(),
 
                     payload: mez_agent::AgentActionPayload::SendMessage {
+                        expect_reply: false,
                         recipient: recipient.to_string(),
                         scope: Some("session".to_string()),
                         content_type: content_type.to_string(),

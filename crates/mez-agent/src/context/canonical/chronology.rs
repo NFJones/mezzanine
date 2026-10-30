@@ -42,6 +42,9 @@ impl AgentContext {
         candidate
             .pending_execution_groups
             .clone_from(&live.pending_execution_groups);
+        candidate
+            .pending_peer_messages
+            .clone_from(&live.pending_peer_messages);
         candidate.next_event_sequence = candidate.next_event_sequence.max(live.next_event_sequence);
         candidate.rebuild_projections();
         candidate.validate_durable()?;

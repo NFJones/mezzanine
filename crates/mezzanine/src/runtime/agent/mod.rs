@@ -232,6 +232,7 @@ mod messages;
 mod outcome;
 mod presentation;
 mod presentation_occurrence;
+mod request_waits;
 pub(crate) use presentation::RuntimeProviderLogInput;
 mod project_accounting;
 mod provider_context;
@@ -440,6 +441,8 @@ pub(crate) struct RuntimeAgentComponent {
     /// Original native send owners bounded by canonical pending occurrences,
     /// retained across provider batches but never restored as task authority.
     outbound_delivery_owners: BTreeMap<u64, message_outcomes::OutboundDeliveryOwner>,
+    /// Explicit tracked requests and exact same-runtime wait/lifecycle ownership.
+    request_waits: request_waits::RuntimeRequestWaits,
     /// Per-failure-signature correction attempts keyed by turn/signature.
     agent_turn_failure_feedback_attempts: BTreeMap<String, usize>,
     /// Output-limit recovery attempt currently shaping each active request.

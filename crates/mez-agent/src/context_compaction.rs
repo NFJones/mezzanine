@@ -374,6 +374,7 @@ fn plan_model_context_compaction_with_projection(
         .iter()
         .map(|event| {
             event.retention() == ContextRetention::Exact
+                || context.peer_message_is_pending(event.sequence())
                 || event.block().source == ContextSourceKind::TranscriptUser
         })
         .collect::<Vec<_>>();
@@ -650,6 +651,7 @@ pub fn apply_model_context_compaction_plan(
         || selected.iter().any(|(_, event)| {
             event.sequence().get() > plan.consumed_sequence_high_water
                 || event.retention() == ContextRetention::Exact
+                || context.peer_message_is_pending(event.sequence())
                 || event
                     .execution_group_id()
                     .is_some_and(|group| context.execution_group_is_pending(group))
@@ -692,7 +694,9 @@ fn model_context_group_is_closed_and_consumed(
 ) -> bool {
     let events = context.chronology();
     if events[group.clone()].iter().any(|event| {
-        event.sequence().get() > consumed_sequence_high_water || !event.recoverable_for_compaction()
+        event.sequence().get() > consumed_sequence_high_water
+            || !event.recoverable_for_compaction()
+            || context.peer_message_is_pending(event.sequence())
     }) {
         return false;
     }

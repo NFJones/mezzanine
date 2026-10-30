@@ -369,6 +369,7 @@ impl RuntimeSessionService {
             .agent_turn_peer_wait_started_at_ms
             .remove(turn_id);
         self.agent.agent_turn_peer_wait_wake_pending.remove(turn_id);
+        self.retire_request_wait_edge(turn_id);
         self.agent
             .agent_turn_imported_history_sequence_high_water
             .remove(turn_id);

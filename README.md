@@ -50,7 +50,9 @@ for its scope and current limitations.
 Published agent objectives update immediately; their optional saved-session
 display mirrors use bounded background persistence so cache contention does not
 freeze unrelated work. Joined children can ask their parent for clarification
-before completing, even with one provider slot. See
+before completing, even with one provider slot. Optional request-bound waits
+also let a parent reassess an exact peer request after a reply or dependency
+retirement. See
 [messaging](docs/agent/subagents-and-messaging.md).
 
 Agent logs can optionally show captured UTC occurrence times with bounded

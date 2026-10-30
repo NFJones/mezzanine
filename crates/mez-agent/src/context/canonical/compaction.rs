@@ -72,6 +72,7 @@ impl AgentContext {
             }
             if self.chronology[range.clone()].iter().any(|event| {
                 event.retention == ContextRetention::Exact
+                    || self.peer_message_is_pending(event.sequence())
                     || event
                         .execution_group_id()
                         .is_some_and(|group| self.execution_group_is_pending(group))
@@ -134,6 +135,7 @@ impl AgentContext {
             let replaced = &self.chronology[range.clone()];
             if replaced.iter().any(|event| {
                 event.retention == ContextRetention::Exact
+                    || self.peer_message_is_pending(event.sequence())
                     || event
                         .execution_group_id()
                         .is_some_and(|group| self.execution_group_is_pending(group))

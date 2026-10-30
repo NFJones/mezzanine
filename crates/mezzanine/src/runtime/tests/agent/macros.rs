@@ -1070,6 +1070,7 @@ fn runtime_joined_child_failure_without_shell_session_settles_parent() {
         id: "macro-step-1".to_string(),
 
         payload: mez_agent::AgentActionPayload::SendMessage {
+            expect_reply: false,
             recipient: format!("agent:{}", child.agent_id),
             scope: None,
             content_type: "text/plain; charset=utf-8".to_string(),

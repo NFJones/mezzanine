@@ -6,9 +6,42 @@
 //! but supplies no action, provider or completion authority and is never part of
 //! persisted transcript metadata or model-visible messages.
 
-use super::{AgentContext, AgentContextError, AgentContextResult, ContextExecutionGroupId};
+use super::{
+    AgentContext, AgentContextError, AgentContextResult, ContextEventSequence,
+    ContextExecutionGroupId, ContextSourceKind,
+};
 
 impl AgentContext {
+    /// Protects an already committed peer event until its request owner's context
+    /// and wake handoff commits. Missing/non-peer sequences reject without
+    /// creating phantom history. Repeated retention is idempotent and does not
+    /// acknowledge a message, grant caller authority, or mark progress.
+    pub fn retain_pending_peer_message(
+        &mut self,
+        sequence: ContextEventSequence,
+    ) -> AgentContextResult<()> {
+        if !self.chronology.iter().any(|event| {
+            event.sequence() == sequence && event.block().source == ContextSourceKind::PeerMessage
+        }) {
+            return Err(AgentContextError::new(
+                "pending peer source is absent from context",
+            ));
+        }
+        self.pending_peer_messages.insert(sequence);
+        Ok(())
+    }
+
+    /// Releases one runtime-owned peer source after handoff or conversation
+    /// retirement. This changes no event, cursor, result, or scheduler state.
+    pub fn release_pending_peer_message(&mut self, sequence: ContextEventSequence) -> bool {
+        self.pending_peer_messages.remove(&sequence)
+    }
+
+    /// Reports exact runtime protection without inferring ownership from text.
+    pub fn peer_message_is_pending(&self, sequence: ContextEventSequence) -> bool {
+        self.pending_peer_messages.contains(&sequence)
+    }
+
     /// Protects an existing execution group from compaction while its runtime
     /// owner has outstanding work. Repeated retention is idempotent. A missing
     /// group fails without inserting state; ids cannot create phantom history.

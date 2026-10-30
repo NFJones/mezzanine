@@ -258,6 +258,7 @@ impl RuntimeSessionService {
             id: "macro-step-1".to_string(),
 
             payload: AgentActionPayload::SendMessage {
+                expect_reply: false,
                 recipient: format!("agent:{child_agent_id}"),
                 scope: Some("project".to_string()),
                 content_type: "text/plain; charset=utf-8".to_string(),

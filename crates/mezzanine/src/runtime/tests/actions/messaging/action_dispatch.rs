@@ -564,6 +564,7 @@ fn runtime_spawned_child_corrects_parent_recipient_without_replaying_sibling() {
         id: id.to_string(),
 
         payload: mez_agent::AgentActionPayload::SendMessage {
+            expect_reply: false,
             recipient,
             scope: Some("session".to_string()),
             content_type: "text/plain".to_string(),

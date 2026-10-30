@@ -729,6 +729,7 @@ fn runtime_occurrence_component_fallback_retains_only_proven_original_sources() 
                         timeout_ms: None,
                     },
                     "message" => mez_agent::AgentActionPayload::SendMessage {
+                        expect_reply: false,
                         recipient: "agent-%2".into(),
                         scope: None,
                         content_type: "text/plain; charset=utf-8".into(),
@@ -1239,6 +1240,7 @@ fn runtime_occurrence_outbound_stream_keeps_original_observation() {
     let action = mez_agent::AgentAction {
         id: "message".into(),
         payload: mez_agent::AgentActionPayload::SendMessage {
+            expect_reply: false,
             recipient: "agent-%2".into(),
             scope: None,
             content_type: "text/plain; charset=utf-8".into(),

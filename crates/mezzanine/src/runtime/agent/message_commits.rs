@@ -204,6 +204,7 @@ impl RuntimeSessionService {
         }
         self.agent.received_peer_message_presentations.clear();
         self.agent.outbound_delivery_owners.clear();
+        self.retire_request_waits_for_restore();
         Ok(())
     }
 
@@ -238,6 +239,7 @@ impl RuntimeSessionService {
         self.agent
             .received_peer_message_presentations
             .retain(|_, receipt| receipt.recipient_agent_id != *recipient);
+        self.prune_request_wait_owners();
         Ok(retired)
     }
 }

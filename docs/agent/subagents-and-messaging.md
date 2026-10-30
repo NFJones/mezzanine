@@ -291,6 +291,37 @@ provider capacity until model-originated peer mail arrives. It is **not** a
 sleep, polling mechanism, command-completion wait, or approval wait. Runtime
 task-status and task-result bridge messages alone do not wake it.
 
+For a dependency-aware request, send with `expect_reply: true`, retain the actual
+returned `message_id`, then select it with `wait.for_message` in a later batch.
+Set `wait.from_agent` to one original recipient for fanout; a one-recipient send
+infers it. Selecting yourself or an untracked/unknown ID returns correctable
+feedback. Ordinary sends default to `expect_reply: false`.
+
+```json
+{"type":"send_message","recipient":"agent:agent-worker","scope":"session","content_type":"text/plain; charset=utf-8","payload":"Review the assigned change.","expect_reply":true}
+```
+
+Use the returned accepted ID, rather than the illustrative placeholder below:
+
+```json
+{"type":"wait","for_message":"actual-returned-message-id","from_agent":"agent-worker"}
+```
+
+A targeted wait can receive an authenticated correlated response, the exact
+owned task's terminal result without a model reply, or opaque evidence that the
+original dependency retired. It never adopts a later task of a persistent child
+or discloses a nonowned peer's private task/output. Offline presence alone is
+insufficient. Unrelated mail can resume inference; reparking preserves the same
+unresolved request. Runtime-owned macro steps retain their existing result gate
+and require `expect_reply: false`.
+
+Tracking reserves finite capacity before sending: at most 64 unresolved requests
+per conversation and 4096 global reservation units, with an independent metadata
+budget. A tracking-cap rejection sends nothing. It does not block ordinary
+untracked delivery. Source references survive ACK/replay eviction and remain
+exact through context/wake handoff, including QueueFull and compaction. Outcomes
+grant no permission or answer-quality verdict and never resend or restart work.
+
 There is one narrow lifecycle exception: when the runtime locally proves an
 owned child's current task failed or was unexpectedly interrupted before its
 expected answer, it retains bounded failure evidence and fairly resumes the

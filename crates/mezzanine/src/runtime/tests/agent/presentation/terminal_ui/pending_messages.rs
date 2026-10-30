@@ -45,6 +45,7 @@ fn promoted_say_pending_message_case(resize: bool, accepted: Option<bool>) {
     let message = mez_agent::AgentAction {
         id: "message".to_string(),
         payload: mez_agent::AgentActionPayload::SendMessage {
+            expect_reply: false,
             recipient: "agent-%2".to_string(),
             scope: None,
             content_type: mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE.to_string(),

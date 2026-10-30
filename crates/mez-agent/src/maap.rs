@@ -378,6 +378,8 @@ pub enum AgentActionPayload {
     /// Callers use this variant to describe one explicit state or command path
     /// without relying on stringly typed status values.
     SendMessage {
+        /// Reserves request lifecycle evidence at acceptance; omission is false.
+        expect_reply: bool,
         /// Stores the recipient value for this data structure.
         ///
         /// The field is part of structured state exchanged across this module
@@ -406,7 +408,12 @@ pub enum AgentActionPayload {
     /// This action is exclusively for waiting on another agent after MMP
     /// coordination. It is not a general sleep, delay, polling, user-input,
     /// process, network, or external-event primitive.
-    Wait,
+    Wait {
+        /// Actual accepted ID of an earlier tracked send in this conversation.
+        for_message: Option<String>,
+        /// One frozen recipient; required when the accepted send was fanout.
+        from_agent: Option<String>,
+    },
     /// Represents the Spawn Agent case for this enumeration.
     ///
     /// Callers use this variant to describe one explicit state or command path
@@ -675,7 +682,7 @@ impl MaapBatch {
         let wait_count = self
             .actions
             .iter()
-            .filter(|action| matches!(action.payload, AgentActionPayload::Wait))
+            .filter(|action| matches!(action.payload, AgentActionPayload::Wait { .. }))
             .count();
         if wait_count > 0 {
             if wait_count != 1 {
@@ -703,7 +710,7 @@ impl MaapBatch {
             }
             for action in &self.actions {
                 match action.payload {
-                    AgentActionPayload::Wait
+                    AgentActionPayload::Wait { .. }
                     | AgentActionPayload::Say {
                         status: SayStatus::Progress,
                         ..
@@ -749,7 +756,7 @@ impl AgentAction {
             AgentActionPayload::IssueQuery { .. } => "issue_query",
             AgentActionPayload::IssueDelete { .. } => "issue_delete",
             AgentActionPayload::SendMessage { .. } => "send_message",
-            AgentActionPayload::Wait => "wait",
+            AgentActionPayload::Wait { .. } => "wait",
             AgentActionPayload::SpawnAgent { .. } => "spawn_agent",
             AgentActionPayload::CloseAgent { .. } => "close_agent",
             AgentActionPayload::ConfigChange { .. } => "config_change",
@@ -951,6 +958,7 @@ impl AgentAction {
                 content_type,
                 payload,
                 correlation_id,
+                ..
             } => {
                 validate_non_empty("message recipient", recipient)?;
                 if let Some(scope) = scope
@@ -972,7 +980,25 @@ impl AgentAction {
                 }
                 Ok(())
             }
-            AgentActionPayload::Wait => Ok(()),
+            AgentActionPayload::Wait {
+                for_message,
+                from_agent,
+            } => {
+                for value in [for_message, from_agent].into_iter().flatten() {
+                    validate_non_empty("wait dependency selector", value)?;
+                    if value.len() > 1024 {
+                        return Err(MaapContractError::invalid_args(
+                            "wait selector exceeds 1024 bytes",
+                        ));
+                    }
+                }
+                if from_agent.is_some() && for_message.is_none() {
+                    return Err(MaapContractError::invalid_args(
+                        "wait.from_agent requires for_message",
+                    ));
+                }
+                Ok(())
+            }
             AgentActionPayload::SpawnAgent {
                 role,
                 placement,
@@ -1541,6 +1567,7 @@ fn parse_maap_action_value(
             id: required_string(object, "id")?.to_string(),
         },
         "send_message" => AgentActionPayload::SendMessage {
+            expect_reply: optional_bool(object, "expect_reply")?.unwrap_or(false),
             recipient: required_string(object, "recipient")?.to_string(),
             scope: optional_string(object, "scope")?.map(str::to_string),
             content_type: required_string(object, "content_type")?.to_string(),
@@ -1548,12 +1575,18 @@ fn parse_maap_action_value(
             correlation_id: optional_string(object, "correlation_id")?.map(str::to_string),
         },
         "wait" => {
-            if object.len() != 1 {
+            if object
+                .keys()
+                .any(|key| !matches!(key.as_str(), "type" | "for_message" | "from_agent"))
+            {
                 return Err(MaapContractError::invalid_args(
-                    "wait accepts no fields other than type",
+                    "wait accepts only type, for_message and from_agent",
                 ));
             }
-            AgentActionPayload::Wait
+            AgentActionPayload::Wait {
+                for_message: optional_string(object, "for_message")?.map(str::to_owned),
+                from_agent: optional_string(object, "from_agent")?.map(str::to_owned),
+            }
         }
         "spawn_agent" => {
             for unsupported in [
@@ -1659,7 +1692,7 @@ fn parse_maap_action_value(
 pub fn batch_requests_terminal_completion(actions: &[AgentAction]) -> bool {
     if actions
         .iter()
-        .any(|action| matches!(action.payload, AgentActionPayload::Wait))
+        .any(|action| matches!(action.payload, AgentActionPayload::Wait { .. }))
     {
         return true;
     }

@@ -11600,8 +11600,9 @@ The baseline action types are:
   without a fresh whitelist prompt. Explicit deny rules MUST win in every mode.
   Runtime macro and bridge delivery is not model-planned and MUST remain
   ungated.
-- `wait`: Park the current turn until model-originated MMP peer mail arrives.
-  The action MUST accept no fields other than `type`, MUST require no approval,
+- `wait`: Park the current turn for MMP coordination, optionally bound to one
+  accepted tracked request. The action MAY include nullable `for_message` and
+  `from_agent`, MUST reject other fields, MUST require no approval,
   and MUST be used only during active inter-agent MMP coordination when the
   agent cannot continue until another agent replies. Provider-facing guidance
   MUST explicitly forbid using `wait` as a general sleep, delay, retry, poll,
@@ -12097,6 +12098,13 @@ complete confinement declaration or an authority decision.
 
 A `send_message` action MUST include `recipient`, `content_type`, and
 `payload`. It MAY include nullable `scope` with value `project` or `session`.
+It MAY include boolean `expect_reply`, defaulting to false. True MUST reserve
+bounded same-runtime request ownership before send acceptance, freeze the actual
+eligible recipient registrations and any provable exact live owned child task,
+and return the accepted `message_id`. Tracking MUST NOT be inferred from payload
+or correlation text. A runtime-owned macro step uses its existing task-result
+gate rather than an MMP request receipt; tracked intent on that bridge MUST be
+rejected correctably before dispatching work.
 Omitted or `null` scope MUST resolve to `project`. Project delivery MUST be
 limited to the authenticated sender's trusted project membership; a sender
 without such membership MUST be rejected rather than widened. `session` is an
@@ -17166,6 +17174,45 @@ lost. Resuming an existing wait MUST NOT increment
 `agents.peer_message_loop_limit`, which counts only newly created
 peer-message-triggered turns. Stop, pane shutdown, session shutdown, and parent
 cancellation MUST clear peer-wait state through normal turn cleanup.
+
+An explicit `wait.for_message` MUST select the actual accepted ID of an earlier
+successful `send_message` with `expect_reply: true` in the same native
+conversation. `wait.from_agent` MAY select one frozen recipient, MUST be present
+for fanout, and MUST NOT select self. Invalid, untracked, unavailable or capped
+selection MUST yield bounded same-turn correction without fabricating authority.
+One original request MUST own at most one selected edge; unrelated mail may
+resume inference but MUST NOT consume that request. Reparking on the same edge
+MUST NOT allocate another dependency generation or manufacture progress.
+
+Tracked requests MUST remain within 64 unresolved requests per originating
+conversation, 4096 global receipt/edge/recipient/terminal reservation units and
+an independently measured finite metadata byte budget. Admission MUST reserve
+future handoff headroom before accepting effects. Ordinary untracked sends MUST
+retain their independent delivery bounds. Native message IDs MUST remain unique
+for the conversation lifetime, including beyond disposable replay retention.
+ACK, replay eviction and later persistent-agent tasks MUST NOT replace the
+original request's ownership. Conversation retirement and restore MUST retire
+same-runtime capabilities; missing proof MUST NOT be reconstructed from history.
+
+A matching response MUST be an authenticated original-recipient `send`
+occurrence, correlated to the exact accepted request ID and committed into
+canonical context. The runtime establishes occurrence, not answer quality. An
+exact captured owned task's terminal result MAY instead supply an untrusted
+output reference without a model-authored reply. A nonowned registration's
+retirement/replacement MUST yield only opaque unavailability; offline presence
+is insufficient. Intentional captured-task retirement MUST NOT fabricate new
+progress or wake unrelated plain waits. Pause, approval, Stop, native ownership,
+exact process uncertainty and original joined-task result gates MUST still hold.
+
+Targeted outcome context and the native wait result MUST commit before fair
+wake admission. QueueFull and context faults MUST retain original source and
+the same edge. Committed response and handoff references MUST remain protected
+from compaction until consumption or originating conversation retirement.
+Dependency generation allocation is not progress: only a matching committed
+response or once-consumed exact task terminal result can supply a content-free
+progress witness. Unavailability, ACKs, heartbeats, arbitrary status and new
+request IDs MUST NOT do so. No stall timer, cycle detector, automatic resend or
+automatic task restart is implied by request tracking.
 
 An authoritative **local owned-child unexpected terminal occurrence** MUST
 also permit the exact owning parent's peer wait to resume. Eligibility MUST

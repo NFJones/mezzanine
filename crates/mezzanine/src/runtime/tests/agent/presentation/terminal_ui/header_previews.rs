@@ -180,7 +180,10 @@ fn runtime_streaming_discovery_and_wait_headers_restore_on_reconciliation() {
             agent_type: Some("subagent".to_string()),
             scope: Some("project".to_string()),
         },
-        mez_agent::AgentActionPayload::Wait,
+        mez_agent::AgentActionPayload::Wait {
+            for_message: None,
+            from_agent: None,
+        },
     ]
     .into_iter()
     .enumerate()

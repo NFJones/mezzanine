@@ -1784,12 +1784,18 @@ impl RuntimeSessionService {
             self.retain_owned_child_failure(turn, outcome, summary, output);
         }
 
+        if unexpected_outcome.is_some() {
+            self.retain_request_task_terminal(turn, summary, output);
+        } else {
+            self.retain_request_task_retired(turn);
+        }
         let now_ms = current_unix_seconds().saturating_mul(1000);
         // The actor commits local evidence before touching the best-effort
         // bridge. An older in-flight parent request is therefore fenced even
         // if bridge acceptance fails or its route is retired below. A genuine
         // context/admission fault keeps the local receipt for delivery recovery.
         let _ = self.recover_owned_child_failures(now_ms);
+        let _ = self.recover_request_waits();
         let child_display_name = self
             .subagent_lineage(&turn.agent_id)
             .map(|lineage| lineage.display_name.clone());

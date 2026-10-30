@@ -200,9 +200,6 @@ impl MessageService {
         sender: &AgentId,
         sequence: MessageSequence,
     ) -> Option<MessageAcceptanceProof> {
-        if sequence <= self.acceptance_history_through {
-            return None;
-        }
         let row = self.pending.get(&sequence)?;
         let floor = row.sender_registered_after_sequence?;
         if row.envelope.sender.agent_id != *sender
@@ -210,6 +207,23 @@ impl MessageService {
         {
             return None;
         }
+        self.live_acceptance_proof(sequence)
+    }
+
+    /// Captures a canonical live occurrence for trusted recipient commit owners,
+    /// including a genuine response accepted before its sender retired. This
+    /// grants no sender ownership, delivery ACK, or scheduling authority. Restored
+    /// history and released sources remain unavailable; no replay scan occurs.
+    pub fn live_acceptance_proof(
+        &self,
+        sequence: MessageSequence,
+    ) -> Option<MessageAcceptanceProof> {
+        if sequence <= self.acceptance_history_through {
+            return None;
+        }
+        let row = self.pending.get(&sequence)?;
+        let sender = &row.envelope.sender.agent_id;
+        let floor = row.sender_registered_after_sequence?;
         Some(MessageAcceptanceProof {
             runtime: self.acceptance_runtime.clone(),
             message_id: row.envelope.id.clone(),
@@ -218,6 +232,28 @@ impl MessageService {
             correlation_id: row.envelope.correlation_id.clone(),
             sequence,
         })
+    }
+
+    /// Previews bounded eligible addresses for a trusted adapter's synchronous
+    /// preaccept ownership/resource validation. This is not acceptance evidence:
+    /// no sequence, registration interval capability, offer or ACK is returned.
+    /// The final acceptance transaction must still authenticate and freeze them.
+    pub fn preview_message_recipients(
+        &self,
+        envelope: &Envelope,
+        scope: MessageScope,
+    ) -> Result<Vec<AgentId>> {
+        let sender = self
+            .registered
+            .get(&envelope.sender.agent_id)
+            .filter(|sender| *sender == &envelope.sender)
+            .ok_or_else(|| MessageError::forbidden("message sender is not authenticated"))?;
+        let audience = resolve_message_audience(sender, scope)?;
+        Ok(self
+            .capture_recipient_bindings(envelope, &audience)?
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect())
     }
 
     /// Checks whether a frozen recipient registration is still current.
@@ -233,6 +269,13 @@ impl MessageService {
             && proof.recipients.iter().any(|(id, floor)| {
                 id == recipient && self.registration_floors.get(id) == Some(floor)
             })
+    }
+
+    /// Checks the original sender interval, preventing a reused address from
+    /// inheriting another registration's outstanding request ownership.
+    pub fn acceptance_sender_is_current(&self, proof: &MessageAcceptanceProof) -> bool {
+        Arc::ptr_eq(&self.acceptance_runtime, &proof.runtime)
+            && self.registration_floors.get(&proof.sender.0) == Some(&proof.sender.1)
     }
 
     /// Authenticates one later reverse occurrence against a frozen request.

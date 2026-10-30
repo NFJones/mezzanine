@@ -4,6 +4,7 @@
 //! product crate retains only tests for its injected shell-command policy.
 
 use crate::*;
+mod request_bound;
 
 /// Minimal active-turn identity used by the moved contract tests.
 struct TestTurn;
@@ -1215,7 +1216,7 @@ fn wait_round_trips_with_strict_mmp_only_batch_contract() {
     let mut wait = parse_maap_action_json(r#"{"type":"wait"}"#).expect("wait action");
     wait.id = "wait-1".to_string();
     assert_eq!(wait.action_type(), "wait");
-    assert!(matches!(wait.payload, AgentActionPayload::Wait));
+    assert!(matches!(wait.payload, AgentActionPayload::Wait { .. }));
     assert!(parse_maap_action_json(r#"{"type":"wait","timeout_ms":1}"#).is_err());
 
     let valid = MaapBatch {

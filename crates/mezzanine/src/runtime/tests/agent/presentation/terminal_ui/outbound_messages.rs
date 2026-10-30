@@ -38,6 +38,7 @@ fn runtime_outbound_adjacent_same_label_sources_remain_distinct() {
                 let action = mez_agent::AgentAction {
                     id: format!("adjacent-{ordinal}"),
                     payload: mez_agent::AgentActionPayload::SendMessage {
+                        expect_reply: false,
                         recipient: "agent-%2".into(),
                         scope: None,
                         content_type: "text/plain; charset=utf-8".into(),
@@ -223,6 +224,7 @@ fn runtime_outbound_plaintext_crlf_growth_keeps_frozen_source() {
         let action = mez_agent::AgentAction {
             id: "growth-crlf-action".into(),
             payload: mez_agent::AgentActionPayload::SendMessage {
+                expect_reply: false,
                 recipient: "agent-%2".into(),
                 scope: None,
                 content_type: "text/plain; charset=utf-8".into(),
@@ -508,6 +510,7 @@ fn runtime_streaming_outbound_message_renders_verbose_json_until_settlement() {
     let action = mez_agent::AgentAction {
         id: "streamed-message".to_string(),
         payload: mez_agent::AgentActionPayload::SendMessage {
+            expect_reply: false,
             recipient: "agent-%2".to_string(),
             scope: None,
             content_type: "application/json".to_string(),
@@ -531,6 +534,7 @@ fn runtime_streaming_outbound_message_renders_verbose_json_until_settlement() {
                     mez_agent::AgentAction {
                         id: "rejected-streamed-message".to_string(),
                         payload: mez_agent::AgentActionPayload::SendMessage {
+                            expect_reply: false,
                             recipient: "agent-%3".to_string(),
                             scope: None,
                             content_type: "application/json".to_string(),
@@ -693,6 +697,7 @@ fn runtime_accepted_outbound_message_persists_sent_source_for_replay() {
     let action = mez_agent::AgentAction {
         id: "accepted-outbound-action".to_string(),
         payload: mez_agent::AgentActionPayload::SendMessage {
+            expect_reply: false,
             recipient: "agent-%2".to_string(),
             scope: None,
             content_type: "text/plain".to_string(),
@@ -841,6 +846,7 @@ fn runtime_streamed_outbound_parent_label_persists_after_lineage_fence() {
     let action = mez_agent::AgentAction {
         id: "streamed-parent-action".to_string(),
         payload: mez_agent::AgentActionPayload::SendMessage {
+            expect_reply: false,
             recipient: "agent-%2".to_string(),
             scope: None,
             content_type: mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE.to_string(),

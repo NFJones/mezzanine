@@ -102,24 +102,26 @@ fn assert_peer_receipt_capacity(content_type: &str) {
             .message_service_mut()
             .advance_subscription(&recipient.agent_id, delivery.sequence)
             .unwrap();
-        service.register_received_peer_message_presentation(
-            recipient.agent_id.clone(),
-            delivery.sequence,
-            &receipt_turn,
-            Envelope {
-                protocol: "mmp/1",
-                id: format!("receipt-fill-{sequence}"),
-                message_type: "send".to_string(),
-                time: format!("runtime:{now_ms}"),
-                sender: sender.clone(),
-                recipient: mez_agent::messaging::Recipient::Agent(recipient.agent_id.clone()),
-                correlation_id: None,
-                ttl_ms: None,
-                content_type: content_type.to_string(),
-                payload: "{}".to_string(),
-                extension_fields: Vec::new(),
-            },
-        );
+        service
+            .register_received_peer_message_presentation(
+                recipient.agent_id.clone(),
+                delivery.sequence,
+                &receipt_turn,
+                Envelope {
+                    protocol: "mmp/1",
+                    id: format!("receipt-fill-{sequence}"),
+                    message_type: "send".to_string(),
+                    time: format!("runtime:{now_ms}"),
+                    sender: sender.clone(),
+                    recipient: mez_agent::messaging::Recipient::Agent(recipient.agent_id.clone()),
+                    correlation_id: None,
+                    ttl_ms: None,
+                    content_type: content_type.to_string(),
+                    payload: "{}".to_string(),
+                    extension_fields: Vec::new(),
+                },
+            )
+            .unwrap();
     }
     let extra = service
         .message_service_mut()
@@ -282,12 +284,14 @@ fn runtime_peer_receipt_bytes_backpressure_before_count_limit() {
                 .message_service_mut()
                 .advance_subscription(&recipient.agent_id, delivery.sequence)
                 .unwrap();
-            service.register_received_peer_message_presentation(
-                recipient.agent_id.clone(),
-                delivery.sequence,
-                &turn,
-                envelope,
-            );
+            service
+                .register_received_peer_message_presentation(
+                    recipient.agent_id.clone(),
+                    delivery.sequence,
+                    &turn,
+                    envelope,
+                )
+                .unwrap();
         }
         let extra = make_envelope(64);
         let delivery = service

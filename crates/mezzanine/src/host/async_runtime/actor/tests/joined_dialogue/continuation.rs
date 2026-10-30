@@ -39,7 +39,10 @@ async fn question(
         child,
         vec![AgentAction {
             id: "needed-wait".into(),
-            payload: AgentActionPayload::Wait,
+            payload: AgentActionPayload::Wait {
+                for_message: None,
+                from_agent: None,
+            },
         }],
         generations,
     )

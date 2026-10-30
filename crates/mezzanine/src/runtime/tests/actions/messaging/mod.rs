@@ -21,6 +21,7 @@ mod loop_episodes;
 mod objectives;
 mod presentation;
 mod receive_commit;
+mod request_bound;
 mod snapshot_recovery;
 mod terminal_maintenance;
 mod turn_lifecycle;

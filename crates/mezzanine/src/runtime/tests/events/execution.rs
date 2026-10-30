@@ -183,7 +183,10 @@ fn runtime_agent_loop_peer_wait_does_not_continue_fresh_iteration() {
                         rationale: "the peer review is still pending".to_string(),
                         actions: vec![mez_agent::AgentAction {
                             id: "wait-for-peer-review".to_string(),
-                            payload: mez_agent::AgentActionPayload::Wait,
+                            payload: mez_agent::AgentActionPayload::Wait {
+                                for_message: None,
+                                from_agent: None,
+                            },
                         }],
                     }),
                     provider_transcript_events: Vec::new(),

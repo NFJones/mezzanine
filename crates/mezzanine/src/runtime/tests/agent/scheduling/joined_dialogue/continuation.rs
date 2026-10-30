@@ -180,7 +180,10 @@ fn runtime_joined_dialogue_recursive_parent_reply_resumes_admitted_wait() {
         &middle.turn_id,
         dialogue_provider(vec![mez_agent::AgentAction {
             id: "recursive-parent-wait".into(),
-            payload: mez_agent::AgentActionPayload::Wait,
+            payload: mez_agent::AgentActionPayload::Wait {
+                for_message: None,
+                from_agent: None,
+            },
         }]),
     );
     assert_eq!(

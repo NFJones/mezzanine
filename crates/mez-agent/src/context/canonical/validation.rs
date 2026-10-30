@@ -317,6 +317,16 @@ impl super::AgentContext {
                 "context mutation removed a pending execution group",
             ));
         }
+        if self.pending_peer_messages.iter().any(|sequence| {
+            !self.chronology.iter().any(|event| {
+                event.sequence() == *sequence
+                    && event.block().source == super::ContextSourceKind::PeerMessage
+            })
+        }) {
+            return Err(AgentContextError::new(
+                "context mutation removed a pending peer source",
+            ));
+        }
         if last_sequence >= self.next_event_sequence {
             return Err(AgentContextError::new(
                 "next context event sequence must exceed the committed high-water mark",

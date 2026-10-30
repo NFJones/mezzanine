@@ -33,7 +33,10 @@ fn runtime_human_pause_peer_mail_cannot_unpause_wait() {
                 rationale: "wait for mail".into(),
                 actions: vec![mez_agent::AgentAction {
                     id: "wait-paused".into(),
-                    payload: mez_agent::AgentActionPayload::Wait,
+                    payload: mez_agent::AgentActionPayload::Wait {
+                        for_message: None,
+                        from_agent: None,
+                    },
                 }],
             }),
             provider_transcript_events: Vec::new(),
@@ -141,7 +144,10 @@ fn runtime_wait_parks_turn_and_peer_mail_resumes_same_turn() {
                 rationale: "the requested MMP reply is still pending".to_string(),
                 actions: vec![mez_agent::AgentAction {
                     id: "wait-1".to_string(),
-                    payload: mez_agent::AgentActionPayload::Wait,
+                    payload: mez_agent::AgentActionPayload::Wait {
+                        for_message: None,
+                        from_agent: None,
+                    },
                 }],
             }),
             provider_transcript_events: Vec::new(),
@@ -332,7 +338,10 @@ fn runtime_wait_deadline_remains_paused_until_scheduler_reacquires_capacity() {
                 rationale: "the requested MMP reply is still pending".to_string(),
                 actions: vec![mez_agent::AgentAction {
                     id: "wait-capacity".to_string(),
-                    payload: mez_agent::AgentActionPayload::Wait,
+                    payload: mez_agent::AgentActionPayload::Wait {
+                        for_message: None,
+                        from_agent: None,
+                    },
                 }],
             }),
             provider_transcript_events: Vec::new(),
@@ -478,7 +487,10 @@ fn runtime_wait_immediately_resumes_for_already_queued_peer_mail() {
                 rationale: "the requested MMP reply is still pending".to_string(),
                 actions: vec![mez_agent::AgentAction {
                     id: "wait-queued-reply".to_string(),
-                    payload: mez_agent::AgentActionPayload::Wait,
+                    payload: mez_agent::AgentActionPayload::Wait {
+                        for_message: None,
+                        from_agent: None,
+                    },
                 }],
             }),
             provider_transcript_events: Vec::new(),

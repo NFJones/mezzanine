@@ -567,6 +567,9 @@ fn historical_tool_replay_stays_bounded_for_adversarial_input() {
 /// followed it.
 fn historical_tool_replay_retains_producer_error_codes() {
     let producer_codes = [
+        "capacity",
+        "request_tracking_capacity",
+        "request_tracking_unavailable",
         "agent_aborted",
         "message_recipient_forbidden",
         "message_recipient_unavailable",
@@ -716,6 +719,7 @@ fn historical_safe_error_codes_pin_full_producer_set() {
         "bubblewrap_status_invalid",
         "bubblewrap_status_mismatch",
         "cancelled",
+        "capacity",
         "config",
         "config_change_failed",
         "config_invalid",
@@ -767,6 +771,8 @@ fn historical_safe_error_codes_pin_full_producer_set() {
         "rate_limited",
         "ratelimited",
         "readiness_probe_timeout",
+        "request_tracking_capacity",
+        "request_tracking_unavailable",
         "sandbox_failure",
         "seatbelt_established_payload_incomplete",
         "seatbelt_pre_payload_failure",

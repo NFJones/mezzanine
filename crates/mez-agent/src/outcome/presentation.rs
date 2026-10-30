@@ -242,7 +242,7 @@ pub fn action_user_phrase(
         AgentActionPayload::CloseAgent { agent_id } => {
             ("persistent child close", action_terminal_preview(agent_id))
         }
-        AgentActionPayload::Wait => ("MMP peer wait", "another agent's reply".to_string()),
+        AgentActionPayload::Wait { .. } => ("MMP peer wait", "another agent's reply".to_string()),
         AgentActionPayload::IssueAdd { title, .. } => ("issue add", action_terminal_preview(title)),
         AgentActionPayload::IssueUpdate { id, .. } => ("issue update", action_terminal_preview(id)),
         AgentActionPayload::IssueQuery { text, .. } => (

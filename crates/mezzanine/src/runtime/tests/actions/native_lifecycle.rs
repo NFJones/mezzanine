@@ -201,7 +201,10 @@ async fn runtime_human_pause_accepts_provider_completion_without_dispatch() {
     assert_eq!(service.agent_human_pause_status("%1"), Some("pausing"));
     let action = mez_agent::AgentAction {
         id: "candidate".into(),
-        payload: mez_agent::AgentActionPayload::Wait,
+        payload: mez_agent::AgentActionPayload::Wait {
+            for_message: None,
+            from_agent: None,
+        },
     };
     let mut request = runtime_model_request_fixture("turn-1");
     request.allowed_actions = service

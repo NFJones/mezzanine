@@ -922,8 +922,10 @@ pub(super) fn runtime_maap_action_payload_trace_json(
             content_type,
             payload,
             correlation_id,
+            expect_reply,
         } => {
             data.insert("recipient".to_string(), serde_json::json!(recipient));
+            data.insert("expect_reply".to_string(), serde_json::json!(expect_reply));
             data.insert("scope".to_string(), serde_json::json!(scope));
             data.insert("content_type".to_string(), serde_json::json!(content_type));
             if let Some(correlation_id) = correlation_id {
@@ -937,7 +939,13 @@ pub(super) fn runtime_maap_action_payload_trace_json(
                 runtime_bounded_trace_string_value(payload),
             );
         }
-        AgentActionPayload::Wait => {}
+        AgentActionPayload::Wait {
+            for_message,
+            from_agent,
+        } => {
+            data.insert("for_message".into(), serde_json::json!(for_message));
+            data.insert("from_agent".into(), serde_json::json!(from_agent));
+        }
         AgentActionPayload::SpawnAgent {
             role,
             placement,

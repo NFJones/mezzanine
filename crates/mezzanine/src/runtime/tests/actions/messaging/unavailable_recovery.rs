@@ -59,6 +59,7 @@ fn send_action(id: &str, recipient: &str, payload: &str) -> AgentAction {
     AgentAction {
         id: id.to_string(),
         payload: AgentActionPayload::SendMessage {
+            expect_reply: false,
             recipient: recipient.to_string(),
             scope: Some("session".to_string()),
             content_type: "text/plain; charset=utf-8".to_string(),

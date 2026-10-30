@@ -1071,6 +1071,9 @@ pub struct AgentContext {
     metadata: ModelContextMetadata,
     /// Runtime-owned unresolved groups; never projected or transcript-serialized.
     pending_execution_groups: BTreeSet<ContextExecutionGroupId>,
+    /// Exact committed peer references awaiting local request handoff. Runtime
+    /// ownership only; never serialized or projected to provider messages.
+    pending_peer_messages: BTreeSet<ContextEventSequence>,
 }
 
 impl AgentContext {
@@ -1088,6 +1091,7 @@ impl AgentContext {
             next_event_sequence: CONTEXT_EVENT_SEQUENCE_STRIDE,
             metadata: ModelContextMetadata::default(),
             pending_execution_groups: BTreeSet::new(),
+            pending_peer_messages: BTreeSet::new(),
         }
     }
 

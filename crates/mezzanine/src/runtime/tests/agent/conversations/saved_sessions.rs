@@ -2940,38 +2940,40 @@ fn runtime_resume_late_failure_restores_complete_prior_subagent_authority() {
     let sender = service
         .ensure_runtime_message_identity("agent-rollback-sender", None, "agent", &[], now_ms)
         .unwrap();
-    service.register_received_peer_message_presentation(
-        recipient.agent_id.clone(),
-        1,
-        &AgentTurnRecord {
-            turn_id: "resume-rollback-receipt".to_string(),
-            conversation_id: previous_conversation_id,
-            agent_id: recipient.agent_id.to_string(),
-            pane_id: "%1".to_string(),
-            trigger: AgentTurnTrigger::UserPrompt,
-            started_at_unix_seconds: current_unix_seconds(),
-            deadline_at_unix_millis: now_ms.saturating_add(60_000),
-            policy_profile: "runtime".to_string(),
-            model_profile: "default".to_string(),
-            parent_turn_id: None,
-            state: AgentTurnState::Queued,
-            cooperation_mode: None,
-            initial_capability: None,
-        },
-        Envelope {
-            protocol: "mmp/1",
-            id: "resume-rollback-receipt".to_string(),
-            message_type: "send".to_string(),
-            time: format!("runtime:{now_ms}"),
-            sender,
-            recipient: mez_agent::messaging::Recipient::Agent(recipient.agent_id),
-            correlation_id: None,
-            ttl_ms: None,
-            content_type: "text/plain; charset=utf-8".to_string(),
-            payload: "preserve old receipt on rollback".to_string(),
-            extension_fields: Vec::new(),
-        },
-    );
+    service
+        .register_received_peer_message_presentation(
+            recipient.agent_id.clone(),
+            1,
+            &AgentTurnRecord {
+                turn_id: "resume-rollback-receipt".to_string(),
+                conversation_id: previous_conversation_id,
+                agent_id: recipient.agent_id.to_string(),
+                pane_id: "%1".to_string(),
+                trigger: AgentTurnTrigger::UserPrompt,
+                started_at_unix_seconds: current_unix_seconds(),
+                deadline_at_unix_millis: now_ms.saturating_add(60_000),
+                policy_profile: "runtime".to_string(),
+                model_profile: "default".to_string(),
+                parent_turn_id: None,
+                state: AgentTurnState::Queued,
+                cooperation_mode: None,
+                initial_capability: None,
+            },
+            Envelope {
+                protocol: "mmp/1",
+                id: "resume-rollback-receipt".to_string(),
+                message_type: "send".to_string(),
+                time: format!("runtime:{now_ms}"),
+                sender,
+                recipient: mez_agent::messaging::Recipient::Agent(recipient.agent_id),
+                correlation_id: None,
+                ttl_ms: None,
+                content_type: "text/plain; charset=utf-8".to_string(),
+                payload: "preserve old receipt on rollback".to_string(),
+                extension_fields: Vec::new(),
+            },
+        )
+        .unwrap();
     let receipts_before_failure = service.snapshot_unsettled_received_peer_message_presentations();
     service.checkpoint_agent_session_metadata().unwrap();
     let checkpoint_before_failure = transcript_store

@@ -54,6 +54,7 @@ fn dialogue_send(id: &str, recipient: &str, payload: &str) -> mez_agent::AgentAc
     mez_agent::AgentAction {
         id: id.into(),
         payload: mez_agent::AgentActionPayload::SendMessage {
+            expect_reply: false,
             recipient: format!("agent:{recipient}"),
             scope: Some("session".into()),
             content_type: "text/plain; charset=utf-8".into(),
@@ -199,7 +200,10 @@ fn dialogue_question_and_wait(
         &child.turn_id,
         dialogue_provider(vec![mez_agent::AgentAction {
             id: format!("wait-{}", child.turn_id),
-            payload: mez_agent::AgentActionPayload::Wait,
+            payload: mez_agent::AgentActionPayload::Wait {
+                for_message: None,
+                from_agent: None,
+            },
         }]),
     );
     assert_eq!(wait.action_results[0].status, ActionStatus::Running);

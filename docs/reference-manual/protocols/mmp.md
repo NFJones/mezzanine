@@ -532,3 +532,20 @@ non-agent selector expressions remain the explicitly addressed label.
 - [`maap/1` action protocol](maap.md)
 - [Subagents and messaging](../../agent/subagents-and-messaging.md)
 - [Normative MMP contract](../../../SPEC.md#12-local-message-passing-protocol)
+
+## Native request-bound waits
+
+MAAP `send_message.expect_reply` and `wait.for_message`/`from_agent` are native
+conversation controls, not new MMP envelope fields. Tracking freezes the actual
+accepted recipient registrations and optional exact owned task at send time.
+An authenticated reverse `send` with `correlation_id` equal to the accepted
+request ID can supply response-occurrence evidence after canonical commit.
+Correlation text alone, bridge flags, ACKs, presence heartbeats and later reused
+addresses never grant task ownership or prove a substantive answer.
+
+Request receipts survive payload replay eviction independently of ordinary
+delivery custody, under finite count and metadata reservations made before
+acceptance. Source references stay exact through context and scheduler handoff.
+Restore drops same-runtime request authority rather than reconstructing it from
+history. Plain waits retain their ordinary-mail and existing unexpected-owned-
+failure rules. No retry, task restart, stall timer or cycle detector is implied.

@@ -99,7 +99,10 @@ fn park_owned_parent(service: &mut RuntimeSessionService, parent: &AgentTurnReco
                 rationale: "explicit review answer is outstanding".into(),
                 actions: vec![mez_agent::AgentAction {
                     id: "wait-owned-reviewer".into(),
-                    payload: mez_agent::AgentActionPayload::Wait,
+                    payload: mez_agent::AgentActionPayload::Wait {
+                        for_message: None,
+                        from_agent: None,
+                    },
                 }],
             }),
             provider_transcript_events: Vec::new(),
@@ -495,7 +498,10 @@ fn runtime_owned_child_failure_before_park_is_observed_once() {
                 rationale: "failure already assessed; another answer outstanding".into(),
                 actions: vec![mez_agent::AgentAction {
                     id: "wait-after-assessment".into(),
-                    payload: mez_agent::AgentActionPayload::Wait,
+                    payload: mez_agent::AgentActionPayload::Wait {
+                        for_message: None,
+                        from_agent: None,
+                    },
                 }],
             }),
             provider_transcript_events: Vec::new(),
@@ -920,6 +926,7 @@ fn runtime_owned_child_failure_does_not_bypass_parent_approval() {
     let action = mez_agent::AgentAction {
         id: "approval-owner".into(),
         payload: mez_agent::AgentActionPayload::SendMessage {
+            expect_reply: false,
             recipient: "agent-other".into(),
             scope: None,
             content_type: "text/plain; charset=utf-8".into(),

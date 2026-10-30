@@ -89,6 +89,7 @@ fn send(id: &str, recipient: &str, text: &str) -> AgentAction {
     AgentAction {
         id: id.into(),
         payload: AgentActionPayload::SendMessage {
+            expect_reply: false,
             recipient: format!("agent:{recipient}"),
             scope: Some("session".into()),
             content_type: "text/plain; charset=utf-8".into(),
@@ -371,7 +372,10 @@ async fn joined_dialogue_actor_claims_and_settles_one_slot_once() {
         )]),
         response(vec![AgentAction {
             id: "actor-wait".into(),
-            payload: AgentActionPayload::Wait,
+            payload: AgentActionPayload::Wait {
+                for_message: None,
+                from_agent: None,
+            },
         }]),
     ] {
         let dispatch = claim(&mut actor, &child).await;
@@ -621,7 +625,10 @@ async fn joined_dialogue_actor_failed_answer_keeps_bounded_correction() {
         )]),
         response(vec![AgentAction {
             id: "correction-wait".into(),
-            payload: AgentActionPayload::Wait,
+            payload: AgentActionPayload::Wait {
+                for_message: None,
+                from_agent: None,
+            },
         }]),
     ] {
         let dispatch = claim(&mut actor, &child).await;
@@ -631,6 +638,7 @@ async fn joined_dialogue_actor_failed_answer_keeps_bounded_correction() {
     let bad = response(vec![AgentAction {
         id: "bad-answer".into(),
         payload: AgentActionPayload::SendMessage {
+            expect_reply: false,
             recipient: "missing-prefix".into(),
             scope: Some("session".into()),
             content_type: "text/plain; charset=utf-8".into(),
@@ -740,7 +748,10 @@ async fn joined_dialogue_actor_external_sibling_retains_attempt_and_original_res
         )]),
         response(vec![AgentAction {
             id: "fetch-child-wait".into(),
-            payload: AgentActionPayload::Wait,
+            payload: AgentActionPayload::Wait {
+                for_message: None,
+                from_agent: None,
+            },
         }]),
     ] {
         let dispatch = claim(&mut actor, &child).await;
@@ -912,7 +923,10 @@ async fn joined_dialogue_actor_repeated_answers_settle_their_own_groups() {
             )]),
             response(vec![AgentAction {
                 id: format!("repeat-wait-{round}"),
-                payload: AgentActionPayload::Wait,
+                payload: AgentActionPayload::Wait {
+                    for_message: None,
+                    from_agent: None,
+                },
             }]),
         ] {
             let dispatch = claim(&mut actor, &child).await;
@@ -1002,7 +1016,10 @@ async fn joined_dialogue_actor_coordination_external_completion_releases_capacit
         )]),
         response(vec![AgentAction {
             id: "coordinate-fetch-wait".into(),
-            payload: AgentActionPayload::Wait,
+            payload: AgentActionPayload::Wait {
+                for_message: None,
+                from_agent: None,
+            },
         }]),
     ] {
         let dispatch = claim(&mut actor, &child).await;
@@ -1138,7 +1155,10 @@ async fn joined_dialogue_actor_human_resume_reconsiders_cancelled_answer() {
         )]),
         response(vec![AgentAction {
             id: "human-child-wait".into(),
-            payload: AgentActionPayload::Wait,
+            payload: AgentActionPayload::Wait {
+                for_message: None,
+                from_agent: None,
+            },
         }]),
     ] {
         let dispatch = claim(&mut actor, &child).await;
@@ -1294,7 +1314,10 @@ async fn joined_dialogue_actor_fetch_result_reaches_next_inference_before_answer
         )]),
         response(vec![AgentAction {
             id: "tool-first-wait".into(),
-            payload: AgentActionPayload::Wait,
+            payload: AgentActionPayload::Wait {
+                for_message: None,
+                from_agent: None,
+            },
         }]),
     ] {
         let dispatch = claim(&mut actor, &child).await;

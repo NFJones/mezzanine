@@ -64,6 +64,7 @@ impl RuntimeSessionService {
         self.recover_received_peer_message_turn_scheduling(now_ms)?;
         self.recover_joined_coordination_wakes()?;
         self.recover_owned_child_failures(now_ms)?;
+        self.recover_request_waits()?;
         // Presentation is a recoverable receiver-side projection. Once a
         // receipt and cursor exist, it must never block provider admission or
         // a parked peer wait from resuming; the retained receipt retries on the
@@ -144,7 +145,7 @@ impl RuntimeSessionService {
                         message.sequence,
                         &turn,
                         message.envelope.as_ref().clone(),
-                    );
+                    )?;
                     committed = committed.saturating_add(1);
                     self.append_agent_trace_turn_event(
                         &turn.pane_id,
@@ -214,6 +215,9 @@ impl RuntimeSessionService {
     /// A full scheduler queue is recoverable: the wake marker remains so a
     /// later delivery sweep retries without losing the committed peer mail.
     pub(super) fn resume_parked_peer_wait(&mut self, turn: &AgentTurnRecord) -> Result<bool> {
+        if self.resume_targeted_request_wait(turn)? {
+            return Ok(true);
+        }
         if turn.state != AgentTurnState::Blocked {
             self.agent
                 .agent_turn_peer_wait_wake_pending
@@ -684,7 +688,7 @@ impl RuntimeSessionService {
                 sequence,
                 &turn,
                 envelope,
-            );
+            )?;
         }
         #[cfg(test)]
         if self.take_peer_message_receive_after_context_storage_failure_for_tests() {
@@ -790,7 +794,7 @@ impl RuntimeSessionService {
         {
             return true;
         }
-        if self.has_pending_owned_child_failure_handoff() {
+        if self.has_pending_owned_child_failure_handoff() || self.has_request_waits() {
             return true;
         }
         if !self.agent.agent_turn_peer_wait_wake_pending.is_empty()
@@ -967,6 +971,7 @@ impl RuntimeSessionService {
                 self.execute_message_action_for_turn(turn, index, &action)?;
             executed = executed.saturating_add(1);
         }
+        self.admit_request_wait_actions(turn, execution)?;
         execution.terminal_state = runtime_agent_turn_state_from_action_results(
             &execution.action_results,
             execution.final_turn,
@@ -992,6 +997,7 @@ impl RuntimeSessionService {
             content_type,
             payload,
             correlation_id,
+            expect_reply,
         } = &action.payload
         else {
             return Err(MezError::invalid_args(
@@ -1109,16 +1115,23 @@ impl RuntimeSessionService {
             "session" => mez_agent::messaging::MessageScope::Session,
             _ => unreachable!("message scope was normalized above"),
         };
-        let delivery = match self.control.message_service_mut().accept_at_with_scope(
-            &sender.agent_id,
-            envelope,
-            message_scope,
-            now_ms,
-        ) {
+        let acceptance = if *expect_reply {
+            self.accept_tracked_runtime_message(turn, envelope, message_scope, now_ms)
+        } else {
+            self.control.message_service_mut().accept_at_with_scope(
+                &sender.agent_id,
+                envelope,
+                message_scope,
+                now_ms,
+            )
+        };
+        let delivery = match acceptance {
             Ok(delivery) => delivery,
             Err(error) => {
                 let capacity = error.kind() == mez_agent::messaging::MessageErrorKind::Capacity;
-                let error_code = if capacity {
+                let error_code = if capacity && *expect_reply {
+                    "request_tracking_capacity"
+                } else if capacity {
                     "capacity"
                 } else if error.kind() == mez_agent::messaging::MessageErrorKind::NotFound
                     && error.message() == "message recipient is not registered or available"
@@ -1151,7 +1164,9 @@ impl RuntimeSessionService {
             }
         };
         self.retain_outbound_delivery_owner(turn, action, &delivery);
-        self.record_joined_coordination_reply(turn, &delivery);
+        if !expect_reply {
+            self.record_joined_coordination_reply(turn, &delivery);
+        }
         self.deliver_pending_runtime_agent_messages(now_ms)?;
         let result = ActionResult::succeeded(
             turn,
@@ -1161,12 +1176,13 @@ impl RuntimeSessionService {
                 delivery.message_id, delivery.queued_recipients
             )],
             Some(format!(
-                r#"{{"recipient":"{}","scope":"{}","message_id":"{}","delivery_status":"accepted","queued_recipients":{},"sequence":{},"protocol_error":null}}"#,
+                r#"{{"recipient":"{}","scope":"{}","message_id":"{}","delivery_status":"accepted","queued_recipients":{},"sequence":{},"expect_reply":{},"protocol_error":null}}"#,
                 json_escape(recipient),
                 scope,
                 json_escape(&delivery.message_id),
                 delivery.queued_recipients,
-                delivery.sequence
+                delivery.sequence,
+                expect_reply
             )),
         );
         self.settle_accepted_outbound_message_preview(

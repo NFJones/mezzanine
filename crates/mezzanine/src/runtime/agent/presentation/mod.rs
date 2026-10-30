@@ -72,7 +72,7 @@ fn action_holds_later_log(action: &mez_agent::AgentAction) -> bool {
         || matches!(
             action.payload,
             AgentActionPayload::ListAgents { .. }
-                | AgentActionPayload::Wait
+                | AgentActionPayload::Wait { .. }
                 | AgentActionPayload::CloseAgent { .. }
                 | AgentActionPayload::IssueAdd { .. }
                 | AgentActionPayload::IssueUpdate { .. }

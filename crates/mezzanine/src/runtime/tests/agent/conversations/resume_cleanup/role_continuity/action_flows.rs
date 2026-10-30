@@ -452,6 +452,7 @@ fn send(id: &str, target: &AgentId, payload: &str) -> mez_agent::AgentAction {
     mez_agent::AgentAction {
         id: id.into(),
         payload: mez_agent::AgentActionPayload::SendMessage {
+            expect_reply: false,
             recipient: format!("agent:{target}"),
             scope: Some("project".into()),
             content_type: "text/plain; charset=utf-8".into(),

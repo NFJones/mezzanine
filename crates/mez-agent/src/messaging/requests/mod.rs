@@ -304,6 +304,22 @@ impl MessageRequests {
     pub fn usage(&self) -> (usize, usize, usize) {
         (self.receipts.len(), self.units, self.metadata_bytes)
     }
+
+    /// Returns immutable trusted limits for bounded adapter preflight. This
+    /// cannot enlarge policy or replace the authoritative acceptance checks.
+    pub fn limits(&self) -> MessageRequestLimits {
+        self.limits
+    }
+
+    /// Borrows outstanding receipts without scanning delivery or turn history.
+    pub fn receipts(&self) -> impl Iterator<Item = &MessageRequestReceipt> {
+        self.receipts.values()
+    }
+
+    /// Borrows one exact dependency generation; missing runtime proof stays absent.
+    pub fn receipt(&self, generation: u64) -> Option<&MessageRequestReceipt> {
+        self.receipts.get(&generation)
+    }
 }
 
 /// Bounded model-correctable admission failure, without echoing request data.

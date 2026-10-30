@@ -2112,7 +2112,7 @@ impl RuntimeSessionService {
                 sequence,
                 &turn,
                 envelope,
-            );
+            )?;
         }
         #[cfg(test)]
         if self.take_peer_message_receive_after_context_storage_failure_for_tests() {
