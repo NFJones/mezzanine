@@ -410,6 +410,8 @@ async fn external_source_resume_pending_end_and_release_preserve_new_reservation
 }
 
 /// Runs one source-owned enrollment through actual off-actor native observation.
+/// Rejects unsuccessful admission here so an error reply cannot become a null
+/// readiness credential. Diagnostics never print the private enrollment reply.
 async fn enroll(fixture: &mut Fixture, request: &JsonRpcRequest) -> serde_json::Value {
     let work = fixture
         .service
@@ -419,12 +421,17 @@ async fn enroll(fixture: &mut Fixture, request: &JsonRpcRequest) -> serde_json::
     let result = tokio::task::spawn_blocking(move || native.observe())
         .await
         .unwrap();
-    serde_json::from_str(&fixture.service.complete_external_enrollment(
-        work,
-        result,
-        &fixture.connection,
-    ))
-    .unwrap()
+    let response: serde_json::Value = serde_json::from_str(
+        &fixture
+            .service
+            .complete_external_enrollment(work, result, &fixture.connection),
+    )
+    .unwrap();
+    assert!(
+        response.get("error").is_none() && response["result"]["registered"] == true,
+        "source enrollment failed before accounting readiness"
+    );
+    response
 }
 
 /// Supplies only the native handle and opaque original marker; origin and source
@@ -681,4 +688,60 @@ async fn external_source_resume_request_origin_replay_and_distinct_report_conser
     drop(database);
     drop(fixture);
     std::fs::remove_dir_all(directory).unwrap();
+}
+
+/// An actual native capture refusal must fail at enrollment, before an error
+/// reply can supply null credential fields to the readiness request builder.
+/// Forced expiry is instance-local and does not relax or race a production
+/// deadline. The static panic excludes private receipt/capability diagnostics;
+/// failed admission must also release its reservation without a live binding.
+#[tokio::test(flavor = "current_thread")]
+async fn external_source_recovery_enrollment_refusal_precedes_readiness() {
+    use futures_util::FutureExt;
+
+    let Some(mut fixture) = fixture("hold").await else {
+        return;
+    };
+    fixture.service.sync_external_ancestry_budget();
+    let budget = fixture
+        .service
+        .control
+        .external_agents()
+        .enrollments
+        .ancestry_budget
+        .clone();
+    budget.force_capture_expiry_at_check_for_tests(1);
+    let result = std::panic::AssertUnwindSafe(enroll(&mut fixture, &request()))
+        .catch_unwind()
+        .await;
+    assert_eq!(budget.capture_expiry_observation_for_tests(), (1, 0));
+    assert_eq!(budget.reserved(), 0);
+    let Err(failure) = result else {
+        panic!("failed native enrollment reached the readiness caller");
+    };
+    let message = failure
+        .downcast_ref::<&str>()
+        .copied()
+        .or_else(|| failure.downcast_ref::<String>().map(String::as_str));
+    assert_eq!(
+        message,
+        Some("source enrollment failed before accounting readiness")
+    );
+    assert!(
+        fixture
+            .service
+            .control
+            .external_agents()
+            .bindings
+            .is_empty()
+    );
+    assert!(
+        fixture
+            .service
+            .control
+            .external_agents()
+            .enrollments
+            .pending
+            .is_empty()
+    );
 }
