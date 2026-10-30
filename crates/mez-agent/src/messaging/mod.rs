@@ -21,6 +21,7 @@ pub use outcomes::{
     DeliveryTerminalReason, MessageDeliveryOutcome, MessageDeliveryTerminalSnapshot,
 };
 pub use pending_limits::PendingDeliveryLimits;
+pub use service::MessageAcceptanceProof;
 pub use types::{
     AgentPresenceStatus, Delivery, DeliveryBatch, DeliveryCursor, DeliveryStatus, Envelope,
     FanoutBatch, FanoutBudget, MMP_CONTENT_TYPE, MessageAcceptedSnapshot, MessageAudienceSnapshot,

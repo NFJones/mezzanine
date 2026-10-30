@@ -706,6 +706,11 @@ pub(super) struct RetiredDeliveryFloor {
 /// structured runtime state without parsing display text.
 #[derive(Debug)]
 pub struct MessageService {
+    /// Nonserializable identity of this live owner. Retained acceptance proofs
+    /// cannot authenticate against another service or snapshot restoration.
+    pub(super) acceptance_runtime: Arc<()>,
+    /// Restored history is not a live acceptance event in this runtime.
+    pub(super) acceptance_history_through: MessageSequence,
     /// Stores the ids value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module

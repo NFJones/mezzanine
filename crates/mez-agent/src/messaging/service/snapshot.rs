@@ -375,6 +375,8 @@ impl MessageService {
             subscription_order,
             fanout_after_recipient: None,
             fanout_diagnostics: MessageFanoutDiagnostics::default(),
+            acceptance_runtime: Arc::new(()),
+            acceptance_history_through: snapshot.next_sequence - 1,
             next_sequence: snapshot.next_sequence,
             retention_messages: snapshot.retention_messages,
             retention_bytes: snapshot.retention_bytes,

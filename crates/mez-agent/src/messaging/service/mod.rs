@@ -36,7 +36,9 @@ use super::validation::{
     validate_sender_identity,
 };
 
+mod acceptance_proof;
 mod discovery;
+pub use acceptance_proof::MessageAcceptanceProof;
 mod identity;
 mod recipient_binding;
 mod snapshot;
@@ -86,6 +88,8 @@ impl MessageService {
     /// on duplicated control-flow logic.
     pub fn with_limits(retention_messages: usize, retention_bytes: usize) -> Self {
         Self {
+            acceptance_runtime: Arc::new(()),
+            acceptance_history_through: 0,
             ids: IdFactory::default(),
             registered: HashMap::new(),
             registration_floors: HashMap::new(),
@@ -157,6 +161,22 @@ impl MessageService {
         scope: MessageScope,
         now_ms: u64,
     ) -> Result<Delivery> {
+        self.accept_with_optional_proof(connection_agent, envelope, scope, now_ms, None)
+            .map(|(delivery, _)| delivery)
+    }
+
+    /// Runs the common authenticated acceptance transaction. A proof budget
+    /// selects fresh tracked acceptance: reserve its complete metadata before
+    /// enqueue, and never turn an existing untracked occurrence into a request.
+    /// Ordinary acceptance retains its existing idempotent duplicate behavior.
+    fn accept_with_optional_proof(
+        &mut self,
+        connection_agent: &AgentId,
+        envelope: Envelope,
+        scope: MessageScope,
+        now_ms: u64,
+        proof_budget: Option<usize>,
+    ) -> Result<(Delivery, Option<MessageAcceptanceProof>)> {
         validate_protocol(envelope.protocol)?;
         validate_message_type(&envelope.message_type)?;
 
@@ -172,11 +192,16 @@ impl MessageService {
         }
         let audience = resolve_message_audience(registered, scope)?;
         if let Some(accepted) = self.accepted_messages.get_mut(&envelope.id) {
+            if proof_budget.is_some() {
+                return Err(MessageError::conflict(
+                    "tracked acceptance requires a fresh message occurrence",
+                ));
+            }
             if accepted.envelope.as_ref() == &envelope && accepted.audience == audience {
                 if envelope_expired_at(&accepted.envelope, accepted.accepted_at_ms, now_ms) {
                     accepted.delivery.status = DeliveryStatus::Expired;
                 }
-                return Ok(accepted.delivery.clone());
+                return Ok((accepted.delivery.clone(), None));
             }
             return Err(MessageError::conflict(MMP_DUPLICATE_MESSAGE_ID_MESSAGE));
         }
@@ -192,6 +217,9 @@ impl MessageService {
         if expires_before_delivery(&envelope) {
             return Err(MessageError::invalid_state(MMP_EXPIRED_MESSAGE));
         }
+        let proof = proof_budget
+            .map(|budget| self.reserve_acceptance_proof(&envelope, &recipient_bindings, budget))
+            .transpose()?;
         let accepted_envelope = Arc::new(envelope);
         let sequence = self.enqueue(
             accepted_envelope.clone(),
@@ -218,7 +246,7 @@ impl MessageService {
             },
         );
         self.prune_accepted_messages_to_retained_queue();
-        Ok(delivery)
+        Ok((delivery, proof))
     }
 
     /// Counts queued local messages whose recipient is scoped to `window_id`.
@@ -568,6 +596,7 @@ fn expires_before_delivery(envelope: &Envelope) -> bool {
 mod tests {
     use super::*;
 
+    mod acceptance_proof;
     mod acknowledgements;
     mod auxiliary;
     mod fresh_retirement;
