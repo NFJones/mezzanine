@@ -434,6 +434,13 @@ impl RuntimeSideEffectRouter {
         }
     }
 
+    /// Reports real receipt inhibition to directly driven actor workflow tests.
+    /// This read-only view cannot release a claim or fabricate worker evidence.
+    #[cfg(test)]
+    pub(super) fn has_held_transcript_receipts(&self) -> bool {
+        self.persistence.iter().any(|queued| queued.receipt_held)
+    }
+
     /// Holds an exact unclaimed append for the route-level admission regression.
     #[cfg(test)]
     pub(super) fn hold_transcript_receipt(&mut self, id: u64) -> bool {
