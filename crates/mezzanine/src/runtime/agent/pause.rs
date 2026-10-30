@@ -123,8 +123,14 @@ impl RuntimeSessionService {
                 .agent_scheduler
                 .waiting_turns()
                 .any(|work| work.turn_id == turn_id);
-            let pending_dependencies =
-                self.agent_turn_executions()
+            // The latest coordination response may contain no spawn at all;
+            // its original awaited tasks still own this dependency wait.
+            let resumed_joined_coordination =
+                self.joined_coordination_resume_needs_provider(turn_id);
+            let pending_dependencies = (!resumed_joined_coordination
+                && self.parent_has_pending_joined_tasks(turn_id))
+                || self
+                    .agent_turn_executions()
                     .get(turn_id)
                     .is_some_and(|execution| {
                         (admitted_peer_wait
@@ -202,6 +208,9 @@ impl RuntimeSessionService {
             // Keep inhibition until the post-mutation canonical cancellation
             // and resume evidence have an original-target owner. A required
             // handoff failure stays typed/fenced; retry cannot replay guidance.
+            if resumed_joined_coordination {
+                self.record_joined_coordination_human_resume(turn_id, generation)?;
+            }
             self.record_completion_human_resume(turn_id, generation)?;
             self.prepare_completion_continuation_handoff(turn_id)?;
             self.agent.agent_scheduler = resumed_scheduler;

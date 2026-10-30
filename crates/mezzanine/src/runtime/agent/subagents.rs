@@ -325,9 +325,9 @@ impl RuntimeSessionService {
                 continue;
             }
             let action_is_running = self
-                .agent_turn_executions()
-                .get(&dependency.parent_turn_id)
-                .is_some_and(|execution| {
+                .joined_execution_sources_for_parent(&dependency.parent_turn_id)
+                .into_iter()
+                .any(|execution| {
                     execution.action_results.iter().any(|result| {
                         result.action_id.as_str() == dependency.parent_action_id.as_str()
                             && result.status == ActionStatus::Running
@@ -351,12 +351,14 @@ impl RuntimeSessionService {
                     .waiting_turns()
                     .any(|work| work.turn_id == turn.turn_id)
         }) {
-            let Some(execution) = self.agent_turn_executions().get(&parent.turn_id) else {
-                continue;
-            };
-            for result in execution.action_results.iter().filter(|result| {
-                result.action_type == "spawn_agent" && result.status == ActionStatus::Running
-            }) {
+            for result in self
+                .joined_execution_sources_for_parent(&parent.turn_id)
+                .into_iter()
+                .flat_map(|execution| execution.action_results.iter())
+                .filter(|result| {
+                    result.action_type == "spawn_agent" && result.status == ActionStatus::Running
+                })
+            {
                 let Some(structured) = result.structured_content_json.as_deref() else {
                     continue;
                 };
@@ -378,19 +380,26 @@ impl RuntimeSessionService {
                 else {
                     continue;
                 };
-                dependencies.insert(
-                    (parent.turn_id.clone(), result.action_id.clone()),
-                    JoinedSubagentDependency {
-                        parent_turn_id: parent.turn_id.clone(),
-                        parent_action_id: result.action_id.clone(),
-                        child_turn_id: child_turn_id.to_string(),
-                        child_agent_id: child_agent_id.to_string(),
-                        child_display_name: value
-                            .get("child_display_name")
-                            .and_then(serde_json::Value::as_str)
-                            .map(ToString::to_string),
-                    },
-                );
+                let dependency = JoinedSubagentDependency {
+                    parent_turn_id: parent.turn_id.clone(),
+                    parent_action_id: result.action_id.clone(),
+                    child_turn_id: child_turn_id.to_string(),
+                    child_agent_id: child_agent_id.to_string(),
+                    child_display_name: value
+                        .get("child_display_name")
+                        .and_then(serde_json::Value::as_str)
+                        .map(ToString::to_string),
+                };
+                let key = (parent.turn_id.clone(), result.action_id.clone());
+                // Canonical source still repairs a stale volatile index. Only
+                // custody transferred by validated native child redirection
+                // may supersede the source's original accepted child attempt.
+                if !dependencies
+                    .get(&key)
+                    .is_some_and(|current| self.joined_dependency_has_redirected_custody(current))
+                {
+                    dependencies.insert(key, dependency);
+                }
             }
         }
         dependencies.into_values().collect()
@@ -597,12 +606,14 @@ impl RuntimeSessionService {
             .collect::<Vec<_>>();
         let mut candidates = Vec::new();
         for parent_turn in parent_turns {
-            let Some(execution) = self.agent_turn_executions().get(&parent_turn.turn_id) else {
-                continue;
-            };
-            for result in execution.action_results.iter().filter(|result| {
-                result.action_type == "spawn_agent" && result.status == ActionStatus::Running
-            }) {
+            for result in self
+                .joined_execution_sources_for_parent(&parent_turn.turn_id)
+                .into_iter()
+                .flat_map(|execution| execution.action_results.iter())
+                .filter(|result| {
+                    result.action_type == "spawn_agent" && result.status == ActionStatus::Running
+                })
+            {
                 let Some(structured) = result.structured_content_json.as_deref() else {
                     continue;
                 };
@@ -2075,9 +2086,21 @@ impl RuntimeSessionService {
                 dependency.parent_turn_id
             )));
         }
+        let coordination_offered = self
+            .agent
+            .joined_coordination
+            .contains_key(&dependency.parent_turn_id);
         let prepared = self.prepare_joined_task_result(dependency, success, summary, output)?;
         let observed_result = prepared.result().clone();
-        let (ready_for_continuation, terminal_state) = {
+        let retained_execution = self.apply_retained_joined_result(dependency, &prepared)?;
+        let (ready_for_continuation, terminal_state) = if retained_execution.is_some() {
+            (
+                self.agent_turn_executions()
+                    .get(&dependency.parent_turn_id)
+                    .is_some_and(runtime_execution_ready_for_provider_continuation),
+                AgentTurnState::Running,
+            )
+        } else {
             let Some(execution) = self
                 .agent_turn_executions_mut()
                 .get_mut(&dependency.parent_turn_id)
@@ -2086,9 +2109,8 @@ impl RuntimeSessionService {
                     "joined subagent parent execution is missing",
                 ));
             };
-            // Preparation owns the original target independently. Applying to
-            // this live slot still requires its exact original group; a future
-            // coordination owner must not bypass that source boundary.
+            // Ordinary joins retain their exact current source. Interleaved
+            // responses settle through the separate retained original above.
             let result_index = prepared.matching_result_slot(execution)?;
             execution.action_results[result_index] = observed_result.clone();
             execution.final_turn = false;
@@ -2101,13 +2123,22 @@ impl RuntimeSessionService {
             (ready_for_continuation, execution.terminal_state)
         };
         self.append_action_result_context_if_absent(&dependency.parent_turn_id, &observed_result)?;
-        if let Some(execution) = self
-            .agent_turn_executions()
-            .get(&parent_turn.turn_id)
-            .cloned()
-        {
+        let retained_publication = retained_execution.is_some();
+        if let Some(execution) = retained_execution.or_else(|| {
+            self.agent_turn_executions()
+                .get(&parent_turn.turn_id)
+                .cloned()
+        }) {
             let publication = self.release_provider_log_execution(&parent_turn.pane_id, &execution);
-            self.note_completion_optional_error(&parent_turn.turn_id, publication);
+            if retained_publication {
+                self.note_retained_joined_publication(
+                    &parent_turn.turn_id,
+                    &execution,
+                    publication,
+                );
+            } else {
+                self.note_completion_optional_error(&parent_turn.turn_id, publication);
+            }
         }
         let mut macro_result_status = None;
         if let Some(parent_run_id) = self
@@ -2154,6 +2185,7 @@ impl RuntimeSessionService {
         self.agent
             .joined_subagent_dependencies
             .remove(&dependency.child_turn_id);
+        self.retire_settled_joined_sources(&parent_turn.turn_id)?;
         self.prune_joined_parent_execution_custody();
         if terminal_state != AgentTurnState::Running {
             let execution = self
@@ -2185,6 +2217,20 @@ impl RuntimeSessionService {
                 self.finish_agent_turn_without_shell_session(&parent_turn, terminal_state)?;
             }
             return Ok(());
+        }
+        if coordination_offered
+            && ready_for_continuation
+            && parent_turn.state == AgentTurnState::Running
+            && !self.parent_has_pending_joined_tasks(&parent_turn.turn_id)
+            && !self.agent_provider_task_is_claimed(&parent_turn.turn_id)
+        {
+            // An unclaimed coordination offer is now ordinary result work.
+            // Remove that old queue purpose before the normal checked archive
+            // and continuation owner accepts its replacement intent.
+            self.agent
+                .pending_agent_provider_tasks
+                .remove(&parent_turn.turn_id);
+            self.admit_completion_provider_continuation(&parent_turn.turn_id)?;
         }
         if ready_for_continuation {
             let _ = self.resume_dependency_wait_if_ready(

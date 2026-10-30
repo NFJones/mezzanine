@@ -49,7 +49,9 @@ for its scope and current limitations.
 
 Published agent objectives update immediately; their optional saved-session
 display mirrors use bounded background persistence so cache contention does not
-freeze unrelated work. See [messaging](docs/agent/subagents-and-messaging.md).
+freeze unrelated work. Joined children can ask their parent for clarification
+before completing, even with one provider slot. See
+[messaging](docs/agent/subagents-and-messaging.md).
 
 Agent logs can optionally show captured UTC occurrence times with bounded
 fixed-width clock formats, without changing copied or model-facing content.

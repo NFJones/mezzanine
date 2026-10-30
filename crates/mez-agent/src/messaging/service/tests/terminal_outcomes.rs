@@ -729,3 +729,31 @@ fn terminal_native_proof_does_not_keep_expiry_timer_alive() {
         "committed native input is retained until its cursor or registration settles"
     );
 }
+
+/// Audience inspection must prove the original sender and recipient intervals
+/// without recording a delivery offer or changing canonical custody. Reusing
+/// either registration must revoke that proof even with identical agent labels.
+#[test]
+fn pending_audience_inspection_is_read_only_and_registration_bound() {
+    let (mut service, sender, recipients, _) = fixture(None);
+    let before = service.snapshot_state();
+    assert!(service.owned_pending_delivery_targets(&sender.agent_id, 1, &recipients[0].agent_id));
+    assert!(service.owned_pending_delivery_targets(&sender.agent_id, 1, &recipients[1].agent_id));
+    assert!(!service.owned_pending_delivery_targets(
+        &recipients[0].agent_id,
+        1,
+        &recipients[1].agent_id
+    ));
+    assert!(!service.owned_pending_delivery_targets(&sender.agent_id, 2, &recipients[0].agent_id));
+    assert!(!service.owned_pending_delivery_targets(&sender.agent_id, 1, &sender.agent_id));
+    assert_eq!(service.snapshot_state(), before);
+    service.retire_agent_identity(&recipients[0].agent_id);
+    service
+        .ensure_agent_identity(recipients[0].clone(), 11)
+        .unwrap();
+    assert!(!service.owned_pending_delivery_targets(&sender.agent_id, 1, &recipients[0].agent_id));
+    assert!(service.owned_pending_delivery_targets(&sender.agent_id, 1, &recipients[1].agent_id));
+    service.retire_agent_identity(&sender.agent_id);
+    service.ensure_agent_identity(sender.clone(), 12).unwrap();
+    assert!(!service.owned_pending_delivery_targets(&sender.agent_id, 1, &recipients[1].agent_id));
+}

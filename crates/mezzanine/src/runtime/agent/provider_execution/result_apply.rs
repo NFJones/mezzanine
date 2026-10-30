@@ -61,6 +61,14 @@ impl RuntimeSessionService {
                 "agent provider execution conversation no longer owns pane",
             ));
         }
+        let joined_coordination = self.begin_joined_coordination_response(turn, &execution)?;
+        if joined_coordination || self.parent_has_pending_joined_tasks(turn_id) {
+            execution.final_turn = false;
+            execution.terminal_state = super::super::runtime_agent_turn_state_from_action_results(
+                &execution.action_results,
+                false,
+            );
+        }
         self.clear_observed_input_compaction_fence(&turn.turn_id);
         self.scope_provider_execution_action_ids(turn, &mut execution)?;
         if mez_agent::outcome::runtime_execution_has_apply_patch_action(&execution) {
@@ -283,14 +291,21 @@ impl RuntimeSessionService {
             let waiting_for_peer_message = execution.action_results.iter().any(|result| {
                 result.action_type == "wait" && result.status == mez_agent::ActionStatus::Running
             });
-            let waiting_for_joined_subagents =
-                self.execution_waiting_for_live_joined_subagents(turn_id, &execution);
+            let waiting_for_joined_subagents = self
+                .execution_waiting_for_live_joined_subagents(turn_id, &execution)
+                || (self.parent_has_pending_joined_tasks(turn_id)
+                    && runtime_execution_ready_for_provider_continuation(&execution)
+                    && !self.joined_coordination_batch_continues(turn_id, &execution));
             if waiting_for_peer_message || waiting_for_joined_subagents {
                 if waiting_for_joined_subagents {
                     self.retain_joined_parent_execution(turn, &execution)?;
                 }
                 self.agent_turn_executions_mut()
                     .insert(turn_id.to_string(), execution.clone());
+                if self.execution_waiting_for_live_joined_subagents(turn_id, &execution) {
+                    let group = super::provider_log_execution_group_id(&execution)?;
+                    self.reserve_completion_group(turn_id, &group)?;
+                }
                 self.agent.agent_scheduler.wait_running(turn_id)?;
                 self.append_agent_trace_turn_event(
                     &turn.pane_id,
@@ -316,6 +331,7 @@ impl RuntimeSessionService {
                 if waiting_for_peer_message {
                     self.park_agent_turn_deadline(turn_id, current_unix_millis());
                 }
+                self.joined_coordination_response_parked(turn_id);
                 self.reconcile_active_turn_sleep_inhibition();
                 self.append_agent_trace_turn_transition(
                     turn,
@@ -355,9 +371,15 @@ impl RuntimeSessionService {
                     &execution.request,
                 )?
             {
-                self.agent
-                    .pending_agent_provider_tasks
-                    .insert(turn_id.to_string());
+                if self.parent_has_pending_joined_tasks(turn_id) {
+                    self.agent_turn_executions_mut()
+                        .insert(turn_id.to_string(), execution.clone());
+                    self.admit_completion_provider_continuation(turn_id)?;
+                } else {
+                    self.agent
+                        .pending_agent_provider_tasks
+                        .insert(turn_id.to_string());
+                }
                 self.append_agent_trace_turn_event(
                     &turn.pane_id,
                     turn_id,

@@ -2220,6 +2220,8 @@ fn runtime_observed_compaction_stages_second_range_before_publication() {
 
 /// Late peer mail must remain lower-trust, ordered, and occurrence-exact while
 /// staged summaries publish atomically. Repeated content is not deduplicated.
+/// The full action catalog and late receipts must fit after two summaries;
+/// the large second source must still require a separate unpublished stage.
 #[test]
 fn runtime_staged_compaction_preserves_late_peer_occurrences() {
     let second = mez_agent::TranscriptContextEvent::execution_block_with_metadata(
@@ -2243,7 +2245,7 @@ fn runtime_staged_compaction_preserves_late_peer_occurrences() {
     let mut profile = service.agent_turn_model_profile(&turn_id).unwrap().clone();
     profile
         .provider_options
-        .insert("max_input_tokens".to_string(), "17000".to_string());
+        .insert("max_input_tokens".to_string(), "18000".to_string());
     service.set_agent_turn_model_profile(turn_id.clone(), profile);
     complete_runtime_test_compaction(&mut service, "%1", "first summary");
     assert!(store.compaction_epoch(&conversation_id).unwrap().is_none());
@@ -2342,15 +2344,32 @@ fn runtime_staged_compaction_preserves_late_peer_occurrences() {
         suffix[0].retention(),
         mez_agent::ContextRetention::Summarizable
     );
-    assert_eq!(
-        store
-            .compaction_epoch(&conversation_id)
-            .unwrap()
-            .unwrap()
-            .ranges
-            .len(),
-        2
+    let remaining_stage = service
+        .pending_agent_compaction_task_for_tests("%1")
+        .map(|task| match &task.target {
+            crate::runtime::agent_state::RuntimeAgentCompactionTarget::ActiveTurn {
+                final_request_retry,
+                plan,
+                staged,
+                ..
+            } => format!(
+                "last_input_tokens={:?} next_range={:?} staged_attempts={:?}",
+                final_request_retry.last_input_tokens,
+                plan.replacement_event_sequences(),
+                staged.as_ref().map(|state| state.attempts)
+            ),
+            _ => "non-active compaction target".to_string(),
+        });
+    assert!(
+        !service.agent_is_compacting("%1"),
+        "two summaries must complete this scenario; remaining_stage={remaining_stage:?}"
     );
+    let epoch = store.compaction_epoch(&conversation_id).unwrap().unwrap_or_else(|| {
+        panic!("staged summaries did not publish; remaining_stage={remaining_stage:?}; trace={} screen={}",
+            service.agent_pane_trace_log_text("%1").unwrap_or_default(),
+            service.pane_screen("%1").unwrap().normal_content_lines().join("\n"));
+    });
+    assert_eq!(epoch.ranges.len(), 2);
     assert_eq!(
         service
             .control
@@ -6858,10 +6877,14 @@ fn runtime_manual_compaction_rejects_non_reducing_final_retry() {
 /// a repeated candidate; both cases preserve the original archive until fit.
 fn qualify_manual_final_fit_retry(repeat: bool) {
     let mut service = test_runtime_service();
+    // Keep room for current static guidance and MAAP schema so the final-fit
+    // owner can request a shorter summary. The long candidate must still be
+    // oversized; this fixture tests retry/no-progress, not irreducible overhead.
+
     service.replace_config_layers(vec![ConfigLayer {
         name: "manual-final-retry".to_string(), path: None,
         format: ConfigFormat::Toml, scope: ConfigScope::Primary, trusted: true,
-        text: "[agents]\ndefault_provider = \"runtime-batch\"\ndefault_model_profile = \"manual-final-retry\"\n[providers.runtime-batch]\nkind = \"openai\"\nmodels = [\"test\"]\ndefault_model = \"test\"\n[model_profiles.manual-final-retry]\nprovider = \"runtime-batch\"\nmodel = \"test\"\ncontext_window_tokens = 40000\nmax_input_tokens = 15000\n".to_string(),
+        text: "[agents]\ndefault_provider = \"runtime-batch\"\ndefault_model_profile = \"manual-final-retry\"\n[providers.runtime-batch]\nkind = \"openai\"\nmodels = [\"test\"]\ndefault_model = \"test\"\n[model_profiles.manual-final-retry]\nprovider = \"runtime-batch\"\nmodel = \"test\"\ncontext_window_tokens = 40000\nmax_input_tokens = 16000\n".to_string(),
     }]).unwrap();
     let store = AgentTranscriptStore::new(temp_root("manual-final-retry"));
     store
@@ -6893,6 +6916,12 @@ fn qualify_manual_final_fit_retry(repeat: bool) {
         &primary,
     );
     assert!(queued.contains("state=queued"), "{queued}");
+    let frozen_words = service
+        .pending_agent_compaction_task_for_tests("%1")
+        .expect("initial manual source")
+        .summary_correction
+        .manual_words;
+    assert!(frozen_words.is_some());
     complete_runtime_test_compaction(&mut service, "%1", &"long summary ".repeat(700));
     assert!(
         store
@@ -6912,9 +6941,20 @@ fn qualify_manual_final_fit_retry(repeat: bool) {
                     .join("\n")
             )
         });
-    assert!(retry.manual_final_retry.is_some());
-    let frozen_words = retry.summary_correction.manual_words;
-    assert!(frozen_words.is_some());
+    let (oversized_estimate, attempts) = retry.manual_final_retry.expect("actual final-fit retry");
+    assert!(
+        oversized_estimate > 15_200,
+        "the long candidate must exceed this fixture's safe cap"
+    );
+    assert_eq!(attempts, 1);
+    assert_eq!(retry.summary_correction.manual_words, frozen_words);
+    assert!(
+        retry
+            .summary_correction
+            .effective_input_tokens
+            .is_some_and(|tokens| tokens > 0)
+    );
+    assert_eq!(store.inspect("manual-final-retry").unwrap().len(), 1);
     let next_summary = if repeat {
         "long summary ".repeat(700)
     } else {
@@ -6928,6 +6968,21 @@ fn qualify_manual_final_fit_retry(repeat: bool) {
             .is_some()
             == !repeat
     );
+    if repeat {
+        let raw = store.inspect("manual-final-retry").unwrap();
+        assert_eq!(raw.len(), 1);
+        assert_eq!(raw[0].content, "old decision ".repeat(800));
+        let screen = service
+            .pane_screen("%1")
+            .unwrap()
+            .normal_content_lines()
+            .join("\n");
+        assert!(
+            screen.contains("manual compaction candidate")
+                && screen.contains("safe input allowance"),
+            "{screen}"
+        );
+    }
     assert!(!service.agent_is_compacting("%1"));
     assert!(service.pending_agent_provider_tasks().is_empty());
 }

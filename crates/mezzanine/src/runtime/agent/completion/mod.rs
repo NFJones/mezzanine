@@ -7,7 +7,8 @@
 //! chronology. Receipt custody never retries hooks/audit, grants policy
 //! authority or invents native evidence. Publication recovery may transfer an
 //! unfinished admitted sibling to the existing dispatcher after its predecessor
-//! prefix installs; whole-group acknowledgement still gates provider handoff.
+//! prefix installs; whole-group acknowledgement still gates ordinary provider
+//! handoff. Exact joined-mail coordination retains a distinct pending source.
 //!
 //! External and native ingress share the original group retirement owner.
 //! Publication-only recovery never re-enters outcome projection or required
@@ -25,6 +26,8 @@ use provider_handoff::ProviderHandoffOwner;
 mod native;
 use native::NativeCompletionReceipt;
 pub(super) use native::{NativeCompletionKey, NativeCompletionPhase};
+mod joined;
+use joined::RetainedJoinedExecution;
 mod claim;
 mod publication;
 use claim::CompletionProviderClaimDisposition;
@@ -130,6 +133,9 @@ pub(super) struct RuntimeCompletionSettlements {
     /// Active execution slots only; a required failure fences new work before
     /// failed owners could accumulate into a historical completion archive.
     groups: BTreeMap<String, Box<CompletionGroup>>,
+    /// Quiescent original task groups, bounded by their outstanding joins.
+    joined_sources:
+        BTreeMap<(String, mez_agent::ContextExecutionGroupId), Box<RetainedJoinedExecution>>,
     /// First required failure, never an optional publication installation error.
     critical_failure: Option<Box<MezError>>,
     /// A nested lifecycle drain cannot enter the same publication pump twice.
@@ -159,6 +165,7 @@ impl fmt::Debug for RuntimeCompletionSettlements {
             .field("external", &self.external)
             .field("native", &self.native)
             .field("groups", &self.groups)
+            .field("joined_sources", &self.joined_sources)
             .field(
                 "critical_failure_kind",
                 &self.critical_failure.as_ref().map(|error| error.kind()),

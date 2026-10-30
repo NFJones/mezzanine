@@ -4,7 +4,8 @@
 //! the first exact value under existing dependency custody before context/slot
 //! mutation. It is not proof of child completion, append, hook, presentation,
 //! provider admission or scheduler wake. The existing apply path still requires
-//! the original live execution group; different-group coordination is separate.
+//! the original active or independently retained execution group. Coordination
+//! never redirects these slots into the replaceable latest response.
 
 use super::*;
 use mez_agent::ActionResult;

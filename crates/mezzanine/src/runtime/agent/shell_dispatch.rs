@@ -943,6 +943,9 @@ impl RuntimeSessionService {
 
         self.agent_turn_executions_mut()
             .insert(turn.turn_id.clone(), execution.clone());
+        if self.park_joined_coordination_after_settlement(&turn.turn_id)? {
+            return Ok(());
+        }
         if self.completion_provider_continuation_ready(&turn.turn_id) {
             if !self.resume_dependency_wait_if_ready(&turn.turn_id, "spawned_shell_result_ready")? {
                 self.admit_completion_provider_continuation(&turn.turn_id)?;

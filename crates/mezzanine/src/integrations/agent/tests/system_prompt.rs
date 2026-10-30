@@ -7,18 +7,6 @@
 use super::*;
 
 #[test]
-/// Bounds the cached base prompt independently of repository and tool context.
-/// The reduced ceiling leaves editing headroom without restoring the old bloat.
-fn default_system_prompt_stays_within_size_budget() {
-    let prompt = build_agent_system_prompt(&AgentPromptProfile::for_model("test-model")).unwrap();
-    assert!(
-        prompt.len() <= 16_000,
-        "base prompt exceeds 16 KB: {}",
-        prompt.len()
-    );
-}
-
-#[test]
 /// Checks all embedded sections occur exactly once in contract order.
 /// Missing headings must fail explicitly rather than comparing optional offsets.
 fn embedded_prompt_fragments_are_loaded_in_contract_order() {

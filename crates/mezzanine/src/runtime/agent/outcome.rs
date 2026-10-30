@@ -381,7 +381,7 @@ impl RuntimeSessionService {
             // context at actual claim. No insertion, queued trace or ACK here.
             return Ok(CompletionSettlementDisposition::Retained);
         }
-        if !self.queue_agent_provider_task(turn.turn_id.clone()) {
+        if !self.queue_completion_policy_feedback_task(turn.turn_id.clone()) {
             self.ensure_completion_required_gates_ready(&turn.turn_id)?;
             self.ensure_completion_admission_open()?;
             return Err(MezError::invalid_state(

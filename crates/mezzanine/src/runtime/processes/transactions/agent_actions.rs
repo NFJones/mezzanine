@@ -2955,7 +2955,8 @@ impl RuntimeSessionService {
                 self.present_deferred_agent_say_actions_to_terminal_buffer(pane_id, &execution)?;
             }
             self.set_pane_readiness(pane_id, PaneReadinessState::Ready);
-            if ready_for_provider_continuation {
+            let coordination_parked = self.park_joined_coordination_after_settlement(turn_id)?;
+            if !coordination_parked && ready_for_provider_continuation {
                 if !self
                     .resume_dependency_wait_if_ready(turn_id, "shell_transaction_result_ready")?
                 {
@@ -2968,7 +2969,7 @@ impl RuntimeSessionService {
                         "provider_task queued reason=shell_transaction_result_ready",
                     )?;
                 }
-            } else {
+            } else if !coordination_parked {
                 let should_dispatch_stored_shell = self
                     .agent_turn_executions()
                     .get(turn_id)

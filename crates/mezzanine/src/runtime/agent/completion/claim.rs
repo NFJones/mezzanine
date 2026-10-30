@@ -18,6 +18,8 @@ pub(super) enum CompletionProviderClaimDisposition {
     Ordinary,
     /// Existing exact analysis owner keeps the preterminal group and backing.
     RetainedManagedAssessment,
+    /// Exact committed child mail permits a serialized coordination response.
+    RetainedJoinedCoordination,
 }
 
 impl RuntimeSessionService {
@@ -28,6 +30,9 @@ impl RuntimeSessionService {
         &self,
         turn_id: &str,
     ) -> Result<CompletionProviderClaimDisposition> {
+        if self.joined_coordination_retains_current_group(turn_id) {
+            return Ok(CompletionProviderClaimDisposition::RetainedJoinedCoordination);
+        }
         let Some(pending) = self.agent.sandbox_failure_assessments.get(turn_id) else {
             return Ok(CompletionProviderClaimDisposition::Ordinary);
         };
@@ -160,6 +165,27 @@ impl RuntimeSessionService {
                 if dispatch.sandbox_failure_assessment_request.is_some() {
                     return Err(MezError::invalid_state(
                         "assessment dispatch has no exact retained owner",
+                    ));
+                }
+            }
+            CompletionProviderClaimDisposition::RetainedJoinedCoordination => {
+                let current = self
+                    .agent_turn_ledger()
+                    .turn(&dispatch.turn.turn_id)
+                    .ok_or_else(|| {
+                        MezError::invalid_state("joined coordination turn disappeared")
+                    })?;
+                if dispatch.turn.agent_id != current.agent_id
+                    || dispatch.turn.pane_id != current.pane_id
+                    || dispatch.turn.conversation_id != current.conversation_id
+                    || dispatch.turn.started_at_unix_seconds != current.started_at_unix_seconds
+                    || dispatch.turn.state != AgentTurnState::Running
+                    || !self.joined_coordination_retains_current_group(&dispatch.turn.turn_id)
+                    || dispatch.sandbox_failure_assessment_request.is_some()
+                    || dispatch.macro_judge_request.is_some()
+                {
+                    return Err(MezError::conflict(
+                        "joined coordination dispatch lost its exact source",
                     ));
                 }
             }

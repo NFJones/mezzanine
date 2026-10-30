@@ -5,7 +5,9 @@
 //! scheduler releases the parent. Children from one response share one snapshot.
 //! Records are bounded by the existing dependency table and convey no provider,
 //! scheduler, permission, child-completion or continuation authority. This module
-//! deliberately does not admit dialogue or replace a live execution slot.
+//! keeps immutable source separate from the coordination module's exact-mail
+//! admission receipts. Mutable original execution transfer belongs to completion;
+//! neither component substitutes a later response for an original result slot.
 
 use super::{
     AgentAction, AgentTurnExecution, AgentTurnRecord, JoinedSubagentDependency, MezError, Result,
@@ -13,6 +15,9 @@ use super::{
 };
 use mez_agent::ContextExecutionGroupId;
 use std::sync::Arc;
+
+mod coordination;
+pub(super) use coordination::JoinedCoordination;
 
 mod results;
 pub(crate) use results::PreparedJoinedTaskResult;
@@ -43,6 +48,9 @@ impl std::fmt::Debug for JoinedExecutionSource {
 pub(super) struct JoinedActionCustody {
     /// Existing controller dependency, updated only by its explicit redirection.
     dependency: JoinedSubagentDependency,
+    /// First child attempt captured at actual spawn ownership admission.
+    /// Validated redirection changes dependency, never this provenance.
+    original_child_turn_id: String,
     /// Immutable original source, rather than the replaceable latest execution.
     source: Arc<JoinedExecutionSource>,
     /// First locally received result value, not a context or wake acknowledgement.
@@ -163,6 +171,7 @@ impl RuntimeSessionService {
                 .joined_parent_executions
                 .entry(dependency.child_turn_id.clone())
                 .or_insert_with(|| JoinedActionCustody {
+                    original_child_turn_id: dependency.child_turn_id.clone(),
                     dependency,
                     source: Arc::clone(&source),
                     prepared_result: None,
@@ -228,6 +237,8 @@ impl RuntimeSessionService {
 
     /// Drops source only after its existing exact dependency no longer owns it.
     pub(super) fn prune_joined_parent_execution_custody(&mut self) {
+        self.prune_joined_coordination_receipts();
+        self.retire_unowned_joined_sources();
         let retired = self
             .agent
             .joined_parent_executions
@@ -276,6 +287,25 @@ impl RuntimeSessionService {
                 context.release_pending_execution_group(&group);
             }
         }
+    }
+
+    /// Recognizes a current controller dependency explicitly transferred from
+    /// its original child attempt. Original source bytes cannot undo that native
+    /// redirection; a merely stale volatile index has no such provenance.
+    pub(in crate::runtime::agent) fn joined_dependency_has_redirected_custody(
+        &self,
+        dependency: &JoinedSubagentDependency,
+    ) -> bool {
+        self.agent
+            .joined_parent_executions
+            .get(&dependency.child_turn_id)
+            .is_some_and(|owner| {
+                owner.original_child_turn_id != dependency.child_turn_id
+                    && owner.dependency == *dependency
+                    && self
+                        .retained_joined_spawn_action(dependency)
+                        .is_ok_and(|action| action.is_some())
+            })
     }
 
     /// Transfers custody only within the existing validated child redirection.

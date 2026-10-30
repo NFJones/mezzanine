@@ -333,6 +333,7 @@ impl RuntimeSessionService {
         } else {
             Ok(())
         };
+        let joined_retirement = self.retain_joined_sources_before_cleanup(turn_id);
         self.settle_steering_receipts(turn_id);
         self.retire_cancelled_mcp_leases_for_turn(turn_id);
         // Only terminal parent ownership retires a local failure handoff.
@@ -410,7 +411,7 @@ impl RuntimeSessionService {
         self.retire_completion_worker_deliveries(turn_id);
         self.clear_agent_provider_retry_attempt(turn_id);
         self.clear_blocked_agent_approvals_for_turn(turn_id);
-        completion_retirement
+        completion_retirement.and(joined_retirement)
     }
 
     /// Cleans up a queued or blocked turn that is not currently bound as the

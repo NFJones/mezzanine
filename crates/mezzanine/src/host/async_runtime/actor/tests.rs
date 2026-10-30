@@ -19,6 +19,7 @@ use tokio::sync::{Notify, Semaphore, oneshot};
 
 mod compaction_source_handoff;
 mod completion_source_handoff;
+mod joined_dialogue;
 mod provider_retry_handoff;
 mod provider_source_handoff;
 mod remember_source_handoff;

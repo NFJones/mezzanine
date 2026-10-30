@@ -1158,6 +1158,10 @@ impl RuntimeSessionService {
         }
         self.agent_turn_executions_mut()
             .insert(turn.turn_id.clone(), execution.clone());
+        if self.park_joined_coordination_after_settlement(&turn.turn_id)? {
+            self.transfer_external_completion(key)?;
+            return Ok(true);
+        }
         if ready_for_provider_continuation {
             self.resume_dependency_wait_if_ready(
                 &turn.turn_id,

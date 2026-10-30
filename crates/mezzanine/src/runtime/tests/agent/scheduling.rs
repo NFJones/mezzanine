@@ -6,6 +6,9 @@ use crate::runtime::ActiveTurnSleepInhibition;
 /// Original joined action custody survives replaceable provider response slots.
 mod joined_custody;
 
+/// Parent-child clarification while the original joined task remains pending.
+mod joined_dialogue;
+
 /// Verifies an existing session retains its complete action schema after live
 /// configuration changes, including the retry and repair control path.
 #[test]

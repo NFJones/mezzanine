@@ -89,9 +89,10 @@ subsystem modules rather than expanding `crates/mezzanine/src/main.rs`.
 
 ## Testing Requirements
 - Use `just check` for fast type-checking while developing.
-- Run tests against the smallest relevant code subset while implementing changes in a branch other than main.
-- All changes must pass all CI checks capable of running on the current machine before merge into main.
+- Run tests against the smallest relevant code subset while implementing changes.
+- All changes must pass all CI checks capable of running on the current machine before merge into main or before issue closure.
 - Prefer end-to-end coverage for feature changes whenever possible.
+- Do not run the full test suite for every implementation change. Save that for the final gate before merge or closure.
 
 ## Commit & Pull Request Requirements
 - Commit messages in history are short, imperative, sentence case, and often end with a period (e.g., “Update pyo3 to latest release and fix compilation issues.”). Keep new commits consistent.

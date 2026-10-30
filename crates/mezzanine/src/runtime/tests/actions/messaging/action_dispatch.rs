@@ -694,11 +694,16 @@ fn runtime_spawned_child_corrects_parent_recipient_without_replaying_sibling() {
             true,
         ),
     };
+    // Parent mail now also makes its coordination task eligible. Complete the
+    // intended child explicitly instead of assuming it is the sole queued task.
     let terminal = service
-        .poll_agent_provider_tasks_with_provider(&terminal_provider, 1)
+        .execute_agent_turn_with_provider(
+            &child.turn_id,
+            &terminal_provider,
+            runtime_model_profile("runtime-batch", "test"),
+        )
         .unwrap();
-    assert_eq!(terminal.len(), 1);
-    assert_eq!(terminal[0].terminal_state, AgentTurnState::Completed);
+    assert_eq!(terminal.terminal_state, AgentTurnState::Completed);
     assert!(!service.has_joined_subagent_dependency(&child.turn_id));
     let parent_context = service.agent_turn_contexts().get(&parent.turn_id).unwrap();
     assert_eq!(

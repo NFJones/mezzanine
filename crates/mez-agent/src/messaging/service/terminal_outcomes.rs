@@ -33,6 +33,21 @@ impl MessageService {
             .map(|queued| queued.envelope.id.as_str())
     }
 
+    /// Checks the immutable accepted audience of a still-pending occurrence.
+    /// Both sender and recipient must retain their exact registration intervals.
+    /// Missing, retired or foreign occurrences return false without offering,
+    /// acknowledging, replaying or changing any delivery state.
+    pub fn owned_pending_delivery_targets(
+        &self,
+        sender: &AgentId,
+        sequence: MessageSequence,
+        recipient: &AgentId,
+    ) -> bool {
+        self.pending.get(&sequence).is_some_and(|queued| {
+            self.owns_outcomes(queued, sender) && self.accepted_recipient(queued, recipient)
+        })
+    }
+
     /// Reports whether finite actor maintenance remains necessary. Future TTL
     /// boundaries, exact recipient retirement and unconsumed terminal horizons
     /// keep maintenance eligible; ordinary offline mail without TTL does not.

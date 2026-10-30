@@ -807,6 +807,11 @@ impl RuntimeSessionService {
             self.agent.pending_agent_provider_tasks.remove(turn_id);
             return Ok(None);
         }
+        if self.joined_coordination_provider_purpose_revoked(turn_id) {
+            self.agent.pending_agent_provider_tasks.remove(turn_id);
+            self.park_joined_coordination_after_settlement(turn_id)?;
+            return Ok(None);
+        }
         self.ensure_completion_provider_claim_ready(turn_id)?;
         Ok(Some(turn))
     }

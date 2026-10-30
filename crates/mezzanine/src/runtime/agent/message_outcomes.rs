@@ -20,6 +20,8 @@ use sha2::{Digest, Sha256};
 pub(super) struct OutboundDeliveryOwner {
     /// Original sending task; a later task cannot inherit its action.
     turn_id: String,
+    /// Sending turn incarnation captured at acceptance, not later delivery.
+    started_at_unix_seconds: u64,
     /// Native sender identity, qualified by lower immutable registration state.
     agent_id: String,
     /// Original pane and conversation, independent of current presentation.
@@ -28,6 +30,8 @@ pub(super) struct OutboundDeliveryOwner {
     conversation_id: String,
     /// Exact immutable accepted occurrence, shared by all recipient slots.
     message_id_hash: [u8; 32],
+    /// Execution group frozen at first acceptance; later batches cannot adopt it.
+    group: Option<mez_agent::ContextExecutionGroupId>,
     /// Exact accepted sequence, independent of provider batch replacement.
     sequence: u64,
 }
@@ -60,6 +64,12 @@ impl RuntimeSessionService {
         let Some(sender) = AgentId::opaque(turn.agent_id.clone()) else {
             return;
         };
+        let group = self
+            .agent
+            .agent_execution_groups_by_turn
+            .get(&turn.turn_id)
+            .and_then(|groups| groups.get(&action.id))
+            .cloned();
         if delivery.accepted
             && delivery
                 .message_id
@@ -77,13 +87,76 @@ impl RuntimeSessionService {
                 .entry(delivery.sequence)
                 .or_insert_with(|| OutboundDeliveryOwner {
                     turn_id: turn.turn_id.clone(),
+                    started_at_unix_seconds: turn.started_at_unix_seconds,
                     agent_id: turn.agent_id.clone(),
                     pane_id: turn.pane_id.clone(),
                     conversation_id: turn.conversation_id.clone(),
                     message_id_hash: message_id_hash(&delivery.message_id),
                     sequence: delivery.sequence,
+                    group,
                 });
         }
+    }
+
+    /// Proves that this batch actually accepted a send to the exact recipient.
+    /// A duplicated action from an earlier batch retains its first group and
+    /// cannot close a later question. This does not imply recipient observation.
+    pub(super) fn runtime_accepted_reply_targets(
+        &self,
+        turn: &mez_agent::AgentTurnRecord,
+        delivery: &mez_agent::messaging::Delivery,
+        group: &mez_agent::ContextExecutionGroupId,
+        recipient: &str,
+    ) -> bool {
+        let Some(owner) = self.agent.outbound_delivery_owners.get(&delivery.sequence) else {
+            return false;
+        };
+        let (Some(sender), Some(recipient)) = (
+            AgentId::opaque(turn.agent_id.clone()),
+            AgentId::opaque(recipient.to_string()),
+        ) else {
+            return false;
+        };
+        delivery.accepted
+            && owner.turn_id == turn.turn_id
+            && owner.agent_id == turn.agent_id
+            && owner.pane_id == turn.pane_id
+            && owner.conversation_id == turn.conversation_id
+            && owner.started_at_unix_seconds == turn.started_at_unix_seconds
+            && owner.message_id_hash == message_id_hash(&delivery.message_id)
+            && owner.group.as_ref() == Some(group)
+            && self
+                .control
+                .message_service()
+                .owned_pending_delivery_targets(&sender, delivery.sequence, &recipient)
+    }
+
+    /// Returns the exact native action task behind a still-owned accepted send.
+    /// Sender labels, envelope correlation text and replay bytes cannot create
+    /// this proof or transfer an old attempt into a replacement task.
+    pub(super) fn runtime_outbound_delivery_origin(
+        &self,
+        sequence: u64,
+        envelope: &super::Envelope,
+    ) -> Option<mez_agent::AgentTurnRecord> {
+        let owner = self.agent.outbound_delivery_owners.get(&sequence)?;
+        let turn = self.agent_turn_ledger().turn(&owner.turn_id)?;
+        if owner.sequence != sequence
+            || owner.message_id_hash != message_id_hash(&envelope.id)
+            || owner.agent_id != envelope.sender.agent_id.as_str()
+            || turn.agent_id != owner.agent_id
+            || turn.pane_id != owner.pane_id
+            || turn.conversation_id != owner.conversation_id
+            || turn.started_at_unix_seconds != owner.started_at_unix_seconds
+            || self
+                .control
+                .message_service()
+                .owned_pending_delivery_id(&envelope.sender.agent_id, sequence)
+                != Some(envelope.id.as_str())
+        {
+            return None;
+        }
+        Some(turn.clone())
     }
 
     /// Commits exact original-action terminal facts, then releases their lower

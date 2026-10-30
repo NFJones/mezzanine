@@ -36,6 +36,16 @@ pub(super) enum CompletionTranscriptTarget {
     NoPersistencePolicy(CompletionNoPersistencePolicy),
 }
 
+/// Queue purpose owned by the existing post-policy producer, never model input.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CompletionQueuePurpose {
+    /// Ordinary continuation still observes every outstanding-task gate.
+    Ordinary,
+    /// Existing action-feedback policy already retained context and retry budget
+    /// for an admitted coordination response; original tasks remain separate.
+    JoinedPolicyFeedback,
+}
+
 /// One non-replayed group continuation or terminal effect boundary.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(super) enum CompletionMilestone {
@@ -846,6 +856,12 @@ impl RuntimeSessionService {
             .groups
             .get(turn_id)
             .ok_or_else(|| MezError::invalid_state("completion evidence group is unavailable"))?;
+        Ok(Self::completion_group_settlement_evidence(group))
+    }
+
+    /// Projects fixed safe provenance from an exact active or retained group.
+    /// This does not acknowledge its archive, effects or continuation.
+    pub(super) fn completion_group_settlement_evidence(group: &CompletionGroup) -> String {
         let failures = group
             .primary_failure
             .iter()
@@ -860,7 +876,7 @@ impl RuntimeSessionService {
                 })
             })
             .collect::<Vec<_>>();
-        Ok(serde_json::json!({
+        serde_json::json!({
             "completion_settlement": {
                 "version": 1, "group": group.group.as_str(),
                 "turn_id": group.turn.turn_id,
@@ -878,7 +894,7 @@ impl RuntimeSessionService {
                 "scheduler_milestone": format!("{:?}", group.scheduler),
             }
         })
-        .to_string())
+        .to_string()
     }
 
     /// Stages immutable source in the existing bounded group before required
@@ -1056,6 +1072,30 @@ impl RuntimeSessionService {
                     .all(ActionResult::is_terminal))
     }
 
+    /// Checks a previously validated primary Resume against its exact active
+    /// completion group. Cancellation is eligible only through that existing
+    /// generation contract, never from peer text or a generic terminal result.
+    pub(in crate::runtime::agent) fn completion_human_resume_source_ready(
+        &self,
+        turn_id: &str,
+        generation: u64,
+        expected_group: &mez_agent::ContextExecutionGroupId,
+    ) -> bool {
+        self.completion_settlement_binding_current(turn_id)
+            && self.completion_continuation_source_ready(turn_id)
+            && self
+                .agent
+                .completion_settlements
+                .groups
+                .get(turn_id)
+                .is_some_and(|group| {
+                    &group.group == expected_group
+                        && group.human_resume_generation == Some(generation)
+                        && group.primary_failure.is_none()
+                        && group.failed_backing.is_none()
+                })
+    }
+
     /// Records the existing exact pause/resume contract after caller validation.
     /// This does not approve an action, reset a failure budget or relabel errors.
     pub(in crate::runtime::agent) fn record_completion_human_resume(
@@ -1093,6 +1133,8 @@ impl RuntimeSessionService {
     /// Human pause blocks continuation, not original archive retention or paint.
     pub(crate) fn completion_provider_continuation_ready(&self, turn_id: &str) -> bool {
         !self.agent_turn_is_human_paused(turn_id)
+            && (!self.parent_has_pending_joined_tasks(turn_id)
+                || self.joined_coordination_offer_ready(turn_id))
             && self.completion_continuation_source_ready(turn_id)
     }
 
@@ -1125,6 +1167,16 @@ impl RuntimeSessionService {
     /// Shared fallible boundary for callback, resume and scheduler continuation.
     /// Held paint leaves its existing receipt actionable without requeue replay.
     pub(crate) fn admit_completion_provider_continuation(&mut self, turn_id: &str) -> Result<bool> {
+        if self.parent_has_pending_joined_tasks(turn_id) {
+            if self.joined_coordination_retains_current_group(turn_id) {
+                self.ensure_completion_required_gates_ready(turn_id)?;
+                return Ok(self.queue_joined_coordination_provider_task(turn_id));
+            }
+            if !self.joined_coordination_offer_ready(turn_id) {
+                self.park_joined_coordination_after_settlement(turn_id)?;
+                return Ok(false);
+            }
+        }
         if !self.completion_owns_transcript_policy(turn_id) {
             if !self.completion_provider_continuation_ready(turn_id)
                 || !self.prepare_completion_continuation_handoff(turn_id)?
@@ -1188,6 +1240,38 @@ impl RuntimeSessionService {
         &mut self,
         turn_id: String,
     ) -> bool {
+        self.queue_completion_provider_task_for_purpose(turn_id, CompletionQueuePurpose::Ordinary)
+    }
+
+    /// Called only after existing failure-feedback eligibility, budget, context
+    /// and archive retention have succeeded. The typed response owner scopes
+    /// this queue to its new batch, without reopening original pending actions.
+    pub(in crate::runtime::agent) fn queue_completion_policy_feedback_task(
+        &mut self,
+        turn_id: String,
+    ) -> bool {
+        let purpose = if self.joined_coordination_response_applying(&turn_id) {
+            CompletionQueuePurpose::JoinedPolicyFeedback
+        } else {
+            CompletionQueuePurpose::Ordinary
+        };
+        self.queue_completion_provider_task_for_purpose(turn_id, purpose)
+    }
+
+    /// Inserts one actual intent with unchanged required/archive milestones.
+    /// A scoped feedback purpose does not bypass any post-policy queue checks.
+    fn queue_completion_provider_task_for_purpose(
+        &mut self,
+        turn_id: String,
+        purpose: CompletionQueuePurpose,
+    ) -> bool {
+        if purpose == CompletionQueuePurpose::Ordinary
+            && self.parent_has_pending_joined_tasks(&turn_id)
+            && (!self.joined_coordination_offer_ready(&turn_id)
+                || self.joined_coordination_retains_current_group(&turn_id))
+        {
+            return false;
+        }
         if self.agent.completion_settlements.critical_failure.is_some() {
             return false;
         }
@@ -1335,9 +1419,11 @@ impl RuntimeSessionService {
         if let Some(failure) = &group.primary_failure {
             return Err((*failure.error).clone());
         }
-        if self.completion_provider_claim_disposition(turn_id)?
-            == CompletionProviderClaimDisposition::RetainedManagedAssessment
-        {
+        if matches!(
+            self.completion_provider_claim_disposition(turn_id)?,
+            CompletionProviderClaimDisposition::RetainedManagedAssessment
+                | CompletionProviderClaimDisposition::RetainedJoinedCoordination
+        ) {
             // Existing preterminal analysis retains every group/receipt/backing
             // obligation. It is not an Accepted ordinary continuation or a
             // terminal archive handoff, and never discharges either one.

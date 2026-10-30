@@ -62,6 +62,7 @@ impl RuntimeSessionService {
     /// remain durable and model-visible without pane presentation.
     pub(crate) fn deliver_pending_runtime_agent_messages(&mut self, now_ms: u64) -> Result<usize> {
         self.recover_received_peer_message_turn_scheduling(now_ms)?;
+        self.recover_joined_coordination_wakes()?;
         self.recover_owned_child_failures(now_ms)?;
         // Presentation is a recoverable receiver-side projection. Once a
         // receipt and cursor exist, it must never block provider admission or
@@ -159,6 +160,11 @@ impl RuntimeSessionService {
                         ),
                     )?;
                 }
+                self.record_joined_coordination_mail(
+                    &turn,
+                    message.sequence,
+                    message.envelope.as_ref(),
+                );
                 self.advance_runtime_message_subscription(&recipient, message.sequence)?;
             }
 
@@ -198,6 +204,7 @@ impl RuntimeSessionService {
                 )?;
             }
         }
+        self.recover_joined_coordination_wakes()?;
         Ok(committed)
     }
 
@@ -759,7 +766,10 @@ impl RuntimeSessionService {
     /// delivery timer (and re-reporting the limit) once per tick. Runtime-owned
     /// bridge traffic never starts a turn, so it keeps the ordinary pending
     /// behavior that also drives TTL expiry. Pending bookkeeping uses this same
-    /// bounded one-second maintenance cadence; receive admission checks only
+    /// bounded one-second maintenance cadence. Committed joined questions retain
+    /// retry until fair admission even after transport acknowledgement; consumed
+    /// receipts and already queued or claimed work do not renew that timer.
+    /// Receive admission checks only
     /// its exact conversation fence, never retries the failed archive read.
     pub(crate) fn has_pending_peer_messages(&mut self, now_ms: u64) -> bool {
         // Custody expiry/retirement is independent of live fanout and loop
@@ -783,7 +793,9 @@ impl RuntimeSessionService {
         if self.has_pending_owned_child_failure_handoff() {
             return true;
         }
-        if !self.agent.agent_turn_peer_wait_wake_pending.is_empty() {
+        if !self.agent.agent_turn_peer_wait_wake_pending.is_empty()
+            || self.has_pending_joined_coordination_wake()
+        {
             return true;
         }
         if self
@@ -855,7 +867,8 @@ impl RuntimeSessionService {
 
     /// Builds the desired dedicated peer-message delivery timer transition.
     ///
-    /// The dedicated timer is armed only while deliverable peer mail exists and
+    /// The dedicated timer is armed only while deliverable peer mail or a
+    /// committed recovery obligation exists and
     /// no delivery timer is already active, so it stays an event-driven wakeup
     /// rather than a permanent tick.
     pub(crate) fn peer_message_delivery_timer_transition(
@@ -1138,6 +1151,7 @@ impl RuntimeSessionService {
             }
         };
         self.retain_outbound_delivery_owner(turn, action, &delivery);
+        self.record_joined_coordination_reply(turn, &delivery);
         self.deliver_pending_runtime_agent_messages(now_ms)?;
         let result = ActionResult::succeeded(
             turn,

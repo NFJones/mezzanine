@@ -13501,10 +13501,47 @@ from the invoking agent's tree.
 
 The `agents.subagent_wait_policy` setting MUST default to `join`. In `join`
 mode, a parent `spawn_agent` action MUST remain a running action until the
-spawned child delivers its final task result, and the parent provider turn MUST
-not continue or complete before joined child results are available as action
-result context. A joined parent turn MUST release global scheduler capacity
-while waiting so child agents can run even when the concurrency limit is low.
+spawned child delivers its final task result. The parent MUST NOT complete its
+task before all joined child results are available as action-result context.
+Canonical mail committed from an exact outstanding child's accepted model send
+MAY admit serialized parent coordination before that child finishes.
+The receipt MUST bind the current parent conversation, incarnation and turn to
+its original spawn action, execution group and child task attempt; sender labels,
+correlation text and runtime bridge notices alone MUST NOT admit coordination.
+Unfinished non-join effects, required completion gates, approval and human pause
+MUST retain their existing admission fences. Coordination MUST use ordinary
+permission evaluation and action dispatch; peer text grants no authority.
+When an explicit validated human Resume supersedes an unissued coordination
+answer, its existing completion-generation contract MUST retain one fresh
+evaluation of that answer without replaying cancelled or completed actions.
+Resume MUST NOT silently discard the question or complete its original child
+await. A settled answer or an intentional peer Wait MUST NOT gain another
+provider call merely from that coordination rule.
+An unanswered question MUST survive ordinary successful tool batches and a
+separately admitted MMP Wait. Their results MUST reach the next inference under
+the existing completion and permission gates. Consuming a question receipt MUST
+NOT imply that its answer has been sent. Coordination for that question ends
+when a native reply is actually accepted for its exact current child recipient
+in the current response group, or the parent explicitly ends coordination with
+a final Say. Acceptance MUST NOT imply recipient observation or acknowledge mail.
+New helper joins created during coordination MUST retain their actual-result
+gate before the earlier question can continue. A helper's own committed question
+MAY admit nested coordination; answering it MUST return to that helper's await
+until its actual result arrives. Original execution groups and result slots MUST
+remain distinct across these nested responses.
+After an answer and its effects settle, the parent MUST park on the SAME pending
+joined dependencies unless another eligible unanswered question can continue.
+Final-looking responses MUST NOT finish unresolved awaited tasks. Accepted
+spawns and settled sibling effects MUST NOT be replayed. An exact accepted join
+MAY release its action-log ordering barrier for later sibling effects while its
+spawn result remains Running; no action or provider completion follows from that
+display-only allowance. Acknowledged questions
+MUST retain a bounded retry wake through queue pressure, pause and pending sibling
+completion, independently of transport delivery. Consumed, stale and retired
+receipts MUST NOT renew provider work. Child completion during inference MUST
+invalidate stale response effects and permit a fresh request consuming the result.
+A joined parent turn MUST release global scheduler capacity while waiting so
+child agents can run even when the concurrency limit is low.
 The scheduler MUST retain the waiting parent's lifecycle, cancellation,
 correlation, agent, and pane ownership while that capacity is released. The joined child result MUST be committed to the parent action-result context
 before a child-completed status is shown or the child route is removed. After
@@ -13528,8 +13565,16 @@ Exact repeated preparation MUST preserve the first value; conflicting input
 MUST NOT replace it. Returning a prepared value is not acknowledgement of
 context, persistence, presentation or wake settlement and grants no provider
 or scheduler authority. Source-group, action and result identity MUST still
-match before applying it to a live slot. A pending received result MUST NOT
-silently transfer into a redirected child attempt.
+match before applying it to its original active or independently retained slot.
+A pending received result MUST NOT silently transfer into a redirected child
+attempt. A fresh coordination response MAY transfer a quiescent original
+execution and its completed effect receipts into explicit joined-source custody;
+unsettled native or external effects MUST retain their current owner first.
+Later child results MUST update that original source and canonical execution
+group without replacing or temporarily swapping the latest response. Original
+archive targets and failed retention evidence MUST survive settlement and owner
+cleanup until checked handoff; retaining source MUST NOT fabricate an ordinary
+continuation acknowledgement or a completed child result.
 The canonical context MUST protect each captured execution group from
 compaction while any joined dependency still owns that group, including after
 later peer mail or another response has arrived. Repeated capture MUST be

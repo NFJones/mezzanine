@@ -552,19 +552,22 @@ fn exercise_deferred_join(children: usize, hold_install: bool) {
     }
     assert_discovery_source(&service, &accepted);
     if hold_install {
-        let provider = RuntimeBatchProvider {
-            response: runtime_say_response_for_agent(
-                "turn-1",
-                "agent-%1",
-                "NEW_PARENT_RESPONSE",
-                true,
-            ),
-        };
-        let executions = service
-            .poll_agent_provider_tasks_with_provider(&provider, 1)
-            .unwrap();
-        assert_eq!(executions.len(), 1);
-        assert_eq!(executions[0].terminal_state, AgentTurnState::Completed);
+        // Publication recovery retains an ordinary completion group until a
+        // genuine actor lease accepts it. A direct synchronous poll cannot
+        // acknowledge that transfer merely by producing another response.
+        service = std::thread::Builder::new()
+            .name("deferred-join-continuation".into())
+            .stack_size(32 * 1024 * 1024)
+            .spawn(move || {
+                tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .unwrap()
+                    .block_on(run_deferred_join_actor(service))
+            })
+            .unwrap()
+            .join()
+            .unwrap_or_else(|payload| std::panic::resume_unwind(payload));
         let rows = service
             .agent_pane_screen("%1")
             .unwrap()
@@ -600,6 +603,177 @@ fn exercise_deferred_join(children: usize, hold_install: bool) {
         assert!(position >= prior, "{immediate}");
         prior = position;
     }
+}
+
+/// Transfers held joined completion through a real actor claim, then applies
+/// one offline lower-runner response through actual generation-qualified ingress.
+/// Returns the actor's service after orderly shutdown for the owning log test's
+/// original pixel, copy, source-identity and durable-history assertions.
+async fn run_deferred_join_actor(mut service: RuntimeSessionService) -> RuntimeSessionService {
+    use crate::host::async_runtime::{
+        AsyncRuntimeActorConfig, AsyncRuntimeSessionActor, AsyncRuntimeSideEffectServiceConfig,
+        run_async_persistence_side_effect_service,
+    };
+    use crate::integrations::agent::actions::AgentTurnRunner;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+    let config_root = service
+        .agent_transcript_store()
+        .unwrap()
+        .root()
+        .join("actor-config");
+    // Configured catalogs are real sandbox read scopes. Materialize this
+    // fixture's empty catalogs before provider preparation validates them.
+    for catalog in ["macros", "skills"] {
+        fs::create_dir_all(config_root.join(catalog)).unwrap();
+    }
+    service.set_config_root(config_root.clone());
+    service.set_auth_store(crate::security::auth::AuthStore::new(
+        crate::security::auth::AuthPaths::under_config_root(&config_root),
+    ));
+    service.replace_config_layers(vec![ConfigLayer {
+        name: "deferred-join-actor".into(), path: None, format: ConfigFormat::Toml,
+        scope: ConfigScope::Primary, trusted: true,
+        text: "[agents]\ndefault_provider=\"runtime-batch\"\ndefault_model_profile=\"default\"\n[providers.runtime-batch]\nkind=\"openai-compatible\"\nbase_url=\"http://127.0.0.1:9/v1\"\nmodels=[\"test\"]\ndefault_model=\"test\"\n[model_profiles.default]\nprovider=\"runtime-batch\"\nmodel=\"test\"\ncontext_window_tokens=128000\n[permissions]\napproval_policy=\"auto-allow\"\nsandbox=\"policy-only\"\n".into(),
+    }]).unwrap();
+    let (handle, actor) =
+        AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
+    let stop = Arc::new(AtomicBool::new(false));
+    let persistence_stop = stop.clone();
+    let persistence_handle = handle.clone();
+    let persistence = async move {
+        run_async_persistence_side_effect_service(
+            &persistence_handle,
+            AsyncRuntimeSideEffectServiceConfig {
+                max_polls: u64::MAX,
+                drain_limit: 32,
+                idle_interval: std::time::Duration::from_millis(5),
+            },
+            move |_, state| {
+                persistence_stop.load(Ordering::SeqCst)
+                    || matches!(state, crate::runtime::RuntimeLifecycleState::Stopping)
+            },
+        )
+        .await
+        .unwrap()
+    };
+    let client = async {
+        let dispatch = handle
+            .claim_configured_agent_provider_task(
+                AgentId::opaque("agent-%1").unwrap(),
+                "turn-1".into(),
+            )
+            .await
+            .unwrap();
+        let Some(dispatch) = dispatch else {
+            stop.store(true, Ordering::SeqCst);
+            return false;
+        };
+        let permissions = crate::security::permissions::ProductPermissionPlanning::new(
+            &dispatch.permission_policy,
+            &dispatch.session_approvals,
+            dispatch.path_scopes.as_ref(),
+        )
+        .with_shell_classification(&dispatch.shell_classification)
+        .with_sandbox_first_local_prompts(dispatch.sandbox_first_local_prompts)
+        .with_macro_bridge_recipients(dispatch.macro_bridge_recipients.clone());
+        let provider = RuntimeBatchProvider {
+            response: runtime_say_response_for_agent(
+                "turn-1",
+                "agent-%1",
+                "NEW_PARENT_RESPONSE",
+                true,
+            ),
+        };
+        let runner = AgentTurnRunner {
+            provider: &provider,
+            model_profile: dispatch.model_profile.clone(),
+            permissions: &permissions,
+            subagent_scope: dispatch.subagent_scope.as_ref(),
+            subagent_scope_enforcement: &mez_agent::DEFAULT_SUBAGENT_SCOPE_ENFORCEMENT,
+            available_mcp_servers: dispatch.available_mcp_servers.clone(),
+            available_mcp_tools: &dispatch.available_mcp_tools,
+            memory_actions_enabled: dispatch.memory_actions_enabled,
+            issue_actions_enabled: dispatch.issue_actions_enabled,
+        };
+        let execution = runner
+            .run_turn_ref_with_allowed_actions(
+                &mut mez_agent::AgentTurnLedger::new(false),
+                dispatch.turn.clone(),
+                dispatch.context.durable(),
+                dispatch.allowed_actions.clone(),
+                dispatch.interaction_kind,
+                dispatch.turn_limits,
+            )
+            .unwrap();
+        assert_eq!(execution.terminal_state, AgentTurnState::Completed);
+        let mut batch = crate::runtime::RuntimeEventBatch::new();
+        batch.push(crate::runtime::RuntimeEvent::AgentProvider(
+            crate::runtime::AgentProviderEvent::Completed {
+                agent_id: AgentId::opaque(dispatch.turn.agent_id.clone()).unwrap(),
+                turn_id: dispatch.turn.turn_id.clone(),
+                claim_generation: dispatch.claim_generation,
+                execution: Box::new(execution),
+            },
+        ));
+        assert_eq!(
+            handle.submit_runtime_events(batch).await.unwrap().applied,
+            1
+        );
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+        while handle.agent_turn_is_running("turn-1").await.unwrap()
+            && tokio::time::Instant::now() < deadline
+        {
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        let completed = !handle.agent_turn_is_running("turn-1").await.unwrap();
+        stop.store(true, Ordering::SeqCst);
+        completed
+    };
+    // The persistence lane drains its actual typed receipts before shutdown;
+    // merely accepting a provider event is not a completed archive handoff.
+    let lanes = async {
+        let (claimed, report) = tokio::join!(client, persistence);
+        handle.shutdown().await.unwrap();
+        (claimed, report)
+    };
+    let ((claimed, report), mut exit) =
+        tokio::time::timeout(std::time::Duration::from_secs(15), async {
+            tokio::join!(lanes, actor.run())
+        })
+        .await
+        .expect("one genuinely admitted offline continuation must settle");
+    assert_eq!(report.failed, 0, "{report:?}");
+    assert!(
+        report.completed > 0,
+        "the actual persistence worker must settle: {report:?}"
+    );
+    if !claimed {
+        let detail = format!(
+            "turn={:?}; queue={:?}; screen={:?}",
+            exit.service.agent_turn_ledger().turn("turn-1"),
+            exit.service
+                .completion_provider_queue_flags_for_tests("turn-1"),
+            exit.service
+                .agent_pane_screen("%1")
+                .map(|screen| screen.normal_content_lines())
+        );
+        exit.service.terminate_all_pane_processes().unwrap();
+        panic!("released original publication must admit a real actor lease: {detail}");
+    }
+
+    assert_eq!(
+        exit.service
+            .agent_turn_ledger()
+            .turn("turn-1")
+            .unwrap()
+            .state,
+        AgentTurnState::Completed
+    );
+    assert!(!exit.service.agent_provider_task_is_pending("turn-1"));
+    exit.service
 }
 
 /// A successful joined child must release multiple nonstreaming progress rows

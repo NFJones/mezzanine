@@ -534,6 +534,7 @@ impl RuntimeSessionService {
                                     )
                             });
                         !prior_is_inactive_failed_shell
+                            && !self.joined_spawn_allows_later_logs(execution, prior)
                             && action_holds_later_log(prior)
                             && !self
                                 .presentation
@@ -735,6 +736,7 @@ impl RuntimeSessionService {
                             result,
                         )
                 }))
+                && !self.joined_spawn_allows_later_logs(execution, action)
                 && action_holds_later_log(action)
                 && !(matches!(action.payload, AgentActionPayload::ShellCommand { .. })
                     && self

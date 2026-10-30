@@ -789,7 +789,7 @@ fn maap_wait_action_schema() -> serde_json::Value {
     .map(|mut schema| {
         schema.insert(
             "description".to_string(),
-            serde_json::json!("Wait only for a response from another agent during active MMP inter-agent coordination. Never use this action for delays, retries, polling, user input, approvals, subprocesses, network operations, or any circumstance unrelated to MMP messaging. Send any needed MMP message first in an earlier action batch, then emit wait as the only executable action in this batch. Wait parks the current turn as idle; later model-originated peer mail resumes the same turn."),
+            serde_json::json!("Wait only for a response from another agent during active MMP inter-agent coordination. Never use this action for delays, retries, polling, user input, approvals, subprocesses, network operations, or any circumstance unrelated to MMP messaging. Send any needed MMP message first in an earlier action batch, then emit wait as the only executable action in this batch. Wait parks the current turn as idle; later model-originated peer mail resumes the same turn. A task-lifetime joined child may ask its parent for clarification before waiting; the parent can use ordinary permissioned tools or a separate peer Wait before answering, then returns to the same outstanding joins. Newly joined helpers retain their actual-result gate. Pause, approval and unfinished sibling effects still inhibit admission."),
         );
         serde_json::Value::Object(schema)
     })
@@ -874,7 +874,7 @@ fn maap_spawn_agent_action_schema(sizing: Option<&SpawnAgentSizing>) -> serde_js
                 "task_prompt",
                 serde_json::json!({
                     "type": "string",
-                    "description": "Initial child task. Required and non-empty for task-lifetime delegation. Only for a persistent inter-agent MMP actor, use an empty string to provision it idle or provide its optional first MMP-coordinated task."
+                    "description": "Initial child task. Required and non-empty for task-lifetime delegation. With join policy the spawn remains pending until the actual child result; a committed clarification question can admit the same parent to use ordinary permissioned tools, consume their results, and answer before returning to that same await. Newly joined helpers must still deliver actual results before that earlier question continues. Do not respawn the child or treat acceptance as completion. Only for a persistent inter-agent MMP actor, use an empty string to provision it idle or provide its optional first MMP-coordinated task."
                 }),
             ),
             (

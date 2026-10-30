@@ -813,6 +813,8 @@ pub(crate) struct RuntimeAgentComponent {
     joined_subagent_dependencies: BTreeMap<String, JoinedSubagentDependency>,
     /// Immutable original execution custody, bounded by live joined dependencies.
     joined_parent_executions: BTreeMap<String, joined_custody::JoinedActionCustody>,
+    /// Committed child mail and the serialized coordination response owner.
+    joined_coordination: BTreeMap<String, joined_custody::JoinedCoordination>,
     /// Declared scope and permission inheritance keyed by child agent id.
     subagent_scope_declarations: BTreeMap<String, SubagentScopeDeclaration>,
     /// Runtime delegation lineage keyed by child agent id.
@@ -2522,6 +2524,9 @@ impl RuntimeSessionService {
             self.agent
                 .joined_subagent_dependencies
                 .insert(redirected_turn_id.to_string(), dependency);
+            // The replacement owns a new attempt, never the old question's
+            // committed coordination receipt. Prune only after atomic transfer.
+            self.prune_joined_parent_execution_custody();
         }
         if let Some(loop_turn) = redirection.routed_loop_turn {
             self.agent
@@ -4256,6 +4261,7 @@ impl RuntimeSessionService {
 
     /// Clears provider-execution identities and action ownership for one turn.
     pub(crate) fn clear_agent_execution_group_ownership_for_turn(&mut self, turn_id: &str) {
+        self.agent.joined_coordination.remove(turn_id);
         self.release_joined_parent_execution_custody_for_turn(turn_id);
         self.agent.agent_execution_groups_by_turn.remove(turn_id);
         self.agent.agent_provider_tool_calls_by_turn.remove(turn_id);

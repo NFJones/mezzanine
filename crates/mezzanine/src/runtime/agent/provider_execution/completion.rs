@@ -175,7 +175,9 @@ impl RuntimeSessionService {
             .get(turn_id)
             .map(mez_agent::AgentContext::event_sequence_high_water_mark)
             .unwrap_or_default();
+        let joined_purpose_revoked = self.joined_coordination_provider_purpose_revoked(turn_id);
         if owned_child_context_pending
+            || joined_purpose_revoked
             || consumed_high_water_mark.is_some_and(|consumed| current_high_water_mark > consumed)
         {
             self.agent.pending_agent_provider_tasks.remove(turn_id);
@@ -185,14 +187,30 @@ impl RuntimeSessionService {
                 turn_id,
                 super::super::presentation::RuntimeProviderLogInput::Terminal,
             )?;
-            self.agent
-                .pending_agent_provider_tasks
-                .insert(turn_id.to_string());
+            if joined_purpose_revoked {
+                self.park_joined_coordination_after_settlement(turn_id)?;
+            } else if !self.parent_has_pending_joined_tasks(turn_id)
+                && self.completion_owns_transcript_policy(turn_id)
+                && self
+                    .agent_turn_executions()
+                    .get(turn_id)
+                    .is_some_and(super::super::runtime_execution_ready_for_provider_continuation)
+            {
+                // A joined child may have completed during this retained-purpose
+                // inference. Its original group must transfer ordinary result
+                // continuation before a fresh claim can consume that result.
+                self.admit_completion_provider_continuation(turn_id)?;
+            } else {
+                self.agent
+                    .pending_agent_provider_tasks
+                    .insert(turn_id.to_string());
+            }
             self.append_agent_trace_turn_event(
                 &turn.pane_id,
                 turn_id,
                 &format!(
-                    "provider_response discarded reason=stale_context consumed_event_sequence={} current_event_sequence={}",
+                    "provider_response discarded reason={} consumed_event_sequence={} current_event_sequence={}",
+                    if joined_purpose_revoked { "revoked_joined_question" } else { "stale_context" },
                     consumed_high_water_mark.unwrap_or_default(),
                     current_high_water_mark
                 ),

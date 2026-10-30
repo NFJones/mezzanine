@@ -5,6 +5,9 @@
 Choose the right place for agent guidance and adjust response style without
 confusing prompt text with permission or execution authority.
 
+The base system prompt has no fixed byte-size ceiling. Content-contract tests
+protect its required instructions; configured model input limits govern requests.
+
 ## Prerequisites
 
 Understand the [agent overview](overview.md) and

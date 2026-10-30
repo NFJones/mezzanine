@@ -67,11 +67,34 @@ parent can continue after creation and receives later status and output through
 local messaging. Do not assume detached work finished merely because the parent
 continued.
 
+A joined child can ask its parent for clarification over MMP, then emit `wait`
+in a separate batch. Once that question commits, Mez can fairly admit the same
+parent to answer before the child finishes, including with one provider slot.
+The parent can first discover peers, read files, run permissioned tools, or ask
+another agent and issue a separate `wait`; successful results reach its next
+inference while the original question remains unanswered. A newly joined helper
+must deliver its actual result before the parent can use it for that answer.
+If the helper also asks a question, answering it returns to that helper's await.
+An accepted reply to the exact question child ends that question's coordination;
+acceptance does not prove the child observed the reply. A final `say` also ends
+coordination without completing unresolved joins.
+The answer uses the parent's normal permissions. Unfinished sibling effects,
+approval and human pause still inhibit admission. After the answer settles, the
+parent parks again on the same outstanding tasks; it cannot finish or treat a
+spawn as completed until the actual child result arrives. Do not respawn a child
+or resend a question to overcome queue pressure. A committed question retains
+its retry wake independently of transport acknowledgement.
+If you pause an answer before an action is issued, explicit Resume cancels the
+old unissued candidate and lets the parent reevaluate the same task under current
+policy. It preserves the original child await and never replays accepted work.
+
 While a provider response waits on joined children, Mez retains its original
 spawn source independently of the latest response slot. A later response cannot
 silently replace the original action or transfer it into a new conversation.
 This retained source does not by itself admit a parent continuation or mean that
-the child has completed. A received result keeps its original task attempt and
+the child has completed. An admitted clarification response transfers only a
+quiescent original group; late child results still settle its original slots and
+archive destination, independently of the latest answer batch. A received result keeps its original task attempt and
 first exact value while awaiting settlement; a conflicting repeat cannot replace
 it. A pending received value cannot follow a redirected child attempt. Preparing
 that value does not mean it has been committed or that the parent may continue.

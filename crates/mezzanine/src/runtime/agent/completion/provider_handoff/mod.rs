@@ -826,7 +826,11 @@ impl RuntimeSessionService {
             disposition,
             original: None,
         };
-        if disposition == CompletionProviderClaimDisposition::RetainedManagedAssessment {
+        if matches!(
+            disposition,
+            CompletionProviderClaimDisposition::RetainedManagedAssessment
+                | CompletionProviderClaimDisposition::RetainedJoinedCoordination
+        ) {
             return Ok(permit);
         }
         let Some(group) = self
@@ -975,6 +979,9 @@ impl RuntimeSessionService {
         }
         if permit.disposition == CompletionProviderClaimDisposition::RetainedManagedAssessment {
             return true;
+        }
+        if permit.disposition == CompletionProviderClaimDisposition::RetainedJoinedCoordination {
+            return self.accept_joined_coordination_claim(&permit.turn.turn_id, permit.generation);
         }
         if permit.original.is_none() {
             return !self
