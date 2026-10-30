@@ -235,6 +235,7 @@ impl RuntimeSessionService {
                     && dependency.parent_turn_id != turn_id
                     && dependency.child_turn_id != turn_id)
             });
+        self.prune_joined_parent_execution_custody();
     }
 
     /// Reports whether one joined dependency still has correlated child work.
@@ -480,6 +481,7 @@ impl RuntimeSessionService {
             self.agent
                 .joined_subagent_dependencies
                 .insert(dependency.child_turn_id.clone(), dependency.clone());
+            self.prune_joined_parent_execution_custody();
             if let Some(child) = child {
                 let success = child.state == AgentTurnState::Completed;
                 let summary = if success {
@@ -1932,6 +1934,7 @@ impl RuntimeSessionService {
         self.agent
             .joined_subagent_dependencies
             .remove(&dependency.child_turn_id);
+        self.prune_joined_parent_execution_custody();
         self.start_ready_agent_turns()?;
         Ok(())
     }
@@ -2072,6 +2075,7 @@ impl RuntimeSessionService {
                 dependency.parent_turn_id
             )));
         }
+        let original_action = self.retained_joined_spawn_action(dependency)?;
         let (observed_result, ready_for_continuation, terminal_state) = {
             let Some(execution) = self
                 .agent_turn_executions_mut()
@@ -2099,6 +2103,14 @@ impl RuntimeSessionService {
                     dependency.parent_action_id
                 )));
             };
+            if original_action
+                .as_ref()
+                .is_some_and(|original| original != &action)
+            {
+                return Err(MezError::conflict(
+                    "joined result differs from its original spawn action",
+                ));
+            }
             let Some(result_index) = execution
                 .action_results
                 .iter()
@@ -2205,6 +2217,7 @@ impl RuntimeSessionService {
         self.agent
             .joined_subagent_dependencies
             .remove(&dependency.child_turn_id);
+        self.prune_joined_parent_execution_custody();
         if terminal_state != AgentTurnState::Running {
             let execution = self
                 .agent_turn_executions()

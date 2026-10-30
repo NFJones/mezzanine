@@ -67,6 +67,12 @@ parent can continue after creation and receives later status and output through
 local messaging. Do not assume detached work finished merely because the parent
 continued.
 
+While a provider response waits on joined children, Mez retains its original
+spawn source independently of the latest response slot. A later response cannot
+silently replace the original action or transfer it into a new conversation.
+This retained source does not by itself admit a parent continuation or mean that
+the child has completed.
+
 A successful one-task child delivers its result before its pane closes. A
 failed or interrupted child pane stays available for diagnosis unless you close
 it. Inspect the result and validation, not just a status label.

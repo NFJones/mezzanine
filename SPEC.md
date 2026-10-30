@@ -13514,6 +13514,14 @@ failed, and the parent MUST NOT resume provider execution until it reacquires
 capacity. Duplicate terminal child observations MUST be idempotent. A join
 settlement invariant failure MUST fail the parent visibly and MUST NOT leave it
 indefinitely blocked.
+Before provider-result parking releases a joined parent, the runtime MUST retain
+the original spawn request, execution group, action and result slot independently
+of the replaceable latest execution. Exact repeated capture MUST preserve that
+source; a changed action, group or parent binding MUST NOT replace it. Siblings
+from one captured response SHOULD share source storage. This custody grants no
+provider, scheduler or completion authority and MUST be retired with its exact
+dependency, transferred only by the existing validated child redirection, or
+removed on owner/session teardown.
 Joined dependency records are result-correlation metadata and MUST NOT by
 themselves keep a successfully completed child session alive.
 In `detach` mode, the parent may continue immediately after spawn creation

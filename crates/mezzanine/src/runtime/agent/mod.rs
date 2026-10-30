@@ -220,6 +220,7 @@ mod context_documents;
 mod discovery;
 mod failures;
 mod issues;
+mod joined_custody;
 mod lifecycle;
 mod macros;
 mod mcp_network;
@@ -810,6 +811,8 @@ pub(crate) struct RuntimeAgentComponent {
     active_sandbox_bypasses: BTreeSet<(String, String)>,
     /// Spawned child turns currently joined by parent agent actions.
     joined_subagent_dependencies: BTreeMap<String, JoinedSubagentDependency>,
+    /// Immutable original execution custody, bounded by live joined dependencies.
+    joined_parent_executions: BTreeMap<String, joined_custody::JoinedActionCustody>,
     /// Declared scope and permission inheritance keyed by child agent id.
     subagent_scope_declarations: BTreeMap<String, SubagentScopeDeclaration>,
     /// Runtime delegation lineage keyed by child agent id.
@@ -1872,11 +1875,13 @@ impl RuntimeSessionService {
         self.agent
             .joined_subagent_dependencies
             .retain(|_, dependency| dependency.child_agent_id != child_agent_id);
+        self.prune_joined_parent_execution_custody();
     }
 
     /// Clears all joined child dependencies on session replacement.
     pub(crate) fn clear_all_joined_subagent_dependencies(&mut self) {
         self.agent.joined_subagent_dependencies.clear();
+        self.agent.joined_parent_executions.clear();
     }
 
     /// Returns the joined child count to crate-local regression tests.
@@ -2498,6 +2503,10 @@ impl RuntimeSessionService {
                 .insert(redirected_turn_id.to_string(), parent_agent_id);
         }
         if let Some(mut dependency) = redirection.joined_dependency {
+            self.transfer_joined_parent_execution_custody(
+                &redirection.interrupted_turn_id,
+                redirected_turn_id,
+            );
             self.agent
                 .joined_subagent_dependencies
                 .remove(&redirection.interrupted_turn_id);
@@ -4239,6 +4248,9 @@ impl RuntimeSessionService {
 
     /// Clears provider-execution identities and action ownership for one turn.
     pub(crate) fn clear_agent_execution_group_ownership_for_turn(&mut self, turn_id: &str) {
+        self.agent
+            .joined_parent_executions
+            .retain(|_, owner| owner.parent_turn_id() != turn_id);
         self.agent.agent_execution_groups_by_turn.remove(turn_id);
         self.agent.agent_provider_tool_calls_by_turn.remove(turn_id);
     }

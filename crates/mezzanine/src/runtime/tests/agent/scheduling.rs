@@ -3,6 +3,9 @@
 use super::*;
 use crate::runtime::ActiveTurnSleepInhibition;
 
+/// Original joined action custody survives replaceable provider response slots.
+mod joined_custody;
+
 /// Verifies an existing session retains its complete action schema after live
 /// configuration changes, including the retry and repair control path.
 #[test]

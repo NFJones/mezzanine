@@ -754,6 +754,9 @@ impl RuntimeSessionService {
             let waiting_for_joined_subagents =
                 self.execution_waiting_for_live_joined_subagents(turn_id, &execution);
             if waiting_for_peer_message || waiting_for_joined_subagents {
+                if waiting_for_joined_subagents {
+                    self.retain_joined_parent_execution(turn, &execution)?;
+                }
                 self.agent_turn_executions_mut()
                     .insert(turn_id.to_string(), execution.clone());
                 self.agent.agent_scheduler.wait_running(turn_id)?;
