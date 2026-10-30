@@ -109,6 +109,7 @@ fn spawn_client(root: &Path, home: &Path, runtime: &Path, name: &str) -> Foregro
     // live resource exists, so a filesystem failure cannot strand a child.
     let owned_root = root.join(name);
     fs::create_dir_all(&owned_root).unwrap();
+    let owned_root = storage::OwnedRoot::capture(&owned_root).unwrap();
     let pair = native_pty_system()
         .openpty(PtySize {
             rows: 24,
@@ -128,46 +129,13 @@ fn spawn_client(root: &Path, home: &Path, runtime: &Path, name: &str) -> Foregro
     // child exists. Starting the child first left a running process with no
     // cleanup guard when reader/writer acquisition or thread construction
     // failed, which is the ownership gap this fixture must close.
-    let mut reader = pair.master.try_clone_reader().unwrap();
-    let writer = pair.master.take_writer().unwrap();
-    let (output_tx, output_rx) = mpsc::channel();
-    let reader_thread = thread::Builder::new()
-        .name(format!("foreground-reader-{name}"))
-        .spawn(move || {
-            let mut bytes = [0; 4096];
-            while let Ok(read) = reader.read(&mut bytes) {
-                if read == 0 || output_tx.send(bytes[..read].to_vec()).is_err() {
-                    break;
-                }
-            }
-        })
-        .unwrap();
-    let child = match pair.slave.spawn_command(command) {
-        Ok(child) => child,
-        Err(error) => {
-            // No child owns the PTY. Close the slave so the already-started
-            // reader observes EOF, then wait for that reader before the failure
-            // escapes; otherwise the startup failure would drop the only handle
-            // to a thread still holding the cloned master.
-            drop(pair.slave);
-            let _ = reader_thread.join();
-            panic!("foreground fixture child spawn failed: {error}");
-        }
-    };
-    drop(pair.slave);
-    ForegroundProcess {
-        child,
-        master: pair.master,
-        writer: Some(writer),
-        output_rx,
-        reader_thread: Some(reader_thread),
-        root: owned_root,
-        writer_worker: None,
-        writer_obligation: None,
-        fail_writer_handoff: false,
-        park_writer_worker: false,
-        writer_park_release: None,
-    }
+    ForegroundProcess::spawn(
+        pair,
+        command,
+        owned_root,
+        &format!("foreground-reader-{name}"),
+    )
+    .unwrap()
 }
 
 /// Two ordinary new commands share one protected broker while the first remains
@@ -265,12 +233,12 @@ fn foreground_new_reuses_live_broker_for_independent_frontends() {
         second_setup["initialize"]["client"]["metadata"]["session_name"],
         "second"
     );
-    assert!(first.child.try_wait().unwrap().is_none());
+    assert!(first.child_mut().try_wait().unwrap().is_none());
     first.send_interrupt().unwrap();
     first
         .read_until_exit(&mut first_output, Duration::from_secs(5))
         .unwrap();
-    assert!(second.child.try_wait().unwrap().is_none());
+    assert!(second.child_mut().try_wait().unwrap().is_none());
     second.send_interrupt().unwrap();
     second
         .read_until_exit(&mut second_output, Duration::from_secs(5))
