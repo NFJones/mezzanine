@@ -2075,80 +2075,21 @@ impl RuntimeSessionService {
                 dependency.parent_turn_id
             )));
         }
-        let original_action = self.retained_joined_spawn_action(dependency)?;
-        let (observed_result, ready_for_continuation, terminal_state) = {
+        let prepared = self.prepare_joined_task_result(dependency, success, summary, output)?;
+        let observed_result = prepared.result().clone();
+        let (ready_for_continuation, terminal_state) = {
             let Some(execution) = self
                 .agent_turn_executions_mut()
                 .get_mut(&dependency.parent_turn_id)
             else {
-                return Err(MezError::invalid_state(format!(
-                    "joined subagent parent execution `{}` is missing",
-                    dependency.parent_turn_id
-                )));
-            };
-            let Some(batch) = execution.response.action_batch.as_ref() else {
-                return Err(MezError::invalid_state(format!(
-                    "joined subagent parent action batch `{}` is missing",
-                    dependency.parent_turn_id
-                )));
-            };
-            let Some(action) = batch
-                .actions
-                .iter()
-                .find(|action| action.id == dependency.parent_action_id)
-                .cloned()
-            else {
-                return Err(MezError::invalid_state(format!(
-                    "joined subagent parent action `{}` is missing",
-                    dependency.parent_action_id
-                )));
-            };
-            if original_action
-                .as_ref()
-                .is_some_and(|original| original != &action)
-            {
-                return Err(MezError::conflict(
-                    "joined result differs from its original spawn action",
+                return Err(MezError::invalid_state(
+                    "joined subagent parent execution is missing",
                 ));
-            }
-            let Some(result_index) = execution
-                .action_results
-                .iter()
-                .position(|result| result.action_id == dependency.parent_action_id)
-            else {
-                return Err(MezError::invalid_state(format!(
-                    "joined subagent parent result `{}` is missing",
-                    dependency.parent_action_id
-                )));
             };
-            let child_label = runtime_subagent_display_label(
-                &dependency.child_agent_id,
-                dependency.child_display_name.as_deref(),
-            );
-            let result_summary = if success {
-                format!("subagent {child_label} completed: {summary}")
-            } else {
-                format!("subagent {child_label} failed: {summary}")
-            };
-            let structured_result = format!(
-                r#"{{"join_policy":"join","join_state":"completed","child_agent_id":"{}","child_display_name":{},"child_turn_id":"{}","task_result":{{"success":{},"summary":"{}","output":"{}"}}}}"#,
-                json_escape(&dependency.child_agent_id),
-                dependency
-                    .child_display_name
-                    .as_deref()
-                    .map(|name| format!(r#""{}""#, json_escape(name)))
-                    .unwrap_or_else(|| "null".to_string()),
-                json_escape(&dependency.child_turn_id),
-                success,
-                json_escape(summary),
-                json_escape(output)
-            );
-            let observed_result = ActionResult::succeeded(
-                &parent_turn,
-                &action,
-                vec![result_summary],
-                Some(structured_result),
-            );
+            // Preparation owns the original target independently. Applying to
+            // this live slot still requires its exact original group; a future
+            // coordination owner must not bypass that source boundary.
+            let result_index = prepared.matching_result_slot(execution)?;
             execution.action_results[result_index] = observed_result.clone();
             execution.final_turn = false;
             execution.terminal_state = runtime_agent_turn_state_from_action_results(
@@ -2157,11 +2098,7 @@ impl RuntimeSessionService {
             );
             let ready_for_continuation =
                 runtime_execution_ready_for_provider_continuation(execution);
-            (
-                observed_result,
-                ready_for_continuation,
-                execution.terminal_state,
-            )
+            (ready_for_continuation, execution.terminal_state)
         };
         self.append_action_result_context_if_absent(&dependency.parent_turn_id, &observed_result)?;
         if let Some(execution) = self

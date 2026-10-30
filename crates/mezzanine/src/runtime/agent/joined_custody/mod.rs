@@ -14,6 +14,9 @@ use super::{
 use mez_agent::ContextExecutionGroupId;
 use std::sync::Arc;
 
+mod results;
+pub(crate) use results::PreparedJoinedTaskResult;
+
 /// One immutable provider response whose spawn effects have been accepted.
 struct JoinedExecutionSource {
     /// Original parent identity; ledger state may subsequently park or resume.
@@ -42,6 +45,8 @@ pub(super) struct JoinedActionCustody {
     dependency: JoinedSubagentDependency,
     /// Immutable original source, rather than the replaceable latest execution.
     source: Arc<JoinedExecutionSource>,
+    /// First locally received result value, not a context or wake acknowledgement.
+    prepared_result: Option<Arc<PreparedJoinedTaskResult>>,
 }
 
 impl JoinedActionCustody {
@@ -155,6 +160,7 @@ impl RuntimeSessionService {
                 .or_insert_with(|| JoinedActionCustody {
                     dependency,
                     source: Arc::clone(&source),
+                    prepared_result: None,
                 });
         }
         self.prune_joined_parent_execution_custody();

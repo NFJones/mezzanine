@@ -13522,6 +13522,14 @@ from one captured response SHOULD share source storage. This custody grants no
 provider, scheduler or completion authority and MUST be retired with its exact
 dependency, transferred only by the existing validated child redirection, or
 removed on owner/session teardown.
+For captured task joins, a locally received terminal result MUST be prepared
+from the retained original action before any live execution-slot mutation.
+Exact repeated preparation MUST preserve the first value; conflicting input
+MUST NOT replace it. Returning a prepared value is not acknowledgement of
+context, persistence, presentation or wake settlement and grants no provider
+or scheduler authority. Source-group, action and result identity MUST still
+match before applying it to a live slot. A pending received result MUST NOT
+silently transfer into a redirected child attempt.
 Joined dependency records are result-correlation metadata and MUST NOT by
 themselves keep a successfully completed child session alive.
 In `detach` mode, the parent may continue immediately after spawn creation

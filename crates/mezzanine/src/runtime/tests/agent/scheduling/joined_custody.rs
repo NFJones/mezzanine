@@ -171,3 +171,250 @@ fn runtime_joined_source_custody_rejects_replacement_parent_binding() {
     );
     service.terminate_all_pane_processes().unwrap();
 }
+
+/// Preparation derives a controller value from the retained original target
+/// even when a controlled later slot has no spawn action. It preserves the
+/// first received value on exact repeat, rejects conflicting output and a
+/// foreign application slot, and neither commits context nor admits work.
+/// These supplied observation facts are fixture data, not child completion or
+/// an authorized coordination response; the actual lifecycle control below
+/// separately proves normal terminal adoption.
+#[test]
+fn runtime_joined_result_preparation_retains_original_target_and_first_value() {
+    let (mut service, parent, dependency, execution) = custody_fixture();
+    let mut later = execution.clone();
+    later.response = runtime_say_response_for_agent(
+        &parent.turn_id,
+        &parent.agent_id,
+        "later untouched response",
+        false,
+    );
+    service
+        .agent_turn_executions_mut()
+        .insert(parent.turn_id.clone(), later.clone());
+    let before_context = service
+        .agent_turn_contexts()
+        .get(&parent.turn_id)
+        .unwrap()
+        .clone();
+    let prepared = service
+        .prepare_joined_task_result(
+            &dependency,
+            true,
+            "PRIVATE_RECEIVED_SUMMARY",
+            "PRIVATE_RECEIVED_OUTPUT",
+        )
+        .unwrap();
+    let duplicate = service
+        .prepare_joined_task_result(
+            &dependency,
+            true,
+            "PRIVATE_RECEIVED_SUMMARY",
+            "PRIVATE_RECEIVED_OUTPUT",
+        )
+        .unwrap();
+    assert!(std::sync::Arc::ptr_eq(&prepared, &duplicate));
+    assert_eq!(prepared.result().action_id, dependency.parent_action_id);
+    assert_eq!(prepared.result().turn_id, parent.turn_id);
+    assert_eq!(prepared.matching_result_slot(&execution).unwrap(), 0);
+    assert!(prepared.matching_result_slot(&later).is_err());
+    let mut foreign = execution.clone();
+    foreign.action_results[0].agent_id = "foreign-agent".into();
+    assert!(prepared.matching_result_slot(&foreign).is_err());
+    assert!(
+        service
+            .prepare_joined_task_result(
+                &dependency,
+                true,
+                "PRIVATE_RECEIVED_SUMMARY",
+                "different output"
+            )
+            .is_err()
+    );
+    assert!(!format!("{prepared:?}").contains("PRIVATE_RECEIVED"));
+    assert_eq!(
+        service.agent_turn_contexts().get(&parent.turn_id),
+        Some(&before_context)
+    );
+    assert_eq!(
+        service
+            .agent_turn_executions()
+            .get(&parent.turn_id)
+            .unwrap()
+            .response
+            .raw_text,
+        later.response.raw_text
+    );
+    assert_eq!(
+        service
+            .agent_turn_ledger()
+            .turn(&parent.turn_id)
+            .unwrap()
+            .state,
+        AgentTurnState::Blocked
+    );
+    service
+        .agent_turn_executions_mut()
+        .insert(parent.turn_id.clone(), execution);
+    service.clear_all_joined_subagent_dependencies();
+    service.terminate_all_pane_processes().unwrap();
+}
+
+/// A cached received value does not bypass conversation replacement. Rechecking
+/// preparation must reject the stale original binding before returning cached
+/// data, and a locally retained fact does not become application authority.
+#[test]
+fn runtime_joined_result_preparation_rechecks_binding_before_cached_value() {
+    let (mut service, parent, dependency, _) = custody_fixture();
+    let prepared = service
+        .prepare_joined_task_result(&dependency, false, "child failed", "retained diagnostic")
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .remove_session(&parent.pane_id);
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume(&parent.pane_id)
+        .unwrap();
+    assert!(
+        service
+            .prepare_joined_task_result(&dependency, false, "child failed", "retained diagnostic")
+            .unwrap_err()
+            .message()
+            .contains("binding changed")
+    );
+    assert!(
+        prepared
+            .result()
+            .structured_content_json
+            .as_ref()
+            .unwrap()
+            .contains("retained diagnostic")
+    );
+    service.clear_all_joined_subagent_dependencies();
+    service.terminate_all_pane_processes().unwrap();
+}
+
+/// Actual child terminal execution uses the prepared original spawn result,
+/// commits it once and normally resumes the parent. Repeated terminal delivery
+/// cannot append another result or create another child. This control is normal
+/// completion, not the still-unfinished clarification/admission workflow.
+#[test]
+fn runtime_joined_prepared_result_flows_through_real_child_completion_once() {
+    let (mut service, parent, dependency, _) = custody_fixture();
+    let child = service
+        .agent_turn_ledger()
+        .turn(&dependency.child_turn_id)
+        .unwrap()
+        .clone();
+    assert!(
+        service
+            .validate_native_agent_surface_startup(&child.pane_id)
+            .unwrap()
+    );
+    service.start_ready_agent_turns().unwrap();
+    let provider = RuntimeBatchProvider {
+        response: runtime_say_response_for_agent(
+            &child.turn_id,
+            &child.agent_id,
+            "PREPARED_REAL_CHILD_RESULT",
+            true,
+        ),
+    };
+    let finished = service
+        .execute_agent_turn_with_provider(
+            &child.turn_id,
+            &provider,
+            runtime_model_profile("runtime-batch", "test"),
+        )
+        .unwrap();
+    assert!(!service.has_joined_subagent_dependency(&child.turn_id));
+    assert_eq!(
+        service
+            .agent_turn_ledger()
+            .turn(&parent.turn_id)
+            .unwrap()
+            .state,
+        AgentTurnState::Running
+    );
+    let result = &service
+        .agent_turn_executions()
+        .get(&parent.turn_id)
+        .unwrap()
+        .action_results[0];
+    assert_eq!(result.status, ActionStatus::Succeeded);
+    assert!(
+        result
+            .structured_content_json
+            .as_ref()
+            .unwrap()
+            .contains("PREPARED_REAL_CHILD_RESULT")
+    );
+    let before = service
+        .agent_turn_contexts()
+        .get(&parent.turn_id)
+        .unwrap()
+        .clone();
+    service
+        .emit_subagent_task_result_for_execution(&child, &finished)
+        .unwrap();
+    assert_eq!(
+        service.agent_turn_contexts().get(&parent.turn_id),
+        Some(&before)
+    );
+    assert_eq!(service.agent_turn_ledger().turns().len(), 2);
+    service.terminate_all_pane_processes().unwrap();
+}
+
+/// Locally retained terminal facts must not silently follow an explicitly
+/// redirected child attempt. A metadata fixture establishes the existing
+/// interruption route, then both prequeue preparation and transfer reject the
+/// pending result without creating another turn or changing the dependency.
+#[test]
+fn runtime_joined_prepared_result_blocks_attempt_redirection_until_settlement() {
+    let (mut service, _, dependency, _) = custody_fixture();
+    let child = service
+        .agent_turn_ledger()
+        .turn(&dependency.child_turn_id)
+        .unwrap()
+        .clone();
+    let prepared = service
+        .prepare_joined_task_result(
+            &dependency,
+            true,
+            "received result",
+            "original attempt output",
+        )
+        .unwrap();
+    assert!(service.retain_subagent_interruption_for_redirection(&child));
+    let mut candidate = child.clone();
+    candidate.turn_id = "unadmitted-redirection-candidate".into();
+    assert!(
+        service
+            .prepare_interrupted_subagent_redirected_turn(&mut candidate)
+            .unwrap_err()
+            .message()
+            .contains("must settle")
+    );
+    assert!(!service.transfer_interrupted_subagent_redirection(
+        &child.agent_id,
+        &child.conversation_id,
+        &candidate.turn_id
+    ));
+    assert_eq!(
+        service.joined_subagent_dependency(&child.turn_id),
+        Some(&dependency)
+    );
+    assert_eq!(service.agent_turn_ledger().turns().len(), 2);
+    let duplicate = service
+        .prepare_joined_task_result(
+            &dependency,
+            true,
+            "received result",
+            "original attempt output",
+        )
+        .unwrap();
+    assert!(std::sync::Arc::ptr_eq(&prepared, &duplicate));
+    service.clear_all_joined_subagent_dependencies();
+    service.terminate_all_pane_processes().unwrap();
+}

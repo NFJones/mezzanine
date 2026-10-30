@@ -2438,6 +2438,11 @@ impl RuntimeSessionService {
         else {
             return Ok(None);
         };
+        if self.joined_task_result_preparation_pending(&redirection.interrupted_turn_id) {
+            return Err(MezError::conflict(
+                "received joined result must settle before child redirection",
+            ));
+        }
         let Some(routed) = redirection.routed_ownership.as_ref() else {
             return Ok(None);
         };
@@ -2482,6 +2487,9 @@ impl RuntimeSessionService {
         else {
             return false;
         };
+        if self.joined_task_result_preparation_pending(&redirection.interrupted_turn_id) {
+            return false;
+        }
         if let Some(routed) = redirection.routed_ownership.as_ref()
             && !self.transfer_interrupted_routed_child_ownership(
                 &redirection.interrupted_turn_id,
