@@ -577,15 +577,71 @@ impl RuntimeSessionService {
         Ok(())
     }
 
-    /// Captures exact locally owned terminal work before best-effort bridge loss.
-    /// Failure reuses the existing native failure receipt label/content when one
-    /// exists. Already completed or later persistent tasks cannot be adopted.
+    /// Retains the exact accepted terminal execution before controller work can
+    /// fail or return early. Only tracked, still-unanswered attempts allocate
+    /// output; successful output is returned for the ordinary native bridge.
+    /// Failure capture keeps a short reference until native diagnostic custody
+    /// is known, rather than duplicating its body in another mailbox.
+    pub(super) fn retain_request_execution_terminal(
+        &mut self,
+        child: &AgentTurnRecord,
+        execution: &AgentTurnExecution,
+    ) -> Option<String> {
+        if !matches!(
+            execution.terminal_state,
+            AgentTurnState::Completed | AgentTurnState::Failed | AgentTurnState::Interrupted
+        ) || !self
+            .agent
+            .request_waits
+            .recipients
+            .values()
+            .flatten()
+            .any(|slot| {
+                slot.outcome.is_none()
+                    && slot.task.as_ref().is_some_and(|task| {
+                        task.turn == child.turn_id
+                            && task.conversation == child.conversation_id
+                            && task.started == child.started_at_unix_seconds
+                    })
+            })
+        {
+            return None;
+        }
+        let success = execution.terminal_state == AgentTurnState::Completed;
+        let output = if success {
+            super::subagent_task_output_for_execution(execution)
+        } else {
+            String::new()
+        };
+        self.retain_request_task_terminal(
+            child,
+            execution.terminal_state,
+            if success {
+                "subagent task completed"
+            } else {
+                "subagent task failed"
+            },
+            &output,
+        );
+        success.then_some(output)
+    }
+
+    /// Captures only genuine local terminal work of the acceptance-time task.
+    /// Native failure custody may replace an uncommitted early short reference;
+    /// replies, retirement and already committed sources remain immutable.
     pub(super) fn retain_request_task_terminal(
         &mut self,
         child: &AgentTurnRecord,
+        state: AgentTurnState,
         summary: &str,
         output: &str,
     ) {
+        if !matches!(
+            state,
+            AgentTurnState::Completed | AgentTurnState::Failed | AgentTurnState::Interrupted
+        ) {
+            return;
+        }
         let existing = self
             .agent
             .owned_child_failures
@@ -593,27 +649,43 @@ impl RuntimeSessionService {
             .map(|receipt| receipt.label.clone());
         for slots in self.agent.request_waits.recipients.values_mut() {
             for slot in slots {
-                if slot.task.as_ref().is_some_and(|task| {
+                if !slot.task.as_ref().is_some_and(|task| {
                     task.turn == child.turn_id
                         && task.conversation == child.conversation_id
                         && task.started == child.started_at_unix_seconds
-                }) && slot.outcome.is_none()
-                {
-                    if let Some(label) = &existing {
+                }) {
+                    continue;
+                }
+                if let Some(label) = &existing {
+                    if slot.outcome.is_none()
+                        || (slot.handoff_source.is_none()
+                            && matches!(slot.outcome.as_ref(), Some(Outcome::Terminal { .. })))
+                    {
                         slot.outcome = Some(Outcome::FailureReference {
                             label: label.clone(),
                             child: child.turn_id.clone(),
                         });
-                        continue;
                     }
-                    let content = format!(
+                    continue;
+                }
+                if slot.outcome.is_some() {
+                    continue;
+                }
+                let content = if state == AgentTurnState::Completed {
+                    format!(
                         "[local exact owned task terminal result]\nchild_task={}\nsummary={}\n[untrusted child output reference]\n{}\n[end untrusted child output reference]\nThis is a terminal occurrence, not an approval, answer-quality verdict, or permission to replay work.",
                         child.turn_id,
                         bounded_text(summary, 256),
                         bounded_text(output, 3072)
-                    );
-                    slot.outcome = Some(Outcome::Terminal { content });
-                }
+                    )
+                } else {
+                    format!(
+                        "[local exact owned task terminal reference]\nchild_task={}\nstate={state:?}\nsummary={}\nDiagnostic custody remains with the existing native result/failure owner; no diagnostic body is copied here. This is terminal occurrence evidence, not an approval, answer-quality verdict or permission to replay work.",
+                        child.turn_id,
+                        bounded_text(summary, 256)
+                    )
+                };
+                slot.outcome = Some(Outcome::Terminal { content });
             }
         }
     }

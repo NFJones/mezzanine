@@ -17198,7 +17198,14 @@ A matching response MUST be an authenticated original-recipient `send`
 occurrence, correlated to the exact accepted request ID and committed into
 canonical context. The runtime establishes occurrence, not answer quality. An
 exact captured owned task's terminal result MAY instead supply an untrusted
-output reference without a model-authored reply. A nonowned registration's
+output reference without a model-authored reply. Genuine state-only successful
+completion MUST remain terminal success rather than intentional retirement.
+Exact accepted terminal evidence MUST be retained before fallible joined, loop
+or routing settlement can lose it. A captured loop iteration's completion does
+not imply its logical goal is met or authorize adopting a later iteration. Early
+failure retention MUST reference existing native diagnostic custody without
+copying its body; committed response/outcome references MUST remain immutable.
+A nonowned registration's
 retirement/replacement MUST yield only opaque unavailability; offline presence
 is insufficient. Intentional captured-task retirement MUST NOT fabricate new
 progress or wake unrelated plain waits. Pause, approval, Stop, native ownership,

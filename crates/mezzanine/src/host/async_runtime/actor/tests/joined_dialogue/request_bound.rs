@@ -716,3 +716,102 @@ async fn request_bound_actor_retirement_during_unrelated_continuation_fences_old
 async fn request_bound_actor_active_source_fault_retains_custody_until_exact_repair() {
     active_retirement(true).await;
 }
+
+/// A genuine scheduler/lifecycle completion can end the captured child without
+/// ever issuing a child provider request. The actor must still claim the SAME
+/// original parent with exactly one terminal handoff, successful typed durable
+/// work and final completion. Five actual leases prove no synthetic child
+/// inference, new task, automatic request resend or duplicate wake is required.
+#[tokio::test(flavor = "current_thread")]
+async fn request_bound_actor_state_only_success_finishes_same_parent_without_child_inference() {
+    let (mut actor, parent, child, mut generations, _) =
+        actor_fixture_with_lifetime(1, Vec::new(), mez_agent::SubagentLifetime::Persistent).await;
+    let message = request(&mut actor, &parent, &child.agent_id, &mut generations).await;
+    park(&mut actor, &parent, &message, &mut generations).await;
+    assert!(
+        !actor
+            .service
+            .agent_turn_executions()
+            .contains_key(&child.turn_id)
+    );
+    assert_eq!(
+        actor
+            .service
+            .agent_turn_ledger()
+            .turn(&child.turn_id)
+            .unwrap()
+            .state,
+        AgentTurnState::Running
+    );
+    actor
+        .service
+        .complete_running_agent_turn_and_start_ready(
+            &child,
+            AgentTurnState::Completed,
+            "native state-only completion",
+        )
+        .unwrap();
+    actor
+        .service
+        .deliver_pending_runtime_agent_messages(async_runtime_current_unix_millis())
+        .unwrap();
+    assert_outcome(&actor, &parent, "peer_terminal", true);
+    let (dispatch, persisted) = step(
+        &mut actor,
+        &parent,
+        vec![record_evidence()],
+        &mut generations,
+    )
+    .await;
+    assert!(persisted > 0);
+    assert_memory_saved(&actor, &parent);
+    assert_eq!(dispatch.turn.turn_id, parent.turn_id);
+    let references: Vec<_> = dispatch
+        .context
+        .durable()
+        .blocks()
+        .iter()
+        .filter(|block| {
+            block.source == mez_agent::ContextSourceKind::PeerMessage
+                && block.label.starts_with("request-handoff:")
+        })
+        .collect();
+    assert_eq!(references.len(), 1);
+    assert!(
+        references[0]
+            .content
+            .contains("completed without provider output")
+    );
+    assert!(references[0].content.contains(&child.turn_id));
+    assert_eq!(
+        actor.service.tracked_message_request_usage(),
+        ((0, 0, 0), 0)
+    );
+    step(
+        &mut actor,
+        &parent,
+        vec![done(
+            "state-only-parent-final",
+            "used the real terminal occurrence",
+        )],
+        &mut generations,
+    )
+    .await;
+    assert_eq!(
+        actor
+            .service
+            .agent_turn_ledger()
+            .turn(&parent.turn_id)
+            .unwrap()
+            .state,
+        AgentTurnState::Completed
+    );
+    assert!(
+        !actor
+            .service
+            .agent_turn_executions()
+            .contains_key(&child.turn_id)
+    );
+    assert_eq!(actor.service.agent_turn_ledger().turns().len(), 2);
+    assert_eq!(generations, (1..=5).collect());
+}

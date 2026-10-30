@@ -315,6 +315,10 @@ insufficient. Unrelated mail can resume inference; reparking preserves the same
 unresolved request. Runtime-owned macro steps retain their existing result gate
 and require `expect_reply: false`.
 
+A terminal outcome may have no provider output. If you addressed a live loop
+iteration, its result describes that captured task, not completion of the whole
+loop goal; later iterations do not replace the selected dependency.
+
 If unrelated mail resumes you first, the selected dependency remains live. Its
 later outcome reaches your next safe model context without starting a concurrent
 request; an older in-flight response may be discarded so the next request can

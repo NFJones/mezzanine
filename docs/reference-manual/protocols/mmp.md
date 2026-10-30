@@ -540,6 +540,11 @@ conversation controls, not new MMP envelope fields. Tracking freezes the actual
 accepted recipient registrations and optional exact owned task at send time.
 An authenticated reverse `send` with `correlation_id` equal to the accepted
 request ID can supply response-occurrence evidence after canonical commit.
+State-only successful completion is a terminal occurrence. A tracked exact loop
+iteration can supply its result while the logical loop continues; later tasks
+are never substituted for that captured iteration. Native terminal evidence is
+retained before controller handoff, and failure references reuse native
+custody rather than duplicating diagnostics.
 Correlation text alone, bridge flags, ACKs, presence heartbeats and later reused
 addresses never grant task ownership or prove a substantive answer.
 

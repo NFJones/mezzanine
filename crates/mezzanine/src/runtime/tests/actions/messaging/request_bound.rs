@@ -1008,3 +1008,229 @@ fn request_bound_mismatched_retained_reference_fails_closed_without_consumption(
     assert_eq!(service.tracked_message_request_usage(), ((0, 0, 0), 0));
     finish(&mut service, &parent);
 }
+
+/// A real state-only lifecycle completion has no provider execution to bridge,
+/// but it is still successful terminal work of the exact task captured at send.
+/// The same parent must receive terminal occurrence and progress, rather than
+/// intentional-retirement evidence, and duplicate observations must stay inert.
+#[test]
+fn request_bound_terminal_state_only_success_is_not_intentional_retirement() {
+    let (mut service, parent, _) = fixture();
+    let child = spawn_child(&mut service, &parent);
+    assert!(
+        service
+            .validate_native_agent_surface_startup(&child.pane_id)
+            .unwrap()
+    );
+    let message = send(&mut service, &parent, &child.agent_id, true);
+    wait(&mut service, &parent, &message, None);
+    assert!(!service.agent_turn_executions().contains_key(&child.turn_id));
+    service
+        .complete_running_agent_turn_and_start_ready(
+            &child,
+            AgentTurnState::Completed,
+            "state-only terminal regression",
+        )
+        .unwrap();
+    service
+        .deliver_pending_runtime_agent_messages(current_unix_millis())
+        .unwrap();
+    assert_eq!(
+        service
+            .agent_turn_ledger()
+            .turn(&child.turn_id)
+            .unwrap()
+            .state,
+        AgentTurnState::Completed
+    );
+    let wait = &service.agent_turn_executions()[&parent.turn_id].action_results[0];
+    let outcome: serde_json::Value =
+        serde_json::from_str(wait.structured_content_json.as_deref().unwrap()).unwrap();
+    assert_eq!(
+        outcome["state"], "peer_terminal",
+        "state-only success was mislabeled as intentional retirement"
+    );
+    assert_eq!(outcome["progress_witness"], true);
+    assert!(
+        service.agent_turn_contexts()[&parent.turn_id]
+            .blocks()
+            .iter()
+            .any(|b| b.label.starts_with("request-handoff:")
+                && b.content.contains("completed without provider output"))
+    );
+    let sources = service.agent_turn_contexts()[&parent.turn_id]
+        .blocks()
+        .iter()
+        .filter(|b| b.label.starts_with("request-handoff:"))
+        .count();
+    service
+        .emit_subagent_task_result_for_state(&child, AgentTurnState::Completed)
+        .unwrap();
+    service
+        .deliver_pending_runtime_agent_messages(current_unix_millis())
+        .unwrap();
+    assert_eq!(
+        service.agent_turn_contexts()[&parent.turn_id]
+            .blocks()
+            .iter()
+            .filter(|b| b.label.starts_with("request-handoff:"))
+            .count(),
+        sources
+    );
+    assert_eq!(service.tracked_message_request_usage(), ((0, 0, 0), 0));
+    execute(
+        &mut service,
+        &parent,
+        AgentAction {
+            id: "close-state-only-child".into(),
+            payload: AgentActionPayload::CloseAgent {
+                agent_id: child.agent_id.clone(),
+            },
+        },
+    );
+    finish(&mut service, &parent);
+}
+
+/// A real goal-loop iteration can complete while its logical controller retains
+/// the result and creates later work. Only the accepted exact iteration may
+/// satisfy the tracked request; its result cannot be lost at the controller's
+/// early return or replaced by the new iteration. Plain waits remain parked.
+#[test]
+fn request_bound_terminal_loop_continuation_preserves_exact_iteration_result() {
+    for tracked in [false, true] {
+        let (mut service, parent, _) = fixture();
+        service.configure_agent_scheduler_limit(2).unwrap();
+        let initial = spawn_child(&mut service, &parent);
+        assert!(
+            service
+                .validate_native_agent_surface_startup(&initial.pane_id)
+                .unwrap()
+        );
+        service.start_ready_agent_turns().unwrap();
+        service
+            .complete_running_agent_turn_and_start_ready(
+                &initial,
+                AgentTurnState::Completed,
+                "prepare persistent loop task",
+            )
+            .unwrap();
+        service.execute_agent_shell_loop_command(&initial.pane_id,
+            "/loop --limit 3 --goal 'complete the later iteration' produce the first iteration result").unwrap();
+        let child = service
+            .agent_turn_ledger()
+            .latest_turn_for_pane(&initial.pane_id)
+            .unwrap()
+            .clone();
+        assert_ne!(child.turn_id, initial.turn_id);
+        let message = send(&mut service, &parent, &child.agent_id, tracked);
+        if tracked {
+            wait(&mut service, &parent, &message, None);
+        } else {
+            execute(
+                &mut service,
+                &parent,
+                AgentAction {
+                    id: "plain-loop-wait".into(),
+                    payload: AgentActionPayload::Wait {
+                        for_message: None,
+                        from_agent: None,
+                    },
+                },
+            );
+        }
+        assert!(
+            service
+                .validate_native_agent_surface_startup(&child.pane_id)
+                .unwrap()
+        );
+        service.start_ready_agent_turns().unwrap();
+        assert_eq!(
+            service
+                .agent_turn_ledger()
+                .turn(&child.turn_id)
+                .unwrap()
+                .state,
+            AgentTurnState::Running
+        );
+        let execution = execute(
+            &mut service,
+            &child,
+            AgentAction {
+                id: "first-loop-result".into(),
+                payload: AgentActionPayload::Say {
+                    status: SayStatus::Final,
+                    text: "EXACT_FIRST_ITERATION_OUTPUT".into(),
+                    content_type: mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE.into(),
+                },
+            },
+        );
+        service
+            .deliver_pending_runtime_agent_messages(current_unix_millis())
+            .unwrap();
+        let later = service
+            .agent_turn_ledger()
+            .latest_turn_for_pane(&initial.pane_id)
+            .unwrap()
+            .clone();
+        assert_ne!(
+            later.turn_id, child.turn_id,
+            "the real controller must create its next iteration"
+        );
+        if tracked {
+            assert_eq!(
+                service
+                    .agent_turn_ledger()
+                    .turn(&parent.turn_id)
+                    .unwrap()
+                    .state,
+                AgentTurnState::Running,
+                "exact first task result was lost at the loop controller early return"
+            );
+            let outcome: serde_json::Value = serde_json::from_str(
+                service.agent_turn_executions()[&parent.turn_id].action_results[0]
+                    .structured_content_json
+                    .as_deref()
+                    .unwrap(),
+            )
+            .unwrap();
+            assert_eq!(outcome["state"], "peer_terminal");
+            assert_eq!(outcome["progress_witness"], true);
+            let source = service.agent_turn_contexts()[&parent.turn_id]
+                .blocks()
+                .iter()
+                .find(|b| b.label.starts_with("request-handoff:"))
+                .unwrap();
+            assert!(source.content.contains("EXACT_FIRST_ITERATION_OUTPUT"));
+            assert!(source.content.contains(&child.turn_id));
+            assert!(!source.content.contains(&later.turn_id));
+            assert_eq!(service.tracked_message_request_usage(), ((0, 0, 0), 0));
+            let before = service.agent_turn_contexts()[&parent.turn_id]
+                .blocks()
+                .to_vec();
+            service
+                .emit_subagent_task_result_for_execution(&child, &execution)
+                .unwrap();
+            assert_eq!(
+                service.agent_turn_contexts()[&parent.turn_id].blocks(),
+                before
+            );
+        } else {
+            assert_eq!(
+                service
+                    .agent_turn_ledger()
+                    .turn(&parent.turn_id)
+                    .unwrap()
+                    .state,
+                AgentTurnState::Blocked
+            );
+            assert!(
+                !service.agent_turn_contexts()[&parent.turn_id]
+                    .blocks()
+                    .iter()
+                    .any(|b| b.label.starts_with("request-handoff:"))
+            );
+        }
+        // Cleanup stays with the fixture's real lifecycle owners.
+        service.terminate_all_pane_processes().unwrap();
+    }
+}

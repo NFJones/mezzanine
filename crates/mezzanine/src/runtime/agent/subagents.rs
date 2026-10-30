@@ -1377,12 +1377,14 @@ impl RuntimeSessionService {
         if let Some(disposition) = self.terminal_result_disposition(&turn.turn_id) {
             return Ok(disposition);
         }
+        let retained_request_output = self.retain_request_execution_terminal(turn, execution);
         let routed_parent_turn_id = self.routed_parent_turn_id_for_child(&turn.turn_id);
         let loop_settlement = self.settle_agent_loop_after_terminal_execution(turn, execution)?;
         if loop_settlement == RuntimeAgentLoopSettlement::Continued {
             self.agent.subagent_task_routes.remove(&turn.turn_id);
             let disposition = TerminalResultDisposition::RetainedByLoop;
             self.record_terminal_result_disposition(&turn.turn_id, disposition);
+            let _ = self.recover_request_waits();
             return Ok(disposition);
         }
         if let (
@@ -1397,12 +1399,14 @@ impl RuntimeSessionService {
         if self.handle_routed_child_execution_result(turn, execution)? {
             let disposition = TerminalResultDisposition::RetainedByRoutedWorkflow;
             self.record_terminal_result_disposition(&turn.turn_id, disposition);
+            let _ = self.recover_request_waits();
             return Ok(disposition);
         }
         if self.routed_presentation_turn(&turn.turn_id) {
             self.emit_terminal_routed_parent_result(turn, execution)?;
             let disposition = TerminalResultDisposition::PresentationDelivered;
             self.record_terminal_result_disposition(&turn.turn_id, disposition);
+            let _ = self.recover_request_waits();
             return Ok(disposition);
         }
         let success = execution.terminal_state == AgentTurnState::Completed;
@@ -1411,7 +1415,8 @@ impl RuntimeSessionService {
         } else {
             "subagent task failed"
         };
-        let output = subagent_task_output_for_execution(execution);
+        let output = retained_request_output
+            .unwrap_or_else(|| subagent_task_output_for_execution(execution));
         let loop_dependency = match loop_settlement {
             RuntimeAgentLoopSettlement::Terminal { completion } => {
                 completion.map(|completion| JoinedSubagentDependency {
@@ -1564,40 +1569,42 @@ impl RuntimeSessionService {
         {
             return Ok(());
         }
-        if self.handle_routed_child_missing_execution(turn, state)? {
-            return Ok(());
-        }
-        if turn.cooperation_mode.as_deref() == Some("routed-worker") {
-            return Ok(());
-        }
-        let loop_dependency = self.take_agent_loop_dependency_for_turn(&turn.turn_id);
-        match state {
-            AgentTurnState::Completed => self.emit_subagent_task_result_with_dependency(
-                turn,
-                loop_dependency,
+        let (success, summary, output) = match state {
+            AgentTurnState::Completed => (
                 true,
                 "subagent task completed",
                 "completed without provider output",
-                None,
             ),
-            AgentTurnState::Failed => self.emit_subagent_task_result_with_dependency(
-                turn,
-                loop_dependency,
+            AgentTurnState::Failed => (
                 false,
                 "subagent task failed",
                 "failed without provider output",
-                Some(state),
             ),
-            AgentTurnState::Interrupted => self.emit_subagent_task_result_with_dependency(
-                turn,
-                loop_dependency,
+            AgentTurnState::Interrupted => (
                 false,
                 "subagent task interrupted",
                 "interrupted by snapshot resume",
-                Some(state),
             ),
-            _ => Ok(()),
+            _ => return Ok(()),
+        };
+        self.retain_request_task_terminal(turn, state, summary, output);
+        if self.handle_routed_child_missing_execution(turn, state)? {
+            let _ = self.recover_request_waits();
+            return Ok(());
         }
+        if turn.cooperation_mode.as_deref() == Some("routed-worker") {
+            let _ = self.recover_request_waits();
+            return Ok(());
+        }
+        let loop_dependency = self.take_agent_loop_dependency_for_turn(&turn.turn_id);
+        self.emit_subagent_task_result_with_dependency(
+            turn,
+            loop_dependency,
+            success,
+            summary,
+            output,
+            Some(state),
+        )
     }
 
     /// Takes the controller-owned macro join for one terminal loop work turn.
@@ -1740,8 +1747,13 @@ impl RuntimeSessionService {
         success: bool,
         summary: &str,
         output: &str,
-        unexpected_outcome: Option<AgentTurnState>,
+        terminal_outcome: Option<AgentTurnState>,
     ) -> Result<()> {
+        if let Some(state) = terminal_outcome {
+            self.retain_request_task_terminal(turn, state, summary, output);
+        } else {
+            self.retain_request_task_retired(turn);
+        }
         let dependency = dependency.or_else(|| {
             self.agent
                 .joined_subagent_dependencies
@@ -1772,22 +1784,23 @@ impl RuntimeSessionService {
         let has_subagent_runtime_state =
             parent_agent_id.is_some() || self.has_subagent_authority_state(&turn.agent_id);
         if !has_subagent_runtime_state {
+            let _ = self.recover_request_waits();
             return Ok(());
         }
 
-        // Only the execution/state lifecycle owners supply an unexpected
-        // outcome. Neither a failed-looking envelope nor requested teardown
-        // can create this local receipt, and existing joins retain settlement.
+        // Only execution/state lifecycle owners supply a genuine terminal
+        // outcome. Native failure custody independently excludes success and
+        // requested teardown; envelopes never create local terminal authority.
         if dependency.is_none()
-            && let Some(outcome) = unexpected_outcome
+            && let Some(outcome) = terminal_outcome
         {
             self.retain_owned_child_failure(turn, outcome, summary, output);
         }
 
-        if unexpected_outcome.is_some() {
-            self.retain_request_task_terminal(turn, summary, output);
-        } else {
-            self.retain_request_task_retired(turn);
+        // Bind any still-uncommitted early failure reference to its existing
+        // diagnostic owner before context recovery. Committed sources stay fixed.
+        if let Some(state) = terminal_outcome {
+            self.retain_request_task_terminal(turn, state, summary, output);
         }
         let now_ms = current_unix_seconds().saturating_mul(1000);
         // The actor commits local evidence before touching the best-effort
