@@ -4,9 +4,24 @@
 //! not consume worker outcomes, re-enter projection, replay hooks/audit, or issue
 //! completed effects. Each pump snapshots existing keys and revalidates their
 //! exact live owner before use. Required-failed/revoked owners retain evidence
-//! but are never advertised as actionable paint work.
+//! but are never advertised as actionable paint work. A successful native action
+//! prefix may hand an unfinished admitted sibling to the existing dispatcher;
+//! this is distinct from acknowledging the group or scheduling another model.
 
 use super::*;
+
+/// Publication progress carries distinct execution and whole-group authority.
+/// An accepted action prefix permits only an already admitted sibling handoff;
+/// it never acknowledges the held group or authorizes provider continuation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::runtime::agent) enum NativePublicationProgress {
+    /// Current ownership or this action's ordered prefix remains unsettled.
+    Held,
+    /// This action's prefix installed, but a later group component is held.
+    ActionPublished,
+    /// All ordered components installed; existing group gates still apply.
+    GroupPublished,
+}
 
 impl RuntimeSessionService {
     /// Checks live paint binding independently of retired worker delivery maps.
@@ -60,19 +75,26 @@ impl RuntimeSessionService {
                 })
     }
 
-    /// Pending immutable ordered components are not installed acknowledgements.
-    fn completion_ordered_publication_pending(&self, owner: &ExternalCompletionOwner) -> bool {
+    /// Checks immutable ordered components in the exact group, optionally only
+    /// through an action ordinal. A prefix check is dispatch eligibility, never
+    /// an acknowledgement of whole-group publication.
+    fn completion_ordered_publication_pending(
+        &self,
+        owner: &ExternalCompletionOwner,
+        through: Option<usize>,
+    ) -> bool {
         self.presentation
             .agent_queued_provider_headers
             .keys()
             .chain(self.presentation.agent_queued_provider_commands.keys())
             .chain(self.presentation.agent_queued_provider_results.keys())
             .chain(self.presentation.agent_queued_provider_outcomes.keys())
-            .any(|(pane, turn, conversation, group, _)| {
+            .any(|(pane, turn, conversation, group, ordinal)| {
                 pane == &owner.pane_id
                     && turn == &owner.turn_id
                     && conversation == &owner.conversation_id
                     && group == &owner.group
+                    && through.is_none_or(|bound| *ordinal <= bound)
             })
     }
 
@@ -160,7 +182,7 @@ impl RuntimeSessionService {
             // it never re-executes the completed action or re-runs required gates.
             self.present_agent_action_outcomes_to_terminal_buffer(&owner.pane_id, &execution)?;
             self.flush_ordered_provider_headers(&owner.pane_id, &execution)?;
-            Ok(!self.completion_ordered_publication_pending(&owner))
+            Ok(!self.completion_ordered_publication_pending(&owner, None))
         })();
         match publication {
             Err(error) => {
@@ -206,7 +228,7 @@ impl RuntimeSessionService {
     pub(in crate::runtime::agent) fn publish_retained_native_completion(
         &mut self,
         key: &NativeCompletionKey,
-    ) -> Result<bool> {
+    ) -> Result<NativePublicationProgress> {
         let receipt = self
             .agent
             .completion_settlements
@@ -214,11 +236,11 @@ impl RuntimeSessionService {
             .get(key)
             .ok_or_else(|| MezError::invalid_state("native publication owner is unavailable"))?;
         if receipt.phase == NativeCompletionPhase::NextPhaseOwned {
-            return Ok(false);
+            return Ok(NativePublicationProgress::Held);
         }
         let owner = receipt.owner.clone();
         if !self.completion_paint_owner_is_current(&owner) {
-            return Ok(false);
+            return Ok(NativePublicationProgress::Held);
         }
         let execution = self
             .agent_turn_executions()
@@ -242,7 +264,7 @@ impl RuntimeSessionService {
                         })
                     })
         });
-        let publication = (|| -> Result<bool> {
+        let publication = (|| -> Result<NativePublicationProgress> {
             if let Some(result) = execution
                 .action_results
                 .iter()
@@ -318,24 +340,98 @@ impl RuntimeSessionService {
             )?;
             self.flush_ordered_provider_headers(&owner.pane_id, &execution)?;
             self.present_deferred_agent_say_actions_to_terminal_buffer(&owner.pane_id, &execution)?;
-            Ok(!self.completion_ordered_publication_pending(&owner))
+            Ok(
+                if !self.completion_ordered_publication_pending(&owner, None) {
+                    NativePublicationProgress::GroupPublished
+                } else if !self.completion_ordered_publication_pending(&owner, Some(owner.ordinal))
+                {
+                    NativePublicationProgress::ActionPublished
+                } else {
+                    NativePublicationProgress::Held
+                },
+            )
         })();
         let published = match publication {
             Ok(published) => published,
             Err(error) => {
                 self.note_native_publication_error(key, Err(error));
-                false
+                NativePublicationProgress::Held
             }
         };
         self.native_completion_phase(
             key,
-            if published {
+            if published == NativePublicationProgress::GroupPublished {
                 NativeCompletionPhase::PublicationAccepted
             } else {
                 NativeCompletionPhase::PublicationHeld
             },
         )?;
         Ok(published)
+    }
+
+    /// Transfers a published prefix to the existing admitted-action dispatcher.
+    /// Required gates, exact paint identity, pause and current execution still
+    /// govern dispatch. Group continuation remains solely behind its existing
+    /// acknowledgement barrier. A retry reports progress only when ownership or
+    /// a pending action state actually changes, not merely on another attempt.
+    pub(in crate::runtime::agent) fn finish_native_completion_publication(
+        &mut self,
+        key: &NativeCompletionKey,
+        progress: NativePublicationProgress,
+    ) -> Result<bool> {
+        match progress {
+            NativePublicationProgress::Held => Ok(false),
+            NativePublicationProgress::GroupPublished => {
+                self.continue_native_completion(key)?;
+                Ok(true)
+            }
+            NativePublicationProgress::ActionPublished => {
+                let Some(receipt) = self.agent.completion_settlements.native.get(key) else {
+                    return Ok(false);
+                };
+                if receipt.phase != NativeCompletionPhase::PublicationHeld
+                    || receipt.raw.is_some()
+                    || receipt.failure.is_some()
+                    || !self.completion_paint_owner_is_current(&receipt.owner)
+                    || self.agent_turn_is_human_paused(&key.0)
+                {
+                    return Ok(false);
+                }
+                self.ensure_completion_required_gates_ready(&key.0)?;
+                let Some(execution) = self.agent_turn_executions().get(&key.0).cloned() else {
+                    return Ok(false);
+                };
+                if !self.execution_has_pending_shell_dispatch(&key.0, &execution) {
+                    return Ok(false);
+                }
+                let pending = execution
+                    .action_results
+                    .iter()
+                    .filter(|result| {
+                        result.status == ActionStatus::Running
+                            && !self.agent_action_has_native_shell_owner(&key.0, &result.action_id)
+                            && !self.agent_action_has_running_shell_transaction(
+                                &key.0,
+                                &result.action_id,
+                            )
+                            && !self
+                                .agent_action_has_pending_pre_shell_hook(&key.0, &result.action_id)
+                    })
+                    .map(|result| result.action_id.clone())
+                    .collect::<Vec<_>>();
+                let Some(updated) = self.dispatch_stored_running_shell_actions(&key.0)? else {
+                    return Ok(false);
+                };
+                Ok(pending.iter().any(|id| {
+                    self.agent_action_has_native_shell_owner(&key.0, id)
+                        || self.agent_action_has_running_shell_transaction(&key.0, id)
+                        || self.agent_action_has_pending_pre_shell_hook(&key.0, id)
+                        || updated.action_results.iter().any(|result| {
+                            result.action_id == *id && result.status != ActionStatus::Running
+                        })
+                }))
+            }
+        }
     }
 
     /// Shared actionable predicate for pump, idle scheduling and turn liveness.
@@ -432,22 +528,18 @@ impl RuntimeSessionService {
                 continue;
             }
             let scope = self.begin_completion_scope(&key.0, CompletionScope::Callback);
-            let publication = if native {
+            let result = if native {
                 self.publish_retained_native_completion(&key)
+                    .and_then(|progress| self.finish_native_completion_publication(&key, progress))
             } else {
                 self.publish_retained_external_completion(&key)
+                    .and_then(|published| {
+                        if published {
+                            self.continue_external_completion(&key)?;
+                        }
+                        Ok(published)
+                    })
             };
-            let result = publication.and_then(|published| {
-                if !published {
-                    return Ok(false);
-                }
-                if native {
-                    self.continue_native_completion(&key)?;
-                } else {
-                    self.continue_external_completion(&key)?;
-                }
-                Ok(true)
-            });
             if let Err(error) = &result {
                 if native {
                     self.fail_native_completion(&key, error);

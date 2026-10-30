@@ -6,6 +6,14 @@ Understand the actions shown in an agent conversation, decide what to approve,
 and recover safely when work fails or is interrupted. You do not need to write
 action batches yourself; the agent submits them to Mezzanine.
 
+Native commands in an admitted batch advance after the preceding command's
+ordered output is installed. A later discovery row, such as `list_agents`, stays
+behind unfinished commands without blocking their execution. Pause, Stop,
+conversation replacement, approvals and required completion failures still gate
+the next action. Retrying display publication preserves completed command and
+patch effects. The next ordinary model step waits for the whole group's required
+results and publication to settle.
+
 ## Prerequisites
 
 Read [Agent overview](../agent/overview.md) and

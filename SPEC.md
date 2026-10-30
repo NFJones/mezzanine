@@ -5689,6 +5689,18 @@ installation MUST preserve that exact tuple for publication-only recovery;
 a later callback MUST NOT substitute new result bytes or resample its occurrence.
 Successful installation acknowledges only that retained tuple. This publication
 acknowledgment is not canonical execution acceptance or authority to rerun work.
+For already admitted native siblings, successful installation through the
+completing action's ordinal MAY transfer the next unfinished action to the
+existing dispatcher while later ordered components remain held. A later
+immediate discovery header MUST NOT create a cycle requiring its preceding
+native sibling to finish before that sibling can dispatch. This prefix transfer
+MUST retain exact owner identity, required context/audit/hook gates, pause,
+cancellation, Stop, replacement and policy checks. It MUST NOT acknowledge the
+whole group's publication or authorize another provider response. Group receipts
+remain held until their full publication requirements settle. Healthy retry MAY
+perform that same once-only pending-sibling handoff after an installation failure;
+it MUST NOT replay completed commands, patches, hooks or audit. Retry progress
+MUST reflect a real ownership or action-state transition, not another attempt.
 Installing provisional provider claim/accounting state MUST NOT discharge an
 original completion group. Ordinary handoff requires actual bounded lease
 admission and completion of the actor's remaining fallible pre-dispatch steps.

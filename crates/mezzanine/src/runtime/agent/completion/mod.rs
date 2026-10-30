@@ -4,8 +4,10 @@
 //! The original outcome moves here before delivery authority is retired. Raw
 //! payload is released only after canonical execution owns its terminal result;
 //! subsequent phase records carry identity and diagnostics, not another result
-//! chronology. This owner never dispatches actions, retries hooks/audit, grants
-//! policy authority, schedules providers or invents native source evidence.
+//! chronology. Receipt custody never retries hooks/audit, grants policy
+//! authority or invents native evidence. Publication recovery may transfer an
+//! unfinished admitted sibling to the existing dispatcher after its predecessor
+//! prefix installs; whole-group acknowledgement still gates provider handoff.
 //!
 //! External and native ingress share the original group retirement owner.
 //! Publication-only recovery never re-enters outcome projection or required

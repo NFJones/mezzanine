@@ -865,7 +865,10 @@ impl RuntimeSessionService {
         self.append_agent_trace_turn_event(&pane_id, turn_id, text)
     }
 
-    /// Applies shared continuation/terminal lifecycle after actual adoption.
+    /// Publishes actual adoption before transferring further execution authority.
+    /// An installed action prefix may hand off an admitted sibling while later
+    /// output remains held; only whole-group acknowledgement permits the existing
+    /// provider/terminal continuation path. Required gates precede either handoff.
     fn settle_native_shell_execution(
         &mut self,
         key: &NativeCompletionKey,
@@ -875,10 +878,9 @@ impl RuntimeSessionService {
     ) -> Result<()> {
         self.ensure_completion_required_gates_ready(&turn.turn_id)?;
         self.record_runtime_agent_patch_results_for_turn(turn, &execution);
-        if !self.publish_retained_native_completion(key)? {
-            return Ok(());
-        }
-        self.continue_native_completion(key)
+        let progress = self.publish_retained_native_completion(key)?;
+        self.finish_native_completion_publication(key, progress)?;
+        Ok(())
     }
 
     /// Continues from current canonical state only after every group receipt
