@@ -191,6 +191,17 @@ impl RuntimeSessionService {
             self.note_completion_optional_error(turn_id, publication);
         }
 
+        // Retire provisional/transient presentation before installing accepted
+        // response components; that retirement must not restore an older suffix
+        // over a newly acknowledged accepted log.
+        if matches!(
+            state,
+            AgentTurnState::Completed | AgentTurnState::Failed | AgentTurnState::Interrupted
+        ) {
+            let publication = self.retain_terminal_provider_logs_for_turn(turn_id, state);
+            self.note_completion_optional_error(turn_id, publication);
+        }
+
         if !suppress_exit_output
             && state == AgentTurnState::Failed
             && let Some(execution) = self.agent_turn_executions().get(turn_id).cloned()
@@ -273,6 +284,7 @@ impl RuntimeSessionService {
         if finished.visibility == AgentShellVisibility::Hidden {
             self.advance_pane_shell_prompt_after_agent_exit(pane_id)?;
         }
+        self.retry_provider_log_handoffs_for_turn(turn_id);
         if matches!(
             state,
             AgentTurnState::Completed | AgentTurnState::Failed | AgentTurnState::Interrupted
@@ -469,6 +481,13 @@ impl RuntimeSessionService {
                 super::presentation::RuntimeProviderLogInput::Terminal,
             )?;
         }
+        if matches!(
+            state,
+            AgentTurnState::Completed | AgentTurnState::Failed | AgentTurnState::Interrupted
+        ) {
+            let publication = self.retain_terminal_provider_logs_for_turn(&turn.turn_id, state);
+            self.note_completion_optional_error(&turn.turn_id, publication);
+        }
         if pane_present
             && conversation_still_owned
             && state == AgentTurnState::Failed
@@ -558,6 +577,7 @@ impl RuntimeSessionService {
             self.retire_subagent_cleanup_pane_binding(&turn.pane_id);
             self.agent_shell_store_mut().remove_session(&turn.pane_id)
         };
+        self.retry_provider_log_handoffs_for_turn(&turn.turn_id);
         if pane_present
             && matches!(
                 state,

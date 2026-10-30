@@ -480,6 +480,7 @@ impl RuntimeSessionService {
             .any(|turn| self.completion_publication_retry_needed_for_turn(turn))
             || self.action_progress_retirement_retry_needed()
             || self.shell_preview_retirement_retry_needed()
+            || !self.presentation.agent_provider_log_handoffs.is_empty()
     }
 
     /// One bounded pass; successful earlier items may retire later snapshot keys.
@@ -575,6 +576,7 @@ impl RuntimeSessionService {
             }
         }
         advanced = advanced.saturating_add(self.retry_action_progress_retirements());
+        advanced = advanced.saturating_add(self.retry_provider_log_handoffs());
         advanced = advanced.saturating_add(self.retry_shell_preview_retirements());
         self.agent.completion_settlements.publication_pump_active = false;
         advanced

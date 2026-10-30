@@ -20,6 +20,40 @@ impl RuntimeSessionService {
     #[cfg(test)]
     pub(crate) fn hold_agent_presentation_installs_for_tests(&mut self, held: bool) {
         self.presentation.agent_install_failure_held = held;
+        self.presentation.agent_install_failure_target = None;
+    }
+
+    /// Holds the same preinstall cut for one exact accepted entry. Other panes
+    /// and unrelated status rows remain healthy so child settlement can finish.
+    #[cfg(test)]
+    pub(crate) fn hold_agent_presentation_entry_for_tests(
+        &mut self,
+        pane: &str,
+        entry: &str,
+        held: bool,
+    ) {
+        self.presentation.agent_install_failure_held = held;
+        self.presentation.agent_install_failure_target =
+            held.then(|| (pane.to_string(), entry.to_string()));
+    }
+
+    /// Reports whether the current install matches the selected test-only cut.
+    /// This affects presentation refusal only, never policy or execution state.
+    #[cfg(test)]
+    pub(crate) fn agent_presentation_install_held_for_tests(&self, pane: &str) -> bool {
+        self.presentation.agent_install_failure_held
+            && self
+                .presentation
+                .agent_install_failure_target
+                .as_ref()
+                .is_none_or(|(target_pane, target_entry)| {
+                    target_pane == pane
+                        && self
+                            .presentation
+                            .occurrence_override
+                            .as_ref()
+                            .is_some_and(|active| active.0 == pane && active.1.id == *target_entry)
+                })
     }
 
     /// Removes previews whose final output has already been retained.
@@ -271,7 +305,7 @@ impl RuntimeSessionService {
         presentation: Option<RuntimeAgentShellPreviewPresentation>,
     ) -> Result<()> {
         #[cfg(test)]
-        if self.presentation.agent_install_failure_held {
+        if self.agent_presentation_install_held_for_tests(pane_id) {
             return Err(MezError::invalid_state(
                 "injected held pre-install presentation failure",
             ));

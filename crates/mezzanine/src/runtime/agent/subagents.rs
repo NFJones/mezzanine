@@ -686,6 +686,17 @@ impl RuntimeSessionService {
         reason: &str,
     ) -> Result<bool> {
         self.ensure_completion_required_gates_ready(parent_turn_id)?;
+        // A failed optional display handoff retains its original response. The
+        // existing ready-dependency recovery retries reacquisition after paint
+        // custody drains, without replaying child results or required gates.
+        if self
+            .presentation
+            .agent_provider_log_handoffs
+            .keys()
+            .any(|key| key.1 == parent_turn_id)
+        {
+            return Ok(false);
+        }
         if !self.completion_dependency_reacquisition_ready(parent_turn_id) {
             return Ok(false);
         }
@@ -2141,6 +2152,14 @@ impl RuntimeSessionService {
             )
         };
         self.append_action_result_context_if_absent(&dependency.parent_turn_id, &observed_result)?;
+        if let Some(execution) = self
+            .agent_turn_executions()
+            .get(&parent_turn.turn_id)
+            .cloned()
+        {
+            let publication = self.release_provider_log_execution(&parent_turn.pane_id, &execution);
+            self.note_completion_optional_error(&parent_turn.turn_id, publication);
+        }
         let mut macro_result_status = None;
         if let Some(parent_run_id) = self
             .agent

@@ -290,6 +290,13 @@ before relying on an action. A confirmed file-mutation section proves that
 section's effect, not whole-action success; a later failure does not imply
 rollback.
 
+Completed action rows can wait behind earlier work. Stop preserves accepted
+rows queued for display and retires unverified assistant progress or final text.
+Joined-child results release eligible parent logs without another prompt, and a
+correction response follows accepted rows from the earlier attempt. Display
+recovery preserves the original command effects and copy source. Old queued
+rows cannot write into a replacement conversation.
+
 Provisional shell-output and external-read previews do not take ownership of
 unrelated deferred runtime work. Under queue pressure that work stays with its
 service owner for an authoritative transfer; preview arrival is not delivery

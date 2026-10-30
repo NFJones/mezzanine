@@ -686,6 +686,9 @@ pub(crate) struct RuntimePresentationComponent {
     /// Test-only sustained preinstall failure until explicitly released.
     #[cfg(test)]
     pub(super) agent_install_failure_held: bool,
+    /// Optional accepted-entry target for the existing test-only install cut.
+    #[cfg(test)]
+    pub(super) agent_install_failure_target: Option<(String, String)>,
     /// One-shot fault at outbound settlement, after real send acceptance.
     #[cfg(test)]
     reject_next_settled_outbound_projection: bool,
@@ -826,6 +829,12 @@ pub(crate) struct RuntimePresentationComponent {
     pub(super) agent_provider_log_orders: std::collections::BTreeMap<
         (String, String, String, mez_agent::ContextExecutionGroupId),
         RuntimeProviderPresentationOrder,
+    >,
+    /// Exact response publication snapshots retained across execution release.
+    /// They can drain accepted display source, never restore action authority.
+    pub(super) agent_provider_log_handoffs: std::collections::BTreeMap<
+        (String, String, String, mez_agent::ContextExecutionGroupId),
+        RuntimeProviderLogHandoff,
     >,
     /// Ordinals whose executor-owned headers have been published.
     pub(super) agent_published_provider_headers: std::collections::BTreeSet<(
@@ -1076,6 +1085,17 @@ pub(crate) struct RuntimeProviderPresentationOrder {
         (Option<usize>, String),
         mez_core::presentation::PresentationEntry,
     >,
+}
+
+/// Publication-only custody retained after an execution or dependency handoff.
+/// Canonical eligibility and the original typed display failure stay observable;
+/// this record contains no worker, permission grant, or provider claim authority.
+#[derive(Debug, Clone)]
+pub(crate) struct RuntimeProviderLogHandoff {
+    /// Accepted response and canonical results used only for display eligibility.
+    pub(in crate::runtime) execution: mez_agent::AgentTurnExecution,
+    /// First optional installation failure; healthy recovery retires the record.
+    pub(in crate::runtime) failure: Option<Box<crate::error::MezError>>,
 }
 
 /// Accumulated source and contract fields for one streamed `say` action.
@@ -2184,6 +2204,8 @@ impl RuntimePresentationComponent {
         self.agent_published_provider_outcomes
             .retain(|((candidate_pane_id, _, _, _, _), _, _)| candidate_pane_id != pane_id);
         self.agent_provider_log_orders
+            .retain(|(candidate_pane_id, _, _, _), _| candidate_pane_id != pane_id);
+        self.agent_provider_log_handoffs
             .retain(|(candidate_pane_id, _, _, _), _| candidate_pane_id != pane_id);
         self.agent_published_provider_headers
             .retain(|(candidate_pane_id, _, _, _, _)| candidate_pane_id != pane_id);

@@ -251,7 +251,7 @@ impl RuntimeSessionService {
             self.ui_theme(),
         )?;
         #[cfg(test)]
-        if self.presentation.agent_install_failure_held {
+        if self.agent_presentation_install_held_for_tests(&pane_id) {
             return Err(MezError::invalid_state(
                 "injected held pre-install presentation failure",
             ));
@@ -1113,7 +1113,7 @@ impl RuntimeSessionService {
             self.ui_theme(),
         )?;
         #[cfg(test)]
-        if self.presentation.agent_install_failure_held {
+        if self.agent_presentation_install_held_for_tests(pane_id) {
             return Err(MezError::invalid_state(
                 "injected held pre-install presentation failure",
             ));
@@ -1380,7 +1380,7 @@ impl RuntimeSessionService {
             self.ui_theme(),
         )?;
         #[cfg(test)]
-        if self.presentation.agent_install_failure_held {
+        if self.agent_presentation_install_held_for_tests(pane_id) {
             return Err(MezError::invalid_state(
                 "injected held pre-install presentation failure",
             ));
@@ -1590,7 +1590,7 @@ impl RuntimeSessionService {
                 self.ui_theme(),
             )?;
             #[cfg(test)]
-            if self.presentation.agent_install_failure_held {
+            if self.agent_presentation_install_held_for_tests(pane_id) {
                 return Err(MezError::invalid_state(
                     "injected held pre-install presentation failure",
                 ));

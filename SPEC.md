@@ -5701,6 +5701,22 @@ remain held until their full publication requirements settle. Healthy retry MAY
 perform that same once-only pending-sibling handoff after an installation failure;
 it MUST NOT replay completed commands, patches, hooks or audit. Retry progress
 MUST reflect a real ownership or action-state transition, not another attempt.
+Terminal cleanup and joined-child settlement MUST preserve accepted deferred
+publication independently of execution ownership. The existing presentation
+coordinator MUST derive display eligibility from canonical results, retire
+unverified assistant-speech ordering slots on failure/interruption, and drain
+accepted components in response order. Completing or cancelling a turn alone
+MUST NOT discard uninstalled headers, commands, results, or outcomes. A failed
+optional installation MUST retain the exact conversation/response/ordinal source
+and original presentation entry through execution cleanup, with a bounded active
+publication-only recovery trigger even after the ledger becomes terminal.
+Recovery MUST NOT re-enter an outcome producer requiring revoked execution
+authority, reconstruct logs by replaying work, or promote unverified final text.
+Joined-result publication MUST settle before dependent parent reacquisition;
+accepted earlier action rows MUST precede a subsequent correction response.
+Successful installation acknowledges only its original components. Intentional
+pane/conversation retirement MUST fence old sources from replacement pixels;
+publication custody never restores action, approval, or provider authority.
 Installing provisional provider claim/accounting state MUST NOT discharge an
 original completion group. Ordinary handoff requires actual bounded lease
 admission and completion of the actor's remaining fallible pre-dispatch steps.

@@ -66,6 +66,17 @@ that tuple for publication-only retry, without a new occurrence or changed body;
 only successful installation acknowledges and removes the original source.
 This log-source acknowledgment is not execution, canonical-result, or required
 audit/hook gate acceptance and never authorizes action replay.
+Accepted, queued, installed, and retired are separate publication states. Turn
+interruption retires unverified assistant speech while preserving independently
+accepted action components. Terminal cleanup transfers a failed display install
+to its existing conversation-fenced presentation owner; a bounded idle recovery
+can drain that source after execution state is gone. The original entry,
+occurrence, semantic copy source, and component acknowledgments survive retries.
+Recovery drains accepted components without re-entering an execution outcome
+producer, issuing work, or promoting a provisional final response. Joined-child
+settlement releases eligible parent logs before dependency reacquisition, and
+accepted earlier action rows precede a later correction response. Replacement
+intentionally retires old display authority rather than writing into a new view.
 Approved external completion retains its actor-issued attempt and original
 execution group before consuming worker delivery ownership. Terminal context is
 retained before optional result installation; completed-hook/audit failures stay
