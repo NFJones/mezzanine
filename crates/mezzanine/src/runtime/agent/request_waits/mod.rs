@@ -7,6 +7,8 @@
 //! establish ownership. Ordinary mail can resume inference without consuming an
 //! explicit edge. Restore discards these capabilities rather than replaying work.
 
+mod handoff;
+
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 
@@ -110,6 +112,8 @@ struct RecipientState {
     peer_source: Option<(String, mez_agent::ContextEventSequence)>,
     /// Typed handoff reference protected across QueueFull and context retries.
     handoff_source: Option<(String, mez_agent::ContextEventSequence)>,
+    /// Fixed-size digest of the privately staged canonical handoff content.
+    handoff_digest: Option<[u8; 32]>,
 }
 
 /// One selected dependency for an exact native waiting task.
@@ -374,6 +378,7 @@ impl RuntimeSessionService {
                 terminal_consumed: false,
                 peer_source: None,
                 handoff_source: None,
+                handoff_digest: None,
             });
         }
         let anchor = self.capture_request_parent_anchor(turn);
@@ -732,6 +737,22 @@ impl RuntimeSessionService {
     /// before trying the normal fair wait owner. Offline presence is not loss.
     pub(super) fn recover_request_waits(&mut self) -> Result<()> {
         self.prune_request_wait_owners();
+        self.record_request_registration_retirements();
+        let turns = self
+            .agent
+            .request_waits
+            .edges
+            .keys()
+            .filter_map(|id| self.agent_turn_ledger().turn(id).cloned())
+            .collect::<Vec<_>>();
+        for turn in turns {
+            self.resume_targeted_request_wait(&turn)?;
+        }
+        Ok(())
+    }
+
+    /// Observes only original registration retirement; presence is not authority.
+    fn record_request_registration_retirements(&mut self) {
         for receipt in self.agent.request_waits.requests.receipts() {
             for (index, recipient) in receipt.proof().recipients().enumerate() {
                 if !self
@@ -750,299 +771,60 @@ impl RuntimeSessionService {
                 }
             }
         }
-        let turns = self
-            .agent
-            .request_waits
-            .edges
-            .keys()
-            .filter_map(|id| self.agent_turn_ledger().turn(id).cloned())
-            .collect::<Vec<_>>();
-        for turn in turns {
-            self.resume_targeted_request_wait(&turn)?;
-        }
-        Ok(())
     }
 
-    /// Settles a selected edge only after canonical evidence and action-result
-    /// handoff exist. QueueFull retains the same edge/source for the next sweep.
-    /// Unrelated mail uses ordinary wake without consuming this request.
-    pub(super) fn resume_targeted_request_wait(&mut self, turn: &AgentTurnRecord) -> Result<bool> {
-        let Some(edge) = self.agent.request_waits.edges.get(&turn.turn_id).cloned() else {
-            return Ok(false);
-        };
-        if turn.state != AgentTurnState::Blocked
-            || self.agent_turn_is_human_paused(&turn.turn_id)
-            || edge.started != turn.started_at_unix_seconds
-            || self
-                .agent_shell_store()
-                .get(&turn.pane_id)
-                .is_none_or(|shell| shell.session_id != turn.conversation_id)
-        {
-            return Ok(false);
-        }
-        let Some(receipt) = self.agent.request_waits.requests.receipt(edge.generation) else {
-            return Ok(false);
-        };
-        if receipt.origin().agent_id.as_str() != turn.agent_id
-            || receipt.origin().conversation_id != turn.conversation_id
-        {
-            return Ok(false);
-        }
-        if !self
-            .control
-            .message_service()
-            .acceptance_sender_is_current(receipt.proof())
-            || self
-                .agent
-                .request_waits
-                .anchors
-                .get(&edge.generation)
-                .is_none_or(|anchor| !self.request_parent_anchor_is_current(turn, anchor))
-        {
-            return Ok(false);
-        }
-        let origin = receipt.origin().clone();
-        let outcome = self
-            .agent
-            .request_waits
-            .recipients
-            .get(&edge.generation)
-            .and_then(|slots| slots.get(edge.recipient))
-            .and_then(|slot| slot.outcome.clone());
-        let Some(outcome) = outcome else {
-            return Ok(false);
-        };
-        let selected_slot = &self.agent.request_waits.recipients[&edge.generation][edge.recipient];
-        let terminal_consumed = selected_slot.terminal_consumed;
-        let terminal_task = selected_slot.task.clone();
-        let terminal_outcome = matches!(
-            outcome,
-            Outcome::Terminal { .. } | Outcome::FailureReference { .. }
-        );
-        let Some(mut result) = self
-            .agent_turn_executions()
-            .get(&turn.turn_id)
-            .and_then(|execution| {
-                if execution.action_results.iter().any(|result| {
-                    result.status != ActionStatus::Succeeded
-                        && !(result.action_type == "wait" && result.status == ActionStatus::Running)
-                }) {
-                    return None;
-                }
-                execution.action_results.iter().find(|result| {
-                    result.action_type == "wait" && result.status == ActionStatus::Running
-                })
-            })
-            .cloned()
-        else {
-            return Ok(false);
-        };
-        let mut failure_source: Option<(String, [u8; 32])> = None;
-        let (reason, kind, source_identity, content, progress) = match outcome {
-            Outcome::Reply(sequence) => ("reply", "reply", sequence.to_string(),
-                format!("Authenticated matching response committed at message sequence {sequence}. Runtime proves occurrence, not substantive answer correctness."), true),
-            Outcome::Terminal { content } => ("peer_terminal", "terminal", String::new(), content, !terminal_consumed),
-            Outcome::FailureReference { label, child } => {
-                let source = self.agent.owned_child_failures.get(&child);
-                if source.is_some_and(|receipt| receipt.committed_turn_id.is_none()) { return Ok(false); }
-                if let Some(receipt) = source.filter(|receipt| receipt.committed_turn_id.as_deref() == Some(turn.turn_id.as_str())) {
-                    failure_source = Some((receipt.label.clone(), Sha256::digest(receipt.content.as_bytes()).into()));
-                }
-                ("peer_terminal", "failure-reference", child,
-                    format!("Exact captured owned-task failure reference: {label}. Its existing native failure receipt owns diagnostic delivery. This conveys terminal occurrence, not new output, a verdict, approval or permission to replay work."),
-                    !terminal_consumed && source.is_some_and(|receipt| !receipt.wake_admitted))
-            },
-            Outcome::Unavailable => ("peer_unavailable", "unavailable", String::new(),
-                "The selected original dependency is unavailable or intentionally retired. Reassess the missing answer and choose authorized independent work. No private peer task or output is disclosed; no request or task is automatically replayed.".into(), false),
-        };
-        let label = self.request_handoff_label(turn, &edge, kind, &source_identity)?;
-        let retained = self.agent.request_waits.recipients[&edge.generation][edge.recipient]
-            .handoff_source
-            .clone();
-        let Some(context) = self.agent_turn_contexts_mut().get_mut(&turn.turn_id) else {
-            return Ok(false);
-        };
-        let failure_event = match failure_source {
-            Some((source_label, expected)) => {
-                let Some(source) = context.chronology().iter().find(|event| {
-                    event.block().source == mez_agent::ContextSourceKind::PeerMessage
-                        && event.block().label == source_label
-                }) else {
-                    return Ok(false);
-                };
-                let actual: [u8; 32] = Sha256::digest(source.block().content.as_bytes()).into();
-                if actual != expected {
-                    return Err(super::MezError::conflict(
-                        "native failure source identity changed",
-                    ));
-                }
-                Some(source.sequence())
-            }
-            None => None,
-        };
-        let event = match retained
-            .as_ref()
-            .filter(|(owner, _)| owner == &turn.turn_id)
-        {
-            Some((_, sequence)) => {
-                let valid = context.chronology().iter().any(|event| {
-                    event.sequence() == *sequence
-                        && event.block().source == mez_agent::ContextSourceKind::PeerMessage
-                        && event.block().label == label
-                        && event.block().content == content
-                });
-                if !valid {
-                    return Err(super::MezError::conflict(
-                        "request handoff reference identity changed",
-                    ));
-                }
-                *sequence
-            }
-            None => {
-                if context
-                    .chronology()
-                    .iter()
-                    .any(|event| event.block().label == label)
-                {
-                    return Err(super::MezError::conflict(
-                        "request handoff label has no live occurrence owner",
-                    ));
-                }
-                context.append_peer_message_event(label, content)?
-            }
-        };
-        if let Some(source) = failure_event {
-            context.retain_pending_peer_message(source)?;
-        }
-        context.retain_pending_peer_message(event)?;
-        let mut previous_failure = None;
-        if let Some(slot) = self
-            .agent
-            .request_waits
-            .recipients
-            .get_mut(&edge.generation)
-            .and_then(|slots| slots.get_mut(edge.recipient))
-        {
-            slot.handoff_source = Some((turn.turn_id.clone(), event));
-            if let Some(source) = failure_event {
-                previous_failure = slot.peer_source.replace((turn.turn_id.clone(), source));
-            }
-        }
-        if let Some((owner, sequence)) = previous_failure {
-            self.release_request_pin_if_unheld(&owner, sequence);
-        }
-        if let Some((owner, sequence)) = retained.filter(|(owner, _)| owner != &turn.turn_id) {
-            self.release_request_pin_if_unheld(&owner, sequence);
-        }
-        result.status = ActionStatus::Succeeded;
-        result.content = vec![mez_agent::ActionContentBlock::text(
-            "selected request outcome received; reassess coordination",
-        )];
-        result.structured_content_json = Some(
-            serde_json::json!({"state":reason,"dependency_generation":edge.generation,
-            "dependency_satisfied":true,"progress_witness":progress})
-            .to_string(),
-        );
-        self.append_action_result_context_if_absent(&turn.turn_id, &result)?;
-        match self.agent.agent_scheduler.requeue_waiting(&turn.turn_id) {
-            Ok(_) => {}
-            Err(error) if error.kind() == mez_agent::SchedulerErrorKind::QueueFull => {
-                return Ok(false);
-            }
-            Err(error) => return Err(error.into()),
-        }
-        if let Some(execution) = self.agent_turn_executions_mut().get_mut(&turn.turn_id) {
-            if let Some(wait) = execution
-                .action_results
-                .iter_mut()
-                .find(|wait| wait.action_id == result.action_id)
-            {
-                *wait = result;
-            }
-            execution.final_turn = false;
-            execution.terminal_state = super::runtime_agent_turn_state_from_action_results(
-                &execution.action_results,
-                false,
-            );
-        }
-        self.agent.request_waits.edges.remove(&turn.turn_id);
-        if terminal_outcome && let Some(task) = terminal_task {
-            for slots in self.agent.request_waits.recipients.values_mut() {
-                for slot in slots {
-                    if slot.task.as_ref().is_some_and(|other| {
-                        other.turn == task.turn
-                            && other.conversation == task.conversation
-                            && other.started == task.started
-                    }) {
-                        slot.terminal_consumed = true;
-                    }
-                }
-            }
-        }
-        self.release_request_sources(edge.generation);
-        self.agent.request_waits.recipients.remove(&edge.generation);
-        self.agent.request_waits.anchors.remove(&edge.generation);
-        self.agent
-            .request_waits
-            .fingerprints
-            .remove(&edge.generation);
-        self.agent
-            .request_waits
-            .requests
-            .consume(edge.generation, &origin);
-        self.agent
-            .agent_turn_peer_wait_wake_pending
-            .remove(&turn.turn_id);
-        self.start_ready_agent_turns()?;
-        Ok(true)
-    }
-
-    /// Keeps delivery maintenance eligible while explicit request handoffs exist.
+    /// Keeps delivery maintenance eligible for parked outcomes or an active
+    /// owner's uncommitted source. A committed active reference needs no timer.
     pub(super) fn has_request_waits(&self) -> bool {
         self.agent
             .request_waits
             .edges
             .iter()
-            .filter(|(turn_id, _)| {
-                self.agent_turn_ledger()
-                    .turn(turn_id)
-                    .is_some_and(|turn| turn.state == AgentTurnState::Blocked)
-                    && !self.agent_turn_is_human_paused(turn_id)
+            .any(|(turn_id, edge)| {
+                let Some(turn) = self.agent_turn_ledger().turn(turn_id) else {
+                    return false;
+                };
+                if self.agent_turn_is_human_paused(turn_id) {
+                    return false;
+                }
+                let slot = self
+                    .agent
+                    .request_waits
+                    .recipients
+                    .get(&edge.generation)
+                    .and_then(|slots| slots.get(edge.recipient));
+                let retired = self
+                    .agent
+                    .request_waits
+                    .requests
+                    .receipt(edge.generation)
+                    .is_some_and(|receipt| {
+                        receipt
+                            .proof()
+                            .recipients()
+                            .nth(edge.recipient)
+                            .is_some_and(|recipient| {
+                                !self
+                                    .control
+                                    .message_service()
+                                    .acceptance_recipient_is_current(receipt.proof(), recipient)
+                            })
+                    });
+                if matches!(turn.state, AgentTurnState::Running | AgentTurnState::Queued) {
+                    return self.request_wait_context_pending_for_turn(turn)
+                        || (retired && slot.is_some_and(|slot| slot.outcome.is_none()));
+                }
+                turn.state == AgentTurnState::Blocked
                     && self
                         .agent_turn_executions()
-                        .get(*turn_id)
+                        .get(turn_id)
                         .is_some_and(|execution| {
                             execution.action_results.iter().any(|result| {
                                 result.action_type == "wait"
                                     && result.status == ActionStatus::Running
                             })
                         })
-            })
-            .any(|(_, edge)| {
-                self.agent
-                    .request_waits
-                    .recipients
-                    .get(&edge.generation)
-                    .and_then(|slots| slots.get(edge.recipient))
-                    .is_some_and(|slot| slot.outcome.is_some())
-                    || self
-                        .agent
-                        .request_waits
-                        .requests
-                        .receipt(edge.generation)
-                        .and_then(|receipt| {
-                            receipt
-                                .proof()
-                                .recipients()
-                                .nth(edge.recipient)
-                                .map(|recipient| {
-                                    !self
-                                        .control
-                                        .message_service()
-                                        .acceptance_recipient_is_current(receipt.proof(), recipient)
-                                })
-                        })
-                        .unwrap_or(false)
+                    && (slot.is_some_and(|slot| slot.outcome.is_some()) || retired)
             })
     }
 
@@ -1105,72 +887,6 @@ impl RuntimeSessionService {
         if !held && let Some(context) = self.agent_turn_contexts_mut().get_mut(turn) {
             context.release_pending_peer_message(sequence);
         }
-    }
-
-    /// Names an exact accepted occurrence, frozen recipient, captured task and
-    /// outcome within this runtime and waiting task. Historical labels cannot
-    /// recreate ownership after generation reset or a recipient pivot.
-    fn request_handoff_label(
-        &self,
-        turn: &AgentTurnRecord,
-        edge: &Edge,
-        kind: &str,
-        source: &str,
-    ) -> Result<String> {
-        let receipt = self
-            .agent
-            .request_waits
-            .requests
-            .receipt(edge.generation)
-            .ok_or_else(|| super::MezError::invalid_state("request handoff receipt is missing"))?;
-        let recipient = receipt
-            .proof()
-            .recipients()
-            .nth(edge.recipient)
-            .ok_or_else(|| {
-                super::MezError::invalid_state("request handoff recipient is missing")
-            })?;
-        let slot = self
-            .agent
-            .request_waits
-            .recipients
-            .get(&edge.generation)
-            .and_then(|slots| slots.get(edge.recipient))
-            .ok_or_else(|| {
-                super::MezError::invalid_state("request handoff reservation is missing")
-            })?;
-        let mut digest = Sha256::new();
-        digest.update(self.agent.request_waits.label_epoch);
-        digest.update(receipt.proof().sequence().to_le_bytes());
-        digest.update(turn.started_at_unix_seconds.to_le_bytes());
-        for field in [
-            receipt.origin().agent_id.as_str(),
-            receipt.origin().conversation_id.as_str(),
-            receipt.delivery().message_id.as_str(),
-            recipient.as_str(),
-            turn.turn_id.as_str(),
-            kind,
-            source,
-        ] {
-            digest.update((field.len() as u64).to_le_bytes());
-            digest.update(field.as_bytes());
-        }
-        if let Some(task) = &slot.task {
-            digest.update(task.started.to_le_bytes());
-            for field in [&task.turn, &task.conversation] {
-                digest.update((field.len() as u64).to_le_bytes());
-                digest.update(field.as_bytes());
-            }
-        }
-        let identity = digest
-            .finalize()
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<String>();
-        Ok(format!(
-            "request-handoff:{}:{}:{identity}",
-            edge.generation, edge.recipient
-        ))
     }
 
     /// Injects a stale retained source reference without fabricating acceptance,

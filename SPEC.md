@@ -17208,6 +17208,16 @@ Targeted outcome context and the native wait result MUST commit before fair
 wake admission. QueueFull and context faults MUST retain original source and
 the same edge. Committed response and handoff references MUST remain protected
 from compaction until consumption or originating conversation retirement.
+If unrelated mail has already resumed the waiting owner, its selected outcome
+MUST still reach canonical context at the next safe request/completion boundary.
+This MUST NOT acquire another scheduler slot, bypass pending sibling/approval
+owners or rewrite an already-settled ordinary-mail wait result. An older claim
+that omitted the reference MUST use existing stale-context rejection. Active
+source pins and request custody MUST remain until an accepted ordinary provider
+response whose real dispatch included that exact reference, or conversation
+retirement. Failed context commits MUST retain custody and defer admission;
+worker-returned content and numeric event high-water alone grant no proof.
+
 Dependency generation allocation is not progress: only a matching committed
 response or once-consumed exact task terminal result can supply a content-free
 progress witness. Unavailability, ACKs, heartbeats, arbitrary status and new

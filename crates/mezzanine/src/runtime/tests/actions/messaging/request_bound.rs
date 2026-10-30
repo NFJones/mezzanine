@@ -968,7 +968,7 @@ fn request_bound_mismatched_retained_reference_fails_closed_without_consumption(
             event
                 .block()
                 .content
-                .starts_with("Authenticated matching response committed")
+                .contains("Authenticated matching response committed")
         })
         .unwrap()
         .sequence();

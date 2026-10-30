@@ -546,6 +546,11 @@ addresses never grant task ownership or prove a substantive answer.
 Request receipts survive payload replay eviction independently of ordinary
 delivery custody, under finite count and metadata reservations made before
 acceptance. Source references stay exact through context and scheduler handoff.
+After unrelated mail resumes the owner, the selected outcome still enters its
+next safe context boundary. Staging adds no scheduler slot and changes no settled
+call result. An older response is rejected through the existing context fence;
+the protected request reference remains until an accepted response from a real
+dispatch that included it. Failed commits retain source and defer admission.
 Restore drops same-runtime request authority rather than reconstructing it from
 history. Plain waits retain their ordinary-mail and existing unexpected-owned-
 failure rules. No retry, task restart, stall timer or cycle detector is implied.

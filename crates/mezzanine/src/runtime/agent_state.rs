@@ -216,6 +216,10 @@ pub(crate) struct RuntimeAgentProviderClaim {
     pub timeout_ms: u64,
     /// Highest canonical event sequence consumed by the claimed request.
     pub context_event_high_water_mark: u64,
+    /// Exact selected dependency generation, recipient index, canonical source
+    /// sequence and digest present in the actual ordinary dispatch context.
+    /// This volatile proof is never reconstructed from a returned worker body.
+    pub request_wait_context: Option<(u64, usize, mez_agent::ContextEventSequence, [u8; 32])>,
     /// Canonical serialized OpenAI Responses body bytes for the claimed request.
     ///
     /// Non-Responses providers leave this unset. Context-limit recovery uses

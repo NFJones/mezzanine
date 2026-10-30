@@ -453,3 +453,266 @@ async fn request_bound_actor_nonowned_retirement_permits_same_parent_alternative
     assert_eq!(actor.service.agent_turn_ledger().turns().len(), 2);
     assert_eq!(generations, (1..=6).collect());
 }
+
+/// Commits genuine unrelated peer mail through authenticated lower acceptance.
+/// The fresh registration has no request correlation or lifecycle authority.
+fn unrelated_mail(actor: &mut DialogueActor, parent: &mez_agent::AgentTurnRecord) {
+    use mez_agent::messaging::{Envelope, MessageScope, Recipient};
+    let now = async_runtime_current_unix_millis();
+    let sender = actor
+        .service
+        .ensure_runtime_message_identity("agent-actor-unrelated-observer", None, "worker", &[], now)
+        .unwrap();
+    actor
+        .service
+        .message_service_mut()
+        .accept_at_with_scope(
+            &sender.agent_id,
+            Envelope {
+                protocol: "mmp/1",
+                id: "actor-unrelated-mail".into(),
+                message_type: "send".into(),
+                time: format!("fixture:{now}"),
+                sender: sender.clone(),
+                recipient: Recipient::Agent(AgentId::opaque(parent.agent_id.clone()).unwrap()),
+                correlation_id: None,
+                ttl_ms: None,
+                content_type: "text/plain; charset=utf-8".into(),
+                payload: "UNRELATED_ACTIVE_COORDINATION".into(),
+                extension_fields: Vec::new(),
+            },
+            MessageScope::Session,
+            now,
+        )
+        .unwrap();
+    actor
+        .service
+        .deliver_pending_runtime_agent_messages(now)
+        .unwrap();
+}
+
+/// Unrelated model mail may resume the original targeted Wait but cannot erase
+/// its selected dependency. If that exact peer retires during an admitted model
+/// request, canonical evidence must fence the old response at completion. The
+/// next real claim consumes the outcome, performs useful persisted work and
+/// completes the SAME task without replaying a send or concurrent inference.
+async fn active_retirement(corrupt_reference: bool) {
+    let (mut actor, parent, child, mut generations, _) =
+        actor_fixture_with_lifetime(1, Vec::new(), mez_agent::SubagentLifetime::Persistent).await;
+    let peer = actor
+        .service
+        .ensure_runtime_message_identity(
+            "agent-actor-active-dependency",
+            None,
+            "worker",
+            &[],
+            async_runtime_current_unix_millis(),
+        )
+        .unwrap();
+    let message = request(
+        &mut actor,
+        &parent,
+        peer.agent_id.as_str(),
+        &mut generations,
+    )
+    .await;
+    park(&mut actor, &parent, &message, &mut generations).await;
+    step(
+        &mut actor,
+        &child,
+        vec![done("active-unrelated-child", "unrelated child done")],
+        &mut generations,
+    )
+    .await;
+    unrelated_mail(&mut actor, &parent);
+    assert_eq!(
+        actor
+            .service
+            .agent_turn_ledger()
+            .turn(&parent.turn_id)
+            .unwrap()
+            .state,
+        AgentTurnState::Running
+    );
+    assert_ne!(
+        actor.service.tracked_message_request_usage(),
+        ((0, 0, 0), 0)
+    );
+    let obsolete = claim(&mut actor, &parent).await;
+    assert!(generations.insert(obsolete.claim_generation));
+    assert!(
+        !obsolete
+            .context
+            .durable()
+            .blocks()
+            .iter()
+            .any(|b| b.label.starts_with("request-handoff:"))
+    );
+    let execution = execute(
+        &obsolete,
+        &response(vec![done("obsolete-final", "STALE_WITHOUT_RETIREMENT")]),
+    )
+    .await;
+    assert!(
+        actor
+            .service
+            .retire_runtime_message_identity_after_native_commits(&peer.agent_id)
+            .unwrap()
+    );
+    actor
+        .service
+        .deliver_pending_runtime_agent_messages(async_runtime_current_unix_millis())
+        .unwrap();
+    assert_eq!(
+        actor.service.agent_turn_contexts()[&parent.turn_id]
+            .blocks()
+            .iter()
+            .filter(|b| b.label.starts_with("request-handoff:"))
+            .count(),
+        1,
+        "selected retirement was not staged at the active owner's safe context boundary"
+    );
+    let handoff = actor.service.agent_turn_contexts()[&parent.turn_id]
+        .chronology()
+        .iter()
+        .find(|event| event.block().label.starts_with("request-handoff:"))
+        .unwrap()
+        .sequence();
+    assert!(actor.service.agent_turn_contexts()[&parent.turn_id].peer_message_is_pending(handoff));
+    if corrupt_reference {
+        let unrelated = actor.service.agent_turn_contexts()[&parent.turn_id]
+            .chronology()
+            .iter()
+            .find(|event| {
+                event.block().source == mez_agent::ContextSourceKind::PeerMessage
+                    && event
+                        .block()
+                        .content
+                        .contains("UNRELATED_ACTIVE_COORDINATION")
+            })
+            .unwrap()
+            .sequence();
+        actor
+            .service
+            .replace_request_handoff_reference_for_test(&parent.turn_id, unrelated)
+            .unwrap();
+    }
+    assert_eq!(complete(&mut actor, &obsolete, execution.clone()).await, 1);
+    assert_eq!(complete(&mut actor, &obsolete, execution).await, 0);
+    settle_provider_work(&mut actor).await;
+    assert_eq!(
+        actor
+            .service
+            .agent_turn_ledger()
+            .turn(&parent.turn_id)
+            .unwrap()
+            .state,
+        AgentTurnState::Running,
+        "an old provider response completed the task without seeing selected retirement"
+    );
+    assert!(
+        !actor.service.agent_turn_contexts()[&parent.turn_id]
+            .blocks()
+            .iter()
+            .any(|block| block.content.contains("STALE_WITHOUT_RETIREMENT"))
+    );
+    assert_ne!(
+        actor.service.tracked_message_request_usage(),
+        ((0, 0, 0), 0)
+    );
+    if corrupt_reference {
+        let (reply, receiver) = tokio::sync::oneshot::channel();
+        assert!(
+            !actor
+                .handle_request(AsyncRuntimeRequest::PrepareConfiguredAgentProviderTask {
+                    agent_id: AgentId::opaque(parent.agent_id.clone()).unwrap(),
+                    turn_id: parent.turn_id.clone(),
+                    reply,
+                })
+                .await
+        );
+        assert!(
+            receiver.await.unwrap().unwrap().is_none(),
+            "a mismatched canonical occurrence must defer provider preparation"
+        );
+        assert_ne!(
+            actor.service.tracked_message_request_usage(),
+            ((0, 0, 0), 0)
+        );
+        actor
+            .service
+            .replace_request_handoff_reference_for_test(&parent.turn_id, handoff)
+            .unwrap();
+    }
+    let resumed = claim(&mut actor, &parent).await;
+    assert!(generations.insert(resumed.claim_generation));
+    assert_ne!(
+        actor.service.tracked_message_request_usage(),
+        ((0, 0, 0), 0),
+        "issuing a new request is not accepted outcome consumption"
+    );
+    assert!(actor.service.agent_turn_contexts()[&parent.turn_id].peer_message_is_pending(handoff));
+    let mut evidence = record_evidence();
+    evidence.id = "action-1".into();
+    let execution = execute(&resumed, &response(vec![evidence])).await;
+    assert_eq!(complete(&mut actor, &resumed, execution.clone()).await, 1);
+    assert_eq!(complete(&mut actor, &resumed, execution).await, 0);
+    let persisted = settle_provider_work(&mut actor).await;
+    assert!(persisted > 0);
+    assert!(!actor.service.agent_turn_contexts()[&parent.turn_id].peer_message_is_pending(handoff));
+    assert_memory_saved(&actor, &parent);
+    assert_eq!(resumed.turn.turn_id, parent.turn_id);
+    assert_eq!(
+        resumed
+            .context
+            .durable()
+            .blocks()
+            .iter()
+            .filter(|b| b.source == mez_agent::ContextSourceKind::PeerMessage
+                && b.label.starts_with("request-handoff:")
+                && b.content.contains("unavailable"))
+            .count(),
+        1
+    );
+    assert_eq!(
+        actor.service.tracked_message_request_usage(),
+        ((0, 0, 0), 0)
+    );
+    step(
+        &mut actor,
+        &parent,
+        vec![done(
+            "active-final",
+            "used selected retirement for useful alternative",
+        )],
+        &mut generations,
+    )
+    .await;
+    assert_eq!(
+        actor
+            .service
+            .agent_turn_ledger()
+            .turn(&parent.turn_id)
+            .unwrap()
+            .state,
+        AgentTurnState::Completed
+    );
+    assert_eq!(actor.service.agent_turn_ledger().turns().len(), 2);
+    assert_eq!(generations, (1..=7).collect());
+}
+
+/// A selected retirement that arrives during actual inference must fence that
+/// older response, remain pinned through the replacement claim, and be consumed
+/// only by its accepted response before useful same-parent completion.
+#[tokio::test(flavor = "current_thread")]
+async fn request_bound_actor_retirement_during_unrelated_continuation_fences_old_response() {
+    active_retirement(false).await;
+}
+
+/// A stale local handoff pointer to a different genuine peer event must neither
+/// consume the selected dependency nor admit a model request. Actual source
+/// repair restores normal admission without a new send, task or forged ACK.
+#[tokio::test(flavor = "current_thread")]
+async fn request_bound_actor_active_source_fault_retains_custody_until_exact_repair() {
+    active_retirement(true).await;
+}

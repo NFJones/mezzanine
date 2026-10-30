@@ -315,6 +315,11 @@ insufficient. Unrelated mail can resume inference; reparking preserves the same
 unresolved request. Runtime-owned macro steps retain their existing result gate
 and require `expect_reply: false`.
 
+If unrelated mail resumes you first, the selected dependency remains live. Its
+later outcome reaches your next safe model context without starting a concurrent
+request; an older in-flight response may be discarded so the next request can
+use that evidence.
+
 Tracking reserves finite capacity before sending: at most 64 unresolved requests
 per conversation and 4096 global reservation units, with an independent metadata
 budget. A tracking-cap rejection sends nothing. It does not block ordinary

@@ -212,6 +212,7 @@ impl RuntimeSessionService {
                 claimed_at_unix_ms: current_unix_millis(),
                 timeout_ms: DEFAULT_PROVIDER_TIMEOUT_MS,
                 context_event_high_water_mark,
+                request_wait_context: None,
                 openai_request_bytes: None,
                 openai_request_stream: None,
             },
@@ -813,6 +814,22 @@ impl RuntimeSessionService {
             return Ok(None);
         }
         self.ensure_completion_provider_claim_ready(turn_id)?;
+        // Context staging grants no new slot or sibling readiness. A failed
+        // commit retains the same task and source for normal delivery retry.
+        if let Err(error) = self.recover_request_wait_context_for_turn(&turn) {
+            let _ = self.append_agent_trace_turn_event(
+                &turn.pane_id,
+                turn_id,
+                &format!(
+                    "request_dependency context_commit_pending error={}",
+                    super::runtime_agent_terminal_preview(error.message())
+                ),
+            );
+            return Ok(None);
+        }
+        if self.request_wait_context_pending_for_turn(&turn) {
+            return Ok(None);
+        }
         Ok(Some(turn))
     }
 
@@ -1955,6 +1972,7 @@ impl RuntimeSessionService {
             ));
         }
         let handoff = self.prepare_completion_provider_handoff(dispatch, generation)?;
+        let request_wait_context = self.capture_request_wait_provider_context(dispatch);
         self.agent.claimed_agent_provider_tasks.insert(
             turn.turn_id.clone(),
             RuntimeAgentProviderClaim {
@@ -1973,6 +1991,7 @@ impl RuntimeSessionService {
                     .context
                     .durable()
                     .event_sequence_high_water_mark(),
+                request_wait_context,
                 openai_request_bytes,
                 openai_request_stream,
             },

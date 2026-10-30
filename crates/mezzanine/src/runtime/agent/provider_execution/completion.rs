@@ -150,6 +150,11 @@ impl RuntimeSessionService {
             .claimed_agent_provider_tasks
             .get(turn_id)
             .map(|claim| claim.context_event_high_water_mark);
+        let request_wait_context = self
+            .agent
+            .claimed_agent_provider_tasks
+            .get(turn_id)
+            .and_then(|claim| claim.request_wait_context);
         let provider_owner = self
             .agent
             .claimed_agent_provider_tasks
@@ -169,6 +174,17 @@ impl RuntimeSessionService {
                 ),
             )?;
         }
+        if let Err(error) = self.recover_request_wait_context_for_turn(&turn) {
+            let _ = self.append_agent_trace_turn_event(
+                &turn.pane_id,
+                turn_id,
+                &format!(
+                    "request_dependency context_commit_pending error={}",
+                    super::super::runtime_agent_terminal_preview(error.message())
+                ),
+            );
+        }
+        let request_context_pending = self.request_wait_context_pending_for_turn(&turn);
         let owned_child_context_pending = self.owned_child_failure_context_pending_for_turn(&turn);
         let current_high_water_mark = self
             .agent_turn_contexts()
@@ -177,6 +193,7 @@ impl RuntimeSessionService {
             .unwrap_or_default();
         let joined_purpose_revoked = self.joined_coordination_provider_purpose_revoked(turn_id);
         if owned_child_context_pending
+            || request_context_pending
             || joined_purpose_revoked
             || consumed_high_water_mark.is_some_and(|consumed| current_high_water_mark > consumed)
         {
@@ -289,6 +306,7 @@ impl RuntimeSessionService {
             );
             return Ok(true);
         }
+        self.consume_active_request_wait_context(&turn, request_wait_context);
         // The streamed header handoff must use the same execution-scoped action
         // identity that runtime dispatch and its authoritative presenter use.
         self.scope_provider_execution_action_ids(&turn, &mut execution)?;
