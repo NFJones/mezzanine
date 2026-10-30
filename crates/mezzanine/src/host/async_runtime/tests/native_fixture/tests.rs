@@ -201,19 +201,32 @@ async fn expired_budget_does_not_poll_original_stages_or_start_close() {
     assert!(matches!(joined.client.failure, Some(Failure::Cancelled)));
 }
 
-#[tokio::test(flavor = "current_thread")]
+#[tokio::test(flavor = "current_thread", start_paused = true)]
 /// Actor output is stored before sibling failure/timeout can cancel the join;
 /// pending siblings remain cancelled, never promoted to successful completion.
+/// Poll the original stages before advancing their unchanged deadline so host
+/// scheduling cannot turn this into the separately tested pre-expired case.
 async fn deadline_conserves_actual_completed_actor_output() {
-    let joined = join_originals(
+    let actor_polls = Rc::new(Cell::new(0));
+    let observed = actor_polls.clone();
+    let original_deadline = tokio::time::Instant::now() + Duration::from_millis(10);
+    let mut original = Box::pin(join_originals(
         std::future::pending::<Result<(), MezError>>(),
         std::future::pending::<Result<(), MezError>>(),
-        async { Ok("returned actor service") },
-        tokio::time::Instant::now() + Duration::from_millis(10),
+        async move {
+            observed.set(observed.get() + 1);
+            Ok("returned actor service")
+        },
+        original_deadline,
         Arc::new(AtomicBool::new(false)),
         || async { Ok(()) },
-    )
-    .await;
+    ));
+    assert!(futures_util::poll!(original.as_mut()).is_pending());
+    assert_eq!(actor_polls.get(), 1);
+    assert!(tokio::time::Instant::now() < original_deadline);
+    tokio::time::advance(Duration::from_millis(10)).await;
+    let joined = original.await;
+    assert_eq!(actor_polls.get(), 1);
     assert!(joined.timed_out);
     assert!(joined.actor.completed);
     assert_eq!(joined.actor.value, Some("returned actor service"));
