@@ -1886,14 +1886,20 @@ field replaces those selectors. A native qualified original first epoch named
 requires status completed/aborted/error. No private credential, caller-selected
 presentation state, timestamp, title, content or counters enter this RPC.
 Generation equal to session is a known non-interactive fallback and rejects.
-Only beforeSubmitPrompt starts a new generation; old generation IDs remain
-fenced in bounded storage. Stop maps to ready/interrupted/failed, never invoice
+Only beforeSubmitPrompt starts a new generation; up to4096 distinct IDs per
+native source remain fenced without eviction. Further prompt generations return
+RateLimited; the last admitted generation can still receive its terminal event.
+Rejected work does not renew observer proof or claim completion. Stop maps to ready/interrupted/failed, never invoice
 or process-death proof. Late activity/duplicate Stop is time-inert. SessionEnd
 has no generation/status selector and retires only its exact admitted original
 session; rotated/foreign source callbacks reject through native work settlement.
 Shared per-source ingress ordering covers observation through actor commit.
 Idle observer health, shared-server association and ordinary counters remain
-unavailable, not replaced by payload labels or a newest-generation lookup.
+unavailable, not replaced by payload labels or a newest-generation lookup. Missing,
+zero and unsupported IDE/SDK-shaped counter objects do not change the projected
+RPC or create an expense report. Selected model/provider/request labels are not
+authority. Stop loop_count is past follow-up history and cannot initiate a new
+generation or request continuation.
 
 `agent/external/helper-presentation` accepts only `launch_token`, `generation`,
 `external_session_id`, `sequence`, `state`, and optional `title`. It uses the

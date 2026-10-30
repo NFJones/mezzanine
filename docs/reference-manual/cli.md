@@ -75,7 +75,7 @@ case is qualified before adding shared authored members.
 | Claude / `claude` | Child discovers installed skill/plugin/hooks metadata; SDK-shaped loader shim executes the installed module, real native helper ingress and local timer cancellation | Synthetic current-request final outcomes commit once on replay; missing usage stays unknown and reports a fixed current-epoch coverage gap after prior expense. Not an actual Claude vendor-loader or paid-request check. Native retirement after creator exit is separate from local SessionEnd. |
 | Codex / `codex` | Child reads installed hooks.json and executes exact commands; native enrollment, lifecycle and exact SessionEnd retirement | Revision7 synchronous model hooks report checked per-request usage with original native readiness/project origin, separate parent/child custody and durable replay. Native producer replacement under a retained pane root is qualified separately. All known app-server modes require unavailable requesting-client association; this is not default-daemon support. |
 | Copilot / `copilot` | Classic exec/args discovery, native lifecycle and exact SessionEnd retirement in this matrix; separate installed SDK-shaped native fixtures cover original pulses, early subagent usage and replay. | Revision7 defaults only a missing `EXTENSIONS` flag and preserves authored exporters/policy. Classic callbacks carry no counters; separate terminal observations commit once with explicit unattributed origin. Genuine pre-dispatch origin and actual vendor loading remain unqualified. |
-| Cursor / `agent` | Child reads installed hooks.json and executes exact ordinary CLI hook commands; native lifecycle and exact SessionEnd retirement | `unavailable-counter-schema`: exact CLI counter/cache/multiplicity/native-origin evidence remains unqualified. No forced print mode or IDE-counter substitution. |
+| Cursor / `agent` | Child reads installed hooks.json and executes exact ordinary CLI hook commands; native lifecycle, duplicate/stale-generation fences and exact SessionEnd retirement | `unavailable-counter-schema`: missing, zero and IDE/SDK-shaped counters remain unavailable. Exact CLI expense semantics/native origin are not inferred; no forced print mode or status-line replacement. |
 | OpenCode / `opencode` | Separate installer, TUI route/cache and explicit Bun-native fixture; excluded from this four-creator run | The installed client-local TUI observer selects only its own cached root session. Ordinary usage observations are deliberately dropped until durable source continuity is implemented. The legacy server entry remains descriptor-gated and inert under ordinary launch. |
 | Pi / `pi` | Separate bare-bootstrap/ordinary-source fixtures cover native lifecycle, finite production-worker idle renewal, EOF/exit and exact retirement. | Separate installed finalized-message accounting, durable ACK-loss/recovery and bounded-stream fixtures; not part of the four-harness matrix or a full-spend claim. |
 
@@ -227,7 +227,12 @@ It returns no env/context/follow-up/permission fields. SessionStart must carry
 matching session_id/conversation_id; child fields and ambiguous selectors drop.
 Distinct interactive prompt generations fence old Stops. Completed means ready,
 not proof of success; aborted/error mean interrupted/failed. Compact/tool/response
-activity never bills context tokens or reopens a terminal generation. Exact old
+activity never bills context tokens or reopens a terminal generation.
+Each native source retains at most4096 distinct generation fences. New prompts
+beyond that cap reject rather than evict old IDs or invent a replacement turn;
+terminal callbacks for the last admitted generation remain deliverable. Rejected
+callbacks do not renew observer proof. Normal health/lease expiry exposes loss,
+without treating missing events as successful completion. Exact old
 end cannot retire a different session or rotated observer. Idle silence and a
 shared preexisting daemon lack persistent observer/client association proof.
 Bootstrap reports lifecycle `unverified`, usage `unavailable-counter-schema` in
@@ -248,7 +253,26 @@ its counter schema is not documented here; bootstrap leaves user footer/title
 pins untouched. Enterprise OTel is server-side admin/public-HTTPS/auth configuration,
 not safe local bootstrap activation. Retry accounting when an exact ordinary CLI
 counter/request identity contract and native original-expense mapping are available.
-This lifecycle phase does not close continuous idle/shared-daemon or usage work.
+Current best-effort qualification covers installed native lifecycle and explicit
+accounting unavailability. It makes no continuous idle/shared-daemon or expense
+claim; those capabilities remain unavailable pending a supported native source
+contract. A positive stop `loop_count` records past automatic follow-ups and does
+not prove another turn will start; the helper never requests a continuation.
+The installed fixture repeats and replays responses, Stops and ends across
+generations while mixing absent, zero and unsupported IDE/SDK counter shapes.
+All retain one durable native source with no inserted expense events. Selected
+model/provider/request labels and payload content never enter the lifecycle RPC.
+Administrative rows retain usage_coverage `unavailable-source-continuity`: passive
+callbacks do not prove continuous usage coverage. The bootstrap report separately
+names the missing counter schema; neither value means measured zero. A real
+pane-root replacement with a reused session ID admits a fresh durable namespace,
+rejects queued old prompt/end work and preserves the new source until its own end.
+These tests qualify conservative handling, not vendor emission of those shapes.
+The [Cursor SDK](https://cursor.com/docs/sdk/typescript) exposes usage on SDK-owned
+runs; its result types do not establish ordinary CLI hook fields. The
+[Admin API explanation](https://forum.cursor.com/t/cursor-cli-omits-beforesubmitprompt-afteragentresponse-and-stop-hooks-loses-token-usage-and-emits-inconsistent-generation-id-values/169059/15)
+also notes absent CLI/IDE distinction and parent-child links. Neither interface
+provides the passive native-origin expense contract required here.
 Loading under custom roots, policy, sandbox and relocation remains best-effort;
 actual vendor/macOS acceptance is not certified by isolated fixtures.
 Sources: [CLI changelog](https://cursor.com/docs/cli/changelog.md),

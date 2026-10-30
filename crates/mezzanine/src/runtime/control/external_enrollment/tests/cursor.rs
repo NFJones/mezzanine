@@ -274,3 +274,168 @@ async fn external_cursor_observer_rotation_fences_original_callbacks() {
     assert!(registry.bindings.values().all(|b| !b.retired));
     assert!(registry.enrollments.pending.is_empty());
 }
+
+/// A real pane-root replacement must not let already observed Cursor work adopt
+/// a newly created native producer, even when the vendor reuses its session ID.
+/// Both roots and creators are generated through production process ownership.
+/// Old callbacks keep their original native proof, while the fresh source owns
+/// a distinct durable namespace and can still paint its own prompt generation.
+/// Unsupported usage stays absent throughout; no historical expense is replayed.
+#[tokio::test(flavor = "current_thread")]
+async fn external_cursor_actual_root_replacement_fences_queued_callbacks() {
+    for kind in ["beforeSubmitPrompt", "sessionEnd"] {
+        let Some(mut fixture) = fixture("hold").await else {
+            panic!("Cursor root replacement requires native evidence");
+        };
+        let usage = fixture.directory.join("cursor-root-usage.sqlite");
+        fixture
+            .service
+            .set_token_usage_store(crate::storage::token_usage::TokenUsageStore::new(&usage));
+        let original_root = fixture.service.pane_process_identity("%1").unwrap();
+        let (_old_socket, old_connection) = child(&mut fixture).await;
+        let work = fixture
+            .service
+            .prepare_external_enrollment(&declaration("session-a"), &old_connection)
+            .unwrap();
+        assert_eq!(
+            settle(&mut fixture, work, &old_connection).await["result"]["registered"],
+            true
+        );
+        let old_owner = fixture
+            .service
+            .control
+            .external_agents()
+            .bindings
+            .values()
+            .find(|binding| !binding.retired)
+            .unwrap()
+            .accounting_owner
+            .clone();
+        let queued_request = callback(
+            "session-a",
+            kind,
+            (kind == "beforeSubmitPrompt").then_some("old-turn"),
+            None,
+        );
+        let queued = fixture
+            .service
+            .prepare_external_helper_presentation(&queued_request, &old_connection)
+            .unwrap();
+        let native = queued.clone();
+        let observed = tokio::task::spawn_blocking(move || native.observe())
+            .await
+            .unwrap();
+        assert!(
+            observed.is_ok(),
+            "queued {kind} native proof failed: {:?}",
+            observed.as_ref().err()
+        );
+        fixture.service.terminate_all_pane_processes().unwrap();
+        fixture.service.start_initial_pane_process(None).unwrap();
+        let fresh_root = fixture.service.pane_process_identity("%1").unwrap();
+        assert!(!fresh_root.same_incarnation(&original_root));
+        fixture.service.reconcile_external_agent_registrations();
+        let (socket, connection) =
+            launch_ordinary_fixture(&mut fixture.service, &fixture.listener, "hold")
+                .await
+                .unwrap();
+        fixture.socket = socket;
+        fixture.connection = connection;
+        let (_new_socket, new_connection) = child(&mut fixture).await;
+        let work = fixture
+            .service
+            .prepare_external_enrollment(&declaration("session-a"), &new_connection)
+            .unwrap();
+        assert_eq!(
+            settle(&mut fixture, work, &new_connection).await["result"]["registered"],
+            true
+        );
+        let fresh_owner = fixture
+            .service
+            .control
+            .external_agents()
+            .bindings
+            .values()
+            .find(|binding| !binding.retired)
+            .unwrap()
+            .accounting_owner
+            .clone();
+        assert_ne!(fresh_owner, old_owner);
+        let refused: serde_json::Value = serde_json::from_str(
+            &fixture
+                .service
+                .complete_external_enrollment(queued, observed, &old_connection),
+        )
+        .unwrap();
+        assert!(
+            refused.get("error").is_some(),
+            "old {kind} work adopted fresh root: {refused}"
+        );
+        let old_end = callback("session-a", "sessionEnd", None, None);
+        if let Ok(work) = fixture
+            .service
+            .prepare_external_helper_presentation(&old_end, &old_connection)
+        {
+            assert!(
+                settle(&mut fixture, work, &old_connection)
+                    .await
+                    .get("error")
+                    .is_some()
+            );
+        }
+        let prompt = callback("session-a", "beforeSubmitPrompt", Some("fresh-turn"), None);
+        let work = fixture
+            .service
+            .prepare_external_helper_presentation(&prompt, &new_connection)
+            .unwrap();
+        let accepted = settle(&mut fixture, work, &new_connection).await;
+        assert_eq!(accepted["result"]["changed"], true, "{accepted}");
+        let rows = fixture.service.external_agent_rows();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["harness"], "cursor");
+        assert_eq!(rows[0]["usage_coverage"], "unavailable-source-continuity");
+        assert_eq!(
+            fixture
+                .service
+                .live_pane_harness_status("%1")
+                .unwrap()
+                .text
+                .as_deref(),
+            Some("running")
+        );
+        let fresh_end = callback("session-a", "sessionEnd", None, None);
+        let work = fixture
+            .service
+            .prepare_external_helper_presentation(&fresh_end, &new_connection)
+            .unwrap();
+        assert_eq!(
+            settle(&mut fixture, work, &new_connection).await["result"]["retired"],
+            true
+        );
+        assert!(fixture.service.external_agent_rows().is_empty());
+        assert!(
+            fixture
+                .service
+                .control
+                .external_agents()
+                .enrollments
+                .pending
+                .is_empty()
+        );
+        let database = rusqlite::Connection::open(usage).unwrap();
+        assert_eq!(
+            database
+                .query_row("SELECT count(*) FROM token_usage_events", [], |row| row
+                    .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            database
+                .query_row("SELECT count(*) FROM external_usage_sources", [], |row| row
+                    .get::<_, i64>(0))
+                .unwrap(),
+            2
+        );
+    }
+}

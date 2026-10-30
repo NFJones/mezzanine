@@ -1028,7 +1028,11 @@ stable request/report identity and original expense-origin correlation are
 evidenced. Staff statements that counters exist MUST NOT invent usage.input_tokens
 or provider identity; context occupancy, transcript/terminal scraping, mandatory
 print mode, admin/server-side exporters and status-line replacement MUST NOT be
-substitutes for a safe ordinary-mode producer contract.
+substitutes for a safe ordinary-mode producer contract. SDK-owned result types
+MUST NOT establish ordinary CLI hook counter semantics. Missing, explicit zero
+and unsupported IDE/SDK-shaped counters MUST all retain unavailable accounting;
+selected-model/provider/request labels MUST NOT create expense identity. Stop
+loop_count describes prior hook follow-ups, not proof of future continuation.
 Recovery preview MUST share version/root/compiled-intent/preimage authorization
 with recovery, without writer lock or publication. JSON MUST distinguish operation,
 dry_run, changed_paths, recovered and accepted recovery_pending. Check success

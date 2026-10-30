@@ -260,6 +260,96 @@ mod tests {
         assert!(request("beforeSubmitPrompt", input, "../pane").is_err());
         assert!(request("stop", &vec![b' '; 65_536], "%1").is_err());
     }
+    /// IDE, SDK and guessed expense shapes must not become an ordinary CLI
+    /// billing source merely because their field names look familiar. Missing,
+    /// explicit zero and nonzero counters all leave the same inert lifecycle
+    /// projection. Selected model/provider/request labels and content canaries
+    /// cannot grant native identity or leak through this metadata-only helper.
+    #[test]
+    fn cursor_hook_counter_shapes_cannot_claim_ordinary_cli_usage() {
+        let shapes = [
+            serde_json::json!({}),
+            serde_json::json!({"usage":{"input_tokens":0,"output_tokens":0,"cache_read_tokens":0,"cache_write_tokens":0}}),
+            serde_json::json!({"input_tokens":11,"output_tokens":7,"cache_read_tokens":5,"cache_write_tokens":3}),
+            serde_json::json!({"usage":{"inputTokens":11,"outputTokens":7,"cacheReadTokens":5,"cacheWriteTokens":3,"totalTokens":26,"reasoningTokens":2}}),
+            serde_json::json!({"usage":{"input_tokens":11,"output_tokens":7,"cached_input_tokens":5,"reasoning_output_tokens":2},"context_tokens":999999}),
+        ];
+        for event in ["afterAgentResponse", "stop"] {
+            let original = serde_json::json!({"hook_event_name":event,"conversation_id":"session-a","generation_id":"turn-a","status":"completed","loop_count":0});
+            let expected = request(event, original.to_string().as_bytes(), "%1")
+                .unwrap()
+                .unwrap();
+            for shape in &shapes {
+                let mut payload = original.clone();
+                for (key, value) in shape.as_object().unwrap() {
+                    payload[key] = value.clone();
+                }
+                payload["model"] = "PRIVATE-SELECTED-MODEL".into();
+                payload["model_id"] = "PRIVATE-SELECTED-ID".into();
+                payload["provider"] = "PRIVATE-PROVIDER".into();
+                payload["request_id"] = "PRIVATE-REQUEST".into();
+                payload["transcript_path"] = "PRIVATE-PATH".into();
+                payload["text"] = "PRIVATE-RESPONSE".into();
+                assert_eq!(
+                    request(event, payload.to_string().as_bytes(), "%1")
+                        .unwrap()
+                        .unwrap(),
+                    expected
+                );
+            }
+        }
+    }
+
+    /// A stop count describes previous hook-driven followups, not a new prompt
+    /// or permission to continue the vendor. It cannot alter the observational
+    /// projection. Child selectors likewise cannot reuse parent labels to repaint
+    /// parent status; all responses remain under the existing neutral helper path.
+    #[test]
+    fn cursor_hook_followup_history_and_children_cannot_rebind_parent() {
+        let original = serde_json::json!({"hook_event_name":"stop","conversation_id":"session-a","generation_id":"turn-a","status":"completed","loop_count":0});
+        let expected = request("stop", original.to_string().as_bytes(), "%1")
+            .unwrap()
+            .unwrap();
+        for count in [1, 5, 9_007_199_254_740_991u64] {
+            let mut payload = original.clone();
+            payload["loop_count"] = count.into();
+            assert_eq!(
+                request("stop", payload.to_string().as_bytes(), "%1")
+                    .unwrap()
+                    .unwrap(),
+                expected
+            );
+        }
+        for key in [
+            "subagent_id",
+            "parent_conversation_id",
+            "agent_id",
+            "subagent_type",
+        ] {
+            let mut payload = original.clone();
+            payload[key] = "PRIVATE-CHILD".into();
+            assert!(
+                request("stop", payload.to_string().as_bytes(), "%1")
+                    .unwrap()
+                    .is_none()
+            );
+        }
+        for invalid in [
+            serde_json::Value::Null,
+            (-1).into(),
+            serde_json::json!(1.5),
+            serde_json::json!(9_007_199_254_740_992u64),
+        ] {
+            let mut payload = original.clone();
+            payload["loop_count"] = invalid;
+            assert!(
+                request("stop", payload.to_string().as_bytes(), "%1")
+                    .unwrap()
+                    .is_none()
+            );
+        }
+    }
+
     /// The lifecycle transition from nonretaining drain preserves the exact byte
     /// cap, with no extra block consumed while discovering oversized input.
     #[test]

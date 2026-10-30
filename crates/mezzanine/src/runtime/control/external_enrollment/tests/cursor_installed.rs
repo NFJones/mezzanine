@@ -7,7 +7,9 @@ use super::*;
 
 /// Bare bootstrap twice in an isolated HOME then ordinary creator execution of
 /// exact installed hooks admits only its native source. Prompt/Stop generations
-/// repaint observational status, unknown context/usage is never charged, and exact
+/// repaint observational status; missing, zero and unsupported IDE/SDK expense
+/// shapes never become bills. Duplicate/stale responses, Stops and ends stay
+/// inert across model/generation changes, and exact
 /// sessionEnd retires without a role grant or vendor continuation decision.
 #[tokio::test(flavor = "current_thread")]
 #[ignore = "requires freshly built sibling mez binary; installed Cursor native helper qualification"]
@@ -55,22 +57,50 @@ async fn external_cursor_installed_hooks_admit_and_retire_without_launcher() {
     let (handle, actor) =
         AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
     let task = tokio::spawn(actor.run());
-    for (event, generation, status) in [
+    for (index, (event, generation, status)) in [
         ("sessionStart", "a", "completed"),
         ("sessionStart", "a", "completed"),
         ("beforeSubmitPrompt", "a", "completed"),
         ("preCompact", "a", "completed"),
         ("postToolUse", "a", "completed"),
         ("afterAgentResponse", "a", "completed"),
+        ("afterAgentResponse", "a", "completed"),
+        ("stop", "a", "completed"),
         ("stop", "a", "completed"),
         ("beforeSubmitPrompt", "b", "completed"),
+        ("afterAgentResponse", "a", "completed"),
+        ("stop", "a", "error"),
         ("stop", "b", "aborted"),
         ("beforeSubmitPrompt", "c", "completed"),
+        ("afterAgentResponse", "c", "completed"),
         ("stop", "c", "error"),
+        ("postToolUse", "c", "completed"),
         ("sessionEnd", "c", "error"),
-    ] {
+        ("sessionEnd", "c", "error"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
         let command = document["hooks"][event][0]["command"].as_str().unwrap();
-        let launch=serde_json::json!({"command":command,"event":{"hook_event_name":event,"session_id":"session-a","conversation_id":"session-a","generation_id":generation,"status":status,"loop_count":0,"reason":"user_close","prompt":"PRIVATE","text":"PRIVATE","transcript_path":"PRIVATE","user_email":"PRIVATE","context_tokens":999,"usage":{"input_tokens":999}}}).to_string();
+        // These are deliberately unsupported sample shapes, not a claim that
+        // any ordinary Cursor CLI release emits SDK/IDE expense fields.
+        let mut payload = serde_json::json!({"hook_event_name":event,"session_id":"session-a","conversation_id":"session-a","generation_id":generation,"status":status,"loop_count":index % 6,"reason":"user_close","prompt":"PRIVATE","text":"PRIVATE","transcript_path":"PRIVATE","user_email":"PRIVATE","model":format!("PRIVATE-SELECTED-{generation}"),"model_id":format!("PRIVATE-MODEL-{generation}"),"provider":"PRIVATE-PROVIDER","request_id":format!("PRIVATE-REQUEST-{generation}"),"context_tokens":999});
+        match index % 4 {
+            0 => {} // Missing counters are unavailable, not a report of zero.
+            1 => {
+                payload["usage"] = serde_json::json!({"input_tokens":0,"output_tokens":0,"cache_read_tokens":0,"cache_write_tokens":0})
+            }
+            2 => {
+                payload["input_tokens"] = 11.into();
+                payload["output_tokens"] = 7.into();
+                payload["cache_read_tokens"] = 5.into();
+                payload["cache_write_tokens"] = 3.into();
+            }
+            _ => {
+                payload["usage"] = serde_json::json!({"inputTokens":11,"outputTokens":7,"cacheReadTokens":5,"cacheWriteTokens":3,"totalTokens":26,"reasoningTokens":2})
+            }
+        }
+        let launch = serde_json::json!({"command":command,"event":payload}).to_string();
         fixture.socket.write_all(&[9]).await.unwrap();
         fixture
             .socket
