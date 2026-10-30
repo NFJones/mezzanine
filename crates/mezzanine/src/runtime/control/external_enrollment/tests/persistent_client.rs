@@ -291,8 +291,10 @@ async fn external_enrollment_installed_pi_retired_child_assertion_failure_is_rej
 
 /// The installed ordinary Pi producer sends finalized error/abort/success
 /// expense through real native readiness and typed durable ACK, not parent
-/// completion. More than 4096 messages retain one source/model/category stream;
-/// early counters, tool totals and replay never inflate durable expense.
+/// completion. More than 4096 messages alternate actual response models while
+/// retaining one source and exactly two model/category streams. Per-model
+/// expense and reopened history conserve every partition; early counters, tool
+/// totals and evicted historical callbacks never inflate or relabel expense.
 #[tokio::test(flavor = "current_thread")]
 #[ignore = "explicit MEZ_TEST_NODE_BINARY and freshly built mez helper required; offline only"]
 async fn external_enrollment_installed_ordinary_pi_usage_has_bounded_durable_stream() {
@@ -975,13 +977,16 @@ async fn qualify_installed_node_entry_result(
                 .unwrap(),
             expected_requests as i64
         );
-        for table in ["external_usage_streams", "external_usage_sources"] {
+        for (table, count) in [
+            ("external_usage_streams", if pi_usage { 2 } else { 1 }),
+            ("external_usage_sources", 1),
+        ] {
             assert_eq!(
                 database
                     .query_row(&format!("SELECT count(*) FROM {table}"), [], |row| row
                         .get::<_, i64>(0))
                     .unwrap(),
-                1
+                count
             );
         }
         assert_eq!(
@@ -995,9 +1000,29 @@ async fn qualify_installed_node_entry_result(
             assert!(exit.service.agent_shell_store().get("%1").is_none());
             let status = exit.service.runtime_agent_status_display("%1").unwrap();
             assert!(status.contains("pi-offline-provider"));
-            assert!(status.contains("actual-model"));
+            assert!(status.contains("actual-model-a"));
+            assert!(status.contains("actual-model-b"));
             assert!(!status.contains("selected-model"));
             assert!(!status.contains("PRIVATE_CALLBACK_CONTENT"));
+            let totals = database
+                .prepare("SELECT model,count(*),sum(input_tokens),sum(output_tokens),sum(reasoning_tokens),sum(cached_input_tokens),sum(cache_write_input_tokens) FROM token_usage_events GROUP BY model ORDER BY model")
+                .unwrap()
+                .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?, row.get::<_, i64>(2)?, row.get::<_, i64>(3)?, row.get::<_, i64>(4)?, row.get::<_, i64>(5)?, row.get::<_, i64>(6)?)))
+                .unwrap()
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .unwrap();
+            assert_eq!(
+                totals,
+                [("actual-model-a", 2053), ("actual-model-b", 2052)].map(|(model, count)| (
+                    model.to_string(),
+                    count,
+                    count * 10,
+                    count * 7,
+                    count * 4,
+                    count * 2,
+                    count * 3,
+                ))
+            );
             let reopened =
                 crate::storage::token_usage::TokenUsageStore::new(directory.join("usage.sqlite"));
             let snapshot = reopened
@@ -1013,6 +1038,32 @@ async fn qualify_installed_node_entry_result(
                     .map(|usage| usage.usage.input_tokens)
                     .sum::<u64>(),
                 expected_input
+            );
+            let model_history = snapshot.windows[&1]
+                .iter()
+                .map(|(key, value)| {
+                    assert_eq!(key.harness, "pi");
+                    assert_eq!(key.model.provider, "pi-offline-provider");
+                    let count = match key.model.model.as_str() {
+                        "actual-model-a" => 2053,
+                        "actual-model-b" => 2052,
+                        _ => panic!("unexpected fixture history model"),
+                    };
+                    assert_eq!(value.usage.input_tokens, count * 10);
+                    assert_eq!(value.usage.output_tokens, count * 7);
+                    assert_eq!(value.usage.reasoning_tokens, count * 4);
+                    assert_eq!(value.usage.cached_input_tokens, Some(count * 2));
+                    assert_eq!(value.usage.cache_write_input_tokens, Some(count * 3));
+                    assert!(value.reasoning_known);
+                    (key.model.model.clone(), value.usage.input_tokens)
+                })
+                .collect::<std::collections::BTreeMap<_, _>>();
+            assert_eq!(
+                model_history,
+                std::collections::BTreeMap::from([
+                    ("actual-model-a".to_string(), 20530),
+                    ("actual-model-b".to_string(), 20520),
+                ])
             );
         }
     }

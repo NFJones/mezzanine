@@ -1,7 +1,9 @@
 /** Offline Pi-like process loads the actual installed ordinary default entry.
  * Source-contract-shaped callbacks are synthetic, not a vendor/provider run.
  * The process itself enrolls and requests native readiness/durable accounting;
- * no supplied descriptor, token, parent completion or transcript import exists. */
+ * no supplied descriptor, token, parent completion or transcript import exists.
+ * Alternating actual models must keep two durable streams, never one per message
+ * or a sticky first/selected model, including replay after recent-map eviction. */
 import assert from "node:assert/strict";
 import { pathToFileURL } from "node:url";
 
@@ -27,8 +29,9 @@ try {
   emit({ type: "agent_start" }); await settle();
   for (let index = 0; index < 4105; index++) {
     emit({ type: "turn_start", turnIndex: index, timestamp: Date.now() });
-    const message = { role: "assistant", provider: "pi-offline-provider", model: "selected-model",
-      responseModel: "actual-model", stopReason: ["stop", "error", "aborted", "length", "toolUse"][index % 5],
+    const suffix = index % 2 === 0 ? "a" : "b";
+    const message = { role: "assistant", provider: "pi-offline-provider", model: `selected-model-${suffix}`,
+      responseModel: `actual-model-${suffix}`, stopReason: ["stop", "error", "aborted", "length", "toolUse"][index % 5],
       usage: { input: 999999, output: 7, cacheRead: 2, cacheWrite: 3, reasoning: 4, cacheWrite1h: 1 },
       content: [{ type: "text", text: "PRIVATE_CALLBACK_CONTENT" }], errorMessage: "PRIVATE_CALLBACK_CONTENT" };
     emit({ type: "message_end", message });
@@ -44,10 +47,13 @@ try {
   }
   // No genuine current request or object binding: old session/history replay
   // cannot allocate another marker after the bounded recent window expires.
-  emit({ type: "turn_end", turnIndex: 0, messageEntryId: "entry-0", message: {
-    role: "assistant", provider: "pi-offline-provider", model: "actual-model", stopReason: "stop",
-    usage: { input: 5, output: 7, cacheRead: 2, cacheWrite: 3, reasoning: 4 },
-  } }); await settle();
+  for (const [index, suffix] of [[0, "a"], [1, "b"]]) {
+    emit({ type: "turn_end", turnIndex: index, messageEntryId: `entry-${index}`, message: {
+      role: "assistant", provider: "pi-offline-provider", model: `selected-model-${suffix}`,
+      responseModel: `actual-model-${suffix}`, stopReason: index === 0 ? "stop" : "error",
+      usage: { input: 5, output: 7, cacheRead: 2, cacheWrite: 3, reasoning: 4, cacheWrite1h: 1 },
+    } }); await settle();
+  }
   emit({ type: "agent_before_settle", outcome: "completed" });
   emit({ type: "agent_settled" }); await settle();
   emit({ type: "session_shutdown", reason: "quit" }); await globalThis[ownerKey].tail;

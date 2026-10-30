@@ -1092,8 +1092,9 @@ accepted retries do not reset lifecycle ordinals twice. Original request/report
 identity, witness, origin, admission time and normalized counters remain unchanged;
 no provider work or historical charge is replayed. A never-received checkpoint,
 unresolved history gap or expired/retired/changed source remains unavailable.
-Current Pi17/OpenCode15 artifacts include this client; their exact previous
-Pi15/OpenCode13 bundles remain recognized independently frozen installer history.
+Pi17/OpenCode15 introduced this client; current Pi19 retains the same shared
+transport. The preceding Pi15/OpenCode13 bundles remain recognized as
+independently frozen installer history.
 
 A daemon replacement that starts a new pane/producer must not treat its former
 public source receipt as authority for the new native incarnation. Already
