@@ -10,6 +10,18 @@
 
 use super::*;
 
+/// Trusted headroom reserved for one fresh tracked acceptance transaction.
+/// This is local resource policy, never a model, wire, or snapshot field.
+#[derive(Debug, Clone, Copy)]
+pub struct MessageAcceptanceReservation {
+    /// Total remaining metadata bytes, including future recipient handoffs.
+    pub metadata_bytes: usize,
+    /// Maximum eligible recipients that fit the caller's remaining count units.
+    pub recipients: usize,
+    /// Additional pre-reserved metadata per recipient for task/outcome handoff.
+    pub handoff_bytes_per_recipient: usize,
+}
+
 /// Immutable same-runtime acceptance evidence for trusted local adapters.
 ///
 /// This value is deliberately neither serializable nor caller-constructible.
@@ -82,13 +94,33 @@ impl MessageService {
         now_ms: u64,
         metadata_budget: usize,
     ) -> Result<(Delivery, MessageAcceptanceProof)> {
-        let (delivery, proof) = self.accept_with_optional_proof(
+        self.accept_at_with_scope_and_reservation(
             sender,
             envelope,
             scope,
             now_ms,
-            Some(metadata_budget),
-        )?;
+            MessageAcceptanceReservation {
+                metadata_bytes: metadata_budget,
+                recipients: usize::MAX,
+                handoff_bytes_per_recipient: 0,
+            },
+        )
+    }
+
+    /// Accepts only when both frozen-recipient count and measured metadata plus
+    /// future handoff reservations fit before enqueue. Errors leave acceptance
+    /// state unchanged; ordinary send budgets remain independent. Callers own
+    /// consumption of the reserved request/edge/outcome capacity after success.
+    pub fn accept_at_with_scope_and_reservation(
+        &mut self,
+        sender: &AgentId,
+        envelope: Envelope,
+        scope: MessageScope,
+        now_ms: u64,
+        reservation: MessageAcceptanceReservation,
+    ) -> Result<(Delivery, MessageAcceptanceProof)> {
+        let (delivery, proof) =
+            self.accept_with_optional_proof(sender, envelope, scope, now_ms, Some(reservation))?;
         // The selected transaction constructs proof before enqueue and has no
         // successful duplicate path. Absence indicates a programming error.
         let proof = proof.ok_or_else(|| {
@@ -105,7 +137,7 @@ impl MessageService {
         &self,
         envelope: &Envelope,
         recipients: &[(AgentId, MessageSequence)],
-        budget: usize,
+        budget: MessageAcceptanceReservation,
     ) -> Result<MessageAcceptanceProof> {
         let bytes = std::mem::size_of::<MessageAcceptanceProof>()
             .saturating_add(2 * std::mem::size_of::<usize>())
@@ -116,7 +148,14 @@ impl MessageService {
             .saturating_add(recipients.iter().fold(0usize, |bytes, (id, _)| {
                 bytes.saturating_add(id.as_str().len())
             }));
-        if bytes > budget {
+        let handoff = recipients
+            .len()
+            .checked_mul(budget.handoff_bytes_per_recipient);
+        if recipients.len() > budget.recipients
+            || handoff
+                .and_then(|handoff| bytes.checked_add(handoff))
+                .is_none_or(|total| total > budget.metadata_bytes)
+        {
             return Err(MessageError::new(
                 MessageErrorKind::Capacity,
                 "tracked acceptance metadata capacity exceeded",
@@ -129,14 +168,26 @@ impl MessageService {
             .ok_or_else(|| {
                 MessageError::invalid_state("sender registration evidence unavailable")
             })?;
-        Ok(MessageAcceptanceProof {
+        let proof = MessageAcceptanceProof {
             runtime: self.acceptance_runtime.clone(),
             message_id: envelope.id.clone(),
             sender: (envelope.sender.agent_id.clone(), floor),
             recipients: recipients.to_vec(),
             correlation_id: envelope.correlation_id.clone(),
             sequence: self.next_sequence,
-        })
+        };
+        // Check actual owned capacities too, before enqueue. Admission must not
+        // depend on an allocator or a String/Vec clone preserving an estimate.
+        if handoff
+            .and_then(|handoff| proof.metadata_bytes().checked_add(handoff))
+            .is_none_or(|total| total > budget.metadata_bytes)
+        {
+            return Err(MessageError::new(
+                MessageErrorKind::Capacity,
+                "tracked acceptance metadata capacity exceeded",
+            ));
+        }
+        Ok(proof)
     }
 
     /// Captures bounded payload-free evidence while the canonical occurrence is

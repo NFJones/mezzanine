@@ -38,7 +38,7 @@ use super::validation::{
 
 mod acceptance_proof;
 mod discovery;
-pub use acceptance_proof::MessageAcceptanceProof;
+pub use acceptance_proof::{MessageAcceptanceProof, MessageAcceptanceReservation};
 mod identity;
 mod recipient_binding;
 mod snapshot;
@@ -175,7 +175,7 @@ impl MessageService {
         envelope: Envelope,
         scope: MessageScope,
         now_ms: u64,
-        proof_budget: Option<usize>,
+        proof_budget: Option<MessageAcceptanceReservation>,
     ) -> Result<(Delivery, Option<MessageAcceptanceProof>)> {
         validate_protocol(envelope.protocol)?;
         validate_message_type(&envelope.message_type)?;

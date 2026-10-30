@@ -286,7 +286,15 @@ fn acceptance_proof_budget_is_reserved_before_acceptance() {
     let envelope = mail(&parent, &child.agent_id, "tracked", None);
     let bindings = vec![(child.agent_id.clone(), 0)];
     let charge = service
-        .reserve_acceptance_proof(&envelope, &bindings, 4096)
+        .reserve_acceptance_proof(
+            &envelope,
+            &bindings,
+            MessageAcceptanceReservation {
+                metadata_bytes: 4096,
+                recipients: 1,
+                handoff_bytes_per_recipient: 0,
+            },
+        )
         .unwrap()
         .metadata_bytes();
     let before = service.snapshot_state();

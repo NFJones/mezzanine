@@ -10,6 +10,7 @@ mod error;
 mod json;
 mod outcomes;
 mod pending_limits;
+mod requests;
 mod service;
 mod types;
 mod validation;
@@ -21,7 +22,11 @@ pub use outcomes::{
     DeliveryTerminalReason, MessageDeliveryOutcome, MessageDeliveryTerminalSnapshot,
 };
 pub use pending_limits::PendingDeliveryLimits;
-pub use service::MessageAcceptanceProof;
+pub use requests::{
+    MESSAGE_REQUEST_HANDOFF_BYTES, MessageRequestLimits, MessageRequestOrigin,
+    MessageRequestReceipt, MessageRequests,
+};
+pub use service::{MessageAcceptanceProof, MessageAcceptanceReservation};
 pub use types::{
     AgentPresenceStatus, Delivery, DeliveryBatch, DeliveryCursor, DeliveryStatus, Envelope,
     FanoutBatch, FanoutBudget, MMP_CONTENT_TYPE, MessageAcceptedSnapshot, MessageAudienceSnapshot,
