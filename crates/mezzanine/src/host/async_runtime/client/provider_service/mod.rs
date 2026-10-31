@@ -23,7 +23,7 @@ use crate::integrations::agent::network::execute_network_action_with_transport_a
 use crate::integrations::agent::provider::{
     ObservedAsyncModelProvider, PendingProviderWireObservations, ProviderRequestPurpose,
     ProviderWireRequestObservation, ProviderWireRequestObserver,
-    STREAMING_SAY_TEXT_CHUNK_LIMIT_BYTES,
+    STREAMING_SAY_TEXT_CHUNK_LIMIT_BYTES, SharedProviderReportedUsage,
 };
 use crate::runtime::{
     AgentSessionTitleEvent, AgentSessionTitleOutcome, RuntimeAgentCommandAsyncOutcome,
@@ -33,6 +33,14 @@ use crate::runtime::{
 use std::future::Future;
 use std::pin::Pin;
 use std::time::{Duration, Instant};
+
+mod worker_ownership;
+use worker_ownership::{
+    AgentProviderJoined, AgentProviderWorkerOwners, ProviderObservationOwner, ProviderWorkerOwner,
+    finish_provider_service_result, record_owned_agent_provider_worker,
+    retire_agent_provider_workers, spawn_owned_agent_provider_worker,
+    take_completed_auxiliary_usage, with_reported_auxiliary_failure_usage,
+};
 
 mod executor_progress;
 use executor_progress::{
@@ -83,6 +91,18 @@ fn provider_worker_join_failure(error: &tokio::task::JoinError) -> &'static str 
     }
 }
 
+/// Bounds native join failures without copying arbitrary panic payloads.
+/// A cancellation category alone is not a native child retirement receipt.
+fn native_worker_join_failure(error: &tokio::task::JoinError) -> &'static str {
+    if error.is_panic() {
+        "native shell worker join failed: panic"
+    } else if error.is_cancelled() {
+        "native shell worker join failed: cancelled"
+    } else {
+        "native shell worker join failed: unknown"
+    }
+}
+
 /// Service-owned expense evidence surviving monitor abort or early failure.
 /// Producer destruction is acknowledged before the ordinary wire journal is
 /// drained; this owner never sends provider requests or authorizes output.
@@ -90,11 +110,15 @@ struct ProviderObservationDrain {
     abort: tokio::task::AbortHandle,
     completed: tokio::sync::oneshot::Receiver<()>,
     pending: PendingProviderWireObservations,
+    /// Auxiliary reported expense independent of wire-channel acknowledgment.
+    reported: Option<SharedProviderReportedUsage>,
 }
 
 /// Retained cleanup owners for the currently active inference monitors.
 type ProviderObservationDrains = std::sync::Arc<
-    std::sync::Mutex<std::collections::BTreeMap<(String, u64), ProviderObservationDrain>>,
+    std::sync::Mutex<
+        std::collections::BTreeMap<ProviderObservationOwner, ProviderObservationDrain>,
+    >,
 >;
 
 /// Acknowledges producer destruction, including cancellation before completion.
@@ -339,6 +363,7 @@ where
     let mut lifecycle = handle.lifecycle_state_watcher();
     let mut side_effect_watcher = handle.side_effect_delivery_watcher();
     let mut workers = JoinSet::new();
+    let mut owners = AgentProviderWorkerOwners::default();
     let mut report = AsyncAgentProviderPollReport {
         polls: 0,
         executions: 0,
@@ -347,11 +372,18 @@ where
     };
 
     let drains: ProviderObservationDrains = Default::default();
-    let result = async {
+    let mut result = async {
         loop {
             let state = *lifecycle.borrow();
             report.terminal_state = state;
-            drain_completed_agent_provider_workers(&mut workers, handle, &mut report).await?;
+            drain_completed_agent_provider_workers(
+                &mut workers,
+                handle,
+                &mut report,
+                &mut owners,
+                &drains,
+            )
+            .await?;
             if should_stop(report.polls, state) {
                 return Ok(report);
             }
@@ -395,19 +427,45 @@ where
                 )
                 .await
                 {
-                    record_joined_agent_provider_worker(joined, handle, &mut report).await?;
+                    record_owned_agent_provider_worker(
+                        joined,
+                        handle,
+                        &mut report,
+                        &mut owners,
+                        &drains,
+                    )
+                    .await?;
                 }
             } else {
-                dispatch_agent_provider_side_effects(handle, dispatches, &mut workers, &drains)
-                    .await?;
-                drain_completed_agent_provider_workers(&mut workers, handle, &mut report).await?;
+                dispatch_agent_provider_side_effects(
+                    handle,
+                    dispatches,
+                    &mut workers,
+                    &drains,
+                    &mut owners,
+                )
+                .await?;
+                drain_completed_agent_provider_workers(
+                    &mut workers,
+                    handle,
+                    &mut report,
+                    &mut owners,
+                    &drains,
+                )
+                .await?;
                 report.polls = report.polls.saturating_add(1);
             }
         }
     }
     .await;
-    abort_agent_provider_workers(&mut workers, handle, &drains).await?;
-    result
+    let cleanup = abort_agent_provider_workers(&mut workers, handle, &drains, &mut owners)
+        .await
+        .map(|executions| {
+            if let Ok(report) = &mut result {
+                report.executions = report.executions.saturating_add(executions);
+            }
+        });
+    finish_provider_service_result(result, cleanup)
 }
 
 /// Runs deferred interactive commands on a dedicated, bounded worker lane.
@@ -781,9 +839,11 @@ async fn drain_completed_agent_provider_workers(
     workers: &mut JoinSet<Result<AsyncAgentProviderWorkerResult>>,
     handle: &AsyncRuntimeSessionHandle,
     report: &mut AsyncAgentProviderPollReport,
+    owners: &mut AgentProviderWorkerOwners,
+    drains: &ProviderObservationDrains,
 ) -> Result<()> {
-    while let Some(joined) = workers.try_join_next() {
-        record_joined_agent_provider_worker(joined, handle, report).await?;
+    while let Some(joined) = workers.try_join_next_with_id() {
+        record_owned_agent_provider_worker(joined, handle, report, owners, drains).await?;
     }
     Ok(())
 }
@@ -857,7 +917,8 @@ async fn record_joined_agent_provider_worker(
         Ok(Err(error)) => Err(error),
         Err(error) if error.is_cancelled() => Ok(()),
         Err(error) => Err(MezError::invalid_state(format!(
-            "async agent provider worker task failed: {error}"
+            "async agent provider worker task failed: {}",
+            if error.is_panic() { "panic" } else { "unknown" }
         ))),
     }
 }
@@ -870,7 +931,7 @@ async fn wait_for_agent_provider_worker_wakeup(
     lifecycle_watcher: &mut watch::Receiver<RuntimeLifecycleState>,
     side_effect_watcher: &mut watch::Receiver<u64>,
     idle_interval: Duration,
-) -> Option<std::result::Result<Result<AsyncAgentProviderWorkerResult>, tokio::task::JoinError>> {
+) -> Option<AgentProviderJoined> {
     if workers.is_empty() {
         tokio::select! {
             _ = handle.wait_for_event_delivery() => None,
@@ -887,7 +948,7 @@ async fn wait_for_agent_provider_worker_wakeup(
     } else {
         tokio::select! {
             biased;
-            joined = workers.join_next() => joined,
+            joined = workers.join_next_with_id() => joined,
             _ = handle.wait_for_event_delivery() => None,
             changed = side_effect_watcher.changed() => {
                 let _ = changed;
@@ -907,16 +968,9 @@ async fn abort_agent_provider_workers(
     workers: &mut JoinSet<Result<AsyncAgentProviderWorkerResult>>,
     handle: &AsyncRuntimeSessionHandle,
     drains: &ProviderObservationDrains,
-) -> Result<()> {
-    workers.abort_all();
-    while workers.join_next().await.is_some() {}
-    let retained = std::mem::take(&mut *drains.lock().unwrap_or_else(|error| error.into_inner()));
-    for (_, drain) in retained {
-        drain.abort.abort();
-        let _ = drain.completed.await;
-        flush_pending_provider_observations(handle, &drain.pending).await?;
-    }
-    Ok(())
+    owners: &mut AgentProviderWorkerOwners,
+) -> Result<u64> {
+    retire_agent_provider_workers(workers, handle, drains, owners).await
 }
 
 /// Runs the dispatch agent provider side effects operation for this subsystem.
@@ -929,6 +983,7 @@ async fn dispatch_agent_provider_side_effects(
     dispatches: Vec<RuntimeSideEffect>,
     workers: &mut JoinSet<Result<AsyncAgentProviderWorkerResult>>,
     drains: &ProviderObservationDrains,
+    owners: &mut AgentProviderWorkerOwners,
 ) -> Result<()> {
     for dispatch in dispatches {
         match dispatch {
@@ -939,13 +994,19 @@ async fn dispatch_agent_provider_side_effects(
                 else {
                     continue;
                 };
-                workers.spawn(monitor_runtime_agent_provider_dispatch(
-                    handle.clone(),
-                    agent_id,
-                    turn_id,
-                    dispatch,
-                    drains.clone(),
-                ));
+                let owner = ProviderWorkerOwner::inference(agent_id.clone(), &dispatch);
+                spawn_owned_agent_provider_worker(
+                    workers,
+                    owners,
+                    Some(owner),
+                    monitor_runtime_agent_provider_dispatch(
+                        handle.clone(),
+                        agent_id,
+                        turn_id,
+                        dispatch,
+                        drains.clone(),
+                    ),
+                );
             }
             RuntimeSideEffect::DispatchApprovedExternalAction { turn_id, action_id } => {
                 let Some(dispatch) = handle
@@ -954,14 +1015,24 @@ async fn dispatch_agent_provider_side_effects(
                 else {
                     continue;
                 };
-                workers.spawn(execute_approved_external_action(handle.clone(), dispatch));
+                spawn_owned_agent_provider_worker(
+                    workers,
+                    owners,
+                    None,
+                    execute_approved_external_action(handle.clone(), dispatch),
+                );
             }
             RuntimeSideEffect::DispatchNativeShellAction { turn_id, action_id } => {
                 let Some(dispatch) = handle.claim_native_shell_action(turn_id, action_id).await?
                 else {
                     continue;
                 };
-                workers.spawn(execute_native_shell_action(handle.clone(), dispatch));
+                spawn_owned_agent_provider_worker(
+                    workers,
+                    owners,
+                    None,
+                    execute_native_shell_action(handle.clone(), dispatch),
+                );
             }
             RuntimeSideEffect::DispatchRecordBrowserRefresh {
                 refresh_key,
@@ -976,7 +1047,7 @@ async fn dispatch_agent_provider_side_effects(
                     Err(error) => return Err(error),
                 };
                 let handle = handle.clone();
-                workers.spawn(async move {
+                spawn_owned_agent_provider_worker(workers, owners, None, async move {
                     let execution_work = work.clone();
                     let outcome = match tokio::task::spawn_blocking(move || {
                         crate::runtime::RuntimeSessionService::execute_record_browser_refresh(
@@ -1026,11 +1097,19 @@ async fn dispatch_agent_provider_side_effects(
                         continue;
                     }
                 };
-                workers.spawn(monitor_runtime_agent_compaction_dispatch(
-                    handle.clone(),
-                    pane_id,
-                    dispatch,
-                ));
+                let owner = ProviderWorkerOwner::compaction(&dispatch);
+                spawn_owned_agent_provider_worker(
+                    workers,
+                    owners,
+                    Some(owner),
+                    monitor_runtime_agent_compaction_dispatch(
+                        handle.clone(),
+                        pane_id,
+                        dispatch,
+                        drains.clone(),
+                        execute_runtime_agent_compaction_dispatch,
+                    ),
+                );
             }
             RuntimeSideEffect::DispatchAgentRemember {
                 pane_id,
@@ -1045,11 +1124,19 @@ async fn dispatch_agent_provider_side_effects(
                     // Claim failure is retired by its actor-owned admission.
                     Err(_) => continue,
                 };
-                workers.spawn(monitor_runtime_agent_remember_dispatch(
-                    handle.clone(),
-                    pane_id,
-                    dispatch,
-                ));
+                let owner = ProviderWorkerOwner::remember(&dispatch);
+                spawn_owned_agent_provider_worker(
+                    workers,
+                    owners,
+                    Some(owner),
+                    monitor_runtime_agent_remember_dispatch(
+                        handle.clone(),
+                        pane_id,
+                        dispatch,
+                        drains.clone(),
+                        execute_runtime_agent_remember_dispatch,
+                    ),
+                );
             }
             RuntimeSideEffect::DispatchAgentSessionTitle {
                 conversation_id,
@@ -1066,17 +1153,25 @@ async fn dispatch_agent_provider_side_effects(
                     Ok(None) => continue,
                     Err(_) => continue,
                 };
-                workers.spawn(monitor_runtime_agent_session_title_dispatch(
-                    handle.clone(),
-                    dispatch,
-                ));
+                let owner = ProviderWorkerOwner::title(&dispatch);
+                spawn_owned_agent_provider_worker(
+                    workers,
+                    owners,
+                    Some(owner),
+                    monitor_runtime_agent_session_title_dispatch(
+                        handle.clone(),
+                        dispatch,
+                        drains.clone(),
+                        execute_runtime_agent_session_title_dispatch,
+                    ),
+                );
             }
             RuntimeSideEffect::DispatchAgentPresentationResize {
                 pane_id,
                 debounce_ms,
             } => {
                 let handle = handle.clone();
-                workers.spawn(async move {
+                spawn_owned_agent_provider_worker(workers, owners, None, async move {
                     sleep(Duration::from_millis(debounce_ms.max(1))).await;
                     let Ok(Some(work)) = handle.take_agent_presentation_resize_work(pane_id).await
                     else {
@@ -1273,7 +1368,7 @@ async fn execute_native_shell_action(
             launch_counts: None,
             result: Err(RuntimeNativeShellFailure {
                 kind: "invalid_state".to_string(),
-                message: format!("native shell worker join failed: {error}"),
+                message: native_worker_join_failure(&error).to_string(),
                 lifecycle: None,
             }),
         },
@@ -1498,7 +1593,7 @@ where
         let _completed = ProviderCompletionOnDrop(Some(completed_sender));
         factory(progress_sender, observation_sender, worker_pending).await
     });
-    let drain_key = (turn_id.clone(), claim_generation);
+    let drain_key = ProviderObservationOwner::Inference(turn_id.clone(), claim_generation);
     drains
         .lock()
         .unwrap_or_else(|error| error.into_inner())
@@ -1508,6 +1603,7 @@ where
                 abort: worker.abort_handle(),
                 completed,
                 pending: pending_observations.clone(),
+                reported: None,
             },
         );
     let _worker_owner = AbortProviderWorkerOnDrop(worker.abort_handle());
@@ -1730,36 +1826,68 @@ pub(in crate::host::async_runtime) fn classify_provider_monitor_liveness(
 }
 
 /// Runs one model-backed compaction worker while honoring shutdown.
-async fn monitor_runtime_agent_compaction_dispatch(
+/// The executor factory constructs only request-local work inside the owned
+/// child; captured identity, observations and actor ingress stay monitor-owned.
+async fn monitor_runtime_agent_compaction_dispatch<Factory, WorkerFuture>(
     handle: AsyncRuntimeSessionHandle,
     pane_id: String,
     dispatch: RuntimeAgentCompactionDispatch,
-) -> Result<AsyncAgentProviderWorkerResult> {
+    drains: ProviderObservationDrains,
+    execute: Factory,
+) -> Result<AsyncAgentProviderWorkerResult>
+where
+    Factory: FnOnce(RuntimeAgentCompactionDispatch, ProviderWireRequestObserver) -> WorkerFuture
+        + Send
+        + 'static,
+    WorkerFuture: Future<Output = Result<mez_agent::ModelResponse>> + Send + 'static,
+{
     let mut lifecycle = handle.lifecycle_state_watcher();
     let mut side_effect_watcher = handle.side_effect_delivery_watcher();
     let task_generation = dispatch.task.task_generation;
     let conversation_id = dispatch.task.conversation_id.clone();
+    let drain_key = ProviderObservationOwner::Compaction(pane_id.clone(), task_generation);
+    let pending: PendingProviderWireObservations = Default::default();
+    let reported: SharedProviderReportedUsage = Default::default();
     let (observation_sender, mut observation_receiver) =
         tokio::sync::mpsc::channel(STREAMING_SAY_PROGRESS_CHANNEL_CAPACITY);
     let observer =
-        ProviderWireRequestObserver::new(conversation_id, pane_id.clone(), observation_sender);
+        ProviderWireRequestObserver::new(conversation_id, pane_id.clone(), observation_sender)
+            .with_pending_observations(pending.clone())
+            .with_reported_usage(reported.clone());
+    let (completed_sender, completed) = tokio::sync::oneshot::channel();
+    let completion = ProviderCompletionOnDrop(Some(completed_sender));
     let (mut worker, _worker_owner) = spawn_auxiliary_provider_worker(move || async move {
-        execute_runtime_agent_compaction_dispatch(dispatch, &observer).await
+        let _completion = completion;
+        execute(dispatch, observer).await
     });
+    drains
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .insert(
+            drain_key.clone(),
+            ProviderObservationDrain {
+                abort: worker.abort_handle(),
+                completed,
+                pending: pending.clone(),
+                reported: Some(reported),
+            },
+        );
     loop {
         tokio::select! {
             result = &mut worker => {
                 while let Ok(observation) = observation_receiver.try_recv() {
-                    submit_provider_wire_request_observation(&handle, observation).await?;
+                    submit_pending_provider_observation(&handle, &pending, observation).await?;
                 }
-                return Ok(Some(compaction_worker_event(
-                    pane_id,
-                    task_generation,
-                    result,
-                )));
+                flush_pending_provider_observations(&handle, &pending).await?;
+                let reported = take_completed_auxiliary_usage(&drains, &drain_key)?;
+                let join_failed = result.is_err();
+                let completion = compaction_worker_event(pane_id, task_generation, result);
+                return Ok(Some(if join_failed {
+                    with_reported_auxiliary_failure_usage(completion, reported)?
+                } else { completion }));
             }
             Some(observation) = observation_receiver.recv() => {
-                submit_provider_wire_request_observation(&handle, observation).await?;
+                submit_pending_provider_observation(&handle, &pending, observation).await?;
             }
             _ = handle.wait_for_event_delivery() => {}
             changed = side_effect_watcher.changed() => {
@@ -1778,11 +1906,21 @@ async fn monitor_runtime_agent_compaction_dispatch(
 }
 
 /// Runs one model-backed durable memory worker while honoring shutdown.
-async fn monitor_runtime_agent_remember_dispatch(
+/// The injected executor replaces request work, preserving the monitor's exact
+/// observation identity and ordinary failure/actor-delivery boundaries.
+async fn monitor_runtime_agent_remember_dispatch<Factory, WorkerFuture>(
     handle: AsyncRuntimeSessionHandle,
     pane_id: String,
     dispatch: RuntimeAgentRememberDispatch,
-) -> Result<AsyncAgentProviderWorkerResult> {
+    drains: ProviderObservationDrains,
+    execute: Factory,
+) -> Result<AsyncAgentProviderWorkerResult>
+where
+    Factory: FnOnce(RuntimeAgentRememberDispatch, ProviderWireRequestObserver) -> WorkerFuture
+        + Send
+        + 'static,
+    WorkerFuture: Future<Output = Result<mez_agent::ModelResponse>> + Send + 'static,
+{
     let mut lifecycle = handle.lifecycle_state_watcher();
     let mut side_effect_watcher = handle.side_effect_delivery_watcher();
     let observation_id = dispatch.task.observation_id.clone();
@@ -1792,23 +1930,49 @@ async fn monitor_runtime_agent_remember_dispatch(
         .prompt_cache_session_id
         .clone()
         .unwrap_or_else(|| format!("pane:{pane_id}"));
+    let drain_key = ProviderObservationOwner::Remember(observation_id.clone());
+    let pending: PendingProviderWireObservations = Default::default();
+    let reported: SharedProviderReportedUsage = Default::default();
     let (observation_sender, mut observation_receiver) =
         tokio::sync::mpsc::channel(STREAMING_SAY_PROGRESS_CHANNEL_CAPACITY);
     let observer =
-        ProviderWireRequestObserver::new(conversation_id, pane_id.clone(), observation_sender);
+        ProviderWireRequestObserver::new(conversation_id, pane_id.clone(), observation_sender)
+            .with_pending_observations(pending.clone())
+            .with_reported_usage(reported.clone());
+    let (completed_sender, completed) = tokio::sync::oneshot::channel();
+    let completion = ProviderCompletionOnDrop(Some(completed_sender));
     let (mut worker, _worker_owner) = spawn_auxiliary_provider_worker(move || async move {
-        execute_runtime_agent_remember_dispatch(dispatch, &observer).await
+        let _completion = completion;
+        execute(dispatch, observer).await
     });
+    drains
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .insert(
+            drain_key.clone(),
+            ProviderObservationDrain {
+                abort: worker.abort_handle(),
+                completed,
+                pending: pending.clone(),
+                reported: Some(reported),
+            },
+        );
     loop {
         tokio::select! {
             result = &mut worker => {
                 while let Ok(observation) = observation_receiver.try_recv() {
-                    submit_provider_wire_request_observation(&handle, observation).await?;
+                    submit_pending_provider_observation(&handle, &pending, observation).await?;
                 }
-                return Ok(Some(remember_worker_event(pane_id, observation_id, result)));
+                flush_pending_provider_observations(&handle, &pending).await?;
+                let reported = take_completed_auxiliary_usage(&drains, &drain_key)?;
+                let join_failed = result.is_err();
+                let completion = remember_worker_event(pane_id, observation_id, result);
+                return Ok(Some(if join_failed {
+                    with_reported_auxiliary_failure_usage(completion, reported)?
+                } else { completion }));
             }
             Some(observation) = observation_receiver.recv() => {
-                submit_provider_wire_request_observation(&handle, observation).await?;
+                submit_pending_provider_observation(&handle, &pending, observation).await?;
             }
             _ = handle.wait_for_event_delivery() => {}
             changed = side_effect_watcher.changed() => {
@@ -1828,34 +1992,71 @@ async fn monitor_runtime_agent_remember_dispatch(
 
 /// Runs one turn-less generated session-title request while honoring shutdown.
 ///
+/// Request construction stays inside the spawned child even when the executor
+/// factory unwinds. Completion retains the original conversation and attempt.
 /// Title work is optional and never owns a turn, so the worker can be dropped at
 /// any point without leaving turn machinery behind.
-async fn monitor_runtime_agent_session_title_dispatch(
+async fn monitor_runtime_agent_session_title_dispatch<Factory, WorkerFuture>(
     handle: AsyncRuntimeSessionHandle,
     dispatch: RuntimeAgentSessionTitleDispatch,
-) -> Result<AsyncAgentProviderWorkerResult> {
+    drains: ProviderObservationDrains,
+    execute: Factory,
+) -> Result<AsyncAgentProviderWorkerResult>
+where
+    Factory: FnOnce(RuntimeAgentSessionTitleDispatch, ProviderWireRequestObserver) -> WorkerFuture
+        + Send
+        + 'static,
+    WorkerFuture:
+        Future<Output = (AgentSessionTitleOutcome, mez_agent::ModelTokenUsage)> + Send + 'static,
+{
     let mut lifecycle = handle.lifecycle_state_watcher();
     let mut side_effect_watcher = handle.side_effect_delivery_watcher();
     let conversation_id = dispatch.task.conversation_id.clone();
     let pane_id = dispatch.task.pane_id.clone();
     let attempt_id = dispatch.task.attempt_id.clone();
+    let drain_key = ProviderObservationOwner::Title(attempt_id.clone());
+    let pending: PendingProviderWireObservations = Default::default();
+    let reported: SharedProviderReportedUsage = Default::default();
     let (observation_sender, mut observation_receiver) =
         tokio::sync::mpsc::channel(STREAMING_SAY_PROGRESS_CHANNEL_CAPACITY);
     let observer =
-        ProviderWireRequestObserver::new(conversation_id.clone(), pane_id, observation_sender);
+        ProviderWireRequestObserver::new(conversation_id.clone(), pane_id, observation_sender)
+            .with_pending_observations(pending.clone())
+            .with_reported_usage(reported.clone());
+    let (completed_sender, completed) = tokio::sync::oneshot::channel();
+    let completion = ProviderCompletionOnDrop(Some(completed_sender));
     let (mut worker, _worker_owner) = spawn_auxiliary_provider_worker(move || async move {
-        execute_runtime_agent_session_title_dispatch(dispatch, &observer).await
+        let _completion = completion;
+        execute(dispatch, observer).await
     });
+    drains
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .insert(
+            drain_key.clone(),
+            ProviderObservationDrain {
+                abort: worker.abort_handle(),
+                completed,
+                pending: pending.clone(),
+                reported: Some(reported),
+            },
+        );
     loop {
         tokio::select! {
             outcome = &mut worker => {
                 while let Ok(observation) = observation_receiver.try_recv() {
-                    submit_provider_wire_request_observation(&handle, observation).await?;
+                    submit_pending_provider_observation(&handle, &pending, observation).await?;
                 }
-                return Ok(Some(session_title_worker_event(conversation_id, attempt_id, outcome)));
+                flush_pending_provider_observations(&handle, &pending).await?;
+                let reported = take_completed_auxiliary_usage(&drains, &drain_key)?;
+                let join_failed = outcome.is_err();
+                let completion = session_title_worker_event(conversation_id, attempt_id, outcome);
+                return Ok(Some(if join_failed {
+                    with_reported_auxiliary_failure_usage(completion, reported)?
+                } else { completion }));
             }
             Some(observation) = observation_receiver.recv() => {
-                submit_provider_wire_request_observation(&handle, observation).await?;
+                submit_pending_provider_observation(&handle, &pending, observation).await?;
             }
             _ = handle.wait_for_event_delivery() => {}
             changed = side_effect_watcher.changed() => {
@@ -2055,15 +2256,16 @@ fn session_title_worker_event(
     >,
 ) -> (RuntimeEvent, bool) {
     let (outcome, usage) = result.unwrap_or_else(|error| {
+        use crate::session_title::SessionTitleFailureReason;
         let reason = if error.is_panic() {
-            "worker_panic"
+            SessionTitleFailureReason::WorkerPanic
         } else if error.is_cancelled() {
-            "worker_cancelled"
+            SessionTitleFailureReason::WorkerCancelled
         } else {
-            "worker_join_failed"
+            SessionTitleFailureReason::WorkerJoinFailed
         };
         (
-            AgentSessionTitleOutcome::Rejected(reason.to_string()),
+            AgentSessionTitleOutcome::Rejected(reason.as_str().to_string()),
             Default::default(),
         )
     });
@@ -2282,7 +2484,7 @@ async fn execute_runtime_agent_provider_dispatch(
 /// Executes one model-backed conversation compaction request.
 async fn execute_runtime_agent_compaction_dispatch(
     dispatch: RuntimeAgentCompactionDispatch,
-    observer: &ProviderWireRequestObserver,
+    observer: ProviderWireRequestObserver,
 ) -> Result<mez_agent::ModelResponse> {
     let RuntimeAgentCompactionDispatch {
         task,
@@ -2294,7 +2496,7 @@ async fn execute_runtime_agent_compaction_dispatch(
         RuntimeAgentProviderDispatchProvider::OpenAi(provider) => {
             let provider = ObservedAsyncModelProvider::new(
                 &provider,
-                observer,
+                &observer,
                 ProviderRequestPurpose::Compaction,
             );
             runtime_send_compaction_request_with_output_limit_retry(
@@ -2310,7 +2512,7 @@ async fn execute_runtime_agent_compaction_dispatch(
         RuntimeAgentProviderDispatchProvider::DeepSeek(provider) => {
             let provider = ObservedAsyncModelProvider::new(
                 &provider,
-                observer,
+                &observer,
                 ProviderRequestPurpose::Compaction,
             );
             runtime_send_compaction_request_with_output_limit_retry(
@@ -2326,7 +2528,7 @@ async fn execute_runtime_agent_compaction_dispatch(
         RuntimeAgentProviderDispatchProvider::Anthropic(provider) => {
             let provider = ObservedAsyncModelProvider::new(
                 &provider,
-                observer,
+                &observer,
                 ProviderRequestPurpose::Compaction,
             );
             runtime_send_compaction_request_with_output_limit_retry(
@@ -2342,7 +2544,7 @@ async fn execute_runtime_agent_compaction_dispatch(
         RuntimeAgentProviderDispatchProvider::OpenAiCompatible(provider) => {
             let provider = ObservedAsyncModelProvider::new(
                 &provider,
-                observer,
+                &observer,
                 ProviderRequestPurpose::Compaction,
             );
             runtime_send_compaction_request_with_output_limit_retry(
@@ -2361,14 +2563,14 @@ async fn execute_runtime_agent_compaction_dispatch(
 /// Executes one model-backed durable memory generation request.
 async fn execute_runtime_agent_remember_dispatch(
     dispatch: RuntimeAgentRememberDispatch,
-    observer: &ProviderWireRequestObserver,
+    observer: ProviderWireRequestObserver,
 ) -> Result<mez_agent::ModelResponse> {
     let RuntimeAgentRememberDispatch { task, provider } = dispatch;
     match provider {
         RuntimeAgentProviderDispatchProvider::OpenAi(provider) => {
             observed_provider_request(
                 &provider,
-                observer,
+                &observer,
                 ProviderRequestPurpose::Memory,
                 &task.request,
             )
@@ -2377,7 +2579,7 @@ async fn execute_runtime_agent_remember_dispatch(
         RuntimeAgentProviderDispatchProvider::Anthropic(provider) => {
             observed_provider_request(
                 &provider,
-                observer,
+                &observer,
                 ProviderRequestPurpose::Memory,
                 &task.request,
             )
@@ -2386,7 +2588,7 @@ async fn execute_runtime_agent_remember_dispatch(
         RuntimeAgentProviderDispatchProvider::DeepSeek(provider) => {
             observed_provider_request(
                 &provider,
-                observer,
+                &observer,
                 ProviderRequestPurpose::Memory,
                 &task.request,
             )
@@ -2395,7 +2597,7 @@ async fn execute_runtime_agent_remember_dispatch(
         RuntimeAgentProviderDispatchProvider::OpenAiCompatible(provider) => {
             observed_provider_request(
                 &provider,
-                observer,
+                &observer,
                 ProviderRequestPurpose::Memory,
                 &task.request,
             )
@@ -2410,13 +2612,13 @@ async fn execute_runtime_agent_remember_dispatch(
 /// reason crosses the worker boundary; raw provider text never crosses it.
 async fn execute_runtime_agent_session_title_dispatch(
     dispatch: RuntimeAgentSessionTitleDispatch,
-    observer: &ProviderWireRequestObserver,
+    observer: ProviderWireRequestObserver,
 ) -> (AgentSessionTitleOutcome, mez_agent::ModelTokenUsage) {
     let RuntimeAgentSessionTitleDispatch { task, provider } = dispatch;
     session_title_response_outcome(
         observed_dispatch_provider_request(
             &provider,
-            observer,
+            &observer,
             ProviderRequestPurpose::Auxiliary,
             &task.request,
         )
@@ -2690,6 +2892,7 @@ fn provider_worker_error_kind(error: &MezError) -> &'static str {
 mod tests {
     use super::*;
 
+    mod auxiliary_actor_faults;
     mod auxiliary_containment;
     mod incomplete;
     mod network_progress;
@@ -3494,6 +3697,55 @@ mod tests {
         assert_eq!(
             tracker.total_elapsed_ms(started_at + Duration::from_millis(20)),
             20
+        );
+    }
+
+    /// Real blocking-pool panic and pre-start cancellation must expose only a
+    /// fixed native join category. This classifier control owns no native child
+    /// and makes no claim that an already-started blocking task can be aborted.
+    #[test]
+    fn native_worker_join_messages_exclude_payloads_and_distinguish_cancellation() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .max_blocking_threads(1)
+            .enable_all()
+            .build()
+            .unwrap();
+        let panic = runtime.block_on(async {
+            tokio::task::spawn_blocking(|| panic!("private native worker payload"))
+                .await
+                .unwrap_err()
+        });
+        assert_eq!(
+            native_worker_join_failure(&panic),
+            "native shell worker join failed: panic"
+        );
+        let (ready, started) = std::sync::mpsc::channel();
+        let (release, released) = std::sync::mpsc::channel();
+        let blocker = runtime.spawn_blocking(move || {
+            ready.send(()).unwrap();
+            released.recv_timeout(Duration::from_secs(5)).unwrap();
+        });
+        started.recv_timeout(Duration::from_secs(5)).unwrap();
+        let evaluated = Arc::new(AtomicUsize::new(0));
+        let queued_evaluated = evaluated.clone();
+        let queued = runtime.spawn_blocking(move || {
+            queued_evaluated.fetch_add(1, Ordering::SeqCst);
+        });
+        queued.abort();
+        release.send(()).unwrap();
+        let cancelled = runtime.block_on(async {
+            blocker.await.unwrap();
+            queued.await.unwrap_err()
+        });
+        assert!(cancelled.is_cancelled());
+        assert_eq!(evaluated.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            native_worker_join_failure(&cancelled),
+            "native shell worker join failed: cancelled"
         );
     }
 

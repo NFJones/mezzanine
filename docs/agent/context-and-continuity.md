@@ -263,6 +263,16 @@ separately. Structured failures contain bounded categories, while the ordinary
 process panic diagnostics remain available. Shared actor failures still stop
 the compromised owner.
 
+When the provider service retires a claimed request, it observes request
+termination and settles the original claim. A completed result still follows
+normal actor validation; cleanup does not substitute a cancellation for it.
+Reported auxiliary usage survives cancellation or a request panic, including
+when response content was never published. Normal returned usage is not charged
+again from the retained counters. Inference keeps its wire checkpoints. Cleanup
+preserves the first failure if another retirement step also fails; shared monitor
+failures remain fatal to their owning service. Existing title retry bounds still
+apply, and no settled action or provider request is replayed by retirement.
+
 If compaction fails, the error does not mean the source history was discarded.
 Mez does not publish a partial replacement as a completed durable compaction.
 Interrupted compactor responses (including HTTP 200 with an incomplete body)

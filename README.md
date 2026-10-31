@@ -64,6 +64,8 @@ request fit, independently of provider generation controls. OpenAI requests
 always omit `max_output_tokens`; see [context and continuity](docs/agent/context-and-continuity.md).
 Forked subagents retain compacted summaries, including conversations with no
 remaining raw history, before starting their first provider request.
+Provider request cancellation settles the original claim and preserves recorded
+usage; completed outcomes still pass through normal validation.
 
 Shared HTTP execution keeps wire payloads out of transport diagnostics. The
 [authenticated-search foundation](docs/reference-manual/agent-actions.md#http-execution-and-authenticated-search-foundation)

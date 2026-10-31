@@ -677,6 +677,21 @@ pub(crate) type PendingProviderWireObservations = std::sync::Arc<
     std::sync::Mutex<std::collections::BTreeMap<String, ProviderWireRequestObservation>>,
 >;
 
+/// Constant-space expense retained when an auxiliary response cannot be adopted.
+/// Normal outcome accounting remains authoritative; this snapshot is used only
+/// after its producer is destroyed and the terminal outcome is unavailable.
+#[derive(Debug, Default, Clone, Copy)]
+pub(crate) struct ProviderReportedUsage {
+    /// Disjoint normalized usage from completed concrete wire observations.
+    pub(crate) usage: mez_agent::ModelTokenUsage,
+    /// Reports with known usage, including an explicitly reported zero.
+    pub(crate) known_observations: u64,
+}
+
+/// Request-owner-local reported expense, independent of channel acknowledgement.
+pub(crate) type SharedProviderReportedUsage =
+    std::sync::Arc<std::sync::Mutex<ProviderReportedUsage>>;
+
 /// Actor-bound observation sink shared by every provider call in one worker.
 pub struct ProviderWireRequestObserver {
     conversation_id: String,
@@ -684,6 +699,7 @@ pub struct ProviderWireRequestObserver {
     sender: tokio::sync::mpsc::Sender<ProviderWireRequestObservation>,
     claim_generation: Option<u64>,
     pending: Option<PendingProviderWireObservations>,
+    reported: Option<SharedProviderReportedUsage>,
 }
 
 /// Process-local monotonic identity for concrete provider requests.
@@ -703,6 +719,7 @@ impl ProviderWireRequestObserver {
             sender,
             claim_generation: None,
             pending: None,
+            reported: None,
         }
     }
 
@@ -718,6 +735,14 @@ impl ProviderWireRequestObserver {
         pending: PendingProviderWireObservations,
     ) -> Self {
         self.pending = Some(pending);
+        self
+    }
+
+    /// Retains each normalized wire report once before cancellable delivery.
+    /// This sink never submits billing events; ordinary completion and captured
+    /// cancellation choose one accounting outcome for the same issued owner.
+    pub(crate) fn with_reported_usage(mut self, reported: SharedProviderReportedUsage) -> Self {
+        self.reported = Some(reported);
         self
     }
 
@@ -881,6 +906,14 @@ impl<'a> ProviderWireObservationContext<'a> {
             failure_kind,
             elapsed_ms: final_wire.elapsed_ms,
         };
+        if let (Some(reported), Some(usage)) = (&self.observer.reported, observation.usage) {
+            // Each concrete attempt emits one fresh wire identity above. Keep
+            // only its disjoint counters, never response content or a growing
+            // history of acknowledged observations.
+            let mut reported = reported.lock().unwrap_or_else(|error| error.into_inner());
+            reported.usage.add_assign(usage);
+            reported.known_observations = reported.known_observations.saturating_add(1);
+        }
         if let Some(pending) = &self.observer.pending {
             // Poison recovery preserves already incurred expense; a panic in
             // presentation delivery must not erase this content-free evidence.

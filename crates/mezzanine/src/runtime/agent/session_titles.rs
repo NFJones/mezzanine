@@ -1298,6 +1298,11 @@ impl RuntimeSessionService {
 /// never carry an unbounded worker string.
 fn bounded_session_title_reason(reason: &str) -> &'static str {
     match reason {
+        "worker_panic" => SessionTitleFailureReason::WorkerPanic.as_str(),
+        "worker_cancelled" => SessionTitleFailureReason::WorkerCancelled.as_str(),
+        "worker_join_failed" => SessionTitleFailureReason::WorkerJoinFailed.as_str(),
+        "monitor_panic" => SessionTitleFailureReason::MonitorPanic.as_str(),
+        "monitor_failed" => SessionTitleFailureReason::MonitorFailed.as_str(),
         "provider_error" => SessionTitleFailureReason::ProviderError.as_str(),
         "timeout" => SessionTitleFailureReason::Timeout.as_str(),
         "empty" => SessionTitleFailureReason::Empty.as_str(),
@@ -1325,6 +1330,26 @@ mod tests {
     use crate::session_title::{
         SessionTitleFailureReason, SessionTitlePolicy, SessionTitleRejection,
     };
+
+    /// Worker and monitor failures retain bounded distinct causes through actor
+    /// normalization. Untrusted arbitrary strings still become provider_error,
+    /// so privacy does not depend on formatting a panic payload or error body.
+    #[test]
+    fn title_worker_failure_causes_survive_bounded_normalization() {
+        for reason in [
+            "worker_panic",
+            "worker_cancelled",
+            "worker_join_failed",
+            "monitor_panic",
+            "monitor_failed",
+        ] {
+            assert_eq!(super::bounded_session_title_reason(reason), reason);
+        }
+        assert_eq!(
+            super::bounded_session_title_reason("private arbitrary panic payload"),
+            "provider_error"
+        );
+    }
 
     /// Builds one admission request that is otherwise acceptable.
     ///

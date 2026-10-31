@@ -1008,15 +1008,17 @@ async fn max_messages_service_stop_flushes_backpressured_wire_journal() {
     });
     let abort = producer.abort_handle();
     drains.lock().unwrap().insert(
-        (dispatch.turn.turn_id.clone(), 7),
+        ProviderObservationOwner::Inference(dispatch.turn.turn_id.clone(), 7),
         ProviderObservationDrain {
             abort: abort.clone(),
             completed,
             pending: pending.clone(),
+            reported: None,
         },
     );
     let mut workers = JoinSet::new();
-    workers.spawn(async move {
+    let mut owners = AgentProviderWorkerOwners::default();
+    spawn_owned_agent_provider_worker(&mut workers, &mut owners, None, async move {
         let _owner = AbortProviderWorkerOnDrop(abort);
         std::future::pending::<Result<AsyncAgentProviderWorkerResult>>().await
     });
@@ -1027,7 +1029,7 @@ async fn max_messages_service_stop_flushes_backpressured_wire_journal() {
         while pending.lock().unwrap().len() < 2 {
             tokio::task::yield_now().await;
         }
-        abort_agent_provider_workers(&mut workers, &handle, &drains)
+        abort_agent_provider_workers(&mut workers, &handle, &drains, &mut owners)
             .await
             .unwrap();
         let _ = producer.await;
@@ -1138,4 +1140,240 @@ async fn max_messages_partial_checkpoint_cache_categories_and_persisted_totals()
         assert_eq!(history.windows[&1].values().next().unwrap().usage, expected);
         std::fs::remove_dir_all(root).unwrap();
     }
+}
+
+/// A finished inference monitor may still be waiting in the service JoinSet.
+/// Retirement must adopt that original result once, count its execution and run
+/// canonical persistence rather than discard it or fabricate cancellation.
+#[tokio::test]
+async fn service_retirement_adopts_completed_inference_and_counts_execution() {
+    let (service, agent, turn_id) = prepared_fixture("complete before service retirement").await;
+    let (handle, actor) =
+        crate::host::async_runtime::AsyncRuntimeSessionActor::new(service, Default::default())
+            .unwrap();
+    let actor = tokio::spawn(actor.run());
+    let dispatch = handle
+        .claim_configured_agent_provider_task(agent.clone(), turn_id.clone())
+        .await
+        .unwrap()
+        .unwrap();
+    let generation = dispatch.claim_generation;
+    let conversation = dispatch.turn.conversation_id.clone();
+    let drains: ProviderObservationDrains = Default::default();
+    let mut workers = JoinSet::new();
+    let mut owners = AgentProviderWorkerOwners::default();
+    let owner = ProviderWorkerOwner::inference(agent.clone(), &dispatch);
+    let monitor = spawn_owned_agent_provider_worker(
+        &mut workers,
+        &mut owners,
+        Some(owner),
+        monitor_agent_provider_future(
+            handle.clone(),
+            agent.clone(),
+            turn_id.clone(),
+            "%1".into(),
+            generation,
+            drains.clone(),
+            move |progress, sender, pending| async move {
+                let provider = IncompleteProvider {
+                    requests: Mutex::new(Vec::new()),
+                    failures: 0,
+                    stream: false,
+                };
+                let observer =
+                    ProviderWireRequestObserver::new(&dispatch.turn.conversation_id, "%1", sender)
+                        .with_claim_generation(generation)
+                        .with_pending_observations(pending);
+                let execution =
+                    run_incomplete_fixture(&provider, &observer, &dispatch, 0, Some(progress))
+                        .await?;
+                Ok(RuntimeAgentProviderWorkerOutcome::Execution(Box::new(
+                    execution,
+                )))
+            },
+        ),
+    );
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while !monitor.is_finished() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        workers.len(),
+        1,
+        "the original outcome has not been joined or adopted"
+    );
+    assert_eq!(
+        abort_agent_provider_workers(&mut workers, &handle, &drains, &mut owners)
+            .await
+            .unwrap(),
+        1
+    );
+    assert!(owners.is_empty());
+    assert!(drains.lock().unwrap().is_empty());
+    let persistence = crate::host::async_runtime::run_async_persistence_side_effect_service(
+        &handle,
+        crate::host::async_runtime::AsyncRuntimeSideEffectServiceConfig {
+            max_polls: 16,
+            drain_limit: 64,
+            idle_interval: Duration::from_millis(1),
+        },
+        |polls, _| polls >= 16,
+    )
+    .await
+    .unwrap();
+    assert_eq!(persistence.failed, 0);
+    assert!(!handle.agent_turn_is_running(&turn_id).await.unwrap());
+    handle.shutdown().await.unwrap();
+    let mut exit = actor.await.unwrap();
+    assert_eq!(
+        exit.service
+            .agent_turn_ledger()
+            .turn(&turn_id)
+            .unwrap()
+            .state,
+        AgentTurnState::Completed
+    );
+    assert!(
+        !exit
+            .service
+            .agent_provider_claim_matches(&agent, &turn_id, generation)
+    );
+    let usage = exit
+        .service
+        .agent_token_usage_for_conversation(&conversation);
+    assert_eq!(
+        usage[&mez_agent::ModelTokenUsageKey::new("local-chat", "test-model")].input_tokens,
+        5
+    );
+    assert_eq!(
+        exit.service.terminate_all_pane_processes().unwrap().len(),
+        1
+    );
+}
+
+/// A known-cancelled inference producer must release its genuine claim without
+/// waiting for the original lease to expire. Reported partial expense survives,
+/// no replacement request runs, and a late exact lease tick remains inert. All
+/// native cleanup precedes assertions so the baseline failure also retains fate.
+#[tokio::test]
+async fn service_cancellation_retires_inference_without_waiting_for_lease() {
+    let (service, agent, turn_id) =
+        prepared_fixture("cancel the owned provider service request").await;
+    let (handle, actor) =
+        crate::host::async_runtime::AsyncRuntimeSessionActor::new(service, Default::default())
+            .unwrap();
+    let actor = tokio::spawn(actor.run());
+    let dispatch = handle
+        .claim_configured_agent_provider_task(agent.clone(), turn_id.clone())
+        .await
+        .unwrap()
+        .unwrap();
+    let generation = dispatch.claim_generation;
+    let conversation = dispatch.turn.conversation_id.clone();
+    let lease = handle
+        .drain_timer_side_effects(1024)
+        .await
+        .unwrap()
+        .into_iter()
+        .find_map(|effect| match effect {
+            RuntimeSideEffect::ScheduleTimer { key, .. }
+                if key.kind == crate::runtime::RuntimeTimerKind::ProviderClaim
+                    && key.owner_id == turn_id
+                    && key.generation == generation =>
+            {
+                Some(key)
+            }
+            _ => None,
+        })
+        .unwrap();
+    let provider = std::sync::Arc::new(IncompleteProvider {
+        requests: Mutex::new(Vec::new()),
+        failures: usize::MAX,
+        stream: true,
+    });
+    let received = std::sync::Arc::new(tokio::sync::Notify::new());
+    let worker_provider = NotifyingProvider {
+        inner: provider.clone(),
+        received: received.clone(),
+    };
+    let drains: ProviderObservationDrains = Default::default();
+    let mut workers = JoinSet::new();
+    let mut owners = AgentProviderWorkerOwners::default();
+    let owner = ProviderWorkerOwner::inference(agent.clone(), &dispatch);
+    spawn_owned_agent_provider_worker(
+        &mut workers,
+        &mut owners,
+        Some(owner),
+        monitor_agent_provider_future(
+            handle.clone(),
+            agent.clone(),
+            turn_id.clone(),
+            "%1".into(),
+            generation,
+            drains.clone(),
+            move |progress, sender, pending| async move {
+                let observer =
+                    ProviderWireRequestObserver::new(&dispatch.turn.conversation_id, "%1", sender)
+                        .with_claim_generation(generation)
+                        .with_pending_observations(pending);
+                let execution = run_incomplete_fixture(
+                    &worker_provider,
+                    &observer,
+                    &dispatch,
+                    100_000,
+                    Some(progress),
+                )
+                .await?;
+                Ok(RuntimeAgentProviderWorkerOutcome::Execution(Box::new(
+                    execution,
+                )))
+            },
+        ),
+    );
+    received.notified().await;
+    assert_eq!(
+        abort_agent_provider_workers(&mut workers, &handle, &drains, &mut owners)
+            .await
+            .unwrap(),
+        0
+    );
+    let running = handle.agent_turn_is_running(&turn_id).await.unwrap();
+    if !running {
+        let mut late = RuntimeEventBatch::new();
+        late.push(RuntimeEvent::Timer(crate::runtime::TimerEvent {
+            key: lease,
+            now_ms: 0,
+        }));
+        assert_eq!(handle.submit_runtime_events(late).await.unwrap().applied, 0);
+    }
+    assert!(owners.is_empty());
+    assert!(drains.lock().unwrap().is_empty());
+    handle.shutdown().await.unwrap();
+    let mut exit = actor.await.unwrap();
+    let state = exit
+        .service
+        .agent_turn_ledger()
+        .turn(&turn_id)
+        .unwrap()
+        .state;
+    let claimed = exit
+        .service
+        .agent_provider_claim_matches(&agent, &turn_id, generation);
+    let usage = exit
+        .service
+        .agent_token_usage_for_conversation(&conversation);
+    let roots = exit.service.terminate_all_pane_processes().unwrap().len();
+    assert_eq!(roots, 1);
+    assert_eq!(provider.requests.lock().unwrap().len(), 1);
+    assert!(
+        !running,
+        "destroyed inference request must not retain running capacity until its lease"
+    );
+    assert!(!claimed);
+    assert_eq!(state, AgentTurnState::Failed);
+    let totals = &usage[&mez_agent::ModelTokenUsageKey::new("local-chat", "test-model")];
+    assert_eq!((totals.input_tokens, totals.output_tokens), (17, 3));
 }

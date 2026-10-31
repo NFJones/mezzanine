@@ -195,6 +195,16 @@ pub(crate) enum SessionTitleRejection {
 /// variant carries provider text.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SessionTitleFailureReason {
+    /// Request-local execution unwound before producing its result.
+    WorkerPanic,
+    /// Request-local execution was cancelled before producing its result.
+    WorkerCancelled,
+    /// Request-local execution lost its join without a recognized cause.
+    WorkerJoinFailed,
+    /// A shared monitor unwound and its owning service remains failed.
+    MonitorPanic,
+    /// A shared monitor failed before returning terminal request content.
+    MonitorFailed,
     /// The provider returned an error.
     ProviderError,
     /// The provider request timed out.
@@ -219,6 +229,11 @@ impl SessionTitleFailureReason {
     /// Returns the stable bounded reason name.
     pub(crate) const fn as_str(self) -> &'static str {
         match self {
+            Self::WorkerPanic => "worker_panic",
+            Self::WorkerCancelled => "worker_cancelled",
+            Self::WorkerJoinFailed => "worker_join_failed",
+            Self::MonitorPanic => "monitor_panic",
+            Self::MonitorFailed => "monitor_failed",
             Self::ProviderError => "provider_error",
             Self::Timeout => "timeout",
             Self::Empty => "empty",

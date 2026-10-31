@@ -2568,6 +2568,26 @@ These request-local boundaries MUST NOT catch actor ingress or shared monitor
 ownership failures. Structured join failures MUST use bounded categories rather
 than arbitrary panic payloads; the normal process panic hook remains unchanged.
 
+Provider-service retirement MUST retain accepted inference and auxiliary task
+identities outside their monitor futures, including cancellation before first
+poll. Once the request producer is destroyed, its live claim MUST settle once
+rather than remain occupied until lease expiry. Completed original outcomes MUST
+be adopted through their normal actor fences instead of discarded or replaced
+with fabricated cancellation. A terminal event whose actor application is
+unknown MUST NOT be replayed by cleanup.
+Retirement MUST preserve inference wire checkpoints and reported compaction,
+memory and title expense when their terminal result is unavailable. Normal
+returned outcomes remain authoritative and MUST NOT add the same wire totals
+again. Retained auxiliary counters MUST use bounded storage and frozen expense
+provenance. Request-local join failures MUST retain reported expense as well.
+Shared monitor loss remains service-fatal; sibling cleanup MUST still be
+attempted, with the original typed failure preserved if cleanup also fails.
+Title diagnostics MUST retain bounded worker/monitor panic and cancellation
+categories through actor normalization, without accepting arbitrary reason text.
+These ownership rules add no provider retry, native replay, configuration item,
+stack increase or permission grant. Native blocking-task cancellation alone
+MUST NOT be presented as a child reap or settled-reader receipt.
+
 A panic in the request-local framing/JSON read phase of one authenticated local
 control connection MUST retire only that connection while the host continues to
 serve other clients. A panic after shared host dispatch begins MUST remain
