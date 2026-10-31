@@ -1,13 +1,168 @@
 //! Request-bound lifecycle recovery through genuine actor-owned provider leases.
 //!
 //! Each response uses real preparation, policy planning and completion ingress.
-//! The original parent consumes canonical evidence before its next admitted
-//! inference, with one scheduler slot and no model-authored reply. Typed provider
-//! persistence work executes against fixture-owned stores and settles through
-//! its real generation; this fixture does not claim full archive-worker coverage.
+//! Original parents consume canonical evidence before their next admitted
+//! inference. Workflows cover one-slot scheduling, ordinary correlated replies,
+//! exact lifecycle outcomes and overlapping native-result custody. Typed provider
+//! persistence executes against fixture-owned stores and settles through its
+//! real generation. The native overlap case also checks original bookkeeping;
+//! these seams do not claim full archive-worker coverage.
 
 use super::*;
 use crate::host::async_runtime::actor::coalesce::async_runtime_current_unix_millis;
+
+/// An exact owned terminal outcome may arrive while the original parent owns
+/// an actual native command result. It must neither settle that Running action
+/// nor admit a concurrent provider. The real native callback completes first;
+/// only then may a genuine parent claim consume both exact result sources and
+/// perform useful typed persistence before completing the same original task.
+#[tokio::test(flavor = "current_thread")]
+async fn request_bound_actor_owned_outcome_preserves_running_native_result_gate() {
+    let (mut actor, parent, child, mut generations, _) =
+        actor_fixture_with_lifetime(2, Vec::new(), mez_agent::SubagentLifetime::Persistent).await;
+    let message = request(&mut actor, &parent, &child.agent_id, &mut generations).await;
+    park(&mut actor, &parent, &message, &mut generations).await;
+    unrelated_mail(&mut actor, &parent);
+    step(
+        &mut actor,
+        &parent,
+        vec![AgentAction {
+            id: "native-pending".into(),
+            payload: AgentActionPayload::ShellCommand {
+                summary: "Read independent native evidence".into(),
+                command: "printf NATIVE_SIBLING_RESULT".into(),
+                interactive: false,
+                stateful: false,
+                timeout_ms: None,
+            },
+        }],
+        &mut generations,
+    )
+    .await;
+    let result = actor.service.agent_turn_executions()[&parent.turn_id].action_results[0].clone();
+    assert_eq!(result.status, mez_agent::ActionStatus::Running);
+    let native = actor
+        .service
+        .claim_native_shell_action(&parent.turn_id, &result.action_id)
+        .unwrap()
+        .unwrap();
+    assert!(!native.capability_probe_only);
+    let outcome = crate::runtime::execute_native_shell_dispatch(native);
+    step(
+        &mut actor,
+        &child,
+        vec![done(
+            "owned-native-child-final",
+            "NATIVE_SIBLING_CHILD_RESULT",
+        )],
+        &mut generations,
+    )
+    .await;
+    actor
+        .service
+        .deliver_pending_runtime_agent_messages(async_runtime_current_unix_millis())
+        .unwrap();
+    assert_eq!(
+        actor.service.agent_turn_executions()[&parent.turn_id].action_results[0],
+        result
+    );
+    assert!(
+        !actor
+            .service
+            .agent_provider_task_is_pending(&parent.turn_id)
+    );
+    assert_eq!(actor.service.tracked_message_request_usage().0.0, 1);
+    assert!(actor.service.complete_native_shell_action(outcome).unwrap());
+    let mut candidates = actor.service.claim_bookkeeping_candidates();
+    assert_eq!(candidates.len(), 1);
+    let work = candidates.remove(0);
+    let read = work.clone();
+    let history = tokio::task::spawn_blocking(move || read.execute())
+        .await
+        .unwrap();
+    assert!(history.is_ok(), "{history:?}");
+    assert!(
+        !Box::pin(
+            actor.handle_request(AsyncRuntimeRequest::CompleteBookkeepingCandidate {
+                work,
+                history,
+            })
+        )
+        .await
+    );
+    admit_receipts(&mut actor).await;
+    actor
+        .service
+        .deliver_pending_runtime_agent_messages(async_runtime_current_unix_millis())
+        .unwrap();
+    let (dispatch, persisted) = step(
+        &mut actor,
+        &parent,
+        vec![record_evidence()],
+        &mut generations,
+    )
+    .await;
+    assert!(persisted > 0);
+    assert_memory_saved(&actor, &parent);
+    assert_eq!(
+        dispatch
+            .context
+            .durable()
+            .blocks()
+            .iter()
+            .filter(
+                |block| block.source == mez_agent::ContextSourceKind::ActionResult
+                    && block.content.contains("NATIVE_SIBLING_RESULT")
+            )
+            .count(),
+        1
+    );
+    let handoffs = dispatch
+        .context
+        .durable()
+        .blocks()
+        .iter()
+        .filter(|block| block.label.starts_with("request-handoff:"))
+        .collect::<Vec<_>>();
+    assert_eq!(handoffs.len(), 1);
+    assert!(handoffs[0].content.contains("NATIVE_SIBLING_CHILD_RESULT"));
+    assert_eq!(
+        actor.service.tracked_message_request_usage(),
+        ((0, 0, 0), 0)
+    );
+    step(
+        &mut actor,
+        &parent,
+        vec![done(
+            "native-parent-done",
+            "used both exact native and owned results",
+        )],
+        &mut generations,
+    )
+    .await;
+    assert_eq!(
+        actor
+            .service
+            .agent_turn_ledger()
+            .turn(&parent.turn_id)
+            .unwrap()
+            .state,
+        AgentTurnState::Completed
+    );
+    assert_eq!(actor.service.agent_turn_ledger().turns().len(), 2);
+    assert_eq!(generations, (1..=7).collect());
+    assert_eq!(
+        actor
+            .service
+            .message_service()
+            .snapshot_state()
+            .accepted_messages
+            .iter()
+            .filter(|row| row.envelope.id == message)
+            .count(),
+        1
+    );
+}
 
 /// A real provider response blocks on Ask, releases its sole scheduler slot,
 /// and resumes only after the primary's actual approval. Failure after accepted

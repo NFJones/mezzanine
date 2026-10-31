@@ -48,7 +48,7 @@ fn fixture_with_primary_pending_limits(
 }
 
 /// Uses a real parent root and isolated provider/auth configuration for the
-/// two component controls that advance approved completion handoff admission.
+/// component controls that advance native completion handoff admission.
 fn fixture_with_primary_provider_claims() -> (
     RuntimeSessionService,
     AgentTurnRecord,
@@ -170,10 +170,7 @@ fn execute(
 /// and canonical handoff gates before the synchronous offline provider seam.
 /// This fixture has one worker generation; it is not actor lease coverage.
 /// Separate actor tests exercise actual Prepare/Claim/Complete generations.
-fn claim_approved_provider_continuation(
-    service: &mut RuntimeSessionService,
-    turn: &AgentTurnRecord,
-) {
+fn claim_native_provider_continuation(service: &mut RuntimeSessionService, turn: &AgentTurnRecord) {
     let agent = AgentId::opaque(turn.agent_id.clone()).unwrap();
     let mut dispatch = None;
     for _ in 0..4 {
@@ -189,7 +186,7 @@ fn claim_approved_provider_continuation(
     }
     let dispatch = dispatch.unwrap_or_else(|| {
         panic!(
-            "the approved continuation must be genuinely claimable: {:?}; trace={}",
+            "the native continuation must be genuinely claimable: {:?}; trace={}",
             service.completion_provider_queue_flags_for_tests(&turn.turn_id),
             service.agent_pane_trace_log_text(&turn.pane_id).unwrap(),
         )

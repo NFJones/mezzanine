@@ -316,7 +316,7 @@ fn request_bound_approved_partial_send_consumes_decision_and_freezes_intent() {
                 .apply_peer_message_delivery_timer(current_unix_millis(), tick)
                 .unwrap();
         }
-        claim_approved_provider_continuation(&mut service, &parent);
+        claim_native_provider_continuation(&mut service, &parent);
         wait(&mut service, &parent, &message, None);
         if !tracked {
             assert!(

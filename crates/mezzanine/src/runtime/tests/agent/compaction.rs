@@ -1908,6 +1908,38 @@ fn runtime_observed_compaction_retains_unsummarized_exact_history_for_replay() {
     );
 }
 
+/// Places the fixture's configured cap between two fully assembled refreshed
+/// requests, including current system policy, schemas, exact history and late
+/// transcript rows. The production five-percent headroom remains in force;
+/// assertions prove the large summary is over budget and the short one fits.
+/// This calibrates test input only and changes no runtime/model default.
+fn set_observed_compaction_summary_fit_boundary(
+    service: &mut crate::runtime::RuntimeSessionService,
+    turn_id: &str,
+    large_summary: &str,
+) {
+    let short = service
+        .observed_compaction_candidate_input_tokens_for_tests("%1", "shorter final summary")
+        .unwrap();
+    let large = service
+        .observed_compaction_candidate_input_tokens_for_tests("%1", large_summary)
+        .unwrap();
+    assert!(large > short + 2, "short={short} large={large}");
+    let desired_safe_limit = short + (large - short) / 2;
+    // Invert floor(19 * configured / 20), the existing five-percent reserve.
+    let configured = (desired_safe_limit * 20).div_ceil(19);
+    let safe_limit = configured - configured.div_ceil(20);
+    assert!(
+        short < safe_limit && safe_limit < large,
+        "short={short} safe={safe_limit} large={large}"
+    );
+    let mut profile = service.agent_turn_model_profile(turn_id).unwrap().clone();
+    profile
+        .provider_options
+        .insert("max_input_tokens".into(), configured.to_string());
+    service.set_agent_turn_model_profile(turn_id.to_string(), profile);
+}
+
 /// A still-oversized refreshed request retries a smaller model-authored
 /// summary without publishing the first candidate or repeating settled work.
 #[test]
@@ -1924,11 +1956,11 @@ fn runtime_observed_compaction_retries_oversized_final_request() {
         .unwrap()
         .request
         .max_output_tokens;
-    let mut profile = service.agent_turn_model_profile(&turn_id).unwrap().clone();
-    profile
-        .provider_options
-        .insert("max_input_tokens".to_string(), "17000".to_string());
-    service.set_agent_turn_model_profile(turn_id.clone(), profile);
+    set_observed_compaction_summary_fit_boundary(
+        &mut service,
+        &turn_id,
+        &"large-summary ".repeat(900),
+    );
     complete_runtime_test_compaction(&mut service, "%1", &"large-summary ".repeat(900));
     assert!(store.compaction_epoch(&conversation_id).unwrap().is_none());
     assert!(
@@ -1984,11 +2016,11 @@ fn runtime_observed_compaction_allows_fourth_improving_final_retry() {
         .unwrap()
         .session_id
         .clone();
-    let mut profile = service.agent_turn_model_profile(&turn_id).unwrap().clone();
-    profile
-        .provider_options
-        .insert("max_input_tokens".to_string(), "17000".to_string());
-    service.set_agent_turn_model_profile(turn_id.clone(), profile);
+    set_observed_compaction_summary_fit_boundary(
+        &mut service,
+        &turn_id,
+        &"large-summary ".repeat(900),
+    );
     let mut task = service.take_pending_agent_compaction_task("%1").unwrap();
     let crate::runtime::agent_state::RuntimeAgentCompactionTarget::ActiveTurn {
         final_request_retry,
@@ -2792,11 +2824,11 @@ fn runtime_observed_compaction_rejects_non_reducing_final_retry() {
         .unwrap()
         .session_id
         .clone();
-    let mut profile = service.agent_turn_model_profile(&turn_id).unwrap().clone();
-    profile
-        .provider_options
-        .insert("max_input_tokens".to_string(), "17000".to_string());
-    service.set_agent_turn_model_profile(turn_id.clone(), profile);
+    set_observed_compaction_summary_fit_boundary(
+        &mut service,
+        &turn_id,
+        &"large-summary ".repeat(900),
+    );
     complete_runtime_test_compaction(&mut service, "%1", "");
     assert!(
         service
@@ -2950,13 +2982,11 @@ fn runtime_observed_compaction_retries_refreshed_only_overflow() {
         .agent_shell_store_mut()
         .record_transcript_entries("%1", 1)
         .unwrap();
-    let mut profile = service.agent_turn_model_profile(&turn_id).unwrap().clone();
-    // Include the expanded close-recovery schema and prompt overhead while
-    // keeping the large refreshed summary over budget and the short one under.
-    profile
-        .provider_options
-        .insert("max_input_tokens".to_string(), "18000".to_string());
-    service.set_agent_turn_model_profile(turn_id.clone(), profile);
+    set_observed_compaction_summary_fit_boundary(
+        &mut service,
+        &turn_id,
+        &"large-summary ".repeat(600),
+    );
     complete_runtime_test_compaction(&mut service, "%1", &"large-summary ".repeat(600));
     assert!(store.compaction_epoch(&conversation_id).unwrap().is_none());
     assert!(

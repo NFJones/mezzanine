@@ -203,8 +203,9 @@ pub struct RuntimeSessionService {
     presentation: RuntimePresentationComponent,
     /// Pane process, terminal state, and shell-transaction ownership.
     process: RuntimeProcessComponent,
-    /// Application-side agent execution ownership.
-    agent: RuntimeAgentComponent,
+    /// Application-side agent execution ownership. Heap placement keeps its
+    /// growing bounded indexes out of by-value runtime/actor handoff frames.
+    agent: Box<RuntimeAgentComponent>,
     /// Repository and deferred external-effect ownership.
     persistence: RuntimePersistenceComponent,
     /// Control replay, messaging, and event-fanout ownership.

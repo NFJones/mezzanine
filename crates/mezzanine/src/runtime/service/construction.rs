@@ -196,7 +196,7 @@ impl RuntimeSessionService {
         Ok(Self {
             presentation: RuntimePresentationComponent::default(),
             process: RuntimeProcessComponent::with_pane_processes(pane_processes),
-            agent: RuntimeAgentComponent::with_settings(
+            agent: Box::new(RuntimeAgentComponent::with_settings(
                 DEFAULT_AGENT_ROUTING,
                 RuntimeAutoSizingConfig::default(),
                 DEFAULT_AGENT_COMPACTION_RAW_RETENTION_PERCENT,
@@ -204,7 +204,7 @@ impl RuntimeSessionService {
                 DEFAULT_AGENT_PEER_MESSAGE_LOOP_LIMIT,
                 DEFAULT_AGENT_ACTION_FAILURE_RETRY_LIMIT,
                 mez_agent::DEFAULT_AGENT_TURN_TIMEOUT_MS,
-            ),
+            )),
             persistence: RuntimePersistenceComponent::default(),
             control: RuntimeControlComponent::new(
                 control_idempotency,
