@@ -5256,3 +5256,9 @@ impl RuntimeSessionService {
         }
     }
 }
+
+#[allow(
+    dead_code,
+    reason = "filesystem producer custody is being connected to async dispatch"
+)]
+pub(crate) mod native_filesystem_producer;

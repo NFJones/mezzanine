@@ -294,3 +294,10 @@ use provider::{
 /// declaration makes the boundary available to the crate.
 #[cfg(test)]
 mod tests;
+
+/// Typed filesystem authority RPC and process-free producer execution.
+#[allow(
+    dead_code,
+    reason = "filesystem bridge is being connected to runtime selection"
+)]
+pub(crate) mod native_filesystem;

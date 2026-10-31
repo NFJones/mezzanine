@@ -699,3 +699,5 @@ fn native_filesystem_actor_commit_lease_rejects_fresh_authority_contraction() {
     assert!(dispatch.fence.check().is_err());
     assert!(!fixture.root.join("file").exists());
 }
+
+mod async_producer;

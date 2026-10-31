@@ -75,6 +75,12 @@ impl NativePatchCommitFence {
         Ok(())
     }
 
+    /// Returns only the remaining original action budget; RPC cannot renew it.
+    pub(crate) fn remaining(&self) -> Result<Duration> {
+        self.check()?;
+        Ok(self.deadline.saturating_duration_since(Instant::now()))
+    }
+
     /// Tries to enter an exclusive commit without waiting on another writer.
     /// The caller must retain the guard across current authority, physical
     /// preimage revalidation and publication, and record the actual outcome.

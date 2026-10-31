@@ -10,10 +10,11 @@
 pub(crate) mod authority;
 mod state;
 pub(super) use state::NativeFilesystemActions;
+use state::NativeFilesystemOwner;
+pub(crate) use state::NativeFilesystemWork;
 pub(crate) use state::{
     NativeFilesystemAttempt, NativeFilesystemRegisteredSource, RuntimeNativeFilesystemDispatch,
 };
-use state::{NativeFilesystemOwner, NativeFilesystemWork};
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -322,6 +323,54 @@ impl RuntimeSessionService {
             self.agent.native_filesystem_actions.cancel_attempt(attempt);
         }
         result
+    }
+
+    /// Registers shared producer custody before issuance and installs dispatch
+    /// there synchronously. A lost reply cannot lose the actual claimed work.
+    pub(crate) fn claim_native_filesystem_producer(
+        &mut self,
+        producer: &crate::runtime::processes::native_filesystem_producer::NativeFilesystemProducer,
+    ) -> Result<bool> {
+        producer.claim_with(|attempt| {
+            self.agent
+                .native_filesystem_actions
+                .register_producer(attempt, producer.clone())?;
+            self.claim_native_filesystem_action(attempt)
+        })
+    }
+
+    /// Recovers the actual retained producer allocation after a delivery failure.
+    pub(crate) fn retained_native_filesystem_producer(
+        &self,
+        attempt: &NativeFilesystemAttempt,
+    ) -> Option<crate::runtime::processes::native_filesystem_producer::NativeFilesystemProducer>
+    {
+        self.agent.native_filesystem_actions.producer(attempt)
+    }
+
+    /// Authorizes a typed preparation boundary only for authored touched paths.
+    /// Scopes remain preparation authority; publication needs an exact lease.
+    pub(crate) fn native_filesystem_preparation_scopes(
+        &mut self,
+        attempt: &NativeFilesystemAttempt,
+        identity: &NativeCommitIdentity,
+        phase: mez_agent::native_action::NativePatchPhase,
+        path: &str,
+    ) -> Result<PathScopes> {
+        if path.len() > 4096
+            || !matches!(
+                phase,
+                mez_agent::native_action::NativePatchPhase::Snapshot
+                    | mez_agent::native_action::NativePatchPhase::Stage
+                    | mez_agent::native_action::NativePatchPhase::Commit
+            )
+            || !identity.operation.patch.touched_paths().contains(path)
+        {
+            return Err(MezError::forbidden(
+                "native filesystem preparation exceeds accepted patch paths",
+            ));
+        }
+        self.native_filesystem_scope_snapshot(attempt, identity)
     }
 
     /// Atomically admits one endpoint in the serialized actor after fresh

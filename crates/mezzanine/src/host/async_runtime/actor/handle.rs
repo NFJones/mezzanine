@@ -1104,6 +1104,63 @@ impl AsyncRuntimeSessionHandle {
         .await?
     }
 
+    /// Claims into shared custody created before this future is polled.
+    pub(crate) async fn claim_native_filesystem_producer(
+        &self,
+        producer: crate::runtime::native_filesystem::NativeFilesystemProducer,
+    ) -> Result<bool> {
+        self.request(|reply| AsyncRuntimeRequest::ClaimNativeFilesystemProducer { producer, reply })
+            .await?
+    }
+
+    /// Reads current actor-authorized scopes for a bounded typed preparation.
+    pub(crate) async fn native_filesystem_scopes(
+        &self,
+        attempt: crate::runtime::native_filesystem::NativeFilesystemAttempt,
+        identity: std::sync::Arc<mez_agent::native_action::NativeCommitIdentity>,
+        phase: mez_agent::native_action::NativePatchPhase,
+        path: String,
+    ) -> Result<mez_agent::permissions::PathScopes> {
+        self.request(|reply| AsyncRuntimeRequest::NativeFilesystemScopes {
+            attempt,
+            identity,
+            phase,
+            path,
+            reply,
+        })
+        .await?
+    }
+
+    /// Requests a noncloneable endpoint admission from the current actor owner.
+    pub(crate) async fn native_filesystem_commit(
+        &self,
+        attempt: crate::runtime::native_filesystem::NativeFilesystemAttempt,
+        identity: std::sync::Arc<mez_agent::native_action::NativeCommitIdentity>,
+        proposal: std::sync::Arc<crate::runtime::native_filesystem::NativePatchCommitProposal>,
+    ) -> Result<crate::runtime::native_filesystem::NativePatchCommitLease> {
+        self.request(|reply| AsyncRuntimeRequest::NativeFilesystemCommit {
+            attempt,
+            identity,
+            proposal,
+            reply,
+        })
+        .await?
+    }
+
+    /// Acknowledges raw actor custody only; canonical/durable settlement remains.
+    pub(crate) async fn retain_native_filesystem_outcome(
+        &self,
+        attempt: crate::runtime::native_filesystem::NativeFilesystemAttempt,
+        outcome: std::sync::Arc<crate::runtime::native_filesystem::NativePatchWorkerOutcome>,
+    ) -> Result<bool> {
+        self.request(|reply| AsyncRuntimeRequest::RetainNativeFilesystemOutcome {
+            attempt,
+            outcome,
+            reply,
+        })
+        .await?
+    }
+
     /// Returns one approved external-action result to actor-owned state.
     pub async fn complete_approved_external_action(
         &self,

@@ -3113,6 +3113,47 @@ impl AsyncRuntimeSessionActor {
                 }
                 false
             }
+            AsyncRuntimeRequest::ClaimNativeFilesystemProducer { producer, reply } => {
+                let result = self.service.claim_native_filesystem_producer(&producer);
+                let _ = reply.send(result);
+                false
+            }
+            AsyncRuntimeRequest::NativeFilesystemScopes {
+                attempt,
+                identity,
+                phase,
+                path,
+                reply,
+            } => {
+                let result = self
+                    .service
+                    .native_filesystem_preparation_scopes(&attempt, &identity, phase, &path);
+                let _ = reply.send(result);
+                false
+            }
+            AsyncRuntimeRequest::NativeFilesystemCommit {
+                attempt,
+                identity,
+                proposal,
+                reply,
+            } => {
+                let result = self
+                    .service
+                    .authorize_native_filesystem_commit(&attempt, &identity, &proposal);
+                let _ = reply.send(result);
+                false
+            }
+            AsyncRuntimeRequest::RetainNativeFilesystemOutcome {
+                attempt,
+                outcome,
+                reply,
+            } => {
+                let result = self
+                    .service
+                    .retain_native_filesystem_outcome(&attempt, outcome);
+                let _ = reply.send(result);
+                false
+            }
             AsyncRuntimeRequest::CompleteApprovedExternalAction { outcome, reply } => {
                 let previous_lifecycle_state = self.service.lifecycle_state();
                 let previous_id = self.side_effect_routes.next_transcript_claim_id();

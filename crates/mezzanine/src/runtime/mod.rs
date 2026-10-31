@@ -704,3 +704,6 @@ mod tests;
 
 #[cfg(test)]
 pub(crate) use tests::effective_uid_for_tests;
+
+/// Exact filesystem actor/producer contracts used by host orchestration.
+pub(crate) mod native_filesystem;

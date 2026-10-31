@@ -39,11 +39,11 @@ impl NativePatchAuthority for RuntimeNativeFilesystemAuthority<'_> {
     fn scopes(
         &mut self,
         identity: &NativeCommitIdentity,
-        _phase: NativePatchPhase,
-        _path: &str,
+        phase: NativePatchPhase,
+        path: &str,
     ) -> Result<PathScopes> {
         self.service
-            .native_filesystem_scope_snapshot(self.attempt, identity)
+            .native_filesystem_preparation_scopes(self.attempt, identity, phase, path)
     }
 
     /// Returns to actual actor admission for this exact proposed endpoint.

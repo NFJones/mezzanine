@@ -127,6 +127,9 @@ struct Attempt {
     scopes: Option<PathScopes>,
     /// Original immutable result; retries never clone or replay its effects.
     outcome: Option<Arc<NativePatchWorkerOutcome>>,
+    /// Shared producer registration survives lost claim replies and monitors.
+    producer:
+        Option<crate::runtime::processes::native_filesystem_producer::NativeFilesystemProducer>,
     /// Issued endpoint admissions are never replayed after delivery uncertainty.
     commits: BTreeSet<(usize, usize)>,
     /// Failed preparation or outcome validation, without losing result custody.
@@ -217,6 +220,7 @@ impl NativeFilesystemActions {
                 phase: Phase::Queued,
                 scopes: None,
                 outcome: None,
+                producer: None,
                 commits: BTreeSet::new(),
                 failure: None,
             },
@@ -329,6 +333,44 @@ impl NativeFilesystemActions {
             .clone()
             .ok_or_else(|| MezError::invalid_state("native filesystem claim lost scope ceiling"))?;
         Ok((Arc::clone(&entry.work), scopes))
+    }
+
+    /// Retains the actual root registration before issuing work. Replacing it
+    /// with a same-label producer is forbidden; the same allocation may retry
+    /// while a queued claim remains paused or otherwise temporarily unavailable.
+    pub(super) fn register_producer(
+        &mut self,
+        token: &NativeFilesystemAttempt,
+        producer: crate::runtime::processes::native_filesystem_producer::NativeFilesystemProducer,
+    ) -> Result<()> {
+        let entry = self
+            .get_mut(token)
+            .filter(|entry| entry.phase == Phase::Queued)
+            .ok_or_else(|| {
+                MezError::conflict("native filesystem producer registration is not queued")
+            })?;
+        if producer.attempt() != token
+            || entry
+                .producer
+                .as_ref()
+                .is_some_and(|original| !original.same(&producer))
+        {
+            return Err(MezError::conflict(
+                "native filesystem producer allocation changed",
+            ));
+        }
+        entry.producer = Some(producer);
+        Ok(())
+    }
+
+    /// Recovers actual producer custody after a lost reply/monitor, without
+    /// reconstructing a producer from equal action or attempt labels.
+    pub(super) fn producer(
+        &self,
+        token: &NativeFilesystemAttempt,
+    ) -> Option<crate::runtime::processes::native_filesystem_producer::NativeFilesystemProducer>
+    {
+        self.get(token).and_then(|entry| entry.producer.clone())
     }
 
     /// Acquires commit scheduling in the serialized actor after policy checks.

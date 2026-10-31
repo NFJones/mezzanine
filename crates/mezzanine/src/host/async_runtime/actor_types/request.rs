@@ -1078,6 +1078,46 @@ pub(in crate::host::async_runtime) enum AsyncRuntimeRequest {
         /// Returns immutable worker input when the queued action is claimable.
         reply: oneshot::Sender<Result<Option<RuntimeNativeShellDispatch>>>,
     },
+    /// Installs filesystem dispatch in retained producer custody before replying.
+    ClaimNativeFilesystemProducer {
+        /// Shared registration retained before this claim can be polled.
+        producer: crate::runtime::native_filesystem::NativeFilesystemProducer,
+        /// Acceptance only; sole dispatch custody never crosses this reply.
+        reply: oneshot::Sender<Result<bool>>,
+    },
+    /// Resolves typed preparation grants for one original filesystem attempt.
+    NativeFilesystemScopes {
+        /// Opaque exact actor allocation and attempt identity.
+        attempt: crate::runtime::native_filesystem::NativeFilesystemAttempt,
+        /// Original semantic identity, shared without per-request patch copies.
+        identity: std::sync::Arc<mez_agent::native_action::NativeCommitIdentity>,
+        /// Bounded preparation phase, never an implicit publication grant.
+        phase: mez_agent::native_action::NativePatchPhase,
+        /// Exact authored touched path, checked against accepted semantics.
+        path: String,
+        /// Current clipped preparation scopes only.
+        reply: oneshot::Sender<Result<mez_agent::permissions::PathScopes>>,
+    },
+    /// Admits an exact filesystem endpoint with a short actor-owned write lease.
+    NativeFilesystemCommit {
+        /// Exact actor attempt, not reconstructed public labels.
+        attempt: crate::runtime::native_filesystem::NativeFilesystemAttempt,
+        /// Original accepted semantic generation and patch identity.
+        identity: std::sync::Arc<mez_agent::native_action::NativeCommitIdentity>,
+        /// Bounded proposal shared with the actual worker capture.
+        proposal: std::sync::Arc<crate::runtime::native_filesystem::NativePatchCommitProposal>,
+        /// Noncloneable admission; dropped delivery releases its guard.
+        reply: oneshot::Sender<Result<crate::runtime::native_filesystem::NativePatchCommitLease>>,
+    },
+    /// Retains original raw filesystem evidence, without canonical acknowledgement.
+    RetainNativeFilesystemOutcome {
+        /// Original opaque attempt whose evidence must survive presentation.
+        attempt: crate::runtime::native_filesystem::NativeFilesystemAttempt,
+        /// Original immutable producer outcome; never reconstructed on retry.
+        outcome: std::sync::Arc<crate::runtime::native_filesystem::NativePatchWorkerOutcome>,
+        /// Raw custody acknowledgement only, not durable or worker-join proof.
+        reply: oneshot::Sender<Result<bool>>,
+    },
     /// Applies one approved external-action worker result inside the actor.
     CompleteApprovedExternalAction {
         /// Worker result, including any MCP transport returning to actor ownership.
@@ -1590,6 +1630,10 @@ impl AsyncRuntimeRequest {
             | Self::ClaimConfiguredAgentProviderTask { .. }
             | Self::ClaimApprovedExternalAction { .. }
             | Self::ClaimNativeShellAction { .. }
+            | Self::ClaimNativeFilesystemProducer { .. }
+            | Self::NativeFilesystemScopes { .. }
+            | Self::NativeFilesystemCommit { .. }
+            | Self::RetainNativeFilesystemOutcome { .. }
             | Self::CompleteApprovedExternalAction { .. }
             | Self::ClaimAgentCommandWork { .. }
             | Self::CompleteAgentCommandWork { .. }
