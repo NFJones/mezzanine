@@ -3,7 +3,10 @@
 //! This module owns provider-produced `send_message` execution and sender
 //! identity management for the runtime agent harness. Actor-serialized delivery
 //! commits canonical input before acknowledging transport; sender action handling
-//! never grants replay authority. The receipts child owns bounded receive proof,
+//! never grants replay authority. Irreversible acceptance stays successful when
+//! receiver recovery is deferred; required sender-presentation errors carry the
+//! original result back to its execution owner before propagation. The receipts
+//! child owns bounded receive proof,
 //! display recovery, and outbox admission independently of disposable replay.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -24,6 +27,27 @@ use super::{
     validate_mmp_payload_metadata,
 };
 use crate::runtime::{RuntimeTimerKey, RuntimeTimerKind, RuntimeTransition};
+
+/// One actual message-action result plus a later sender-publication failure.
+/// Acceptance evidence must reach its execution owner before that error escapes;
+/// a receiver's recoverable delivery error never negates accepted sender work.
+/// This native value is not serialized or constructed from provider output.
+pub(super) struct RuntimeMessageActionOutcome {
+    /// Original planned/rejected result, or success from real lower acceptance.
+    pub(super) result: ActionResult,
+    /// Required sender presentation failure after irreversible acceptance.
+    pub(super) post_accept_error: Option<MezError>,
+}
+
+impl From<ActionResult> for RuntimeMessageActionOutcome {
+    /// Wraps a result without a later accepted-effect publication failure.
+    fn from(result: ActionResult) -> Self {
+        Self {
+            result,
+            post_accept_error: None,
+        }
+    }
+}
 
 /// Cadence of the dedicated peer-message delivery and expiry sweep.
 ///
@@ -968,9 +992,12 @@ impl RuntimeSessionService {
                 .ok_or_else(|| {
                     MezError::invalid_state("running message result does not match an action")
                 })?;
-            execution.action_results[index] =
-                self.execute_message_action_for_turn(turn, index, &action)?;
+            let outcome = self.execute_message_action_for_turn(turn, index, &action)?;
+            execution.action_results[index] = outcome.result;
             executed = executed.saturating_add(1);
+            if let Some(error) = outcome.post_accept_error {
+                return Err(error);
+            }
         }
         self.admit_request_wait_actions(turn, execution)?;
         execution.terminal_state = runtime_agent_turn_state_from_action_results(
@@ -991,7 +1018,7 @@ impl RuntimeSessionService {
         turn: &AgentTurnRecord,
         action_index: usize,
         action: &AgentAction,
-    ) -> Result<ActionResult> {
+    ) -> Result<RuntimeMessageActionOutcome> {
         let AgentActionPayload::SendMessage {
             recipient,
             scope,
@@ -1028,7 +1055,7 @@ impl RuntimeSessionService {
                     })
                     .to_string(),
                 );
-                return Ok(result);
+                return Ok(result.into());
             }
         };
         let scope = match scope {
@@ -1053,7 +1080,7 @@ impl RuntimeSessionService {
                 runtime_mezzanine_error_code(error.kind()),
                 json_escape(error.message())
             ));
-            return Ok(result);
+            return Ok(result.into());
         }
         if let Some(mut result) = self.queue_macro_managed_message_step(
             turn,
@@ -1064,7 +1091,7 @@ impl RuntimeSessionService {
             payload,
         )? {
             Self::runtime_message_result_with_scope(&mut result, recipient, scope);
-            return Ok(result);
+            return Ok(result.into());
         }
         let sender = self.runtime_message_sender_identity(turn)?;
         let recipient_target = match runtime_message_recipient(recipient) {
@@ -1091,7 +1118,7 @@ impl RuntimeSessionService {
                     })
                     .to_string(),
                 );
-                return Ok(result);
+                return Ok(result.into());
             }
         };
         let message_id = format!("{}:{}", turn.turn_id, action.id);
@@ -1161,19 +1188,18 @@ impl RuntimeSessionService {
                     })
                     .to_string(),
                 );
-                return Ok(result);
+                return Ok(result.into());
             }
         };
         self.retain_outbound_delivery_owner(turn, action, &delivery);
         if !expect_reply {
             self.record_joined_coordination_reply(turn, &delivery);
         }
-        self.deliver_pending_runtime_agent_messages(now_ms)?;
         let result = ActionResult::succeeded(
             turn,
             action,
             vec![format!(
-                "message {} delivered to {} recipient(s)",
+                "message {} accepted for {} recipient(s)",
                 delivery.message_id, delivery.queued_recipients
             )],
             Some(format!(
@@ -1186,13 +1212,33 @@ impl RuntimeSessionService {
                 expect_reply
             )),
         );
-        self.settle_accepted_outbound_message_preview(
-            &turn.pane_id,
-            &turn.turn_id,
-            action_index,
-            action,
-        )?;
-        Ok(result)
+        if let Err(error) = self.deliver_pending_runtime_agent_messages(now_ms) {
+            // Transport acceptance is irreversible. The receiver retains its
+            // original partial context/cursor/admission owner for maintenance;
+            // that recovery cannot fail or replay the sender's accepted action.
+            let trace = self.append_agent_trace_turn_event(
+                &turn.pane_id,
+                &turn.turn_id,
+                &format!(
+                    "message_delivery deferred_after_acceptance index={action_index} error={}",
+                    super::runtime_agent_terminal_preview(error.message())
+                ),
+            );
+            self.note_completion_optional_error(&turn.turn_id, trace);
+            self.note_completion_optional_error(&turn.turn_id, Err(error));
+        }
+        let post_accept_error = self
+            .settle_accepted_outbound_message_preview(
+                &turn.pane_id,
+                &turn.turn_id,
+                action_index,
+                action,
+            )
+            .err();
+        Ok(RuntimeMessageActionOutcome {
+            result,
+            post_accept_error,
+        })
     }
 
     /// Adds the public resolved audience to one macro-managed message result.

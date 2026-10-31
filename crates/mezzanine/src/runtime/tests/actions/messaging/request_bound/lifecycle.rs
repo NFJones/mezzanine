@@ -165,7 +165,7 @@ fn request_bound_owned_terminal_respects_pause_resume_and_stop_replacement() {
 /// the same request can then consume its retained terminal evidence once.
 #[test]
 fn request_bound_owned_terminal_retains_active_approval_until_primary_decision() {
-    let (mut service, parent, peer, primary) = fixture_with_primary();
+    let (mut service, parent, peer, primary) = fixture_with_primary_provider_claims();
     service.configure_agent_scheduler_limit(2).unwrap();
     let child = spawn_child(&mut service, &parent);
     assert!(
@@ -282,6 +282,7 @@ fn request_bound_owned_terminal_retains_active_approval_until_primary_decision()
             .count(),
         1
     );
+    claim_approved_provider_continuation(&mut service, &parent);
     wait(&mut service, &parent, &message, None);
     service
         .deliver_pending_runtime_agent_messages(current_unix_millis())
@@ -308,6 +309,7 @@ fn request_bound_owned_terminal_retains_active_approval_until_primary_decision()
         },
     );
     finish(&mut service, &parent);
+    service.terminate_all_pane_processes().unwrap();
 }
 
 /// Requested owned-child teardown is neither successful work nor unexpected

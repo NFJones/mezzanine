@@ -29,7 +29,15 @@ fn runtime_streamed_outbound_noop_settlement_continues_exactly_once() {
     ] {
         for cap in [24, 80] {
             for timestamps in [false, true] {
-                streamed_outbound_noop_case(content_type, verbose, payload, cap, timestamps, None);
+                streamed_outbound_noop_case(
+                    content_type,
+                    verbose,
+                    payload,
+                    cap,
+                    timestamps,
+                    None,
+                    false,
+                );
             }
         }
     }
@@ -49,6 +57,26 @@ fn runtime_outbound_settlement_failure_retains_provider_evidence() {
             80,
             false,
             Some(asynchronous),
+            false,
+        );
+    }
+}
+
+/// A tracked accepted send keeps its exact native receipt and actual returned
+/// ID after a genuine required projection rejection. Both synchronous and
+/// asynchronous handlers must retain the successful result, report the original
+/// integrity error and avoid a provider or message retry to repair display.
+#[test]
+fn runtime_tracked_outbound_settlement_failure_retains_request_and_evidence() {
+    for asynchronous in [false, true] {
+        streamed_outbound_noop_case(
+            "text/plain; charset=utf-8",
+            false,
+            "tracked accepted projection failure",
+            80,
+            false,
+            Some(asynchronous),
+            true,
         );
     }
 }
@@ -61,6 +89,7 @@ fn streamed_outbound_noop_case(
     cap: usize,
     timestamps: bool,
     failure_boundary: Option<bool>,
+    tracked: bool,
 ) {
     let mut service = test_runtime_service();
     super::timestamp_settings::replace_timestamp_settings(
@@ -178,7 +207,7 @@ fn streamed_outbound_noop_case(
     let action = mez_agent::AgentAction {
         id: "accepted-noop-message".into(),
         payload: mez_agent::AgentActionPayload::SendMessage {
-            expect_reply: false,
+            expect_reply: tracked,
             recipient,
             scope: Some("session".into()),
             content_type: content_type.into(),
@@ -318,6 +347,10 @@ fn streamed_outbound_noop_case(
         );
         assert_eq!(messages.accepted_messages[0].envelope.payload, payload);
         assert_eq!(messages.next_sequence, sequence + 1);
+        assert_eq!(
+            service.tracked_message_request_usage().0.0,
+            usize::from(tracked)
+        );
         let evidence = service
             .agent_turn_contexts()
             .get(&turn.turn_id)

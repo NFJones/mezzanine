@@ -17318,6 +17318,13 @@ historical errors without a fingerprint or rejection reason remain unattributed.
 Genuine rejected work retains its integrity error; diagnostics MUST NOT relax a
 fence or automatically retry provider requests, actions or messages. Missing
 typed recovery facts MUST remain unknown, never inferred correction counts.
+Once a native send is accepted, recoverable recipient context/cursor/admission
+failure MUST remain receiver maintenance work, with a bounded causal diagnostic.
+It MUST NOT fail the sender's accepted action, lose its actual message ID or
+repeat the send. Sender approval MUST be consumed once acceptance occurs;
+reusing its decision cannot change accepted tracking intent. Required sender
+presentation failures still propagate after the original accepted result has
+reached its execution owner.
 If message execution settles terminal effects before preview finalization
 fails, synchronous and asynchronous result application MUST observe and retain
 those original results in canonical chronology before returning the error.

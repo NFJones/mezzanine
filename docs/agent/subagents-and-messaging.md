@@ -296,6 +296,9 @@ returned `message_id`, then select it with `wait.for_message` in a later batch.
 Set `wait.from_agent` to one original recipient for fanout; a one-recipient send
 infers it. Selecting yourself or an untracked/unknown ID returns correctable
 feedback. Ordinary sends default to `expect_reply: false`.
+Receiver recovery after acceptance does not turn a successful send into failure
+or resend it. Keep its returned message ID; acceptance still does not prove that
+the recipient processed or answered it.
 
 ```json
 {"type":"send_message","recipient":"agent:agent-worker","scope":"session","content_type":"text/plain; charset=utf-8","payload":"Review the assigned change.","expect_reply":true}

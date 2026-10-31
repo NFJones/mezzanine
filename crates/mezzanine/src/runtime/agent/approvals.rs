@@ -3,7 +3,9 @@
 //! This module owns blocked-action approval queueing, permission-change
 //! reconciliation, pre-approval hooks, and approved/denied action resumption.
 //! Keeping these policy transitions together makes the runtime agent facade
-//! less coupled to approval-store internals.
+//! less coupled to approval-store internals. Once a message attempt has an
+//! authoritative result, required presentation errors cannot discard it or
+//! leave its already used approval available for another send.
 
 use super::{
     ActionResult, ActionStatus, AgentActionPayload, AgentTurnExecution, AgentTurnRecord,
@@ -18,6 +20,13 @@ use super::{
 use crate::runtime::RuntimeSandboxFallbackAudit;
 
 impl RuntimeSessionService {
+    /// Rejects one late approved-send publication without inventing an effect,
+    /// approval, scheduler claim or result. The real send must run first.
+    #[cfg(test)]
+    pub(crate) fn fail_next_approved_message_late_publication_for_tests(&mut self) {
+        self.agent.fail_next_approved_message_late_publication = true;
+    }
+
     /// Runs the apply permission request hooks for execution operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in
@@ -1012,6 +1021,12 @@ impl RuntimeSessionService {
                         "approved send_message no longer matches the approved recipient or payload",
                     ));
                 }
+                // An inline approved send may have no outstanding worker
+                // receipt. Reserve its existing completion owner before the
+                // effect so startup-error cleanup can transfer original-target
+                // evidence instead of deleting the last accepted result.
+                let group = super::provider_execution::provider_log_execution_group_id(&execution)?;
+                self.reserve_completion_group(&turn.turn_id, &group)?;
                 if !self.queue_ordered_provider_header(&turn.pane_id, &execution, &action)? {
                     self.append_agent_status_text_to_terminal_buffer(
                         &turn.pane_id,
@@ -1022,14 +1037,50 @@ impl RuntimeSessionService {
                         ),
                     )?;
                 }
-                let result = self.execute_message_action_for_turn(&turn, result_index, &action)?;
-                execution.action_results[result_index] = result;
-                self.flush_ordered_provider_headers(&turn.pane_id, &execution)?;
-                self.finalize_settled_outbound_message_previews(
-                    &turn.pane_id,
-                    &turn.turn_id,
-                    &execution,
-                )?;
+                let outcome = self.execute_message_action_for_turn(&turn, result_index, &action)?;
+                execution.action_results[result_index] = outcome.result;
+                // Own the authoritative result before any subsequent fallible
+                // publication or continuation. Cleanup must never recover the
+                // old Blocked slot after an irreversible native acceptance.
+                self.agent.blocked_agent_approval_refs.remove(approval_id);
+                execution.terminal_state = runtime_agent_turn_state_from_action_results(
+                    &execution.action_results,
+                    execution.final_turn,
+                );
+                self.agent_turn_executions_mut()
+                    .insert(turn.turn_id.clone(), execution.clone());
+                if let Some(error) = outcome.post_accept_error {
+                    let observed = execution.action_results[result_index].clone();
+                    return Err(self.retain_settled_results_after_application_error(
+                        &turn.turn_id,
+                        &execution,
+                        std::slice::from_ref(&observed),
+                        error,
+                    ));
+                }
+                if execution.action_results[result_index].is_terminal() {
+                    self.append_action_result_context_if_absent(
+                        &turn.turn_id,
+                        &execution.action_results[result_index],
+                    )?;
+                }
+                let publication = (|| {
+                    self.flush_ordered_provider_headers(&turn.pane_id, &execution)?;
+                    self.finalize_settled_outbound_message_previews(
+                        &turn.pane_id,
+                        &turn.turn_id,
+                        &execution,
+                    )
+                })();
+                if let Err(error) = publication {
+                    let observed = execution.action_results[result_index].clone();
+                    return Err(self.retain_settled_results_after_application_error(
+                        &turn.turn_id,
+                        &execution,
+                        std::slice::from_ref(&observed),
+                        error,
+                    ));
+                }
             }
             _ => return Ok(None),
         }
@@ -1039,6 +1090,14 @@ impl RuntimeSessionService {
             execution.final_turn,
         );
         self.flush_ordered_provider_headers(&turn.pane_id, &execution)?;
+        #[cfg(test)]
+        if matches!(action.payload, AgentActionPayload::SendMessage { .. })
+            && std::mem::take(&mut self.agent.fail_next_approved_message_late_publication)
+        {
+            return Err(MezError::invalid_state(
+                "injected approved message late publication failure",
+            ));
+        }
         self.present_deferred_agent_say_actions_to_terminal_buffer(&turn.pane_id, &execution)?;
         self.append_agent_trace_turn_event(
             &turn.pane_id,

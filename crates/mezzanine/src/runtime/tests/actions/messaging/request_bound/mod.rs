@@ -7,6 +7,7 @@
 mod expiry;
 mod faults;
 mod lifecycle;
+mod partial_send;
 mod protocol;
 mod retention;
 mod terminal;
@@ -15,8 +16,8 @@ use super::*;
 use mez_agent::{AgentAction, AgentActionPayload, SayStatus};
 
 /// Creates a genuine native parent conversation and a registered nonowned peer.
-/// A non-live parent has explicitly process-free ownership, rather than an
-/// unavailable OS observation being mistaken for an absent process.
+/// Ordinary component controls use explicitly process-free parent ownership;
+/// provider-claim controls opt into a real root before creating the turn.
 fn fixture() -> (RuntimeSessionService, AgentTurnRecord, SenderIdentity) {
     let (service, parent, peer, _) = fixture_with_primary();
     (service, parent, peer)
@@ -43,7 +44,47 @@ fn fixture_with_primary_pending_limits(
     SenderIdentity,
     mez_core::ids::ClientId,
 ) {
+    fixture_with_primary_pending_limits_and_claims(limits, false)
+}
+
+/// Uses a real parent root and isolated provider/auth configuration for the
+/// two component controls that advance approved completion handoff admission.
+fn fixture_with_primary_provider_claims() -> (
+    RuntimeSessionService,
+    AgentTurnRecord,
+    SenderIdentity,
+    mez_core::ids::ClientId,
+) {
+    fixture_with_primary_pending_limits_and_claims(None, true)
+}
+
+/// Chooses real provider preparation ownership before any conversation, while
+/// preserving process-free component fixtures that do not exercise claims.
+fn fixture_with_primary_pending_limits_and_claims(
+    limits: Option<mez_agent::messaging::PendingDeliveryLimits>,
+    provider_claims: bool,
+) -> (
+    RuntimeSessionService,
+    AgentTurnRecord,
+    SenderIdentity,
+    mez_core::ids::ClientId,
+) {
     let mut service = test_runtime_service();
+    if provider_claims {
+        let root = temp_root("runtime-request-provider-claims");
+        for catalog in ["skills", "macros"] {
+            std::fs::create_dir_all(root.join(catalog)).unwrap();
+        }
+        service.set_config_root(root.clone());
+        service.set_auth_store(crate::security::auth::AuthStore::new(
+            crate::security::auth::AuthPaths::under_config_root(&root),
+        ));
+        service.replace_config_layers(vec![ConfigLayer {
+        name: "request-bound-offline-provider".into(), path: None,
+        format: ConfigFormat::Toml, scope: ConfigScope::Primary, trusted: true,
+        text: "[agents]\ndefault_provider=\"runtime-batch\"\ndefault_model_profile=\"default\"\nshell_mode=\"native\"\n[permissions]\napproval_policy=\"ask\"\nsandbox=\"policy-only\"\n[providers.runtime-batch]\nkind=\"openai-compatible\"\nbase_url=\"http://127.0.0.1:9/v1\"\nmodels=[\"test\"]\ndefault_model=\"test\"\n[model_profiles.default]\nprovider=\"runtime-batch\"\nmodel=\"test\"\ncontext_window_tokens=128000\n".into(),
+    }]).unwrap();
+    }
     if let Some(limits) = limits {
         *service.message_service_mut() =
             MessageService::with_pending_limits(128, 65_536, limits).unwrap();
@@ -56,7 +97,12 @@ fn fixture_with_primary_pending_limits(
     let primary = service
         .attach_primary("primary", true, Size::new(100, 30).unwrap(), 120)
         .unwrap();
-    service.session.set_pane_live_state("%1", false).unwrap();
+    if provider_claims {
+        service.start_initial_pane_process(Some("cat")).unwrap();
+        service.set_pane_readiness("%1", mez_agent::PaneReadinessState::Ready);
+    } else {
+        service.session.set_pane_live_state("%1", false).unwrap();
+    }
     service
         .agent_shell_store_mut()
         .enter_or_resume("%1")
@@ -118,6 +164,41 @@ fn execute(
             runtime_model_profile("runtime-batch", "test"),
         )
         .unwrap()
+}
+
+/// Advances the service-level continuation through its real configured claim
+/// and canonical handoff gates before the synchronous offline provider seam.
+/// This fixture has one worker generation; it is not actor lease coverage.
+/// Separate actor tests exercise actual Prepare/Claim/Complete generations.
+fn claim_approved_provider_continuation(
+    service: &mut RuntimeSessionService,
+    turn: &AgentTurnRecord,
+) {
+    let agent = AgentId::opaque(turn.agent_id.clone()).unwrap();
+    let mut dispatch = None;
+    for _ in 0..4 {
+        service
+            .deliver_pending_runtime_agent_messages(current_unix_millis())
+            .unwrap();
+        dispatch = service
+            .claim_configured_agent_provider_task(&agent, &turn.turn_id)
+            .unwrap();
+        if dispatch.is_some() {
+            break;
+        }
+    }
+    let dispatch = dispatch.unwrap_or_else(|| {
+        panic!(
+            "the approved continuation must be genuinely claimable: {:?}; trace={}",
+            service.completion_provider_queue_flags_for_tests(&turn.turn_id),
+            service.agent_pane_trace_log_text(&turn.pane_id).unwrap(),
+        )
+    });
+    let (_, handoff) = service
+        .record_claimed_agent_provider_task(&dispatch, 1, 30_000)
+        .unwrap();
+    assert!(service.accept_completion_provider_handoff(&handoff));
+    service.clear_claimed_agent_provider_task(&turn.turn_id);
 }
 
 /// Sends once through the real native action boundary and returns the actual

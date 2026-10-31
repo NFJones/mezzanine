@@ -535,6 +535,16 @@ non-agent selector expressions remain the explicitly addressed label.
 
 ## Native request-bound waits
 
+A native sender's success means acceptance, independently of receiver recovery.
+A recoverable receiver context/cursor/admission error is diagnosed and retried
+by receiver maintenance; it cannot fail or repeat the already accepted send.
+The original actual message ID/tracking result and consumed sender approval
+remain authoritative. Sender presentation integrity errors still propagate,
+with the accepted result retained before the error escapes.
+Approved inline sends reserve their original completion owner before acceptance;
+later publication or scheduler-start cleanup retains that original result
+instead of making the consumed approval available for replay.
+
 MAAP `send_message.expect_reply` and `wait.for_message`/`from_agent` are native
 conversation controls, not new MMP envelope fields. Tracking freezes the actual
 accepted recipient registrations and optional exact owned task at send time.

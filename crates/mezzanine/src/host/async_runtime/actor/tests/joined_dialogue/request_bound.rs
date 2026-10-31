@@ -9,6 +9,155 @@
 use super::*;
 use crate::host::async_runtime::actor::coalesce::async_runtime_current_unix_millis;
 
+/// A real provider response blocks on Ask, releases its sole scheduler slot,
+/// and resumes only after the primary's actual approval. Failure after accepted
+/// send publication must retain the Succeeded result in its original transcript
+/// handoff even when scheduler startup retires the live turn. Reusing that exact
+/// decision cannot resend or change the accepted request's frozen intent.
+#[tokio::test(flavor = "current_thread")]
+async fn request_bound_actor_approved_send_retains_result_after_late_publication_failure() {
+    let (mut actor, parent, child, mut generations, primary) =
+        actor_fixture_with_lifetime(1, Vec::new(), mez_agent::SubagentLifetime::Persistent).await;
+    let peer = actor
+        .service
+        .ensure_runtime_message_identity(
+            "agent-late-approved-send-peer",
+            None,
+            "worker",
+            &[],
+            async_runtime_current_unix_millis(),
+        )
+        .unwrap();
+    actor
+        .service
+        .set_pane_approval_policy_override(&parent.pane_id, Some(mez_agent::ApprovalPolicy::Ask));
+    let mut action = send(
+        "late-approved-send",
+        peer.agent_id.as_str(),
+        "LATE_APPROVED_SEND",
+    );
+    if let AgentActionPayload::SendMessage { expect_reply, .. } = &mut action.payload {
+        *expect_reply = true;
+    }
+    step(&mut actor, &parent, vec![action], &mut generations).await;
+    assert_eq!(
+        actor.service.agent_turn_executions()[&parent.turn_id].action_results[0].status,
+        mez_agent::ActionStatus::Blocked
+    );
+    let approval = actor
+        .service
+        .blocked_approvals()
+        .pending()
+        .into_iter()
+        .find(|approval| {
+            approval.pane_id == parent.pane_id && approval.action_kind == "send_message"
+        })
+        .unwrap()
+        .clone();
+    step(
+        &mut actor,
+        &child,
+        vec![done("idle-before-approval", "initial child finished")],
+        &mut generations,
+    )
+    .await;
+    actor
+        .service
+        .fail_next_approved_message_late_publication_for_tests();
+    let mut connection =
+        crate::control::ControlConnectionState::trusted_existing_client(primary.clone());
+    let body = serde_json::json!({"jsonrpc":"2.0", "id":"late-approved-send",
+        "method":"approval/decide", "params":{"approval_id":approval.id,
+        "decision":"approve", "idempotency_key":"late-approved-send"}})
+    .to_string();
+    let input = crate::control::encode_control_body(&body);
+    let (output, _) = actor
+        .service
+        .handle_control_input_for_connection(&input, 4096, &mut connection)
+        .unwrap();
+    let (error, _) = crate::control::decode_control_frame(&output, 4096).unwrap();
+    assert!(
+        error.contains("approved message late publication failure"),
+        "{error}"
+    );
+    let decided = actor
+        .service
+        .blocked_approvals()
+        .get(&approval.id)
+        .unwrap()
+        .clone();
+    assert_eq!(
+        decided.decision,
+        Some(mez_agent::permissions::ApprovalDecision::Approve)
+    );
+    assert_eq!(
+        actor
+            .service
+            .agent_turn_ledger()
+            .turn(&parent.turn_id)
+            .unwrap()
+            .state,
+        AgentTurnState::Failed
+    );
+    assert!(
+        !actor
+            .service
+            .agent_turn_executions()
+            .contains_key(&parent.turn_id)
+    );
+    assert!(
+        !actor
+            .service
+            .agent_provider_task_is_pending(&parent.turn_id)
+    );
+    let state = actor.service.message_service().snapshot_state();
+    let accepted = state
+        .accepted_messages
+        .iter()
+        .filter(|row| row.envelope.payload == "LATE_APPROVED_SEND")
+        .collect::<Vec<_>>();
+    assert_eq!(accepted.len(), 1);
+    let message = accepted[0].envelope.id.clone();
+    let snapshot = actor
+        .service
+        .retained_completion_snapshot_for_tests(&parent.turn_id)
+        .unwrap()
+        .expect("the original transcript must retain its accepted result through cleanup");
+    let snapshot: serde_json::Value = serde_json::from_slice(&snapshot).unwrap();
+    assert_eq!(snapshot["turn"], parent.turn_id);
+    assert_eq!(snapshot["conversation"], parent.conversation_id);
+    let results = snapshot["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|entry| entry["role"] == "tool")
+        .filter_map(|entry| entry["content"].as_str())
+        .filter(|content| {
+            content.contains(&message)
+                && content.contains("send_message")
+                && content.contains("succeeded")
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        results.len(),
+        1,
+        "late publication lost the canonical Succeeded result after actual acceptance"
+    );
+    let (_, data) = results[0].split_once("\ndata: ").unwrap();
+    let result: serde_json::Value = serde_json::from_str(data).unwrap();
+    assert_eq!(result["message_id"], message);
+    assert_eq!(result["expect_reply"], true);
+    assert_eq!(
+        actor
+            .service
+            .resume_approved_blocked_agent_action(&approval.id, &decided, &primary,)
+            .unwrap(),
+        None
+    );
+    assert_eq!(actor.service.message_service().snapshot_state(), state);
+    assert_eq!(generations, (1..=3).collect());
+}
+
 /// Runs existing append-receipt admission and dispatches only actual worker
 /// requests received through bounded actor ingress. A notifier and watchdog
 /// replace sleeps; no invented success acknowledgement releases the lane.
@@ -1077,4 +1226,174 @@ async fn request_bound_actor_pending_original_reply_fences_completion_before_can
     );
     assert_eq!(actor.service.agent_turn_ledger().turns().len(), 2);
     assert_eq!(generations, (1..=7).collect());
+}
+
+/// An actual one-slot provider claim may accept its tracked send before an idle
+/// receiver fails canonical admission. That fault must remain receiver work:
+/// the SAME parent receives a successful accepted-ID result, parks on it, then
+/// consumes the original registration's real reply and performs typed durable
+/// work. No sender failure/retry, duplicate receive task or synthetic lease can
+/// replace the original accepted effect, even across duplicate event ingress.
+#[tokio::test(flavor = "current_thread")]
+async fn request_bound_actor_accepted_send_survives_receiver_commit_fault() {
+    let (mut actor, parent, initial, mut generations, _) =
+        actor_fixture_with_lifetime(1, Vec::new(), mez_agent::SubagentLifetime::Persistent).await;
+    step(
+        &mut actor,
+        &parent,
+        vec![AgentAction {
+            id: "prepare-idle-recipient".into(),
+            payload: AgentActionPayload::Wait {
+                for_message: None,
+                from_agent: None,
+            },
+        }],
+        &mut generations,
+    )
+    .await;
+    step(
+        &mut actor,
+        &initial,
+        vec![done(
+            "initial-recipient-done",
+            "idle before actual tracked acceptance",
+        )],
+        &mut generations,
+    )
+    .await;
+    unrelated_mail(&mut actor, &parent);
+    actor
+        .service
+        .fail_next_peer_message_receive_after_context_storage_for_tests();
+    let message = request(&mut actor, &parent, &initial.agent_id, &mut generations).await;
+    assert_eq!(
+        actor
+            .service
+            .agent_turn_ledger()
+            .turn(&parent.turn_id)
+            .unwrap()
+            .state,
+        AgentTurnState::Running
+    );
+    assert_eq!(
+        actor.service.agent_turn_executions()[&parent.turn_id].action_results[0].status,
+        mez_agent::ActionStatus::Succeeded
+    );
+    let diagnostic = actor
+        .service
+        .agent_pane_trace_log_text(&parent.pane_id)
+        .unwrap();
+    assert!(diagnostic.contains("deferred after acceptance"));
+    assert!(diagnostic.contains("after context storage"));
+    actor
+        .service
+        .apply_peer_message_delivery_timer(async_runtime_current_unix_millis(), 77)
+        .unwrap();
+    let recipient = actor
+        .service
+        .agent_turn_ledger()
+        .latest_turn_for_pane(&initial.pane_id)
+        .unwrap()
+        .clone();
+    assert_ne!(recipient.turn_id, initial.turn_id);
+    assert_eq!(actor.service.agent_turn_ledger().turns().len(), 3);
+    assert_eq!(
+        actor.service.agent_turn_contexts()[&recipient.turn_id]
+            .blocks()
+            .iter()
+            .filter(
+                |block| block.source == mez_agent::ContextSourceKind::PeerMessage
+                    && block.label.contains(&message)
+            )
+            .count(),
+        1
+    );
+    park(&mut actor, &parent, &message, &mut generations).await;
+    step(
+        &mut actor,
+        &recipient,
+        vec![
+            AgentAction {
+                id: "actual-reply-after-receiver-recovery".into(),
+                payload: AgentActionPayload::SendMessage {
+                    expect_reply: false,
+                    recipient: format!("agent:{}", parent.agent_id),
+                    scope: Some("session".into()),
+                    content_type: "text/plain; charset=utf-8".into(),
+                    payload: "ACTUAL_REPLY_AFTER_PARTIAL_SEND".into(),
+                    correlation_id: Some(message.clone()),
+                },
+            },
+            done(
+                "recovered-recipient-done",
+                "replied once after receiver recovery",
+            ),
+        ],
+        &mut generations,
+    )
+    .await;
+    assert_outcome(&actor, &parent, "reply", true);
+    let (dispatch, persisted) = step(
+        &mut actor,
+        &parent,
+        vec![record_evidence()],
+        &mut generations,
+    )
+    .await;
+    assert!(persisted > 0);
+    assert_memory_saved(&actor, &parent);
+    assert!(
+        dispatch
+            .context
+            .durable()
+            .blocks()
+            .iter()
+            .any(|block| block.content.contains("ACTUAL_REPLY_AFTER_PARTIAL_SEND"))
+    );
+    assert_eq!(
+        dispatch
+            .context
+            .durable()
+            .blocks()
+            .iter()
+            .filter(|block| block.label.starts_with("request-handoff:"))
+            .count(),
+        1
+    );
+    assert_eq!(
+        actor.service.tracked_message_request_usage(),
+        ((0, 0, 0), 0)
+    );
+    assert_eq!(
+        actor
+            .service
+            .message_service()
+            .snapshot_state()
+            .accepted_messages
+            .iter()
+            .filter(|row| row.envelope.id == message)
+            .count(),
+        1
+    );
+    step(
+        &mut actor,
+        &parent,
+        vec![done(
+            "partial-send-parent-final",
+            "used real reply after receiver recovery",
+        )],
+        &mut generations,
+    )
+    .await;
+    assert_eq!(
+        actor
+            .service
+            .agent_turn_ledger()
+            .turn(&parent.turn_id)
+            .unwrap()
+            .state,
+        AgentTurnState::Completed
+    );
+    assert_eq!(actor.service.agent_turn_ledger().turns().len(), 3);
+    assert_eq!(generations, (1..=8).collect());
 }

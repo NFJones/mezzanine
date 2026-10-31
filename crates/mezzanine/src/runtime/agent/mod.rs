@@ -795,6 +795,9 @@ pub(crate) struct RuntimeAgentComponent {
     /// Test-only one-shot failure injected after receive cursor advancement.
     #[cfg(test)]
     fail_next_peer_message_receive_after_cursor_advance: bool,
+    /// Test-only one-shot approval publication failure after accepted send paint.
+    #[cfg(test)]
+    fail_next_approved_message_late_publication: bool,
     /// Test-only one-shot failure injected before receiver presentation work.
     #[cfg(test)]
     fail_next_received_peer_message_presentation: bool,
