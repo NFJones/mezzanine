@@ -31,6 +31,16 @@ and handlers with a blocking failure policy reject admission before dispatch;
 optional warn-only handlers produce an incompatibility diagnostic and do not
 queue a program or focused-shell command.
 
+Filesystem completion captures the original `post_shell_command` definitions
+when the action is queued. Matching uses semantic action identity, action status,
+effect certainty and confirmed endpoint/operation counts; it does not fabricate
+shell commands or exit codes. Completion incompatibilities are diagnosed once,
+even if required, while committed effects remain recorded. Later configuration
+or pane-mode changes cannot enable executable completion handlers. Diagnostic
+failures retain the first error and do not replay earlier diagnostics; a
+replacement conversation receives no hook status paint. This hook milestone
+does not acknowledge audit, publication, archive or worker ownership transfer.
+
 Treat hook runners as distinct execution boundaries. Program hooks can invoke
 external programs and receive structured event data on standard input. Shell
 hooks use the focused pane shell when one is available. Focused-shell hooks

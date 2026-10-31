@@ -46,7 +46,7 @@ fn execute_raw(
 }
 
 /// Retains the original actual worker Arc after execution, without projection.
-fn execute_and_retain(
+pub(super) fn execute_and_retain(
     fixture: &mut Fixture,
     cancel_after_first: bool,
 ) -> (NativeFilesystemAttempt, Arc<NativePatchWorkerOutcome>) {
@@ -60,7 +60,7 @@ fn execute_and_retain(
 }
 
 /// Counts actual immutable chronology entries for the original action only.
-fn result_events(fixture: &Fixture) -> usize {
+pub(super) fn result_events(fixture: &Fixture) -> usize {
     fixture
         .service
         .agent_turn_contexts()
@@ -136,7 +136,7 @@ fn canonical_filesystem_success_commits_typed_facts_once_without_acknowledging_s
             .service
             .filesystem_completion_phase_for_tests(&attempt)
             .unwrap(),
-        "filesystem_context_committed"
+        "filesystem_hooks_accepted"
     );
 }
 
@@ -323,7 +323,7 @@ fn canonical_filesystem_late_facts_update_original_failed_backing_not_latest_exe
             .service
             .filesystem_completion_phase_for_tests(&attempt)
             .unwrap(),
-        "filesystem_context_committed"
+        "filesystem_hooks_accepted"
     );
     assert_eq!(
         fs::read(fixture.root.join("file")).unwrap(),

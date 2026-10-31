@@ -220,6 +220,27 @@ impl RuntimeSessionService {
         Ok(())
     }
 
+    /// Diagnoses frozen original filesystem completion plans without entering
+    /// executable paths. Completion incompatibility never rolls back effects.
+    /// Original ownership remains in each plan's semantic payload; stale pane
+    /// conversations receive no terminal status paint. Diagnostic errors are
+    /// propagated to the caller's entered gate and cannot authorize a retry.
+    pub(super) fn complete_native_filesystem_hook_plans(
+        &mut self,
+        plans: Vec<HookExecutionPlan>,
+        paint_current_conversation: bool,
+    ) -> Result<()> {
+        for mut plan in plans {
+            plan.target_pane_id = if paint_current_conversation {
+                runtime_hook_target_pane_id(&plan.event_payload_json)
+            } else {
+                None
+            };
+            self.record_native_hook_incompatibility(&plan)?;
+        }
+        Ok(())
+    }
+
     /// Runs the run configured pre action hooks operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in

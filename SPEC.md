@@ -12693,8 +12693,14 @@ required incompatible executable gates MUST block before mutation. Native
 filesystem attempt admission MUST check these guards before issuing a dispatch,
 using the immutable execution domain and semantic action metadata rather than
 generated shell commands or mutable pane presentation. Optional warn-only
-handlers MUST NOT enqueue executable work. Pane
-creation, external editing, clipboard/status commands and other intentionally
+handlers MUST NOT enqueue executable work. Filesystem completion MUST classify
+original queued completion-hook definitions against validated semantic outcome
+metadata in a non-executable domain, even after pane mode, conversation or
+configuration changes. Completed-hook incompatibility MUST preserve confirmed
+effects. Entered diagnostic failures MUST retain their first error and MUST NOT
+replay earlier diagnostics. Hook acceptance MUST NOT imply audit, publication,
+archive or producer-custody transfer; stale conversations MUST receive no hook
+status paint. Pane creation, external editing, clipboard/status commands and other intentionally
 process-oriented UI integrations are outside this filesystem guarantee. A
 literal shell-command-only launch policy MUST reject incompatible integrations
 rather than silently expanding these exclusions. HTTP integrations and passive

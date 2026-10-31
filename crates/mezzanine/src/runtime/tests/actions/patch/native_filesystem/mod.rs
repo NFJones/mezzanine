@@ -713,3 +713,6 @@ mod async_producer;
 mod canonical;
 
 mod hooks;
+
+#[cfg(target_os = "linux")]
+mod completion_hooks;

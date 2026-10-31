@@ -132,7 +132,7 @@ async fn async_actor_rpc_commits_and_retains_original_raw_outcome() {
             .service
             .filesystem_completion_phase_for_tests(&attempt)
             .unwrap(),
-        "filesystem_context_committed"
+        "filesystem_hooks_accepted"
     );
     assert!(
         !fixture

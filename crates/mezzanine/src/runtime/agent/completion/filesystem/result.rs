@@ -53,6 +53,32 @@ pub(super) fn action_result(
     Ok(result)
 }
 
+/// Encodes only original semantic identity and validated outcome summary for
+/// completion matching. Shell command, exit-code, stdout and diff fields are
+/// deliberately absent; this payload can never authorize or execute a hook.
+pub(super) fn completed_hook_payload(
+    work: &NativeFilesystemWork,
+    raw: &NativePatchWorkerOutcome,
+    status: ActionStatus,
+) -> String {
+    serde_json::json!({
+        "turn_id": work.owner.turn.turn_id,
+        "agent_id": work.owner.turn.agent_id,
+        "pane_id": work.owner.turn.pane_id,
+        "conversation_id": work.owner.turn.conversation_id,
+        "action_id": work.owner.action.id,
+        "action_type": work.owner.action.action_type(),
+        "semantic_action_type": work.owner.action.action_type(),
+        "execution_target": "native_runtime", "sent_to_pane": false,
+        "policy_descriptor": work.identity.operation.policy_descriptor(),
+        "action_status": if status == ActionStatus::Succeeded { "succeeded" } else { "failed" },
+        "effect_certainty": certainty_name(raw.result.certainty),
+        "confirmed_endpoint_count": raw.receipts.len(),
+        "completed_operation_count": raw.completed_operations.len(),
+    })
+    .to_string()
+}
+
 /// Checks semantic occurrences, dependencies, certainty and aggregate budgets.
 fn validate(work: &NativeFilesystemWork, raw: &NativePatchWorkerOutcome) -> Result<()> {
     let effects = &work.identity.operation.effects;

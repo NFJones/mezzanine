@@ -20,7 +20,8 @@ enum Source {
 
 impl RuntimeSessionService {
     /// Promotes retained original filesystem facts into canonical execution and
-    /// chronology once. This is not continuation, audit, publication or archive
+    /// chronology and classify original completed hooks once. This is not
+    /// continuation, audit, publication or archive
     /// acknowledgement and never releases worker/attempt custody.
     pub(crate) fn project_native_filesystem_completion(
         &mut self,
@@ -44,7 +45,11 @@ impl RuntimeSessionService {
             ));
         }
         let scope = self.begin_completion_scope(&key.0, CompletionScope::Callback);
-        let projected = self.project_filesystem_facts(&key);
+        let projected = (|| {
+            let changed = self.project_filesystem_facts(&key)?;
+            self.complete_filesystem_hooks(&key)
+                .map(|hooks_changed| changed || hooks_changed)
+        })();
         if let Err(error) = &projected {
             self.fail_filesystem_completion(attempt, error);
         }
@@ -62,7 +67,12 @@ impl RuntimeSessionService {
         if let Some(error) = &receipt.failure {
             return Err((**error).clone());
         }
-        if receipt.phase == FilesystemCompletionPhase::ContextCommitted {
+        if matches!(
+            receipt.phase,
+            FilesystemCompletionPhase::ContextCommitted
+                | FilesystemCompletionPhase::HooksEntered
+                | FilesystemCompletionPhase::HooksAccepted
+        ) {
             return Ok(false);
         }
         if receipt.phase != FilesystemCompletionPhase::OutcomeRetained {
@@ -76,6 +86,13 @@ impl RuntimeSessionService {
         })?;
         self.filesystem_completion_phase(key, FilesystemCompletionPhase::Projection)?;
         let result = result::action_result(&work, &raw)?;
+        let payload = result::completed_hook_payload(&work, &raw, result.status);
+        self.agent
+            .completion_settlements
+            .filesystem
+            .get_mut(key)
+            .ok_or_else(|| MezError::invalid_state("filesystem hook receipt unavailable"))?
+            .completed_hook_payload = Some(payload);
         let (source, mut execution) = self.filesystem_original_execution(&work)?;
         let index = work.owner.ordinal;
         let authored = execution

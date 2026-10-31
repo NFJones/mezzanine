@@ -4,7 +4,8 @@
 //! change. Exact actor attempts register issued/observed/context milestones and
 //! retain raw evidence independently of cancellation. Projection updates only
 //! the actual original execution and context, including moved failed backing.
-//! Canonical/context acceptance is NOT audit, publication, archive-candidate or
+//! Canonical/context and non-executable hook acceptance are NOT audit,
+//! publication, archive-candidate or
 //! disk durability acknowledgement. Those remaining gates must finish before
 //! worker/attempt custody may transfer; this module never authorizes replay.
 
@@ -13,6 +14,7 @@ use crate::runtime::agent::native_filesystem::{NativeFilesystemAttempt, NativeFi
 use crate::runtime::processes::native_patch::worker::NativePatchWorkerOutcome;
 use std::sync::Arc;
 
+mod hooks;
 mod projection;
 mod result;
 
@@ -33,6 +35,10 @@ pub(super) enum FilesystemCompletionPhase {
     ContextEntered,
     /// Canonical/context facts accepted; later required gates remain.
     ContextCommitted,
+    /// Non-executable completed-hook classification entered, not acknowledged.
+    HooksEntered,
+    /// Original configured completion hooks were diagnosed without execution.
+    HooksAccepted,
 }
 
 impl FilesystemCompletionPhase {
@@ -46,6 +52,8 @@ impl FilesystemCompletionPhase {
             Self::CanonicalRetained => "filesystem_canonical_retained",
             Self::ContextEntered => "filesystem_context_entered",
             Self::ContextCommitted => "filesystem_context_committed",
+            Self::HooksEntered => "filesystem_hooks_entered",
+            Self::HooksAccepted => "filesystem_hooks_accepted",
         }
     }
 }
@@ -62,6 +70,10 @@ pub(super) struct FilesystemCompletionReceipt {
     raw: Option<Arc<NativePatchWorkerOutcome>>,
     /// Actual entered/accepted projection boundary, not inferred from a result.
     phase: FilesystemCompletionPhase,
+    /// Original completion definitions, independent of later config changes.
+    completed_hooks: Vec<crate::integrations::hooks::HookDefinition>,
+    /// Bounded semantic outcome captured with canonical facts, never a command.
+    completed_hook_payload: Option<String>,
     /// First required failure; duplicates never reset it or replay the gate.
     failure: Option<Box<MezError>>,
 }
@@ -160,6 +172,14 @@ impl RuntimeSessionService {
                 work,
                 raw: None,
                 phase: FilesystemCompletionPhase::Queued,
+                completed_hooks: self
+                    .integration
+                    .hook_definitions()
+                    .iter()
+                    .filter(|definition| definition.event == HookEvent::PostShellCommand)
+                    .cloned()
+                    .collect(),
+                completed_hook_payload: None,
                 failure: None,
             }),
         );
