@@ -4,6 +4,7 @@
 //! and terminal result owners. No lifecycle envelope or acceptance flag is forged.
 //! Actor-owned provider claims and the larger fault matrix are separate gates.
 
+mod expiry;
 mod lifecycle;
 mod protocol;
 mod retention;

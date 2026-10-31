@@ -560,7 +560,16 @@ cannot wake an unrelated plain wait.
 
 Request receipts survive payload replay eviction independently of ordinary
 delivery custody, under finite count and metadata reservations made before
-acceptance. Retained allocations count their actual owned capacity, rather than
+acceptance. For a trusted envelope with a finite original wire TTL, first strict
+expiry observation starts the existing ten-minute handoff window for unanswered
+tracking. ACK/replay do not end this reservation early, and clock rollback does
+not renew it. Actual pending/retained outcomes keep their full reservation and
+source protection through normal handoff. The existing message-maintenance
+cadence handles expiry; no-TTL or protected-only tracking adds no expiry timer.
+Expiry itself neither wakes/settles a wait nor grants progress. A selected wait
+whose tracking expires still admits ordinary mail; selecting the retired ID
+later returns bounded correction. MAAP has no added TTL/deadline parameter.
+ Retained allocations count their actual owned capacity, rather than
 only the text length; cached output cannot retain uncharged formatting slack. Source references stay exact through context and scheduler handoff.
 After unrelated mail resumes the owner, the selected outcome still enters its
 next safe context boundary. Staging adds no scheduler slot and changes no settled

@@ -17196,6 +17196,18 @@ ACK, replay eviction and later persistent-agent tasks MUST NOT replace the
 original request's ownership. Conversation retirement and restore MUST retire
 same-runtime capabilities; missing proof MUST NOT be reconstructed from history.
 
+For a trusted accepted envelope with a finite original wire TTL, strict expiry
+observation MUST retain one ten-minute handoff window before unanswered request
+tracking may retire, independently of payload ACK/replay. Clock rollback or
+repeated maintenance MUST NOT renew that window. Genuine pending responses,
+retained outcomes and protected canonical sources MUST remain charged until
+their normal handoff or originating conversation retirement. Existing message
+maintenance MAY drive this finite cleanup; no-TTL/protected-only tracking MUST
+NOT create an expiry timer. Expiry alone MUST NOT settle a wait, queue inference
+or count as progress. An expired selected wait retains ordinary-mail wake
+behavior; subsequent selection of its retired ID MUST return bounded correction.
+MAAP adds no TTL/deadline parameter through this retention policy.
+
 A matching response MUST be an authenticated original-recipient `send`
 occurrence, correlated to the exact accepted request ID and committed into
 canonical context. The runtime establishes occurrence, not answer quality. A

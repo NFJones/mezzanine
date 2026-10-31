@@ -332,6 +332,10 @@ budget. A tracking-cap rejection sends nothing. It does not block ordinary
 untracked delivery. Source references survive ACK/replay eviction and remain
 exact through context/wake handoff, including QueueFull and compaction. Outcomes
 grant no permission or answer-quality verdict and never resend or restart work.
+If a native wire request has a finite TTL, unanswered tracking may retire after
+its expiry handoff window. This does not wake you or count as progress; a later
+selection of the retired ID returns correction. Already retained outcomes keep
+their protected handoff. No deadline parameter is added to `send_message`.
 
 There is one narrow lifecycle exception: when the runtime locally proves an
 owned child's current task failed or was unexpectedly interrupted before its

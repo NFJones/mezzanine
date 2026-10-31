@@ -301,7 +301,7 @@ impl RuntimeSessionService {
         scope: MessageScope,
         now_ms: u64,
     ) -> mez_agent::messaging::Result<Delivery> {
-        self.prune_request_wait_owners();
+        self.prune_request_wait_owners_at(now_ms);
         let fingerprint = request_fingerprint(&envelope, scope);
         let origin = Self::request_origin(turn).map_err(|_| {
             mez_agent::messaging::MessageError::invalid_state("native request origin unavailable")
@@ -424,6 +424,7 @@ impl RuntimeSessionService {
             else {
                 continue;
             };
+            self.prune_request_wait_owners();
             let sender = Self::request_origin(turn)?.agent_id;
             let selected = self
                 .agent
@@ -722,9 +723,72 @@ impl RuntimeSessionService {
         }
     }
 
-    /// Retires only dead original conversations, never completed tasks. Restored
-    /// sessions clear the complete owner separately instead of recreating proof.
+    /// Reconciles conversation retirement and finite request expiry. Task
+    /// completion alone does not retire a conversation; restore clears the
+    /// complete owner separately instead of recreating historical proof.
     pub(super) fn prune_request_wait_owners(&mut self) {
+        self.prune_request_wait_owners_at(super::current_unix_millis());
+    }
+
+    /// Keeps actual pending/retained outcomes ahead of metadata expiry. Existing
+    /// private source custody or original acceptance/registration facts qualify;
+    /// caller text and disposable history never protect a tracking reservation.
+    fn request_expiry_has_outcome(&self, generation: u64, now_ms: u64) -> bool {
+        if self
+            .agent
+            .request_waits
+            .recipients
+            .get(&generation)
+            .is_some_and(|slots| {
+                slots.iter().any(|slot| {
+                    slot.outcome.is_some()
+                        || slot.peer_source.is_some()
+                        || slot.handoff_source.is_some()
+                })
+            })
+        {
+            return true;
+        }
+        let Some(receipt) = self.agent.request_waits.requests.receipt(generation) else {
+            return false;
+        };
+        receipt.proof().recipients().any(|recipient| {
+            !self
+                .control
+                .message_service()
+                .acceptance_recipient_is_current(receipt.proof(), recipient)
+                || self.control.message_service().has_pending_acceptance_reply(
+                    receipt.proof(),
+                    recipient,
+                    now_ms,
+                    |envelope| !crate::runtime::control::runtime_owned_bridge_message(envelope),
+                )
+        })
+    }
+
+    /// Ages only unanswered finite tracking on this trusted clock snapshot.
+    /// Expiry removes no retained source, creates no provider wake and cannot
+    /// recreate selection authority from a still-readable transport occurrence.
+    fn prune_request_wait_owners_at(&mut self, now_ms: u64) {
+        let protected = self
+            .agent
+            .request_waits
+            .requests
+            .receipts()
+            .filter(|receipt| {
+                receipt.has_finite_expiry()
+                    && self.request_expiry_has_outcome(receipt.generation(), now_ms)
+            })
+            .map(|receipt| receipt.generation())
+            .collect::<std::collections::BTreeSet<_>>();
+        let expired = self
+            .agent
+            .request_waits
+            .requests
+            .retire_expired_at(now_ms, |generation| protected.contains(&generation));
+        for generation in expired {
+            self.release_request_sources(generation);
+        }
         let retired =
             self.agent
                 .request_waits
@@ -829,7 +893,7 @@ impl RuntimeSessionService {
     /// Uses one trusted delivery snapshot for TTL eligibility and retirement,
     /// so recovery cannot preempt a reply still live for the following fanout.
     pub(super) fn recover_request_waits_at(&mut self, now_ms: u64) -> Result<()> {
-        self.prune_request_wait_owners();
+        self.prune_request_wait_owners_at(now_ms);
         self.record_request_registration_retirements(now_ms);
         let turns = self
             .agent
@@ -874,7 +938,17 @@ impl RuntimeSessionService {
 
     /// Keeps delivery maintenance eligible for parked outcomes or an active
     /// owner's uncommitted source. A committed active reference needs no timer.
-    pub(super) fn has_request_waits(&self) -> bool {
+    pub(super) fn has_request_waits(&self, now_ms: u64) -> bool {
+        if self
+            .agent
+            .request_waits
+            .requests
+            .needs_expiry_maintenance(|generation| {
+                self.request_expiry_has_outcome(generation, now_ms)
+            })
+        {
+            return true;
+        }
         self.agent
             .request_waits
             .edges
@@ -910,7 +984,7 @@ impl RuntimeSessionService {
                             })
                     });
                 if matches!(turn.state, AgentTurnState::Running | AgentTurnState::Queued) {
-                    return self.request_wait_context_pending_for_turn(turn)
+                    return self.request_wait_context_pending_for_turn_at(turn, now_ms)
                         || (retired && slot.is_some_and(|slot| slot.outcome.is_none()));
                 }
                 turn.state == AgentTurnState::Blocked
@@ -1018,6 +1092,20 @@ impl RuntimeSessionService {
     /// accepted request receipts or allowing a later task to inherit its edge.
     pub(super) fn retire_request_wait_edge(&mut self, turn: &str) {
         self.agent.request_waits.edges.remove(turn);
+    }
+
+    /// Exercises the genuine trusted admission transaction with a wire TTL.
+    /// This test seam neither installs receipts nor supplies lifecycle proof;
+    /// normal origin, registration, task, scope and resource checks still run.
+    #[cfg(test)]
+    pub(in crate::runtime) fn accept_tracked_message_envelope_for_tests(
+        &mut self,
+        turn: &AgentTurnRecord,
+        envelope: Envelope,
+        scope: MessageScope,
+        now_ms: u64,
+    ) -> mez_agent::messaging::Result<Delivery> {
+        self.accept_tracked_runtime_message(turn, envelope, scope, now_ms)
     }
 
     /// Exposes finite owner counts to product regressions without granting mail,

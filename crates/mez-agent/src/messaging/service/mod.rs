@@ -16,6 +16,7 @@ use mez_core::ids::{AgentId, IdFactory, PaneId, StableId, WindowId};
 use super::error::{MessageError, MessageErrorKind, Result};
 use super::outcomes::{
     DeliveryTerminalReason, MessageDeliveryOutcome, MessageDeliveryTerminalSnapshot,
+    TERMINAL_HANDOFF_MS,
 };
 use super::pending_limits::PendingDeliveryLimits;
 

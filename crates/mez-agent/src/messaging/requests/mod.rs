@@ -3,8 +3,10 @@
 //! This is not another mailbox: receipts retain only opaque acceptance evidence,
 //! caller identity and pre-reserved handoff headroom. Admission borrows the sole
 //! message owner exclusively and reserves conversation, recipient, edge, terminal
-//! and metadata capacity before lower acceptance. Failed admission publishes no
-//! occurrence. Product adapters remain responsible for proving caller/task
+//! and metadata capacity before lower acceptance. Finite wire TTL starts one
+//! expiry handoff window independently of payload ACK; genuine retained outcomes
+//! stay protected and fully charged through the adapter's handoff. Failed
+//! admission publishes no occurrence. Product adapters remain responsible for proving caller/task
 //! ownership, capturing exact child attempts in the same exclusive transaction,
 //! committing context before consuming a receipt, and retiring conversations.
 //! No snapshot reconstructs this store; generation allocation is not progress.
@@ -13,6 +15,7 @@ use std::collections::BTreeMap;
 
 use mez_core::ids::AgentId;
 
+use super::outcomes::TERMINAL_HANDOFF_MS;
 use super::{
     Delivery, Envelope, MessageAcceptanceProof, MessageAcceptanceReservation, MessageError,
     MessageErrorKind, MessageScope, MessageService, Result,
@@ -76,7 +79,12 @@ pub struct MessageRequestReceipt {
     delivery: Delivery,
     /// Payload-free occurrence and frozen registration evidence.
     proof: MessageAcceptanceProof,
-    /// Full reserved units, retained until explicit owner consumption.
+    /// Strict acceptance-relative wire TTL, independent of payload ACK/replay.
+    /// Saturation at u64::MAX cannot expire on any representable clock value.
+    expires_at_ms: Option<u64>,
+    /// First actual expiry observation; rollback/retries never renew its window.
+    expiry_observed_at_ms: Option<u64>,
+    /// Full reserved units, retained until explicit owner consumption or expiry.
     units: usize,
     /// Full metadata charge, including future task/outcome references.
     metadata_bytes: usize,
@@ -98,6 +106,11 @@ impl MessageRequestReceipt {
     /// Borrows the immutable occurrence proof for authenticated reply matching.
     pub fn proof(&self) -> &MessageAcceptanceProof {
         &self.proof
+    }
+    /// Reports a wire TTL that can expire on a representable native clock.
+    /// No-TTL and saturated deadlines retain ordinary explicit ownership.
+    pub fn has_finite_expiry(&self) -> bool {
+        self.expires_at_ms.is_some_and(|expiry| expiry < u64::MAX)
     }
     /// Returns the already reserved task/outcome bytes for each frozen recipient.
     pub fn handoff_bytes_per_recipient(&self) -> usize {
@@ -220,6 +233,7 @@ impl MessageRequests {
         // AgentId hides its owned string capacity. Clone only after the length
         // fits, so the retained ID has the measured compact allocation.
         origin.agent_id = origin.agent_id.clone();
+        let expires_at_ms = envelope.ttl_ms.map(|ttl| now_ms.saturating_add(ttl));
         let (delivery, proof) = service.accept_at_with_scope_and_reservation(
             &origin.agent_id,
             envelope,
@@ -247,6 +261,8 @@ impl MessageRequests {
                 origin,
                 delivery,
                 proof,
+                expires_at_ms,
+                expiry_observed_at_ms: None,
                 units,
                 metadata_bytes,
             }))
@@ -298,6 +314,52 @@ impl MessageRequests {
             }
             keep
         });
+    }
+
+    /// Observes strict original wire TTL expiry and releases unanswered tracking
+    /// after the native handoff window. The trusted adapter must protect genuine
+    /// pending/retained outcomes with `retain_outcome`; protected receipts stay
+    /// fully charged until handoff or conversation retirement. Returned bounded
+    /// generations let the adapter remove matching sidecars/edges. This operation
+    /// neither offers/ACKs mail, settles waits, nor supplies progress or a wake.
+    /// First observation is sticky across retries and clock rollback.
+    pub fn retire_expired_at(
+        &mut self,
+        now_ms: u64,
+        retain_outcome: impl Fn(u64) -> bool,
+    ) -> Vec<u64> {
+        let mut retired = Vec::new();
+        for (generation, receipt) in &mut self.receipts {
+            if receipt.expiry_observed_at_ms.is_none()
+                && receipt.expires_at_ms.is_some_and(|expiry| expiry < now_ms)
+            {
+                receipt.expiry_observed_at_ms = Some(now_ms);
+            }
+            if receipt
+                .expiry_observed_at_ms
+                .is_some_and(|observed| now_ms.saturating_sub(observed) >= TERMINAL_HANDOFF_MS)
+                && !retain_outcome(*generation)
+            {
+                retired.push(*generation);
+            }
+        }
+        for generation in &retired {
+            if let Some(receipt) = self.receipts.remove(generation) {
+                self.units -= receipt.units;
+                self.metadata_bytes -= receipt.metadata_bytes;
+            }
+        }
+        retired
+    }
+
+    /// Reports finite expiry work for the existing native maintenance owner.
+    /// No-TTL, unrepresentable deadlines and protected-outcome-only stores need
+    /// no expiry timer; the adapter already owns their delivery/handoff gates.
+    /// This pure query grants neither retention nor scheduling authority.
+    pub fn needs_expiry_maintenance(&self, retain_outcome: impl Fn(u64) -> bool) -> bool {
+        self.receipts.iter().any(|(generation, receipt)| {
+            receipt.has_finite_expiry() && !retain_outcome(*generation)
+        })
     }
 
     /// Returns unresolved request count and fully reserved global units/bytes.

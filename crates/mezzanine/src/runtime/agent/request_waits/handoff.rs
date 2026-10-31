@@ -310,23 +310,15 @@ impl RuntimeSessionService {
         turn: &AgentTurnRecord,
     ) -> Result<bool> {
         let now_ms = super::super::current_unix_millis();
+        self.prune_request_wait_owners_at(now_ms);
         self.record_request_registration_retirements(now_ms);
         self.resume_targeted_request_wait(turn)?;
         Ok(self.request_wait_context_pending_for_turn_at(turn, now_ms))
     }
 
-    /// Checks only privately retained source identity and content. A failed
-    /// commit remains pending even when no event high-water mark could advance.
-    pub(in crate::runtime::agent) fn request_wait_context_pending_for_turn(
-        &self,
-        turn: &AgentTurnRecord,
-    ) -> bool {
-        self.request_wait_context_pending_for_turn_at(turn, super::super::current_unix_millis())
-    }
-
     /// Checks pending canonical sources against the same native snapshot used
     /// to recover retirement, without a second TTL boundary crossing.
-    fn request_wait_context_pending_for_turn_at(
+    pub(super) fn request_wait_context_pending_for_turn_at(
         &self,
         turn: &AgentTurnRecord,
         now_ms: u64,

@@ -10,10 +10,6 @@
 
 use super::*;
 
-/// Ten-minute opportunity for exact-owner handoff after first observation.
-/// Actor callers drive maintenance; elapsed wall-clock high-water is not a
-/// promise of monotonic elapsed time or crash-atomic persistence.
-const TERMINAL_HANDOFF_MS: u64 = 600_000;
 /// One query cannot clone more than this many payload-free receipt records.
 const OUTCOME_BATCH: usize = 100;
 

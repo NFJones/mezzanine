@@ -795,7 +795,7 @@ impl RuntimeSessionService {
         {
             return true;
         }
-        if self.has_pending_owned_child_failure_handoff() || self.has_request_waits() {
+        if self.has_pending_owned_child_failure_handoff() || self.has_request_waits(now_ms) {
             return true;
         }
         if !self.agent.agent_turn_peer_wait_wake_pending.is_empty()

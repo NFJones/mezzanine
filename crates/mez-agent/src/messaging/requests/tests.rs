@@ -421,3 +421,144 @@ fn request_limits_and_generation_exhaustion_fail_before_send() {
     assert_eq!(service.snapshot_state(), before);
     assert_eq!(requests.usage(), (0, 0, 0));
 }
+
+/// Original TTL observation has a strict boundary and its own retained window,
+/// even after transport no longer owns the payload. Only unprotected finite
+/// receipts age out: genuine outcome custody stays charged, no-TTL ownership
+/// survives, counters release exactly once and generations never restart.
+#[test]
+fn request_expiry_releases_only_unprotected_finite_receipts_after_handoff() {
+    let (mut service, sender, child, origin) = fixture();
+    let mut requests = MessageRequests::default();
+    let mut finite = mail(&sender, &child, "finite");
+    finite.ttl_ms = Some(1);
+    let first = requests
+        .accept(
+            &mut service,
+            origin.clone(),
+            finite.clone(),
+            MessageScope::Session,
+            10,
+        )
+        .unwrap()
+        .generation();
+    let charge = requests.receipt(first).unwrap().metadata_bytes;
+    requests
+        .accept(
+            &mut service,
+            origin.clone(),
+            mail(&sender, &child, "indefinite"),
+            MessageScope::Session,
+            10,
+        )
+        .unwrap();
+    finite.id = "protected".into();
+    let protected = requests
+        .accept(
+            &mut service,
+            origin.clone(),
+            finite,
+            MessageScope::Session,
+            10,
+        )
+        .unwrap()
+        .generation();
+    let original = requests.usage();
+    let transport = service.snapshot_state();
+    assert!(requests.needs_expiry_maintenance(|_| false));
+    assert!(requests.retire_expired_at(11, |_| false).is_empty());
+    assert!(
+        requests
+            .receipt(first)
+            .unwrap()
+            .expiry_observed_at_ms
+            .is_none()
+    );
+    assert!(
+        requests
+            .retire_expired_at(12, |id| id == protected)
+            .is_empty()
+    );
+    assert!(
+        requests
+            .retire_expired_at(600_011, |id| id == protected)
+            .is_empty()
+    );
+    assert_eq!(requests.usage(), original);
+    assert_eq!(
+        requests.retire_expired_at(600_012, |id| id == protected),
+        vec![first]
+    );
+    assert_eq!(requests.usage(), (2, original.1 - 4, original.2 - charge));
+    assert!(!requests.needs_expiry_maintenance(|id| id == protected));
+    assert_eq!(
+        requests.retire_expired_at(600_012, |_| false),
+        vec![protected]
+    );
+    assert!(!requests.needs_expiry_maintenance(|_| false));
+    assert!(requests.retire_expired_at(u64::MAX, |_| false).is_empty());
+    assert_eq!(requests.usage().0, 1);
+    assert_eq!(
+        service.snapshot_state(),
+        transport,
+        "tracking expiry cannot invent transport offers or ACKs"
+    );
+    let next = requests
+        .accept(
+            &mut service,
+            origin,
+            mail(&sender, &child, "later"),
+            MessageScope::Session,
+            600_013,
+        )
+        .unwrap();
+    assert_eq!(next.generation(), protected + 1);
+}
+
+/// The first expiry observation is immutable across backward clock snapshots,
+/// while saturating TTL arithmetic cannot turn an unrepresentable expiration
+/// into an immediate loss or an endless maintenance request. Neither case
+/// fabricates receipt consumption before its exact retention boundary.
+#[test]
+fn request_expiry_observation_survives_rollback_and_saturated_deadlines() {
+    let (mut service, sender, child, origin) = fixture();
+    let mut requests = MessageRequests::default();
+    let mut finite = mail(&sender, &child, "rollback");
+    finite.ttl_ms = Some(1);
+    let generation = requests
+        .accept(
+            &mut service,
+            origin.clone(),
+            finite,
+            MessageScope::Session,
+            10,
+        )
+        .unwrap()
+        .generation();
+    assert!(requests.retire_expired_at(12, |_| false).is_empty());
+    assert!(requests.retire_expired_at(11, |_| false).is_empty());
+    assert_eq!(
+        requests.receipt(generation).unwrap().expiry_observed_at_ms,
+        Some(12)
+    );
+    assert!(requests.retire_expired_at(600_011, |_| false).is_empty());
+    assert_eq!(
+        requests.retire_expired_at(600_012, |_| false),
+        vec![generation]
+    );
+    assert_eq!(requests.usage(), (0, 0, 0));
+    let mut saturated = mail(&sender, &child, "saturated");
+    saturated.ttl_ms = Some(2);
+    requests
+        .accept(
+            &mut service,
+            origin,
+            saturated,
+            MessageScope::Session,
+            u64::MAX - 1,
+        )
+        .unwrap();
+    assert!(!requests.needs_expiry_maintenance(|_| false));
+    assert!(requests.retire_expired_at(u64::MAX, |_| false).is_empty());
+    assert_eq!(requests.usage().0, 1);
+}
