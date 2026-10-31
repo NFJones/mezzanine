@@ -8,6 +8,7 @@ mod compaction;
 mod network_cancellation;
 mod patch_recovery;
 mod preparation;
+mod stack_qualification;
 
 /// Verifies async agent provider service polls runtime queue.
 ///
@@ -1865,11 +1866,14 @@ async fn async_routed_subagent_settles_with_real_bubblewrap() {
     assert!(effects[0].writes.is_empty());
     assert!(effects[0].creates.is_empty());
     let bubblewrap_executable = assert_real_bubblewrap_profile_is_available();
-    assert_routed_subagent_settles_after_in_place_selection(
+    // The composite retains actor/provider/pane-service futures. Keep it off
+    // the libtest/Tokio wrapper frames while preserving the default thread
+    // stack and every actual routing, sandbox and result assertion below.
+    Box::pin(assert_routed_subagent_settles_after_in_place_selection(
         &bubblewrap_executable,
         &command,
         "ROUTED_SANDBOX_ACTION",
-    )
+    ))
     .await;
     assert!(
         !denied_write_path.exists(),
