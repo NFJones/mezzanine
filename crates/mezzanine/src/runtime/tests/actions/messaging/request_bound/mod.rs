@@ -5,6 +5,7 @@
 //! Actor-owned provider claims and the larger fault matrix are separate gates.
 
 mod expiry;
+mod faults;
 mod lifecycle;
 mod protocol;
 mod retention;
@@ -28,7 +29,25 @@ fn fixture_with_primary() -> (
     SenderIdentity,
     mez_core::ids::ClientId,
 ) {
+    fixture_with_primary_pending_limits(None)
+}
+
+/// Chooses real lower custody limits before any identity or request exists.
+/// The default fixture retains its original service; fault owners can narrow
+/// only the independent accepted-message budget without replacing live proof.
+fn fixture_with_primary_pending_limits(
+    limits: Option<mez_agent::messaging::PendingDeliveryLimits>,
+) -> (
+    RuntimeSessionService,
+    AgentTurnRecord,
+    SenderIdentity,
+    mez_core::ids::ClientId,
+) {
     let mut service = test_runtime_service();
+    if let Some(limits) = limits {
+        *service.message_service_mut() =
+            MessageService::with_pending_limits(128, 65_536, limits).unwrap();
+    }
     service.set_agent_default_shell_mode(crate::runtime::config::ShellMode::Native);
     service.configure_agent_scheduler_limit(1).unwrap();
     service.set_agent_transcript_store(AgentTranscriptStore::new(temp_root(

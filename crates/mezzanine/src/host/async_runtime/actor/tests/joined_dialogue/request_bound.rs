@@ -491,12 +491,23 @@ fn unrelated_mail(actor: &mut DialogueActor, parent: &mez_agent::AgentTurnRecord
         .unwrap();
 }
 
+/// Independent canonical-source failures at the real actor boundary.
+#[derive(Clone, Copy)]
+enum RetirementFault {
+    /// Ordinary committed reference with no injected source failure.
+    None,
+    /// Another genuine context event cannot stand in for the selected source.
+    ReferenceMismatch,
+    /// The original context owner is temporarily unavailable, then restored.
+    ContextUnavailable,
+}
+
 /// Unrelated model mail may resume the original targeted Wait but cannot erase
 /// its selected dependency. If that exact peer retires during an admitted model
 /// request, canonical evidence must fence the old response at completion. The
 /// next real claim consumes the outcome, performs useful persisted work and
 /// completes the SAME task without replaying a send or concurrent inference.
-async fn active_retirement(corrupt_reference: bool) {
+async fn active_retirement(fault: RetirementFault) {
     let (mut actor, parent, child, mut generations, _) =
         actor_fixture_with_lifetime(1, Vec::new(), mez_agent::SubagentLifetime::Persistent).await;
     let peer = actor
@@ -553,6 +564,17 @@ async fn active_retirement(corrupt_reference: bool) {
         &response(vec![done("obsolete-final", "STALE_WITHOUT_RETIREMENT")]),
     )
     .await;
+    let original_context = if matches!(fault, RetirementFault::ContextUnavailable) {
+        Some(
+            actor
+                .service
+                .agent_turn_contexts_mut()
+                .remove(&parent.turn_id)
+                .unwrap(),
+        )
+    } else {
+        None
+    };
     assert!(
         actor
             .service
@@ -563,39 +585,52 @@ async fn active_retirement(corrupt_reference: bool) {
         .service
         .deliver_pending_runtime_agent_messages(async_runtime_current_unix_millis())
         .unwrap();
-    assert_eq!(
-        actor.service.agent_turn_contexts()[&parent.turn_id]
-            .blocks()
-            .iter()
-            .filter(|b| b.label.starts_with("request-handoff:"))
-            .count(),
-        1,
-        "selected retirement was not staged at the active owner's safe context boundary"
-    );
-    let handoff = actor.service.agent_turn_contexts()[&parent.turn_id]
-        .chronology()
-        .iter()
-        .find(|event| event.block().label.starts_with("request-handoff:"))
-        .unwrap()
-        .sequence();
-    assert!(actor.service.agent_turn_contexts()[&parent.turn_id].peer_message_is_pending(handoff));
-    if corrupt_reference {
-        let unrelated = actor.service.agent_turn_contexts()[&parent.turn_id]
+    let mut handoff = None;
+    if original_context.is_none() {
+        assert_eq!(
+            actor.service.agent_turn_contexts()[&parent.turn_id]
+                .blocks()
+                .iter()
+                .filter(|b| b.label.starts_with("request-handoff:"))
+                .count(),
+            1,
+            "selected retirement was not staged at the active owner's safe context boundary"
+        );
+        let source = actor.service.agent_turn_contexts()[&parent.turn_id]
             .chronology()
             .iter()
-            .find(|event| {
-                event.block().source == mez_agent::ContextSourceKind::PeerMessage
-                    && event
-                        .block()
-                        .content
-                        .contains("UNRELATED_ACTIVE_COORDINATION")
-            })
+            .find(|event| event.block().label.starts_with("request-handoff:"))
             .unwrap()
             .sequence();
-        actor
-            .service
-            .replace_request_handoff_reference_for_test(&parent.turn_id, unrelated)
-            .unwrap();
+        assert!(
+            actor.service.agent_turn_contexts()[&parent.turn_id].peer_message_is_pending(source)
+        );
+        if matches!(fault, RetirementFault::ReferenceMismatch) {
+            let unrelated = actor.service.agent_turn_contexts()[&parent.turn_id]
+                .chronology()
+                .iter()
+                .find(|event| {
+                    event.block().source == mez_agent::ContextSourceKind::PeerMessage
+                        && event
+                            .block()
+                            .content
+                            .contains("UNRELATED_ACTIVE_COORDINATION")
+                })
+                .unwrap()
+                .sequence();
+            actor
+                .service
+                .replace_request_handoff_reference_for_test(&parent.turn_id, unrelated)
+                .unwrap();
+        }
+        handoff = Some(source);
+    } else {
+        assert!(
+            !actor
+                .service
+                .agent_turn_contexts()
+                .contains_key(&parent.turn_id)
+        );
     }
     assert_eq!(complete(&mut actor, &obsolete, execution.clone()).await, 1);
     assert_eq!(complete(&mut actor, &obsolete, execution).await, 0);
@@ -610,17 +645,26 @@ async fn active_retirement(corrupt_reference: bool) {
         AgentTurnState::Running,
         "an old provider response completed the task without seeing selected retirement"
     );
-    assert!(
-        !actor.service.agent_turn_contexts()[&parent.turn_id]
-            .blocks()
-            .iter()
-            .any(|block| block.content.contains("STALE_WITHOUT_RETIREMENT"))
-    );
+    if original_context.is_none() {
+        assert!(
+            !actor.service.agent_turn_contexts()[&parent.turn_id]
+                .blocks()
+                .iter()
+                .any(|block| block.content.contains("STALE_WITHOUT_RETIREMENT"))
+        );
+    } else {
+        assert!(
+            !actor
+                .service
+                .agent_turn_contexts()
+                .contains_key(&parent.turn_id)
+        );
+    }
     assert_ne!(
         actor.service.tracked_message_request_usage(),
         ((0, 0, 0), 0)
     );
-    if corrupt_reference {
+    if !matches!(fault, RetirementFault::None) {
         let (reply, receiver) = tokio::sync::oneshot::channel();
         assert!(
             !actor
@@ -633,17 +677,46 @@ async fn active_retirement(corrupt_reference: bool) {
         );
         assert!(
             receiver.await.unwrap().unwrap().is_none(),
-            "a mismatched canonical occurrence must defer provider preparation"
+            "an unavailable or mismatched canonical source must defer provider preparation"
         );
         assert_ne!(
             actor.service.tracked_message_request_usage(),
             ((0, 0, 0), 0)
         );
-        actor
-            .service
-            .replace_request_handoff_reference_for_test(&parent.turn_id, handoff)
-            .unwrap();
+        if let Some(original) = original_context {
+            actor
+                .service
+                .agent_turn_contexts_mut()
+                .insert(parent.turn_id.clone(), original);
+            actor
+                .service
+                .deliver_pending_runtime_agent_messages(async_runtime_current_unix_millis())
+                .unwrap();
+            let context = &actor.service.agent_turn_contexts()[&parent.turn_id];
+            assert_eq!(
+                context
+                    .blocks()
+                    .iter()
+                    .filter(|block| block.label.starts_with("request-handoff:"))
+                    .count(),
+                1
+            );
+            handoff = Some(
+                context
+                    .chronology()
+                    .iter()
+                    .find(|event| event.block().label.starts_with("request-handoff:"))
+                    .unwrap()
+                    .sequence(),
+            );
+        } else {
+            actor
+                .service
+                .replace_request_handoff_reference_for_test(&parent.turn_id, handoff.unwrap())
+                .unwrap();
+        }
     }
+    let handoff = handoff.unwrap();
     let resumed = claim(&mut actor, &parent).await;
     assert!(generations.insert(resumed.claim_generation));
     assert_ne!(
@@ -706,7 +779,7 @@ async fn active_retirement(corrupt_reference: bool) {
 /// only by its accepted response before useful same-parent completion.
 #[tokio::test(flavor = "current_thread")]
 async fn request_bound_actor_retirement_during_unrelated_continuation_fences_old_response() {
-    active_retirement(false).await;
+    active_retirement(RetirementFault::None).await;
 }
 
 /// A stale local handoff pointer to a different genuine peer event must neither
@@ -714,7 +787,16 @@ async fn request_bound_actor_retirement_during_unrelated_continuation_fences_old
 /// repair restores normal admission without a new send, task or forged ACK.
 #[tokio::test(flavor = "current_thread")]
 async fn request_bound_actor_active_source_fault_retains_custody_until_exact_repair() {
-    active_retirement(true).await;
+    active_retirement(RetirementFault::ReferenceMismatch).await;
+}
+
+/// A missing canonical context during actual inference cannot allow an old
+/// completion to settle the selected request or admit a replacement provider.
+/// Restoring the SAME original context lets normal delivery stage its one
+/// outcome, then genuine claim/typed persistence consumes it on the same task.
+#[tokio::test(flavor = "current_thread")]
+async fn request_bound_actor_unavailable_context_fences_completion_until_original_restored() {
+    active_retirement(RetirementFault::ContextUnavailable).await;
 }
 
 /// A genuine scheduler/lifecycle completion can end the captured child without
