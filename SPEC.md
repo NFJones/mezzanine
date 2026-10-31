@@ -14200,6 +14200,12 @@ The baseline command capabilities are:
   Every completed physical mirror file-lock refusal MUST be counted once, including a
   superseded or deleted revision. This diagnostic observation MUST NOT revive
   stale retry, publication, confirmation or browser-refresh authority.
+  Counters advance when the actor collects the retained physical receipt.
+  Read-only metrics MUST distinguish a pending receipt's content-free kind
+  (`written`, `busy`, or `failed`) from those collected counters. A pending
+  receipt MAY exist with zero queued keys and zero collected refusals; reading
+  its kind MUST NOT consume it, schedule work, access storage, or establish
+  current-revision retry or confirmation authority.
   Stale results MUST NOT confirm newer revisions or rebound stores. An older
   write already past its last revision check cannot be described as cancelled;
   newer local work MUST follow it serially, and current confirmation MUST settle

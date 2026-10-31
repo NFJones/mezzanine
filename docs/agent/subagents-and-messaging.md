@@ -269,6 +269,10 @@ to cancel its sync. Essential persistence continues independently. Busy locks
 retry at a bounded cadence; storage failure or capacity refusal is reported
 without objective text, conversation IDs, or private paths. This is not an I/O
 completion deadline or a global newest-value promise across separate runtimes.
+Metrics report the kind of an uncollected physical receipt (`written`, `busy`,
+or `failed`) separately from counters that advance on collection. A pending
+Busy receipt can therefore coexist with a zero Busy count and no queued keys.
+Reading these diagnostics neither consumes work nor authorizes a retry.
 
 `send_message` can target an agent, pane, window, role, capability, or group.
 Default project scope requires trusted project membership and never silently

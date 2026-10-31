@@ -114,6 +114,9 @@ async fn async_objective_mirror_lock_does_not_stall_provider_adoption_or_actor()
 /// Objective-only traffic must retry a busy real lock and converge after its
 /// release through the existing persistence worker's bounded idle polls. No
 /// later provider publication, user kick or runtime timer schedules the retry.
+/// A physical Busy receipt can precede collection while essential persistence
+/// work settles. Require that exact refusal while the lock is held and require
+/// its adopted counter as well as cache convergence after explicit release.
 #[tokio::test(flavor = "current_thread")]
 async fn async_objective_only_cache_converges_after_busy_lock_release() {
     objective_mirror_actor_case(true).await;
@@ -292,7 +295,9 @@ async fn objective_mirror_actor_case(run_service: bool) {
                     if watchdog.released.load(Ordering::Acquire) {
                         break false;
                     }
-                    if status.busy > 0 && status.pending_keys > 0 {
+                    if status.pending_receipt == Some("busy")
+                        || (status.busy > 0 && status.pending_keys > 0)
+                    {
                         break true;
                     }
                     tokio::time::sleep(Duration::from_millis(5)).await;
@@ -309,7 +314,8 @@ async fn objective_mirror_actor_case(run_service: bool) {
             let observed = tokio::time::timeout(Duration::from_secs(2), async {
                 loop {
                     let status = handle.metrics().await.unwrap().objective_mirror;
-                    if status.confirmed > 0
+                    if status.busy > 0
+                        && status.confirmed > 0
                         && status.pending_keys == 0
                         && status.slot_phase == "idle"
                     {

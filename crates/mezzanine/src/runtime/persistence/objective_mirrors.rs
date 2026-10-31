@@ -8,6 +8,8 @@
 //! Lock contention uses nonblocking admission and a bounded cadence. Filesystem
 //! operations themselves can still stall indefinitely; this owner bounds jobs
 //! and protects actor/essential persistence progress, not physical I/O latency.
+//! Read-only diagnostics distinguish a physical receipt awaiting collection
+//! from adopted counters; observing either grants no retry or write authority.
 //!
 //! Revisions order this runtime only. Different runtimes/processes sharing a
 //! store retain cache last-lock-admitted-writer semantics, not a fabricated
@@ -61,9 +63,13 @@ pub struct RuntimeObjectiveMirrorStatus {
     /// Idle, in_flight, receipt_pending, or observing (short mutex contention).
     /// Receipt custody is not a claim that physical I/O is still running.
     pub slot_phase: &'static str,
+    /// Physical receipt awaiting collection: written, busy, or failed. None
+    /// means no receipt was observed, including short mutex contention. This
+    /// observation neither consumes the receipt nor changes adopted counters.
+    pub pending_receipt: Option<&'static str>,
     /// Exact current-revision cache confirmations, not transcript receipts.
     pub confirmed: u64,
-    /// Observed physical lock refusals, including superseded/deleted receipts.
+    /// Collected physical lock refusals, including superseded/deleted receipts.
     pub busy: u64,
     /// Terminal I/O or abandoned-work observations.
     pub failed: u64,
@@ -80,6 +86,7 @@ impl Default for RuntimeObjectiveMirrorStatus {
             pending_keys: 0,
             tracked_keys: 0,
             slot_phase: "idle",
+            pending_receipt: None,
             confirmed: 0,
             busy: 0,
             failed: 0,
@@ -154,6 +161,45 @@ pub(super) struct ObjectiveMirrorQueue {
 }
 
 impl ObjectiveMirrorQueue {
+    /// Snapshots bounded in-memory ownership without collecting a receipt,
+    /// claiming work, or reading the filesystem. Mutex contention is reported
+    /// as observing; callers never wait behind physical cache I/O.
+    fn snapshot(&self) -> RuntimeObjectiveMirrorStatus {
+        let (slot_phase, pending_receipt) = match self.slot.try_lock() {
+            Ok(slot) => match &*slot {
+                PhysicalSlot::Idle => ("idle", None),
+                PhysicalSlot::Reserved(_) => ("in_flight", None),
+                PhysicalSlot::Completed(receipt) => (
+                    "receipt_pending",
+                    Some(match &receipt.result {
+                        MirrorResult::Written(_) => "written",
+                        MirrorResult::Busy => "busy",
+                        MirrorResult::Failed(_) => "failed",
+                    }),
+                ),
+            },
+            Err(_) => ("observing", None),
+        };
+        RuntimeObjectiveMirrorStatus {
+            pending_keys: self.entries.values().filter(|entry| entry.dirty).count(),
+            tracked_keys: self.entries.len(),
+            slot_phase,
+            pending_receipt,
+            confirmed: self.status.confirmed,
+            busy: self.status.busy,
+            failed: self.status.failed,
+            refused: self.status.refused,
+            last_failure: self.status.last_failure.map(|reason| match reason {
+                MirrorFailure::Io => "io",
+                MirrorFailure::Abandoned => "abandoned",
+                MirrorFailure::Capacity => "capacity",
+                MirrorFailure::Registration => "registration",
+                MirrorFailure::RevisionExhausted => "revision_exhausted",
+                MirrorFailure::SchedulingExhausted => "scheduling_exhausted",
+            }),
+        }
+    }
+
     /// Drops pending old-store revisions without resetting the monotonic issue
     /// identity or releasing a physical operation that may already be syncing.
     pub(super) fn invalidate(&mut self) {
@@ -483,32 +529,7 @@ impl RuntimeSessionService {
     /// Returns only bounded memory observations. In particular this must not
     /// call the filesystem-backed transcript-store mirror status accessor.
     pub(crate) fn runtime_objective_mirror_status(&self) -> RuntimeObjectiveMirrorStatus {
-        let queue = &self.persistence.objective_mirrors;
-        let slot_phase = match queue.slot.try_lock() {
-            Ok(slot) => match &*slot {
-                PhysicalSlot::Idle => "idle",
-                PhysicalSlot::Reserved(_) => "in_flight",
-                PhysicalSlot::Completed(_) => "receipt_pending",
-            },
-            Err(_) => "observing",
-        };
-        RuntimeObjectiveMirrorStatus {
-            pending_keys: queue.entries.values().filter(|entry| entry.dirty).count(),
-            tracked_keys: queue.entries.len(),
-            slot_phase,
-            confirmed: queue.status.confirmed,
-            busy: queue.status.busy,
-            failed: queue.status.failed,
-            refused: queue.status.refused,
-            last_failure: queue.status.last_failure.map(|reason| match reason {
-                MirrorFailure::Io => "io",
-                MirrorFailure::Abandoned => "abandoned",
-                MirrorFailure::Capacity => "capacity",
-                MirrorFailure::Registration => "registration",
-                MirrorFailure::RevisionExhausted => "revision_exhausted",
-                MirrorFailure::SchedulingExhausted => "scheduling_exhausted",
-            }),
-        }
+        self.persistence.objective_mirrors.snapshot()
     }
 
     /// Queues optional mirror work without filesystem access or durable claims.
@@ -1202,5 +1223,57 @@ mod tests {
         std::fs::remove_dir_all(other).unwrap();
         assert!(serviced, "busy entries starved an independent ready key");
         assert_eq!(persisted.unwrap().objective, "ready");
+    }
+    /// A genuine completed lock refusal remains distinguishable from a queued
+    /// retry before actor receipt adoption. Read-only diagnostics must neither
+    /// consume that physical result nor count it as an adopted retry; collecting
+    /// once performs that transition, and repeated collection cannot duplicate
+    /// it. Written and abandoned receipts must never be diagnosed as Busy.
+    #[test]
+    fn objective_mirror_snapshot_distinguishes_physical_busy_from_adoption() {
+        let (store, root) = store();
+        let lock = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(root.join(".session-objectives.json.lock"))
+            .unwrap();
+        flock(&lock, FlockOperation::LockExclusive).unwrap();
+        let mut queue = ObjectiveMirrorQueue::default();
+        assert!(queue.publish(store.clone(), "same", Some("latest")));
+        queue.claim().unwrap().execute();
+        let pending = queue.snapshot();
+        assert_eq!(pending.slot_phase, "receipt_pending");
+        assert_eq!(pending.pending_keys, 0);
+        assert_eq!(pending.busy, 0);
+        let encoded = serde_json::to_value(&pending).unwrap();
+        assert_eq!(encoded["pending_receipt"], "busy", "{encoded}");
+        assert_eq!(queue.snapshot(), pending, "snapshot must not adopt work");
+        assert!(queue.claim().is_none(), "receipt still owns the one slot");
+        queue.collect();
+        let adopted = queue.snapshot();
+        assert_eq!(adopted.busy, 1);
+        assert_eq!(adopted.pending_keys, 1);
+        assert_eq!(adopted.slot_phase, "idle");
+        assert!(serde_json::to_value(&adopted).unwrap()["pending_receipt"].is_null());
+        queue.collect();
+        assert_eq!(queue.snapshot(), adopted);
+        drop(lock);
+        queue.entries.values_mut().next().unwrap().eligible_at = Instant::now();
+        queue.claim().unwrap().execute();
+        let written = serde_json::to_value(queue.snapshot()).unwrap();
+        assert_eq!(written["pending_receipt"], "written", "{written}");
+        queue.collect();
+        assert_eq!(queue.snapshot().confirmed, 1);
+        assert_eq!(queue.snapshot().busy, 1);
+        assert!(queue.publish(store, "same", Some("new desired")));
+        drop(queue.claim().unwrap());
+        let abandoned = serde_json::to_value(queue.snapshot()).unwrap();
+        assert_eq!(abandoned["pending_receipt"], "failed", "{abandoned}");
+        queue.collect();
+        assert_eq!(queue.snapshot().failed, 1);
+        assert_eq!(queue.snapshot().busy, 1);
+        std::fs::remove_dir_all(root).unwrap();
     }
 }
