@@ -1,7 +1,8 @@
 //! Descriptor-based patch worker with ordered, positively confirmed effects.
 //!
 //! This synchronous owner runs outside the actor. A supplied authority callback
-//! must obtain current actor grants for every snapshot, stage and commit. The
+//! must obtain current actor grants for preparation and exact short actor-issued
+//! leases before each commit. The
 //! immutable initial scopes remain an upper bound. Actual runtime dispatch and
 //! retirement must retain this worker and its returned evidence; dropping a
 //! blocking task cannot certify unexecuted effects. Cancellation is checked
@@ -24,7 +25,8 @@ use mez_agent::semantic_patch_planning::{
     ApplyPatchFileChange, ApplyPatchOriginalState, ApplyPatchSnapshot, ApplyPatchSnapshotState,
 };
 
-use super::commit::{NativePatchCommitFence, NativePatchWriteCoordinator};
+use super::commit::NativePatchCommitFence;
+use super::lease::{NativePatchCommitLease, NativePatchCommitProposal};
 use crate::error::{MezError, Result};
 use crate::security::filesystem::capability::{
     NativeFileCapability, NativeFilesystemRoot, NativeStagedFile,
@@ -40,8 +42,6 @@ pub(crate) struct NativePatchWorkerRequest {
     pub(crate) scopes: PathScopes,
     /// Exact action's shared cancellation and finite deadline.
     pub(crate) fence: NativePatchCommitFence,
-    /// Coordinator shared by conflicting Mezzanine writes in this session.
-    pub(crate) coordinator: NativePatchWriteCoordinator,
 }
 
 /// Positively completed endpoint, including a partial move destination.
@@ -122,13 +122,32 @@ impl EndpointOwner {
     }
 }
 
+/// Authority bridge implemented by an actor or its asynchronous request client.
+/// Returning scopes permits preparation only; every mutation needs an exact
+/// actor-issued lease that already owns in-flight commit scheduling custody.
+pub(crate) trait NativePatchAuthority {
+    /// Resolves current clipped grants for bounded snapshot/stage/no-op work.
+    fn scopes(
+        &mut self,
+        identity: &NativeCommitIdentity,
+        phase: NativePatchPhase,
+        path: &str,
+    ) -> Result<PathScopes>;
+    /// Admits one exact proposed endpoint under current actor authority.
+    fn commit(
+        &mut self,
+        identity: &NativeCommitIdentity,
+        proposal: &NativePatchCommitProposal,
+    ) -> Result<NativePatchCommitLease>;
+}
+
 /// Executes bounded native planning and actual descriptor-relative publication.
 /// The callback must validate exact current actor ownership before returning
 /// scopes; this worker never converts paths or presentation into permission.
 /// A panic retains earlier receipts and marks an interrupted commit unknown.
 pub(crate) fn execute_native_patch(
     request: NativePatchWorkerRequest,
-    mut authority: impl FnMut(&NativeCommitIdentity, NativePatchPhase, &str) -> Result<PathScopes>,
+    mut authority: impl NativePatchAuthority,
     mut progress: impl FnMut(&NativePatchEndpointReceipt),
 ) -> NativePatchWorkerOutcome {
     let mut outcome = NativePatchWorkerOutcome {
@@ -184,12 +203,12 @@ fn bounded_diagnostic(mut text: String) -> String {
 /// Intersects each fresh actor grant with the immutable captured upper bound.
 fn authorize(
     request: &NativePatchWorkerRequest,
-    authority: &mut impl FnMut(&NativeCommitIdentity, NativePatchPhase, &str) -> Result<PathScopes>,
+    authority: &mut impl NativePatchAuthority,
     phase: NativePatchPhase,
     path: &str,
 ) -> Result<PathScopes> {
     request.fence.check()?;
-    let current = authority(&request.identity, phase, path)?;
+    let current = authority.scopes(&request.identity, phase, path)?;
     request.fence.check()?;
     request
         .scopes
@@ -201,7 +220,7 @@ fn authorize(
 fn execute(
     request: &NativePatchWorkerRequest,
     outcome: &mut NativePatchWorkerOutcome,
-    authority: &mut impl FnMut(&NativeCommitIdentity, NativePatchPhase, &str) -> Result<PathScopes>,
+    authority: &mut impl NativePatchAuthority,
     progress: &mut impl FnMut(&NativePatchEndpointReceipt),
 ) -> Result<()> {
     request.fence.check()?;
@@ -307,7 +326,7 @@ fn execute(
 fn publish_endpoint(
     request: &NativePatchWorkerRequest,
     outcome: &mut NativePatchWorkerOutcome,
-    authority: &mut impl FnMut(&NativeCommitIdentity, NativePatchPhase, &str) -> Result<PathScopes>,
+    authority: &mut impl NativePatchAuthority,
     progress: &mut impl FnMut(&NativePatchEndpointReceipt),
     owners: &mut BTreeMap<String, EndpointOwner>,
     operation_ordinal: usize,
@@ -340,8 +359,15 @@ fn publish_endpoint(
         .as_ref()
         .map(|bytes| capability.stage(&request.root, &scopes, bytes))
         .transpose()?;
-    let scopes = authorize(request, authority, NativePatchPhase::Commit, &change.path)?;
-    let guard = request.fence.try_begin(&request.coordinator)?;
+    let proposal = NativePatchCommitProposal::capture(
+        &capability,
+        change,
+        operation_ordinal,
+        endpoint_ordinal,
+    )?;
+    request.fence.check()?;
+    let lease = authority.commit(&request.identity, &proposal)?;
+    let (scopes, guard) = lease.enter(&proposal, &request.fence)?;
     outcome.result.phase = NativePatchPhase::Commit;
     let (kind, next) = if let Some(mut stage) = stage {
         capability.publish(&request.root, &scopes, &mut stage)?;

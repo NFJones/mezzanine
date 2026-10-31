@@ -16,3 +16,6 @@ pub(crate) mod commit;
     reason = "filesystem worker is being connected to actor dispatch"
 )]
 pub(crate) mod worker;
+
+/// Exact endpoint proposals and short actor-issued publication leases.
+pub(crate) mod lease;

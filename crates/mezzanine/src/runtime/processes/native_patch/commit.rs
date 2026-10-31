@@ -107,6 +107,11 @@ impl NativePatchCommitFence {
         Ok(guard)
     }
 
+    /// Binds an actor-issued guard to this exact action fence allocation.
+    pub(crate) fn owns_guard(&self, guard: &NativePatchCommitGuard) -> bool {
+        Arc::ptr_eq(&self.in_flight, &guard.in_flight)
+    }
+
     /// Monotonically fences future commits without blocking the actor.
     /// InFlight requires later actual completion evidence; Fenced says nothing
     /// about effects confirmed before this call or about snapshot worker exit.

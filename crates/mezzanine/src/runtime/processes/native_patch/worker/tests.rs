@@ -10,7 +10,63 @@ use std::path::PathBuf;
 
 use super::*;
 use crate::runtime::processes::native_cancellation::NativeActionCancellation;
+use crate::runtime::processes::native_patch::commit::NativePatchWriteCoordinator;
 use crate::security::filesystem::host_resolved_path_scopes;
+
+/// Test-only authority simulation for the worker's physical boundary tests.
+/// Actor authorization is covered separately against actual canonical slots.
+struct ScopeFixtureAuthority<F> {
+    /// Test-controlled scopes/fault injection at the existing phase boundaries.
+    callback: F,
+    /// Exact request fence retained so simulated leases bind the actual worker.
+    fence: NativePatchCommitFence,
+    /// Explicit isolated writer coordinator, never a production fallback.
+    coordinator: NativePatchWriteCoordinator,
+}
+
+impl<F> NativePatchAuthority for ScopeFixtureAuthority<F>
+where
+    F: FnMut(&NativeCommitIdentity, NativePatchPhase, &str) -> Result<PathScopes>,
+{
+    /// Supplies the test's explicit preparation grant.
+    fn scopes(
+        &mut self,
+        identity: &NativeCommitIdentity,
+        phase: NativePatchPhase,
+        path: &str,
+    ) -> Result<PathScopes> {
+        (self.callback)(identity, phase, path)
+    }
+    /// Simulates current commit admission for real descriptor-worker tests.
+    fn commit(
+        &mut self,
+        identity: &NativeCommitIdentity,
+        proposal: &NativePatchCommitProposal,
+    ) -> Result<NativePatchCommitLease> {
+        let scopes = (self.callback)(identity, NativePatchPhase::Commit, proposal.path())?;
+        proposal.authorize(identity, &scopes)?;
+        NativePatchCommitLease::issue(
+            proposal.clone(),
+            scopes,
+            self.fence.try_begin(&self.coordinator)?,
+        )
+    }
+}
+
+/// Runs existing physical worker controls with an explicitly test-only bridge.
+/// This wrapper is not compiled into production or evidence of actor authority.
+fn execute_native_patch(
+    request: NativePatchWorkerRequest,
+    callback: impl FnMut(&NativeCommitIdentity, NativePatchPhase, &str) -> Result<PathScopes>,
+    progress: impl FnMut(&NativePatchEndpointReceipt),
+) -> NativePatchWorkerOutcome {
+    let authority = ScopeFixtureAuthority {
+        callback,
+        fence: request.fence.clone(),
+        coordinator: NativePatchWriteCoordinator::default(),
+    };
+    super::execute_native_patch(request, authority, progress)
+}
 
 /// Owned, physically canonical fixture with grants restricted to its subtree.
 struct Fixture {
@@ -53,7 +109,6 @@ impl Fixture {
             root: NativeFilesystemRoot::capture(std::process::id()).unwrap(),
             scopes: self.scopes.clone(),
             fence: NativePatchCommitFence::new(NativeActionCancellation::new(), None).unwrap(),
-            coordinator: NativePatchWriteCoordinator::default(),
         }
     }
 

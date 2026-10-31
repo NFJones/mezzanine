@@ -338,15 +338,13 @@ fn native_filesystem_actor_retains_actual_worker_outcome_after_cancellation() {
         root: dispatch.work.source.capture_root().unwrap(),
         scopes: dispatch.scopes,
         fence: dispatch.fence,
-        coordinator: dispatch.coordinator,
     };
     let outcome = Arc::new(execute_native_patch(
         request,
-        |identity, _, _| {
-            fixture
-                .service
-                .native_filesystem_scope_snapshot(&attempt, identity)
-        },
+        crate::runtime::agent::native_filesystem::authority::RuntimeNativeFilesystemAuthority::new(
+            &mut fixture.service,
+            &attempt,
+        ),
         |_| {},
     ));
     assert_eq!(outcome.result.certainty, NativeEffectCertainty::Confirmed);
@@ -483,15 +481,13 @@ fn native_filesystem_actor_keeps_issued_source_after_projection_changes() {
             root: dispatch.work.source.capture_root().unwrap(),
             scopes: dispatch.scopes,
             fence: dispatch.fence,
-            coordinator: dispatch.coordinator,
         };
         let outcome = Arc::new(execute_native_patch(
             request,
-            |identity, _, _| {
-                fixture
-                    .service
-                    .native_filesystem_scope_snapshot(&attempt, identity)
-            },
+            crate::runtime::agent::native_filesystem::authority::RuntimeNativeFilesystemAuthority::new(
+                &mut fixture.service,
+                &attempt,
+            ),
             |_| {},
         ));
         assert_eq!(outcome.result.certainty, NativeEffectCertainty::Confirmed);
@@ -573,4 +569,133 @@ fn native_filesystem_actor_bounds_attempts_before_producer_admission() {
             .is_ok()
     );
     assert_eq!(fs::read_dir(&fixture.root).unwrap().count(), 0);
+}
+
+/// Builds a real held missing-entry proposal for the canonical add fixture.
+/// This is preparation only; the actor must separately admit its exact endpoint.
+#[cfg(target_os = "linux")]
+fn commit_proposal(
+    dispatch: &crate::runtime::agent::native_filesystem::RuntimeNativeFilesystemDispatch,
+    root: &std::path::Path,
+    endpoint: usize,
+) -> (
+    crate::security::filesystem::capability::NativeFileCapability,
+    crate::runtime::processes::native_patch::lease::NativePatchCommitProposal,
+) {
+    use crate::runtime::processes::native_patch::lease::NativePatchCommitProposal;
+    use crate::security::filesystem::capability::NativeFileCapability;
+    use mez_agent::semantic_patch_planning::{ApplyPatchFileChange, ApplyPatchOriginalState};
+    let physical = dispatch.work.source.capture_root().unwrap();
+    let path = root.join("file").to_str().unwrap().to_owned();
+    let capability =
+        NativeFileCapability::capture(&physical, &dispatch.scopes, &path, true).unwrap();
+    let change = ApplyPatchFileChange {
+        path: path.clone(),
+        resolved_path: path,
+        original: ApplyPatchOriginalState::Missing,
+        final_bytes: Some(b"native data\n".to_vec()),
+    };
+    let proposal = NativePatchCommitProposal::capture(&capability, &change, 0, endpoint).unwrap();
+    (capability, proposal)
+}
+
+/// Actual actor admission spends an endpoint once and owns the in-flight guard
+/// before lease delivery. Cancellation cannot report stopped effects while that
+/// lease exists; cancellation before entry rejects the write and releases it.
+#[cfg(target_os = "linux")]
+#[test]
+fn native_filesystem_actor_commit_lease_spends_once_and_fences_cancelled_delivery() {
+    use crate::runtime::processes::native_patch::commit::NativePatchFenceStatus;
+    let mut fixture = Fixture::new();
+    let attempt = fixture.queue();
+    let dispatch = fixture
+        .service
+        .claim_native_filesystem_action(&attempt)
+        .unwrap()
+        .unwrap();
+    let (_capability, proposal) = commit_proposal(&dispatch, &fixture.root, 0);
+    let lease = fixture
+        .service
+        .authorize_native_filesystem_commit(&attempt, &dispatch.work.identity, &proposal)
+        .unwrap();
+    assert!(
+        fixture
+            .service
+            .authorize_native_filesystem_commit(&attempt, &dispatch.work.identity, &proposal)
+            .is_err()
+    );
+    fixture
+        .service
+        .request_agent_worker_cancellation_for_turn(&fixture.turn.turn_id);
+    assert_eq!(dispatch.fence.cancel(), NativePatchFenceStatus::InFlight);
+    assert!(lease.enter(&proposal, &dispatch.fence).is_err());
+    assert_eq!(dispatch.fence.cancel(), NativePatchFenceStatus::Fenced);
+    assert!(!fixture.root.join("file").exists());
+}
+
+/// Actor leases require the original accepted effect and current authority.
+/// An invalid endpoint cannot consume the valid endpoint's admission; after a
+/// valid grant is dropped it remains spent without permitting mutation replay.
+#[cfg(target_os = "linux")]
+#[test]
+fn native_filesystem_actor_commit_lease_rejects_wrong_effect_and_spent_admission() {
+    let mut fixture = Fixture::new();
+    let attempt = fixture.queue();
+    let dispatch = fixture
+        .service
+        .claim_native_filesystem_action(&attempt)
+        .unwrap()
+        .unwrap();
+    let (_invalid_capability, invalid) = commit_proposal(&dispatch, &fixture.root, 1);
+    assert!(
+        fixture
+            .service
+            .authorize_native_filesystem_commit(&attempt, &dispatch.work.identity, &invalid)
+            .is_err()
+    );
+    let (_capability, proposal) = commit_proposal(&dispatch, &fixture.root, 0);
+    let lease = fixture
+        .service
+        .authorize_native_filesystem_commit(&attempt, &dispatch.work.identity, &proposal)
+        .unwrap();
+    drop(lease);
+    assert!(
+        fixture
+            .service
+            .authorize_native_filesystem_commit(&attempt, &dispatch.work.identity, &proposal)
+            .is_err()
+    );
+    assert!(!fixture.root.join("file").exists());
+}
+
+/// Fresh permission contraction between producer claim and commit admission
+/// denies an otherwise unspent valid endpoint, independently of duplicate gates.
+/// The actual attempt fence closes and no file effect is produced.
+#[cfg(target_os = "linux")]
+#[test]
+fn native_filesystem_actor_commit_lease_rejects_fresh_authority_contraction() {
+    let mut fixture = Fixture::new();
+    let attempt = fixture.queue();
+    let dispatch = fixture
+        .service
+        .claim_native_filesystem_action(&attempt)
+        .unwrap()
+        .unwrap();
+    let (_capability, proposal) = commit_proposal(&dispatch, &fixture.root, 0);
+    let permissions = crate::runtime::config::runtime_configured_permissions_from_config(
+        &serde_json::json!({"permissions":{"read_scopes":[],"write_scopes":[]}}),
+    )
+    .unwrap();
+    fixture
+        .service
+        .integration
+        .replace_configured_permissions(permissions);
+    assert!(
+        fixture
+            .service
+            .authorize_native_filesystem_commit(&attempt, &dispatch.work.identity, &proposal)
+            .is_err()
+    );
+    assert!(dispatch.fence.check().is_err());
+    assert!(!fixture.root.join("file").exists());
 }

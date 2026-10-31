@@ -16,6 +16,7 @@ use std::ffi::OsString;
 use std::fs::File;
 use std::io::{Read, Write};
 use std::path::Path;
+use std::sync::Arc;
 
 use sha2::{Digest, Sha256};
 
@@ -294,6 +295,8 @@ fn require_exact_group_evidence(available: bool) -> Result<()> {
 
 /// Authorized regular-file or missing-entry capability, with immutable preimage.
 pub(crate) struct NativeFileCapability {
+    /// Allocation identity binding a commit lease to this held capture.
+    allocation: Arc<()>,
     /// Original spelling so link retargeting can revoke the captured operation.
     requested: String,
     /// Physical resolution and held parent directories.
@@ -339,6 +342,7 @@ impl NativeFileCapability {
         };
         revalidate_ancestry(&physical)?;
         Ok(Self {
+            allocation: Arc::new(()),
             requested: requested.to_string(),
             physical,
             preimage,
@@ -346,6 +350,11 @@ impl NativeFileCapability {
             scopes: scopes.clone(),
             writable,
         })
+    }
+
+    /// Returns opaque identity for this exact held capability, not path equality.
+    pub(crate) fn commit_allocation(&self) -> Arc<()> {
+        Arc::clone(&self.allocation)
     }
 
     /// Returns captured exact bytes, separately from normalized matching text.

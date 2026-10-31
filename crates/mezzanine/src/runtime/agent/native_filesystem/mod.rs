@@ -7,6 +7,7 @@
 //! asynchronous producer/commit-lease/settlement bridge must use these owners
 //! before switching native patches away from their existing shell adapter.
 
+pub(crate) mod authority;
 mod state;
 pub(super) use state::NativeFilesystemActions;
 pub(crate) use state::{
@@ -321,6 +322,23 @@ impl RuntimeSessionService {
             self.agent.native_filesystem_actions.cancel_attempt(attempt);
         }
         result
+    }
+
+    /// Atomically admits one endpoint in the serialized actor after fresh
+    /// permission/source validation. Issuance already owns the in-flight writer
+    /// guard; cancellation must retain its actual completion rather than claim
+    /// stopped effects. This does not certify publication or worker join.
+    pub(crate) fn authorize_native_filesystem_commit(
+        &mut self,
+        attempt: &NativeFilesystemAttempt,
+        identity: &NativeCommitIdentity,
+        proposal: &crate::runtime::processes::native_patch::lease::NativePatchCommitProposal,
+    ) -> Result<crate::runtime::processes::native_patch::lease::NativePatchCommitLease> {
+        self.ensure_completion_admission_open()?;
+        let scopes = self.native_filesystem_scope_snapshot(attempt, identity)?;
+        self.agent
+            .native_filesystem_actions
+            .issue_commit(attempt, proposal, scopes)
     }
 
     /// Validates genuine retained registration without using a presentation CID

@@ -5,7 +5,7 @@
 //! immutable and retained even after cancellation. This owner does not infer
 //! commit permission, producer termination or durable canonical settlement.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -104,8 +104,6 @@ pub(crate) struct RuntimeNativeFilesystemDispatch {
     pub(crate) scopes: PathScopes,
     /// Exact action cancellation and finite admission deadline.
     pub(crate) fence: NativePatchCommitFence,
-    /// Explicit session-local exclusion shared by filesystem commits.
-    pub(crate) coordinator: NativePatchWriteCoordinator,
 }
 
 /// Ownership stages; retaining an outcome is not producer-join or durability proof.
@@ -129,6 +127,8 @@ struct Attempt {
     scopes: Option<PathScopes>,
     /// Original immutable result; retries never clone or replay its effects.
     outcome: Option<Arc<NativePatchWorkerOutcome>>,
+    /// Issued endpoint admissions are never replayed after delivery uncertainty.
+    commits: BTreeSet<(usize, usize)>,
     /// Failed preparation or outcome validation, without losing result custody.
     failure: Option<Box<MezError>>,
 }
@@ -217,6 +217,7 @@ impl NativeFilesystemActions {
                 phase: Phase::Queued,
                 scopes: None,
                 outcome: None,
+                commits: BTreeSet::new(),
                 failure: None,
             },
         );
@@ -296,7 +297,6 @@ impl NativeFilesystemActions {
         token: &NativeFilesystemAttempt,
         scopes: PathScopes,
     ) -> Result<Option<RuntimeNativeFilesystemDispatch>> {
-        let coordinator = self.coordinator.clone();
         let Some(entry) = self
             .get_mut(token)
             .filter(|entry| entry.phase == Phase::Queued)
@@ -311,7 +311,6 @@ impl NativeFilesystemActions {
             work: Arc::clone(&entry.work),
             scopes,
             fence: entry.fence.clone(),
-            coordinator,
         }))
     }
 
@@ -330,6 +329,36 @@ impl NativeFilesystemActions {
             .clone()
             .ok_or_else(|| MezError::invalid_state("native filesystem claim lost scope ceiling"))?;
         Ok((Arc::clone(&entry.work), scopes))
+    }
+
+    /// Acquires commit scheduling in the serialized actor after policy checks.
+    /// A granted occurrence remains spent even if delivery or lease entry fails:
+    /// neither uncertainty nor a later display retry authorizes mutation replay.
+    pub(super) fn issue_commit(
+        &mut self,
+        token: &NativeFilesystemAttempt,
+        proposal: &crate::runtime::processes::native_patch::lease::NativePatchCommitProposal,
+        scopes: PathScopes,
+    ) -> Result<crate::runtime::processes::native_patch::lease::NativePatchCommitLease> {
+        let coordinator = self.coordinator.clone();
+        let entry = self
+            .get_mut(token)
+            .filter(|entry| entry.phase == Phase::Issued)
+            .ok_or_else(|| MezError::conflict("native filesystem commit owner is not issued"))?;
+        proposal.authorize(&entry.work.identity, &scopes)?;
+        if entry.commits.contains(&proposal.key()) {
+            return Err(MezError::conflict(
+                "native filesystem endpoint already admitted",
+            ));
+        }
+        let guard = entry.fence.try_begin(&coordinator)?;
+        let lease = crate::runtime::processes::native_patch::lease::NativePatchCommitLease::issue(
+            proposal.clone(),
+            scopes,
+            guard,
+        )?;
+        entry.commits.insert(proposal.key());
+        Ok(lease)
     }
 
     /// Retains the original immutable producer result before any projection.
