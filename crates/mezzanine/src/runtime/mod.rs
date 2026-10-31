@@ -366,6 +366,8 @@ pub(crate) use persistence::{RuntimeObjectiveMirrorWork, RuntimePersistenceCompo
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 mod processes;
+/// Exact native cancellation shared with the outside-monitor custody owner.
+pub(crate) use processes::native_cancellation::NativeActionCancellation;
 // The dual-screen foundation is consumed incrementally by dependency-gated
 // rendering, presentation, interaction, resize, and lifecycle refactors.
 #[cfg(test)]

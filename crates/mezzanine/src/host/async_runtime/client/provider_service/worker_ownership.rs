@@ -1,11 +1,15 @@
-//! Provider-service task retirement and cancellation-safe auxiliary ownership.
+//! Provider-service task retirement and cancellation-safe request ownership.
 //!
 //! The service retains task identities outside monitor futures. Retirement first
 //! observes producer destruction, then conserves reported expense and submits one
 //! captured failure. Normal completed outcomes keep their original authority;
 //! shared monitor/actor failures remain fatal. Registries live only as long as
 //! their bounded in-flight workers and never authorize another provider request.
+//! Native requests retain actual blocking handles and original outcomes in a
+//! separate per-request owner; model observation journals never impersonate
+//! native completion, process custody or replay authority.
 
+use super::native_ownership::NativeWorkerOwner;
 use super::{
     AsyncAgentProviderWorkerResult, ProviderObservationDrain, ProviderObservationDrains,
     flush_pending_provider_observations, record_joined_agent_provider_worker,
@@ -179,16 +183,33 @@ impl RetirementCause {
     }
 }
 
-/// One registered task, including explicit non-auxiliary ownership.
+/// Work retained independently of a request monitor's lifetime.
+enum OwnedAgentWork {
+    /// Inference or auxiliary request with its observation custody.
+    Provider(ProviderWorkerOwner),
+    /// Native dispatch with its actual blocking handle and original result.
+    Native(NativeWorkerOwner),
+}
+
+/// One registered task, including explicit non-request ownership.
 pub(super) struct WorkerOwnership {
     /// Request metadata whose lifetime precedes the monitor future.
-    request: Option<ProviderWorkerOwner>,
+    request: Option<OwnedAgentWork>,
     /// Fatal monitor loss is retained through cleanup without changing its cause.
     cause: RetirementCause,
 }
 
 /// Every root provider task is registered, so missing identity remains fatal.
 pub(super) type AgentProviderWorkerOwners = HashMap<tokio::task::Id, WorkerOwnership>;
+
+/// Cleanup evidence retained outside an abortable provider-service future.
+#[derive(Default)]
+pub(super) struct ProviderCleanupFailures {
+    /// First actual cleanup failure, including its original typed facts.
+    first: Option<MezError>,
+    /// Bounded count of further failures while sibling retirement continues.
+    additional: usize,
+}
 
 /// Observed task identity paired with its unmodified monitor result.
 pub(super) type AgentProviderJoined = std::result::Result<
@@ -201,6 +222,42 @@ pub(super) fn spawn_owned_agent_provider_worker<F>(
     workers: &mut JoinSet<Result<AsyncAgentProviderWorkerResult>>,
     owners: &mut AgentProviderWorkerOwners,
     request: Option<ProviderWorkerOwner>,
+    future: F,
+) -> tokio::task::AbortHandle
+where
+    F: Future<Output = Result<AsyncAgentProviderWorkerResult>> + Send + 'static,
+{
+    spawn_owned_worker(
+        workers,
+        owners,
+        request.map(OwnedAgentWork::Provider),
+        future,
+    )
+}
+
+/// Registers actual native custody before its monitor can be polled.
+pub(super) fn spawn_owned_native_agent_worker<F>(
+    workers: &mut JoinSet<Result<AsyncAgentProviderWorkerResult>>,
+    owners: &mut AgentProviderWorkerOwners,
+    request: NativeWorkerOwner,
+    future: F,
+) -> tokio::task::AbortHandle
+where
+    F: Future<Output = Result<AsyncAgentProviderWorkerResult>> + Send + 'static,
+{
+    spawn_owned_worker(
+        workers,
+        owners,
+        Some(OwnedAgentWork::Native(request)),
+        future,
+    )
+}
+
+/// Installs every root task identity synchronously before a service await.
+fn spawn_owned_worker<F>(
+    workers: &mut JoinSet<Result<AsyncAgentProviderWorkerResult>>,
+    owners: &mut AgentProviderWorkerOwners,
+    request: Option<OwnedAgentWork>,
     future: F,
 ) -> tokio::task::AbortHandle
 where
@@ -292,10 +349,14 @@ async fn retire_observation_drain(
 /// and exact failure accounting even if one of those independent operations fails.
 async fn retire_request_owner(
     handle: &AsyncRuntimeSessionHandle,
-    owner: ProviderWorkerOwner,
+    owner: OwnedAgentWork,
     cause: RetirementCause,
     drains: &ProviderObservationDrains,
 ) -> Result<()> {
+    let owner = match owner {
+        OwnedAgentWork::Provider(owner) => owner,
+        OwnedAgentWork::Native(owner) => return retire_native_owner(handle, owner, cause).await,
+    };
     let drain = {
         drains
             .lock()
@@ -315,6 +376,23 @@ async fn retire_request_owner(
         submit_authoritative_runtime_event(handle, owner.event(cause, reported.usage)).await
     };
     finish_provider_service_result(delivery, settlement)
+}
+
+/// Observes actual native producer retirement and adopts its original outcome.
+/// Actor ingress failure remains fatal after resources have actually joined;
+/// known native outcomes are not silently discarded as successful cleanup.
+async fn retire_native_owner(
+    handle: &AsyncRuntimeSessionHandle,
+    owner: NativeWorkerOwner,
+    cause: RetirementCause,
+) -> Result<()> {
+    let message = match cause {
+        RetirementCause::Cancelled => "native shell worker retired: cancelled",
+        RetirementCause::MonitorPanic => "native shell monitor failed: panic",
+        RetirementCause::MonitorError => "native shell monitor failed before completion",
+    };
+    let outcome = owner.retire(message).await?;
+    submit_authoritative_runtime_event(handle, RuntimeEvent::NativeShell(outcome)).await
 }
 
 /// Preserves fatal shared errors while retaining their cleanup-only identity.
@@ -388,10 +466,9 @@ pub(super) async fn retire_agent_provider_workers(
     handle: &AsyncRuntimeSessionHandle,
     drains: &ProviderObservationDrains,
     owners: &mut AgentProviderWorkerOwners,
+    failures: &mut ProviderCleanupFailures,
 ) -> Result<u64> {
     workers.abort_all();
-    let mut first_error = None;
-    let mut additional_errors = 0usize;
     let mut report = AsyncAgentProviderPollReport {
         polls: 0,
         executions: 0,
@@ -400,8 +477,7 @@ pub(super) async fn retire_agent_provider_workers(
     };
     while let Some(joined) = workers.join_next_with_id().await {
         keep_cleanup_error(
-            &mut first_error,
-            &mut additional_errors,
+            failures,
             record_owned_agent_provider_worker(joined, handle, &mut report, owners, drains).await,
         );
     }
@@ -412,40 +488,49 @@ pub(super) async fn retire_agent_provider_workers(
     for (key, drain) in retained {
         let (usage, delivery) = retire_observation_drain(handle, drain).await;
         reported.insert(key, usage);
-        keep_cleanup_error(&mut first_error, &mut additional_errors, delivery);
+        keep_cleanup_error(failures, delivery);
     }
     for (_, ownership) in std::mem::take(owners) {
-        if let Some(owner) = ownership.request {
-            let usage = reported.remove(&owner.key()).unwrap_or_default();
-            let closed = handle.lifecycle_state_watcher().has_changed().is_err();
-            if !closed || usage.known_observations != 0 {
+        match ownership.request {
+            Some(OwnedAgentWork::Native(owner)) => {
                 keep_cleanup_error(
-                    &mut first_error,
-                    &mut additional_errors,
-                    submit_authoritative_runtime_event(
-                        handle,
-                        owner.event(ownership.cause, usage.usage),
-                    )
-                    .await,
+                    failures,
+                    retire_native_owner(handle, owner, ownership.cause).await,
                 );
             }
+            Some(OwnedAgentWork::Provider(owner)) => {
+                let usage = reported.remove(&owner.key()).unwrap_or_default();
+                let closed = handle.lifecycle_state_watcher().has_changed().is_err();
+                if !closed || usage.known_observations != 0 {
+                    keep_cleanup_error(
+                        failures,
+                        submit_authoritative_runtime_event(
+                            handle,
+                            owner.event(ownership.cause, usage.usage),
+                        )
+                        .await,
+                    );
+                }
+            }
+            None => {}
         }
     }
-    match first_error {
-        Some(error) => Err(error.with_context(format!(
-            "provider worker cleanup incomplete; additional_failures={additional_errors}"
+    match failures.first.as_ref() {
+        Some(error) => Err(error.clone().with_context(format!(
+            "provider worker cleanup incomplete; additional_failures={}",
+            failures.additional
         ))),
         None => Ok(report.executions),
     }
 }
 
 /// Accumulates bounded cleanup uncertainty while continuing sibling retirement.
-fn keep_cleanup_error(first: &mut Option<MezError>, additional: &mut usize, result: Result<()>) {
+fn keep_cleanup_error(failures: &mut ProviderCleanupFailures, result: Result<()>) {
     if let Err(error) = result {
-        if first.is_none() {
-            *first = Some(error);
+        if failures.first.is_none() {
+            failures.first = Some(error);
         } else {
-            *additional = additional.saturating_add(1);
+            failures.additional = failures.additional.saturating_add(1);
         }
     }
 }
@@ -520,9 +605,15 @@ mod tests {
         );
         assert_eq!(owners.len(), 1);
         assert_eq!(
-            retire_agent_provider_workers(&mut workers, &handle, &drains, &mut owners)
-                .await
-                .unwrap(),
+            retire_agent_provider_workers(
+                &mut workers,
+                &handle,
+                &drains,
+                &mut owners,
+                &mut ProviderCleanupFailures::default()
+            )
+            .await
+            .unwrap(),
             0
         );
         assert!(owners.is_empty());

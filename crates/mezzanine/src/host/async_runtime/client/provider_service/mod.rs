@@ -15,8 +15,8 @@ use super::{
     RuntimeAgentProviderDispatch, RuntimeAgentProviderDispatchProvider,
     RuntimeAgentRememberDispatch, RuntimeApprovedExternalActionDispatch,
     RuntimeApprovedExternalActionOutcome, RuntimeEvent, RuntimeEventBatch, RuntimeLifecycleState,
-    RuntimeNativeShellDispatch, RuntimeNativeShellFailure, RuntimeNativeShellOutcome,
-    RuntimeSideEffect, is_terminal_runtime_lifecycle_state, provider_error_retry_class,
+    RuntimeNativeShellDispatch, RuntimeNativeShellOutcome, RuntimeSideEffect,
+    is_terminal_runtime_lifecycle_state, provider_error_retry_class,
     runtime_execute_auto_sizing_with_async_provider, sleep, watch,
 };
 use crate::integrations::agent::network::execute_network_action_with_transport_async_with_progress;
@@ -36,11 +36,19 @@ use std::time::{Duration, Instant};
 
 mod worker_ownership;
 use worker_ownership::{
-    AgentProviderJoined, AgentProviderWorkerOwners, ProviderObservationOwner, ProviderWorkerOwner,
-    finish_provider_service_result, record_owned_agent_provider_worker,
-    retire_agent_provider_workers, spawn_owned_agent_provider_worker,
+    AgentProviderJoined, AgentProviderWorkerOwners, ProviderCleanupFailures,
+    ProviderObservationOwner, ProviderWorkerOwner, finish_provider_service_result,
+    record_owned_agent_provider_worker, retire_agent_provider_workers,
+    spawn_owned_agent_provider_worker, spawn_owned_native_agent_worker,
     take_completed_auxiliary_usage, with_reported_auxiliary_failure_usage,
 };
+
+mod native_ownership;
+use native_ownership::NativeWorkerOwner;
+
+mod service_retirement;
+pub(in crate::host::async_runtime) use service_retirement::AgentProviderServiceRetirement;
+use service_retirement::{AgentProviderWorkRetirement, ProviderServiceState};
 
 mod executor_progress;
 use executor_progress::{
@@ -346,15 +354,33 @@ fn spawn_streaming_say_projection_worker(
     ));
 }
 
-/// Runs the run async agent provider service operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
+/// Runs a standalone provider driver through request retirement. Invalid
+/// configuration, shared worker/actor failures and cleanup errors propagate;
+/// the stop predicate receives poll count and current lifecycle state. Product
+/// supervision uses the builder's independently retained driver handle so an
+/// abortable wrapper cannot interrupt this function's cleanup.
+#[cfg(test)]
 pub async fn run_async_agent_provider_service<F>(
     handle: &AsyncRuntimeSessionHandle,
     config: AsyncAgentProviderServiceConfig,
+    should_stop: F,
+) -> Result<AsyncAgentProviderPollReport>
+where
+    F: FnMut(u64, RuntimeLifecycleState) -> bool,
+{
+    let retirement = AgentProviderWorkRetirement::new(handle.clone());
+    run_async_agent_provider_service_owned(handle, config, should_stop, retirement).await
+}
+
+/// Drives work under one per-service custody borrow, without locking the actor
+/// or serializing request workers. Supervised adapters retain and join this
+/// actual driver outside their wrapper, preserving cleanup across wrapper abort;
+/// retained state permits remaining-worker retirement if the driver panics.
+pub(in crate::host::async_runtime) async fn run_async_agent_provider_service_owned<F>(
+    handle: &AsyncRuntimeSessionHandle,
+    config: AsyncAgentProviderServiceConfig,
     mut should_stop: F,
+    retirement: AgentProviderWorkRetirement,
 ) -> Result<AsyncAgentProviderPollReport>
 where
     F: FnMut(u64, RuntimeLifecycleState) -> bool,
@@ -362,8 +388,14 @@ where
     config.validate()?;
     let mut lifecycle = handle.lifecycle_state_watcher();
     let mut side_effect_watcher = handle.side_effect_delivery_watcher();
-    let mut workers = JoinSet::new();
-    let mut owners = AgentProviderWorkerOwners::default();
+    let mut state = retirement.state.lock().await;
+    let ProviderServiceState {
+        workers,
+        owners,
+        drains,
+        service_failure,
+        cleanup_failures,
+    } = &mut *state;
     let mut report = AsyncAgentProviderPollReport {
         polls: 0,
         executions: 0,
@@ -371,20 +403,13 @@ where
         terminal_state: *lifecycle.borrow(),
     };
 
-    let drains: ProviderObservationDrains = Default::default();
     let mut result = async {
         loop {
             let state = *lifecycle.borrow();
             report.terminal_state = state;
-            drain_completed_agent_provider_workers(
-                &mut workers,
-                handle,
-                &mut report,
-                &mut owners,
-                &drains,
-            )
-            .await?;
-            if should_stop(report.polls, state) {
+            drain_completed_agent_provider_workers(workers, handle, &mut report, owners, drains)
+                .await?;
+            if retirement.stopping() || should_stop(report.polls, state) {
                 return Ok(report);
             }
 
@@ -420,37 +445,25 @@ where
                 }
                 if let Some(joined) = wait_for_agent_provider_worker_wakeup(
                     handle,
-                    &mut workers,
+                    workers,
                     &mut lifecycle,
                     &mut side_effect_watcher,
                     config.idle_interval,
                 )
                 .await
                 {
-                    record_owned_agent_provider_worker(
-                        joined,
-                        handle,
-                        &mut report,
-                        &mut owners,
-                        &drains,
-                    )
-                    .await?;
+                    record_owned_agent_provider_worker(joined, handle, &mut report, owners, drains)
+                        .await?;
                 }
             } else {
-                dispatch_agent_provider_side_effects(
-                    handle,
-                    dispatches,
-                    &mut workers,
-                    &drains,
-                    &mut owners,
-                )
-                .await?;
+                dispatch_agent_provider_side_effects(handle, dispatches, workers, drains, owners)
+                    .await?;
                 drain_completed_agent_provider_workers(
-                    &mut workers,
+                    workers,
                     handle,
                     &mut report,
-                    &mut owners,
-                    &drains,
+                    owners,
+                    drains,
                 )
                 .await?;
                 report.polls = report.polls.saturating_add(1);
@@ -458,14 +471,22 @@ where
         }
     }
     .await;
-    let cleanup = abort_agent_provider_workers(&mut workers, handle, &drains, &mut owners)
+    if let Err(error) = &result {
+        *service_failure = Some(error.clone());
+    }
+    let cleanup = retire_agent_provider_workers(workers, handle, drains, owners, cleanup_failures)
         .await
         .map(|executions| {
             if let Ok(report) = &mut result {
                 report.executions = report.executions.saturating_add(executions);
             }
         });
-    finish_provider_service_result(result, cleanup)
+    let result = finish_provider_service_result(result, cleanup);
+    // The returned result now owns the error; no await can lose it between
+    // this transfer and the wrapper's observed completion.
+    *service_failure = None;
+    *cleanup_failures = ProviderCleanupFailures::default();
+    result
 }
 
 /// Runs deferred interactive commands on a dedicated, bounded worker lane.
@@ -964,13 +985,21 @@ async fn wait_for_agent_provider_worker_wakeup(
 }
 
 /// Aborts provider workers before the provider service exits.
+#[cfg(test)]
 async fn abort_agent_provider_workers(
     workers: &mut JoinSet<Result<AsyncAgentProviderWorkerResult>>,
     handle: &AsyncRuntimeSessionHandle,
     drains: &ProviderObservationDrains,
     owners: &mut AgentProviderWorkerOwners,
 ) -> Result<u64> {
-    retire_agent_provider_workers(workers, handle, drains, owners).await
+    retire_agent_provider_workers(
+        workers,
+        handle,
+        drains,
+        owners,
+        &mut ProviderCleanupFailures::default(),
+    )
+    .await
 }
 
 /// Runs the dispatch agent provider side effects operation for this subsystem.
@@ -1027,11 +1056,12 @@ async fn dispatch_agent_provider_side_effects(
                 else {
                     continue;
                 };
-                spawn_owned_agent_provider_worker(
+                spawn_native_shell_action_worker(
                     workers,
                     owners,
-                    None,
-                    execute_native_shell_action(handle.clone(), dispatch),
+                    handle.clone(),
+                    dispatch,
+                    crate::runtime::execute_native_shell_dispatch_with_progress,
                 );
             }
             RuntimeSideEffect::DispatchRecordBrowserRefresh {
@@ -1221,27 +1251,61 @@ where
     }
 }
 
-/// Executes one native shell action on Tokio's blocking pool.
-async fn execute_native_shell_action(
+/// Registers one native monitor before its first poll. The executor parameter
+/// keeps request-local work inside the blocking child and permits bounded
+/// ownership regressions without changing actor admission or result handling.
+fn spawn_native_shell_action_worker<Executor>(
+    workers: &mut JoinSet<Result<AsyncAgentProviderWorkerResult>>,
+    owners: &mut AgentProviderWorkerOwners,
     handle: AsyncRuntimeSessionHandle,
     dispatch: RuntimeNativeShellDispatch,
-) -> Result<AsyncAgentProviderWorkerResult> {
+    execute: Executor,
+) -> tokio::task::AbortHandle
+where
+    Executor: FnOnce(
+            RuntimeNativeShellDispatch,
+            watch::Sender<Option<crate::runtime::RuntimeNativeShellWorkerProgress>>,
+        ) -> RuntimeNativeShellOutcome
+        + Send
+        + 'static,
+{
+    let owner = NativeWorkerOwner::new(&dispatch);
+    spawn_owned_native_agent_worker(
+        workers,
+        owners,
+        owner.clone(),
+        execute_native_shell_action(handle, dispatch, owner, execute),
+    )
+}
+
+/// Executes one native shell action on Tokio's blocking pool. Actual production
+/// dispatch passes its ordinary executor; observation/actor ingress remain in
+/// this monitor, outside the blocking request-local execution boundary.
+async fn execute_native_shell_action<Executor>(
+    handle: AsyncRuntimeSessionHandle,
+    dispatch: RuntimeNativeShellDispatch,
+    owner: NativeWorkerOwner,
+    execute: Executor,
+) -> Result<AsyncAgentProviderWorkerResult>
+where
+    Executor: FnOnce(
+            RuntimeNativeShellDispatch,
+            watch::Sender<Option<crate::runtime::RuntimeNativeShellWorkerProgress>>,
+        ) -> RuntimeNativeShellOutcome
+        + Send
+        + 'static,
+{
     let progress_feedback = ExecutorProgressFeedback::new(ExecutorProgressFamily::NativeShell);
-    let turn_id = dispatch.turn_id.clone();
-    let action_id = dispatch.action_id.clone();
-    let marker = dispatch.marker.clone();
-    let command = dispatch.request.transaction.command.clone();
-    let started_at_unix_ms = dispatch.started_at_unix_ms;
-    let progress_turn_id = turn_id.clone();
-    let progress_action_id = action_id.clone();
-    let progress_marker = marker.clone();
+    let progress_turn_id = dispatch.turn_id.clone();
+    let progress_action_id = dispatch.action_id.clone();
+    let progress_marker = dispatch.marker.clone();
     let _cancellation_guard = dispatch.cancellation.cancel_on_drop();
     let (progress_sender, mut progress_receiver) = tokio::sync::watch::channel(None);
     let mut last_progress_revision = 0_u64;
     let mut confirmed_patch_sections = 0_usize;
-    let mut worker = tokio::task::spawn_blocking(move || {
-        crate::runtime::execute_native_shell_dispatch_with_progress(dispatch, progress_sender)
-    });
+    owner.start(dispatch, progress_sender, execute).await?;
+    let worker = owner.join();
+    tokio::pin!(worker);
     let joined = loop {
         tokio::select! {
             joined = &mut worker => break joined,
@@ -1355,24 +1419,8 @@ async fn execute_native_shell_action(
             submit_executor_progress_batch(&handle, batch, &progress_feedback).await;
         }
     }
-    let outcome = match joined {
-        Ok(outcome) => outcome,
-        Err(error) => RuntimeNativeShellOutcome {
-            turn_id,
-            action_id,
-            marker,
-            command,
-            started_at_unix_ms,
-            sandbox_capability: None,
-            capability_probe_only: false,
-            launch_counts: None,
-            result: Err(RuntimeNativeShellFailure {
-                kind: "invalid_state".to_string(),
-                message: native_worker_join_failure(&error).to_string(),
-                lifecycle: None,
-            }),
-        },
-    };
+    joined?;
+    let outcome = owner.take_completed().await?;
     Ok(Some((RuntimeEvent::NativeShell(outcome), false)))
 }
 

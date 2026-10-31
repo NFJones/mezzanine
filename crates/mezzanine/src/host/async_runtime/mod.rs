@@ -46,10 +46,9 @@ use crate::runtime::{
     RuntimeAgentProviderDispatchProvider, RuntimeAgentProviderTask, RuntimeAgentRememberDispatch,
     RuntimeAgentSessionTitleDispatch, RuntimeApprovedExternalActionDispatch,
     RuntimeApprovedExternalActionOutcome, RuntimeEventWakeup, RuntimeLifecycleState,
-    RuntimeNativeShellDispatch, RuntimeNativeShellFailure, RuntimeNativeShellOutcome,
-    RuntimeProviderInfoRefreshOutcome, RuntimeSessionService, RuntimeSnapshotControlAsyncOutcome,
-    RuntimeSnapshotControlAsyncWork, RuntimeSnapshotControlAsyncWorkKind,
-    authenticated_unix_peer_uid, current_effective_uid,
+    RuntimeNativeShellDispatch, RuntimeNativeShellOutcome, RuntimeProviderInfoRefreshOutcome,
+    RuntimeSessionService, RuntimeSnapshotControlAsyncOutcome, RuntimeSnapshotControlAsyncWork,
+    RuntimeSnapshotControlAsyncWorkKind, authenticated_unix_peer_uid, current_effective_uid,
 };
 use mez_agent::AgentTurnLedger;
 use mez_agent::messaging::{DeliveryCursor, FanoutBatch, MessageConnection, delivery_batch_json};
@@ -196,9 +195,10 @@ pub use client::build_async_attached_terminal_client_service;
 pub(crate) use client::execute_approved_external_action;
 #[cfg(test)]
 pub use client::run_async_agent_command_service;
+#[cfg(test)]
+pub use client::run_async_agent_provider_service;
 pub use client::{
-    AsyncAttachedTerminalClientServiceConfig, run_async_agent_provider_service,
-    run_async_attached_terminal_client_service,
+    AsyncAttachedTerminalClientServiceConfig, run_async_attached_terminal_client_service,
 };
 pub(crate) use config::AsyncRuntimeRequestLane;
 pub(crate) use config::ClientClipboardRouteLease;

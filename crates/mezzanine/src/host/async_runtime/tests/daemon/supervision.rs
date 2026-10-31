@@ -2,6 +2,32 @@
 
 use super::super::*;
 
+/// Shared service task panic must remain fatal with its named bounded cause,
+/// while arbitrary panic payloads stay out of the structured supervisor error.
+/// The normal process panic hook remains unchanged; this checks the join boundary.
+#[tokio::test]
+async fn async_runtime_service_supervisor_panic_diagnostic_excludes_payload() {
+    let error = supervise_async_runtime_services(
+        vec![AsyncRuntimeService::new("owned-panic-service", async {
+            panic!("PRIVATE_SUPERVISED_SERVICE_PANIC_PAYLOAD")
+        })],
+        std::future::pending(),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error.kind(), crate::error::MezErrorKind::InvalidState);
+    assert!(
+        error
+            .message()
+            .contains("owned-panic-service task failed: panic")
+    );
+    assert!(
+        !error
+            .message()
+            .contains("PRIVATE_SUPERVISED_SERVICE_PANIC_PAYLOAD")
+    );
+}
+
 /// Verifies that daemon supervision rejects invalid service sets before
 /// spawning tasks. This matters because duplicate or missing listener names
 /// would make later failure and shutdown reports ambiguous.

@@ -1,35 +1,49 @@
-//! Async Runtime Provider implementation.
+//! Provider and deferred-command service assembly for runtime supervision.
 //!
-//! This module owns the async runtime provider boundary for Mezzanine. It keeps related
-//! state transitions and helper routines localized so neighboring modules
-//! interact through typed APIs instead of duplicating subsystem details.
+//! These adapters install outside-wrapper retirement owners before supervision
+//! starts. The provider wrapper borrows its actual driver's handle; cancellation
+//! cannot interrupt request cleanup, and the driver receives separate work state
+//! to avoid retaining its own handle. The command lane retains exact fork work.
+//! No socket, permission, retry or native process authority is introduced here;
+//! dispatch/adoption stay with the driver and actor, joins with the supervisor.
 
 use super::{
     AsyncAgentProviderServiceConfig, AsyncRuntimeService, AsyncRuntimeServiceExit,
     AsyncRuntimeSessionHandle, AttachedTerminalClientLoopReport, Result, RuntimeLifecycleState,
-    run_async_agent_provider_service,
 };
 
 // Async agent provider polling service.
 
-/// Runs the build async agent provider service operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
+/// Builds a named provider adapter with supervisor-retained driver/work custody.
+/// Invalid configuration fails before any task starts. Polling the wrapper
+/// starts and observes its actual driver; request/actor/cleanup failures remain
+/// errors, while supervisor cancellation still joins that driver before shutdown.
 pub fn build_async_agent_provider_service(
     name: impl Into<String>,
     handle: AsyncRuntimeSessionHandle,
     config: AsyncAgentProviderServiceConfig,
 ) -> Result<AsyncRuntimeService> {
     config.validate()?;
-    Ok(AsyncRuntimeService::new_auxiliary(name, async move {
-        let report = run_async_agent_provider_service(&handle, config, |_, state| {
-            is_terminal_runtime_lifecycle_state(state)
-        })
-        .await?;
+    let retirement = super::client::AgentProviderServiceRetirement::new(handle.clone());
+    let worker_retirement = retirement.clone();
+    let mut service = AsyncRuntimeService::new_auxiliary(name, async move {
+        let work = worker_retirement.work();
+        worker_retirement
+            .start_driver(async move {
+                super::client::run_async_agent_provider_service_owned(
+                    &handle,
+                    config,
+                    |_, state| is_terminal_runtime_lifecycle_state(state),
+                    work,
+                )
+                .await
+            })
+            .await?;
+        let report = worker_retirement.join_driver().await?;
         Ok(AsyncRuntimeServiceExit::completed(report.executions))
-    }))
+    });
+    service.agent_provider_retirement = Some(retirement);
+    Ok(service)
 }
 
 /// Builds the dedicated deferred interactive-command worker service.

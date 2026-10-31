@@ -7,6 +7,131 @@
 //! they do not establish a universal stack bound or arbitrary workload safety.
 
 use super::*;
+
+/// Aborting the complete provider-service wrapper must keep the actual driver
+/// alive through request destruction, exact memory-claim retirement and known
+/// expense adoption. This uses the production builder/supervisor plus one real
+/// normalized wire observation; no response or billing completion is invented.
+#[tokio::test]
+async fn auxiliary_supervisor_cancellation_preserves_claim_retirement_and_known_expense() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    let (_root, service, primary, conversation) = queued_fixture(Family::Remember);
+    let observation = service
+        .pending_agent_remember_observation_id("%1")
+        .unwrap()
+        .to_string();
+    let (handle, actor) = AsyncRuntimeSessionActor::new(service, Default::default()).unwrap();
+    let actor = tokio::spawn(actor.run());
+    let dispatch = handle
+        .claim_agent_remember_task("%1".into(), observation.clone())
+        .await
+        .unwrap()
+        .unwrap();
+    let service = crate::host::async_runtime::provider::build_async_agent_provider_service(
+        "auxiliary-retirement-fixture",
+        handle.clone(),
+        AsyncAgentProviderServiceConfig::new(1).unwrap(),
+    )
+    .unwrap();
+    let retirement = service.agent_provider_retirement.as_ref().unwrap().clone();
+    let (started, ready) = tokio::sync::oneshot::channel();
+    let requests = Arc::new(AtomicUsize::new(0));
+    let worker_requests = requests.clone();
+    {
+        let mut state = retirement.work.state.lock().await;
+        let ProviderServiceState {
+            workers,
+            owners,
+            drains,
+            ..
+        } = &mut *state;
+        let owner = ProviderWorkerOwner::remember(&dispatch);
+        spawn_owned_agent_provider_worker(
+            workers,
+            owners,
+            Some(owner),
+            monitor_runtime_agent_remember_dispatch(
+                handle.clone(),
+                "%1".into(),
+                dispatch,
+                drains.clone(),
+                move |dispatch, observer| async move {
+                    let provider = ReportedMemoryProvider(worker_requests);
+                    let _unpublished = observed_provider_request(
+                        &provider,
+                        &observer,
+                        ProviderRequestPurpose::Memory,
+                        &dispatch.task.request,
+                    )
+                    .await
+                    .unwrap();
+                    let _ = started.send(());
+                    std::future::pending::<Result<ModelResponse>>().await
+                },
+            ),
+        );
+    }
+    let primary_service =
+        crate::host::async_runtime::AsyncRuntimeService::new("primary-fixture", async {
+            std::future::pending::<()>().await;
+            Ok(crate::host::async_runtime::AsyncRuntimeServiceExit::completed(0))
+        });
+    let (cancel, cancelled) = tokio::sync::oneshot::channel();
+    let supervision = tokio::spawn(
+        crate::host::async_runtime::supervise_async_runtime_services(
+            vec![service, primary_service],
+            async {
+                let _ = cancelled.await;
+            },
+        ),
+    );
+    tokio::time::timeout(Duration::from_secs(5), ready)
+        .await
+        .unwrap()
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !retirement.driver_started_for_tests() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    cancel.send(()).unwrap();
+    let report = supervision.await.unwrap();
+    let ingress = handle
+        .execute_agent_shell_command(primary, "/help".into())
+        .await;
+    handle.shutdown().await.unwrap();
+    let mut exit = actor.await.unwrap();
+    let reaped = exit.service.terminate_all_pane_processes();
+    report.unwrap();
+    ingress.unwrap();
+    reaped.unwrap();
+    assert_eq!(requests.load(Ordering::SeqCst), 1);
+    assert!(
+        !exit
+            .service
+            .agent_remember_observation_matches("%1", &observation)
+    );
+    assert!(!exit.service.agent_is_remembering("%1"));
+    let usage = exit
+        .service
+        .agent_token_usage_for_conversation(&conversation);
+    let key = mez_agent::ModelTokenUsageKey::new("local-chat", "test");
+    assert_eq!(
+        usage
+            .get(&key)
+            .map(|usage| (usage.input_tokens, usage.output_tokens)),
+        Some((17, 3))
+    );
+    let state = retirement.work.state.lock().await;
+    assert!(state.workers.is_empty());
+    assert!(state.owners.is_empty());
+    assert!(state.drains.lock().unwrap().is_empty());
+}
 use crate::host::async_runtime::{AsyncRuntimeSessionActor, ClientId, RuntimeTimerKind};
 use crate::runtime::RuntimeSessionService;
 

@@ -20,10 +20,10 @@ use super::{
     RuntimeAgentProviderDispatchProvider, RuntimeAgentRememberDispatch,
     RuntimeApprovedExternalActionDispatch, RuntimeApprovedExternalActionOutcome, RuntimeEvent,
     RuntimeEventBatch, RuntimeLifecycleState, RuntimeNativeShellDispatch,
-    RuntimeNativeShellFailure, RuntimeNativeShellOutcome, RuntimeSideEffect, Size,
-    TerminalClientLoopAction, empty_attached_terminal_loop_report,
-    is_terminal_runtime_lifecycle_state, merge_attached_terminal_loop_report,
-    run_async_attached_terminal_client_loop_with_snapshot, sleep,
+    RuntimeNativeShellOutcome, RuntimeSideEffect, Size, TerminalClientLoopAction,
+    empty_attached_terminal_loop_report, is_terminal_runtime_lifecycle_state,
+    merge_attached_terminal_loop_report, run_async_attached_terminal_client_loop_with_snapshot,
+    sleep,
 };
 use crate::error::MezErrorKind;
 use crate::host::async_runtime::RenderInvalidationReason;
@@ -46,6 +46,9 @@ mod saved_fork_retirement;
 mod terminal_service;
 
 pub(super) use provider_service::run_async_agent_command_service_owned;
+pub(super) use provider_service::{
+    AgentProviderServiceRetirement, run_async_agent_provider_service_owned,
+};
 pub(super) use saved_fork_retirement::SavedForkServiceRetirement;
 
 #[cfg(test)]
@@ -54,6 +57,7 @@ pub(in crate::host::async_runtime) use provider_service::classify_provider_monit
 pub(crate) use provider_service::execute_approved_external_action;
 #[cfg(test)]
 pub use provider_service::run_async_agent_command_service;
+#[cfg(test)]
 pub use provider_service::run_async_agent_provider_service;
 pub(crate) use terminal_service::attached_terminal_client_service_exit;
 #[cfg(test)]

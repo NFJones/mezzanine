@@ -9,6 +9,7 @@ use crate::runtime::RuntimeSessionService;
 use std::sync::Mutex;
 
 mod crash_qualification;
+mod native_retirement;
 
 /// Records prepared requests and injects authoritative parser-produced errors.
 struct IncompleteProvider {

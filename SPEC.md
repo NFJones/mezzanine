@@ -12521,6 +12521,23 @@ termination evidence and MUST NOT join twice. Cleanup during unwind MUST retain
 the initiating failure; any reader cleanup diagnostic MUST use a bounded
 category without formatting arbitrary panic payloads. Reader retirement alone
 MUST NOT certify native nonexecution, sandbox closure or direct-child reaping.
+Native service retirement MUST retain the actual blocking task handle and its
+issued turn/action/marker, command, timestamp and probe/workload phase outside
+the async monitor. Monitor cancellation MUST NOT detach that handle or discard
+an already completed native outcome. Retirement MUST signal the exact dispatch,
+observe its blocking join and submit its original outcome once; unavailable
+results MUST remain bounded failures with unproven lifecycle/launch facts.
+An actor delivery failure MUST remain fatal after resource retirement, and an
+ambiguous terminal submission MUST NOT authorize a replacement or replay.
+The service supervisor MUST retain the actual provider driver task and bounded
+worker custody outside the abortable service wrapper. Shutdown, primary-service
+completion and shared service failure MUST request stop and observe that same
+driver through cleanup before actor ingress closes. Wrapper cancellation during
+cleanup MUST NOT discard a temporarily borrowed request owner or the original
+typed service failure. A shared driver panic MUST remain fatal while remaining
+retained native/model workers are retired; structured service join diagnostics
+MUST NOT include arbitrary panic payloads. Last-owner drop is a stop request,
+not proof of an observed join or a universal hard-abort cleanup guarantee.
 Native child and staging custody MUST begin immediately after the OS confirms
 the direct child creation and before any pipe extraction or fallible reader
 setup: the exact owned direct child and its process group MUST be terminated

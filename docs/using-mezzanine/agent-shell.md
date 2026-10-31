@@ -151,6 +151,16 @@ owners request cancellation and join their threads. This observes reader
 termination separately from child reaping; cancelled status capture does not
 prove sandbox completion or make replay safe.
 
+When the provider service retires a native monitor, it keeps the blocking
+worker's actual handle, waits for its exit and adopts the original result once.
+A result completed before cancellation is preserved. If the result is lost,
+the exact action fails with unknown lifecycle facts; actor delivery failures
+remain visible, and retirement never retries the command.
+Normal service shutdown also waits for model and native retirement when the
+outer service task is cancelled during cleanup. Known auxiliary usage and
+completed native results survive that handoff; shared service failures remain
+failures even while sibling work retires.
+
 The runtime's targeted pause/resume APIs are distinct from `/stop`: pause retains
 the task, gates new dispatch, and drains already-issued work. Pausing is not proof
 of quiescence; Paused releases provider capacity but retains exclusive task

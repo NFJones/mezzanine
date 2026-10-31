@@ -2,8 +2,11 @@
 //!
 //! Primary services determine lifetime; auxiliary services cannot keep an idle
 //! session alive. Every exit path aborts and joins remaining Tokio wrappers and
-//! retires separately retained saved-fork jobs. The first failure stays causal,
-//! with bounded named secondary diagnostics. Wrapper completion is distinct from
+//! retires separately retained provider drivers and saved-fork jobs. Provider
+//! drivers finish their original request cleanup after wrapper abort; retained
+//! worker state supports cleanup if the driver itself fails. Actor ingress stays
+//! available until those joins finish. The first failure stays causal, with
+//! bounded named secondary diagnostics. Wrapper completion is distinct from
 //! OS-process retirement and does not authorize effect replay.
 
 use super::{
@@ -118,6 +121,8 @@ pub struct AsyncRuntimeService {
     pub(super) future: AsyncRuntimeServiceFuture,
     /// Exact deferred-fork retirement retained outside the abortable future.
     pub(super) saved_fork_retirement: Option<super::client::SavedForkServiceRetirement>,
+    /// Provider/native custody retained outside this abortable service future.
+    pub(super) agent_provider_retirement: Option<super::client::AgentProviderServiceRetirement>,
 }
 
 impl AsyncRuntimeService {
@@ -134,6 +139,7 @@ impl AsyncRuntimeService {
             auxiliary: false,
             future: Box::pin(future),
             saved_fork_retirement: None,
+            agent_provider_retirement: None,
         }
     }
 
@@ -151,6 +157,7 @@ impl AsyncRuntimeService {
             auxiliary: true,
             future: Box::pin(future),
             saved_fork_retirement: None,
+            agent_provider_retirement: None,
         }
     }
 
@@ -215,6 +222,8 @@ pub struct AsyncRuntimeServiceSupervisor {
     pub(super) task_names: HashMap<TokioTaskId, (String, bool)>,
     /// Only deferred command services install these bounded publication owners.
     saved_fork_retirements: Vec<super::client::SavedForkServiceRetirement>,
+    /// Actual request tasks/outcomes surviving provider-wrapper cancellation.
+    agent_provider_retirements: Vec<super::client::AgentProviderServiceRetirement>,
 }
 
 impl AsyncRuntimeServiceSupervisor {
@@ -228,9 +237,13 @@ impl AsyncRuntimeServiceSupervisor {
         let mut tasks = JoinSet::new();
         let mut task_names = HashMap::new();
         let mut saved_fork_retirements = Vec::new();
+        let mut agent_provider_retirements = Vec::new();
         for service in services {
             if let Some(retirement) = service.saved_fork_retirement {
                 saved_fork_retirements.push(retirement);
+            }
+            if let Some(retirement) = service.agent_provider_retirement {
+                agent_provider_retirements.push(retirement);
             }
             let name = service.name;
             let auxiliary = service.auxiliary;
@@ -242,6 +255,7 @@ impl AsyncRuntimeServiceSupervisor {
             tasks,
             task_names,
             saved_fork_retirements,
+            agent_provider_retirements,
         })
     }
 
@@ -267,15 +281,18 @@ impl AsyncRuntimeServiceSupervisor {
                 None
             }
         };
-        // Errors and auxiliary aborts cannot bypass a fork's blocking owner.
-        // Signal before abort, join all wrappers, then take exact retained jobs.
-        for retirement in &self.saved_fork_retirements {
-            retirement.request_stop();
-        }
+        // Signal before abort, join wrappers, then retire retained actual work.
+        // Provider/native custody must settle while actor ingress remains live.
+        self.request_worker_retirement();
         self.tasks.abort_all();
         while let Some(joined) = self.tasks.join_next_with_id().await {
             if let Err(error) = self.report_joined_service(joined) {
                 failures.record("service shutdown", error);
+            }
+        }
+        for retirement in &self.agent_provider_retirements {
+            if let Err(error) = retirement.retire().await {
+                failures.record("agent provider retirement", error);
             }
         }
         for retirement in &self.saved_fork_retirements {
@@ -290,8 +307,8 @@ impl AsyncRuntimeServiceSupervisor {
         })
     }
 
-    /// Runs the existing service reporting policy; the outer owner always retires
-    /// exact saved-fork workers after this policy stops or returns an error.
+    /// Runs the service reporting policy; the outer owner always retires exact
+    /// provider/native and saved-fork workers after this stops or returns error.
     async fn run_services_until_shutdown<C>(
         &mut self,
         cancellation: C,
@@ -364,8 +381,9 @@ impl AsyncRuntimeServiceSupervisor {
                         exit: AsyncRuntimeServiceExit::shutdown(0),
                     })
                 } else {
+                    let cause = if error.is_panic() { "panic" } else { "unknown" };
                     Err(MezError::invalid_state(format!(
-                        "async runtime service {name} task failed: {error}"
+                        "async runtime service {name} task failed: {cause}"
                     )))
                 }
             }
@@ -390,9 +408,7 @@ impl AsyncRuntimeServiceSupervisor {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     async fn abort_remaining_as_shutdown(&mut self) -> Result<Vec<AsyncRuntimeServiceReport>> {
-        for retirement in &self.saved_fork_retirements {
-            retirement.request_stop();
-        }
+        self.request_worker_retirement();
         self.tasks.abort_all();
         let mut reports = Vec::new();
         let mut failures = TeardownErrors::default();
@@ -427,9 +443,7 @@ impl AsyncRuntimeServiceSupervisor {
     async fn abort_remaining_auxiliary_as_completed(
         &mut self,
     ) -> Result<Vec<AsyncRuntimeServiceReport>> {
-        for retirement in &self.saved_fork_retirements {
-            retirement.request_stop();
-        }
+        self.request_worker_retirement();
         self.tasks.abort_all();
         let mut reports = Vec::new();
         let mut failures = TeardownErrors::default();
@@ -447,6 +461,17 @@ impl AsyncRuntimeServiceSupervisor {
         }
         failures.finish()?;
         Ok(reports)
+    }
+
+    /// Signals exact nested work before any abortable service wrapper is joined.
+    /// A stop request is not a receipt; the outer driver still awaits retirement.
+    fn request_worker_retirement(&self) {
+        for retirement in &self.agent_provider_retirements {
+            retirement.request_stop();
+        }
+        for retirement in &self.saved_fork_retirements {
+            retirement.request_stop();
+        }
     }
 }
 
