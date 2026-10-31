@@ -15,6 +15,7 @@ mod managed_shell_handoff;
 mod native_bubblewrap;
 pub(crate) mod native_cancellation;
 mod native_filesystem_authority;
+pub(crate) mod native_patch;
 mod native_shell_inference;
 mod native_workload_environment;
 pub(crate) mod output_filter;
