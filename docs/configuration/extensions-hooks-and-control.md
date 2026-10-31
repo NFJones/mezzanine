@@ -25,6 +25,12 @@ snapshot storage are runtime-owned rather than configuration tables; use their
 CLI and reference documentation to inspect those facilities. `audit` controls
 structured security records.
 
+Native filesystem attempt admission checks `pre_shell_command` hooks using
+semantic action metadata, without generating a shell command. Required handlers
+and handlers with a blocking failure policy reject admission before dispatch;
+optional warn-only handlers produce an incompatibility diagnostic and do not
+queue a program or focused-shell command.
+
 Treat hook runners as distinct execution boundaries. Program hooks can invoke
 external programs and receive structured event data on standard input. Shell
 hooks use the focused pane shell when one is available. Focused-shell hooks

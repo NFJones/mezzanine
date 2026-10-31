@@ -252,6 +252,25 @@ impl RuntimeSessionService {
                     MezError::forbidden("native filesystem source has no path authority")
                 })?;
             self.check_native_filesystem_policy(&work, &scopes)?;
+            // Only semantic metadata is offered to configured guards. No
+            // generated command, shell adapter, or process continuation exists.
+            let payload = serde_json::json!({
+                "turn_id": work.owner.turn.turn_id,
+                "agent_id": work.owner.turn.agent_id,
+                "pane_id": work.owner.turn.pane_id,
+                "action_id": work.owner.action.id,
+                "action_type": work.owner.action.action_type(),
+                "semantic_action_type": work.owner.action.action_type(),
+                "execution_target": "native_runtime",
+                "policy_descriptor": work.identity.operation.policy_descriptor(),
+            })
+            .to_string();
+            if let Some(block) = self.admit_native_filesystem_hooks(&payload)? {
+                return Err(MezError::forbidden(format!(
+                    "native filesystem admission blocked by hook `{}`: {}",
+                    block.hook_id, block.message,
+                )));
+            }
             let dispatch = self
                 .agent
                 .native_filesystem_actions

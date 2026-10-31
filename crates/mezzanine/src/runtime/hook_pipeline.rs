@@ -18,6 +18,15 @@ use super::{
     runtime_hook_event_name, runtime_hook_target_pane_id,
 };
 
+/// Execution domain selected by the runtime caller, never by hook payload text.
+#[derive(Clone, Copy)]
+enum HookAdmissionDomain {
+    /// Resolve existing pane and semantic action ownership at admission.
+    CurrentPane,
+    /// An actual filesystem attempt cannot admit executable integrations.
+    NativeFilesystem,
+}
+
 // Configured pre-action and completion hook execution.
 
 impl RuntimeSessionService {
@@ -245,6 +254,45 @@ impl RuntimeSessionService {
         event_payload_json: &str,
         continuation: Option<PendingFocusedShellHookContinuation>,
     ) -> Result<RuntimeHookPipelineDecision> {
+        self.run_pre_action_hooks_in_domain(
+            event,
+            event_payload_json,
+            continuation,
+            HookAdmissionDomain::CurrentPane,
+        )
+    }
+
+    /// Classifies configured guards for an actual filesystem owner before
+    /// issuance. This domain cannot queue program/focused-shell work, even if
+    /// current pane presentation changes. Required incompatibilities block;
+    /// optional incompatibilities only emit diagnostics. Errors deny admission.
+    pub(super) fn admit_native_filesystem_hooks(
+        &mut self,
+        event_payload_json: &str,
+    ) -> Result<Option<RuntimeHookPipelineBlock>> {
+        match self.run_pre_action_hooks_in_domain(
+            HookEvent::PreShellCommand,
+            event_payload_json,
+            None,
+            HookAdmissionDomain::NativeFilesystem,
+        )? {
+            RuntimeHookPipelineDecision::Continue => Ok(None),
+            RuntimeHookPipelineDecision::Block(block) => Ok(Some(block)),
+            RuntimeHookPipelineDecision::Pending => Err(MezError::invalid_state(
+                "native filesystem hook admission cannot defer executable work",
+            )),
+        }
+    }
+
+    /// Shares existing hook planning and failure policy while keeping the
+    /// caller's immutable native execution domain ahead of every launch path.
+    fn run_pre_action_hooks_in_domain(
+        &mut self,
+        event: HookEvent,
+        event_payload_json: &str,
+        continuation: Option<PendingFocusedShellHookContinuation>,
+        domain: HookAdmissionDomain,
+    ) -> Result<RuntimeHookPipelineDecision> {
         if self.integration.hook_definitions().is_empty() {
             return Ok(RuntimeHookPipelineDecision::Continue);
         }
@@ -255,7 +303,9 @@ impl RuntimeSessionService {
         )?;
         for mut plan in event_plan.plans {
             plan.target_pane_id = runtime_hook_target_pane_id(event_payload_json);
-            if self.native_basic_hook_path(event, event_payload_json) {
+            if matches!(domain, HookAdmissionDomain::NativeFilesystem)
+                || self.native_basic_hook_path(event, event_payload_json)
+            {
                 let required = self
                     .integration
                     .hook_definitions()

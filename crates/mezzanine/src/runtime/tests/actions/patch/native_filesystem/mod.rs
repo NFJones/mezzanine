@@ -711,3 +711,5 @@ mod async_producer;
 
 #[cfg(target_os = "linux")]
 mod canonical;
+
+mod hooks;

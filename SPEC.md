@@ -12689,7 +12689,11 @@ shell exit codes, signals, markers or stdout evidence.
 Basic-action execution MUST NOT require shells, utilities, sandbox probes,
 interpreters or re-executed Mez helpers. Executable hooks and stdio MCP are
 explicit process integrations, not concealed basic-action prerequisites;
-required incompatible executable gates MUST block before mutation. Pane
+required incompatible executable gates MUST block before mutation. Native
+filesystem attempt admission MUST check these guards before issuing a dispatch,
+using the immutable execution domain and semantic action metadata rather than
+generated shell commands or mutable pane presentation. Optional warn-only
+handlers MUST NOT enqueue executable work. Pane
 creation, external editing, clipboard/status commands and other intentionally
 process-oriented UI integrations are outside this filesystem guarantee. A
 literal shell-command-only launch policy MUST reject incompatible integrations
