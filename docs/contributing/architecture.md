@@ -61,6 +61,27 @@ There is one context store and one checked candidate-before-commit boundary.
 Behavior-grouped tests preserve event identity, causal ownership, trust, and
 byte-exact projection contracts. Transcript filesystem I/O remains product-owned.
 
+`context/canonical/epoch/mod.rs` owns the shared replay-epoch foundation.
+`ReplayEpochContext` moves an existing `AgentContext`; it does not keep another
+mutable model history. The typed head and explicit raw membership refer to that
+one canonical chronology. Birth revision, current membership, request-cache
+identity and runtime attempt generation have separate meanings. Plans snapshot
+the expected parent and exact source, and publication clones, validates and
+commits one head with retained tail and append-only arrivals.
+
+Instruction handles are scoped to a local owner allocation and monotonically
+allocated task generation. Explicit completion changes retention without
+changing text or authorship. Stable system/developer/project/policy slots cannot
+be completed by a task handle. Pending execution groups and peer handoffs retain
+source until their runtime owners retire them. Execution closure also binds the
+exact admitted source frontier and checks native declaration/result pairing;
+a later append invalidates an older closure fence. This retention metadata does not
+prove native execution, reap, message acknowledgment or durable storage. Typed
+historical-instruction state survives checked clones and provider preparation,
+but bare block imports cannot infer it. Persisting/restoring that lifecycle and
+wiring product triggers require their versioned adapters. The foundation's
+explicit omission publication contract is not a user-facing raw-tail option.
+
 Runtime process orchestration remains under `runtime/processes/mod.rs`, with
 focused children for adapter ownership, typed input delivery, terminal settings,
 conversation-bound screens, transaction retirement, termination, and lifecycle

@@ -10834,6 +10834,54 @@ Before making a model request, the harness MUST assemble context from:
 - Explicit action results produced by commands, file operations, directory
   listings, searches, web retrieval, or other model-requested tools.
 
+The shared canonical replay-epoch foundation MUST represent a conversation as
+one optional typed summary head and explicit current raw membership. A raw
+occurrence's birth revision MUST NOT determine membership in a later epoch.
+Summary identity, committed replay revision, provider-cache identity, logical
+compaction operation and worker dispatch generation MUST remain distinct.
+The foundation MUST freeze the current head, eligible closed prefix and arrival
+frontier, and publish one new head plus exact retained raw tail and post-frontier
+arrivals. It MUST NOT expand a parent summary back into covered raw source or
+skip protected prefix events to gather later ranges. Equal text MUST retain
+separate original occurrence identities. A summary's chronological anchor is an
+ordering slot, not a claim to the original identity of covered source.
+
+Manual, observed-input and provider-limit adapters MUST use the same configured
+raw-tail selection contract. Token retention rounds upward and complete
+execution groups remain indivisible. Once compaction is requested, fitting the
+optional tail reservation alone MUST NOT suppress an otherwise eligible oldest
+closed prefix unit; this progress rule MUST be shared by every trigger. Optional
+closed units MUST fit whole within the raw reservation; an oversized newest
+closed unit belongs in the selected prefix. Exact/protected source MUST remain
+raw even when its mandatory tail exceeds that reservation. Explicitly pending native groups and peer
+handoffs, active task instructions and unrecoverable evidence MUST retain their
+exact source; an empty or irreducible prefix MUST report no work without a fake
+model dispatch. Task instructions become historical only through explicit
+completion or supersession of their exact owner. Current system, developer,
+project and policy slots remain outside lossy history. Completion MUST preserve
+instruction bytes and authorship; stale owner handles MUST NOT retire replacement
+work. Releasing execution protection MUST bind the exact admitted group frontier
+and reject unanswered native declarations; neither a stale closure nor a bare
+retention annotation proves completion. Summaries remain reference events and
+grant no permission or MCP authority.
+
+Publication MUST validate an isolated candidate against the exact owner,
+conversation, expected parent, head and frozen source. Changed lifecycle,
+new protection or a group extended beyond the frozen frontier MUST reject
+atomically. Current stable slots and append-only arrivals MUST survive. A
+completed usable summary within resource bounds MUST NOT be rejected merely for
+missing an advisory word count or shrink target. Blank model output MUST NOT
+be interpreted as intentional head absence: absence requires a separately
+selected publication policy. Summary is the default policy.
+
+This is the pure canonical API contract. Integrating all product triggers,
+versioned durable epoch publication and user-selectable summary-free retention
+are separate adapter work; this foundation adds no product configuration or
+old/new engine switch. In-memory task completion and owner allocation fences
+MUST NOT be reconstructed from bare block labels after restart. Durable restore
+requires an explicit typed lifecycle/membership witness; until such an adapter
+exists, bare block imports retain conservative exact instruction semantics.
+
 The harness MUST distinguish terminal bytes, user text, local messages, project
 files, web content, and model output as separate context sources.
 
@@ -10989,6 +11037,12 @@ presence MUST NOT establish durability for publication. Proposed compaction
 previews MUST use the same canonical renderer without publishing the proposal.
 These runtime counters introduce no persisted field or configuration item;
 existing versioned transcript and checkpoint codecs remain authoritative.
+
+The currently wired product prefix/selective adapters have not yet cut over to
+the shared canonical replay-epoch API. The following range, fit and correction
+rules describe those adapters, not the new foundation's source-tail or summary
+acceptance contract above. Adapter cutover is separate work and MUST NOT become
+a user-selectable old/new engine compatibility switch.
 
 When conversation compaction runs, Mezzanine MUST summarize only a closed
 prefix of complete execution groups. It MUST NOT split request messages,
@@ -13145,6 +13199,13 @@ Agents MUST support task planning when requested by the user.
 
 Agents MUST support session continuation after the agent shell is hidden and
 shown again.
+
+The following provider-limit range/recovery procedure describes the currently
+wired product adapters. The shared canonical replay-epoch foundation in Section
+9.6 instead consumes the current head and explicit membership with one common
+source-tail policy; its usable-summary publication contract has no advisory
+shrink/word ladder. Wiring that foundation into every trigger remains separate
+adapter work, not a runtime compatibility mode.
 
 Agents MUST support model-generated conversation compaction or summarization
 when explicit user action or provider feedback shows that context reduction is

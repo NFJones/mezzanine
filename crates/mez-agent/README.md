@@ -9,6 +9,8 @@ supply credentials, persistence, transports, execution, and UI.
 
 - **Shared turn machinery:** request normalization, context assembly and
   budgeting, transcript continuity, turn orchestration, and recovery.
+- **Canonical replay foundation:** typed single-head epochs, exact raw
+  membership, task-instruction lifecycle and atomic expected-parent publication.
 - **Reviewable action contracts:** Mezzanine Agent Action Protocol (MAAP)
   batches, schemas, validation, result shaping, and semantic patch planning.
 - **Provider protocol support:** request and response handling for OpenAI,

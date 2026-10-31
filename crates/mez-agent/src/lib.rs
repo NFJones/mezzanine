@@ -274,6 +274,12 @@ pub use context::{
     model_message_is_compaction_summary, validate_context_placement_order,
     validate_context_required, validate_context_semantics,
 };
+pub use context::{
+    ReplayCompactionNoWork, ReplayCompactionPlan, ReplayCompactionPreparation,
+    ReplayConversationId, ReplayEpochContext, ReplayEpochMember, ReplayEpochRevision,
+    ReplayExecutionOwner, ReplayHeadPolicy, ReplayHeadPublication, ReplayInstructionOwner,
+    ReplaySummaryIdentity,
+};
 pub use context_appenders::{
     EMPTY_PROJECT_GUIDANCE_CONTEXT, MCP_CATALOG_REMOVED_CONTEXT,
     MCP_CATALOG_SNAPSHOT_CONTEXT_LABEL, MCP_INTEGRATIONS_CONTEXT_LABEL,

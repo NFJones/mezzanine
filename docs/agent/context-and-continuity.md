@@ -281,7 +281,10 @@ and jittered backoff. The ordinary turn waits; settled actions are not replayed.
 Manual and observed-input compaction use the same policy. Stop and human pause
 remain effective during backoff. Exhausted or nonretryable failures are terminal,
 and incomplete summaries never replace authoritative history.
-Completed summaries are also checked before private chunk/synthesis staging.
+The currently wired product adapters also check completed summaries before
+private chunk/synthesis staging. The canonical epoch foundation described below
+has a separate usable-output publication contract; its trigger integration is
+not enabled by this API work.
 Empty or malformed output, oversized UTF-8 text, and text above the frozen word
 or estimated-input-token allowance retry only auxiliary summarization of the
 same validated source. The rejected text is not published or quoted back. The
@@ -473,6 +476,21 @@ that preview has not been sent to a provider. `/copy-patches` exports retained
 patch payloads and outcomes, and `/copy-trace-log` exports retained diagnostics.
 Review all exports before sharing them: exclusion of credentials and hidden
 runtime policy does not remove sensitive data from prompts or action output.
+
+## Canonical epoch boundary
+
+The shared canonical API defines one summary head and explicit retained raw
+membership. Summaries are reference material: they cannot enable tools or grant
+access. Current controlling instructions and unresolved call/result groups stay
+exact, while explicitly completed task instructions can become historical
+source without changing their authorship. Covered raw source remains archive
+history rather than becoming active replay again.
+
+This foundation does not change the current command or storage behavior described
+above. Durable lifecycle restoration, all-trigger integration and configurable
+summary-free retention require their own adapters. See the
+[architecture contract](../contributing/architecture.md#product-composition) for
+those boundaries; an in-memory completion marker is not a durable receipt.
 
 ## Related pages
 

@@ -26,7 +26,9 @@ use crate::{ProviderApiCompatibility, ProviderTranscriptEvent};
 
 mod chronology;
 mod compaction;
+mod epoch;
 mod errors;
+pub use epoch::*;
 mod history;
 mod messages;
 mod pending;
@@ -692,11 +694,12 @@ impl ContextBlockMetadata {
     }
 }
 
-/// One immutable chronological event stored by durable agent context.
+/// One chronological occurrence with immutable source and checked lifecycle.
 ///
-/// Event identity, semantics, retention, execution ownership, and provider
-/// ownership are captured together when the event commits. They cannot drift
-/// from the event block through a parallel metadata mutation.
+/// Event identity, authorship, execution and provider ownership commit together.
+/// Explicit task completion may change instruction retention to historical;
+/// source bytes and origin remain unchanged. No parallel metadata mutation may
+/// infer that transition from labels, newer text or a summary's presence.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConversationEvent {
     block: ContextBlock,
@@ -735,6 +738,25 @@ impl ContextConversationAppend {
             retention: ContextRetention::ExecutionGroup,
             execution_group_id: Some(execution_group_id),
             provider_owner: None,
+            recoverable_for_compaction: true,
+        }
+    }
+
+    /// Builds a provider-native assistant occurrence with explicit continuity
+    /// ownership. Canonical append validates the typed payload and API family;
+    /// invalid or mismatched material fails atomically at that boundary.
+    pub fn provider_assistant(
+        label: impl Into<String>,
+        content: impl Into<String>,
+        execution_group_id: ContextExecutionGroupId,
+        provider_owner: ProviderContinuityOwner,
+    ) -> Self {
+        Self {
+            block: ContextBlock::assistant_event(label, content),
+            semantic_kind: ContextSemanticKind::AssistantEvent,
+            retention: ContextRetention::ExecutionGroup,
+            execution_group_id: Some(execution_group_id),
+            provider_owner: Some(provider_owner),
             recoverable_for_compaction: true,
         }
     }
@@ -1074,6 +1096,10 @@ pub struct AgentContext {
     /// Exact committed peer references awaiting local request handoff. Runtime
     /// ownership only; never serialized or projected to provider messages.
     pending_peer_messages: BTreeSet<ContextEventSequence>,
+    /// Explicitly completed instruction occurrences. Their bytes and authorship
+    /// remain immutable while their retention becomes historical. This typed
+    /// lifecycle is not reconstructed from labels or bare block imports.
+    historical_instruction_events: BTreeSet<ContextEventSequence>,
 }
 
 impl AgentContext {
@@ -1092,6 +1118,7 @@ impl AgentContext {
             metadata: ModelContextMetadata::default(),
             pending_execution_groups: BTreeSet::new(),
             pending_peer_messages: BTreeSet::new(),
+            historical_instruction_events: BTreeSet::new(),
         }
     }
 
@@ -1422,7 +1449,7 @@ impl AgentContext {
         candidate.rebuild_projections();
         candidate.validate_stored_metadata()?;
         validate_context_placement_order(&candidate.blocks)?;
-        validate_context_semantics(&candidate.blocks)?;
+        candidate.validate_owned_semantics()?;
         *self = candidate;
         Ok(())
     }
@@ -1491,7 +1518,7 @@ impl AgentContext {
         candidate.rebuild_projections();
         candidate.validate_stored_metadata()?;
         validate_context_placement_order(&candidate.blocks)?;
-        validate_context_semantics(&candidate.blocks)?;
+        candidate.validate_owned_semantics()?;
         *self = candidate;
         Ok(())
     }
@@ -1581,7 +1608,7 @@ impl AgentContext {
         self.rebuild_projections();
         self.validate_stored_metadata()?;
         validate_context_placement_order(&self.blocks)?;
-        validate_context_semantics(&self.blocks)?;
+        self.validate_owned_semantics()?;
         Ok(true)
     }
 
@@ -1866,6 +1893,13 @@ impl AgentContext {
 
     /// Rebuilds adapter projections from typed canonical storage.
     fn rebuild_projections(&mut self) {
+        self.historical_instruction_events.retain(|sequence| {
+            self.chronology.iter().any(|event| {
+                event.sequence == *sequence
+                    && epoch::instruction_source_can_complete(&event.block)
+                    && event.retention == ContextRetention::Summarizable
+            })
+        });
         self.blocks.clear();
         self.block_metadata.clear();
         self.blocks
@@ -1967,7 +2001,7 @@ impl AgentContext {
         }
         candidate.validate_stored_metadata()?;
         validate_context_placement_order(&candidate.blocks)?;
-        validate_context_semantics(&candidate.blocks)?;
+        candidate.validate_owned_semantics()?;
         *self = candidate;
         Ok(committed)
     }

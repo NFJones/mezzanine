@@ -50,8 +50,16 @@ pub fn validate_context_placement_order(blocks: &[ContextBlock]) -> AgentContext
 /// Rejects semantic, retention, and authorship combinations that would make a
 /// provider request ambiguous or move durable events into request-local state.
 pub fn validate_context_semantics(blocks: &[ContextBlock]) -> AgentContextResult<()> {
+    validate_context_semantics_iter(blocks.iter().enumerate())
+}
+
+/// Validates visible instruction order with explicit completed occurrences
+/// excluded only by the canonical owner's private lifecycle witness.
+fn validate_context_semantics_iter<'a>(
+    blocks: impl Iterator<Item = (usize, &'a ContextBlock)>,
+) -> AgentContextResult<()> {
     let mut active_user_seen = false;
-    for (index, block) in blocks.iter().enumerate() {
+    for (index, block) in blocks {
         validate_context_required("context label", &block.label)?;
         let semantic = block.semantic_kind();
         let retention = block.retention();
@@ -247,12 +255,36 @@ impl super::AgentContext {
                 )));
             }
         }
+        for sequence in &self.historical_instruction_events {
+            if !self.chronology.iter().any(|event| {
+                event.sequence() == *sequence
+                    && super::epoch::instruction_source_can_complete(event.block())
+                    && event.retention() == ContextRetention::Summarizable
+            }) {
+                return Err(AgentContextError::new(
+                    "historical instruction witness is invalid",
+                ));
+            }
+        }
         let mut last_sequence = 0u64;
         let mut stable_slot_ids = std::collections::BTreeSet::new();
         let mut active_prompt_count = 0usize;
         let mut assistant_execution_groups = std::collections::BTreeSet::new();
         for (index, (block, metadata)) in self.blocks.iter().zip(&self.block_metadata).enumerate() {
             validate_context_block_metadata(index, block, metadata)?;
+            if block.source == ContextSourceKind::UserInstruction
+                && metadata.retention != ContextRetention::Exact
+                && !metadata
+                    .event_sequence
+                    .is_some_and(|sequence| self.historical_instruction_events.contains(&sequence))
+            {
+                return Err(context_semantic_error(
+                    index,
+                    block,
+                    "user instruction retention requires explicit task completion",
+                ));
+            }
+
             if let Some(slot_id) = metadata.stable_slot_id.as_ref()
                 && !stable_slot_ids.insert(slot_id.as_str())
             {
@@ -262,7 +294,12 @@ impl super::AgentContext {
                     "stable slot identities must be unique",
                 ));
             }
-            if block.source == ContextSourceKind::UserInstruction && block.label == "user prompt" {
+            if block.source == ContextSourceKind::UserInstruction
+                && block.label == "user prompt"
+                && !metadata
+                    .event_sequence
+                    .is_some_and(|sequence| self.historical_instruction_events.contains(&sequence))
+            {
                 active_prompt_count = active_prompt_count.saturating_add(1);
                 if active_prompt_count > 1 {
                     return Err(context_semantic_error(
@@ -335,11 +372,21 @@ impl super::AgentContext {
         Ok(())
     }
 
+    /// Applies ordinary structural semantics while retaining the explicit
+    /// lifecycle distinction between completed and currently controlling tasks.
+    pub(super) fn validate_owned_semantics(&self) -> AgentContextResult<()> {
+        validate_context_semantics_iter(self.blocks.iter().enumerate().filter(|(index, _)| {
+            !self.block_metadata[*index]
+                .event_sequence()
+                .is_some_and(|sequence| self.historical_instruction_events.contains(&sequence))
+        }))
+    }
+
     /// Validates the semantic and lifetime contract for stored turn context.
     pub fn validate_durable(&self) -> AgentContextResult<()> {
         self.validate_stored_metadata()?;
         validate_context_placement_order(&self.blocks)?;
-        validate_context_semantics(&self.blocks)?;
+        self.validate_owned_semantics()?;
         Ok(())
     }
 

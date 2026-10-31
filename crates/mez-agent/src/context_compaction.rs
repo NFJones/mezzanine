@@ -6,6 +6,11 @@
 //! closed contiguous ranges at their original anchors, keeps exact barriers and
 //! straddling causal owners raw, and preserves retained event identities without
 //! product runtime or persistence dependencies.
+//!
+//! These selective/segment planners serve the currently wired product adapters.
+//! The shared single-head foundation is `ReplayEpochContext`; these legacy
+//! allowance/correction rules do not define its source-tail or success contract.
+//! Trigger cutover is separate adapter work, not a user-selectable engine mode.
 
 use crate::{
     AgentContext, AgentContextError, AgentContextResult, ContextBlock, ContextEventSequence,
