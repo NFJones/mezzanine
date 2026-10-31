@@ -239,10 +239,21 @@ impl CuratedAdmission {
     /// Source-as-root and changed/dead/unsupported/native-capacity evidence reject;
     /// successful Result without this immutable publication cannot grant a run.
     pub(super) fn observe(&self, work: &ExternalEnrollmentWork) -> Result<()> {
-        let parent = work
-            .origin
-            .capture_parent()
-            .map_err(|_| MezError::forbidden("curated creator unavailable"))?;
+        let parent = {
+            // The capacity fixture can select a finite instance-local capture
+            // allowance. Production always uses the original fixed policy;
+            // both paths execute the same native relationship/lifetime checks.
+            #[cfg(all(test, target_os = "linux"))]
+            {
+                work.origin
+                    .capture_parent_with_test_budget(&work.ancestry_budget)
+            }
+            #[cfg(not(all(test, target_os = "linux")))]
+            {
+                work.origin.capture_parent()
+            }
+        }
+        .map_err(|_| MezError::forbidden("curated creator unavailable"))?;
         if parent.uid() != work.origin.uid()
             || parent.identity.process_id == work.process.process_id
         {

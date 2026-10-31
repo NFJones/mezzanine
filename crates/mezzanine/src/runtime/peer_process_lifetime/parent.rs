@@ -10,6 +10,9 @@
 //! vendor attestation, client/session association, pane authority or enrollment
 //! follows. Consumers must separately reject pane-root/shell producer selection.
 //! Unsupported platforms fail closed; no subprocess/credential mutation occurs.
+//! Production uses its fixed capture budget. Linux test builds can explicitly
+//! select one fixture's finite allowance and conservative elapsed offset, while
+//! executing this same native algorithm and all original identity fences.
 
 use super::*;
 
@@ -100,22 +103,7 @@ impl UnixOriginProcess {
         #[cfg(target_os = "linux")]
         {
             let start = std::time::Instant::now();
-            let (identity, lifetime) = capture_parent_with(
-                self.uid(),
-                || self.reobserve(),
-                |pid| {
-                    mez_mux::process::process_parent_identity_for_pid(pid).ok_or_else(unavailable)
-                },
-                parent_uid,
-                open_parent,
-                require_live_origin,
-                || start.elapsed() >= PARENT_BUDGET,
-            )?;
-            Ok(UnixParentProcess {
-                uid: self.uid(),
-                identity,
-                lifetime,
-            })
+            self.capture_parent_with_expiry(|| start.elapsed() >= PARENT_BUDGET)
         }
         #[cfg(not(target_os = "linux"))]
         {
@@ -124,6 +112,50 @@ impl UnixOriginProcess {
                 "Unix parent lifetime lookup unsupported",
             ))
         }
+    }
+
+    /// Applies the original native bracketing with one caller-owned expiry
+    /// predicate. UID, birth, relationship and retained-lifetime checks remain
+    /// identical; no deadline can substitute for that evidence.
+    #[cfg(target_os = "linux")]
+    fn capture_parent_with_expiry(
+        &self,
+        expired: impl FnMut() -> bool,
+    ) -> io::Result<UnixParentProcess> {
+        let (identity, lifetime) = capture_parent_with(
+            self.uid(),
+            || self.reobserve(),
+            |pid| mez_mux::process::process_parent_identity_for_pid(pid).ok_or_else(unavailable),
+            parent_uid,
+            open_parent,
+            require_live_origin,
+            expired,
+        )?;
+        Ok(UnixParentProcess {
+            uid: self.uid(),
+            identity,
+            lifetime,
+        })
+    }
+
+    /// Executes every cold native check under this fixture's explicit finite
+    /// allowance, falling back to the unchanged production budget. The fixed
+    /// positive clock offset cannot rewind or manufacture native evidence.
+    /// Policy/offset are captured once; expiry and native failures propagate
+    /// through the original bracketing. Production never calls this method.
+    #[cfg(all(test, target_os = "linux"))]
+    pub(crate) fn capture_parent_with_test_budget(
+        &self,
+        budget: &super::ancestry::UnixAncestryBudget,
+    ) -> io::Result<UnixParentProcess> {
+        let start = std::time::Instant::now();
+        let allowance = budget
+            .capture_budget_override_for_tests()
+            .unwrap_or(PARENT_BUDGET);
+        let additional_elapsed = budget.parent_capture_elapsed_for_tests();
+        self.capture_parent_with_expiry(|| {
+            start.elapsed().saturating_add(additional_elapsed) >= allowance
+        })
     }
 }
 

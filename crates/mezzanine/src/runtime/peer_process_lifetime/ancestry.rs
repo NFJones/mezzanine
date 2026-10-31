@@ -38,11 +38,15 @@ const CAPTURE_BUDGET: Duration = Duration::from_millis(100);
 #[derive(Debug, Default)]
 pub(crate) struct UnixAncestryBudget {
     reserved: AtomicUsize,
-    /// Test-only per-instance capture budget in microseconds; zero uses the
-    /// production 100 ms policy so other fixtures and production stay strict.
+    /// Test-only per-instance native capture allowance in microseconds; zero
+    /// preserves each phase's production policy. Only explicit test setup opts
+    /// in; other fixtures and production stay strict.
     #[cfg(test)]
     #[allow(dead_code)]
     capture_budget_us: AtomicU64,
+    /// Test-only positive elapsed offset for direct-parent capture controls.
+    #[cfg(all(test, target_os = "linux"))]
+    parent_elapsed_us: AtomicU64,
     /// Test-only checkpoint number at which the next capture must expire.
     #[cfg(test)]
     #[allow(dead_code)]
@@ -108,16 +112,39 @@ impl UnixAncestryBudget {
         );
     }
 
+    /// Reads this fixture's explicit finite allowance without substituting one
+    /// native phase's production default for another. None preserves each
+    /// caller's fixed production policy; this exists only in Linux tests.
+    #[cfg(all(test, target_os = "linux"))]
+    pub(super) fn capture_budget_override_for_tests(&self) -> Option<Duration> {
+        let micros = self.capture_budget_us.load(Ordering::SeqCst);
+        (micros > 0).then(|| Duration::from_micros(micros))
+    }
+
+    /// Adds conservative elapsed time to one fixture's real parent captures.
+    /// This never moves a clock backwards or supplies positive native evidence;
+    /// deterministic controls can cross a deadline without sleeps or load.
+    #[cfg(all(test, target_os = "linux"))]
+    pub(crate) fn elapse_parent_capture_for_tests(&self, elapsed: Duration) {
+        self.parent_elapsed_us.store(
+            u64::try_from(elapsed.as_micros()).unwrap_or(u64::MAX),
+            Ordering::SeqCst,
+        );
+    }
+
+    /// Returns only the instance-local conservative parent-clock offset.
+    #[cfg(all(test, target_os = "linux"))]
+    pub(super) fn parent_capture_elapsed_for_tests(&self) -> Duration {
+        Duration::from_micros(self.parent_elapsed_us.load(Ordering::SeqCst))
+    }
+
     /// Returns the production capture deadline unless this test instance opted
     /// into a finite override.
     #[cfg(target_os = "linux")]
     fn active_capture_budget(&self) -> Duration {
         #[cfg(test)]
-        {
-            let micros = self.capture_budget_us.load(Ordering::SeqCst);
-            if micros > 0 {
-                return Duration::from_micros(micros);
-            }
+        if let Some(budget) = self.capture_budget_override_for_tests() {
+            return budget;
         }
         CAPTURE_BUDGET
     }

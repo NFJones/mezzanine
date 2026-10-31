@@ -528,18 +528,22 @@ async fn external_curated_admission_expired_namespace_rejects_retry_after_gc() {
 /// Expiring and garbage-collecting real accepted sources does not evade the
 /// independent finite namespace bound. No live creator fence is evicted to allow
 /// another session label, and rejected allocation leaves generations unchanged.
+/// The fixture's explicit finite capture allowance covers both cold parent and
+/// ancestry acquisition, so this tests namespace capacity independently of the
+/// production capture latency policy. Every native proof check still executes.
 #[tokio::test(flavor = "current_thread")]
 async fn external_curated_admission_namespace_capacity_survives_binding_gc() {
     let Some(mut fixture) = fixture("hold").await else {
         return;
     };
-    fixture
+    let configured_budget = fixture
         .service
         .control
-        .external_agents_mut()
+        .external_agents()
         .enrollments
         .ancestry_budget
-        .set_capture_budget_for_tests(std::time::Duration::from_secs(10));
+        .clone();
+    configured_budget.set_capture_budget_for_tests(std::time::Duration::from_secs(10));
     let (_socket, connection) = child(&mut fixture).await;
     let run_started = std::time::Instant::now();
     for (accepted, index) in (0..super::super::super::external_agents::MAX_BINDINGS).enumerate() {
@@ -554,6 +558,10 @@ async fn external_curated_admission_namespace_capacity_survives_binding_gc() {
             .prepare_external_enrollment(&request, &connection)
             .unwrap();
         let prepare_elapsed = prepare_started.elapsed();
+        assert!(
+            Arc::ptr_eq(&configured_budget, &work.ancestry_budget),
+            "capacity fixture must configure the actual capture owner at entry {index}"
+        );
         let ancestry_before = work.ancestry_budget.reserved();
         let native = work.clone();
         let observe_started = std::time::Instant::now();
@@ -759,4 +767,91 @@ async fn external_curated_admission_rejects_metadata_or_missing_native_proof() {
             .pending
             .is_empty()
     );
+}
+
+/// A capacity-only fixture's finite capture allowance must cover cold parent
+/// and ancestry acquisition without changing production or another fixture.
+/// Conservative elapsed offsets cross the parent boundary deterministically:
+/// default policy rejects, explicit finite allowance permits genuine native
+/// proof, and expiry beyond that allowance still rejects with no retained run.
+#[cfg(target_os = "linux")]
+#[tokio::test(flavor = "current_thread")]
+async fn external_curated_capacity_capture_allowance_is_instance_local() {
+    for (allowance, elapsed, accepted) in [
+        (None, std::time::Duration::from_millis(200), false),
+        (
+            Some(std::time::Duration::from_secs(10)),
+            std::time::Duration::from_millis(200),
+            true,
+        ),
+        (
+            Some(std::time::Duration::from_secs(10)),
+            std::time::Duration::from_secs(11),
+            false,
+        ),
+        (None, std::time::Duration::from_millis(200), false),
+    ] {
+        let Some(mut fixture) = fixture("hold").await else {
+            return;
+        };
+        fixture.service.sync_external_ancestry_budget();
+        let budget = fixture
+            .service
+            .control
+            .external_agents()
+            .enrollments
+            .ancestry_budget
+            .clone();
+        if let Some(allowance) = allowance {
+            budget.set_capture_budget_for_tests(allowance);
+        }
+        budget.elapse_parent_capture_for_tests(elapsed);
+        let (_socket, connection) = child(&mut fixture).await;
+        let work = fixture
+            .service
+            .prepare_external_enrollment(&curated_request(), &connection)
+            .unwrap();
+        assert!(Arc::ptr_eq(&budget, &work.ancestry_budget));
+        let native = work.clone();
+        let observed = tokio::task::spawn_blocking(move || native.observe())
+            .await
+            .unwrap();
+        let native_ok = observed.is_ok();
+        let reply: serde_json::Value = serde_json::from_str(
+            &fixture
+                .service
+                .complete_external_enrollment(work, observed, &connection),
+        )
+        .unwrap();
+        assert_eq!(
+            native_ok, accepted,
+            "allowance={allowance:?} elapsed={elapsed:?}"
+        );
+        if accepted {
+            assert_eq!(reply["result"]["registered"], true);
+            assert_eq!(fixture.service.control.external_agents().bindings.len(), 1);
+        } else {
+            assert!(reply.get("error").is_some());
+            assert!(
+                fixture
+                    .service
+                    .control
+                    .external_agents()
+                    .bindings
+                    .is_empty()
+            );
+            assert_eq!(budget.reserved(), 0);
+        }
+        assert!(
+            fixture
+                .service
+                .control
+                .external_agents()
+                .enrollments
+                .pending
+                .is_empty()
+        );
+        drop(fixture);
+        assert_eq!(budget.reserved(), 0);
+    }
 }
