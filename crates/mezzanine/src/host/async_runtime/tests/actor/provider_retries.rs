@@ -1,4 +1,10 @@
 //! Async-runtime tests owned by provider retries behavior.
+//!
+//! Policy-delay assertions use an isolated paused Tokio clock: a worker offer
+//! carries only the original deadline's remaining time, so wall-clock queue
+//! latency must not be mistaken for the reducer's chosen jittered backoff.
+//! Explicit delayed-offer coverage checks that elapsed time is deducted without
+//! restarting the deadline or duplicating the provider dispatch.
 
 use super::super::*;
 
@@ -212,7 +218,7 @@ async fn async_actor_ignores_stale_provider_poll_timer_events() {
 /// instead of immediately requeueing provider work. This keeps retry/backoff as
 /// an explicit actor-owned timer transition rather than another provider-poll
 /// fallback that can wake too early.
-#[tokio::test(flavor = "current_thread")]
+#[tokio::test(start_paused = true, flavor = "current_thread")]
 async fn async_actor_schedules_provider_retry_timer_for_retryable_failure() {
     let mut service = test_service();
     let primary = service
@@ -942,7 +948,7 @@ context_window_tokens = 128000
 /// waiting for retry backoff, service-level progress reconciliation must treat
 /// that actor-owned timer as valid progress rather than failing the running
 /// turn as unreachable.
-#[tokio::test(flavor = "current_thread")]
+#[tokio::test(start_paused = true, flavor = "current_thread")]
 async fn async_actor_idle_cleanup_preserves_turn_waiting_for_provider_retry_timer() {
     let mut service = test_service();
     let primary = service
@@ -1086,7 +1092,7 @@ async fn async_actor_idle_cleanup_preserves_turn_waiting_for_provider_retry_time
 /// Verifies OpenAI-style provider/controller failures that explicitly invite
 /// retry follow the same bounded retry timer path as transport and rate-limit
 /// failures.
-#[tokio::test(flavor = "current_thread")]
+#[tokio::test(start_paused = true, flavor = "current_thread")]
 async fn async_actor_schedules_provider_retry_timer_for_controller_retry_hint() {
     let mut service = test_service();
     let primary = service
@@ -1458,8 +1464,26 @@ async fn async_actor_dispatches_provider_retry_after_file_action_failure_feedbac
 /// provider-authored error payloads instead of 429 or 5xx statuses. This
 /// regression proves the actor still classifies those failures as retryable
 /// transport so the existing exponential backoff path owns recovery.
-#[tokio::test(flavor = "current_thread")]
+#[tokio::test(start_paused = true, flavor = "current_thread")]
 async fn async_actor_retries_provider_overload_message_without_rate_limit_status() {
+    assert_overload_retry_after_queued_delay(0).await;
+}
+
+/// Verifies an accepted overload retry still dispatches exactly once when its
+/// timer descriptor waits beyond the complete original jittered backoff.
+/// Advancing only the isolated Tokio clock forces a 1ms remaining offer; this
+/// must not be rejected as an invalid policy delay or restart a full backoff.
+#[tokio::test(start_paused = true, flavor = "current_thread")]
+async fn async_actor_overload_retry_deducts_queue_wait_without_duplicate_dispatch() {
+    assert_overload_retry_after_queued_delay(1_000).await;
+}
+
+/// Exercises real actor ingress, an exact claimed turn and an owned pane child
+/// with either immediate or 1,000ms-delayed timer receipt. Both callers pause
+/// Tokio time so policy selection and deliberate queued waiting remain distinct
+/// from OS scheduling. Matching and duplicate callbacks prove dispatch custody;
+/// the fixture explicitly terminates its real child after actor shutdown.
+async fn assert_overload_retry_after_queued_delay(queued_delay_ms: u64) {
     let mut service = test_service();
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 10)
@@ -1511,6 +1535,7 @@ async fn async_actor_retries_provider_overload_message_without_rate_limit_status
         assert_eq!(failure_report.accepted, 1);
         assert_eq!(failure_report.applied, 1);
 
+        tokio::time::advance(std::time::Duration::from_millis(queued_delay_ms)).await;
         let timer_effects = handle.drain_timer_side_effects(8).await.unwrap();
         let (retry_key, retry_delay_ms) = timer_effects
             .iter()
@@ -1525,13 +1550,25 @@ async fn async_actor_retries_provider_overload_message_without_rate_limit_status
             .unwrap_or_else(|| panic!("expected provider retry timer, got {timer_effects:?}"));
         assert_eq!(retry_key.owner_id, expected_turn);
         assert_eq!(retry_key.generation, 1);
-        assert!((500..=1_000).contains(&retry_delay_ms));
+        if queued_delay_ms == 0 {
+            assert!(
+                (500..=1_000).contains(&retry_delay_ms),
+                "chosen policy delay with paused clock: {retry_delay_ms}ms"
+            );
+        } else {
+            assert_eq!(
+                retry_delay_ms, 1,
+                "expired original deadline must retain the worker's 1ms minimum"
+            );
+        }
+        tokio::time::advance(std::time::Duration::from_millis(retry_delay_ms)).await;
 
-        let mut retry = RuntimeEventBatch::new();
-        retry.push(RuntimeEvent::Timer(TimerEvent {
+        let retry_event = TimerEvent {
             key: retry_key,
-            now_ms: retry_delay_ms,
-        }));
+            now_ms: queued_delay_ms.saturating_add(retry_delay_ms),
+        };
+        let mut retry = RuntimeEventBatch::new();
+        retry.push(RuntimeEvent::Timer(retry_event.clone()));
         let retry_report = handle.submit_runtime_events(retry).await.unwrap();
         assert_eq!(retry_report.accepted, 1);
         assert_eq!(retry_report.applied, 1);
@@ -1546,6 +1583,17 @@ async fn async_actor_retries_provider_overload_message_without_rate_limit_status
                 agent_id: expected_agent,
                 turn_id: expected_turn,
             }]
+        );
+        let mut duplicate = RuntimeEventBatch::new();
+        duplicate.push(RuntimeEvent::Timer(retry_event));
+        handle.submit_runtime_events(duplicate).await.unwrap();
+        assert!(
+            handle
+                .drain_agent_provider_dispatch_side_effects(8)
+                .await
+                .unwrap()
+                .is_empty(),
+            "duplicate retry callback must not produce another provider dispatch"
         );
         assert_eq!(
             handle.shutdown().await.unwrap(),
