@@ -9,46 +9,107 @@
 
 use super::*;
 
+/// Retains the exact abort-capable harness until its exit is observed.
+struct PanicProfileChild(std::process::Child);
+
+impl Drop for PanicProfileChild {
+    /// Kills/reaps this harness on errors without claiming native descendant fate.
+    fn drop(&mut self) {
+        if !matches!(self.0.try_wait(), Ok(Some(_))) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+}
+
 /// Runs the abort-capable case in a separately waitable owned process. The
-/// ordinary test stack and runtime configuration are unchanged. A timeout kills
-/// and reaps only this exact subprocess and does not claim native child fate.
+/// original current-thread control and normal multi-thread worker profiles
+/// 1/2/4 use default stacks. Each requires successful exit and a fresh completion
+/// receipt after exact-generation publication, native cleanup and healthy-sibling
+/// assertions. A timeout reaps only this harness and cannot prove native fate.
 #[test]
 fn runtime_actor_panic_preserves_cause_cleanup_and_healthy_sibling() {
     const CHILD_ENV: &str = "MEZ_RUNTIME_PANIC_QUALIFICATION_CHILD";
-    if std::env::var_os(CHILD_ENV).as_deref() == Some(std::ffi::OsStr::new("actor-unwind")) {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
+    const RECEIPT: &str = "MEZ_RUNTIME_PANIC_QUALIFICATION_RECEIPT";
+    if let Some(workers) = std::env::var_os(CHILD_ENV) {
+        let workers = workers.into_string().unwrap().parse::<usize>().unwrap();
+        assert!([0, 1, 2, 4].contains(&workers));
+        let mut builder = if workers == 0 {
+            tokio::runtime::Builder::new_current_thread()
+        } else {
+            let mut builder = tokio::runtime::Builder::new_multi_thread();
+            builder.worker_threads(workers);
+            builder
+        };
+        let runtime = builder.enable_all().build().unwrap();
+        runtime.block_on(async {
+            tokio::spawn(Box::pin(actor_panic_case())).await.unwrap();
+        });
+        drop(runtime);
+        let receipt = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(std::env::var_os(RECEIPT).unwrap())
             .unwrap();
-        runtime.block_on(Box::pin(actor_panic_case()));
+        serde_json::to_writer(
+            receipt,
+            &serde_json::json!({
+                "schema": 1, "workers": workers, "completed": true,
+                "debug_assertions": cfg!(debug_assertions),
+            }),
+        )
+        .unwrap();
         return;
     }
-    let mut child = std::process::Command::new(std::env::current_exe().unwrap())
-        .args([
-            "--exact",
-            "host::session::supervisor::tests::runtime_panic::runtime_actor_panic_preserves_cause_cleanup_and_healthy_sibling",
-            "--nocapture",
-            "--test-threads=1",
-        ])
-        .env(CHILD_ENV, "actor-unwind")
-        .spawn()
-        .unwrap();
-    let deadline = std::time::Instant::now() + Duration::from_secs(45);
-    let status = loop {
-        if let Some(status) = child.try_wait().unwrap() {
-            break status;
-        }
-        if std::time::Instant::now() >= deadline {
-            let _ = child.kill();
-            let status = child.wait().unwrap();
-            panic!("owned panic qualification timed out ({status}); native fate is unproven");
-        }
-        std::thread::sleep(Duration::from_millis(10));
-    };
-    assert!(
-        status.success(),
-        "owned panic qualification failed: {status}"
-    );
+    let receipts = std::env::temp_dir().join(format!(
+        "mez-runtime-panic-profiles-{:032x}",
+        rand::random::<u128>()
+    ));
+    fs::create_dir(&receipts).unwrap();
+    for workers in [0, 1, 2, 4] {
+        let receipt = receipts.join(format!("{workers}.json"));
+        let mut child = PanicProfileChild(
+            std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "host::session::supervisor::tests::runtime_panic::runtime_actor_panic_preserves_cause_cleanup_and_healthy_sibling",
+                    "--nocapture",
+                ])
+                .env_remove("RUST_MIN_STACK")
+                .env_remove("RUST_TEST_THREADS")
+                .env_remove("TOKIO_WORKER_THREADS")
+                .env(CHILD_ENV, workers.to_string())
+                .env(RECEIPT, &receipt)
+                .spawn()
+                .unwrap(),
+        );
+        let deadline = std::time::Instant::now() + Duration::from_secs(45);
+        let status = loop {
+            if let Some(status) = child.0.try_wait().unwrap() {
+                break status;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "runtime panic workers={workers} watchdog expired; native fate unproven"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        assert!(
+            status.success(),
+            "runtime panic workers={workers} exit={status}"
+        );
+        let observed: serde_json::Value =
+            serde_json::from_slice(&fs::read(&receipt).unwrap()).unwrap();
+        assert_eq!(
+            observed,
+            serde_json::json!({
+                "schema": 1, "workers": workers, "completed": true,
+                "debug_assertions": cfg!(debug_assertions),
+            })
+        );
+        eprintln!("RUNTIME_PANIC_PROFILE workers={workers} exit={status} receipt=verified");
+    }
+    fs::remove_dir_all(receipts).unwrap();
 }
 
 /// Qualifies the actual supervisor task, actor request, retained native drain,

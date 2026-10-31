@@ -12513,6 +12513,14 @@ exit. Late or undrained notifications MUST NOT discard actual EOF evidence.
 Cancellation, cancellation-owner disconnect, read failure and reader panic MUST
 NOT establish EOF; retained bytes alone cannot prove closure. The bounded
 post-exit drain period and strict capture/parse limits MUST remain in force.
+Every spawned native capture reader MUST retain its thread handle until an
+observed join, including executor unwind. Dropping an unjoined reader owner
+MUST request cancellation and join it without requiring child or descendant
+pipe EOF. Normal explicit joins MUST preserve their original capture and
+termination evidence and MUST NOT join twice. Cleanup during unwind MUST retain
+the initiating failure; any reader cleanup diagnostic MUST use a bounded
+category without formatting arbitrary panic payloads. Reader retirement alone
+MUST NOT certify native nonexecution, sandbox closure or direct-child reaping.
 Native child and staging custody MUST begin immediately after the OS confirms
 the direct child creation and before any pipe extraction or fallible reader
 setup: the exact owned direct child and its process group MUST be terminated

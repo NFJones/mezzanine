@@ -146,6 +146,11 @@ cannot undo a remote effect. Issued actions with unconfirmed outcomes are retain
 as interrupted with unknown effects, and are not automatically retried. Inspect
 current state before deciding whether a new mutation is needed.
 
+If native execution unwinds, its stdout, stderr and lifecycle-status reader
+owners request cancellation and join their threads. This observes reader
+termination separately from child reaping; cancelled status capture does not
+prove sandbox completion or make replay safe.
+
 The runtime's targeted pause/resume APIs are distinct from `/stop`: pause retains
 the task, gates new dispatch, and drains already-issued work. Pausing is not proof
 of quiescence; Paused releases provider capacity but retains exclusive task

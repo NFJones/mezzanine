@@ -34,7 +34,7 @@ async fn async_manual_compaction_typed_replay_preserves_execution_ownership() {
 /// Directly owns server/provider/actor/client futures under an external fixture
 /// deadline. Response release is explicit; no retry or artificial paint delay is
 /// added to the product. Archive/summary assertions use independent store reads.
-async fn qualify(attached: bool, typed: bool) {
+pub(super) async fn qualify(attached: bool, typed: bool) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let started = StdArc::new(tokio::sync::Notify::new());

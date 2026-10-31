@@ -20,6 +20,8 @@
 //! through the fallible builder API. Partial startup preserves the first
 //! failure, settles readers without requiring descendant EOF, and reports any
 //! unproven cleanup instead of claiming that native effects never began.
+//! Reader owners also cancel and join on executor unwind; channel disconnection
+//! and completion notices never substitute for observing thread termination.
 
 use std::collections::BTreeMap;
 use std::ffi::OsStr;
@@ -196,9 +198,51 @@ struct SpawnedChildPipeReader {
     /// Requests that a nonblocking reader stop waiting for inherited writers.
     cancel: mpsc::Sender<()>,
     /// Reader thread joined only after EOF or cancellation.
-    handle: JoinHandle<Result<CapturedPipeOutput>>,
+    handle: Option<JoinHandle<Result<CapturedPipeOutput>>>,
     /// Whether collection consumed a done notice; a scheduling hint, not EOF.
     completed: bool,
+    /// Counts only observed joins in one private ownership regression.
+    #[cfg(test)]
+    join_witness: Option<Arc<std::sync::atomic::AtomicUsize>>,
+}
+
+impl SpawnedChildPipeReader {
+    /// Consumes the thread handle once and observes its actual termination.
+    /// Missing ownership is a typed failure, never evidence of reader EOF.
+    fn join_handle(&mut self) -> std::thread::Result<Result<CapturedPipeOutput>> {
+        let Some(handle) = self.handle.take() else {
+            return Ok(Err(MezError::invalid_state(
+                "spawned shell reader has no retained thread owner",
+            )));
+        };
+        let result = handle.join();
+        #[cfg(test)]
+        if let Some(witness) = &self.join_witness {
+            witness.fetch_add(1, Ordering::SeqCst);
+        }
+        result
+    }
+}
+
+impl Drop for SpawnedChildPipeReader {
+    /// Cancels and observes an otherwise unjoined nonblocking reader, including
+    /// executor unwind. Normal explicit joins take the handle first, preserving
+    /// their capture/EOF result and preventing a second join. This runs inside
+    /// the blocking executor; cancellation is never promoted to trusted EOF.
+    fn drop(&mut self) {
+        if self.handle.is_none() {
+            return;
+        }
+        let _ = self.cancel.send(());
+        if !matches!(self.join_handle(), Ok(Ok(_))) {
+            // Preserve any primary unwind. Bounded secondary diagnostics do
+            // not copy a reader panic payload or panic on a closed stderr.
+            let _ = writeln!(
+                std::io::stderr().lock(),
+                "mezzanine: native capture reader failed during owner cleanup"
+            );
+        }
+    }
 }
 
 /// Spawned process plus its optional runtime-owned lifecycle-status reader.
@@ -1446,8 +1490,10 @@ where
     Ok(SpawnedChildPipeReader {
         stream,
         cancel,
-        handle,
+        handle: Some(handle),
         completed: false,
+        #[cfg(test)]
+        join_witness: None,
     })
 }
 
@@ -1641,8 +1687,8 @@ fn cancel_pending_reader(reader: &SpawnedChildPipeReader) {
 }
 
 /// Joins one canceled or completed reader and preserves typed diagnostics.
-fn join_output_reader(reader: SpawnedChildPipeReader) -> Result<CapturedPipeOutput> {
-    reader.handle.join().map_err(|_| {
+fn join_output_reader(mut reader: SpawnedChildPipeReader) -> Result<CapturedPipeOutput> {
+    reader.join_handle().map_err(|_| {
         MezError::invalid_state(format!(
             "spawned shell execution {} reader failed",
             reader.stream.label()
@@ -1661,9 +1707,9 @@ fn cancel_output_readers(readers: &[SpawnedChildPipeReader]) {
 /// returning bounded diagnostics only for readers that did not settle cleanly.
 fn join_output_readers(readers: Vec<SpawnedChildPipeReader>) -> Vec<String> {
     let mut failures = Vec::new();
-    for reader in readers {
+    for mut reader in readers {
         let stream = reader.stream;
-        match reader.handle.join() {
+        match reader.join_handle() {
             Ok(Ok(_capture)) => {}
             Ok(Err(error)) => failures.push(format!(
                 "{} reader failed while settling: {}",
@@ -1869,6 +1915,8 @@ mod reader_completion_tests;
 
 #[cfg(test)]
 mod tests {
+    mod unwind_retirement;
+
     use super::super::native_workload_environment::{
         NativeLaunchEnvironmentRole, compose_native_workload_environment,
     };
