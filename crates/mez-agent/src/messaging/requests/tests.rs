@@ -172,6 +172,195 @@ fn request_global_units_include_fanout_and_future_terminal_slots() {
     assert_eq!(exact.usage().1, 6);
 }
 
+/// The actual default global ceiling admits exactly 1,024 direct requests,
+/// charging four units each across sixteen independently bounded conversations.
+/// The next tracked request must fail before acceptance while ordinary mail
+/// remains available. Only the exact originating owner can release capacity;
+/// release/re-admission keeps generations monotonic and never ACKs lower mail.
+/// Real delivery ACKs during setup free the separate pending-message budget
+/// without consuming any of the 1,024 retained request receipts.
+#[test]
+fn request_production_global_ceiling_is_inclusive_and_reusable() {
+    let (mut service, sender, child, origin) = fixture();
+    let mut requests = MessageRequests::default();
+    service.subscribe(&child.agent_id).unwrap();
+    let mut first = None;
+    for index in 0..1024 {
+        let mut caller = origin.clone();
+        caller.conversation_id = format!("conversation-{:02}", index / 64);
+        let receipt = requests
+            .accept(
+                &mut service,
+                caller,
+                mail(&sender, &child, &format!("question-{index:04}")),
+                MessageScope::Session,
+                index + 1,
+            )
+            .unwrap();
+        if index == 0 {
+            first = Some((receipt.generation(), receipt.origin().clone()));
+        }
+        let sequence = receipt.delivery().sequence;
+        assert_eq!(
+            service
+                .receive_subscribed(&child.agent_id, index + 1, 1)
+                .unwrap()
+                .messages
+                .len(),
+            1
+        );
+        service
+            .advance_subscription(&child.agent_id, sequence)
+            .unwrap();
+        assert_eq!(requests.usage().1, (index as usize + 1) * 4);
+    }
+    assert_eq!(requests.usage().0, 1024);
+    assert_eq!(requests.usage().1, 4096);
+    assert!(requests.usage().2 < MessageRequestLimits::default().metadata_bytes);
+    let before = service.snapshot_state();
+    let usage = requests.usage();
+    assert_eq!(
+        requests
+            .accept(
+                &mut service,
+                origin.clone(),
+                mail(&sender, &child, "over-global"),
+                MessageScope::Session,
+                1025,
+            )
+            .unwrap_err()
+            .kind(),
+        MessageErrorKind::Capacity
+    );
+    assert_eq!(service.snapshot_state(), before);
+    assert_eq!(requests.usage(), usage);
+    service
+        .accept_at_with_scope(
+            &sender.agent_id,
+            mail(&sender, &child, "ordinary-at-global-cap"),
+            MessageScope::Session,
+            1026,
+        )
+        .unwrap();
+    let (generation, caller) = first.unwrap();
+    let mut foreign = caller.clone();
+    foreign.started_at_unix_seconds += 1;
+    assert!(!requests.consume(generation, &foreign));
+    assert_eq!(requests.usage(), usage);
+    let transport = service.snapshot_state();
+    assert!(requests.consume(generation, &caller));
+    assert_eq!(requests.usage().1, 4092);
+    assert_eq!(service.snapshot_state(), transport);
+    let receipt = requests
+        .accept(
+            &mut service,
+            caller,
+            mail(&sender, &child, "after-exact-owner-consumption"),
+            MessageScope::Session,
+            1027,
+        )
+        .unwrap();
+    assert_eq!(receipt.generation(), 1025);
+    assert_eq!(requests.usage().1, 4096);
+    let transport = service.snapshot_state();
+    for index in 0..16 {
+        requests.retire_conversation(&sender.agent_id, &format!("conversation-{index:02}"));
+    }
+    assert_eq!(requests.usage(), (0, 0, 0));
+    assert_eq!(service.snapshot_state(), transport);
+}
+
+/// The default 8 MiB metadata bound is independent of the count ceiling.
+/// Measure a real compact receipt, then vary only trusted origin allocation to
+/// reach exactly that byte charge or one byte beyond it. This is lower-owner
+/// accounting coverage, not model authority for arbitrary native identities.
+/// At exact capacity ordinary sends still work; rejection and consumption must
+/// preserve lower transport and only genuine acceptance advances generation.
+#[test]
+fn request_production_metadata_ceiling_is_inclusive_and_independent() {
+    let (mut service, sender, child, origin) = fixture();
+    let mut requests = MessageRequests::default();
+    let receipt = requests
+        .accept(
+            &mut service,
+            origin.clone(),
+            mail(&sender, &child, "byte-budget1"),
+            MessageScope::Session,
+            1,
+        )
+        .unwrap();
+    let generation = receipt.generation();
+    let capacity = receipt.origin().conversation_id.capacity();
+    let limit = MessageRequestLimits::default().metadata_bytes;
+    let exact_capacity = limit - requests.usage().2 + capacity;
+    assert!(requests.consume(generation, &origin));
+    let mut too_large = origin.clone();
+    too_large.conversation_id = "c"
+        .repeat(exact_capacity + 1)
+        .into_boxed_str()
+        .into_string();
+    assert_eq!(too_large.conversation_id.capacity(), exact_capacity + 1);
+    let before = service.snapshot_state();
+    assert_eq!(
+        requests
+            .accept(
+                &mut service,
+                too_large,
+                mail(&sender, &child, "byte-budget2"),
+                MessageScope::Session,
+                2
+            )
+            .unwrap_err()
+            .kind(),
+        MessageErrorKind::Capacity
+    );
+    assert_eq!(requests.usage(), (0, 0, 0));
+    assert_eq!(service.snapshot_state(), before);
+    let mut exact = origin.clone();
+    exact.conversation_id = "c".repeat(exact_capacity).into_boxed_str().into_string();
+    assert_eq!(exact.conversation_id.capacity(), exact_capacity);
+    let receipt = requests
+        .accept(
+            &mut service,
+            exact.clone(),
+            mail(&sender, &child, "byte-budget3"),
+            MessageScope::Session,
+            3,
+        )
+        .unwrap();
+    let generation = receipt.generation();
+    assert_eq!(generation, 2);
+    assert_eq!(requests.usage(), (1, 4, limit));
+    let before = service.snapshot_state();
+    assert_eq!(
+        requests
+            .accept(
+                &mut service,
+                origin,
+                mail(&sender, &child, "byte-budget4"),
+                MessageScope::Session,
+                4
+            )
+            .unwrap_err()
+            .kind(),
+        MessageErrorKind::Capacity
+    );
+    assert_eq!(requests.usage(), (1, 4, limit));
+    assert_eq!(service.snapshot_state(), before);
+    service
+        .accept_at_with_scope(
+            &sender.agent_id,
+            mail(&sender, &child, "ordinary-at-byte-cap"),
+            MessageScope::Session,
+            5,
+        )
+        .unwrap();
+    let before = service.snapshot_state();
+    assert!(requests.consume(generation, &exact));
+    assert_eq!(requests.usage(), (0, 0, 0));
+    assert_eq!(service.snapshot_state(), before);
+}
+
 /// Byte admission independently reserves future handoff metadata, including
 /// sender origin string capacity. Tiny payloads cannot bypass that ceiling and
 /// failed byte admission leaves both lower custody and request counters empty.

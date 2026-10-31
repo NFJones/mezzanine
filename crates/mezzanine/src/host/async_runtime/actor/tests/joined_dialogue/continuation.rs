@@ -128,6 +128,150 @@ async fn finish(
     assert_eq!(actor.service.joined_subagent_dependency_count(), 0);
 }
 
+/// A tracked follow-up to a joined question is continuing coordination, even
+/// though transport has accepted it for the original child. The same parent
+/// must be able to await its actual correlated reply, use that evidence in an
+/// ordinary answer, and still consume the original joined result exactly once.
+/// One scheduler slot and actual provider leases prove that neither tracked
+/// acceptance nor unrelated task mail closes the pending question early.
+#[tokio::test(flavor = "current_thread")]
+async fn joined_dialogue_actor_tracked_followup_does_not_answer_original_question() {
+    let (mut actor, parent, child, mut generations) = actor_fixture(1).await;
+    question(&mut actor, &parent, &child, &mut generations).await;
+    let mut followup = send(
+        "tracked-followup",
+        &child.agent_id,
+        "FOLLOWUP_BEFORE_ANSWER",
+    );
+    if let AgentActionPayload::SendMessage { expect_reply, .. } = &mut followup.payload {
+        *expect_reply = true;
+    }
+    step(&mut actor, &parent, vec![followup], &mut generations).await;
+    assert!(actor.service.has_joined_subagent_dependency(&child.turn_id));
+    let execution = &actor.service.agent_turn_executions()[&parent.turn_id];
+    let result = execution
+        .action_results
+        .iter()
+        .find(|result| result.action_type == "send_message")
+        .unwrap();
+    assert_eq!(result.status, mez_agent::ActionStatus::Succeeded);
+    let result: serde_json::Value =
+        serde_json::from_str(result.structured_content_json.as_deref().unwrap()).unwrap();
+    let message = result["message_id"].as_str().unwrap().to_string();
+    assert_eq!(result["expect_reply"], true);
+    step(
+        &mut actor,
+        &parent,
+        vec![AgentAction {
+            id: "tracked-followup-wait".into(),
+            payload: AgentActionPayload::Wait {
+                for_message: Some(message.clone()),
+                from_agent: None,
+            },
+        }],
+        &mut generations,
+    )
+    .await;
+    assert!(actor.service.has_joined_subagent_dependency(&child.turn_id));
+    assert_eq!(
+        actor
+            .service
+            .agent_turn_ledger()
+            .turn(&parent.turn_id)
+            .unwrap()
+            .state,
+        AgentTurnState::Blocked
+    );
+    let mut reply = send(
+        "tracked-followup-reply",
+        &parent.agent_id,
+        "FOLLOWUP_REPLY_EVIDENCE",
+    );
+    if let AgentActionPayload::SendMessage { correlation_id, .. } = &mut reply.payload {
+        *correlation_id = Some(message.clone());
+    }
+    let child_request = step(&mut actor, &child, vec![reply], &mut generations).await;
+    assert_eq!(
+        child_request
+            .context
+            .durable()
+            .blocks()
+            .iter()
+            .filter(
+                |block| block.source == mez_agent::ContextSourceKind::PeerMessage
+                    && block.content.contains("FOLLOWUP_BEFORE_ANSWER")
+            )
+            .count(),
+        1
+    );
+    step(
+        &mut actor,
+        &child,
+        vec![AgentAction {
+            id: "wait-for-actual-answer".into(),
+            payload: AgentActionPayload::Wait {
+                for_message: None,
+                from_agent: None,
+            },
+        }],
+        &mut generations,
+    )
+    .await;
+    assert!(actor.service.has_joined_subagent_dependency(&child.turn_id));
+    let answer_request = step(
+        &mut actor,
+        &parent,
+        vec![send(
+            "followup-derived-answer",
+            &child.agent_id,
+            "NEEDED_ANSWER",
+        )],
+        &mut generations,
+    )
+    .await;
+    assert_eq!(
+        answer_request
+            .context
+            .durable()
+            .blocks()
+            .iter()
+            .filter(
+                |block| block.source == mez_agent::ContextSourceKind::PeerMessage
+                    && block.content.contains("FOLLOWUP_REPLY_EVIDENCE")
+            )
+            .count(),
+        1
+    );
+    assert_eq!(
+        answer_request
+            .context
+            .durable()
+            .blocks()
+            .iter()
+            .filter(|block| block.label.starts_with("request-handoff:"))
+            .count(),
+        1
+    );
+    assert_eq!(
+        actor.service.tracked_message_request_usage(),
+        ((0, 0, 0), 0)
+    );
+    finish(&mut actor, &parent, &child, &mut generations).await;
+    assert_eq!(actor.service.agent_turn_ledger().turns().len(), 2);
+    assert_eq!(generations, (1..=10).collect());
+    assert_eq!(
+        actor
+            .service
+            .message_service()
+            .snapshot_state()
+            .accepted_messages
+            .iter()
+            .filter(|row| row.envelope.id == message)
+            .count(),
+        1
+    );
+}
+
 /// A native command must settle once, reach a new actual model request, and
 /// supply an answer while the original question child still awaits its result.
 /// This exercises normal completion-group transfer rather than directly calling
