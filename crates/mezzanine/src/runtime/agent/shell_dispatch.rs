@@ -222,6 +222,7 @@ impl RuntimeSessionService {
     /// I/O, rendering or fallible handoff occurs here. Cancellation is not
     /// settlement/rollback; original attempt evidence remains available.
     pub(crate) fn request_agent_worker_cancellation_for_turn(&self, turn_id: &str) {
+        self.agent.native_filesystem_actions.cancel_turn(turn_id);
         for ((owner, _), cancellation) in &self.agent.approved_external_cancellations {
             if owner == turn_id {
                 cancellation.cancel();

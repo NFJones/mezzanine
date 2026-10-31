@@ -202,6 +202,64 @@ impl RuntimeSessionService {
         Ok(scopes)
     }
 
+    /// Resolves current grants for a genuinely registered original action.
+    /// Unlike queued source data alone, this opaque registration survives a
+    /// later pane projection. It does not confer an atomic commit lease, and
+    /// cancellation or changed root/mode/policy/child authority still rejects.
+    pub(crate) fn native_filesystem_scopes_for_registered_owner(
+        &mut self,
+        owner: &crate::runtime::agent::native_filesystem::NativeFilesystemRegisteredSource,
+    ) -> Result<Option<PathScopes>> {
+        let turn = owner.turn();
+        let source = owner.source();
+        if !self.native_filesystem_registered_source_is_current(owner)
+            || !self.native_filesystem_registered_environment_current(turn, source)?
+        {
+            return Err(MezError::conflict(
+                "native filesystem registered source changed before scope resolution",
+            ));
+        }
+        let scopes = self.native_filesystem_scopes_for_turn(turn, &source.operation_directory)?;
+        if !self.native_filesystem_registered_source_is_current(owner)
+            || !self.native_filesystem_registered_environment_current(turn, source)?
+        {
+            return Err(MezError::conflict(
+                "native filesystem registered source changed during scope resolution",
+            ));
+        }
+        Ok(scopes)
+    }
+
+    /// Revalidates actual environmental authority for an already registered
+    /// owner. Frozen operation cwd comes from that original slot, never a later
+    /// presentation. Navigation cannot adopt new intent while such work owns
+    /// the pane; lifecycle cancellation remains an independent mandatory fence.
+    fn native_filesystem_registered_environment_current(
+        &self,
+        turn: &AgentTurnRecord,
+        source: &NativeFilesystemContext,
+    ) -> Result<bool> {
+        if turn.turn_id != source.turn
+            || turn.agent_id != source.agent
+            || turn.conversation_id != source.conversation
+            || turn.pane_id != source.pane
+            || self.effective_agent_shell_mode_for_pane(&source.pane) != ShellMode::Native
+            || !self.agent.native_directory_mode_is_current(
+                &source.pane,
+                &source.pane_mode,
+                &source.default_mode,
+            )
+            || self.session.config_generation != source.config_generation
+            || self.configured_permissions().resources != source.resources
+            || self.subagent_scope_declaration_for_turn(turn) != source.child
+            || self.native_filesystem_root_source(&source.pane)? != source.root
+        {
+            return Ok(false);
+        }
+        Ok(current_working_directory_for_pid(source.root.0).as_ref()
+            == Some(&source.process_directory))
+    }
+
     /// Reads the live owned pane root lifetime without executable inference.
     fn native_filesystem_root_source(&self, pane: &str) -> Result<(u32, u64)> {
         let pid = self

@@ -208,6 +208,11 @@ mod bookkeeping;
 mod child_failures;
 mod cleanup_ownership;
 mod completion;
+#[allow(
+    dead_code,
+    reason = "filesystem attempt ownership is being connected to runtime dispatch"
+)]
+pub(crate) mod native_filesystem;
 pub(crate) use bookkeeping::{
     RuntimeBookkeepingCandidate, RuntimeBookkeepingCandidateWork,
     RuntimeBookkeepingTranscriptReadWork,
@@ -588,6 +593,8 @@ pub(crate) struct RuntimeAgentComponent {
     next_approved_external_action_attempt: u64,
     /// Authorized native shell actions waiting for external worker dispatch.
     pending_native_shell_dispatches: BTreeMap<(String, String), RuntimeNativeShellDispatch>,
+    /// Bounded filesystem attempts and original outcomes, separate from shells.
+    native_filesystem_actions: Box<native_filesystem::NativeFilesystemActions>,
     /// Exact native shell marker owned by an external worker per turn/action.
     claimed_native_shell_dispatches: BTreeMap<(String, String), String>,
     /// Ambiguous Bubblewrap failures awaiting one bounded internal model
@@ -1048,7 +1055,8 @@ impl RuntimeAgentComponent {
                 turn.state,
                 AgentTurnState::Queued | AgentTurnState::Running | AgentTurnState::Blocked
             )
-        }) || self.agent_compacting_panes.contains_key(pane)
+        }) || self.native_filesystem_actions.pending_for_pane(pane)
+            || self.agent_compacting_panes.contains_key(pane)
             || self.agent_remembering_panes.contains_key(pane)
             || self.pending_agent_compaction_tasks.contains_key(pane)
             || self

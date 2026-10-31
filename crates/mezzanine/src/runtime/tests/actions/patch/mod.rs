@@ -4,4 +4,5 @@ use super::*;
 
 mod dispatch;
 mod execution;
+mod native_filesystem;
 mod recovery;
