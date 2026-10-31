@@ -9,6 +9,8 @@
 //! the same portable openat primitives; there is no helper or shell fallback.
 //! Replacement preserves ordinary mode bits, not ownership, ACLs or xattrs;
 //! privilege bits are suppressed. Hard-linked updates replace only this entry.
+//! Original regular-file descriptors remain held with their raw preimages;
+//! numeric inode metadata alone is not a lifetime-long object witness.
 
 use std::ffi::OsString;
 use std::fs::File;
@@ -135,6 +137,8 @@ pub(crate) struct NativeFileCapability {
     physical: PhysicalPath,
     /// Exact raw preimage; None means missing, Some(empty) means empty file.
     preimage: Option<Vec<u8>>,
+    /// Held original regular object, preventing identity reuse after unlink.
+    original_file: Option<File>,
     /// Captured scopes must never be widened by a later actor lease.
     scopes: PathScopes,
     /// True when capture authorized mutation as well as snapshot reading.
@@ -159,21 +163,23 @@ impl NativeFileCapability {
                 "native file capability cannot target a filesystem root",
             ));
         }
-        let preimage = if physical.missing.is_empty() {
+        let (preimage, original_file) = if physical.missing.is_empty() {
             if FileType::from_raw_mode(physical.stat.st_mode) != FileType::RegularFile {
                 return Err(MezError::forbidden(
                     "native file capability requires a regular file",
                 ));
             }
-            Some(read_exact_preimage(&physical)?)
+            let (bytes, file) = read_exact_preimage(&physical)?;
+            (Some(bytes), Some(file))
         } else {
-            None
+            (None, None)
         };
         revalidate_ancestry(&physical)?;
         Ok(Self {
             requested: requested.to_string(),
             physical,
             preimage,
+            original_file,
             scopes: scopes.clone(),
             writable,
         })
@@ -182,6 +188,99 @@ impl NativeFileCapability {
     /// Returns captured exact bytes, separately from normalized matching text.
     pub(crate) fn preimage(&self) -> Option<&[u8]> {
         self.preimage.as_deref()
+    }
+
+    /// Recaptures a positively deleted entry for a later ordered create.
+    /// The original ancestry and parent must still be held and the entry must
+    /// remain missing; a replacement directory or competing file is rejected.
+    /// Calling this method is not itself evidence that deletion occurred.
+    /// The checkpoint permits cancellation before fresh bounded resolution.
+    pub(crate) fn recapture_missing(
+        &self,
+        root: &NativeFilesystemRoot,
+        current_scopes: &PathScopes,
+        checkpoint: impl FnOnce() -> Result<()>,
+    ) -> Result<Self> {
+        root.revalidate()?;
+        if !self.writable || self.preimage.is_none() {
+            return Err(MezError::forbidden(
+                "native deletion recapture lacks original write authority",
+            ));
+        }
+        authorize(&self.scopes, root.cwd(), self.path(), true)?;
+        revalidate_ancestry(&self.physical)?;
+        checkpoint()?;
+        let next = Self::capture(root, current_scopes, &self.requested, true)?;
+        if next.preimage.is_some() || next.path() != self.path() || next.physical.missing.len() != 1
+        {
+            return Err(MezError::conflict(
+                "native deleted entry changed before reuse",
+            ));
+        }
+        self.validate_recaptured_ancestry(&next)?;
+        Ok(next)
+    }
+
+    /// Recaptures this entry after its exact stage was positively published.
+    /// Retains original authority and all ancestor identities while replacing
+    /// only the expected leaf object. Equal-byte or relocated objects fail.
+    /// Cancellation is checked before fresh resolution; afterwards every new
+    /// ancestor descriptor must still identify its original predecessor object.
+    pub(crate) fn recapture_published(
+        &self,
+        root: &NativeFilesystemRoot,
+        current_scopes: &PathScopes,
+        stage: &NativeStagedFile,
+        checkpoint: impl FnOnce() -> Result<()>,
+    ) -> Result<Self> {
+        root.revalidate()?;
+        if !self.writable {
+            return Err(MezError::forbidden(
+                "native publication recapture lacks original write authority",
+            ));
+        }
+        authorize(&self.scopes, root.cwd(), self.path(), true)?;
+        revalidate_ancestry(&self.physical)?;
+        if stage.target != self.path() {
+            return Err(MezError::conflict(
+                "native published stage belongs to another predecessor",
+            ));
+        }
+        checkpoint()?;
+        let next = stage.capture_published_target(root, current_scopes, &self.requested)?;
+        self.validate_recaptured_ancestry(&next)?;
+        Ok(next)
+    }
+
+    /// Binds every returned ancestor witness to the original held object.
+    /// A pre-capture namespace check alone cannot authorize refreshing these
+    /// identities: an ancestor may change during resolution while the same
+    /// immediate parent subtree survives. Equal held descriptors retain the
+    /// original proof through later stage/commit revalidation.
+    fn validate_recaptured_ancestry(&self, next: &Self) -> Result<()> {
+        if self.physical.directories.len() != next.physical.directories.len() {
+            return Err(MezError::conflict(
+                "native recapture ancestor chain changed",
+            ));
+        }
+        for (original, current) in self
+            .physical
+            .directories
+            .iter()
+            .zip(&next.physical.directories)
+        {
+            if original.path != current.path
+                || !same_object(
+                    &fstat(&original.file).map_err(std::io::Error::from)?,
+                    &fstat(&current.file).map_err(std::io::Error::from)?,
+                )
+            {
+                return Err(MezError::conflict(
+                    "native recapture ancestor identity changed",
+                ));
+            }
+        }
+        Ok(())
     }
 
     /// Returns the positively resolved target spelling used in effect evidence.
@@ -197,6 +296,19 @@ impl NativeFileCapability {
         current_scopes: &PathScopes,
     ) -> Result<()> {
         root.revalidate()?;
+        if self.preimage.is_some() != self.original_file.is_some() {
+            return Err(MezError::invalid_state(
+                "native preimage lost original leaf custody",
+            ));
+        }
+        if let Some(original_file) = &self.original_file
+            && !same_object(
+                &fstat(original_file).map_err(std::io::Error::from)?,
+                &self.physical.stat,
+            )
+        {
+            return Err(MezError::conflict("native original leaf witness changed"));
+        }
         authorize(&self.scopes, root.cwd(), self.path(), self.writable)?;
         authorize(current_scopes, root.cwd(), self.path(), self.writable)?;
         revalidate_ancestry(&self.physical)?;
@@ -212,7 +324,7 @@ impl NativeFileCapability {
                     && current.stat.st_mode == self.physical.stat.st_mode
                     && current.stat.st_uid == self.physical.stat.st_uid
                     && current.stat.st_gid == self.physical.stat.st_gid
-                    && read_exact_preimage(&current)? == *bytes =>
+                    && read_exact_preimage(&current)?.0 == *bytes =>
             {
                 Ok(())
             }
@@ -418,6 +530,44 @@ pub(crate) struct NativeStagedFile {
 }
 
 impl NativeStagedFile {
+    /// Captures the exact object this stage positively published for a later
+    /// ordered operation. Equal bytes in a substituted inode are insufficient.
+    /// Publication evidence stays owned by this stage through the recapture.
+    fn capture_published_target(
+        &self,
+        root: &NativeFilesystemRoot,
+        current_scopes: &PathScopes,
+        requested: &str,
+    ) -> Result<NativeFileCapability> {
+        if !self.published {
+            return Err(MezError::conflict("native stage has not been published"));
+        }
+        let capability = NativeFileCapability::capture(root, current_scopes, requested, true)?;
+        if capability.path() != self.target
+            || !same_object(
+                &capability.physical.stat,
+                &fstat(&self.file).map_err(std::io::Error::from)?,
+            )
+        {
+            return Err(MezError::conflict(
+                "native published object changed before reuse",
+            ));
+        }
+        let parent = capability
+            .physical
+            .directories
+            .last()
+            .ok_or_else(|| MezError::invalid_state("native published entry lost parent"))?;
+        if !same_object(
+            &fstat(&parent.file).map_err(std::io::Error::from)?,
+            &fstat(&self.parent).map_err(std::io::Error::from)?,
+        ) {
+            return Err(MezError::conflict("native published entry parent changed"));
+        }
+        self.verify_bytes()?;
+        Ok(capability)
+    }
+
     /// Rejects a replaced staging entry rather than publishing/deleting it.
     fn verify_owned_entry(&self) -> Result<()> {
         let named = statat(&self.parent, &self.name, AtFlags::SYMLINK_NOFOLLOW)
@@ -524,7 +674,8 @@ pub(super) fn revalidate_ancestry(physical: &PhysicalPath) -> Result<()> {
 
 /// Opens and reads only a positively identified regular file, bounded by bytes.
 /// Nonblocking protects against a special-node swap between metadata and open.
-fn read_exact_preimage(physical: &PhysicalPath) -> Result<Vec<u8>> {
+/// Returns its held descriptor with the bytes so original identity stays pinned.
+fn read_exact_preimage(physical: &PhysicalPath) -> Result<(Vec<u8>, File)> {
     let parent = &physical
         .directories
         .last()
@@ -564,7 +715,7 @@ fn read_exact_preimage(physical: &PhysicalPath) -> Result<Vec<u8>> {
             "native snapshot exceeded byte budget during read",
         ));
     }
-    Ok(bytes)
+    Ok((bytes, file))
 }
 
 #[cfg(test)]
@@ -595,6 +746,117 @@ mod evidence_tests {
     fn unavailable_target_group_evidence_fails_closed() {
         assert!(require_exact_group_evidence(false).is_err());
         assert!(require_exact_group_evidence(true).is_ok());
+    }
+
+    /// Exercises the actual recapture boundary after old ancestry validation.
+    /// Moving the same final-parent subtree retains its descriptor identity,
+    /// while replacing only an upper ancestor must still revoke recapture.
+    fn recapture_rejects_upper_ancestor_transfer(published: bool) {
+        let directory =
+            std::env::temp_dir().join(format!("mez-recapture-race-{}", rand::random::<u128>()));
+        std::fs::create_dir_all(directory.join("upper/parent")).unwrap();
+        let directory = std::fs::canonicalize(directory).unwrap();
+        let root = NativeFilesystemRoot::capture(std::process::id()).unwrap();
+        let grant = directory.to_str().unwrap().to_string();
+        let scopes = super::super::host_resolved_path_scopes(
+            root.cwd(),
+            std::slice::from_ref(&grant),
+            std::slice::from_ref(&grant),
+            &[],
+        )
+        .unwrap();
+        let path = directory.join("upper/parent/a");
+        if !published {
+            std::fs::write(&path, b"original").unwrap();
+        }
+        let capability =
+            NativeFileCapability::capture(&root, &scopes, path.to_str().unwrap(), true).unwrap();
+        let stage = if published {
+            let mut stage = capability.stage(&root, &scopes, b"published").unwrap();
+            capability.publish(&root, &scopes, &mut stage).unwrap();
+            Some(stage)
+        } else {
+            capability.delete(&root, &scopes).unwrap();
+            None
+        };
+        let transfer = || {
+            std::fs::rename(directory.join("upper"), directory.join("original-upper")).unwrap();
+            std::fs::create_dir(directory.join("upper")).unwrap();
+            std::fs::rename(
+                directory.join("original-upper/parent"),
+                directory.join("upper/parent"),
+            )
+            .unwrap();
+            Ok(())
+        };
+        let result = if let Some(stage) = &stage {
+            capability.recapture_published(&root, &scopes, stage, transfer)
+        } else {
+            capability.recapture_missing(&root, &scopes, transfer)
+        };
+        let rejected = result.is_err();
+        drop(result);
+        drop(stage);
+        drop(capability);
+        std::fs::remove_dir_all(directory).unwrap();
+        assert!(
+            rejected,
+            "recapture adopted a substituted upper ancestor while final parent stayed the same"
+        );
+    }
+
+    /// A positively published inode and its held immediate parent do not permit
+    /// adoption of replacement upper ancestry during fresh capture. The test
+    /// injects the rename exactly between old validation and new resolution.
+    #[test]
+    fn published_recapture_rejects_upper_ancestor_transfer_at_capture_boundary() {
+        recapture_rejects_upper_ancestor_transfer(true);
+    }
+
+    /// Positive deletion likewise cannot refresh away original upper ancestry
+    /// while recapturing the missing entry for a later ordered create. The same
+    /// final parent remains held throughout this deterministic boundary swap.
+    #[test]
+    fn missing_recapture_rejects_upper_ancestor_transfer_at_capture_boundary() {
+        recapture_rejects_upper_ancestor_transfer(false);
+    }
+
+    /// Injecting numerically aliased cached metadata models the otherwise
+    /// nondeterministic inode-reuse boundary without relying on allocator luck.
+    /// A held original leaf must reject that substituted object even when its
+    /// cached numbers and exact bytes match. This is evidence fault injection,
+    /// not a claim that this fixture forces actual kernel inode reuse.
+    #[test]
+    fn original_leaf_descriptor_rejects_aliased_cached_replacement_metadata() {
+        let directory =
+            std::env::temp_dir().join(format!("mez-leaf-witness-{}", rand::random::<u128>()));
+        std::fs::create_dir(&directory).unwrap();
+        let directory = std::fs::canonicalize(directory).unwrap();
+        let root = NativeFilesystemRoot::capture(std::process::id()).unwrap();
+        let grant = directory.to_str().unwrap().to_string();
+        let scopes = super::super::host_resolved_path_scopes(
+            root.cwd(),
+            std::slice::from_ref(&grant),
+            std::slice::from_ref(&grant),
+            &[],
+        )
+        .unwrap();
+        let path = directory.join("a");
+        std::fs::write(&path, b"same bytes").unwrap();
+        let mut capability =
+            NativeFileCapability::capture(&root, &scopes, path.to_str().unwrap(), true).unwrap();
+        std::fs::rename(&path, directory.join("original")).unwrap();
+        std::fs::write(&path, b"same bytes").unwrap();
+        let replacement = resolve_physical(root.cwd(), path.to_str().unwrap()).unwrap();
+        capability.physical.stat = replacement.stat;
+        let rejected = capability.revalidate(&root, &scopes).is_err();
+        drop(capability);
+        drop(replacement);
+        std::fs::remove_dir_all(directory).unwrap();
+        assert!(
+            rejected,
+            "cached metadata replaced the original leaf ownership proof"
+        );
     }
 
     /// Darwin's shell-oriented reader substitutes daemon groups for another

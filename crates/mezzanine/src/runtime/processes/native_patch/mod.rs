@@ -10,3 +10,9 @@
     reason = "commit fencing is being integrated into the native patch dispatcher"
 )]
 pub(crate) mod commit;
+
+#[allow(
+    dead_code,
+    reason = "filesystem worker is being connected to actor dispatch"
+)]
+pub(crate) mod worker;
