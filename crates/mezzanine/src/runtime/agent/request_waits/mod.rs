@@ -636,6 +636,13 @@ impl RuntimeSessionService {
         summary: &str,
         output: &str,
     ) {
+        // Requested pane shutdown uses Failed for ledger cleanup, but that
+        // state is not unexpected terminal work. Preserve any earlier genuine
+        // reply/result; otherwise retain only intentional unavailability.
+        if self.pane_is_closing(&child.pane_id) {
+            self.retain_request_task_retired(child);
+            return;
+        }
         if !matches!(
             state,
             AgentTurnState::Completed | AgentTurnState::Failed | AgentTurnState::Interrupted

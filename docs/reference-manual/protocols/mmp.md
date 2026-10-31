@@ -554,6 +554,9 @@ retained before controller handoff, and failure references reuse native
 custody rather than duplicating diagnostics.
 Correlation text alone, bridge flags, ACKs, presence heartbeats and later reused
 addresses never grant task ownership or prove a substantive answer.
+Requested pane closure supplies only intentional unavailability, even when
+internal cleanup records the child task as failed. It grants no progress and
+cannot wake an unrelated plain wait.
 
 Request receipts survive payload replay eviction independently of ordinary
 delivery custody, under finite count and metadata reservations made before

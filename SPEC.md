@@ -17217,8 +17217,10 @@ failure retention MUST reference existing native diagnostic custody without
 copying its body; committed response/outcome references MUST remain immutable.
 A nonowned registration's
 retirement/replacement MUST yield only opaque unavailability; offline presence
-is insufficient. Intentional captured-task retirement MUST NOT fabricate new
-progress or wake unrelated plain waits. Pause, approval, Stop, native ownership,
+is insufficient. A requested pane shutdown's cleanup ledger state MUST NOT
+reclassify intentional retirement as unexpected terminal work. Intentional
+captured-task retirement MUST NOT fabricate new progress or wake unrelated
+plain waits. Pause, approval, Stop, native ownership,
 exact process uncertainty and original joined-task result gates MUST still hold.
 
 Targeted outcome context and the native wait result MUST commit before fair
