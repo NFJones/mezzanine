@@ -9,6 +9,7 @@ mod curated_usage;
 mod curated_usage_gaps;
 mod helper_accounting;
 mod root_replacement;
+mod settlement;
 mod source_activation;
 mod source_activation_fixture;
 mod source_capacity;

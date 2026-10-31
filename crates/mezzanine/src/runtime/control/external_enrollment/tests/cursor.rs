@@ -5,6 +5,7 @@
 
 use super::curated_admission::curated_request;
 use super::helper_presentation::{child, settle};
+use super::settlement::settle_success;
 use super::*;
 
 /// Exact native Cursor session-start contract; no guessed vendor source field.
@@ -297,10 +298,14 @@ async fn external_cursor_actual_root_replacement_fences_queued_callbacks() {
             .service
             .prepare_external_enrollment(&declaration("session-a"), &old_connection)
             .unwrap();
-        assert_eq!(
-            settle(&mut fixture, work, &old_connection).await["result"]["registered"],
-            true
-        );
+        settle_success(
+            &mut fixture,
+            work,
+            &old_connection,
+            "registered",
+            "cursor-original-root-enrollment",
+        )
+        .await;
         let old_owner = fixture
             .service
             .control
@@ -346,10 +351,14 @@ async fn external_cursor_actual_root_replacement_fences_queued_callbacks() {
             .service
             .prepare_external_enrollment(&declaration("session-a"), &new_connection)
             .unwrap();
-        assert_eq!(
-            settle(&mut fixture, work, &new_connection).await["result"]["registered"],
-            true
-        );
+        settle_success(
+            &mut fixture,
+            work,
+            &new_connection,
+            "registered",
+            "cursor-new-root-enrollment",
+        )
+        .await;
         let fresh_owner = fixture
             .service
             .control

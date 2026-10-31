@@ -5,6 +5,7 @@
 //! closed without allocating producer, client, observer, accounting or lease.
 
 use super::helper_presentation::{child, enroll_producer, settle};
+use super::settlement::settle_success;
 use super::*;
 
 /// Emits only nonsecret candidate selectors and inert generic presentation.
@@ -478,10 +479,14 @@ async fn external_helper_discovery_bulk_retirement_clears_index_and_old_work() {
         .service
         .prepare_external_helper_presentation(&observation(&fresh, 1), &fresh_helper)
         .unwrap();
-    assert_eq!(
-        settle(&mut fixture, work, &fresh_helper).await["result"]["changed"],
-        true
-    );
+    settle_success(
+        &mut fixture,
+        work,
+        &fresh_helper,
+        "changed",
+        "fresh-helper-observation",
+    )
+    .await;
     assert!(
         fixture
             .service
