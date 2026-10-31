@@ -7,6 +7,204 @@
 use super::*;
 use crate::MezErrorKind;
 
+/// Actual pane-root fixture with separate owned native navigation available.
+struct FilesystemContextFixture {
+    /// Actor-owned session with a real root process; no patch worker launched.
+    service: RuntimeSessionService,
+    /// Unique canonical directory containing process and operation fixtures.
+    root: PathBuf,
+}
+
+impl FilesystemContextFixture {
+    /// Starts the ordinary root fixture once; source capture itself must use
+    /// process metadata rather than shell/environment discovery or PTY input.
+    fn new() -> Self {
+        let root = temp_root("native-filesystem-context");
+        fs::create_dir_all(root.join("owned")).unwrap();
+        let root = fs::canonicalize(root).unwrap();
+        let mut service = test_runtime_service();
+        service
+            .start_initial_pane_process_with_launch_context(Some("cat"), Some(&root), None)
+            .unwrap();
+        service
+            .agent_shell_store_mut()
+            .enter_or_resume("%1")
+            .unwrap();
+        service.set_agent_native_shell_mode_for_tests("%1");
+        let permissions = crate::runtime::config::runtime_configured_permissions_from_config(
+            &serde_json::json!({"permissions":{"read_scopes":[root],"write_scopes":[root]}}),
+        )
+        .unwrap();
+        service
+            .integration
+            .replace_configured_permissions(permissions);
+        Self { service, root }
+    }
+}
+
+impl Drop for FilesystemContextFixture {
+    /// Stops the exact fixture process before removing only its owned directory.
+    fn drop(&mut self) {
+        let _ = self.service.terminate_all_pane_processes();
+        let _ = fs::remove_dir_all(&self.root);
+    }
+}
+
+/// Owned `/cd` intent selects the filesystem operation directory while the
+/// root process retains its independent cwd. Source-bound grants use that
+/// operation directory without shell/environment inference or daemon chdir.
+#[test]
+fn native_filesystem_source_preserves_owned_and_process_directory_separation() {
+    let mut fixture = FilesystemContextFixture::new();
+    let owned = fixture.root.join("owned");
+    fixture
+        .service
+        .agent_shell_store_mut()
+        .ensure_session("%1")
+        .unwrap()
+        .record_native_working_directory(owned.clone(), 0)
+        .unwrap();
+    let source = fixture
+        .service
+        .capture_native_filesystem_context(&turn())
+        .unwrap();
+    assert!(
+        fixture
+            .service
+            .native_filesystem_context_is_current(&turn(), &source)
+            .unwrap()
+    );
+    let scopes = fixture
+        .service
+        .native_filesystem_scopes_for_context(&turn(), &source)
+        .unwrap()
+        .unwrap();
+    assert_eq!(PathBuf::from(&scopes.current_directory), owned);
+    #[cfg(target_os = "linux")]
+    {
+        let root = source.capture_root().unwrap();
+        assert_eq!(root.cwd(), owned);
+        assert_eq!(root.process_cwd(), fixture.root);
+        root.revalidate().unwrap();
+    }
+    #[cfg(target_os = "macos")]
+    assert!(
+        source.capture_root().is_err(),
+        "foreign process group evidence must remain fail-closed"
+    );
+    assert_eq!(
+        fixture.service.native_agent_working_directory("%1"),
+        Some(owned.as_path())
+    );
+}
+
+/// Returning a pane to Native after Pane mode cannot revive an old source
+/// token, even with the same directory and configuration text. Allocation-bound
+/// mode ownership must reject this ABA before resolving any write grants.
+#[test]
+fn native_filesystem_source_rejects_mode_aba() {
+    let mut fixture = FilesystemContextFixture::new();
+    let source = fixture
+        .service
+        .capture_native_filesystem_context(&turn())
+        .unwrap();
+    fixture
+        .service
+        .set_agent_shell_mode_override("%1", Some(crate::runtime::config::ShellMode::Pane));
+    fixture
+        .service
+        .set_agent_shell_mode_override("%1", Some(crate::runtime::config::ShellMode::Native));
+    assert!(
+        !fixture
+            .service
+            .native_filesystem_context_is_current(&turn(), &source)
+            .unwrap()
+    );
+    assert!(
+        fixture
+            .service
+            .native_filesystem_scopes_for_context(&turn(), &source)
+            .is_err()
+    );
+}
+
+/// Re-adopting the same literal directory still advances navigation ownership.
+/// A queued context must not rebase merely because its final path spelling is
+/// equal after the intervening adoption.
+#[test]
+fn native_filesystem_source_rejects_same_path_navigation_generation_change() {
+    let mut fixture = FilesystemContextFixture::new();
+    let source = fixture
+        .service
+        .capture_native_filesystem_context(&turn())
+        .unwrap();
+    fixture
+        .service
+        .agent_shell_store_mut()
+        .ensure_session("%1")
+        .unwrap()
+        .record_native_working_directory(fixture.root.clone(), 0)
+        .unwrap();
+    assert!(
+        !fixture
+            .service
+            .native_filesystem_context_is_current(&turn(), &source)
+            .unwrap()
+    );
+}
+
+/// Changed configured resource provenance invalidates old source data before
+/// current scopes can be confused with a newly widened admission. A fresh
+/// context may be captured separately; this helper never mutates the old one.
+#[test]
+fn native_filesystem_source_rejects_resource_replacement() {
+    let mut fixture = FilesystemContextFixture::new();
+    let source = fixture
+        .service
+        .capture_native_filesystem_context(&turn())
+        .unwrap();
+    let permissions = crate::runtime::config::runtime_configured_permissions_from_config(
+        &serde_json::json!({"permissions":{"read_scopes":[fixture.root],"write_scopes":[]}}),
+    )
+    .unwrap();
+    fixture
+        .service
+        .integration
+        .replace_configured_permissions(permissions);
+    assert!(
+        !fixture
+            .service
+            .native_filesystem_context_is_current(&turn(), &source)
+            .unwrap()
+    );
+    assert!(
+        fixture
+            .service
+            .native_filesystem_scopes_for_context(&turn(), &source)
+            .is_err()
+    );
+}
+
+/// Root process retirement cannot leave a valid source token behind. Missing
+/// live-root evidence is rejection, independently of a still-matching pane,
+/// conversation, operation directory or policy snapshot.
+#[test]
+fn native_filesystem_source_rejects_root_retirement() {
+    let mut fixture = FilesystemContextFixture::new();
+    let source = fixture
+        .service
+        .capture_native_filesystem_context(&turn())
+        .unwrap();
+    fixture.service.terminate_all_pane_processes().unwrap();
+    assert!(
+        fixture
+            .service
+            .native_filesystem_context_is_current(&turn(), &source)
+            .is_err()
+    );
+    assert!(source.capture_root().is_err());
+}
+
 /// Minimal running turn for direct authority inspection.
 fn turn() -> AgentTurnRecord {
     AgentTurnRecord {

@@ -35,6 +35,14 @@ use crate::error::{MezError, Result};
 /// Finite per-file snapshot/staging budget; dispatcher also bounds aggregate work.
 const MAX_FILE_BYTES: u64 = 16 * 1024 * 1024;
 
+/// Separately selected operation directory, retained only for owned navigation.
+struct NativeOperationDirectory {
+    /// Canonical operation location and complete captured ancestor chain.
+    physical: PhysicalPath,
+    /// Held directory leaf; numeric metadata alone cannot preserve identity.
+    file: File,
+}
+
 /// Local process lifetime and filesystem context captured without shell selection.
 pub(crate) struct NativeFilesystemRoot {
     /// Kernel process identifier, always paired with start token.
@@ -43,45 +51,93 @@ pub(crate) struct NativeFilesystemRoot {
     start_token: u64,
     /// Daemon-compatible effective credentials; never change daemon credentials.
     credentials: ProcessCredentials,
-    /// Canonical cwd spelling and held physical identity.
+    /// Canonical observed process cwd and its held physical ancestry.
     cwd: PhysicalPath,
+    /// Kernel-referenced process cwd object, retained through the whole action.
+    cwd_file: File,
+    /// Separate owned agent directory; absent when process cwd is selected.
+    operation: Option<NativeOperationDirectory>,
 }
 
 impl NativeFilesystemRoot {
     /// Captures a live local root with identical daemon credentials. Fails closed
     /// if any metadata is unavailable, replaced or incompatible; no PATH needed.
     pub(crate) fn capture(pid: u32) -> Result<Self> {
+        Self::capture_context(pid, None, None)
+    }
+
+    /// Captures an actor-bound root lifetime with a separate operation cwd.
+    /// The supplied directory is data, never a scope grant; all file access
+    /// still requires actor authorization. A stale process token fails closed.
+    pub(crate) fn capture_at(
+        pid: u32,
+        expected_start_token: u64,
+        directory: &Path,
+    ) -> Result<Self> {
+        Self::capture_context(pid, Some(expected_start_token), Some(directory))
+    }
+
+    /// Captures process and operation directory identities without shell or
+    /// environment inference, then checks their complete observed provenance.
+    fn capture_context(
+        pid: u32,
+        expected_start: Option<u64>,
+        directory: Option<&Path>,
+    ) -> Result<Self> {
         let start_token = process_start_token_for_pid(pid).ok_or_else(|| {
             MezError::invalid_state("native filesystem root lifetime unavailable")
         })?;
+        if expected_start.is_some_and(|expected| expected != start_token) {
+            return Err(MezError::conflict(
+                "native filesystem root lifetime changed before capture",
+            ));
+        }
         let credentials = normalized_credentials(pid)?;
         if credentials != normalized_credentials(std::process::id())? {
             return Err(MezError::forbidden(
                 "native filesystem root credentials differ from daemon",
             ));
         }
-        let cwd_path = current_working_directory_for_pid(pid)
+        let process_path = current_working_directory_for_pid(pid)
             .ok_or_else(|| MezError::invalid_state("native filesystem root cwd unavailable"))?;
-        let cwd = resolve_physical(&cwd_path, ".")?;
-        if !cwd.missing.is_empty()
-            || FileType::from_raw_mode(cwd.stat.st_mode) != FileType::Directory
+        let (cwd, process_path_file) = capture_directory(&process_path)?;
+        let cwd_file = open_process_cwd(pid)?;
+        let kernel = fstat(&cwd_file).map_err(std::io::Error::from)?;
+        if !same_object(&cwd.stat, &kernel)
+            || !same_object(
+                &fstat(&process_path_file).map_err(std::io::Error::from)?,
+                &kernel,
+            )
         {
-            return Err(MezError::invalid_state(
-                "native filesystem root cwd is not a directory",
+            return Err(MezError::conflict(
+                "native process cwd path does not identify its kernel directory",
             ));
         }
+        let operation = if let Some(directory) = directory.filter(|path| *path != cwd.path) {
+            let (physical, file) = capture_directory(directory)?;
+            if physical.path == cwd.path && same_object(&physical.stat, &kernel) {
+                None
+            } else {
+                Some(NativeOperationDirectory { physical, file })
+            }
+        } else {
+            None
+        };
         let root = Self {
             pid,
             start_token,
             credentials,
             cwd,
+            cwd_file,
+            operation,
         };
         root.revalidate()?;
         Ok(root)
     }
 
-    /// Re-observes lifetime, credentials and cwd; moving/replacing cwd revokes
-    /// this root rather than extending a descriptor grant to the new location.
+    /// Re-observes lifetime, credentials, process cwd and operation cwd. Agent
+    /// navigation never changes process cwd; replacing either directory or its
+    /// ancestry revokes this root instead of refreshing its object witness.
     pub(crate) fn revalidate(&self) -> Result<()> {
         if process_start_token_for_pid(self.pid) != Some(self.start_token)
             || normalized_credentials(self.pid)? != self.credentials
@@ -91,19 +147,126 @@ impl NativeFilesystemRoot {
                 "native filesystem process identity changed",
             ));
         }
-        let cwd = current_working_directory_for_pid(self.pid)
+        let process_path = current_working_directory_for_pid(self.pid)
             .ok_or_else(|| MezError::conflict("native filesystem cwd disappeared"))?;
-        let current = resolve_physical(&cwd, ".")?;
-        if current.path != self.cwd.path || !same_object(&current.stat, &self.cwd.stat) {
-            return Err(MezError::conflict("native filesystem cwd identity changed"));
+        let current = resolve_physical(&process_path, ".")?;
+        let process_file = open_process_cwd(self.pid)?;
+        let held = fstat(&self.cwd_file).map_err(std::io::Error::from)?;
+        if current.path != self.cwd.path
+            || !same_object(&current.stat, &held)
+            || !same_object(&self.cwd.stat, &held)
+            || !same_object(&fstat(&process_file).map_err(std::io::Error::from)?, &held)
+        {
+            return Err(MezError::conflict(
+                "native filesystem process cwd identity changed",
+            ));
         }
-        revalidate_ancestry(&self.cwd)
+        revalidate_ancestry(&self.cwd)?;
+        if let Some(operation) = &self.operation {
+            let current = resolve_physical(&operation.physical.path, ".")?;
+            let held = fstat(&operation.file).map_err(std::io::Error::from)?;
+            if current.path != operation.physical.path
+                || !same_object(&current.stat, &held)
+                || !same_object(&operation.physical.stat, &held)
+            {
+                return Err(MezError::conflict(
+                    "native filesystem operation cwd identity changed",
+                ));
+            }
+            revalidate_ancestry(&operation.physical)?;
+        }
+        if process_start_token_for_pid(self.pid) != Some(self.start_token) {
+            return Err(MezError::conflict(
+                "native filesystem root lifetime changed during validation",
+            ));
+        }
+        Ok(())
     }
 
-    /// Returns captured local cwd; never changes the daemon's process directory.
-    pub(crate) fn cwd(&self) -> &Path {
+    /// Returns the separately observed process cwd, not the agent's cwd intent.
+    pub(crate) fn process_cwd(&self) -> &Path {
         &self.cwd.path
     }
+
+    /// Returns operation cwd without changing daemon or pane process directories.
+    pub(crate) fn cwd(&self) -> &Path {
+        self.operation
+            .as_ref()
+            .map_or(self.cwd.path.as_path(), |operation| {
+                operation.physical.path.as_path()
+            })
+    }
+}
+
+/// Captures an absolute directory with its leaf and complete ancestry held.
+/// Directory-only/no-follow opens cannot block on a substituted FIFO or follow
+/// a replaced leaf link; identity comparison rejects swaps during capture.
+fn capture_directory(path: &Path) -> Result<(PhysicalPath, File)> {
+    if !path.is_absolute() {
+        return Err(MezError::invalid_args(
+            "native operation cwd must be absolute",
+        ));
+    }
+    let physical = resolve_physical(path, ".")?;
+    if !physical.missing.is_empty()
+        || FileType::from_raw_mode(physical.stat.st_mode) != FileType::Directory
+    {
+        return Err(MezError::invalid_state(
+            "native operation cwd is not an existing directory",
+        ));
+    }
+    let file = File::from(
+        openat(
+            rustix::fs::CWD,
+            &physical.path,
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        )
+        .map_err(std::io::Error::from)?,
+    );
+    if !same_object(&physical.stat, &fstat(&file).map_err(std::io::Error::from)?) {
+        return Err(MezError::conflict(
+            "native directory changed while capturing its descriptor",
+        ));
+    }
+    revalidate_ancestry(&physical)?;
+    Ok((physical, file))
+}
+
+/// Opens the actual kernel cwd reference, not a second lookup of its pathname.
+/// Linux's proc entry intentionally follows the kernel process reference;
+/// Darwin only admits self here because foreign group evidence fails closed.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn open_process_cwd(pid: u32) -> Result<File> {
+    #[cfg(target_os = "linux")]
+    let path = format!("/proc/{pid}/cwd");
+    #[cfg(target_os = "macos")]
+    let path = {
+        if pid != std::process::id() {
+            return Err(MezError::forbidden(
+                "native foreign process cwd witness unavailable",
+            ));
+        }
+        ".".to_string()
+    };
+    openat(
+        rustix::fs::CWD,
+        path,
+        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
+        Mode::empty(),
+    )
+    .map(File::from)
+    .map_err(|error| {
+        MezError::invalid_state(format!("native kernel cwd witness unavailable: {error}"))
+    })
+}
+
+/// Fails closed on platforms without a supported kernel cwd witness reader.
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn open_process_cwd(_pid: u32) -> Result<File> {
+    Err(MezError::forbidden(
+        "native kernel cwd witness unsupported on this platform",
+    ))
 }
 
 /// Normalizes supplementary groups for exact effective-credential comparison.
@@ -857,6 +1020,66 @@ mod evidence_tests {
             rejected,
             "cached metadata replaced the original leaf ownership proof"
         );
+    }
+
+    /// An explicitly selected operation directory resolves relative file names
+    /// independently of the unchanged process cwd. Both real directory leaves
+    /// remain held and validated without modifying global process state.
+    #[test]
+    fn owned_operation_directory_preserves_independent_process_cwd() {
+        let directory =
+            std::env::temp_dir().join(format!("mez-owned-fs-root-{}", rand::random::<u128>()));
+        std::fs::create_dir(&directory).unwrap();
+        let directory = std::fs::canonicalize(directory).unwrap();
+        std::fs::write(directory.join("note"), b"owned data").unwrap();
+        let process_path = std::env::current_dir().unwrap();
+        let token = process_start_token_for_pid(std::process::id()).unwrap();
+        let root = NativeFilesystemRoot::capture_at(std::process::id(), token, &directory).unwrap();
+        assert_eq!(root.cwd(), directory);
+        assert_eq!(root.process_cwd(), process_path);
+        let grant = directory.to_str().unwrap().to_string();
+        let scopes = super::super::host_resolved_path_scopes(
+            root.cwd(),
+            std::slice::from_ref(&grant),
+            std::slice::from_ref(&grant),
+            &[],
+        )
+        .unwrap();
+        let capability = NativeFileCapability::capture(&root, &scopes, "note", true).unwrap();
+        assert_eq!(capability.preimage(), Some(b"owned data".as_slice()));
+        root.revalidate().unwrap();
+        assert_eq!(std::env::current_dir().unwrap(), process_path);
+        drop(capability);
+        drop(root);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    /// Bound root preparation rejects stale PID lifetimes and non-directory or
+    /// relative targets. Replacing an already captured operation directory
+    /// cannot change its inode witness while the process cwd stays unchanged.
+    #[test]
+    fn bound_operation_directory_rejects_stale_or_replaced_sources() {
+        let directory =
+            std::env::temp_dir().join(format!("mez-bound-fs-root-{}", rand::random::<u128>()));
+        std::fs::create_dir_all(directory.join("owned")).unwrap();
+        let directory = std::fs::canonicalize(directory).unwrap();
+        let token = process_start_token_for_pid(std::process::id()).unwrap();
+        let owned = directory.join("owned");
+        assert!(NativeFilesystemRoot::capture_at(std::process::id(), token ^ 1, &owned).is_err());
+        assert!(
+            NativeFilesystemRoot::capture_at(std::process::id(), token, Path::new(".")).is_err()
+        );
+        std::fs::write(directory.join("file"), b"not a directory").unwrap();
+        assert!(
+            NativeFilesystemRoot::capture_at(std::process::id(), token, &directory.join("file"))
+                .is_err()
+        );
+        let root = NativeFilesystemRoot::capture_at(std::process::id(), token, &owned).unwrap();
+        std::fs::rename(&owned, directory.join("previous")).unwrap();
+        std::fs::create_dir(&owned).unwrap();
+        assert!(root.revalidate().is_err());
+        drop(root);
+        std::fs::remove_dir_all(directory).unwrap();
     }
 
     /// Darwin's shell-oriented reader substitutes daemon groups for another
