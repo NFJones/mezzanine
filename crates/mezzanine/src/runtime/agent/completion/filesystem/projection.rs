@@ -47,8 +47,9 @@ impl RuntimeSessionService {
         let scope = self.begin_completion_scope(&key.0, CompletionScope::Callback);
         let projected = (|| {
             let changed = self.project_filesystem_facts(&key)?;
-            self.complete_filesystem_hooks(&key)
-                .map(|hooks_changed| changed || hooks_changed)
+            let hooks_changed = self.complete_filesystem_hooks(&key)?;
+            self.append_filesystem_audit(&key)
+                .map(|audit_changed| changed || hooks_changed || audit_changed)
         })();
         if let Err(error) = &projected {
             self.fail_filesystem_completion(attempt, error);
@@ -72,6 +73,9 @@ impl RuntimeSessionService {
             FilesystemCompletionPhase::ContextCommitted
                 | FilesystemCompletionPhase::HooksEntered
                 | FilesystemCompletionPhase::HooksAccepted
+                | FilesystemCompletionPhase::AuditEntered
+                | FilesystemCompletionPhase::AuditNotRequired
+                | FilesystemCompletionPhase::AuditAppendAccepted
         ) {
             return Ok(false);
         }

@@ -35,6 +35,12 @@ impl AuditLog {
         }
     }
 
+    /// Returns immutable writer policy for original action obligations. This
+    /// snapshot is policy data, not writer identity or persistence evidence.
+    pub(crate) fn configuration(&self) -> &AuditConfig {
+        &self.config
+    }
+
     /// Runs the with retention operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in
@@ -124,7 +130,6 @@ impl AuditLog {
     /// retention scan, and a full-file hash rescan, so callers that own the
     /// daemon boundary assert this before their first append instead of paying
     /// that cost per record.
-    #[cfg(test)]
     pub(crate) fn writes_are_deferred(&self) -> bool {
         self.defer_writes
     }

@@ -165,7 +165,7 @@ fn native_filesystem_completed_hooks_keep_original_nonexecutable_ownership() {
             .service
             .filesystem_completion_phase_for_tests(&attempt)
             .unwrap(),
-        "filesystem_hooks_accepted"
+        "filesystem_audit_not_required"
     );
     assert!(
         !fixture
@@ -292,6 +292,6 @@ fn native_filesystem_completed_hook_matchers_exclude_unrelated_outcomes() {
             .service
             .filesystem_completion_phase_for_tests(&attempt)
             .unwrap(),
-        "filesystem_hooks_accepted"
+        "filesystem_audit_not_required"
     );
 }

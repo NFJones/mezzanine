@@ -252,6 +252,7 @@ impl RuntimeSessionService {
                     MezError::forbidden("native filesystem source has no path authority")
                 })?;
             self.check_native_filesystem_policy(&work, &scopes)?;
+            self.validate_native_filesystem_audit_source(attempt)?;
             // Only semantic metadata is offered to configured guards. No
             // generated command, shell adapter, or process continuation exists.
             let payload = serde_json::json!({
@@ -440,6 +441,7 @@ impl RuntimeSessionService {
     ) -> Result<crate::runtime::processes::native_patch::lease::NativePatchCommitLease> {
         self.ensure_completion_admission_open()?;
         let scopes = self.native_filesystem_scope_snapshot(attempt, identity)?;
+        self.validate_native_filesystem_audit_source(attempt)?;
         self.agent
             .native_filesystem_actions
             .issue_commit(attempt, proposal, scopes)

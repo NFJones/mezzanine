@@ -41,6 +41,19 @@ failures retain the first error and do not replay earlier diagnostics; a
 replacement conversation receives no hook status paint. This hook milestone
 does not acknowledge audit, publication, archive or worker ownership transfer.
 
+Native filesystem actions retain their original audit writer registration and
+policy when queued. Required disabled logging blocks admission, and commit
+leases recheck the original writer. Replacing it, even with equal settings,
+cannot waive or acknowledge a pending original record. Audit records describe
+native filesystem effects and original action/conversation identity without
+inventing shell commands or output. A failed staged append retains its state and
+queued bytes through errors and unwinding and leaves the stream unproven for
+native use. Failed or lost append acknowledgements retain the first error and
+are not replayed; committed file effects remain recorded. An accepted deferred
+append means that bytes are queued, not persisted. Physical persistence,
+publication, archive and producer ownership transfer still need their own
+evidence. Optional absent/disabled logging is explicitly not required.
+
 Treat hook runners as distinct execution boundaries. Program hooks can invoke
 external programs and receive structured event data on standard input. Shell
 hooks use the focused pane shell when one is available. Focused-shell hooks

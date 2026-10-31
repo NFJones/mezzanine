@@ -12700,7 +12700,18 @@ configuration changes. Completed-hook incompatibility MUST preserve confirmed
 effects. Entered diagnostic failures MUST retain their first error and MUST NOT
 replay earlier diagnostics. Hook acceptance MUST NOT imply audit, publication,
 archive or producer-custody transfer; stale conversations MUST receive no hook
-status paint. Pane creation, external editing, clipboard/status commands and other intentionally
+status paint. Native filesystem ownership MUST freeze original audit writer
+registration, policy and attribution before issuance. Required disabled logging
+MUST reject issuance; current writer registration/availability MUST be checked
+before each endpoint lease. Equal replacement paths/settings MUST NOT satisfy
+an original record obligation. A staged continuation MUST preserve the same
+writer registration and retain entered append state/bytes on error or unwind,
+marking it unproven for native use. Audit append acceptance MUST retain returned
+event/hash evidence and distinguish adapter-deferred bytes from physical
+persistence. Failed or lost append acknowledgements MUST NOT replay audit I/O;
+confirmed filesystem effects MUST remain recorded. Optional absent/disabled
+policy MUST be represented as not required, never a fabricated accepted append.
+No append milestone alone authorizes archive/producer transfer. Pane creation, external editing, clipboard/status commands and other intentionally
 process-oriented UI integrations are outside this filesystem guarantee. A
 literal shell-command-only launch policy MUST reject incompatible integrations
 rather than silently expanding these exclusions. HTTP integrations and passive

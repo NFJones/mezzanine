@@ -14,6 +14,8 @@ use crate::runtime::agent::native_filesystem::{NativeFilesystemAttempt, NativeFi
 use crate::runtime::processes::native_patch::worker::NativePatchWorkerOutcome;
 use std::sync::Arc;
 
+mod audit;
+use audit::FilesystemAuditObligation;
 mod hooks;
 mod projection;
 mod result;
@@ -39,6 +41,12 @@ pub(super) enum FilesystemCompletionPhase {
     HooksEntered,
     /// Original configured completion hooks were diagnosed without execution.
     HooksAccepted,
+    /// Original audit append entered; acknowledgement remains unproven.
+    AuditEntered,
+    /// Original policy required no audit record; no append is claimed.
+    AuditNotRequired,
+    /// Writer accepted this record; deferred physical persistence is separate.
+    AuditAppendAccepted,
 }
 
 impl FilesystemCompletionPhase {
@@ -54,6 +62,9 @@ impl FilesystemCompletionPhase {
             Self::ContextCommitted => "filesystem_context_committed",
             Self::HooksEntered => "filesystem_hooks_entered",
             Self::HooksAccepted => "filesystem_hooks_accepted",
+            Self::AuditEntered => "filesystem_audit_entered",
+            Self::AuditNotRequired => "filesystem_audit_not_required",
+            Self::AuditAppendAccepted => "filesystem_audit_append_accepted",
         }
     }
 }
@@ -74,6 +85,15 @@ pub(super) struct FilesystemCompletionReceipt {
     completed_hooks: Vec<crate::integrations::hooks::HookDefinition>,
     /// Bounded semantic outcome captured with canonical facts, never a command.
     completed_hook_payload: Option<String>,
+    /// Original writer registration, immutable policy and record attribution.
+    audit_obligation: FilesystemAuditObligation,
+    /// Actual returned append evidence, retained even after a lost acknowledgement.
+    audit_append: Option<crate::security::audit::AuditWrite>,
+    /// Whether the accepted bytes still require external persistence evidence.
+    audit_append_deferred: bool,
+    /// Isolated fault after real append, before acknowledgement; never authority.
+    #[cfg(test)]
+    reject_audit_ack_for_tests: bool,
     /// First required failure; duplicates never reset it or replay the gate.
     failure: Option<Box<MezError>>,
 }
@@ -86,6 +106,8 @@ impl fmt::Debug for FilesystemCompletionReceipt {
             .field("owner", &self.owner)
             .field("phase", &self.phase)
             .field("has_raw", &self.raw.is_some())
+            .field("has_audit_append", &self.audit_append.is_some())
+            .field("audit_append_deferred", &self.audit_append_deferred)
             .field(
                 "failure_kind",
                 &self.failure.as_ref().map(|error| error.kind()),
@@ -164,6 +186,7 @@ impl RuntimeSessionService {
             ordinal: work.owner.ordinal,
             attempt: key.2.clone(),
         };
+        let audit_obligation = FilesystemAuditObligation::capture(self, &work)?;
         self.agent.completion_settlements.filesystem.insert(
             key,
             Box::new(FilesystemCompletionReceipt {
@@ -180,6 +203,11 @@ impl RuntimeSessionService {
                     .cloned()
                     .collect(),
                 completed_hook_payload: None,
+                audit_obligation,
+                audit_append: None,
+                audit_append_deferred: false,
+                #[cfg(test)]
+                reject_audit_ack_for_tests: false,
                 failure: None,
             }),
         );

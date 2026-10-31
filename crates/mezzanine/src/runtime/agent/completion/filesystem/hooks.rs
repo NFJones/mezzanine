@@ -25,7 +25,13 @@ impl RuntimeSessionService {
         if let Some(error) = &receipt.failure {
             return Err((**error).clone());
         }
-        if receipt.phase == FilesystemCompletionPhase::HooksAccepted {
+        if matches!(
+            receipt.phase,
+            FilesystemCompletionPhase::HooksAccepted
+                | FilesystemCompletionPhase::AuditEntered
+                | FilesystemCompletionPhase::AuditNotRequired
+                | FilesystemCompletionPhase::AuditAppendAccepted
+        ) {
             return Ok(false);
         }
         if receipt.phase != FilesystemCompletionPhase::ContextCommitted {

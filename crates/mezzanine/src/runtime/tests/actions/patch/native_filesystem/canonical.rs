@@ -136,7 +136,7 @@ fn canonical_filesystem_success_commits_typed_facts_once_without_acknowledging_s
             .service
             .filesystem_completion_phase_for_tests(&attempt)
             .unwrap(),
-        "filesystem_hooks_accepted"
+        "filesystem_audit_not_required"
     );
 }
 
@@ -323,7 +323,7 @@ fn canonical_filesystem_late_facts_update_original_failed_backing_not_latest_exe
             .service
             .filesystem_completion_phase_for_tests(&attempt)
             .unwrap(),
-        "filesystem_hooks_accepted"
+        "filesystem_audit_not_required"
     );
     assert_eq!(
         fs::read(fixture.root.join("file")).unwrap(),

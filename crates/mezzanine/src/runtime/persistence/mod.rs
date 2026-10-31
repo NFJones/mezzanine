@@ -19,6 +19,8 @@ use mez_terminal::TerminalSize;
 use super::RuntimeSideEffect;
 
 mod adapters;
+mod audit;
+pub(crate) use audit::RuntimeAuditWriterIdentity;
 mod bookkeeping;
 mod transcript_admission;
 #[cfg(test)]
@@ -61,6 +63,10 @@ pub(crate) struct RuntimePersistenceComponent {
     token_usage_write_gap: std::cell::Cell<bool>,
     session_registry: Option<SessionRegistry>,
     audit_log: Option<AuditLog>,
+    /// Allocation identity changes on attachment/removal, not ordinary appends.
+    audit_writer_identity: std::sync::Arc<()>,
+    /// A failed staged append may already own effects; native use fails closed.
+    audit_writer_unproven: bool,
     queued_pane_input_effects: Vec<RuntimeSideEffect>,
     /// Next transient family to visit after a capacity-bounded source transfer.
     pub(super) deferred_transient_family_cursor: usize,

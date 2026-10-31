@@ -41,6 +41,8 @@ mod time;
 /// declaration makes the boundary available to the crate.
 mod types;
 
+pub(crate) use types::AuditWrite;
+
 pub use types::{
     AuditActor, AuditConfig, AuditDeferredWrite, AuditLog, AuditRecord, AuditRetentionPolicy,
 };
