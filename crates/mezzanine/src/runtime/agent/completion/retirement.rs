@@ -170,6 +170,8 @@ pub(super) struct CompletionGroup {
     pub(super) turn: AgentTurnRecord,
     pub(super) group: mez_agent::ContextExecutionGroupId,
     pub(super) actions: Vec<(String, String, usize)>,
+    /// Original provider-native call ownership survives moved failed backing.
+    pub(super) provider_calls: Vec<(mez_agent::ProviderContinuityOwner, String)>,
     pub(super) issued: BTreeSet<(String, String)>,
     pub(super) observed: BTreeSet<(String, String)>,
     pub(super) context_committed: BTreeSet<(String, String)>,
@@ -561,6 +563,13 @@ impl RuntimeSessionService {
                 })),
             }))
         });
+        let provider_calls = self
+            .agent
+            .agent_provider_tool_calls_by_turn
+            .get(turn_id)
+            .and_then(|groups| groups.get(group_id))
+            .cloned()
+            .unwrap_or_default();
         self.agent.completion_settlements.groups.insert(
             turn_id.to_string(),
             Box::new(CompletionGroup {
@@ -568,6 +577,7 @@ impl RuntimeSessionService {
                 turn,
                 group: group_id.clone(),
                 actions,
+                provider_calls,
                 issued: BTreeSet::new(),
                 observed: BTreeSet::new(),
                 context_committed: BTreeSet::new(),
@@ -1518,12 +1528,13 @@ impl RuntimeSessionService {
                 &error,
             );
         }
-        let raw_pending = self
-            .agent
-            .completion_settlements
-            .external
-            .values()
-            .any(|receipt| receipt.owner.turn_id == turn.turn_id && receipt.raw.is_some())
+        let raw_pending = self.filesystem_completion_issued_pending(&turn.turn_id)
+            || self
+                .agent
+                .completion_settlements
+                .external
+                .values()
+                .any(|receipt| receipt.owner.turn_id == turn.turn_id && receipt.raw.is_some())
             || self
                 .agent
                 .completion_settlements
@@ -1642,8 +1653,9 @@ impl RuntimeSessionService {
             return self.finalize_completion_provider_refusal(turn, execution, reason);
         }
         self.ensure_completion_required_gates_ready(&turn.turn_id)?;
-        let publication_pending =
-            self.agent
+        let publication_pending = self.filesystem_completion_pending(&turn.turn_id)
+            || self
+                .agent
                 .completion_settlements
                 .external
                 .values()
@@ -1652,20 +1664,20 @@ impl RuntimeSessionService {
                         && (receipt.raw.is_some()
                             || receipt.phase != ExternalCompletionPhase::PublicationAccepted)
                 })
-                || self
-                    .agent
-                    .completion_settlements
-                    .native
-                    .values()
-                    .any(|receipt| {
-                        receipt.owner.turn_id == turn.turn_id
-                            && (receipt.raw.is_some()
-                                || !matches!(
-                                    receipt.phase,
-                                    NativeCompletionPhase::PublicationAccepted
-                                        | NativeCompletionPhase::NextPhaseOwned
-                                ))
-                    });
+            || self
+                .agent
+                .completion_settlements
+                .native
+                .values()
+                .any(|receipt| {
+                    receipt.owner.turn_id == turn.turn_id
+                        && (receipt.raw.is_some()
+                            || !matches!(
+                                receipt.phase,
+                                NativeCompletionPhase::PublicationAccepted
+                                    | NativeCompletionPhase::NextPhaseOwned
+                            ))
+                });
         if publication_pending {
             return Err(MezError::invalid_state(
                 "completion publication still owns group finalization",
@@ -1832,17 +1844,18 @@ impl RuntimeSessionService {
             }
             CompletionTranscriptTarget::NoPersistencePolicy(_) => true,
         };
-        let raw_pending = self
-            .agent
-            .completion_settlements
-            .external
-            .values()
-            .any(|receipt| {
-                receipt.owner.turn_id == turn_id
-                    && (receipt.raw.is_some()
-                        || (!group.paint_revoked
-                            && receipt.phase != ExternalCompletionPhase::PublicationAccepted))
-            })
+        let raw_pending = self.filesystem_completion_pending(turn_id)
+            || self
+                .agent
+                .completion_settlements
+                .external
+                .values()
+                .any(|receipt| {
+                    receipt.owner.turn_id == turn_id
+                        && (receipt.raw.is_some()
+                            || (!group.paint_revoked
+                                && receipt.phase != ExternalCompletionPhase::PublicationAccepted))
+                })
             || self
                 .agent
                 .completion_settlements
@@ -1904,7 +1917,8 @@ impl RuntimeSessionService {
         let Some(group) = self.agent.completion_settlements.groups.get(turn_id) else {
             return;
         };
-        if group.scope.is_some()
+        if self.filesystem_completion_pending(turn_id)
+            || group.scope.is_some()
             || group.primary_failure.is_some()
             || group.failed_backing.is_some()
             || self.agent_turn_executions().contains_key(turn_id)

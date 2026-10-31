@@ -99,6 +99,22 @@ async fn async_actor_rpc_commits_and_retains_original_raw_outcome() {
             .await
             .unwrap()
     );
+    let projected =
+        crate::host::async_runtime::native_filesystem::project_joined_native_filesystem_facts(
+            &actor.handle,
+            &producer,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(Arc::ptr_eq(&projected, &outcome));
+    assert!(
+        !actor
+            .handle
+            .project_native_filesystem_completion(attempt.clone())
+            .await
+            .unwrap()
+    );
     let fixture = actor.finish().await;
     assert!(Arc::ptr_eq(
         &outcome,
@@ -107,6 +123,22 @@ async fn async_actor_rpc_commits_and_retains_original_raw_outcome() {
             .retained_native_filesystem_outcome(&attempt)
             .unwrap()
     ));
+    assert_eq!(
+        fixture.service.agent_turn_executions()[&fixture.turn.turn_id].action_results[0].status,
+        mez_agent::ActionStatus::Succeeded
+    );
+    assert_eq!(
+        fixture
+            .service
+            .filesystem_completion_phase_for_tests(&attempt)
+            .unwrap(),
+        "filesystem_context_committed"
+    );
+    assert!(
+        !fixture
+            .service
+            .completion_provider_continuation_ready(&fixture.turn.turn_id)
+    );
     assert!(
         fixture
             .service

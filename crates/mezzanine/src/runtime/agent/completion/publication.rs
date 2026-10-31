@@ -46,7 +46,8 @@ impl RuntimeSessionService {
         &self,
         turn_id: &str,
     ) -> bool {
-        self.ensure_completion_required_gates_ready(turn_id).is_ok()
+        !self.filesystem_completion_pending(turn_id)
+            && self.ensure_completion_required_gates_ready(turn_id).is_ok()
             && self
                 .agent
                 .completion_settlements

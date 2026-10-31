@@ -70,6 +70,10 @@ pub(crate) struct NativePatchEndpointReceipt {
     pub(crate) kind: NativePatchEndpointKind,
     /// Aggregate-budgeted native diff, published only after commit evidence.
     pub(crate) diff: String,
+    /// Full-file native diff additions, independent of display truncation.
+    pub(crate) added_lines: usize,
+    /// Full-file native diff removals, independent of display truncation.
+    pub(crate) removed_lines: usize,
     /// Display truncation does not remove this authoritative receipt.
     pub(crate) diff_truncated: bool,
 }
@@ -398,6 +402,11 @@ fn publish_endpoint(
         kind,
         diff: diff.source,
         diff_truncated: diff.truncated,
+        added_lines: change
+            .final_bytes
+            .as_ref()
+            .map_or(0, |bytes| line_count(bytes)),
+        removed_lines: expected.map_or(0, line_count),
     };
     outcome.receipts.push(receipt);
     outcome.result.phase = NativePatchPhase::Settle;
@@ -410,6 +419,14 @@ fn publish_endpoint(
             .ok_or_else(|| MezError::invalid_state("native patch lost commit receipt"))?,
     );
     Ok(())
+}
+
+/// Counts complete raw text lines without allocating a truncated display copy.
+fn line_count(bytes: &[u8]) -> usize {
+    if bytes.is_empty() {
+        return 0;
+    }
+    bytes.iter().filter(|byte| **byte == b'\n').count() + usize::from(!bytes.ends_with(b"\n"))
 }
 
 #[cfg(test)]

@@ -1118,6 +1118,13 @@ pub(in crate::host::async_runtime) enum AsyncRuntimeRequest {
         /// Raw custody acknowledgement only, not durable or worker-join proof.
         reply: oneshot::Sender<Result<bool>>,
     },
+    /// Projects original filesystem facts into canonical execution/context only.
+    ProjectNativeFilesystemCompletion {
+        /// Exact raw-owning opaque actor attempt.
+        attempt: crate::runtime::native_filesystem::NativeFilesystemAttempt,
+        /// Canonical/context acceptance only, never archive/durable transfer.
+        reply: oneshot::Sender<Result<bool>>,
+    },
     /// Applies one approved external-action worker result inside the actor.
     CompleteApprovedExternalAction {
         /// Worker result, including any MCP transport returning to actor ownership.
@@ -1634,6 +1641,7 @@ impl AsyncRuntimeRequest {
             | Self::NativeFilesystemScopes { .. }
             | Self::NativeFilesystemCommit { .. }
             | Self::RetainNativeFilesystemOutcome { .. }
+            | Self::ProjectNativeFilesystemCompletion { .. }
             | Self::CompleteApprovedExternalAction { .. }
             | Self::ClaimAgentCommandWork { .. }
             | Self::CompleteAgentCommandWork { .. }

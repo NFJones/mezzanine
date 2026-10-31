@@ -58,6 +58,22 @@ pub(crate) async fn retain_joined_native_filesystem_outcome(
     Ok(Some(outcome))
 }
 
+/// Observes original joined facts and projects their canonical/context result.
+/// Root custody must remain retained: audit, publication and archive ownership
+/// are separate required gates and this helper issues no settlement receipt.
+pub(crate) async fn project_joined_native_filesystem_facts(
+    handle: &AsyncRuntimeSessionHandle,
+    producer: &NativeFilesystemProducer,
+) -> Result<Option<Arc<NativePatchWorkerOutcome>>> {
+    let Some(outcome) = retain_joined_native_filesystem_outcome(handle, producer).await? else {
+        return Ok(None);
+    };
+    handle
+        .project_native_filesystem_completion(producer.attempt().clone())
+        .await?;
+    Ok(Some(outcome))
+}
+
 /// Starts a claimed producer once, retaining its actual blocking handle first.
 /// No subprocess, shell adapter, environment discovery or PTY input is used.
 pub(crate) async fn start_native_filesystem_producer(

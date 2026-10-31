@@ -36,6 +36,16 @@ impl Fixture {
 
     /// Establishes optional owned navigation before starting the original turn.
     fn with_owned_directory(owned_directory: bool) -> Self {
+        Self::with_patch(owned_directory, |root| {
+            format!(
+                "*** Begin Patch\n*** Add File: {}\n+native data\n*** End Patch",
+                root.join("file").display(),
+            )
+        })
+    }
+
+    /// Installs one canonical source with purpose-specific patch semantics.
+    fn with_patch(owned_directory: bool, patch: impl FnOnce(&std::path::Path) -> String) -> Self {
         let root = temp_root("native-filesystem-attempt");
         fs::create_dir_all(&root).unwrap();
         let root = fs::canonicalize(root).unwrap();
@@ -80,10 +90,7 @@ impl Fixture {
         let action = mez_agent::AgentAction {
             id: "native-file".into(),
             payload: mez_agent::AgentActionPayload::ApplyPatch {
-                patch: format!(
-                    "*** Begin Patch\n*** Add File: {}\n+native data\n*** End Patch",
-                    root.join("file").display()
-                ),
+                patch: patch(&root),
                 strip: None,
             },
         };
@@ -701,3 +708,6 @@ fn native_filesystem_actor_commit_lease_rejects_fresh_authority_contraction() {
 }
 
 mod async_producer;
+
+#[cfg(target_os = "linux")]
+mod canonical;

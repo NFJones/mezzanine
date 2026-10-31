@@ -1161,6 +1161,18 @@ impl AsyncRuntimeSessionHandle {
         .await?
     }
 
+    /// Commits raw-owned filesystem facts to original canonical execution/context.
+    /// This reply does not acknowledge audit, publication or archive transfer.
+    pub(crate) async fn project_native_filesystem_completion(
+        &self,
+        attempt: crate::runtime::native_filesystem::NativeFilesystemAttempt,
+    ) -> Result<bool> {
+        self.request(
+            |reply| AsyncRuntimeRequest::ProjectNativeFilesystemCompletion { attempt, reply },
+        )
+        .await?
+    }
+
     /// Returns one approved external-action result to actor-owned state.
     pub async fn complete_approved_external_action(
         &self,

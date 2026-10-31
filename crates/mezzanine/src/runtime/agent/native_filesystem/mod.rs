@@ -73,13 +73,19 @@ impl RuntimeSessionService {
                     })?,
             )
         };
-        self.agent.native_filesystem_actions.queue(
+        self.reserve_completion_group(&turn.turn_id, &owner.group)?;
+        let (attempt, work) = self.agent.native_filesystem_actions.queue(
             owner,
             source,
             operation,
             self.session.config_generation,
             deadline,
-        )
+        )?;
+        if let Err(error) = self.reserve_filesystem_completion(&attempt, work) {
+            let _ = self.agent.native_filesystem_actions.take_unissued(&attempt);
+            return Err(error);
+        }
+        Ok(attempt)
     }
 
     /// Freezes the original slot from the actor's canonical group map. Supplied
@@ -246,7 +252,37 @@ impl RuntimeSessionService {
                     MezError::forbidden("native filesystem source has no path authority")
                 })?;
             self.check_native_filesystem_policy(&work, &scopes)?;
-            self.agent.native_filesystem_actions.claim(attempt, scopes)
+            let dispatch = self
+                .agent
+                .native_filesystem_actions
+                .claim(attempt, scopes)?;
+            if let Some(dispatch) = &dispatch
+                && let Err(error) = self.filesystem_completion_issued(attempt, &dispatch.work)
+            {
+                // Dispatch is still local: no producer could have started.
+                // Retain that positive evidence before reporting an invariant
+                // failure instead of orphaning an issued-but-undelivered slot.
+                let raw = Arc::new(NativePatchWorkerOutcome {
+                    result: mez_agent::native_action::NativePatchOutcome {
+                        identity: dispatch.work.identity.clone(),
+                        phase: mez_agent::native_action::NativePatchPhase::Settle,
+                        certainty: mez_agent::native_action::NativeEffectCertainty::Unexecuted,
+                        confirmed_effects: Vec::new(),
+                        diagnostic: Some("Native filesystem claim could not register completion; no producer started.".into()),
+                    }, receipts: Vec::new(), completed_operations: Vec::new(),
+                });
+                let _ = self.retain_native_filesystem_outcome(attempt, raw);
+                self.fail_filesystem_completion(attempt, &error);
+                self.record_completion_required_failure(
+                    &dispatch.work.owner.turn.turn_id,
+                    "filesystem_claim_registration",
+                    None,
+                    None,
+                    &error,
+                );
+                return Err(error);
+            }
+            Ok(dispatch)
         })();
         if let Err(error) = &result {
             self.agent
@@ -411,9 +447,25 @@ impl RuntimeSessionService {
         attempt: &NativeFilesystemAttempt,
         outcome: Arc<NativePatchWorkerOutcome>,
     ) -> Result<bool> {
-        self.agent
+        let result = self
+            .agent
             .native_filesystem_actions
-            .retain(attempt, outcome)
+            .retain(attempt, Arc::clone(&outcome));
+        if self
+            .agent
+            .native_filesystem_actions
+            .retained(attempt)
+            .is_some()
+        {
+            let observed = self.filesystem_completion_retained(attempt, outcome);
+            if let Err(error) = &result {
+                self.fail_filesystem_completion(attempt, error);
+            } else if let Err(error) = observed {
+                self.fail_filesystem_completion(attempt, &error);
+                return Err(error);
+            }
+        }
+        result
     }
 
     /// Reads original retained evidence without replay or mutable access.
@@ -438,6 +490,12 @@ impl RuntimeSessionService {
         &mut self,
         attempt: &NativeFilesystemAttempt,
     ) -> Result<Arc<NativeFilesystemWork>> {
-        self.agent.native_filesystem_actions.take_unissued(attempt)
+        let reservation = self.prepare_unissued_filesystem_completion(attempt)?;
+        let work = self
+            .agent
+            .native_filesystem_actions
+            .take_unissued(attempt)?;
+        self.discard_prepared_filesystem_completion(reservation);
+        Ok(work)
     }
 }

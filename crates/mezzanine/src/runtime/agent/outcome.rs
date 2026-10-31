@@ -724,50 +724,9 @@ impl RuntimeSessionService {
             let owned_action_ids = action_ownership
                 .iter()
                 .filter(|(_, owner)| *owner == &group)
-                .map(|(action_id, _)| action_id.as_str())
+                .map(|(action_id, _)| action_id.clone())
                 .collect::<Vec<_>>();
-            let all_actions_settled = owned_action_ids.iter().all(|action_id| {
-                context.chronology().iter().any(|event| {
-                    event.execution_group_id() == Some(&group)
-                        && event.block().source == ContextSourceKind::ActionResult
-                        && event.block().label == format!("action result {action_id}")
-                })
-            });
-            if !all_actions_settled {
-                continue;
-            }
-            let tool_result_content = context
-                .chronology()
-                .iter()
-                .filter(|event| {
-                    event.execution_group_id() == Some(&group)
-                        && event.block().source == ContextSourceKind::ActionResult
-                })
-                .map(|event| event.block().content.as_str())
-                .collect::<Vec<_>>()
-                .join("\n\n");
-            for (provider_owner, tool_call_id) in tool_calls {
-                let event =
-                    provider_tool_result_event(provider_owner, tool_call_id, &tool_result_content)?;
-                let content = event.to_transcript_content();
-                if context
-                    .blocks()
-                    .iter()
-                    .any(|block| block.content == content)
-                {
-                    continue;
-                }
-                context
-                    .append_evidence_event(
-                        ContextSourceKind::TranscriptTool,
-                        format!("provider tool result {tool_call_id}"),
-                        content,
-                        group.clone(),
-                        Some(provider_owner.clone()),
-                        true,
-                    )
-                    .map_err(|error| MezError::invalid_state(error.to_string()))?;
-            }
+            append_provider_tool_results_in_group(context, &group, &owned_action_ids, tool_calls)?;
         }
         Ok(committed)
     }
@@ -1005,6 +964,60 @@ pub(super) fn runtime_agent_action_outcome_line(
         },
     )
     .map(|outcome| (outcome.is_error, outcome.line))
+}
+
+/// Emits provider-native result continuity for one actual original group only
+/// after all its canonical actions settle. Reusable for moved failed context;
+/// metadata comes from the admitted group, never a replacement pane/provider.
+pub(in crate::runtime::agent) fn append_provider_tool_results_in_group(
+    context: &mut mez_agent::AgentContext,
+    group: &mez_agent::ContextExecutionGroupId,
+    owned_action_ids: &[String],
+    tool_calls: &[(mez_agent::ProviderContinuityOwner, String)],
+) -> Result<()> {
+    let all_actions_settled = owned_action_ids.iter().all(|action_id| {
+        context.chronology().iter().any(|event| {
+            event.execution_group_id() == Some(group)
+                && event.block().source == ContextSourceKind::ActionResult
+                && event.block().label == format!("action result {action_id}")
+        })
+    });
+    if !all_actions_settled {
+        return Ok(());
+    }
+    let tool_result_content = context
+        .chronology()
+        .iter()
+        .filter(|event| {
+            event.execution_group_id() == Some(group)
+                && event.block().source == ContextSourceKind::ActionResult
+        })
+        .map(|event| event.block().content.as_str())
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    for (provider_owner, tool_call_id) in tool_calls {
+        let event = provider_tool_result_event(provider_owner, tool_call_id, &tool_result_content)?;
+        let content = event.to_transcript_content();
+        if context
+            .blocks()
+            .iter()
+            .any(|block| block.content == content)
+        {
+            continue;
+        }
+        context
+            .append_evidence_event(
+                ContextSourceKind::TranscriptTool,
+                format!("provider tool result {tool_call_id}"),
+                content,
+                group.clone(),
+                Some(provider_owner.clone()),
+                true,
+            )
+            .map_err(|error| MezError::invalid_state(error.to_string()))?;
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]

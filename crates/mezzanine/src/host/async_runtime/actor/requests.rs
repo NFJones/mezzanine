@@ -3154,6 +3154,11 @@ impl AsyncRuntimeSessionActor {
                 let _ = reply.send(result);
                 false
             }
+            AsyncRuntimeRequest::ProjectNativeFilesystemCompletion { attempt, reply } => {
+                let result = self.service.project_native_filesystem_completion(&attempt);
+                let _ = reply.send(result);
+                false
+            }
             AsyncRuntimeRequest::CompleteApprovedExternalAction { outcome, reply } => {
                 let previous_lifecycle_state = self.service.lifecycle_state();
                 let previous_id = self.side_effect_routes.next_transcript_claim_id();

@@ -177,7 +177,7 @@ impl NativeFilesystemActions {
         operation: NativePatchOperation,
         generation: u64,
         deadline: Option<Instant>,
-    ) -> Result<NativeFilesystemAttempt> {
+    ) -> Result<(NativeFilesystemAttempt, Arc<NativeFilesystemWork>)> {
         if self.attempts.len() >= MAX_ATTEMPTS {
             return Err(MezError::conflict(
                 "native filesystem attempt capacity exhausted",
@@ -208,14 +208,15 @@ impl NativeFilesystemActions {
             realm: Arc::clone(&self.realm),
             sequence: self.next,
         };
+        let work = Arc::new(NativeFilesystemWork {
+            owner,
+            identity,
+            source,
+        });
         self.attempts.insert(
             self.next,
             Attempt {
-                work: Arc::new(NativeFilesystemWork {
-                    owner,
-                    identity,
-                    source,
-                }),
+                work: Arc::clone(&work),
                 fence,
                 phase: Phase::Queued,
                 scopes: None,
@@ -226,7 +227,7 @@ impl NativeFilesystemActions {
             },
         );
         self.next = next;
-        Ok(token)
+        Ok((token, work))
     }
 
     /// Resolves only handles belonging to this actual actor allocation.

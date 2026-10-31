@@ -120,7 +120,7 @@ impl NativePatchCommitProposal {
                 source,
                 destination,
             }) => match self.endpoint {
-                0 => self.path == *destination && self.after.is_some(),
+                0 => self.path == *destination && self.before.is_none() && self.after.is_some(),
                 1 => self.path == *source && self.before.is_some() && self.after.is_none(),
                 _ => false,
             },

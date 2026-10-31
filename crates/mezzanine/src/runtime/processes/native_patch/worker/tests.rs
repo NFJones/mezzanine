@@ -391,6 +391,12 @@ fn aggregate_diff_budget_keeps_full_files_and_all_commit_receipts() {
         outcome.receipts.iter().map(|r| r.diff.len()).sum::<usize>() <= NATIVE_PATCH_DIFF_BYTES
     );
     assert!(outcome.receipts.iter().any(|r| r.diff_truncated));
+    assert!(
+        outcome
+            .receipts
+            .iter()
+            .all(|receipt| receipt.added_lines == 1 && receipt.removed_lines == 0)
+    );
     for path in ["a", "b"] {
         assert_eq!(
             fs::read(fixture.directory.join(path)).unwrap().len(),

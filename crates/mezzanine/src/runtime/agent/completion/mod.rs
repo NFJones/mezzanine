@@ -23,7 +23,9 @@ pub(in crate::runtime) use retirement::CompletionScope;
 mod provider_handoff;
 pub(super) use provider_handoff::CompletionProviderHandoff;
 use provider_handoff::ProviderHandoffOwner;
+mod filesystem;
 mod native;
+use filesystem::FilesystemCompletionReceipt;
 use native::NativeCompletionReceipt;
 pub(super) use native::{NativeCompletionKey, NativeCompletionPhase};
 mod joined;
@@ -130,6 +132,8 @@ impl fmt::Debug for ExternalCompletionReceipt {
 pub(super) struct RuntimeCompletionSettlements {
     external: BTreeMap<ExternalCompletionKey, Box<ExternalCompletionReceipt>>,
     native: BTreeMap<NativeCompletionKey, Box<NativeCompletionReceipt>>,
+    /// Filesystem-native receipts share original group gates without shell facts.
+    filesystem: BTreeMap<ExternalCompletionKey, Box<FilesystemCompletionReceipt>>,
     /// Active execution slots only; a required failure fences new work before
     /// failed owners could accumulate into a historical completion archive.
     groups: BTreeMap<String, Box<CompletionGroup>>,
@@ -164,6 +168,7 @@ impl fmt::Debug for RuntimeCompletionSettlements {
             .debug_struct("RuntimeCompletionSettlements")
             .field("external", &self.external)
             .field("native", &self.native)
+            .field("filesystem", &self.filesystem)
             .field("groups", &self.groups)
             .field("joined_sources", &self.joined_sources)
             .field(
