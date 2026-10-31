@@ -256,6 +256,13 @@ Preparing may discover a skip, but it then clears active work without queuing a
 provider or changing the persisted replay epoch; a logical admission fence is not
 a model request or summary commit.
 
+Compaction and memory request panics settle as failures against the original
+task or observation; they do not stop healthy sibling provider work. Generated
+title request panics reject that exact title attempt. Cancellation is reported
+separately. Structured failures contain bounded categories, while the ordinary
+process panic diagnostics remain available. Shared actor failures still stop
+the compromised owner.
+
 If compaction fails, the error does not mean the source history was discarded.
 Mez does not publish a partial replacement as a completed durable compaction.
 Interrupted compactor responses (including HTTP 200 with an incomplete body)

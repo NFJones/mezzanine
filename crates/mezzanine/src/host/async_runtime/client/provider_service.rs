@@ -1,4 +1,9 @@
 //! Agent-provider worker scheduling, dispatch execution, recovery, and accounting.
+//!
+//! Request-local tasks contain provider unwinds while monitors retain exact
+//! completion identities, observation delivery and cancellation ownership. Actor
+//! ingress and shared monitor failures remain outside those unwind boundaries;
+//! request failure never authorizes replay or successful auxiliary publication.
 
 use super::{
     AgentCompactionEvent, AgentId, AgentProviderEvent, AgentRememberEvent, AgentTurnLedger,
@@ -48,6 +53,35 @@ const DEFERRED_AGENT_COMMAND_DEADLINE: Duration = Duration::from_secs(120);
 /// Keeps a nested async task owned on cancellation, channel errors and panic.
 /// Dropping a JoinHandle detaches its task; this guard instead requests abort.
 struct AbortProviderWorkerOnDrop(tokio::task::AbortHandle);
+
+/// Starts request-local auxiliary work behind an unwind boundary while retaining
+/// cancellation ownership in its monitor. Construction runs inside the child as
+/// well as polling, so either failure becomes an observed `JoinError`. Actor I/O
+/// and shared monitor state remain outside this boundary and retain fatal errors.
+fn spawn_auxiliary_provider_worker<Factory, WorkerFuture, Output>(
+    factory: Factory,
+) -> (tokio::task::JoinHandle<Output>, AbortProviderWorkerOnDrop)
+where
+    Factory: FnOnce() -> WorkerFuture + Send + 'static,
+    WorkerFuture: Future<Output = Output> + Send + 'static,
+    Output: Send + 'static,
+{
+    let worker = tokio::spawn(async move { factory().await });
+    let owner = AbortProviderWorkerOnDrop(worker.abort_handle());
+    (worker, owner)
+}
+
+/// Classifies a failed join without copying its arbitrary panic payload or task
+/// debug representation into actor events. The ordinary panic hook is unchanged.
+fn provider_worker_join_failure(error: &tokio::task::JoinError) -> &'static str {
+    if error.is_panic() {
+        "provider worker join failed: panic"
+    } else if error.is_cancelled() {
+        "provider worker join failed: cancelled"
+    } else {
+        "provider worker join failed: unknown"
+    }
+}
 
 /// Service-owned expense evidence surviving monitor abort or early failure.
 /// Producer destruction is acknowledged before the ordinary wire journal is
@@ -1709,8 +1743,9 @@ async fn monitor_runtime_agent_compaction_dispatch(
         tokio::sync::mpsc::channel(STREAMING_SAY_PROGRESS_CHANNEL_CAPACITY);
     let observer =
         ProviderWireRequestObserver::new(conversation_id, pane_id.clone(), observation_sender);
-    let worker = execute_runtime_agent_compaction_dispatch(dispatch, &observer);
-    tokio::pin!(worker);
+    let (mut worker, _worker_owner) = spawn_auxiliary_provider_worker(move || async move {
+        execute_runtime_agent_compaction_dispatch(dispatch, &observer).await
+    });
     loop {
         tokio::select! {
             result = &mut worker => {
@@ -1720,7 +1755,7 @@ async fn monitor_runtime_agent_compaction_dispatch(
                 return Ok(Some(compaction_worker_event(
                     pane_id,
                     task_generation,
-                    Ok(result),
+                    result,
                 )));
             }
             Some(observation) = observation_receiver.recv() => {
@@ -1761,15 +1796,16 @@ async fn monitor_runtime_agent_remember_dispatch(
         tokio::sync::mpsc::channel(STREAMING_SAY_PROGRESS_CHANNEL_CAPACITY);
     let observer =
         ProviderWireRequestObserver::new(conversation_id, pane_id.clone(), observation_sender);
-    let worker = execute_runtime_agent_remember_dispatch(dispatch, &observer);
-    tokio::pin!(worker);
+    let (mut worker, _worker_owner) = spawn_auxiliary_provider_worker(move || async move {
+        execute_runtime_agent_remember_dispatch(dispatch, &observer).await
+    });
     loop {
         tokio::select! {
             result = &mut worker => {
                 while let Ok(observation) = observation_receiver.try_recv() {
                     submit_provider_wire_request_observation(&handle, observation).await?;
                 }
-                return Ok(Some(remember_worker_event(pane_id, observation_id, Ok(result))));
+                return Ok(Some(remember_worker_event(pane_id, observation_id, result)));
             }
             Some(observation) = observation_receiver.recv() => {
                 submit_provider_wire_request_observation(&handle, observation).await?;
@@ -1807,8 +1843,9 @@ async fn monitor_runtime_agent_session_title_dispatch(
         tokio::sync::mpsc::channel(STREAMING_SAY_PROGRESS_CHANNEL_CAPACITY);
     let observer =
         ProviderWireRequestObserver::new(conversation_id.clone(), pane_id, observation_sender);
-    let worker = execute_runtime_agent_session_title_dispatch(dispatch, &observer);
-    tokio::pin!(worker);
+    let (mut worker, _worker_owner) = spawn_auxiliary_provider_worker(move || async move {
+        execute_runtime_agent_session_title_dispatch(dispatch, &observer).await
+    });
     loop {
         tokio::select! {
             outcome = &mut worker => {
@@ -1911,7 +1948,7 @@ fn provider_worker_event(
                 turn_id,
                 claim_generation,
                 kind: "invalid_state".to_string(),
-                message: format!("provider worker join failed: {error}"),
+                message: provider_worker_join_failure(&error).to_string(),
                 provider_failure_json: None,
                 provider_raw_text: None,
                 provider_output_limit_state: None,
@@ -1954,7 +1991,7 @@ fn compaction_worker_event(
                 task_generation,
                 usage: Default::default(),
                 kind: "invalid_state".to_string(),
-                message: format!("provider worker join failed: {error}"),
+                message: provider_worker_join_failure(&error).to_string(),
                 provider_failure_json: None,
                 provider_raw_text: None,
             }),
@@ -1999,7 +2036,7 @@ fn remember_worker_event(
                 observation_id,
                 usage: Default::default(),
                 kind: "invalid_state".to_string(),
-                message: format!("provider worker join failed: {error}"),
+                message: provider_worker_join_failure(&error).to_string(),
                 provider_failure_json: None,
                 provider_raw_text: None,
             }),
@@ -2012,9 +2049,24 @@ fn remember_worker_event(
 fn session_title_worker_event(
     conversation_id: String,
     attempt_id: String,
-    result: (AgentSessionTitleOutcome, mez_agent::ModelTokenUsage),
+    result: std::result::Result<
+        (AgentSessionTitleOutcome, mez_agent::ModelTokenUsage),
+        tokio::task::JoinError,
+    >,
 ) -> (RuntimeEvent, bool) {
-    let (outcome, usage) = result;
+    let (outcome, usage) = result.unwrap_or_else(|error| {
+        let reason = if error.is_panic() {
+            "worker_panic"
+        } else if error.is_cancelled() {
+            "worker_cancelled"
+        } else {
+            "worker_join_failed"
+        };
+        (
+            AgentSessionTitleOutcome::Rejected(reason.to_string()),
+            Default::default(),
+        )
+    });
     (
         RuntimeEvent::AgentSessionTitle(AgentSessionTitleEvent::WorkerSettled {
             conversation_id,
@@ -2638,6 +2690,7 @@ fn provider_worker_error_kind(error: &MezError) -> &'static str {
 mod tests {
     use super::*;
 
+    mod auxiliary_containment;
     mod incomplete;
     mod network_progress;
 
@@ -3509,7 +3562,7 @@ mod tests {
         assert_eq!(turn_id, "turn-panic");
         assert_eq!(claim_generation, 7);
         assert_eq!(kind, "invalid_state");
-        assert!(message.contains("provider worker join failed"), "{message}");
+        assert_eq!(message, "provider worker join failed: panic");
         assert!(provider_failure_json.is_none());
         assert!(provider_raw_text.is_none());
         assert!(provider_output_limit_state.is_none());

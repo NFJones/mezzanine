@@ -2557,6 +2557,17 @@ worker capacity. Stale failure completions MUST obey the same fences as success.
 Actor ingress loss, poisoned shared ownership, and critical invariants MUST
 remain fatal to their compromised owner; auxiliary service lifetime alone MUST
 NOT suppress errors.
+Model-backed compaction, durable-memory extraction and generated session-title
+requests MUST retain their pane/task-generation, observation or title-attempt
+identity outside the request future. Request construction or polling unwinds
+MUST produce a typed failure for that captured owner, rather than terminate the
+provider service or fabricate success. Unexpected request cancellation MUST be
+distinct from panic. Monitor retirement MUST request cancellation of its owned
+request; dropping a join handle alone is not cancellation or observed cleanup.
+These request-local boundaries MUST NOT catch actor ingress or shared monitor
+ownership failures. Structured join failures MUST use bounded categories rather
+than arbitrary panic payloads; the normal process panic hook remains unchanged.
+
 A panic in the request-local framing/JSON read phase of one authenticated local
 control connection MUST retire only that connection while the host continues to
 serve other clients. A panic after shared host dispatch begins MUST remain
