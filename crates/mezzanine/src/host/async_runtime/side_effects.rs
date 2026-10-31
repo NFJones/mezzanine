@@ -1124,6 +1124,39 @@ where
                         }
                     }
                 }
+                RuntimeSideEffect::PersistTrackedAuditLog { work } => {
+                    let receipt = work.receipt()?;
+                    let byte_count = work.byte_count();
+                    let previously_joined = receipt.worker_joined();
+                    match work.execute_owned().await {
+                        Ok((crate::security::audit::AuditAppendStatus::Accepted, performed)) => {
+                            if performed {
+                                report.completed = report.completed.saturating_add(1);
+                                report.audit_batches = report.audit_batches.saturating_add(1);
+                                if work.has_retention_policy() {
+                                    report.audit_retention_runs =
+                                        report.audit_retention_runs.saturating_add(1);
+                                }
+                                report.bytes_written =
+                                    report.bytes_written.saturating_add(byte_count);
+                            }
+                        }
+                        Ok((crate::security::audit::AuditAppendStatus::Failed(_), performed)) => {
+                            if performed {
+                                report.failed = report.failed.saturating_add(1);
+                            }
+                        }
+                        Ok(_) => {}
+                        Err(_) => {
+                            if !previously_joined {
+                                report.failed = report.failed.saturating_add(1);
+                            }
+                        }
+                    }
+                    batch.push(RuntimeEvent::Persistence(
+                        PersistenceEvent::AuditAppendObserved { receipt },
+                    ));
+                }
                 RuntimeSideEffect::PersistAuditLog {
                     path,
                     mut bytes,

@@ -160,6 +160,7 @@ impl RuntimeSessionService {
             receipt.phase,
             FilesystemCompletionPhase::AuditNotRequired
                 | FilesystemCompletionPhase::AuditAppendAccepted
+                | FilesystemCompletionPhase::AuditPhysicalAccepted
         ) {
             return Ok(false);
         }
@@ -198,7 +199,7 @@ impl RuntimeSessionService {
         })?;
         let deferred = writer.writes_are_deferred();
         let write = writer
-            .append(record)
+            .append_tracked(record)
             .map_err(|error| error.with_context("native filesystem audit append"))?
             .ok_or_else(|| {
                 MezError::invalid_state("filesystem original enabled audit append was not accepted")
@@ -221,6 +222,125 @@ impl RuntimeSessionService {
         }
         self.filesystem_completion_phase(key, FilesystemCompletionPhase::AuditAppendAccepted)?;
         Ok(true)
+    }
+
+    /// Accepts only the original physical receipt's own actual result. Pending
+    /// work remains held; path/count notifications cannot reach this boundary.
+    /// Physical acceptance is not publication/archive/producer or worker-join
+    /// acknowledgement. An uncertain failed append is never reissued here.
+    pub(super) fn settle_filesystem_physical_audit(
+        &mut self,
+        key: &ExternalCompletionKey,
+    ) -> Result<bool> {
+        use crate::security::audit::AuditAppendStatus;
+        let terminal = self
+            .agent
+            .completion_settlements
+            .filesystem
+            .get(key)
+            .and_then(|receipt| receipt.audit_append.as_ref())
+            .and_then(|write| write.receipt.as_ref())
+            .is_some_and(|physical| {
+                matches!(
+                    physical.status(),
+                    AuditAppendStatus::Accepted | AuditAppendStatus::Failed(_)
+                )
+            });
+        if terminal {
+            let receipt = self
+                .agent
+                .completion_settlements
+                .filesystem
+                .get_mut(key)
+                .ok_or_else(|| {
+                    MezError::invalid_state("filesystem physical fact owner unavailable")
+                })?;
+            if !receipt.audit_physical_observed {
+                receipt.audit_physical_observed = true;
+                if let Some(group) = self.agent.completion_settlements.groups.get_mut(&key.0) {
+                    group.source_changed();
+                }
+            }
+        }
+        let receipt = self
+            .agent
+            .completion_settlements
+            .filesystem
+            .get(key)
+            .ok_or_else(|| {
+                MezError::invalid_state("filesystem physical audit owner unavailable")
+            })?;
+        if let Some(error) = &receipt.failure {
+            return Err((**error).clone());
+        }
+        if matches!(
+            receipt.phase,
+            FilesystemCompletionPhase::AuditNotRequired
+                | FilesystemCompletionPhase::AuditPhysicalAccepted
+        ) {
+            return Ok(false);
+        }
+        if receipt.phase != FilesystemCompletionPhase::AuditAppendAccepted {
+            return Err(MezError::conflict(
+                "filesystem physical audit has no accepted original append",
+            ));
+        }
+        let physical = receipt
+            .audit_append
+            .as_ref()
+            .and_then(|write| write.receipt.as_ref())
+            .ok_or_else(|| {
+                MezError::invalid_state(
+                    "filesystem accepted append has no original physical receipt",
+                )
+            })?;
+        match physical.status() {
+            AuditAppendStatus::Queued | AuditAppendStatus::InFlight => Ok(false),
+            AuditAppendStatus::Accepted => {
+                if !physical.worker_joined() {
+                    return Ok(false);
+                }
+                self.filesystem_completion_phase(
+                    key,
+                    FilesystemCompletionPhase::AuditPhysicalAccepted,
+                )?;
+                Ok(true)
+            }
+            AuditAppendStatus::Failed(error) => {
+                Err(error.with_context("native filesystem physical audit settlement"))
+            }
+        }
+    }
+
+    /// Observes only an actual receipt already owned by a filesystem attempt.
+    /// Callback labels contain no success bit. Lost notifications can be
+    /// reconciled by the ordinary projection callback reading the same receipt.
+    pub(crate) fn observe_native_filesystem_audit(
+        &mut self,
+        physical: &crate::security::audit::AuditAppendReceipt,
+    ) -> Result<bool> {
+        let owned = self
+            .agent
+            .completion_settlements
+            .filesystem
+            .iter()
+            .find(|(_, receipt)| {
+                receipt
+                    .audit_append
+                    .as_ref()
+                    .and_then(|write| write.receipt.as_ref())
+                    == Some(physical)
+            })
+            .map(|(key, receipt)| (key.clone(), receipt.attempt.clone()));
+        let Some((key, attempt)) = owned else {
+            return Ok(false);
+        };
+        let scope = self.begin_completion_scope(&key.0, CompletionScope::Callback);
+        let settled = self.settle_filesystem_physical_audit(&key);
+        if let Err(error) = &settled {
+            self.fail_filesystem_completion(&attempt, error);
+        }
+        self.end_completion_scope(scope, "filesystem_physical_audit", false, settled)
     }
 
     /// Injects one acknowledgement loss after the actual original append only.

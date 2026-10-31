@@ -423,6 +423,7 @@ pub(super) fn runtime_side_effect_is_durable_persistence(effect: &RuntimeSideEff
         effect,
         RuntimeSideEffect::Persist { .. }
             | RuntimeSideEffect::PersistAuditLog { .. }
+            | RuntimeSideEffect::PersistTrackedAuditLog { .. }
             | RuntimeSideEffect::PersistTranscriptEntries { .. }
             | RuntimeSideEffect::PersistInitialTranscript { .. }
             | RuntimeSideEffect::PersistAgentSessionMetadata { .. }
@@ -472,6 +473,7 @@ pub(super) fn runtime_side_effect_kind(effect: &RuntimeSideEffect) -> &'static s
         RuntimeSideEffect::RunProgramHook { .. } => "run-program-hook",
         RuntimeSideEffect::Persist { .. } => "persist",
         RuntimeSideEffect::PersistAuditLog { .. } => "persist-audit-log",
+        RuntimeSideEffect::PersistTrackedAuditLog { .. } => "persist-tracked-audit-log",
         RuntimeSideEffect::PersistTranscriptEntries { .. } => "persist-transcript",
         RuntimeSideEffect::PersistInitialTranscript { .. } => "persist-initial-transcript",
         RuntimeSideEffect::PersistAgentSessionMetadata { .. } => "persist-agent-session-metadata",

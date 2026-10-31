@@ -18,18 +18,18 @@ use mez_agent::native_action::{NativePatchOutcome, NativePatchPhase};
 use std::time::Duration;
 
 /// Actor fixture retaining storage/process cleanup through its original owner.
-struct ActorFixture {
+pub(super) struct ActorFixture {
     /// Original private subtree and returned runtime service on normal exit.
     fixture: Option<Fixture>,
     /// Actual serialized actor request destination.
-    handle: AsyncRuntimeSessionHandle,
+    pub(super) handle: AsyncRuntimeSessionHandle,
     /// Actual actor task, always observed during normal fixture retirement.
     actor: Option<tokio::task::JoinHandle<AsyncRuntimeActorExit>>,
 }
 
 impl ActorFixture {
     /// Transfers the real canonical slot into an actual asynchronously run actor.
-    fn new(mut fixture: Fixture) -> Self {
+    pub(super) fn new(mut fixture: Fixture) -> Self {
         let service = std::mem::replace(&mut fixture.service, test_runtime_service());
         let (handle, actor) =
             AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
@@ -46,7 +46,7 @@ impl ActorFixture {
     }
 
     /// Observes actor shutdown and restores actual service for process cleanup.
-    async fn finish(mut self) -> Fixture {
+    pub(super) async fn finish(mut self) -> Fixture {
         self.handle.shutdown().await.unwrap();
         let exit = self.actor.take().unwrap().await.unwrap();
         self.fixture.as_mut().unwrap().service = exit.service;

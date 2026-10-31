@@ -56,7 +56,22 @@ impl AuditLog {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub fn append(&mut self, mut record: AuditRecord) -> Result<Option<AuditWrite>> {
+    pub fn append(&mut self, record: AuditRecord) -> Result<Option<AuditWrite>> {
+        self.append_inner(record, false)
+    }
+
+    /// Appends with allocation-bound physical custody through deferred or
+    /// synchronous execution. Returned acceptance alone is not disk proof.
+    pub(crate) fn append_tracked(&mut self, record: AuditRecord) -> Result<Option<AuditWrite>> {
+        self.append_inner(record, true)
+    }
+
+    /// Encodes once and binds optional physical evidence before queue handoff.
+    fn append_inner(
+        &mut self,
+        mut record: AuditRecord,
+        tracked: bool,
+    ) -> Result<Option<AuditWrite>> {
         if !self.config.enabled {
             if self.config.required {
                 return Err(MezError::forbidden(
@@ -82,7 +97,16 @@ impl AuditLog {
         };
         line.push('\n');
 
+        let receipt = tracked.then(|| {
+            super::receipt::AuditAppendReceipt::new(
+                &self.config.path,
+                line.as_bytes(),
+                &self.retention,
+                self.defer_writes,
+            )
+        });
         let mut write = AuditWrite {
+            receipt: receipt.clone(),
             event_id: self.next_event_id,
             hash,
         };
@@ -90,6 +114,7 @@ impl AuditLog {
         if self.defer_writes {
             self.next_event_id += 1;
             self.deferred_writes.push(AuditDeferredWrite {
+                receipt,
                 path: self.config.path.clone(),
                 bytes: line.into_bytes(),
                 retention: self.retention.clone(),
@@ -97,25 +122,31 @@ impl AuditLog {
             return Ok(Some(write));
         }
 
-        if let Some(parent) = self.config.path.parent() {
-            fs::create_dir_all(parent)?;
-            fs::set_permissions(parent, fs::Permissions::from_mode(0o700))?;
-        }
-        let mut file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&self.config.path)?;
-        file.write_all(line.as_bytes())?;
-        file.sync_all()?;
-        fs::set_permissions(&self.config.path, fs::Permissions::from_mode(0o600))?;
-        self.retention.enforce_jsonl(&self.config.path)?;
-        if self.config.hash_chain {
-            let state = audit_hash_state_from_file(&self.config.path, self.next_event_id)?;
-            self.previous_hash = state.last_hash;
-            write.hash = state.event_hash;
-        }
+        let guard = match &receipt {
+            Some(receipt) => Some(
+                receipt
+                    .begin(&self.config.path, line.as_bytes(), &self.retention)?
+                    .ok_or_else(|| {
+                        MezError::invalid_state("fresh audit append was already entered")
+                    })?,
+            ),
+            None => None,
+        };
+        let result = (|| {
+            persist_audit_record(&self.config.path, line.as_bytes(), &self.retention)?;
+            if self.config.hash_chain {
+                let state = audit_hash_state_from_file(&self.config.path, self.next_event_id)?;
+                self.previous_hash = state.last_hash;
+                write.hash = state.event_hash;
+            }
 
-        self.next_event_id += 1;
+            self.next_event_id += 1;
+            Ok(())
+        })();
+        if let Some(guard) = guard {
+            guard.finish(result.clone());
+        }
+        result?;
         Ok(Some(write))
     }
 
@@ -197,4 +228,24 @@ fn audit_hash_state_from_file(path: &Path, event_id: u64) -> Result<AuditHashFil
         }
     }
     Ok(state)
+}
+
+/// Performs the actual synchronous append/sync/permissions/retention boundary.
+/// Callers retain any tracked guard across this entire operation. An error can
+/// follow a partial or complete append and never authorizes automatic replay.
+pub(super) fn persist_audit_record(
+    path: &Path,
+    bytes: &[u8],
+    retention: &AuditRetentionPolicy,
+) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+        fs::set_permissions(parent, fs::Permissions::from_mode(0o700))?;
+    }
+    let mut file = OpenOptions::new().create(true).append(true).open(path)?;
+    file.write_all(bytes)?;
+    file.sync_all()?;
+    fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
+    retention.enforce_jsonl(path)?;
+    Ok(())
 }

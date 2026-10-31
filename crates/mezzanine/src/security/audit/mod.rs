@@ -15,6 +15,8 @@ mod json;
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 mod log;
+mod receipt;
+pub(crate) use receipt::{AuditAppendReceipt, AuditAppendStatus, AuditAppendWork};
 /// Exposes the record module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this

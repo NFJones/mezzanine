@@ -48,8 +48,11 @@ impl RuntimeSessionService {
         let projected = (|| {
             let changed = self.project_filesystem_facts(&key)?;
             let hooks_changed = self.complete_filesystem_hooks(&key)?;
-            self.append_filesystem_audit(&key)
-                .map(|audit_changed| changed || hooks_changed || audit_changed)
+            let audit_changed = self.append_filesystem_audit(&key)?;
+            self.settle_filesystem_physical_audit(&key)
+                .map(|physical_changed| {
+                    changed || hooks_changed || audit_changed || physical_changed
+                })
         })();
         if let Err(error) = &projected {
             self.fail_filesystem_completion(attempt, error);
@@ -76,6 +79,7 @@ impl RuntimeSessionService {
                 | FilesystemCompletionPhase::AuditEntered
                 | FilesystemCompletionPhase::AuditNotRequired
                 | FilesystemCompletionPhase::AuditAppendAccepted
+                | FilesystemCompletionPhase::AuditPhysicalAccepted
         ) {
             return Ok(false);
         }

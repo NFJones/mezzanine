@@ -54,6 +54,18 @@ append means that bytes are queued, not persisted. Physical persistence,
 publication, archive and producer ownership transfer still need their own
 evidence. Optional absent/disabled logging is explicitly not required.
 
+Deferred native audit records carry an opaque physical receipt alongside the
+original bytes, destination and retention policy in the ordered audit queue.
+The worker retains its actual blocking handle across cancelled observers; a
+later observer joins the same job. Physical acceptance requires the original
+qualified I/O result and that actual join. Duplicate deliveries read the retained
+result and never retry an entered write, including an uncertain failed prefix.
+Path/byte notifications or another record's receipt cannot stand in for this
+proof. A lost notification can be reconciled from the original retained receipt;
+late positive evidence preserves an earlier append acknowledgement failure.
+This proves the qualified append and retention operation, not permanent record
+retention or publication/archive/producer transfer.
+
 Treat hook runners as distinct execution boundaries. Program hooks can invoke
 external programs and receive structured event data on standard input. Shell
 hooks use the focused pane shell when one is available. Focused-shell hooks

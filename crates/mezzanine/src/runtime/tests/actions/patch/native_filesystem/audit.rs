@@ -105,7 +105,7 @@ fn native_filesystem_audit_appends_original_record_once() {
             .service
             .filesystem_completion_phase_for_tests(&attempt)
             .unwrap(),
-        "filesystem_audit_append_accepted"
+        "filesystem_audit_physical_accepted"
     );
 }
 
@@ -138,14 +138,10 @@ fn native_filesystem_audit_deferred_acceptance_is_not_physical_settlement() {
     );
     let transition = fixture.service.drain_audit_persistence_transition();
     assert_eq!(transition.side_effects.len(), 1);
-    let RuntimeSideEffect::PersistAuditLog {
-        path: actual,
-        bytes,
-        ..
-    } = &transition.side_effects[0]
-    else {
-        panic!("expected actual deferred audit write");
+    let RuntimeSideEffect::PersistTrackedAuditLog { work } = &transition.side_effects[0] else {
+        panic!("expected exact tracked audit write");
     };
+    let (actual, bytes) = work.encoded_record_for_tests();
     assert_eq!(actual, &path);
     let row: serde_json::Value = serde_json::from_slice(bytes).unwrap();
     assert_eq!(row["event_id"], write.event_id);

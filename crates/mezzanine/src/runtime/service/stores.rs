@@ -129,6 +129,15 @@ impl RuntimeSessionService {
         let mut redispatch_presentation_resizes = false;
         let mut render_overlay = true;
         let payload = match event {
+            crate::runtime::PersistenceEvent::AuditAppendObserved { receipt } => {
+                let state = match self.observe_native_filesystem_audit(&receipt) {
+                    Ok(true) => "accepted",
+                    Ok(false) => "unchanged_or_unowned",
+                    Err(_) => "failed",
+                };
+                serde_json::json!({"worker":"async-persistence", "target":"tracked-audit", "state":state}).to_string()
+            }
+
             crate::runtime::PersistenceEvent::TranscriptCompleted {
                 conversation_id,
                 first_sequence,

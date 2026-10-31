@@ -197,6 +197,8 @@ pub struct AuditRetentionReport {
 /// structured runtime state without parsing display text.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AuditWrite {
+    /// Optional exact physical evidence for explicitly tracked appends.
+    pub(crate) receipt: Option<super::receipt::AuditAppendReceipt>,
     /// Stores the event id value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
@@ -212,6 +214,8 @@ pub struct AuditWrite {
 /// Audit JSONL payload queued for asynchronous persistence.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AuditDeferredWrite {
+    /// Original exact physical owner, carried through ordered queue handoff.
+    pub(crate) receipt: Option<super::receipt::AuditAppendReceipt>,
     /// Destination audit log path.
     pub path: PathBuf,
     /// Encoded JSONL record bytes, including the trailing newline.

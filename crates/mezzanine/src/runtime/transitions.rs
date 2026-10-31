@@ -618,6 +618,11 @@ pub enum AsyncHookEvent {
 /// Event emitted by an async persistence worker.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PersistenceEvent {
+    /// Observation of the original opaque audit receipt, never caller status.
+    AuditAppendObserved {
+        /// Exact allocation with actual shared physical evidence.
+        receipt: crate::security::audit::AuditAppendReceipt,
+    },
     /// Opaque physically joined native renewal, requiring final actor fencing.
     ExternalSourceRenewalCompleted {
         /// Original source and exact actor admission; no caller-supplied result.
@@ -1196,6 +1201,11 @@ pub enum RuntimeSideEffect {
         bytes: Vec<u8>,
         /// Write behavior to use for the destination.
         mode: PersistenceWriteMode,
+    },
+    /// Persist one exact tracked record in the existing ordered audit lane.
+    PersistTrackedAuditLog {
+        /// Immutable bytes/retention and opaque one-shot physical evidence.
+        work: crate::security::audit::AuditAppendWork,
     },
     /// Append one audit JSONL record and apply retention on the persistence worker.
     PersistAuditLog {

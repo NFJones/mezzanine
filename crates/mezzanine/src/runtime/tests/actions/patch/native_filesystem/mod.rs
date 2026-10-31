@@ -719,3 +719,6 @@ mod completion_hooks;
 
 #[cfg(target_os = "linux")]
 mod audit;
+
+#[cfg(target_os = "linux")]
+mod audit_physical;

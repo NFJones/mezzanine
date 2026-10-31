@@ -47,6 +47,8 @@ pub(super) enum FilesystemCompletionPhase {
     AuditNotRequired,
     /// Writer accepted this record; deferred physical persistence is separate.
     AuditAppendAccepted,
+    /// Exact original receipt proves the qualified physical append completed.
+    AuditPhysicalAccepted,
 }
 
 impl FilesystemCompletionPhase {
@@ -65,6 +67,7 @@ impl FilesystemCompletionPhase {
             Self::AuditEntered => "filesystem_audit_entered",
             Self::AuditNotRequired => "filesystem_audit_not_required",
             Self::AuditAppendAccepted => "filesystem_audit_append_accepted",
+            Self::AuditPhysicalAccepted => "filesystem_audit_physical_accepted",
         }
     }
 }
@@ -91,6 +94,8 @@ pub(super) struct FilesystemCompletionReceipt {
     audit_append: Option<crate::security::audit::AuditWrite>,
     /// Whether the accepted bytes still require external persistence evidence.
     audit_append_deferred: bool,
+    /// First terminal physical fact invalidates source witnesses only once.
+    audit_physical_observed: bool,
     /// Isolated fault after real append, before acknowledgement; never authority.
     #[cfg(test)]
     reject_audit_ack_for_tests: bool,
@@ -206,6 +211,7 @@ impl RuntimeSessionService {
                 audit_obligation,
                 audit_append: None,
                 audit_append_deferred: false,
+                audit_physical_observed: false,
                 #[cfg(test)]
                 reject_audit_ack_for_tests: false,
                 failure: None,

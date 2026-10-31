@@ -12711,7 +12711,19 @@ event/hash evidence and distinguish adapter-deferred bytes from physical
 persistence. Failed or lost append acknowledgements MUST NOT replay audit I/O;
 confirmed filesystem effects MUST remain recorded. Optional absent/disabled
 policy MUST be represented as not required, never a fabricated accepted append.
-No append milestone alone authorizes archive/producer transfer. Pane creation, external editing, clipboard/status commands and other intentionally
+Deferred physical audit work MUST retain an opaque receipt bound to its exact
+encoded bytes, destination and retention policy in the existing ordered lane.
+Only actual qualified append/sync/permissions/retention results may populate
+that receipt. Duplicate deliveries MUST observe its retained result without
+replaying entered I/O. Deferred work MUST install and retain its actual blocking
+handle before awaiting it; cancellation of an observer MUST NOT detach the
+worker or prove nonexecution. Physical acceptance MUST require that actual
+worker's observed join. Path/count notifications and equal-looking records MUST
+NOT acknowledge another original receipt. Late physical evidence MUST retain
+original attribution and MUST NOT erase an earlier append-acknowledgement error.
+Append/physical milestones alone do not authorize publication, archive or
+producer transfer. Pane creation, external editing, clipboard/status commands
+and other intentionally
 process-oriented UI integrations are outside this filesystem guarantee. A
 literal shell-command-only launch policy MUST reject incompatible integrations
 rather than silently expanding these exclusions. HTTP integrations and passive

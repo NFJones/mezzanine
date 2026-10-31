@@ -31,6 +31,7 @@ impl RuntimeSessionService {
                 | FilesystemCompletionPhase::AuditEntered
                 | FilesystemCompletionPhase::AuditNotRequired
                 | FilesystemCompletionPhase::AuditAppendAccepted
+                | FilesystemCompletionPhase::AuditPhysicalAccepted
         ) {
             return Ok(false);
         }

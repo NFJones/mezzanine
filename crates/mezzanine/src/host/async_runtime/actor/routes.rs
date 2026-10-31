@@ -357,6 +357,7 @@ impl RuntimeSideEffectRouter {
             effect,
             RuntimeSideEffect::Persist { .. }
                 | RuntimeSideEffect::PersistAuditLog { .. }
+                | RuntimeSideEffect::PersistTrackedAuditLog { .. }
                 | RuntimeSideEffect::PersistTranscriptEntries { .. }
                 | RuntimeSideEffect::PersistInitialTranscript { .. }
                 | RuntimeSideEffect::PersistAgentSessionMetadata { .. }

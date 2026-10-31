@@ -164,6 +164,10 @@ pub(crate) fn coalesce_config_persistence_effects(
 
 /// Converts one encoded audit write into its canonical persistence effect.
 fn audit_persistence_effect(write: AuditDeferredWrite) -> RuntimeSideEffect {
+    let write = match write.into_tracked() {
+        Ok(work) => return RuntimeSideEffect::PersistTrackedAuditLog { work },
+        Err(write) => write,
+    };
     RuntimeSideEffect::PersistAuditLog {
         path: write.path,
         bytes: write.bytes,
