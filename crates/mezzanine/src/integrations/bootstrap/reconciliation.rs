@@ -377,9 +377,9 @@ pub(super) fn reconcile_array(
     if new.is_some_and(|new| {
         array.iter().enumerate().any(|(index, value)| {
             value == new
-                && !indices
+                && indices
                     .as_ref()
-                    .is_some_and(|indices| indices.binary_search(&index).is_ok())
+                    .is_none_or(|indices| indices.binary_search(&index).is_err())
         })
     }) {
         return Err(MezError::conflict(

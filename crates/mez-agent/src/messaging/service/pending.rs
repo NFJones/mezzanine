@@ -203,9 +203,9 @@ pub(super) fn validate_pending_snapshot(
         let bindings = row.recipient_bindings.as_deref().unwrap_or(&[]);
         let offers = row.offered_recipients.as_deref().unwrap_or(&[]);
         if row.ack_expiry_observed_at_ms.is_some_and(|observed| {
-            !row.envelope
+            row.envelope
                 .ttl_ms
-                .is_some_and(|ttl| row.accepted_at_ms.saturating_add(ttl) < observed)
+                .is_none_or(|ttl| row.accepted_at_ms.saturating_add(ttl) >= observed)
         }) {
             return Err(MessageError::invalid_args(
                 "snapshot MMP ACK expiry evidence is invalid",

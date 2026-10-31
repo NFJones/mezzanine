@@ -9,7 +9,7 @@ Mezzanine sessions.
 
 - Linux or macOS, with pseudoterminals and a POSIX-style shell.
 - A usable `$SHELL`; Mezzanine falls back to `/bin/sh` when it is executable.
-- Rust 1.91 or newer when building from this repository.
+- Rust 1.95 or newer when building from this repository.
 
 ## Install from this repository
 

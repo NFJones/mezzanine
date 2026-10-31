@@ -788,15 +788,14 @@ fn screen_schema_keywords(
         };
         for (keyword, child) in map {
             match keyword.as_str() {
-                "$schema" => {
-                    if child.as_str() != Some(schema_dialect_uri(draft)) {
-                        return Err(McpSchemaDiagnostic::new(
-                            McpSchemaFailure::UnsupportedDialect,
-                            Some("$schema"),
-                            None,
-                        ));
-                    }
+                "$schema" if child.as_str() != Some(schema_dialect_uri(draft)) => {
+                    return Err(McpSchemaDiagnostic::new(
+                        McpSchemaFailure::UnsupportedDialect,
+                        Some("$schema"),
+                        None,
+                    ));
                 }
+                "$schema" => {}
                 "$ref" | "$dynamicRef" => {
                     references = references.saturating_add(1);
                     let supported = child

@@ -20,7 +20,7 @@ This is a library, not a terminal application. To run Mezzanine, see the
 
 ## Prerequisites
 
-- Rust 1.91 or newer, with Rust 2024 edition support.
+- Rust 1.95 or newer, with Rust 2024 edition support.
 - A checkout of the [Mezzanine repository](../../README.md).
 
 Mezzanine supports Linux and macOS. This crate models a terminal surface;

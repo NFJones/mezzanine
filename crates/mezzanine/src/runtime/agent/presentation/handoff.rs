@@ -96,10 +96,10 @@ impl RuntimeSessionService {
 
     /// Attempts one accepted-source snapshot without replacing its first error.
     fn drain_provider_log_handoff_once(&mut self, key: &ProviderLogOwner) -> Result<()> {
-        if !self
+        if self
             .agent_shell_store()
             .get(&key.0)
-            .is_some_and(|session| session.session_id == key.2)
+            .is_none_or(|session| session.session_id != key.2)
         {
             self.presentation.agent_provider_log_handoffs.remove(key);
             self.retire_provider_log_groups_matching(|p, t, c, g| {

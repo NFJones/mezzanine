@@ -94,10 +94,10 @@ impl RuntimeSessionService {
         ids: std::collections::BTreeSet<String>,
     ) -> Result<()> {
         if self.agent_pane_screen_lineage(pane, conversation).is_none()
-            || !self
+            || self
                 .agent_shell_store()
                 .get(pane)
-                .is_some_and(|session| session.session_id == conversation)
+                .is_none_or(|session| session.session_id != conversation)
         {
             return Err(MezError::invalid_state(
                 "steering replay candidate owner changed",

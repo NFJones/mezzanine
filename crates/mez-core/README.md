@@ -17,7 +17,7 @@ pane-local agent, see the [product crate](../mezzanine/README.md).
 
 ## Prerequisites
 
-- Rust 1.91 or newer, with Rust 2024 edition support.
+- Rust 1.95 or newer, with Rust 2024 edition support.
 - A checkout of the [Mezzanine repository](../../README.md).
 
 Mezzanine targets Linux and macOS. This crate is the workspace dependency root

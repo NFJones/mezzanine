@@ -20,7 +20,7 @@ see the [product crate](../mezzanine/README.md).
 
 ## Prerequisites
 
-- Rust 1.91 or newer, with Rust 2024 edition support.
+- Rust 1.95 or newer, with Rust 2024 edition support.
 - Linux or macOS for supported Mezzanine operation.
 - Pseudoterminals and a POSIX-style shell for process-backed use and tests.
 - A checkout of the [Mezzanine repository](../../README.md).

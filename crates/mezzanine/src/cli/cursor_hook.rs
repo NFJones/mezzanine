@@ -172,9 +172,9 @@ fn request(event: &str, bytes: &[u8], pane: &str) -> Result<Option<String>> {
                     .as_str()
                     .filter(|s| matches!(*s, "completed" | "aborted" | "error"))
                     .ok_or_else(|| MezError::invalid_args("Cursor stop unavailable"))?;
-                if !value["loop_count"]
+                if value["loop_count"]
                     .as_u64()
-                    .is_some_and(|n| n <= 9_007_199_254_740_991)
+                    .is_none_or(|n| n > 9_007_199_254_740_991)
                 {
                     return Ok(None);
                 }

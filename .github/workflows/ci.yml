@@ -11,54 +11,76 @@ concurrency:
   cancel-in-progress: true
 jobs:
   validate:
-    name: "Validate: Linux"
+    name: "Validate: Linux (Rust ${{ matrix.toolchain }})"
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        toolchain: ["1.95.0", stable]
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
       - name: Install Bubblewrap
         run: |
           sudo apt-get update
-          sudo apt-get install --yes bubblewrap xauth xvfb
+          sudo apt-get install --yes bubblewrap xauth xvfb fish zsh
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: ${{ matrix.toolchain }}
           components: rustfmt, clippy
       - name: Cache Cargo artifacts
         uses: Swatinem/rust-cache@v2
       - name: Check formatting
         run: cargo fmt --all --check
+      - name: Check all targets
+        run: cargo check --workspace --all-targets --all-features --locked
       - name: Build
-        run: cargo build --all-targets --all-features
+        run: cargo build --workspace --all-targets --all-features --locked
       - name: Lint
-        run: cargo clippy --all-targets --all-features -- -D warnings
+        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
       - name: Test
-        timeout-minutes: 15
-        run: canonical_tmp="$(cd /tmp && pwd -P)"; TMPDIR="$canonical_tmp" cargo test --workspace --all-targets --all-features --no-fail-fast --quiet
+        timeout-minutes: 25
+        run: canonical_tmp="$(cd /tmp && pwd -P)"; TMPDIR="$canonical_tmp" timeout 1200s cargo test --workspace --all-targets --all-features --no-fail-fast --locked --quiet
+      - name: Test documentation
+        run: timeout 1200s cargo test --workspace --all-features --doc --locked --quiet
       - name: Validate X11 forwarding against Xvfb
         timeout-minutes: 6
         run: canonical_tmp="$(cd /tmp && pwd -P)"; TMPDIR="$canonical_tmp" sh scripts/test-x11-forwarding.sh
   macos-release-build:
-    name: "Validate: macOS"
+    name: "Validate: macOS (Rust ${{ matrix.toolchain }})"
     runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        toolchain: ["1.95.0", stable]
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+      - name: Install validation prerequisites
+        run: |
+          brew install coreutils fish
+          echo "$(brew --prefix coreutils)/libexec/gnubin" >> "$GITHUB_PATH"
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: ${{ matrix.toolchain }}
           components: rustfmt, clippy
       - name: Cache Cargo artifacts
         uses: Swatinem/rust-cache@v2
       - name: Check formatting
         run: cargo fmt --all --check
+      - name: Check all targets
+        run: cargo check --workspace --all-targets --all-features --locked
       - name: Build
-        run: cargo build --all-targets --all-features
+        run: cargo build --workspace --all-targets --all-features --locked
       - name: Lint
-        run: cargo clippy --all-targets --all-features -- -D warnings
+        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
       - name: Test
-        timeout-minutes: 15
-        run: canonical_tmp="$(cd /tmp && pwd -P)"; TMPDIR="$canonical_tmp" cargo test --workspace --all-targets --all-features --no-fail-fast --quiet -- --test-threads=1
+        timeout-minutes: 25
+        run: canonical_tmp="$(cd /tmp && pwd -P)"; TMPDIR="$canonical_tmp" timeout 1200s cargo test --workspace --all-targets --all-features --no-fail-fast --locked --quiet
+      - name: Test documentation
+        run: timeout 1200s cargo test --workspace --all-features --doc --locked --quiet
   managed-shell-reliability:
     name: "Managed shells: ${{ matrix.name }}"
     runs-on: ${{ matrix.os }}
@@ -126,6 +148,11 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+      - name: Install timeout utility on macOS
+        if: runner.os == 'macOS'
+        run: |
+          brew install coreutils
+          echo "$(brew --prefix coreutils)/libexec/gnubin" >> "$GITHUB_PATH"
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
       - name: Cache Cargo artifacts
@@ -135,7 +162,7 @@ jobs:
         env:
           MEZ_RELEASE_LOAD_REPORT: ${{ github.workspace }}/target/release-load/${{ matrix.artifact }}.json
           MEZ_RELEASE_LOAD_WORKERS: ${{ matrix.workers }}
-        run: cargo test -p mezzanine --release --lib --all-features --quiet host::async_runtime::tests::services::release_load::release_load_reports_cross_platform_pty_responsiveness -- --exact --ignored --nocapture --test-threads=1
+        run: timeout 1800s cargo test -p mezzanine --release --lib --all-features --quiet host::async_runtime::tests::services::release_load::release_load_reports_cross_platform_pty_responsiveness -- --exact --ignored --nocapture --test-threads=1
       - name: Upload responsiveness report
         if: always()
         uses: actions/upload-artifact@v4

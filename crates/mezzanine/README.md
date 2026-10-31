@@ -22,7 +22,7 @@ the lower crates.
 ## Prerequisites
 
 - Linux or macOS, with pseudoterminals and a POSIX-style shell.
-- Rust 1.91 or newer when building from this repository.
+- Rust 1.95 or newer when building from this repository.
 - A usable `$SHELL`; Mez falls back to `/bin/sh` when it is executable.
 - A provider account and supported sign-in method, or a configured compatible
   local backend, for model-backed agent work.

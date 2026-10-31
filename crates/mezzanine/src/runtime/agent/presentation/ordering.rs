@@ -735,15 +735,15 @@ impl RuntimeSessionService {
                             &execution.request.turn_id,
                             result,
                         )
-                }))
-                && !self.joined_spawn_allows_later_logs(execution, action)
-                && action_holds_later_log(action)
-                && !(matches!(action.payload, AgentActionPayload::ShellCommand { .. })
+                })
+                || self.joined_spawn_allows_later_logs(execution, action)
+                || !action_holds_later_log(action)
+                || (matches!(action.payload, AgentActionPayload::ShellCommand { .. })
                     && self
                         .presentation
                         .agent_published_provider_headers
                         .contains(&key))
-                && !execution.action_results.iter().any(|result| {
+                || execution.action_results.iter().any(|result| {
                     result.action_id == action.id
                         && result.is_terminal()
                         && runtime_agent_action_outcome_line(
@@ -757,7 +757,7 @@ impl RuntimeSessionService {
                                 .agent_published_provider_outcomes
                                 .contains(&(key.clone(), is_error, line))
                         })
-                })
+                }))
             {
                 break;
             }

@@ -154,13 +154,6 @@ pub(crate) enum SearchEndpoint {
     SerpApi,
 }
 
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "Endpoint identity and auth placement are a dormant search adapter boundary."
-    )
-)]
 impl SearchEndpoint {
     /// Returns a credential-free code-owned endpoint for approval descriptions.
     pub(crate) const fn url(self) -> &'static str {
@@ -188,13 +181,6 @@ impl SearchEndpoint {
 /// This is transport input, not an approval decision or model-facing result.
 /// Backend adapters own query/options contracts and authorization. Debug omits
 /// the complete payload, including user query and body.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "Credential-free search input awaits separately authorized runtime adapters."
-    )
-)]
 pub(crate) struct SearchHttpRequest {
     endpoint: SearchEndpoint,
     request: ProviderHttpRequest,

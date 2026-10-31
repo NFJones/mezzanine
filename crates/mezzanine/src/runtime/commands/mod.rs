@@ -1468,10 +1468,10 @@ impl RuntimeSessionService {
             input: input.to_string(),
             submitted_at_unix_seconds: current_unix_seconds(),
         };
-        if !self
+        if self
             .agent_shell_store()
             .get(pane_id)
-            .is_some_and(|session| session.session_id == turn.conversation_id)
+            .is_none_or(|session| session.session_id != turn.conversation_id)
         {
             return Err(MezError::conflict("steering turn conversation changed"));
         }

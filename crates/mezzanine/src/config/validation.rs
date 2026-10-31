@@ -386,7 +386,7 @@ pub(crate) fn validate_config_text_with_document(
         }
 
         if let Some(value) = root.pointer("/terminal/zen_focus_label_duration_ms")
-            && !value.as_u64().is_some_and(|duration| duration <= 60000)
+            && value.as_u64().is_none_or(|duration| duration > 60000)
         {
             diagnostics.push(ConfigDiagnostic {
                 path: "terminal.zen_focus_label_duration_ms".to_string(),
@@ -1759,7 +1759,7 @@ fn validate_iroh_transport_config(root: &serde_json::Value) -> Vec<ConfigDiagnos
         }
     }
     if let Some(value) = iroh.get("compression_min_bytes")
-        && !value.as_u64().is_some_and(|value| value <= 1024 * 1024)
+        && value.as_u64().is_none_or(|value| value > 1024 * 1024)
     {
         reject(
             "transport.iroh.compression_min_bytes",
@@ -1786,7 +1786,7 @@ fn validate_agent_timeout_config(root: &serde_json::Value) -> Vec<ConfigDiagnost
     };
     let mut diagnostics = Vec::new();
     if let Some(value) = agents.get("turn_timeout_ms")
-        && !value.as_u64().is_some_and(|timeout_ms| timeout_ms > 0)
+        && value.as_u64().is_none_or(|timeout_ms| timeout_ms == 0)
     {
         diagnostics.push(ConfigDiagnostic {
             path: "agents.turn_timeout_ms".to_string(),
@@ -1814,9 +1814,9 @@ fn validate_provider_retry_config(root: &serde_json::Value) -> Vec<ConfigDiagnos
     };
     let mut diagnostics = Vec::new();
     if let Some(value) = agents.get("provider_error_retry_limit")
-        && !value
+        && value
             .as_u64()
-            .is_some_and(|limit| u32::try_from(limit).is_ok())
+            .is_none_or(|limit| u32::try_from(limit).is_err())
     {
         diagnostics.push(ConfigDiagnostic {
             path: "agents.provider_error_retry_limit".to_string(),

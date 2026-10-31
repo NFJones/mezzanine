@@ -21,7 +21,7 @@ install the [Mezzanine product](../mezzanine/README.md).
 
 ## Prerequisites
 
-- Rust 1.91 or newer, with Rust 2024 edition support.
+- Rust 1.95 or newer, with Rust 2024 edition support.
 - A checkout of the [Mezzanine repository](../../README.md).
 
 Mezzanine supports Linux and macOS. Building this library does not require

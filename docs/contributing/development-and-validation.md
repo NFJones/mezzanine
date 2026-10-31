@@ -7,7 +7,7 @@ before handing off a change.
 
 ## Prerequisites
 
-- Rust 1.91 or newer, including `rustfmt` and `clippy`.
+- Rust 1.95 or newer, including `rustfmt` and `clippy`.
 - `just` for the repository recipes.
 - GNU `timeout` available as an executable named `timeout` on `PATH`.
 - Python 3 available as `python3` for managed-shell Cargo-artifact parsing and
@@ -39,6 +39,22 @@ processes. Keep coreutils' `gnubin` directory on the inherited `PATH`. Ensure
 `python3` and all supported shells above are installed too; coreutils and Fish
 alone do not supply every prerequisite. Linux typically supplies GNU timeout
 through coreutils; install Fish and Zsh if absent.
+
+## Supported Rust versions
+
+The workspace minimum is Rust 1.95. All five packages inherit that requirement;
+the locked Mermaid renderer packages also require 1.95. CI checks exact 1.95.0
+and current stable on Linux and macOS with all-target/all-feature checking,
+building, strict Clippy, tests and documentation tests. Install either toolchain
+with rustfmt and Clippy; no repository toolchain override is required.
+
+```sh
+rustup toolchain install 1.95.0 --profile minimal --component rustfmt,clippy
+timeout 1200s cargo +1.95.0 test --workspace --all-targets --all-features --locked --quiet
+```
+
+A successful newer-compiler build does not establish compatibility with the
+minimum. Record the actual compiler and operating system for local validation.
 
 ## Build and run
 

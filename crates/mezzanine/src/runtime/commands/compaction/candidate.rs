@@ -133,15 +133,15 @@ impl RuntimeSessionService {
         // summary from the old base alongside its newly rendered replacement.
         // Only the exact controller-owned legacy prefix ID is a UUID fallback.
         base_context.retain_blocks_with_metadata(|block, _| {
-            !mez_agent::context_block_is_compaction_summary(block)
-                && !(block.source == ContextSourceKind::Memory
+            !(mez_agent::context_block_is_compaction_summary(block)
+                || (block.source == ContextSourceKind::Memory
                     && block
                         .label
                         .starts_with(&format!("memory {compact_memory_id} ")))
-                && !(block.source == ContextSourceKind::UserInstruction
+                || (block.source == ContextSourceKind::UserInstruction
                     && block.label == "user prompt")
-                && block.source != ContextSourceKind::McpCatalogSnapshot
-                && !runtime_context_block_is_transcript_replay(block)
+                || block.source == ContextSourceKind::McpCatalogSnapshot
+                || runtime_context_block_is_transcript_replay(block))
         })?;
         let mut blocks = vec![ContextBlock::reference_event(
             ContextSourceKind::CompactionPrefix,

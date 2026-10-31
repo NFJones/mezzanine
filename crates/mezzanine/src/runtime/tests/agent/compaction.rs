@@ -6996,7 +6996,7 @@ fn qualify_manual_final_fit_retry(repeat: bool) {
             .compaction_epoch("manual-final-retry")
             .unwrap()
             .is_some()
-            == !repeat
+            != repeat
     );
     if repeat {
         let raw = store.inspect("manual-final-retry").unwrap();

@@ -772,7 +772,7 @@ impl AsyncRuntimeRequestIngress {
     /// Reports whether the next normal dequeue will service a pane-output producer.
     pub(super) fn next_normal_request_is_pane_output(&self) -> bool {
         !self.normal_pane_output_ready.is_empty()
-            && !(self.normal_pane_output_turn && !self.normal_requests.is_empty())
+            && (!self.normal_pane_output_turn || self.normal_requests.is_empty())
     }
 
     /// Removes one normal request, rotating exact pane-output producers fairly.
