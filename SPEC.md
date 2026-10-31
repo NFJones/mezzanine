@@ -12721,8 +12721,16 @@ worker or prove nonexecution. Physical acceptance MUST require that actual
 worker's observed join. Path/count notifications and equal-looking records MUST
 NOT acknowledge another original receipt. Late physical evidence MUST retain
 original attribution and MUST NOT erase an earlier append-acknowledgement error.
-Append/physical milestones alone do not authorize publication, archive or
-producer transfer. Pane creation, external editing, clipboard/status commands
+Native final publication MUST retain validated confirmed endpoint diffs and a
+semantic certainty/count outcome under the original response/ordinal owner,
+including positive partial effects. Rendering MUST NOT lower a shell adapter to
+summarize these typed native facts. Display-install failures MUST retain exact
+immutable sources and entry identities for publication-only retry; they MUST
+NOT replay workers, context commits, hooks or audit. Current original group and
+conversation binding are required for paint. A visible earlier filesystem
+header MUST NOT acknowledge its still-pending required gates. Native no-ops
+MUST NOT create phantom diff rows. Action-prefix publication acceptance MUST
+NOT imply whole-group continuation, archive or producer transfer. Pane creation, external editing, clipboard/status commands
 and other intentionally
 process-oriented UI integrations are outside this filesystem guarantee. A
 literal shell-command-only launch policy MUST reject incompatible integrations

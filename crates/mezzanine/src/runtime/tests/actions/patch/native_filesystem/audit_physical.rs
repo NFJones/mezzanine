@@ -137,7 +137,7 @@ async fn native_filesystem_audit_actual_worker_preserves_order_and_deduplicates_
             .service
             .filesystem_completion_phase_for_tests(&attempt)
             .unwrap(),
-        "filesystem_audit_physical_accepted"
+        "filesystem_publication_accepted"
     );
     assert!(Arc::ptr_eq(
         &raw,
@@ -279,7 +279,7 @@ async fn native_filesystem_audit_lost_notification_requires_actual_original_phys
             .service
             .filesystem_completion_phase_for_tests(&attempt)
             .unwrap(),
-        "filesystem_audit_physical_accepted"
+        "filesystem_publication_accepted"
     );
     assert!(
         !fixture

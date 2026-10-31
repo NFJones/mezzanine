@@ -67,7 +67,7 @@ fn validated_log_components(batch: &mez_agent::MaapBatch) -> Vec<RuntimeValidate
 }
 
 /// Whether this action owns a log that must precede a later say component.
-fn action_holds_later_log(action: &mez_agent::AgentAction) -> bool {
+pub(in crate::runtime::agent) fn action_holds_later_log(action: &mez_agent::AgentAction) -> bool {
     runtime_agent_action_has_runtime_visible_effect(action)
         || matches!(
             action.payload,

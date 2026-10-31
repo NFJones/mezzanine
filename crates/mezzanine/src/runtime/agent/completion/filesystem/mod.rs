@@ -4,10 +4,11 @@
 //! change. Exact actor attempts register issued/observed/context milestones and
 //! retain raw evidence independently of cancellation. Projection updates only
 //! the actual original execution and context, including moved failed backing.
-//! Canonical/context and non-executable hook acceptance are NOT audit,
-//! publication, archive-candidate or
-//! disk durability acknowledgement. Those remaining gates must finish before
-//! worker/attempt custody may transfer; this module never authorizes replay.
+//! Required context, non-executable hooks and exact audit milestones feed the
+//! immutable ordered final-display source. Their acceptance never proves an
+//! archive candidate, whole-group continuation or producer custody transfer.
+//! Original raw/attempt ownership remains until those separate gates finish;
+//! no callback or publication retry authorizes effect replay.
 
 use super::*;
 use crate::runtime::agent::native_filesystem::{NativeFilesystemAttempt, NativeFilesystemWork};
@@ -18,6 +19,8 @@ mod audit;
 use audit::FilesystemAuditObligation;
 mod hooks;
 mod projection;
+mod publication;
+use publication::FilesystemPublicationSource;
 mod result;
 
 /// Entered and accepted canonical gates, not a producer/durability receipt.
@@ -49,6 +52,10 @@ pub(super) enum FilesystemCompletionPhase {
     AuditAppendAccepted,
     /// Exact original receipt proves the qualified physical append completed.
     AuditPhysicalAccepted,
+    /// Immutable native display source remains owned across optional install failure.
+    PublicationHeld,
+    /// This action's exact ordered prefix installed; archive/transfer remain.
+    PublicationAccepted,
 }
 
 impl FilesystemCompletionPhase {
@@ -68,6 +75,8 @@ impl FilesystemCompletionPhase {
             Self::AuditNotRequired => "filesystem_audit_not_required",
             Self::AuditAppendAccepted => "filesystem_audit_append_accepted",
             Self::AuditPhysicalAccepted => "filesystem_audit_physical_accepted",
+            Self::PublicationHeld => "filesystem_publication_held",
+            Self::PublicationAccepted => "filesystem_publication_accepted",
         }
     }
 }
@@ -99,6 +108,10 @@ pub(super) struct FilesystemCompletionReceipt {
     /// Isolated fault after real append, before acknowledgement; never authority.
     #[cfg(test)]
     reject_audit_ack_for_tests: bool,
+    /// Original validated diff/result source, independent of mutable presentation.
+    publication_source: Option<Arc<FilesystemPublicationSource>>,
+    /// Optional display-install failure never resets required-gate evidence.
+    publication_failure: Option<Box<MezError>>,
     /// First required failure; duplicates never reset it or replay the gate.
     failure: Option<Box<MezError>>,
 }
@@ -214,6 +227,8 @@ impl RuntimeSessionService {
                 audit_physical_observed: false,
                 #[cfg(test)]
                 reject_audit_ack_for_tests: false,
+                publication_source: None,
+                publication_failure: None,
                 failure: None,
             }),
         );

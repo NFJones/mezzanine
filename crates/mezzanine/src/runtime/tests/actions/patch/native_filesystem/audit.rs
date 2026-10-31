@@ -105,7 +105,7 @@ fn native_filesystem_audit_appends_original_record_once() {
             .service
             .filesystem_completion_phase_for_tests(&attempt)
             .unwrap(),
-        "filesystem_audit_physical_accepted"
+        "filesystem_publication_held"
     );
 }
 
@@ -352,7 +352,7 @@ fn native_filesystem_audit_required_disabled_blocks_but_optional_is_explicit() {
                     .service
                     .filesystem_completion_phase_for_tests(&attempt)
                     .unwrap(),
-                "filesystem_audit_not_required"
+                "filesystem_publication_accepted"
             );
             assert!(
                 fixture

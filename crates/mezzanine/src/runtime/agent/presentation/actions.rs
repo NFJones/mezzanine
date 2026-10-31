@@ -453,7 +453,7 @@ impl RuntimeSessionService {
     /// Both aggregate and per-action outcomes retain exact source/result/entry
     /// before immediate append and share the same installed-source ack. This is
     /// the existing ordered owner, not an outcome replay queue or execution grant.
-    fn publish_ordered_runtime_outcome(
+    pub(in crate::runtime::agent) fn publish_ordered_runtime_outcome(
         &mut self,
         pane_id: &str,
         execution: &AgentTurnExecution,

@@ -66,6 +66,15 @@ late positive evidence preserves an earlier append acknowledgement failure.
 This proves the qualified append and retention operation, not permanent record
 retention or publication/archive/producer transfer.
 
+Native final display uses only validated confirmed endpoint diffs and a semantic
+certainty/count summary. Partial effects remain visible alongside failure, and
+no-op results do not fabricate diff rows. The original response/ordinal retains
+immutable display entries through install failures; retries install those
+sources without reexecuting work, context, hooks or audit. A replacement
+conversation receives no old paint, and a visible earlier filesystem header
+cannot acknowledge pending required gates. Accepted action-prefix display is
+separate from whole-group continuation, archive and producer transfer.
+
 Treat hook runners as distinct execution boundaries. Program hooks can invoke
 external programs and receive structured event data on standard input. Shell
 hooks use the focused pane shell when one is available. Focused-shell hooks

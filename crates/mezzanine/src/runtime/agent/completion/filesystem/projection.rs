@@ -19,10 +19,9 @@ enum Source {
 }
 
 impl RuntimeSessionService {
-    /// Promotes retained original filesystem facts into canonical execution and
-    /// chronology and classify original completed hooks once. This is not
-    /// continuation, audit, publication or archive
-    /// acknowledgement and never releases worker/attempt custody.
+    /// Commits original facts/context and advances non-executable hook, audit
+    /// and eligible final-display milestones. The bool means some facts/gates
+    /// advanced, not whole settlement. Archive and producer custody stay held.
     pub(crate) fn project_native_filesystem_completion(
         &mut self,
         attempt: &NativeFilesystemAttempt,
@@ -49,10 +48,10 @@ impl RuntimeSessionService {
             let changed = self.project_filesystem_facts(&key)?;
             let hooks_changed = self.complete_filesystem_hooks(&key)?;
             let audit_changed = self.append_filesystem_audit(&key)?;
-            self.settle_filesystem_physical_audit(&key)
-                .map(|physical_changed| {
-                    changed || hooks_changed || audit_changed || physical_changed
-                })
+            let physical_changed = self.settle_filesystem_physical_audit(&key)?;
+            self.publish_filesystem_completion(&key).map(|published| {
+                changed || hooks_changed || audit_changed || physical_changed || published
+            })
         })();
         if let Err(error) = &projected {
             self.fail_filesystem_completion(attempt, error);
@@ -80,6 +79,8 @@ impl RuntimeSessionService {
                 | FilesystemCompletionPhase::AuditNotRequired
                 | FilesystemCompletionPhase::AuditAppendAccepted
                 | FilesystemCompletionPhase::AuditPhysicalAccepted
+                | FilesystemCompletionPhase::PublicationHeld
+                | FilesystemCompletionPhase::PublicationAccepted
         ) {
             return Ok(false);
         }
@@ -94,6 +95,13 @@ impl RuntimeSessionService {
         })?;
         self.filesystem_completion_phase(key, FilesystemCompletionPhase::Projection)?;
         let result = result::action_result(&work, &raw)?;
+        let publication = FilesystemPublicationSource::capture(&work, &raw, &result)?;
+        self.agent
+            .completion_settlements
+            .filesystem
+            .get_mut(key)
+            .ok_or_else(|| MezError::invalid_state("filesystem publication receipt unavailable"))?
+            .publication_source = Some(Arc::new(publication));
         let payload = result::completed_hook_payload(&work, &raw, result.status);
         self.agent
             .completion_settlements
@@ -166,6 +174,16 @@ impl RuntimeSessionService {
         self.commit_filesystem_original_context(&work, source, &result)?;
         self.filesystem_completion_phase(key, FilesystemCompletionPhase::ContextCommitted)?;
         Ok(true)
+    }
+
+    /// Returns actual original canonical backing for display comparison without
+    /// swapping it into a newer current execution or replaying its chronology.
+    pub(super) fn filesystem_execution_for_publication(
+        &self,
+        work: &NativeFilesystemWork,
+    ) -> Result<AgentTurnExecution> {
+        self.filesystem_original_execution(work)
+            .map(|(_, execution)| execution)
     }
 
     /// Reads the actual original source; failed captured absence stays final.

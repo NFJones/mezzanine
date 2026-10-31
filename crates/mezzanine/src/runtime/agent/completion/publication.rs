@@ -25,7 +25,10 @@ pub(in crate::runtime::agent) enum NativePublicationProgress {
 
 impl RuntimeSessionService {
     /// Checks live paint binding independently of retired worker delivery maps.
-    fn completion_paint_owner_is_current(&self, owner: &ExternalCompletionOwner) -> bool {
+    pub(super) fn completion_paint_owner_is_current(
+        &self,
+        owner: &ExternalCompletionOwner,
+    ) -> bool {
         self.agent
             .completion_settlements
             .groups
@@ -79,7 +82,7 @@ impl RuntimeSessionService {
     /// Checks immutable ordered components in the exact group, optionally only
     /// through an action ordinal. A prefix check is dispatch eligibility, never
     /// an acknowledgement of whole-group publication.
-    fn completion_ordered_publication_pending(
+    pub(super) fn completion_ordered_publication_pending(
         &self,
         owner: &ExternalCompletionOwner,
         through: Option<usize>,
@@ -469,6 +472,7 @@ impl RuntimeSessionService {
                             && receipt.failure.is_none()
                             && self.completion_paint_owner_is_current(&receipt.owner)
                     })
+                || self.filesystem_publication_retry_needed(turn_id)
                 || self.retained_completion_settlement_retry_needed(turn_id))
     }
 
@@ -576,6 +580,7 @@ impl RuntimeSessionService {
                 advanced += 1;
             }
         }
+        advanced = advanced.saturating_add(self.retry_filesystem_publications());
         advanced = advanced.saturating_add(self.retry_action_progress_retirements());
         advanced = advanced.saturating_add(self.retry_provider_log_handoffs());
         advanced = advanced.saturating_add(self.retry_shell_preview_retirements());

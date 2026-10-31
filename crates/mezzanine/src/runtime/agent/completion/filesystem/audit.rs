@@ -161,6 +161,8 @@ impl RuntimeSessionService {
             FilesystemCompletionPhase::AuditNotRequired
                 | FilesystemCompletionPhase::AuditAppendAccepted
                 | FilesystemCompletionPhase::AuditPhysicalAccepted
+                | FilesystemCompletionPhase::PublicationHeld
+                | FilesystemCompletionPhase::PublicationAccepted
         ) {
             return Ok(false);
         }
@@ -277,6 +279,8 @@ impl RuntimeSessionService {
             receipt.phase,
             FilesystemCompletionPhase::AuditNotRequired
                 | FilesystemCompletionPhase::AuditPhysicalAccepted
+                | FilesystemCompletionPhase::PublicationHeld
+                | FilesystemCompletionPhase::PublicationAccepted
         ) {
             return Ok(false);
         }
@@ -336,7 +340,12 @@ impl RuntimeSessionService {
             return Ok(false);
         };
         let scope = self.begin_completion_scope(&key.0, CompletionScope::Callback);
-        let settled = self.settle_filesystem_physical_audit(&key);
+        let settled = self
+            .settle_filesystem_physical_audit(&key)
+            .and_then(|changed| {
+                self.publish_filesystem_completion(&key)
+                    .map(|published| changed || published)
+            });
         if let Err(error) = &settled {
             self.fail_filesystem_completion(&attempt, error);
         }

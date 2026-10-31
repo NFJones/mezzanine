@@ -946,13 +946,38 @@ pub(super) fn runtime_agent_finished_footer_line(
     }
 }
 
-/// Builds a concise default-visible line for a runtime action that could not
-/// reach its usual visible execution path.
+/// Builds a concise visible outcome. Typed filesystem facts are summarized
+/// directly without shell lowering; other actions retain their existing plans.
+/// Returns no line for actions without a visible outcome and grants no authority.
 pub(super) fn runtime_agent_action_outcome_line(
     action: &AgentAction,
     result: &ActionResult,
     show_shell_details: bool,
 ) -> Option<(bool, String)> {
+    // Filesystem-native results already carry validated semantic facts. Do not
+    // lower a shell adapter merely to summarize their presentation.
+    if matches!(action.payload, AgentActionPayload::ApplyPatch { .. })
+        && let Some(metadata) = result.structured_content_json.as_deref()
+        && let Ok(value) = serde_json::from_str::<serde_json::Value>(metadata)
+        && value.get("enforcement").and_then(serde_json::Value::as_str)
+            == Some(
+                mez_agent::native_action::NativeFilesystemEnforcement::RuntimeCapabilities.as_str(),
+            )
+    {
+        let certainty = value
+            .get("effect_certainty")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("unknown");
+        let count = value
+            .get("confirmed_endpoints")
+            .and_then(serde_json::Value::as_array)
+            .map_or(0, Vec::len);
+        let mut line = format!("native patch: {certainty}; {count} confirmed file endpoint(s)");
+        if let Some(error) = &result.error {
+            line.push_str(&format!("; {}", error.message));
+        }
+        return Some((result.is_error, line));
+    }
     let (local_plan, network_plan) = runtime_agent_action_plans(action);
     action_outcome_line(
         action,

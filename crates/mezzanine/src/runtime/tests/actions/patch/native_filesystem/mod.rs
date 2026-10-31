@@ -46,6 +46,23 @@ impl Fixture {
 
     /// Installs one canonical source with purpose-specific patch semantics.
     fn with_patch(owned_directory: bool, patch: impl FnOnce(&std::path::Path) -> String) -> Self {
+        Self::with_actions(owned_directory, |root| {
+            vec![mez_agent::AgentAction {
+                id: "native-file".into(),
+                payload: mez_agent::AgentActionPayload::ApplyPatch {
+                    patch: patch(root),
+                    strip: None,
+                },
+            }]
+        })
+    }
+
+    /// Installs one actual authored group with optional earlier inert siblings.
+    /// The first patch is the fixture's effect owner; all results start running.
+    fn with_actions(
+        owned_directory: bool,
+        actions: impl FnOnce(&std::path::Path) -> Vec<mez_agent::AgentAction>,
+    ) -> Self {
         let root = temp_root("native-filesystem-attempt");
         fs::create_dir_all(&root).unwrap();
         let root = fs::canonicalize(root).unwrap();
@@ -87,13 +104,21 @@ impl Fixture {
             .cloned()
             .unwrap();
         service.remove_pending_agent_provider_task(&turn.turn_id);
-        let action = mez_agent::AgentAction {
-            id: "native-file".into(),
-            payload: mez_agent::AgentActionPayload::ApplyPatch {
-                patch: patch(&root),
-                strip: None,
-            },
-        };
+        let actions = actions(&root);
+        let action = actions
+            .iter()
+            .find(|action| {
+                matches!(
+                    action.payload,
+                    mez_agent::AgentActionPayload::ApplyPatch { .. }
+                )
+            })
+            .unwrap()
+            .clone();
+        let results = actions
+            .iter()
+            .map(|action| mez_agent::ActionResult::running(&turn, action, Vec::new(), None))
+            .collect();
         let execution = mez_agent::AgentTurnExecution {
             request: runtime_model_request_fixture_for_agent(&turn.turn_id, &turn.agent_id),
             response: mez_agent::ModelResponse {
@@ -105,18 +130,13 @@ impl Fixture {
                 quota_usage: Default::default(),
                 action_batch: Some(mez_agent::MaapBatch {
                     rationale: "native actor ownership".into(),
-                    actions: vec![action.clone()],
+                    actions,
                 }),
                 provider_transcript_events: Vec::new(),
             },
             latest_response_usage: Default::default(),
             routing_token_usage_by_model: Default::default(),
-            action_results: vec![mez_agent::ActionResult::running(
-                &turn,
-                &action,
-                Vec::new(),
-                None,
-            )],
+            action_results: results,
             final_turn: false,
             terminal_state: AgentTurnState::Running,
         };
@@ -722,3 +742,6 @@ mod audit;
 
 #[cfg(target_os = "linux")]
 mod audit_physical;
+
+#[cfg(target_os = "linux")]
+mod publication;

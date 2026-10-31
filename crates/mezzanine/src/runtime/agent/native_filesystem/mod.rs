@@ -73,6 +73,7 @@ impl RuntimeSessionService {
                     })?,
             )
         };
+        self.retain_provider_presentation_order(&turn.pane_id, execution)?;
         self.reserve_completion_group(&turn.turn_id, &owner.group)?;
         let (attempt, work) = self.agent.native_filesystem_actions.queue(
             owner,
