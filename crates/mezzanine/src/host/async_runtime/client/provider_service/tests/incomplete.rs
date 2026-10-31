@@ -8,6 +8,8 @@ use super::*;
 use crate::runtime::RuntimeSessionService;
 use std::sync::Mutex;
 
+mod crash_qualification;
+
 /// Records prepared requests and injects authoritative parser-produced errors.
 struct IncompleteProvider {
     requests: Mutex<Vec<ModelRequest>>,
@@ -83,8 +85,10 @@ impl AsyncModelProvider for IncompleteProvider {
     }
 }
 
-/// Creates an auth-free configured native dispatch; the endpoint is never used.
-async fn issued_fixture() -> (RuntimeSessionService, RuntimeAgentProviderDispatch) {
+/// Prepares a real auth-free native turn without claiming it. Production actor
+/// admission may assign its own generation; older component controls can still
+/// install their explicit claim through `issued_fixture` below.
+async fn prepared_fixture(prompt: &str) -> (RuntimeSessionService, AgentId, String) {
     use crate::config::{ConfigFormat, ConfigLayer, ConfigScope};
     let mut service = crate::test_support::runtime::RuntimeServiceFixture::new().build();
     let root = std::env::temp_dir().join(format!(
@@ -121,7 +125,7 @@ async fn issued_fixture() -> (RuntimeSessionService, RuntimeAgentProviderDispatc
         .enter_or_resume("%1")
         .unwrap();
     service
-        .execute_agent_shell_command(&primary, "replace incomplete inference")
+        .execute_agent_shell_command(&primary, prompt)
         .unwrap();
     let task = service.pending_agent_provider_tasks().remove(0);
     let turn = service
@@ -133,8 +137,15 @@ async fn issued_fixture() -> (RuntimeSessionService, RuntimeAgentProviderDispatc
     let outcome = RuntimeSessionService::execute_agent_provider_preparation(preparation).await;
     service.apply_agent_provider_preparation(outcome).unwrap();
     let agent = AgentId::opaque(turn.agent_id.clone()).unwrap();
+    (service, agent, turn.turn_id)
+}
+
+/// Creates the explicit generation-seven dispatch used by expense component
+/// controls. Runtime-profile qualification instead uses actual actor admission.
+async fn issued_fixture() -> (RuntimeSessionService, RuntimeAgentProviderDispatch) {
+    let (mut service, agent, turn_id) = prepared_fixture("replace incomplete inference").await;
     let mut dispatch = service
-        .claim_configured_agent_provider_task(&agent, &turn.turn_id)
+        .claim_configured_agent_provider_task(&agent, &turn_id)
         .unwrap()
         .unwrap();
     service
