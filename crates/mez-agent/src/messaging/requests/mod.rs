@@ -12,6 +12,9 @@
 //! No snapshot reconstructs this store; generation allocation is not progress.
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
+
+mod admission;
 
 use mez_core::ids::AgentId;
 
@@ -78,7 +81,9 @@ pub struct MessageRequestReceipt {
     /// Immutable lower acceptance result, including the real message ID.
     delivery: Delivery,
     /// Payload-free occurrence and frozen registration evidence.
-    proof: MessageAcceptanceProof,
+    proof: Arc<MessageAcceptanceProof>,
+    /// Original staged allocation retained for exact idempotent commit matching.
+    admission_ticket: Option<super::MessageAcceptanceTicket>,
     /// Strict acceptance-relative wire TTL, independent of payload ACK/replay.
     /// Saturation at u64::MAX cannot expire on any representable clock value.
     expires_at_ms: Option<u64>,
@@ -124,6 +129,8 @@ impl MessageRequestReceipt {
 pub struct MessageRequests {
     /// Trusted construction policy, never enlarged by incoming model data.
     limits: MessageRequestLimits,
+    /// Fully charged unpublished caller ownership; never a visible receipt.
+    pending: Option<admission::PendingRequest>,
     /// Outstanding requests keyed by a locally assigned monotonic generation.
     receipts: BTreeMap<u64, MessageRequestReceipt>,
     /// Next identity; exhaustion rejects before message acceptance.
@@ -139,6 +146,7 @@ impl Default for MessageRequests {
     fn default() -> Self {
         Self {
             limits: MessageRequestLimits::default(),
+            pending: None,
             receipts: BTreeMap::new(),
             next_generation: 1,
             units: 0,
@@ -186,6 +194,9 @@ impl MessageRequests {
         scope: MessageScope,
         now_ms: u64,
     ) -> Result<&MessageRequestReceipt> {
+        if self.pending.is_some() {
+            return Err(capacity());
+        }
         if origin.agent_id != envelope.sender.agent_id
             || origin.conversation_id.is_empty()
             || origin.turn_id.is_empty()
@@ -260,7 +271,8 @@ impl MessageRequests {
                 generation,
                 origin,
                 delivery,
-                proof,
+                proof: Arc::new(proof),
+                admission_ticket: None,
                 expires_at_ms,
                 expiry_observed_at_ms: None,
                 units,
@@ -302,7 +314,8 @@ impl MessageRequests {
     }
 
     /// Retires only one originating conversation's retained ownership. Product
-    /// teardown must call this when that conversation ends; task completion alone
+    /// teardown must call this when that conversation ends. Unpublished storage
+    /// work remains charged for explicit original-owner settlement; task completion alone
     /// does not retire a persistent conversation's unresolved requests.
     pub fn retire_conversation(&mut self, sender: &AgentId, conversation: &str) {
         self.receipts.retain(|_, receipt| {
@@ -362,7 +375,8 @@ impl MessageRequests {
         })
     }
 
-    /// Returns unresolved request count and fully reserved global units/bytes.
+    /// Returns visible accepted receipt count and fully reserved global units/bytes.
+    /// Units/bytes also include unpublished storage work, absent from the count.
     pub fn usage(&self) -> (usize, usize, usize) {
         (self.receipts.len(), self.units, self.metadata_bytes)
     }

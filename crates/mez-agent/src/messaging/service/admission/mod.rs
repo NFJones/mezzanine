@@ -176,6 +176,22 @@ admission_debug!(MessageAcceptanceRejected, identity);
 admission_debug!(MessageAcceptanceUncertain, write.identity);
 
 impl MessageAcceptanceTicket {
+    /// Compares original reservation allocations before a deferred cancellation.
+    pub(crate) fn same_reservation(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.identity, &other.identity)
+    }
+    /// Checks the private original allocation before a request owner adopts a fact.
+    pub(crate) fn matches_commit(&self, commit: &MessageAcceptanceCommit) -> bool {
+        Arc::ptr_eq(&self.identity, &commit.identity)
+    }
+    /// Checks the private original allocation before releasing request headroom.
+    pub(crate) fn matches_rejected(&self, rejected: &MessageAcceptanceRejected) -> bool {
+        Arc::ptr_eq(&self.identity, &rejected.identity)
+    }
+    /// Returns frozen obligation count for caller reservation accounting only.
+    pub(crate) fn recipient_count(&self) -> usize {
+        self.identity.delivery.queued_recipients
+    }
     /// Returns the reserved occurrence sequence, not an acceptance assertion.
     pub fn sequence(&self) -> MessageSequence {
         self.identity.delivery.sequence

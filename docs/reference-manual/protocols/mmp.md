@@ -474,6 +474,14 @@ absent from delivery, while existing accepted mail can still drain. Allocator
 reservation gaps are not successful sends, and tail subscriptions do not skip
 an original that is published later.
 
+The lower tracked-request owner can reserve the original conversation/turn and
+future handoff capacity before issuing storage work. This unpublished ownership
+is not an accepted receipt. Conversation retirement and TTL maintenance cannot
+release an issued request: its matching completion must still settle against the
+original caller. Qualified noncommit releases both request and delivery charges;
+positive completion publishes one receipt, and duplicate completion never sends
+again. Product lifecycle integration must explicitly settle this retained work.
+
 Only a never-issued reservation or an exactly qualified noncommit can be called
 unaccepted. Ambiguous writes retain the same original for reconciliation. A lost
 worker result requires actual join evidence before a new attempt; generic errors

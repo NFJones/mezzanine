@@ -15459,6 +15459,14 @@ accepted mail MUST remain drainable. A reservation/allocator gap is not success.
 A replacement registration MUST exclude an older unpublished binding as well as
 older published mail; tail subscriptions MUST NOT skip later publication.
 
+Tracked storage-qualified requests MUST reserve the original caller conversation,
+turn/incarnation, dependency generation and future handoff headroom before lower
+storage issuance. Unpublished ownership MUST remain absent from accepted receipt
+scans and MUST NOT be released by conversation retirement or expiry maintenance.
+Matching positive adoption MUST attach the receipt to that original caller; a
+foreign fact or a consumed receipt MUST NOT authorize another send. The product
+owner remains responsible for settling retained work after caller teardown.
+
 A storage-qualified path MUST keep issued or ambiguous work charged until its
 actual joined outcome is reconciled. Only a never-issued reservation or an exact
 qualified noncommit may be released as unaccepted. Lost worker results require
