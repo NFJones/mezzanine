@@ -11,7 +11,7 @@
 //! publication. Backoff is monotonic1,2,4..30 seconds after each observed failure,
 //! with one worker per root and no provider permit. The owning actor/supervisor
 //! must keep this root until settlement. This component does not yet wire ingress,
-//! control-drain recovery/rebase, restart dedup or total storage/cache quotas.
+//! control-drain scheduling, restart dedup or total storage/cache quotas.
 
 use std::future::{Future, poll_fn};
 use std::path::PathBuf;
@@ -56,6 +56,8 @@ pub(crate) enum CustodyWorkerStatus {
     Idle,
     /// Exact joined positive/refusal awaits canonical actor adoption.
     AwaitingAdoption,
+    /// Exact joined qualified noncommit awaits paired lower/request release.
+    AwaitingRefusal,
     /// Original uncertain/lost attempt can retry after this monotonic deadline.
     RetryAt(Instant),
     /// Opening failed; no lower write was issued by this root.
@@ -88,6 +90,8 @@ struct Admission {
     attempt: MessageAcceptanceAttempt,
     /// Tracked originals must settle their paired request owner too.
     tracked: bool,
+    /// Once requested, failed-stage recovery survives every later lost result.
+    recovery: bool,
     /// Completed failures, saturating without creating catch-up retries.
     failures: u32,
 }
@@ -242,6 +246,9 @@ impl MmpCustodyRoot {
                 MessageAcceptanceWriteOutcome::Unknown(unknown) => {
                     Some(lower_error(unknown.error().clone()))
                 }
+                MessageAcceptanceWriteOutcome::NotCommitted(rejected) => {
+                    Some(lower_error(rejected.error().clone()))
+                }
                 _ => None,
             },
             _ => None,
@@ -286,13 +293,14 @@ impl MmpCustodyRoot {
             plan,
             attempt: write.attempt(),
             tracked,
+            recovery: false,
             failures: 0,
         };
         let previous = std::mem::replace(&mut *state, State::Unavailable(ownership_error()));
         let State::Idle(opened) = previous else {
             return Err(ownership_error());
         };
-        let worker = self.spawn_write(Some(opened.store), admission.plan.clone(), write);
+        let worker = self.spawn_write(Some(opened.store), admission.plan.clone(), write, false);
         *state = State::Running { admission, worker };
         Ok(())
     }
@@ -301,6 +309,23 @@ impl MmpCustodyRoot {
     /// foreign/currently replaced lower owner cannot consume uncertain input.
     /// Stop still allows this settlement; no fresh message identity is allocated.
     pub fn retry(&self, service: &mut MessageService, now: Instant) -> Result<bool> {
+        self.retry_with_recovery(service, now, false)
+    }
+
+    /// Reconciles a failed original for release before later store control work.
+    /// A committed original remains positive; otherwise only exact durable abort
+    /// cleanup can qualify noncommit. Recovery intent persists across later loss.
+    pub fn recover_failed_stage(&self, service: &mut MessageService, now: Instant) -> Result<bool> {
+        self.retry_with_recovery(service, now, true)
+    }
+
+    /// Issues one exact joined retry with a monotonic, retain-only recovery mode.
+    fn retry_with_recovery(
+        &self,
+        service: &mut MessageService,
+        now: Instant,
+        recover: bool,
+    ) -> Result<bool> {
         let mut state = self.0.state.lock().map_err(|_| ownership_error())?;
         let State::Joined {
             admission,
@@ -333,6 +358,7 @@ impl MmpCustodyRoot {
         else {
             return Err(ownership_error());
         };
+        admission.recovery |= recover;
         let (store, recovered) = match result.map(|written| *written) {
             Ok(Written {
                 store,
@@ -366,7 +392,7 @@ impl MmpCustodyRoot {
             }
         };
         admission.attempt = write.attempt();
-        let worker = self.spawn_write(store, admission.plan.clone(), write);
+        let worker = self.spawn_write(store, admission.plan.clone(), write, admission.recovery);
         *state = State::Running { admission, worker };
         Ok(true)
     }
@@ -477,6 +503,7 @@ impl MmpCustodyRoot {
         store: Option<MmpCustodyStore>,
         plan: AcceptancePlan,
         write: MessageAcceptanceWrite,
+        recovery: bool,
     ) -> JoinHandle<Result<Written>> {
         let destination = self.0.destination.clone();
         #[cfg(test)]
@@ -494,7 +521,11 @@ impl MmpCustodyRoot {
                     destination.limits,
                 )?,
             };
-            let outcome = write.persist(&mut store.acceptance_port(&plan));
+            let outcome = if recovery {
+                write.persist(&mut store.acceptance_recovery_port(&plan))
+            } else {
+                write.persist(&mut store.acceptance_port(&plan))
+            };
             #[cfg(test)]
             if let Some(probe) = &probe {
                 probe.after_write(&outcome);
@@ -569,20 +600,17 @@ fn status(state: &State) -> CustodyWorkerStatus {
         State::Idle(_) => CustodyWorkerStatus::Idle,
         State::Joined {
             result, retry_at, ..
-        } => {
-            if matches!(
-                result.as_deref(),
-                Ok(Written {
-                    outcome: MessageAcceptanceWriteOutcome::Committed(_)
-                        | MessageAcceptanceWriteOutcome::NotCommitted(_),
-                    ..
-                })
-            ) {
-                CustodyWorkerStatus::AwaitingAdoption
-            } else {
-                CustodyWorkerStatus::RetryAt(*retry_at)
-            }
-        }
+        } => match result.as_deref() {
+            Ok(Written {
+                outcome: MessageAcceptanceWriteOutcome::Committed(_),
+                ..
+            }) => CustodyWorkerStatus::AwaitingAdoption,
+            Ok(Written {
+                outcome: MessageAcceptanceWriteOutcome::NotCommitted(_),
+                ..
+            }) => CustodyWorkerStatus::AwaitingRefusal,
+            _ => CustodyWorkerStatus::RetryAt(*retry_at),
+        },
         State::Unavailable(_) => CustodyWorkerStatus::Unavailable,
     }
 }

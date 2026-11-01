@@ -15498,7 +15498,23 @@ from observed failures, with one physical worker per root and no provider permit
 Stop MUST close fresh issuance while preserving issued reconciliation/publication.
 Orderly supervision MUST retain the root through settlement; last-root cleanup
 MUST NOT claim canonical acknowledgement. This worker component does not itself
-wire durable ingress, failed-stage control-drain recovery or restart recovery.
+wire durable ingress, later control-drain scheduling or restart recovery.
+
+Explicit failed-stage recovery MUST preserve an actual committed acceptance.
+Only exact absence at the untouched original generation, or validated private
+stage cleanup, MAY qualify noncommit. A cleanup decision MUST bind the original
+store/occurrence/generation and header hash before deleting any payload chunk.
+The version1 `MMPABT01`80-byte descriptor MUST replace the original private stage
+header at the same encoded length with zero padding; recovery MUST NOT require a
+new row for that decision. Initial admission MUST reserve generation headroom for
+all chunk writes, abort publication and bounded tail deletion. Cleanup retries
+MUST validate actual remaining-prefix bytes, checksums, count and generation,
+without repairing missing/corrupt custody or accepting future descriptor versions.
+Only completed cleanup MAY release paired lower/request ownership. The bounded
+terminal tombstone MUST remain charged to storage policy; removing it later
+requires allocator/terminal-history preservation. Worker recovery intent MUST
+survive later lost results and MUST NOT revert to acceptance on ordinary retry.
+Actual ACK/control scheduling and ingress integration remain separate work.
 
 The lower service's explicit actor-owned terminal maintenance MUST reserve one
 fixed-size disposition slot per accepted recipient before success. It records

@@ -501,8 +501,21 @@ worker join before reconciliation. Retry spacing is monotonic1s,2s,4s up to30s,
 with one worker per root and no provider slot. Stop closes new issuance and leaves
 issued work available for settlement. The supervising actor must retain this root;
 fallback last-root draining is not canonical acknowledgement. Ingress/supervisor
-wiring, failed-stage recovery/rebase for later ACK/control work, genuine storage
+wiring, later ACK/control scheduling, genuine storage
 change wakeups, full quotas and crash/restart recovery remain integration work.
+
+An explicit failed-stage recovery preserves a real accepted marker if one exists.
+Otherwise it validates the original private prefix and replaces its stage header
+with a version1 `MMPABT01` abort descriptor at the same encoded length. The80-byte
+prefix binds occurrence, original/declaration generations, chunk count, encoded
+size and original-header SHA256; remaining padding must be zero. Tail chunks are
+then deleted in bounded exact-preimage transactions. Missing/corrupt rows, changed
+history and unknown descriptor versions fail closed. Interrupted cleanup resumes
+that same decision; it cannot switch back to acceptance. Only complete cleanup or
+exact untouched absence qualifies a refusal for paired actor adoption. The final
+bounded metadata tombstone stays charged, and later compaction must preserve
+allocator/terminal history. Reusing the existing header cell supports cleanup at
+the database page ceiling; total physical/quota qualification remains unfinished.
 
 Only a never-issued reservation or an exactly qualified noncommit can be called
 unaccepted. Ambiguous writes retain the same original for reconciliation. A lost

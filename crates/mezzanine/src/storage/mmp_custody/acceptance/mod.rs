@@ -18,6 +18,8 @@ use serde::Serialize;
 
 use super::*;
 
+mod recovery;
+
 /// Keeps encoded buffers and individual transactions below the generic batch cap.
 const CHUNK_BYTES: usize = 64 * 1024;
 /// Row format version independent of SQLite schema1 and admission input version1.
@@ -120,20 +122,7 @@ impl PlannedAcceptanceStore<'_> {
                 "MMP acceptance destination or occurrence changed",
             ));
         }
-        let mut counter = Counter {
-            bytes: 0,
-            maximum: self.store.limits.logical_bytes,
-            hash: Sha256::new(),
-        };
-        serde_json::to_writer(&mut counter, record).map_err(encoding_error)?;
-        let header = Header {
-            record_version: RECORD_VERSION,
-            sequence: record.sequence(),
-            encoded_bytes: counter.bytes,
-            chunks: counter.bytes.div_ceil(CHUNK_BYTES),
-            digest: counter.hash.finalize().into(),
-        };
-        let header_bytes = serde_json::to_vec(&header).map_err(encoding_error)?;
+        let (header, header_bytes) = record_header(record, self.store.limits.logical_bytes)?;
         let prefix = format!("a1:{:016x}:", self.plan.sequence);
         let stage_key = format!("{prefix}stage");
         let commit_key = format!("{prefix}commit");
@@ -157,7 +146,7 @@ impl PlannedAcceptanceStore<'_> {
         if self
             .plan
             .generation
-            .checked_add((header.chunks + 2) as u64)
+            .checked_add((2 * header.chunks + 2) as u64)
             .is_none_or(|last| last > i64::MAX as u64)
         {
             return Err(MezError::invalid_state(
@@ -251,6 +240,31 @@ impl PlannedAcceptanceStore<'_> {
         }
         Ok(())
     }
+}
+
+/// Computes original framing/checksum without retaining a complete encoded copy.
+fn record_header(record: &MessageAcceptanceWrite, maximum: usize) -> Result<(Header, Vec<u8>)> {
+    let mut counter = Counter {
+        bytes: 0,
+        maximum,
+        hash: Sha256::new(),
+    };
+    serde_json::to_writer(&mut counter, record).map_err(encoding_error)?;
+    let header = Header {
+        record_version: RECORD_VERSION,
+        sequence: record.sequence(),
+        encoded_bytes: counter.bytes,
+        chunks: counter.bytes.div_ceil(CHUNK_BYTES),
+        digest: counter.hash.finalize().into(),
+    };
+    let bytes = serde_json::to_vec(&header).map_err(encoding_error)?;
+    // The abort descriptor must fit the original header cell at the same length.
+    if bytes.len() < recovery::ABORT_BYTES {
+        return Err(MezError::invalid_state(
+            "MMP acceptance control framing capacity",
+        ));
+    }
+    Ok((header, bytes))
 }
 
 /// Counts/hashes the original without allocating an encoded copy before preflight.
@@ -380,5 +394,7 @@ fn encoding_error(error: serde_json::Error) -> MezError {
     MezError::invalid_state(format!("MMP acceptance encoding/storage: {error}"))
 }
 
+#[cfg(test)]
+mod test_fixture;
 #[cfg(test)]
 mod tests;

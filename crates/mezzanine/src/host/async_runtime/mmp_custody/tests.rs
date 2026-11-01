@@ -18,6 +18,8 @@ pub(super) struct Probe {
     attempts: AtomicUsize,
     /// One-shot loss after real marker completion but before the root gets it.
     panic_after_commit: AtomicBool,
+    /// One-shot actual loss after durable uncommitted cleanup but before receipt.
+    panic_after_refusal: AtomicBool,
 }
 impl Probe {
     /// Constructs a retained real worker gate with optional immediate release.
@@ -27,6 +29,7 @@ impl Probe {
             gate: (Mutex::new(released), std::sync::Condvar::new()),
             attempts: AtomicUsize::new(0),
             panic_after_commit: AtomicBool::new(false),
+            panic_after_refusal: AtomicBool::new(false),
         })
     }
     /// Blocks the physical worker without occupying any async executor thread.
@@ -44,6 +47,11 @@ impl Probe {
             && self.panic_after_commit.swap(false, Ordering::SeqCst)
         {
             panic!("injected loss after actual custody marker commit");
+        }
+        if matches!(outcome, MessageAcceptanceWriteOutcome::NotCommitted(_))
+            && self.panic_after_refusal.swap(false, Ordering::SeqCst)
+        {
+            panic!("injected actual loss after durable uncommitted cleanup");
         }
     }
     /// Releases the real original worker, including after an assertion unwind.
@@ -594,4 +602,147 @@ async fn replacement_store_after_actual_worker_loss_cannot_adopt_original_plan()
     assert!(root.failure().unwrap().is_some());
     assert!(root.adopt(&mut service, None).is_err());
     assert!(service.has_unpublished_acceptance());
+}
+
+/// A failed real marker can explicitly recover to a qualified paired refusal,
+/// including after Stop and conversation retirement. Missing/foreign adopters
+/// cannot free the original charge; exact release makes the store idle again.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn failed_stage_recovery_releases_original_tracked_owners_only_after_durable_cleanup() {
+    let fixture = Fixture::new(true);
+    let root = fixture.root();
+    root.observe().await.unwrap();
+    let connection = rusqlite::Connection::open(fixture.path.join("custody.sqlite")).unwrap();
+    connection.execute_batch("CREATE TRIGGER fail_marker BEFORE INSERT ON records WHEN NEW.key LIKE '%:commit' BEGIN SELECT RAISE(ABORT,'fixture marker failure'); END;").unwrap();
+    let (mut service, sender, target, origin) = fixture_service();
+    let mut requests = MessageRequests::default();
+    let ticket = requests
+        .prepare_acceptance(
+            &mut service,
+            origin.clone(),
+            envelope(&sender, &target, "tracked"),
+            MessageScope::Session,
+            100,
+        )
+        .unwrap();
+    root.start(&mut service, &ticket, Some(&requests)).unwrap();
+    let CustodyWorkerStatus::RetryAt(due) = root.observe().await.unwrap() else {
+        panic!("expected partial original")
+    };
+    let usage = requests.usage();
+    requests.retire_conversation(&origin.agent_id, &origin.conversation_id);
+    root.request_stop();
+    assert!(root.recover_failed_stage(&mut service, due).unwrap());
+    assert_eq!(
+        root.observe().await.unwrap(),
+        CustodyWorkerStatus::AwaitingRefusal
+    );
+    assert_eq!(fixture.disk().1, 1);
+    assert_eq!(requests.usage(), usage);
+    assert!(service.has_unpublished_acceptance());
+    assert!(root.adopt(&mut service, Some(&mut requests)).is_err());
+    assert!(root.release_rejected(&mut service, None).is_err());
+    let mut foreign_requests = MessageRequests::default();
+    assert!(
+        root.release_rejected(&mut service, Some(&mut foreign_requests))
+            .is_err()
+    );
+    let (mut foreign, _, _, _) = fixture_service();
+    assert!(
+        root.release_rejected(&mut foreign, Some(&mut requests))
+            .is_err()
+    );
+    assert!(root.failure().unwrap().is_some());
+    root.release_rejected(&mut service, Some(&mut requests))
+        .unwrap();
+    assert_eq!(requests.usage(), (0, 0, 0));
+    assert!(!service.has_unpublished_acceptance());
+    assert_eq!(root.observe().await.unwrap(), CustodyWorkerStatus::Idle);
+}
+
+/// An actual postcommit worker loss may look failed to its observer. Explicit
+/// recovery must reconcile that original positive, with no abort marker or
+/// generation advance, rather than turning uncertainty into a fabricated refusal.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn requested_failed_stage_recovery_preserves_actual_lost_positive_commit() {
+    let fixture = Fixture::new(true);
+    fixture
+        .probe
+        .panic_after_commit
+        .store(true, Ordering::SeqCst);
+    let root = fixture.root();
+    root.observe().await.unwrap();
+    let (mut service, sender, target, _) = fixture_service();
+    let ticket = service
+        .prepare_acceptance(
+            &sender.agent_id,
+            envelope(&sender, &target, "original"),
+            MessageScope::Session,
+            100,
+            4096,
+            None,
+        )
+        .unwrap();
+    root.start(&mut service, &ticket, None).unwrap();
+    let CustodyWorkerStatus::RetryAt(due) = root.observe().await.unwrap() else {
+        panic!("expected actual joined loss")
+    };
+    let before = fixture.disk();
+    assert!(root.recover_failed_stage(&mut service, due).unwrap());
+    assert_eq!(
+        root.observe().await.unwrap(),
+        CustodyWorkerStatus::AwaitingAdoption
+    );
+    assert_eq!(fixture.disk(), before);
+    assert!(root.release_rejected(&mut service, None).is_err());
+    assert!(root.adopt(&mut service, None).unwrap().accepted);
+}
+
+/// Cleanup can succeed before the actual worker panics and loses its refusal.
+/// A later ordinary retry must retain the root's recovery intent and reconcile
+/// the same abort postimage, never switch back to accepting the old occurrence.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn lost_cleanup_receipt_keeps_recovery_intent_through_actual_worker_join() {
+    let fixture = Fixture::new(true);
+    let root = fixture.root();
+    root.observe().await.unwrap();
+    let connection = rusqlite::Connection::open(fixture.path.join("custody.sqlite")).unwrap();
+    connection.execute_batch("CREATE TRIGGER fail_marker BEFORE INSERT ON records WHEN NEW.key LIKE '%:commit' BEGIN SELECT RAISE(ABORT,'fixture marker failure'); END;").unwrap();
+    let (mut service, sender, target, _) = fixture_service();
+    let ticket = service
+        .prepare_acceptance(
+            &sender.agent_id,
+            envelope(&sender, &target, "original"),
+            MessageScope::Session,
+            100,
+            4096,
+            None,
+        )
+        .unwrap();
+    root.start(&mut service, &ticket, None).unwrap();
+    let CustodyWorkerStatus::RetryAt(due) = root.observe().await.unwrap() else {
+        panic!("expected partial original")
+    };
+    fixture
+        .probe
+        .panic_after_refusal
+        .store(true, Ordering::SeqCst);
+    assert!(root.recover_failed_stage(&mut service, due).unwrap());
+    let CustodyWorkerStatus::RetryAt(due) = root.observe().await.unwrap() else {
+        panic!("expected actual lost cleanup receipt")
+    };
+    let before = fixture.disk();
+    assert_eq!(before.1, 1);
+    connection
+        .execute_batch("DROP TRIGGER fail_marker")
+        .unwrap();
+    assert!(root.retry(&mut service, due).unwrap());
+    assert_eq!(
+        root.observe().await.unwrap(),
+        CustodyWorkerStatus::AwaitingRefusal
+    );
+    assert_eq!(fixture.disk(), before);
+    root.release_rejected(&mut service, None).unwrap();
+    assert!(!service.has_unpublished_acceptance());
+    assert_eq!(fixture.probe.attempts.load(Ordering::SeqCst), 3);
 }
