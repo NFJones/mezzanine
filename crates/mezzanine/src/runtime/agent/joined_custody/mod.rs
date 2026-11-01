@@ -1,8 +1,9 @@
 //! Original spawn source retained independently of the parent's latest response.
 //!
 //! A joined task may outlive a provider response. Its original action, request,
-//! result slot and execution group therefore need immutable custody before the
-//! scheduler releases the parent. Children from one response share one snapshot.
+//! result slot and execution group therefore need immutable custody when spawn
+//! is accepted, before asynchronous siblings settle or the scheduler releases
+//! the parent. Children from one response share one snapshot.
 //! Records are bounded by the existing dependency table and convey no provider,
 //! scheduler, permission, child-completion or continuation authority. This module
 //! keeps immutable source separate from the coordination module's exact-mail
@@ -65,7 +66,7 @@ impl JoinedActionCustody {
 }
 
 impl RuntimeSessionService {
-    /// Retains matching live joins before parking a provider response. All
+    /// Retains matching live joins at accepted spawn and revalidates at parking. All
     /// validation precedes insertion; exact repeat capture preserves its first
     /// immutable snapshot, while changed action/group/binding fails closed.
     /// Empty or unrelated responses retain nothing and grant no admission.

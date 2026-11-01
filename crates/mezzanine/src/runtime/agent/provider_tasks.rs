@@ -792,6 +792,16 @@ impl RuntimeSessionService {
         if self.persistence.bookkeeping_pending(&turn.conversation_id) {
             return Ok(None);
         }
+        // A scheduler wake may leave a provider offer queued while a native
+        // filesystem sibling still owns execution or settlement. This is a
+        // temporary hold, not an invalid continuation that should fail the turn.
+        // Only the original producer's exact transfer releases this ownership.
+        // Retire the stale offer so it cannot masquerade as an already owned
+        // provider task and suppress the original completion's later handoff.
+        if self.native_filesystem_turn_has_owner(turn_id) {
+            self.agent.pending_agent_provider_tasks.remove(turn_id);
+            return Ok(None);
+        }
         if self
             .agent_turn_executions()
             .get(turn_id)

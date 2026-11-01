@@ -20,10 +20,6 @@ use crate::security::filesystem::capability::NativeFilesystemRoot;
 
 /// Immutable actor source data, deliberately without executable/environment data.
 #[derive(Clone)]
-#[allow(
-    dead_code,
-    reason = "source binding is being wired into native patch dispatch"
-)]
 pub(crate) struct NativeFilesystemContext {
     /// Exact issuing turn, independent of presentation-pane conversation IDs.
     turn: String,
@@ -80,10 +76,6 @@ impl NativeFilesystemContext {
     }
     /// Captures physical process/operation cwd witnesses on a blocking worker.
     /// This does not authorize file access or publish the prepared root.
-    #[allow(
-        dead_code,
-        reason = "blocking dispatch preparation is the next integration step"
-    )]
     pub(crate) fn capture_root(&self) -> Result<NativeFilesystemRoot> {
         let root =
             NativeFilesystemRoot::capture_at(self.root.0, self.root.1, &self.operation_directory)?;
@@ -99,10 +91,6 @@ impl NativeFilesystemContext {
 impl RuntimeSessionService {
     /// Captures current native source ownership without shell or environment
     /// discovery. This source token is data, not action or mutation admission.
-    #[allow(
-        dead_code,
-        reason = "source binding is being wired into native patch dispatch"
-    )]
     pub(crate) fn capture_native_filesystem_context(
         &mut self,
         turn: &AgentTurnRecord,
@@ -153,10 +141,6 @@ impl RuntimeSessionService {
     /// Checks exact source identity without rebasing a queued operation. Callers
     /// must separately validate live action/attempt custody and resolve current
     /// grants before using a prepared filesystem root.
-    #[allow(
-        dead_code,
-        reason = "source binding is being wired into native patch dispatch"
-    )]
     pub(crate) fn native_filesystem_context_is_current(
         &self,
         turn: &AgentTurnRecord,
@@ -199,10 +183,7 @@ impl RuntimeSessionService {
     /// Resolves current grants only for unchanged source data. Exact action and
     /// commit-lease admission remain with the native dispatch owner; this helper
     /// cannot turn a source token or prepared root into mutation authority.
-    #[allow(
-        dead_code,
-        reason = "source-bound authorization is being wired into native patch dispatch"
-    )]
+    #[cfg(test)]
     pub(crate) fn native_filesystem_scopes_for_context(
         &mut self,
         turn: &AgentTurnRecord,

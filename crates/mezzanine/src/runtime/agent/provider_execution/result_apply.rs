@@ -170,6 +170,10 @@ impl RuntimeSessionService {
         let spawn_actions_executed =
             self.execute_running_spawn_actions_for_turn(turn, &mut execution)?;
         terminal_observations.observe(&execution);
+        // A live joined child may precede asynchronous filesystem siblings.
+        // Retain its exact admitted source now so ordered publication can pass
+        // its waiting slot without waiting for the child to finish first.
+        self.retain_joined_parent_execution(turn, &execution)?;
         let _close_agent_actions_executed =
             self.execute_running_close_agent_actions_for_turn(turn, &mut execution)?;
         terminal_observations.observe(&execution);

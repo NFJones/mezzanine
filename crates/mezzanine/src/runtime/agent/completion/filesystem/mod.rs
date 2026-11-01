@@ -229,6 +229,35 @@ impl RuntimeSessionService {
             .stage())
     }
 
+    /// Reports immutable gate details when a real integration fixture times out.
+    /// This cannot advance publication, replace its source or release custody.
+    #[cfg(test)]
+    pub(crate) fn filesystem_completion_diagnostics_for_tests(
+        &self,
+        attempt: &NativeFilesystemAttempt,
+    ) -> Result<String> {
+        let key = self.filesystem_completion_key(attempt)?;
+        let receipt = self
+            .agent
+            .completion_settlements
+            .filesystem
+            .get(&key)
+            .ok_or_else(|| MezError::invalid_state("filesystem diagnostic receipt unavailable"))?;
+        Ok(format!(
+            "phase={} publication_failure={:?} predecessors={} prefix_pending={}",
+            receipt.phase.stage(),
+            receipt
+                .publication_failure
+                .as_ref()
+                .map(|error| error.message()),
+            self.filesystem_publication_predecessors_ready(receipt),
+            self.completion_ordered_publication_pending(
+                &receipt.owner,
+                Some(receipt.owner.ordinal)
+            )
+        ))
+    }
+
     /// Reserves original group/action metadata while the accepted slot is live.
     /// This is queued ownership only; actual claim records issuance separately.
     pub(in crate::runtime::agent) fn reserve_filesystem_completion(

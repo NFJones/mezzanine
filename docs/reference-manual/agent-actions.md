@@ -138,6 +138,13 @@ for pane shell work; the original source is checked before scheduler reacquisiti
 Successful duplicate mutations are recognized from parsed patch semantics and
 original context, independently of action IDs and shell text. They are skipped
 without reapplying the mutation. Partial or unknown effects never permit replay.
+A queued model continuation waits while the original filesystem producer is
+still settling; polling that queue does not fail the turn or permit another
+inference. Joined child results and filesystem results settle independently.
+Accepted joined spawns retain their original source while other work runs, so
+waiting for a child cannot hold up publication of an already committed patch.
+Once file work settles, a parent waiting only for joined children releases its
+scheduler capacity so those children can run.
 Use the actual action result and [sandbox status](../safety-and-trust/sandboxing.md).
 
 Native descriptor reads, staged writes and byte verification check the original

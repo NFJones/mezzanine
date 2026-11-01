@@ -522,6 +522,7 @@ native_shell_timeout_ms = 600000
 # are internal resource bounds, not additional configuration settings.
 # Missing parents require separate directory grants and exact leases; their
 # confirmed effects survive later failures and never add file line counts.
+# Model continuation waits for original file work and joined child results.
 shell_mode = "native"
 # Default bounded iteration count used by /loop.
 loop_limit = 8

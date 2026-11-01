@@ -287,6 +287,9 @@ impl RuntimeSessionService {
             prepared_fork,
         )?;
         terminal_observations.observe(&execution);
+        // Capture the actual joined source before later asynchronous siblings
+        // settle; its waiting result must not block their ordered publication.
+        self.retain_joined_parent_execution(turn, &execution)?;
         let close_agent_actions_executed =
             self.execute_running_close_agent_actions_for_turn(turn, &mut execution)?;
         terminal_observations.observe(&execution);

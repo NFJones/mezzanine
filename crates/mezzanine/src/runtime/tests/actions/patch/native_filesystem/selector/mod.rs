@@ -27,6 +27,15 @@ fn selected_with_approval(prompt: bool) -> Fixture {
 
 /// Selects an actual approval policy before the accepted provider response.
 fn selected_with_policy(policy: mez_agent::ApprovalPolicy) -> Fixture {
+    selected_with_setup(policy, |_, _| {})
+}
+
+/// Installs a policy/source fixture before the actual provider response is accepted.
+/// Setup may configure intent or seed a real competing file, never outcome facts.
+fn selected_with_setup(
+    policy: mez_agent::ApprovalPolicy,
+    setup: impl FnOnce(&mut RuntimeSessionService, &std::path::Path),
+) -> Fixture {
     let prompt = matches!(
         policy,
         mez_agent::ApprovalPolicy::Ask | mez_agent::ApprovalPolicy::AutoAllow
@@ -78,6 +87,8 @@ fn selected_with_policy(policy: mez_agent::ApprovalPolicy) -> Fixture {
             .unwrap(),
         );
     }
+    service.set_pane_approval_policy_override("%1", Some(policy));
+    setup(&mut service, &root);
     let start = service
         .start_agent_prompt_turn("%1", "create a native file")
         .unwrap();
@@ -1058,3 +1069,5 @@ async fn native_filesystem_selector_capacity_waiter_rejects_changed_mode() {
             .is_empty()
     );
 }
+
+mod acceptance;

@@ -12718,7 +12718,17 @@ required for the native filesystem dispatcher.
 Native filesystem workers MUST use bounded resources and cooperative
 cancellation outside the serialized actor. The patch budget remains 30 seconds,
 capped by the turn deadline, not the native shell timeout. Four admitted or
-untransferred owners bound concurrency. Up to 64 deferred selections retain
+untransferred owners bound concurrency. A queued provider offer MUST defer
+without failing its turn while an original native filesystem owner remains;
+it MUST NOT infer or claim a continuation before that owner's exact transfer.
+Joined child and filesystem siblings retain independent settlement gates.
+An accepted joined spawn MUST retain its original action/group source before
+asynchronous siblings settle, so a waiting child result does not prevent those
+siblings' ordered publication. Source retention MUST NOT complete that child.
+After physical siblings transfer, a parent waiting only on joined children MUST
+release its scheduler slot through ordinary dependency admission, without a new
+provider inference or replaying the settled filesystem work.
+Up to 64 deferred selections retain
 original payload/group/context and the original deadline while capacity is busy;
 an actual owner transfer wakes eligible waiters without renewing their budget or
 falling back to a changed pane transport. Acknowledged

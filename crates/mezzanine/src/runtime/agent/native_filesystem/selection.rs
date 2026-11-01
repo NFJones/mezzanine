@@ -306,6 +306,20 @@ impl RuntimeSessionService {
         {
             self.dispatch_stored_running_shell_actions(turn)?;
         }
+        if self.joined_coordination_source_quiescent(turn)
+            && self
+                .agent_turn_executions()
+                .get(turn)
+                .is_some_and(|execution| {
+                    self.execution_waiting_for_live_joined_subagents(turn, execution)
+                })
+        {
+            // The last filesystem transfer can leave only real joined children.
+            // The ordinary retry predicate intentionally excludes that state;
+            // use its existing dependency admission to park the parent and free
+            // scheduler capacity without granting another provider inference.
+            self.admit_completion_provider_continuation(turn)?;
+        }
         self.recover_retained_completion_settlement(turn)?;
         Ok(())
     }
