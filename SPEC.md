@@ -15413,7 +15413,8 @@ permission grant.
 
 Private message snapshot schema9 MUST preserve active registration sequence
 floors and each retained occurrence's exact recipient bindings. The floor is
-the acceptance high-water at registration: any mail belonging to a previous
+the occurrence-allocation high-water at registration (including an unpublished
+reserved original): any mail belonging to a previous
 registration falls at or below the replacement floor. Restoring schemas2–4 with
 retained mail MUST report unknown acceptance-time recipients rather than invent
 them from current selector membership; the original snapshot remains untouched.
@@ -15449,6 +15450,23 @@ remain as bounded evidence without a live recipient; that does not prove
 delivery or a terminal outcome. Unsatisfied retired/expired obligations MUST
 remain charged until an explicit terminal-outcome owner settles them;
 retirement or expiry alone MUST NOT fabricate recipient commit.
+
+A lower unpublished admission MUST reserve its immutable occurrence, original
+sender/audience/recipient intervals and finite budgets before storage issuance.
+It MUST NOT appear in accepted receipts, delivery indexes, offers or live proofs
+until qualified storage completion is adopted by its exact actor owner. Existing
+accepted mail MUST remain drainable. A reservation/allocator gap is not success.
+A replacement registration MUST exclude an older unpublished binding as well as
+older published mail; tail subscriptions MUST NOT skip later publication.
+
+A storage-qualified path MUST keep issued or ambiguous work charged until its
+actual joined outcome is reconciled. Only a never-issued reservation or an exact
+qualified noncommit may be released as unaccepted. Lost worker results require
+nonblocking evidence that the exact owned attempt joined before reissuing the
+same original. A generic I/O error, timeout or lost observer is not that evidence.
+Positive duplicate adoption MUST return the original fact without reinserting
+mail after ordinary replay eviction. These lower contracts do not by themselves
+upgrade the current runtime's in-memory acceptance to crash-durable delivery.
 
 The lower service's explicit actor-owned terminal maintenance MUST reserve one
 fixed-size disposition slot per accepted recipient before success. It records

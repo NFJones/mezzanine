@@ -26,7 +26,12 @@ pub use requests::{
     MESSAGE_REQUEST_HANDOFF_BYTES, MessageRequestLimits, MessageRequestOrigin,
     MessageRequestReceipt, MessageRequests,
 };
-pub use service::{MessageAcceptanceProof, MessageAcceptanceReservation};
+pub use service::{
+    MessageAcceptanceAttempt, MessageAcceptanceCommit, MessageAcceptanceJoin,
+    MessageAcceptanceProof, MessageAcceptanceRejected, MessageAcceptanceReservation,
+    MessageAcceptanceStore, MessageAcceptanceStoreError, MessageAcceptanceTicket,
+    MessageAcceptanceUncertain, MessageAcceptanceWrite, MessageAcceptanceWriteOutcome,
+};
 pub use types::{
     AgentPresenceStatus, Delivery, DeliveryBatch, DeliveryCursor, DeliveryStatus, Envelope,
     FanoutBatch, FanoutBudget, MMP_CONTENT_TYPE, MessageAcceptedSnapshot, MessageAudienceSnapshot,

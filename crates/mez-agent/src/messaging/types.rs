@@ -706,6 +706,9 @@ pub(super) struct RetiredDeliveryFloor {
 /// structured runtime state without parsing display text.
 #[derive(Debug)]
 pub struct MessageService {
+    /// Charged unpublished occurrence, excluded from every delivery projection.
+    pub(super) admission: Option<super::service::PendingMessageAdmission>,
+
     /// Nonserializable identity of this live owner. Retained acceptance proofs
     /// cannot authenticate against another service or snapshot restoration.
     pub(super) acceptance_runtime: Arc<()>,

@@ -457,7 +457,7 @@ are rejected. This remains snapshot recovery, not acceptance-atomic disk storage
 
 Schema5 records each active registration's acceptance sequence floor and each
 retained occurrence's exact accepted recipient intervals. A floor is the last
-accepted sequence before registration; all mail for an earlier registration is
+allocated occurrence before registration, including unpublished reservations; all mail for an earlier registration is
 at or below a replacement's floor. Capture/restore preserves these facts, not
 arbitrary reconnect authority. Schemas2–4 with retained mail are explicitly
 refused as unknown acceptance-time recipients; the service does not guess a
@@ -465,6 +465,22 @@ recipient set from current registrations, nor rewrite the input snapshot.
 Empty-mail legacy snapshots still restore, while schema1 retains its existing
 audience-less-mail discard policy. This format version does not promise an
 acceptance-atomic disk write or transparent workflow restart.
+
+The lower storage-qualified admission boundary separates reservation, issuance,
+physical completion and actor publication. Its version1 immutable record streams
+borrowed original fields, payload and exact eligible recipient intervals; the
+encoded data is not a live receipt or capability. An unpublished occurrence is
+absent from delivery, while existing accepted mail can still drain. Allocator
+reservation gaps are not successful sends, and tail subscriptions do not skip
+an original that is published later.
+
+Only a never-issued reservation or an exactly qualified noncommit can be called
+unaccepted. Ambiguous writes retain the same original for reconciliation. A lost
+worker result requires actual join evidence before a new attempt; generic errors
+or dropped observers do not prove absence. Repeated positive adoption reports the
+original fact without replaying mail. These are lower-layer contracts: the current
+runtime/native/socket ingresses still use in-memory acceptance until the durable
+storage integration is complete; no new restart guarantee is advertised here.
 
 Schema6 additionally preserves exact offered-recipient subsets and their
 selection clock high-waters. Missing, duplicate, foreign and TTL-inconsistent

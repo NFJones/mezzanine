@@ -58,6 +58,29 @@ impl MessageService {
         Ok(bindings)
     }
 
+    /// Reserves frozen slots against pending sources before disposable replay
+    /// is dropped by a successful unpublished reservation. No pending work evicts.
+    pub(super) fn reserve_pending_recipient_bindings(
+        &self,
+        incoming: &[(AgentId, MessageSequence)],
+    ) -> Result<()> {
+        let mut count = incoming.len();
+        let mut bytes = binding_bytes(incoming.iter().map(|(id, _)| id.as_str()));
+        for row in self.pending.values() {
+            count = count.saturating_add(row.recipient_bindings.len());
+            bytes = bytes.saturating_add(binding_bytes(
+                row.recipient_bindings.iter().map(|(id, _)| id.as_str()),
+            ));
+        }
+        if count > MAX_RECIPIENT_BINDINGS || bytes > MAX_RECIPIENT_BINDING_BYTES {
+            return Err(MessageError::new(
+                MessageErrorKind::Capacity,
+                "MMP recipient metadata capacity; message not accepted",
+            ));
+        }
+        Ok(())
+    }
+
     /// Reserves all recipient metadata before sequence allocation or mutation.
     /// Fully settled history that this enqueue already evicts does not
     /// consume the candidate budget. Pending references are always charged.

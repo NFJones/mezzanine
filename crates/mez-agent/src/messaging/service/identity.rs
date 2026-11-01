@@ -78,14 +78,18 @@ impl MessageService {
         Ok(self.insert_registered_identity(identity, 0))
     }
 
-    /// Inserts one identity into registered-agent and presence state.
+    /// Inserts one identity into registered-agent and presence state. The
+    /// allocation high-water fences unpublished older originals as well as
+    /// accepted ones; a replacement cannot acquire an in-flight old binding.
     fn insert_registered_identity(
         &mut self,
         identity: SenderIdentity,
         updated_at_ms: u64,
     ) -> SenderIdentity {
-        self.registration_floors
-            .insert(identity.agent_id.clone(), self.last_sequence());
+        self.registration_floors.insert(
+            identity.agent_id.clone(),
+            self.next_sequence.saturating_sub(1),
+        );
         self.registered
             .insert(identity.agent_id.clone(), identity.clone());
         self.presence.insert(

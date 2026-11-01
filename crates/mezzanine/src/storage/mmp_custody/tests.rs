@@ -484,3 +484,187 @@ fn exact_retry_refuses_resurrected_removed_postimage_without_deleting_again() {
         Some(b"original".as_slice())
     );
 }
+
+/// A real disk commit may succeed before its worker panics and loses the reply.
+/// The lower original must remain unpublished/uncancellable until an actual
+/// join-qualified retry reconciles that same SQLite generation and record once.
+/// This composes the storage/core boundary, not the unfinished product ingress.
+#[test]
+fn admission_worker_loss_after_real_commit_reconciles_same_disk_occurrence_once() {
+    use mez_agent::messaging::{
+        Envelope, MessageAcceptanceAttempt, MessageAcceptanceJoin, MessageAcceptanceStore,
+        MessageAcceptanceStoreError, MessageAcceptanceWrite, MessageAcceptanceWriteOutcome,
+        MessageError, MessageScope, MessageService, Recipient,
+    };
+    struct Port {
+        root: std::path::PathBuf,
+        lose_reply: bool,
+    }
+    impl MessageAcceptanceStore for Port {
+        /// Commits the exact serialized original before the injected worker loss.
+        fn commit(
+            &mut self,
+            record: &MessageAcceptanceWrite,
+        ) -> std::result::Result<(), MessageAcceptanceStoreError> {
+            let bytes = serde_json::to_vec(record).unwrap();
+            let key = format!("occurrence-{}", record.sequence());
+            let mut store = MmpCustodyStore::open(&self.root, "session").map_err(|error| {
+                MessageAcceptanceStoreError::Unknown(MessageError::invalid_state(error.to_string()))
+            })?;
+            store
+                .commit(
+                    0,
+                    &[CustodyWrite {
+                        key: &key,
+                        previous: None,
+                        value: Some(&bytes),
+                    }],
+                )
+                .map_err(|error| {
+                    MessageAcceptanceStoreError::Unknown(MessageError::invalid_state(
+                        error.to_string(),
+                    ))
+                })?;
+            assert!(!self.lose_reply, "injected loss after actual commit");
+            Ok(())
+        }
+    }
+    struct Joined {
+        expected: MessageAcceptanceAttempt,
+        observed: bool,
+    }
+    impl MessageAcceptanceJoin for Joined {
+        /// Qualifies only the exact original after the real thread join completed.
+        fn qualify_joined(
+            &mut self,
+            attempt: &MessageAcceptanceAttempt,
+        ) -> mez_agent::messaging::Result<()> {
+            if self.observed && self.expected.same_attempt(attempt) {
+                Ok(())
+            } else {
+                Err(MessageError::invalid_state(
+                    "original worker has not joined",
+                ))
+            }
+        }
+    }
+    let fixture = Fixture::new();
+    let mut service = MessageService::default();
+    let sender = service.register_agent(None, None, "sender", vec![]);
+    let target = service.register_agent(None, None, "target", vec![]);
+    service
+        .subscribe_from_retained_start(&target.agent_id)
+        .unwrap();
+    let input = Envelope {
+        protocol: "mmp/1",
+        id: "disk-original".into(),
+        message_type: "send".into(),
+        time: "fixture:disk".into(),
+        sender: sender.clone(),
+        recipient: Recipient::Agent(target.agent_id.clone()),
+        correlation_id: None,
+        ttl_ms: None,
+        content_type: "text/plain".into(),
+        payload: "committed before worker reply".into(),
+        extension_fields: vec![],
+    };
+    let ticket = service
+        .prepare_acceptance(
+            &sender.agent_id,
+            input,
+            MessageScope::Session,
+            17,
+            4096,
+            None,
+        )
+        .unwrap();
+    let mut foreign = MessageService::from_snapshot_state(&service.snapshot_state()).unwrap();
+    let write = service.begin_acceptance_write(&ticket).unwrap();
+    let attempt = service.acceptance_write_attempt(&ticket).unwrap();
+    let root = fixture.0.clone();
+    let worker = std::thread::spawn(move || {
+        write.persist(&mut Port {
+            root,
+            lose_reply: true,
+        })
+    });
+    let mut joined = Joined {
+        expected: attempt.clone(),
+        observed: false,
+    };
+    assert!(
+        service
+            .recover_joined_acceptance_write(&attempt, &mut joined)
+            .is_err()
+    );
+    assert!(worker.join().is_err());
+    joined.observed = true;
+    let store = MmpCustodyStore::open(&fixture.0, "session").unwrap();
+    let before = store
+        .read(&format!("occurrence-{}", ticket.sequence()))
+        .unwrap()
+        .unwrap();
+    drop(store);
+    assert!(service.snapshot_state().accepted_messages.is_empty());
+    assert!(
+        service
+            .receive_subscribed(&target.agent_id, 18, 10)
+            .unwrap()
+            .messages
+            .is_empty()
+    );
+    assert!(service.cancel_acceptance(&ticket).is_err());
+    service
+        .update_agent_objective(
+            &sender.agent_id,
+            Some("changed while original reply was lost"),
+            18,
+        )
+        .unwrap();
+    let retry = service
+        .recover_joined_acceptance_write(&attempt, &mut joined)
+        .unwrap();
+    let MessageAcceptanceWriteOutcome::Committed(committed) = retry.persist(&mut Port {
+        root: fixture.0.clone(),
+        lose_reply: false,
+    }) else {
+        panic!("exact reconciliation should succeed")
+    };
+    assert!(foreign.publish_acceptance(&committed).is_err());
+    let receipt = service.publish_acceptance(&committed).unwrap().0;
+    assert_eq!(receipt.sequence, ticket.sequence());
+    assert_eq!(service.publish_acceptance(&committed).unwrap().0, receipt);
+    assert_eq!(
+        service
+            .receive_subscribed(&target.agent_id, 19, 10)
+            .unwrap()
+            .messages
+            .len(),
+        1
+    );
+    let store = MmpCustodyStore::open(&fixture.0, "session").unwrap();
+    assert_eq!(
+        store
+            .read(&format!("occurrence-{}", ticket.sequence()))
+            .unwrap()
+            .unwrap(),
+        before
+    );
+    assert_eq!(
+        store
+            .connection
+            .query_row("SELECT generation FROM state", [], |row| row
+                .get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        store
+            .connection
+            .query_row("SELECT COUNT(*) FROM records", [], |row| row
+                .get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+    MessageService::from_snapshot_state(&service.snapshot_state()).unwrap();
+}

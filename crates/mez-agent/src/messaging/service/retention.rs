@@ -27,7 +27,6 @@ impl MessageService {
             .next_sequence
             .checked_add(1)
             .ok_or_else(|| MessageError::invalid_state("message sequence number exhausted"))?;
-        self.queued_bytes += size;
         let sender_registered_after_sequence = self
             .registration_floors
             .get(&envelope.sender.agent_id)
@@ -44,6 +43,15 @@ impl MessageService {
             recipient_bindings,
             accepted_at_ms: now_ms,
         });
+        self.install_accepted_row(queued);
+        Ok(sequence)
+    }
+
+    /// Installs an already-budgeted exact canonical original. Pending storage
+    /// adoption uses the same indexes, replay and custody owner as ordinary send.
+    pub(super) fn install_accepted_row(&mut self, queued: Arc<QueuedEnvelope>) {
+        self.queued_bytes += queued.envelope.payload.len();
+        let sequence = queued.sequence;
         self.insert_queue_indexes(&queued);
         self.pending.insert(sequence, queued.clone());
         self.queue.push_back(queued);
@@ -59,7 +67,6 @@ impl MessageService {
             }
         }
         self.prune_retired_delivery_floors();
-        Ok(sequence)
     }
 
     /// Reconstructs lookup projections from canonical retained queue order.

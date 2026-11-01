@@ -7,6 +7,9 @@
 //! authenticates sender provenance and freezes project/session membership before
 //! queueing; all delivery paths use the predicates defined here. Snapshot restore
 //! validates that same state before it becomes available to callers.
+//! Unpublished storage reservations share this owner's finite budgets but remain
+//! outside delivery/receipt indexes until exact qualified actor adoption. The
+//! product owns actual off-actor storage, joins and any durable runtime mode.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
@@ -39,6 +42,14 @@ use super::validation::{
 };
 
 mod acceptance_proof;
+mod admission;
+pub(super) use admission::PendingMessageAdmission;
+pub use admission::{
+    MessageAcceptanceAttempt, MessageAcceptanceCommit, MessageAcceptanceJoin,
+    MessageAcceptanceRejected, MessageAcceptanceStore, MessageAcceptanceStoreError,
+    MessageAcceptanceTicket, MessageAcceptanceUncertain, MessageAcceptanceWrite,
+    MessageAcceptanceWriteOutcome,
+};
 mod discovery;
 pub use acceptance_proof::{MessageAcceptanceProof, MessageAcceptanceReservation};
 mod identity;
@@ -91,6 +102,7 @@ impl MessageService {
     /// on duplicated control-flow logic.
     pub fn with_limits(retention_messages: usize, retention_bytes: usize) -> Self {
         Self {
+            admission: None,
             acceptance_runtime: Arc::new(()),
             acceptance_history_through: 0,
             ids: IdFactory::default(),
@@ -209,6 +221,12 @@ impl MessageService {
             return Err(MessageError::conflict(MMP_DUPLICATE_MESSAGE_ID_MESSAGE));
         }
 
+        if self.admission.is_some() {
+            return Err(MessageError::new(
+                MessageErrorKind::Capacity,
+                "MMP unpublished admission in progress; message not accepted",
+            ));
+        }
         let recipient_bindings = self.capture_recipient_bindings(&envelope, &audience)?;
         let queued_recipients = recipient_bindings.len();
         if queued_recipients == 0 {
@@ -299,7 +317,9 @@ impl MessageService {
             }
         }
         drop(objectives);
+        let original_floor = self.registration_floors.get(agent_id).copied();
         self.retire_observational_identity(agent_id);
+        self.mark_admission_sender_retired(agent_id, true, original_floor);
         if let Some(sequence) = last_authored {
             self.retired_delivery_floors.insert(
                 agent_id.clone(),
@@ -319,6 +339,8 @@ impl MessageService {
     /// acceptance receipts. The delivery floor prevents a reused identity from
     /// consuming its former interval; unrelated recipients retain their mail.
     pub fn retire_observational_identity(&mut self, agent_id: &AgentId) -> bool {
+        let original_floor = self.registration_floors.get(agent_id).copied();
+        self.mark_admission_sender_retired(agent_id, false, original_floor);
         let identity = self.registered.remove(agent_id);
         self.registration_floors.remove(agent_id);
         self.presence.remove(agent_id);
@@ -355,11 +377,13 @@ impl MessageService {
         self.retire_observational_identity(agent_id)
     }
 
-    /// Returns the sequence that will be assigned to the next accepted message.
+    /// Returns the sequence reserved for the next original occurrence.
     ///
     /// Runtime-authored envelopes use this durable, monotonically increasing
     /// value as an occurrence identity. Because snapshots preserve the sequence,
     /// generated message ids cannot collide with accepted pre-restart traffic.
+    /// Reservation gaps are not acceptance evidence; producers must select the
+    /// actual admission slot before constructing sequence-derived message IDs.
     pub fn next_message_sequence(&self) -> MessageSequence {
         self.next_sequence
     }
@@ -458,13 +482,14 @@ impl MessageService {
             .is_some_and(|presence| presence.status != AgentPresenceStatus::Offline)
     }
 
-    /// Runs the last sequence operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
+    /// Returns the settled allocation high-water, excluding the current
+    /// unpublished original so a tail subscription cannot skip its later commit.
+    /// Cancelled allocation gaps do not constitute acceptance or delivery.
     fn last_sequence(&self) -> MessageSequence {
-        self.next_sequence.saturating_sub(1)
+        self.admission.as_ref().map_or_else(
+            || self.next_sequence.saturating_sub(1),
+            |pending| pending.sequence().saturating_sub(1),
+        )
     }
 }
 
