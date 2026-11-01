@@ -12,6 +12,11 @@ pub(crate) mod issues;
 pub(crate) mod lease;
 pub(crate) mod local_assignment;
 pub(crate) mod memory;
+#[allow(
+    dead_code,
+    reason = "durable MMP actor integration is the next phase of issue e048f9a8"
+)]
+pub(crate) mod mmp_custody;
 pub(crate) mod registry;
 mod row_diff;
 #[allow(
