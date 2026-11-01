@@ -1,7 +1,9 @@
 //! Filesystem producer custody before claim and across monitor cancellation.
 //!
-//! The root service creates this owner before polling an actor claim. The actor
-//! retains the same allocation before issuing work and installs dispatch here;
+//! The queue-owned enrollment and host root retain the same actual allocation
+//! before its first actor claim poll. The producer keeps only a non-owning link
+//! back to enrollment; dispatch and cached archive evidence follow that rule to
+//! avoid source/producer self-custody. The actor installs dispatch here;
 //! a oneshot reply carries acceptance only. Closing unclaimed admission prevents
 //! a later queued claim from starting work. Actual blocking handles and immutable
 //! outcomes remain owned outside monitor futures. Last-owner drop requests
@@ -147,12 +149,13 @@ impl NativeFilesystemProducerStop {
 pub(crate) struct NativeFilesystemProducer(Arc<Inner>);
 
 impl NativeFilesystemProducer {
-    /// Creates root custody before an asynchronous claim can be polled.
+    /// Creates a candidate with a non-owning source enrollment reference.
+    /// Actual root enrollment must complete before its claim future can poll.
     pub(crate) fn new(attempt: NativeFilesystemAttempt) -> Self {
         Self(Arc::new(Inner {
             identity: NativeFilesystemProducerIdentity(Arc::new(())),
             transfer: Mutex::new(None),
-            attempt,
+            attempt: attempt.non_owning(),
             admission: Mutex::new(Admission {
                 closed: false,
                 claiming: false,
@@ -165,6 +168,19 @@ impl NativeFilesystemProducer {
             execution: tokio::sync::Mutex::new(Execution::Unstarted),
             progress: Mutex::new(Vec::new()),
         }))
+    }
+
+    /// Enrolls the exact root allocation before any claim poll. A completed
+    /// historical transfer remains valid after source enrollment has ended.
+    /// This grants no scope/worker rights and rejects lookalike replacement.
+    pub(crate) fn register_root(&self) -> Result<()> {
+        if self
+            .transfer_acknowledgement()?
+            .is_some_and(|ack| ack.belongs_to(self))
+        {
+            return Ok(());
+        }
+        self.0.attempt.register_root(self)
     }
 
     /// Creates reduce-only cancellation without strongly retaining this owner.
@@ -240,13 +256,16 @@ impl NativeFilesystemProducer {
             })?;
         admission.claiming = false;
         let result = match result {
-            Ok(Some(dispatch)) => {
+            Ok(Some(mut dispatch)) => {
                 if dispatch.attempt != self.0.attempt {
                     dispatch.fence.cancel();
                     Err(MezError::conflict(
                         "native filesystem producer received another attempt",
                     ))
                 } else {
+                    // A retained dispatch must not own the enrollment cell that
+                    // in turn owns this producer/actual worker handle.
+                    dispatch.attempt = dispatch.attempt.non_owning();
                     if admission.closed {
                         dispatch.fence.cancel();
                     }

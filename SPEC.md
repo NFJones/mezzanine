@@ -12797,7 +12797,18 @@ acknowledgement; transferring one action MUST leave unrelated sibling, group,
 provider continuation and failure gates intact.
 
 The provider root MUST register filesystem producer custody before releasing
-its first claim poll. Startup recovery MUST recover the original queued source
+its first claim poll. That registration MUST retain the same actual allocation
+in the original queued source, before any claim RPC can issue dispatch. Recovery
+of a closed/unissued source MUST recover that allocation rather than constructing
+a new same-label producer. The first enrollment is immutable; a lookalike MUST
+fail before its monitor is spawned or polled. Enrollment grants custody only,
+not filesystem authority, worker admission, commit permission or a join receipt.
+
+Actor/offer owners MAY retain the source enrollment cell. Producer-owned attempt,
+dispatch and cached archive/transfer evidence MUST use non-owning enrollment
+references, preserving exact source identity without a source-to-producer custody
+cycle. Historical exact acknowledgements remain valid after enrollment ends.
+ Startup recovery MUST recover the original queued source
 or registered allocation, including lost offers, without redispatching effects.
 An offered source MUST NOT be duplicated by unrelated provider poll timers.
 Filesystem ownership MUST count as a runtime progress path and prevent shell

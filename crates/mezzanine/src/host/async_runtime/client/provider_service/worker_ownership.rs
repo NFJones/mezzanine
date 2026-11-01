@@ -324,16 +324,18 @@ where
     )
 }
 
-/// Registers the exact filesystem producer outside its abortable monitor.
+/// Registers the exact producer in its original source and host root before
+/// releasing the monitor gate. An enrollment error spawns/polls no monitor.
 pub(super) fn spawn_owned_filesystem_agent_worker<F>(
     workers: &mut JoinSet<Result<AsyncAgentProviderWorkerResult>>,
     owners: &mut AgentProviderWorkerOwners,
     producer: crate::runtime::native_filesystem::NativeFilesystemProducer,
     future: F,
-) -> tokio::task::AbortHandle
+) -> Result<tokio::task::AbortHandle>
 where
     F: Future<Output = Result<AsyncAgentProviderWorkerResult>> + Send + 'static,
 {
+    producer.register_root()?;
     let stop_control = producer.clone();
     let (registered, admission) = tokio::sync::oneshot::channel();
     let root = super::filesystem_ownership::FilesystemRootOwner::new(
@@ -355,7 +357,7 @@ where
     // Only this send, after map insertion, releases the monitor's first poll.
     owners.filesystem.register(task.id(), &stop_control);
     let _ = registered.send(());
-    task
+    Ok(task)
 }
 
 /// Clones only actual filesystem custody while its root map entry stays installed.

@@ -593,3 +593,28 @@ async fn progress_callback_does_not_prevent_last_owner_cancellation() {
     assert!(worker_observed_cancellation);
     assert!(!fixture.root.join("file").exists());
 }
+
+/// First root enrollment is immutable even before issuance. A same-source
+/// lookalike cannot replace it, and dropping that rejected allocation must not
+/// cancel the actual original source. Genuine actor claim remains possible;
+/// owned-dispatch retirement then proves unexecuted work without launching it.
+#[tokio::test(flavor = "current_thread")]
+async fn preclaim_enrollment_rejects_lookalike_without_revoking_original_source() {
+    let mut fixture = Fixture::new();
+    let attempt = fixture.queue();
+    let original = NativeFilesystemProducer::new(attempt.clone());
+    original.register_root().unwrap();
+    assert!(attempt.root_producer().unwrap().same(&original));
+    let lookalike = NativeFilesystemProducer::new(attempt.clone());
+    assert!(lookalike.register_root().is_err());
+    drop(lookalike);
+    assert!(
+        fixture
+            .service
+            .claim_native_filesystem_producer(&original)
+            .unwrap()
+    );
+    let outcome = original.retire().await.unwrap().unwrap();
+    assert_eq!(outcome.result.certainty, NativeEffectCertainty::Unexecuted);
+    assert!(!fixture.root.join("file").exists());
+}

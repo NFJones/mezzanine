@@ -210,7 +210,7 @@ pub(super) async fn recover_filesystem_workers(
                 owners,
                 producer.clone(),
                 monitor(handle.clone(), producer),
-            );
+            )?;
         } else {
             Box::pin(super::dispatch_agent_provider_side_effects(
                 handle,
@@ -231,8 +231,8 @@ pub(super) fn spawn_filesystem_action_worker(
     owners: &mut AgentProviderWorkerOwners,
     handle: AsyncRuntimeSessionHandle,
     offer: RuntimeNativeFilesystemOffer,
-) -> tokio::task::AbortHandle {
-    let producer = NativeFilesystemProducer::new(offer.attempt().clone());
+) -> Result<tokio::task::AbortHandle> {
+    let producer = offer.attempt().root_producer()?;
     worker_ownership::spawn_owned_filesystem_agent_worker(
         workers,
         owners,

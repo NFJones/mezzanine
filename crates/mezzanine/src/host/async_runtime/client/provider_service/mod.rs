@@ -1060,7 +1060,7 @@ async fn dispatch_agent_provider_side_effects(
                     owners,
                     handle.clone(),
                     offer,
-                );
+                )?;
             }
             RuntimeSideEffect::DispatchNativeShellAction { turn_id, action_id } => {
                 let Some(dispatch) = handle.claim_native_shell_action(turn_id, action_id).await?

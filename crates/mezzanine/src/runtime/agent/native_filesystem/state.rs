@@ -4,9 +4,13 @@
 //! a replacement actor. Claims transfer work once; observed outcomes remain
 //! immutable and retained even after cancellation. This owner does not infer
 //! commit permission, producer termination or durable canonical settlement.
+//! Shared queue enrollment retains the actual root before first claim; offered
+//! tokens own that cell, while producer/cached evidence tokens are non-owning.
+//! This preserves original recovery without a source/producer custody cycle.
 
+use crate::runtime::processes::native_filesystem_producer::NativeFilesystemProducer;
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, Weak};
 use std::time::Instant;
 
 use mez_agent::native_action::{NativeCommitIdentity, NativePatchOperation};
@@ -24,6 +28,10 @@ use crate::runtime::processes::native_patch::worker::NativePatchWorkerOutcome;
 /// Maximum admitted active/untransferred owners, not an unbounded result archive.
 const MAX_ATTEMPTS: usize = 4;
 
+/// One immutable producer enrollment owned by the actor and offered-source
+/// custodians. Producers retain only a weak link back, never their own owner.
+type NativeFilesystemEnrollment = Mutex<Option<NativeFilesystemProducer>>;
+
 /// Opaque actor allocation and checked sequence; public labels are not authority.
 #[derive(Clone)]
 pub(crate) struct NativeFilesystemAttempt {
@@ -33,6 +41,11 @@ pub(crate) struct NativeFilesystemAttempt {
     sequence: u64,
     /// Reduce-only cancellation reaches queued state before any actor RPC/claim.
     fence: NativePatchCommitFence,
+    /// Exact source enrollment; this weak link grants no claim or commit rights.
+    enrollment: Weak<NativeFilesystemEnrollment>,
+    /// Offered-source lifetime only. Producer/cache observers deliberately omit
+    /// this anchor so source -> producer -> source cannot retain itself.
+    _custody: Option<Arc<NativeFilesystemEnrollment>>,
 }
 
 impl PartialEq for NativeFilesystemAttempt {
@@ -58,6 +71,74 @@ impl Ord for NativeFilesystemAttempt {
     }
 }
 impl NativeFilesystemAttempt {
+    /// Preserves source identity/cancellation without owning the enrollment cell.
+    /// Producer-owned state and cached storage gates must use this form to avoid
+    /// keeping their own actual producer alive through a strong custody cycle.
+    pub(crate) fn non_owning(&self) -> Self {
+        Self {
+            realm: self.realm.clone(),
+            sequence: self.sequence,
+            fence: self.fence.clone(),
+            enrollment: self.enrollment.clone(),
+            _custody: None,
+        }
+    }
+
+    /// Observes allocation liveness only for custody-cycle regression controls.
+    /// This is not worker termination, source acceptance or permission evidence.
+    #[cfg(all(test, target_os = "linux"))]
+    pub(crate) fn enrollment_alive_for_tests(&self) -> bool {
+        self.enrollment.upgrade().is_some()
+    }
+
+    /// Recovers or creates the actual original root before its first claim poll.
+    /// Only enrollment changes: scope/worker/commit admission remain actor-owned.
+    /// Expired/poisoned source custody fails without manufacturing a replacement.
+    pub(crate) fn root_producer(&self) -> Result<NativeFilesystemProducer> {
+        let enrollment = self
+            .enrollment
+            .upgrade()
+            .ok_or_else(|| MezError::conflict("native filesystem original enrollment ended"))?;
+        let mut current = enrollment.lock().map_err(|_| {
+            MezError::invalid_state("native filesystem enrollment custody poisoned")
+        })?;
+        if let Some(original) = &*current {
+            return Ok(original.clone());
+        }
+        let producer = NativeFilesystemProducer::new(self.non_owning());
+        *current = Some(producer.clone());
+        Ok(producer)
+    }
+
+    /// Registers exactly this allocation before releasing a host root claim gate.
+    /// Equal labels cannot replace an enrolled producer; no scope is granted.
+    pub(crate) fn register_root(&self, producer: &NativeFilesystemProducer) -> Result<()> {
+        if producer.attempt() != self
+            || !Weak::ptr_eq(&self.enrollment, &producer.attempt().enrollment)
+        {
+            return Err(MezError::conflict(
+                "native filesystem enrollment source changed",
+            ));
+        }
+        let enrollment = self
+            .enrollment
+            .upgrade()
+            .ok_or_else(|| MezError::conflict("native filesystem original enrollment ended"))?;
+        let mut current = enrollment.lock().map_err(|_| {
+            MezError::invalid_state("native filesystem enrollment custody poisoned")
+        })?;
+        if current
+            .as_ref()
+            .is_some_and(|original| !original.same(producer))
+        {
+            return Err(MezError::conflict(
+                "native filesystem producer allocation changed",
+            ));
+        }
+        *current = Some(producer.clone());
+        Ok(())
+    }
+
     /// Monotonically fences the original queued or issued work, granting no rights.
     pub(crate) fn cancel(&self) {
         self.fence.cancel();
@@ -151,8 +232,7 @@ struct Attempt {
     /// Original immutable result; retries never clone or replay its effects.
     outcome: Option<Arc<NativePatchWorkerOutcome>>,
     /// Shared producer registration survives lost claim replies and monitors.
-    producer:
-        Option<crate::runtime::processes::native_filesystem_producer::NativeFilesystemProducer>,
+    enrollment: Arc<NativeFilesystemEnrollment>,
     /// Issued endpoint admissions are never replayed after delivery uncertainty.
     commits: BTreeSet<(usize, usize)>,
     /// Failed preparation or outcome validation, without losing result custody.
@@ -188,6 +268,18 @@ impl std::fmt::Debug for NativeFilesystemActions {
         f.debug_struct("NativeFilesystemActions")
             .field("owners", &self.attempts.len())
             .finish_non_exhaustive()
+    }
+}
+
+impl Attempt {
+    /// Conserves the actual allocation even if a control lock was poisoned.
+    /// This read grants no new enrollment, permission, join or storage evidence;
+    /// mutating enrollment still fails closed on poison.
+    fn producer(&self) -> Option<NativeFilesystemProducer> {
+        match self.enrollment.lock() {
+            Ok(current) => current.clone(),
+            Err(poisoned) => poisoned.into_inner().clone(),
+        }
     }
 }
 
@@ -227,10 +319,13 @@ impl NativeFilesystemActions {
             authority_generation: generation,
             operation,
         };
+        let enrollment = Arc::new(Mutex::new(None));
         let token = NativeFilesystemAttempt {
             realm: Arc::clone(&self.realm),
             sequence: self.next,
             fence: fence.clone(),
+            enrollment: Arc::downgrade(&enrollment),
+            _custody: Some(enrollment.clone()),
         };
         let work = Arc::new(NativeFilesystemWork {
             owner,
@@ -245,7 +340,7 @@ impl NativeFilesystemActions {
                 phase: Phase::Queued,
                 scopes: None,
                 outcome: None,
-                producer: None,
+                enrollment,
                 commits: BTreeSet::new(),
                 failure: None,
             },
@@ -260,11 +355,13 @@ impl NativeFilesystemActions {
     pub(super) fn pending(&self) -> Vec<NativeFilesystemAttempt> {
         self.attempts
             .iter()
-            .filter(|(_, entry)| entry.phase == Phase::Queued && entry.producer.is_none())
+            .filter(|(_, entry)| entry.phase == Phase::Queued && entry.producer().is_none())
             .map(|(sequence, entry)| NativeFilesystemAttempt {
                 realm: self.realm.clone(),
                 sequence: *sequence,
                 fence: entry.fence.clone(),
+                enrollment: Arc::downgrade(&entry.enrollment),
+                _custody: Some(entry.enrollment.clone()),
             })
             .collect()
     }
@@ -285,8 +382,10 @@ impl NativeFilesystemActions {
                         realm: self.realm.clone(),
                         sequence: *sequence,
                         fence: entry.fence.clone(),
+                        enrollment: Arc::downgrade(&entry.enrollment),
+                        _custody: Some(entry.enrollment.clone()),
                     },
-                    entry.producer.clone(),
+                    entry.producer(),
                 )
             })
             .collect()
@@ -329,7 +428,7 @@ impl NativeFilesystemActions {
             })?;
         entry.fence.check()?;
         Ok(NativeFilesystemRegisteredSource {
-            attempt: token.clone(),
+            attempt: token.non_owning(),
             work: Arc::clone(&entry.work),
         })
     }
@@ -374,7 +473,7 @@ impl NativeFilesystemActions {
         entry.scopes = Some(scopes.clone());
         entry.phase = Phase::Issued;
         Ok(Some(RuntimeNativeFilesystemDispatch {
-            attempt: token.clone(),
+            attempt: token.non_owning(),
             work: Arc::clone(&entry.work),
             scopes,
             fence: entry.fence.clone(),
@@ -412,17 +511,12 @@ impl NativeFilesystemActions {
             .ok_or_else(|| {
                 MezError::conflict("native filesystem producer registration is not queued")
             })?;
-        if producer.attempt() != token
-            || entry
-                .producer
-                .as_ref()
-                .is_some_and(|original| !original.same(&producer))
-        {
+        if !Weak::ptr_eq(&token.enrollment, &Arc::downgrade(&entry.enrollment)) {
             return Err(MezError::conflict(
-                "native filesystem producer allocation changed",
+                "native filesystem enrollment allocation changed",
             ));
         }
-        entry.producer = Some(producer);
+        token.register_root(&producer)?;
         Ok(())
     }
 
@@ -433,7 +527,7 @@ impl NativeFilesystemActions {
         token: &NativeFilesystemAttempt,
     ) -> Option<crate::runtime::processes::native_filesystem_producer::NativeFilesystemProducer>
     {
-        self.get(token).and_then(|entry| entry.producer.clone())
+        self.get(token).and_then(Attempt::producer)
     }
 
     /// Matches live display data only to a registered issued/retained producer.
@@ -447,7 +541,7 @@ impl NativeFilesystemActions {
                 && entry.work.owner.turn.turn_id == progress.turn_id
                 && entry.work.owner.action.id == progress.action_id
                 && entry
-                    .producer
+                    .producer()
                     .as_ref()
                     .is_some_and(|producer| producer.matches_progress(progress))
         })
@@ -607,7 +701,7 @@ impl NativeFilesystemActions {
         if entry.phase != Phase::Retained
             || !Arc::ptr_eq(&entry.work, work)
             || !entry
-                .producer
+                .producer()
                 .as_ref()
                 .is_some_and(|original| original.same(producer))
             || !entry

@@ -176,7 +176,7 @@ impl RuntimeSessionService {
                 .get(&key.0)
                 .ok_or_else(|| MezError::invalid_state("filesystem archive group disappeared"))?;
             let acceptance = NativeFilesystemArchiveAcceptance {
-                attempt: attempt.clone(),
+                attempt: attempt.non_owning(),
                 group: Arc::clone(&group.identity),
                 producer: self
                     .retained_native_filesystem_producer(attempt)

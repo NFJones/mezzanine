@@ -128,8 +128,13 @@ Return to [Configuration overview](overview.md) or validate the final file with
 `mez config validate`.
 
 Filesystem producer custody in the provider service is registered before its
-first actor claim. Startup recovers lost queued offers or the actual registered
-producer; recovery never reconstructs a worker from action labels. Stop fences
+first actor claim. Registration also retains the exact allocation in its original
+queued source before any claim RPC. Startup therefore recovers that same producer
+even if it closed before dispatch; recovery never reconstructs a worker from
+action labels. A same-label lookalike cannot replace the first enrolled producer.
+Enrollment grants no write authority. Offered-source owners retain its enrollment
+cell; producer-owned dispatch and cached archive evidence use non-owning links,
+so completed producer acknowledgement cannot keep its own enrollment alive. Stop fences
 all registered sources without waiting for the provider driver's async lock,
 and a registration racing after stop is fenced before admission. Cancelled
 monitors retain their actual recovery handles until original completion transfer
