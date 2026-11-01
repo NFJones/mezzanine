@@ -196,6 +196,12 @@ impl MessageAcceptanceTicket {
     pub fn sequence(&self) -> MessageSequence {
         self.identity.delivery.sequence
     }
+    /// Reports reserved proof ownership without exposing a live acceptance proof.
+    /// Product request-aware roots use this to require paired owner validation.
+    pub fn has_reserved_proof(&self) -> bool {
+        self.identity.proof.is_some()
+    }
+
     /// Reports retained receipt/proof metadata for caller-owned pool accounting.
     /// The canonical payload remains charged to the message service, not this ticket.
     pub fn metadata_bytes(&self) -> usize {
@@ -221,6 +227,14 @@ impl MessageAcceptanceAttempt {
 }
 
 impl MessageAcceptanceWrite {
+    /// Retains the exact payload-free attempt before an owned worker takes input.
+    /// This copies allocation evidence, not a write or publication capability.
+    pub fn attempt(&self) -> MessageAcceptanceAttempt {
+        MessageAcceptanceAttempt {
+            identity: self.identity.clone(),
+            attempt: self.attempt.clone(),
+        }
+    }
     /// Runs this linear original through the trusted port. Completion drops the
     /// worker's payload reference except on ambiguity, when it remains pinned.
     pub fn persist(self, store: &mut impl MessageAcceptanceStore) -> MessageAcceptanceWriteOutcome {
@@ -467,6 +481,13 @@ impl MessageService {
             identity: pending.identity.clone(),
             attempt: attempt.clone(),
         })
+    }
+
+    /// Validates the exact current attempt without consuming its retained input.
+    /// Product roots use this before transferring an uncertain result on retry;
+    /// foreign/stale callers cannot destroy original input by failed adoption.
+    pub fn validate_acceptance_attempt(&self, attempt: &MessageAcceptanceAttempt) -> Result<()> {
+        self.require_admission_attempt(&attempt.identity, &attempt.attempt)
     }
 
     /// Authorizes one new reconciliation attempt from a joined uncertain result.

@@ -125,6 +125,20 @@ impl MessageRequests {
         Ok(ticket)
     }
 
+    /// Borrows original caller ownership only for this exact unpublished ticket.
+    /// Product roots validate the paired reservation before issuing its write;
+    /// matching public IDs or a foreign store cannot supply this capability.
+    pub fn prepared_origin(
+        &self,
+        ticket: &MessageAcceptanceTicket,
+    ) -> Result<&MessageRequestOrigin> {
+        let pending = self.pending.as_ref().ok_or_else(changed)?;
+        if !pending.ticket.same_reservation(ticket) {
+            return Err(changed());
+        }
+        Ok(&pending.origin)
+    }
+
     /// Adopts only the matching committed occurrence into its original caller.
     /// Positive duplicate completion borrows the same retained receipt without
     /// sending again. Missing/consumed ownership is an error, never permission

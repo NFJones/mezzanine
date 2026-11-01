@@ -15486,6 +15486,20 @@ actual dense immutable prefix and generation, without reconstructing missing or
 corrupt committed chunks. The original serialized-store plan MUST settle before
 later store work; this storage adapter alone does not enable durable ingress.
 
+An MMP storage worker root MUST retain the actual opening/write handle, original
+store plan and exact lower attempt before any observer awaits completion. Dropped
+observers MUST NOT consume those handles or inputs. Tracked issuance MUST validate
+the exact prepared request owner before beginning the lower write; a flag alone
+MUST NOT authorize bypassing paired adoption. Positive completion MUST remain
+owned until exact lower/request publication. Foreign lower validation MUST precede
+consuming an uncertain input for retry, and lost input MUST require the actual
+observed original worker join. Retry spacing MUST be monotonic1s,2s,4s up to30s
+from observed failures, with one physical worker per root and no provider permit.
+Stop MUST close fresh issuance while preserving issued reconciliation/publication.
+Orderly supervision MUST retain the root through settlement; last-root cleanup
+MUST NOT claim canonical acknowledgement. This worker component does not itself
+wire durable ingress, failed-stage control-drain recovery or restart recovery.
+
 The lower service's explicit actor-owned terminal maintenance MUST reserve one
 fixed-size disposition slot per accepted recipient before success. It records
 `expired` only after the original strict TTL boundary, or `recipient_retired`

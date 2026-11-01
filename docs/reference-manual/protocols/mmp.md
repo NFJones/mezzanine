@@ -493,6 +493,17 @@ Chunk rows count against the current private store row/encoded-byte limits; the
 full product envelope/obligation/cache and total physical quotas remain separate
 integration work. Current runtime acceptance remains in memory.
 
+The async storage worker component retains actual opening/write handles and the
+original plan outside abortable observers. Tracked starts require the actual
+prepared request owner; positive completion remains held until paired publication.
+Unknown results keep the linear input, while lost results require the exact actual
+worker join before reconciliation. Retry spacing is monotonic1s,2s,4s up to30s,
+with one worker per root and no provider slot. Stop closes new issuance and leaves
+issued work available for settlement. The supervising actor must retain this root;
+fallback last-root draining is not canonical acknowledgement. Ingress/supervisor
+wiring, failed-stage recovery/rebase for later ACK/control work, genuine storage
+change wakeups, full quotas and crash/restart recovery remain integration work.
+
 Only a never-issued reservation or an exactly qualified noncommit can be called
 unaccepted. Ambiguous writes retain the same original for reconciliation. A lost
 worker result requires actual join evidence before a new attempt; generic errors

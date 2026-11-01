@@ -34,6 +34,18 @@ pub(crate) struct AcceptancePlan {
     sequence: u64,
 }
 
+impl AcceptancePlan {
+    /// Binds an idle root's already-observed store position to its next occurrence.
+    /// The root may call this only before issuance, with no unsettled store work.
+    pub(crate) fn for_sequence(&self, sequence: u64) -> Self {
+        Self {
+            store_id: self.store_id.clone(),
+            generation: self.generation,
+            sequence,
+        }
+    }
+}
+
 /// Complete immutable content identity stored both before and after chunk writes.
 #[derive(Serialize)]
 struct Header {
