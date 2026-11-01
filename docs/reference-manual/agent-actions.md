@@ -109,10 +109,11 @@ for redaction limits; do not put credentials into prompts or `fetch_url` URLs.
 ## File changes and safe recovery
 
 Patch paths are normally relative to the pane working directory; parent
-traversal is rejected. Under active, non-bypassed Bubblewrap, absolute paths may
-target effective write scopes. Other execution modes reject absolute patch
-headers and targets outside the pane working directory. These patch checks are
-not general confinement of an unsandboxed shell.
+traversal is rejected. Native filesystem patches may use absolute paths within
+current effective read/write scopes. The pane shell adapter permits absolute
+paths under active, non-bypassed Bubblewrap and otherwise restricts headers to
+the pane working directory. These checks are not general confinement of an
+unsandboxed shell or the daemon.
 
 The shell patch resolver fails closed if its native component walker cannot read
 a symbolic link or exceeds its link-expansion bound. It reports a fixed reason
@@ -126,10 +127,17 @@ remaining work using fresh file context. Replaying the original batch can
 repeat effects or fail against changed content. A truncated displayed diff is
 not a complete file review.
 
-Native shell mode currently runs both shell commands and patches through fresh
-shell processes, reported as `spawned_shell`. Pane mode uses the pane shell,
-reported as `pane_shell`. Neither selecting native mode nor seeing a configured
-sandbox name proves process-free patch execution or effective OS confinement.
+Native mode executes `apply_patch` in a bounded filesystem worker, reported as
+`native_runtime`, `sent_to_pane=false`; shell commands retain `spawned_shell`.
+Pane mode keeps the `pane_shell` adapter for both actions. Native patch approval,
+policy classification and presentation use the semantic patch without lowering
+shell source. A real approved request binds its original patch, root/navigation,
+configuration and group; changing that context requires fresh authorization.
+Changing to pane mode does not convert an existing native request into approval
+for pane shell work; the original source is checked before scheduler reacquisition.
+Successful duplicate mutations are recognized from parsed patch semantics and
+original context, independently of action IDs and shell text. They are skipped
+without reapplying the mutation. Partial or unknown effects never permit replay.
 Use the actual action result and [sandbox status](../safety-and-trust/sandboxing.md).
 
 Native filesystem worker confirmations use the shared confirmed-mutation display
@@ -139,8 +147,8 @@ diffs. The live display holds at most 64 endpoint components per action; remaini
 confirmed effects stay in the complete final result. A worker lost after commits
 keeps its captured confirmations, including display overflow, in an unknown
 result; those facts do not prove whole-operation completion. Held installs and
-stale conversations retain the original facts. This component does not by itself
-switch the runtime patch selector away from its existing shell adapter.
+stale conversations retain the original facts. Native selection uses this path
+while the pane adapter retains shell-framed patch confirmations.
 
 When file confirmations arrive after a turn has been retired, archive updates
 retain that turn's original context and history boundary. They cannot borrow a

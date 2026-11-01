@@ -182,6 +182,12 @@ impl RuntimeSessionService {
             );
         }
         self.store_filesystem_original_execution(&key.0, source, execution)?;
+        if result.status == ActionStatus::Succeeded {
+            self.agent
+                .native_filesystem_actions
+                .selection
+                .confirm(&work)?;
+        }
         self.filesystem_completion_phase(key, FilesystemCompletionPhase::CanonicalRetained)?;
         // This pane-local cache is paint, not original effect attribution. Never
         // populate a replacement conversation's cache from an old completion.

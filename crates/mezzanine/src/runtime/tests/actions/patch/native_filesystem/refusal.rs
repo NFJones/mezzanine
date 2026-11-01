@@ -122,7 +122,7 @@ fn native_filesystem_refusal_keeps_rejection_and_canonical_facts_once() {
             .unwrap()
     );
     let result = &fixture.service.agent_turn_executions()[&fixture.turn.turn_id].action_results[0];
-    assert_eq!(result.status, mez_agent::ActionStatus::Failed);
+    assert_eq!(result.status, mez_agent::ActionStatus::Denied);
     let metadata: serde_json::Value =
         serde_json::from_str(result.structured_content_json.as_ref().unwrap()).unwrap();
     assert_eq!(metadata["dispatch_state"], "not_dispatched");

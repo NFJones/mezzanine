@@ -188,7 +188,7 @@ async fn filesystem_root_policy_refusal_is_contained_and_durable_without_worker(
             .filter(
                 |row| row.role == mez_agent::transcript::TranscriptRole::Tool
                     && row.content.contains("not_dispatched")
-                    && row.content.contains("failed")
+                    && row.content.contains("denied")
             )
             .count(),
         1

@@ -844,7 +844,11 @@ fn runtime_agent_action_plans(
     Option<mez_agent::NetworkActionPlan>,
 ) {
     (
-        local_action_plan(action).ok().flatten(),
+        if matches!(action.payload, AgentActionPayload::ApplyPatch { .. }) {
+            None
+        } else {
+            local_action_plan(action).ok().flatten()
+        },
         network_action_plan(action),
     )
 }
@@ -857,7 +861,7 @@ pub(super) fn runtime_agent_context_command(action: &AgentAction, command: &str)
     if matches!(action.payload, AgentActionPayload::ShellCommand { .. }) {
         return command.to_string();
     }
-    local_action_plan(action)
+    mez_agent::local_action_policy(action)
         .ok()
         .flatten()
         .map(|plan| plan.policy_command)
@@ -907,6 +911,9 @@ pub(super) fn runtime_agent_pending_approval_log_line(approval: &BlockedApproval
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 pub(super) fn runtime_agent_action_summary(action: &AgentAction) -> Option<String> {
+    if matches!(action.payload, AgentActionPayload::ApplyPatch { .. }) {
+        return mez_agent::local_action_summary(action).ok().flatten();
+    }
     let (local_plan, network_plan) = runtime_agent_action_plans(action);
     action_summary(
         action,
@@ -972,9 +979,17 @@ pub(super) fn runtime_agent_action_outcome_line(
             .get("confirmed_endpoints")
             .and_then(serde_json::Value::as_array)
             .map_or(0, Vec::len);
+        if certainty == "unexecuted" && result.status == ActionStatus::Failed {
+            // Existing patch correction/terminal diagnostics own this failure
+            // row. No confirmed effect or unknown completion is hidden.
+            return None;
+        }
         let mut line = format!("native patch: {certainty}; {count} confirmed file endpoint(s)");
         if let Some(error) = &result.error {
-            line.push_str(&format!("; {}", error.message));
+            line.push_str(&format!(
+                "; {}",
+                runtime_agent_terminal_preview(&error.message)
+            ));
         }
         return Some((result.is_error, line));
     }

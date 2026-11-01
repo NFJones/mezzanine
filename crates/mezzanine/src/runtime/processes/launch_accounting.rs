@@ -17,8 +17,6 @@ use crate::error::{MezError, Result};
 pub(crate) enum NativeLaunchReason {
     /// Intentional model-authored shell command (possibly sandbox wrapped).
     ShellCommand,
-    /// Legacy semantic patch shell; forbidden in the process-free target.
-    LegacyPatch,
     /// OS backend capability probe, never a native filesystem prerequisite.
     SandboxProbe,
     /// Explicit command-backed status provider, outside basic-action scope.
@@ -107,7 +105,6 @@ mod tests {
         let ledger = NativeLaunchLedger::new(true);
         for reason in [
             NativeLaunchReason::ShellCommand,
-            NativeLaunchReason::LegacyPatch,
             NativeLaunchReason::SandboxProbe,
             NativeLaunchReason::StatusProvider,
         ] {
@@ -118,7 +115,7 @@ mod tests {
             );
         }
         let evidence = ledger.snapshot().unwrap();
-        assert_eq!(evidence.len(), 4);
+        assert_eq!(evidence.len(), 3);
         assert!(
             evidence
                 .iter()

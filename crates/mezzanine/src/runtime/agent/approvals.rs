@@ -107,6 +107,9 @@ impl RuntimeSessionService {
             .iter()
             .filter(|result| result.status == ActionStatus::Blocked)
         {
+            let native_filesystem_domain = result.action_type == "apply_patch"
+                && self.effective_agent_shell_mode_for_pane(&turn.pane_id)
+                    == crate::runtime::config::ShellMode::Native;
             let approval_id = self.queue_blocked_approval(runtime_blocked_approval_request(
                 turn,
                 result,
@@ -117,6 +120,7 @@ impl RuntimeSessionService {
                 BlockedAgentApprovalRef {
                     turn_id: turn.turn_id.clone(),
                     action_id: result.action_id.clone(),
+                    native_filesystem_domain,
                     sandbox_bypass_after_approval: sandbox_bypass_action_id
                         == Some(result.action_id.as_str())
                         || self
@@ -128,6 +132,17 @@ impl RuntimeSessionService {
             if let Some(approval) = self.blocked_approvals().get(&approval_id).cloned() {
                 let log_line = runtime_agent_pending_approval_log_line(&approval);
                 self.append_agent_status_text_to_terminal_buffer(&turn.pane_id, &log_line)?;
+            }
+            if native_filesystem_domain
+                && let Some(action) = execution.response.action_batch.as_ref().and_then(|batch| {
+                    batch
+                        .actions
+                        .iter()
+                        .find(|action| action.id == result.action_id)
+                })
+                && matches!(action.payload, AgentActionPayload::ApplyPatch { .. })
+            {
+                self.reserve_native_filesystem_approval(turn, action, execution, &approval_id)?;
             }
             approval_ids.push(approval_id);
         }
@@ -530,8 +545,8 @@ impl RuntimeSessionService {
             return Ok(true);
         }
         match &action.payload {
-            _ if local_action_plan(action)?.is_some() => {
-                let Some(plan) = local_action_plan(action)? else {
+            _ if mez_agent::local_action_policy(action)?.is_some() => {
+                let Some(plan) = mez_agent::local_action_policy(action)? else {
                     return Ok(false);
                 };
                 let subagent_scope = self.subagent_scope_declaration_for_turn(turn);
@@ -562,13 +577,7 @@ impl RuntimeSessionService {
                     ).decision,
                     RuleDecision::Allow
                 ) || (permission_policy.approval_policy == mez_agent::ApprovalPolicy::AutoAllow
-                    && mez_agent::action_supports_auto_allow(
-                        action,
-                        mez_agent::ActionPlanningInput {
-                            local_plan: Some(&plan),
-                            ..mez_agent::ActionPlanningInput::default()
-                        },
-                    )))
+                    && !plan.summary.trim().is_empty()))
             }
             _ if network_action_plan(action).is_some() => {
                 let Some(plan) = network_action_plan(action) else {
@@ -743,6 +752,17 @@ impl RuntimeSessionService {
         if execution.action_results[result_index].status != ActionStatus::Blocked {
             return Ok(None);
         }
+        let native_patch_approval = self
+            .native_filesystem_action_requires_adapter(&turn.turn_id, &action.id)
+            || (matches!(action.payload, AgentActionPayload::ApplyPatch { .. })
+                && self.effective_agent_shell_mode_for_pane(&turn.pane_id)
+                    == crate::runtime::config::ShellMode::Native);
+        if native_patch_approval {
+            // Validate the original admission domain before reacquiring scheduler
+            // capacity or granting a bypass. Current Pane mode cannot reinterpret
+            // the frozen native request as approval for executable shell work.
+            self.retain_native_filesystem_approval(&turn, &action, &execution, approval_id)?;
+        }
         if turn.state == AgentTurnState::Blocked {
             self.agent.agent_scheduler.requeue_blocked(&turn.turn_id)?;
             self.append_agent_trace_turn_event(
@@ -775,6 +795,23 @@ impl RuntimeSessionService {
             ),
         )?;
         match &action.payload {
+            AgentActionPayload::ApplyPatch { .. } if native_patch_approval => {
+                let mut resumed = ActionResult::running(
+                    &turn,
+                    &action,
+                    vec!["approved native patch accepted for filesystem dispatch".into()],
+                    Some(
+                        serde_json::json!({"kind":"apply_patch", "policy_descriptor":"apply_patch",
+                        "execution_target":"native_runtime", "sent_to_pane":false,
+                        "dispatch_state":"pending", "approval_id":approval_id})
+                        .to_string(),
+                    ),
+                );
+                resumed.permission_evaluation = retained_permission_evaluation.clone();
+                execution.action_results[result_index] = resumed;
+                execution.terminal_state = AgentTurnState::Running;
+                self.dispatch_running_shell_actions_to_panes(&turn, &mut execution)?;
+            }
             _ if local_action_plan(&action)?.is_some() => {
                 let Some(plan) = local_action_plan(&action)? else {
                     return Err(MezError::invalid_state(

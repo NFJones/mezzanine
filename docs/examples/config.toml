@@ -513,7 +513,9 @@ turn_timeout_ms = 1800000
 native_shell_timeout_ms = 600000
 # Agent shell command execution mode. `native` spawns a fresh shell process
 # inferred from the pane root process without touching the pane PTY; `pane`
-# executes commands through the pane shell.
+# executes commands through the pane shell. Native apply_patch uses an in-process
+# filesystem worker with runtime capabilities and a 30-second budget capped by
+# the turn deadline; it does not use native_shell_timeout_ms or an OS launcher.
 shell_mode = "native"
 # Default bounded iteration count used by /loop.
 loop_limit = 8

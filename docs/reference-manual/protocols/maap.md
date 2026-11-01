@@ -89,12 +89,14 @@ Queued candidate ownership does not certify checked history or durable disk appe
 
 ## Action catalog
 
-Native semantic execution has a staged
-[migration contract](../../../SPEC.md#process-free-semantic-adapter-contract-and-migration).
-Current shell-backed patches retain `spawned_shell` evidence. Only a qualified
-in-process adapter may report `native_runtime`, `sent_to_pane=false`, and typed
-filesystem outcomes without shell exit/signal evidence. Model action shapes and
-the existing permission owners do not change with these foundational contracts.
+Native `apply_patch` selects the in-process filesystem adapter before shell
+lowering and reports `native_runtime`, `sent_to_pane=false`, configured sandbox
+intent and actual runtime capability enforcement. Typed filesystem outcomes
+retain confirmed endpoints and certainty without invented shell exit/signal or
+stdout fields. Native `shell_command` retains `spawned_shell`; pane patches keep
+`pane_shell`. The [filesystem contract](../../../SPEC.md#process-free-semantic-adapter-contract-and-migration)
+defines exact approval, partial effects and cancellation. Action shapes and
+permission ownership remain unchanged.
 
 | Action | Required fields | Contract boundary |
 | --- | --- | --- |

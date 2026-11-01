@@ -12543,10 +12543,10 @@ escaped descendants retain inherited output pipes. Native execution MUST work
 while an alternative screen application occupies the pane, MUST reject
 stateful or interactive actions
 without falling back to the pane shell, and MUST report `spawned_shell`
-transport metadata with `sent_to_pane` false. Native
-`apply_patch` actions MUST complete the same read and write phases as pane
-transport, materializing final content sidecar records into the spawned
-command file instead of the pane PTY. When a sandbox backend is active in native mode,
+transport metadata with `sent_to_pane` false. Native `apply_patch` MUST instead select the in-process filesystem adapter
+before shell lowering, with no shell phases, command files or sidecars. The
+following backend launch requirements apply to native `shell_command`.
+When a sandbox backend is active in native mode,
 Mezzanine MUST derive process identity from the live root process and select
 optional environment forwarding from the immutable Mez-server snapshot,
 canonicalize filesystem authority directly through host
@@ -12613,20 +12613,26 @@ fail-closed; later model-authored actions MUST undergo normal permission checks.
 
 #### Process-free semantic adapter contract and migration
 
-The shell-backed native patch behavior above describes the current legacy
-adapter. The process-free replacement MUST select an adapter before generating
-shell source: pane `shell_command` and `apply_patch` keep the pane/remote shell
-adapter; native `shell_command` keeps the fresh shell and OS sandbox lifecycle;
-native `apply_patch` requires an in-process filesystem adapter. Until that
-replacement is integrated and qualified, native patch results MUST continue to
-report `spawned_shell`, not `native_runtime`. Foundational contracts and launch
-accounting alone MUST NOT be presented as the completed runtime guarantee.
+The runtime MUST select an adapter before generating shell source: pane
+`shell_command` and `apply_patch` keep the pane/remote shell adapter; native
+`shell_command` keeps the fresh shell and OS sandbox lifecycle; native
+`apply_patch` uses the in-process filesystem adapter and reports
+`native_runtime`, `sent_to_pane=false`. Native patch policy and presentation
+MUST use the semantic descriptor without generating an unused shell program.
+Native patches MUST NOT schedule shell transactions, sandbox probes, command
+files, sidecars or executable basic-action helpers. Foundational contracts or
+launch accounting alone do not prove a particular action completed.
 
 The replacement MUST use shared parsed patch semantics with exact accepted
 payload identity, ordered effects and dependent move endpoints. `apply_patch`
 is a policy descriptor, not executable source. Approval and each short commit
-lease MUST bind the exact operation, transaction and current authority. Runtime
-filesystem capabilities MUST preserve effective trust, read/write scopes,
+lease MUST bind the exact operation, transaction and current authority. Native
+approval resumption MUST preserve its original adapter domain even if the pane
+has changed mode. A changed source MUST fail before scheduler reacquisition,
+shell lowering or bypass grants; a native request MUST NOT become pane approval.
+Original native domain provenance MUST survive loss of volatile approval proof;
+missing proof or a changed action family MUST reject, never select a shell.
+Runtime filesystem capabilities MUST preserve effective trust, read/write scopes,
 planning restrictions and child intersections without a competing authority
 store. They MUST NOT claim OS confinement of the daemon, namespace or network
 isolation, or an approved sandbox bypass. An independently mandatory OS process
@@ -12647,7 +12653,8 @@ MUST bind the exact plan and action, verify endpoint kind/order and retain both
 move endpoints independently. Confirmed success requires all planned endpoints;
 only a positively planned no-op may succeed without mutation confirmations.
 In-flight work stays nonterminal and unknown effects MUST NOT authorize replay.
-These pure adapters do not themselves enable native filesystem dispatch.
+The pure adapters grant no execution authority; the actual actor admission,
+original producer and fresh commit leases remain required.
 
 The native filesystem primitive boundary MUST use held directory handles and
 no-follow descriptor-relative operations on Linux and macOS. Physical lookup
@@ -12660,6 +12667,10 @@ tuples and an explicit supplementary-group list from one bounded kernel
 snapshot. Distinct FSUID/FSGID MUST fail closed; daemon evidence MUST describe
 the actual calling worker thread rather than only its process group leader.
 Darwin target groups MUST NOT be inferred from matching UID/GID or daemon groups.
+The Darwin reader uses the actual target KERN_PROC_PID credential record through
+an SDK-compiled private shim and matches a held cwd descriptor to libproc vnode
+identity before and after open. Missing, partial or truncated evidence fails
+closed; neither platform falls back to shell-based filesystem execution.
 Existing file snapshots MUST be bounded and reject nonregular objects before
 consumption, including nonblocking opens to prevent special-node swaps from
 blocking reads. Current scopes and captured ancestry/object/preimage evidence
@@ -12673,12 +12684,16 @@ bits. Ownership, ACLs and xattrs are not preserved by this primitive adapter;
 hard-link siblings retain their old object. Revalidation followed by rename or
 unlink MUST NOT be described as atomic compare-and-swap against arbitrary
 external writers: relocation/replacement after the final check remains a race.
-Actor-owned short commit leases and conflicting-write serialization remain
-required when the dependent filesystem dispatcher integrates these primitives.
+Actor-owned short commit leases and conflicting-write serialization are
+required for the native filesystem dispatcher.
 
 Native filesystem workers MUST use bounded resources and cooperative
 cancellation outside the serialized actor. The patch budget remains 30 seconds,
-capped by the turn deadline, not the native shell timeout. Acknowledged
+capped by the turn deadline, not the native shell timeout. Four admitted or
+untransferred owners bound concurrency. Up to 64 deferred selections retain
+original payload/group/context and the original deadline while capacity is busy;
+an actual owner transfer wakes eligible waiters without renewing their budget or
+falling back to a changed pane transport. Acknowledged
 cancellation MUST fence future commits; a started syscall may remain in flight.
 Dropping a blocking worker or reaching a deadline MUST NOT prove nonexecution.
 Results MUST retain confirmed partial effects and identify in-flight or unknown

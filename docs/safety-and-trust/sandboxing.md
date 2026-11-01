@@ -37,25 +37,28 @@ networking. An `isolated` or `connected` network claim requires both the plan
 and its capability proof. A CLI preview is not an attestation of every action
 or remote process; inspect the affected action's result as well.
 
-### Native shell mode is not process-free patching
+### Native patches and shell commands
 
-Pane mode sends agent work through the pane shell. Native shell mode runs a
-fresh process outside the pane PTY and can work while a full-screen application
-occupies the pane. Both modes use the configured local sandbox when applicable.
+Pane mode sends commands and patches through the pane shell. In native mode,
+`shell_command` starts a fresh shell outside the pane PTY with the configured
+local sandbox lifecycle. Native `apply_patch` instead uses an in-process
+filesystem worker, reported as `native_runtime`, `sent_to_pane=false`.
+It requires no shell, utility, sandbox probe, command sidecar or helper process.
 
-**Native `apply_patch` still uses the shell-backed read/write path and reports
-`spawned_shell`, not `native_runtime`.** The process-free filesystem adapter is
-planned, not integrated. Existing filesystem primitives and tests do not supply
-that runtime guarantee. Do not rely on future descriptor-based publication,
-commit fencing, or cancellation protections for today's patches. See the
-[migration contract](../../SPEC.md#process-free-semantic-adapter-contract-and-migration)
-for the planned behavior.
+Native patch results distinguish configured sandbox intent from actual
+`runtime_filesystem_capabilities` enforcement. Those capabilities enforce the
+current trust, read/write scopes, planning restrictions and child intersections;
+they do not confine the daemon in an OS sandbox or isolate its network. Required
+incompatible executable hooks block before mutation. Actual human approval binds
+the original patch and captured context; a Prompt evaluation alone is insufficient.
 
-The existing primitive credential guard rejects incomplete Linux kernel
-evidence and distinct FSUID/FSGID, and observes the calling daemon thread.
-Darwin access to another process remains rejected until its supplementary
-groups can be independently verified; matching UID/GID is insufficient.
-These guards do not enable production process-free patch dispatch.
+The credential guard rejects incomplete Linux kernel evidence and distinct
+FSUID/FSGID, and observes the calling daemon thread. Darwin reads actual target
+credentials through an SDK-compiled sysctl shim and matches the kernel cwd vnode
+to a held descriptor; it never substitutes daemon groups. Unavailable or changed
+root evidence fails closed. See the
+[filesystem contract](../../SPEC.md#process-free-semantic-adapter-contract-and-migration)
+for publication, cancellation and metadata limits.
 
 ### Native lifecycle evidence and uncertain completion
 

@@ -5,6 +5,7 @@
 
 use super::*;
 
+mod filesystem_fixture;
 mod native;
 mod previews;
 mod siblings;

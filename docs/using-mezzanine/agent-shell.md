@@ -500,6 +500,13 @@ stateful or interactive actions are rejected rather than redirected to it.
 State such as a command's `cd` or `export` does not carry into the next fresh
 shell.
 
+Native `apply_patch` uses an in-process filesystem worker with current scoped
+permissions and exact approval. It creates no shell process, sandbox probe,
+command sidecar or pane input. Its results report `native_runtime` and actual
+runtime filesystem capability enforcement separately from configured sandbox
+intent. Its 30-second budget is capped by the turn deadline, including capacity
+waiting, and is independent of the native shell command timeout.
+
 `pane` mode sends shell-backed work through the interactive pane shell. It
 requires a supported Bash, Fish, Zsh, or POSIX `sh` shell ready at an empty
 prompt. A full-screen program, password prompt, or uncertain shell boundary
@@ -513,7 +520,7 @@ does not clear an existing pane-local override, including one in the issuing
 pane; check `/shell-mode status` afterward. Pane-local overrides are not durable
 across runtime restarts.
 
-Native actions use a cleared base environment, not the daemon's full
+Native shell commands use a cleared base environment, not the daemon's full
 environment. Optional values come only from `permissions.env_whitelist` in
 the immutable snapshot captured when Mez starts, plus documented runtime
 requirements. Pane-root metadata selects the shell and working directory;

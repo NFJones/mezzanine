@@ -228,12 +228,18 @@ impl RuntimeSessionService {
             timeout_ms,
             permission_evaluation,
         } = dispatch;
+        let native_mode =
+            self.effective_agent_shell_mode_for_pane(&turn.pane_id) == ShellMode::Native;
+        if native_mode && matches!(action.payload, AgentActionPayload::ApplyPatch { .. }) {
+            return Err(MezError::invalid_state(
+                "native patches require filesystem selection before shell dispatch",
+            ));
+        }
         let permission_policy = self.permission_policy_for_turn(turn);
         let policy_command = local_action_plan(action)?
             .ok_or_else(|| MezError::invalid_state("shell dispatch requires a local action plan"))?
             .policy_command;
-        let native_mode =
-            self.effective_agent_shell_mode_for_pane(&turn.pane_id) == ShellMode::Native;
+
         let native_shell_command =
             native_mode && matches!(action.payload, AgentActionPayload::ShellCommand { .. });
         let effective_timeout_ms = if native_shell_command {
@@ -884,24 +890,11 @@ impl RuntimeSessionService {
                 "native transport does not serve stateful or interactive execution",
             ));
         }
-        let is_internal_apply_patch_write_phase =
-            matches!(action.payload, AgentActionPayload::ApplyPatch { .. })
-                && apply_patch_transaction_phase(command)
-                    == Some(ApplyPatchTransactionPhase::Write);
-        let is_apply_patch_read_phase =
-            matches!(action.payload, AgentActionPayload::ApplyPatch { .. })
-                && apply_patch_transaction_phase(command) == Some(ApplyPatchTransactionPhase::Read);
-        let apply_patch_read_path = if is_apply_patch_read_phase {
-            self.agent
-                .apply_patch_batch_states
-                .get(&Self::apply_patch_batch_state_key(
-                    &turn.turn_id,
-                    &action.id,
-                ))
-                .and_then(|state| state.current_path.clone())
-        } else {
-            None
-        };
+        if !matches!(action.payload, AgentActionPayload::ShellCommand { .. }) {
+            return Err(MezError::invalid_state(
+                "spawned native shell accepts only shell_command",
+            ));
+        }
         let sandbox_config = self.sandbox_config_for_pane(&turn.pane_id);
         let permission_policy = self.permission_policy_for_turn(turn);
         let bubblewrap_applies =
@@ -988,40 +981,16 @@ impl RuntimeSessionService {
                     .as_ref()
                     .map(|dispatch| dispatch.audit_summary.clone())
             });
-        let emitted_action_log = if is_internal_apply_patch_write_phase {
-            false
-        } else if let Some(path) = apply_patch_read_path {
-            if let Some(execution) = execution {
-                self.queue_ordered_provider_header_with_text(
-                    &turn.pane_id,
-                    execution,
-                    action,
-                    format!("apply patch: {path}"),
-                )?;
-                self.flush_ordered_provider_headers(&turn.pane_id, execution)?;
-            } else {
-                self.append_agent_action_execution_header_to_terminal_buffer(
-                    &turn.pane_id,
-                    action,
-                    &format!("apply patch: {path}"),
-                )?;
-            }
-            true
-        } else if let Some(execution) = execution {
+        let emitted_action_log = if let Some(execution) = execution {
             let queued = self.queue_ordered_provider_header(&turn.pane_id, execution, action)?;
             self.flush_ordered_provider_headers(&turn.pane_id, execution)?;
             queued
         } else {
             self.append_agent_action_execution_text_to_terminal_buffer(&turn.pane_id, action)?
         };
-        let is_model_shell_command =
-            matches!(action.payload, AgentActionPayload::ShellCommand { .. });
-        let should_emit_fallback_action_status = (self.agent_verbose_enabled(&turn.pane_id)
-            || !is_model_shell_command)
-            && !is_internal_apply_patch_write_phase
-            && !emitted_action_log;
-        if should_emit_fallback_action_status
-            && (!is_model_shell_command || !preview_already_presented)
+        if self.agent_verbose_enabled(&turn.pane_id)
+            && !emitted_action_log
+            && !preview_already_presented
         {
             let emitted_thinking = self.append_agent_action_model_thinking_to_terminal_buffer(
                 &turn.pane_id,
@@ -1036,12 +1005,7 @@ impl RuntimeSessionService {
             }
         }
         let marker = runtime_marker_for_action(turn, &action.id)?;
-        if !preview_already_presented
-            && !is_internal_apply_patch_write_phase
-            && (is_model_shell_command
-                || !emitted_action_log
-                || self.agent_verbose_enabled(&turn.pane_id))
-        {
+        if !preview_already_presented {
             if let Some(execution) = execution {
                 self.queue_ordered_provider_transaction_command(
                     &turn.pane_id,
@@ -1120,11 +1084,8 @@ impl RuntimeSessionService {
                 bubblewrap_activity_lease,
                 seatbelt_workload_lease,
                 request,
-                launch_reason: if matches!(action.payload, AgentActionPayload::ApplyPatch { .. }) {
-                    crate::runtime::processes::launch_accounting::NativeLaunchReason::LegacyPatch
-                } else {
-                    crate::runtime::processes::launch_accounting::NativeLaunchReason::ShellCommand
-                },
+                launch_reason:
+                    crate::runtime::processes::launch_accounting::NativeLaunchReason::ShellCommand,
                 started_at_unix_ms,
             },
         );

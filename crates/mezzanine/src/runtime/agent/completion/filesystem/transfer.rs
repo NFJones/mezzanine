@@ -131,7 +131,14 @@ impl RuntimeSessionService {
     /// Resumes only retained ordinary intent after own historical handoff.
     /// A suffix error remains latched and cannot invalidate/replay that transfer.
     pub(super) fn recover_filesystem_transfer_suffix(&mut self, turn: &str) {
-        if let Err(error) = self.recover_retained_completion_settlement(turn) {
+        self.resume_waiting_filesystem_selections();
+        if let Err(error) = self
+            .continue_selected_filesystem_execution(turn)
+            .and_then(|()| {
+                self.recover_retained_completion_settlement(turn)
+                    .map(|_| ())
+            })
+        {
             let _ = self.append_runtime_diagnostic_event(format!(
                 r#"{{"kind":"filesystem_transfer_settlement_suffix_failed","error_kind":"{:?}"}}"#,
                 error.kind(),

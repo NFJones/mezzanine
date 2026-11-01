@@ -51,6 +51,15 @@ fn admit_batch(
         .unwrap();
     service.set_agent_shell_mode_override("%1", Some(crate::runtime::config::ShellMode::Native));
     service.permission_policy_mut().set_approval_bypass(true);
+    if patch.is_some() {
+        let cwd = std::env::current_dir().unwrap();
+        service.integration.replace_configured_permissions(
+            crate::runtime::config::runtime_configured_permissions_from_config(
+                &serde_json::json!({"permissions":{"read_scopes":[cwd],"write_scopes":[cwd]}}),
+            )
+            .unwrap(),
+        );
+    }
     let start = service.dispatch_runtime_control_body(
         r#"{"jsonrpc":"2.0","id":"native-pair","method":"agent/shell/command","params":{"idempotency_key":"native-pair","input":"run the native pair"}}"#,
         &primary,
@@ -662,12 +671,12 @@ context_window_tokens = 40000
     fs::remove_dir_all(root).unwrap();
 }
 
-/// A native patch's read/probe phase must keep its exact write owner instead of
-/// releasing shell B early. After confirmed patch settlement, a later discovery
+/// A native patch retains its actual descriptor producer instead of releasing
+/// shell B early. After exact canonical/storage handoff, a later discovery
 /// header must not block B's automatic handoff. Only generated target fixtures
 /// are mutated; duplicate completion delivery never reexecutes the patch.
-#[test]
-fn runtime_native_siblings_patch_then_shell_and_discovery_advance() {
+#[tokio::test(flavor = "current_thread")]
+async fn runtime_native_siblings_patch_then_shell_and_discovery_advance() {
     let relative = format!(
         "target/mez-native-sibling-patch-{}",
         crate::storage::token_usage::new_token_usage_event_id()
@@ -684,48 +693,26 @@ fn runtime_native_siblings_patch_then_shell_and_discovery_advance() {
         Some(&marker),
         Some(&patch),
     );
-    let mut terminal = false;
-    let mut last = None;
-    for _ in 0..8 {
-        let dispatch = service
-            .claim_native_shell_action("turn-1", "patch-a")
-            .unwrap()
-            .expect("patch must retain its actual next-phase owner");
-        let outcome = crate::runtime::execute_native_shell_dispatch(dispatch);
-        assert!(
-            service
-                .complete_native_shell_action(outcome.clone())
-                .unwrap()
-        );
-        last = Some(outcome);
-        let execution = &service.agent_turn_executions()["turn-1"];
-        let result = execution
-            .action_results
-            .iter()
-            .find(|result| result.action_id == "patch-a")
-            .unwrap();
-        if result.is_terminal() {
-            assert_eq!(result.status, ActionStatus::Succeeded);
-            terminal = true;
-            break;
-        }
-        assert!(
-            service
-                .claim_native_shell_action("turn-1", "shell-b")
-                .unwrap()
-                .is_none(),
-            "patch phase must settle before B"
-        );
-    }
+    let offers = service.pending_native_filesystem_actions();
+    assert_eq!(offers.len(), 1);
     assert!(
-        terminal,
-        "patch did not reach confirmed terminal settlement"
+        service
+            .claim_native_shell_action("turn-1", "shell-b")
+            .unwrap()
+            .is_none(),
+        "patch must settle before B"
     );
+    let producer = offers[0].attempt().root_producer().unwrap();
+    let actor = super::filesystem_fixture::FilesystemActor::new(service);
+    actor.start(&producer).await;
+    actor.settle(&producer).await;
+    actor.settle(&producer).await;
+    let mut service = actor.finish().await;
     assert_eq!(
         fs::read_to_string(root.join("patched.txt")).unwrap(),
         "patched-once\n"
     );
-    service.complete_native_shell_action(last.unwrap()).unwrap();
+    assert!(service.pending_native_filesystem_actions().is_empty());
     assert!(
         service
             .claim_native_shell_action("turn-1", "patch-a")

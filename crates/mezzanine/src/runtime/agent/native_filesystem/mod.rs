@@ -4,11 +4,14 @@
 //! retained independently of later presentation. Opaque allocation-bound handles
 //! claim work once; cancellation fences future work without discarding a known
 //! result. Scope snapshots are deliberately not atomic commit leases. The
-//! asynchronous producer/commit-lease/settlement bridge must use these owners
-//! before switching native patches away from their existing shell adapter.
+//! asynchronous producer, commit-lease and settlement bridge retain these owners
+//! from actual native selection through the original checked storage handoff.
 
 pub(crate) mod authority;
+mod authorization;
 mod progress;
+mod selection;
+pub(in crate::runtime::agent) use selection::Selection;
 mod state;
 pub(super) use state::NativeFilesystemActions;
 use state::NativeFilesystemOwner;
@@ -34,11 +37,23 @@ impl RuntimeSessionService {
     /// Queues an exact canonical native patch slot without lowering shell code.
     /// This captures ownership only; claiming and current scopes are separate,
     /// and no producer or mutation is started by registering this record.
+    #[cfg(test)]
     pub(crate) fn queue_native_filesystem_action(
         &mut self,
         turn: &AgentTurnRecord,
         action: &AgentAction,
         execution: &AgentTurnExecution,
+    ) -> Result<NativeFilesystemAttempt> {
+        self.queue_native_filesystem_action_with_deadline(turn, action, execution, None)
+    }
+
+    /// Admits a deferred original selection without renewing its action budget.
+    fn queue_native_filesystem_action_with_deadline(
+        &mut self,
+        turn: &AgentTurnRecord,
+        action: &AgentAction,
+        execution: &AgentTurnExecution,
+        original_deadline: Option<Instant>,
     ) -> Result<NativeFilesystemAttempt> {
         self.ensure_completion_admission_open()?;
         if self.agent_turn_is_human_paused(&turn.turn_id) || !self.native_filesystem_turn_live(turn)
@@ -74,6 +89,15 @@ impl RuntimeSessionService {
                     })?,
             )
         };
+        let deadline = match (deadline, original_deadline) {
+            (Some(turn), Some(original)) => Some(turn.min(original)),
+            (turn, original) => turn.or(original),
+        };
+        if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+            return Err(MezError::conflict(
+                "native filesystem original deadline expired",
+            ));
+        }
         self.retain_provider_presentation_order(&turn.pane_id, execution)?;
         self.reserve_completion_group(&turn.turn_id, &owner.group)?;
         let (attempt, work) = self.agent.native_filesystem_actions.queue(
@@ -161,6 +185,18 @@ impl RuntimeSessionService {
             group,
             ordinal: *ordinal,
             permission: result.permission_evaluation.clone(),
+            sandbox_intent: self.sandbox_config_for_pane(&turn.pane_id).as_str(),
+            approval: self
+                .agent
+                .native_filesystem_actions
+                .approvals
+                .get(&(turn.turn_id.clone(), action.id.clone()))
+                .cloned(),
+            auto_allowed: result
+                .structured_content_json
+                .as_deref()
+                .and_then(|text| serde_json::from_str::<serde_json::Value>(text).ok())
+                .is_some_and(|metadata| metadata["approval"]["state"] == "auto_allowed"),
         })
     }
 
@@ -333,11 +369,13 @@ impl RuntimeSessionService {
                 "native filesystem action forbidden by current policy",
             )),
             RuleDecision::Prompt
-                if work
+                if !(work
                     .owner
-                    .permission
+                    .approval
                     .as_ref()
-                    .is_none_or(|original| original.decision != RuleDecision::Prompt) =>
+                    .is_some_and(|approval| approval.is_current(self, work))
+                    || (policy.approval_policy == mez_agent::ApprovalPolicy::AutoAllow
+                        && work.owner.auto_allowed)) =>
             {
                 Err(MezError::conflict(
                     "native filesystem action requires fresh exact approval",

@@ -1227,6 +1227,17 @@ pub fn runtime_action_result_is_terminal_failure(result: &ActionResult) -> bool 
 /// Returns output detail worth showing when a failed action is no longer being
 /// fed back to the model for correction.
 pub fn runtime_unrecovered_action_failure_output(result: &ActionResult) -> Option<String> {
+    // Native semantic diagnostics are errors, never fabricated shell output.
+    if result.is_error
+        && runtime_action_result_structured_string(result, &["execution_target"]).as_deref()
+            == Some("native_runtime")
+    {
+        return result
+            .error
+            .as_ref()
+            .map(|error| error.message.clone())
+            .filter(|message| !message.trim().is_empty());
+    }
     let content = result.content_text();
     if !content.trim().is_empty() && !runtime_action_failure_content_is_generic_status(&content) {
         return Some(content);

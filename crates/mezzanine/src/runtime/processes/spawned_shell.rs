@@ -1,6 +1,6 @@
 //! Spawned shell executor for native shell mode.
 //!
-//! Native shell mode executes agent actions in a fresh shell process derived
+//! Native shell commands execute in a fresh shell process derived
 //! from pane root-process metadata. This module owns that spawn: it
 //! materializes the transaction command to a temporary file, runs the shell
 //! (or an explicit typed child launch) with the inferred environment and
@@ -39,9 +39,6 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use mez_agent::SpawnedShellExecutor as SpawnedShellExecutorPort;
-use mez_agent::semantic_patch_planning::{
-    ApplyPatchProgressDecoder, ApplyPatchTransactionPhase, apply_patch_transaction_phase,
-};
 use mez_agent::{
     DEFAULT_AGENT_TURN_TIMEOUT_MS, ShellChildArgument, ShellExecutionOutput, ShellExecutionRequest,
     ShellTransaction, ShellTransportDiagnostics,
@@ -103,10 +100,6 @@ struct SpawnedChildProgressState {
     preview: Vec<u8>,
     /// Strictly increasing revision assigned under the same output lock.
     revision: u64,
-    /// Decoder retained only for one native semantic-patch write transaction.
-    patch_decoder: Option<ApplyPatchProgressDecoder>,
-    /// Confirmed write sections retained across coalesced watch publications.
-    confirmed_patch_sections: Vec<mez_agent::semantic_patch_planning::ApplyPatchConfirmedSection>,
 }
 
 /// Shared latest-value relay used by stdout and stderr reader threads.
@@ -118,7 +111,7 @@ struct SpawnedChildProgressReporter {
 
 impl SpawnedChildProgressReporter {
     /// Appends one observed chunk and publishes the newest revisioned preview.
-    fn report(&self, stream: SpawnedChildPipe, bytes: &[u8]) {
+    fn report(&self, bytes: &[u8]) {
         let Ok(mut state) = self.state.lock() else {
             return;
         };
@@ -128,20 +121,11 @@ impl SpawnedChildProgressReporter {
             state.preview.drain(..excess);
         }
         state.revision = state.revision.saturating_add(1);
-        if stream == SpawnedChildPipe::Stdout
-            && let Some(decoder) = state.patch_decoder.as_mut()
-            && let Ok(progress) = decoder.push(bytes)
-        {
-            state
-                .confirmed_patch_sections
-                .extend(progress.confirmed_sections);
-        }
         let snapshot = crate::runtime::RuntimeNativeShellWorkerProgress {
             output: Some((
                 state.revision,
                 String::from_utf8_lossy(&state.preview).into_owned(),
             )),
-            confirmed_patch_sections: state.confirmed_patch_sections.clone(),
         };
         self.sender.send_replace(Some(snapshot));
     }
@@ -1336,14 +1320,10 @@ pub(crate) fn execute_native_shell_dispatch_with_progress(
         Option<crate::runtime::RuntimeNativeShellWorkerProgress>,
     >,
 ) -> crate::runtime::RuntimeNativeShellOutcome {
-    let patch_write = apply_patch_transaction_phase(&dispatch.request.transaction.command)
-        == Some(ApplyPatchTransactionPhase::Write);
     let progress = SpawnedChildProgressReporter {
         state: Arc::new(Mutex::new(SpawnedChildProgressState {
             preview: Vec::new(),
             revision: 0,
-            patch_decoder: patch_write.then(ApplyPatchProgressDecoder::new),
-            confirmed_patch_sections: Vec::new(),
         })),
         sender: progress_sender,
     };
@@ -1592,7 +1572,7 @@ where
             Ok(0) => break PipeReadTermination::Eof,
             Ok(count) => {
                 if let Some(progress) = progress.as_ref() {
-                    progress.report(stream, &buffer[..count]);
+                    progress.report(&buffer[..count]);
                 }
                 let remaining = budget.saturating_sub(retained.len());
                 let keep = count.min(remaining);
@@ -2122,21 +2102,20 @@ mod tests {
         assert!(!effect_exists, "cancelled worker performed a delayed write");
     }
 
-    /// The legacy native-patch adapter must expose its direct child launch,
-    /// and the process-free admission guard must reject that same production
-    /// spawn boundary before the command can run. This deliberately does not
-    /// assert that migration of the native patch executor is complete.
+    /// Ordinary native shell execution exposes its direct child launch. The
+    /// process-free admission guard rejects that production spawn boundary
+    /// before running a command; native patches no longer use this adapter.
     #[test]
-    fn legacy_native_patch_launch_is_observable_and_rejectable() {
+    fn native_shell_launch_is_observable_and_rejectable() {
         let mut executor = SpawnedShellExecutor::new(test_context());
-        executor.launch_reason = NativeLaunchReason::LegacyPatch;
-        let request = request("printf legacy-patch", Some(5_000));
+        executor.launch_reason = NativeLaunchReason::ShellCommand;
+        let request = request("printf native-shell", Some(5_000));
         let output = executor.execute_shell(&request).unwrap();
-        assert_eq!(output.stdout, "legacy-patch");
+        assert_eq!(output.stdout, "native-shell");
         assert_eq!(
             executor.launches.snapshot().unwrap(),
             vec![super::super::launch_accounting::NativeLaunchCount {
-                reason: NativeLaunchReason::LegacyPatch,
+                reason: NativeLaunchReason::ShellCommand,
                 attempted: 1,
                 launched: 1,
             }]
@@ -2181,12 +2160,12 @@ mod tests {
     #[test]
     fn native_worker_returns_actor_selected_launch_evidence() {
         let mut dispatch = dispatch_with_probe("printf patch", None);
-        dispatch.launch_reason = NativeLaunchReason::LegacyPatch;
+        dispatch.launch_reason = NativeLaunchReason::StatusProvider;
         let outcome = execute_native_shell_dispatch(dispatch);
         assert!(outcome.result.is_ok());
         assert_eq!(
             outcome.launch_counts.unwrap()[0].reason,
-            NativeLaunchReason::LegacyPatch
+            NativeLaunchReason::StatusProvider
         );
     }
 
@@ -2202,21 +2181,17 @@ mod tests {
             state: Arc::new(Mutex::new(SpawnedChildProgressState {
                 preview: Vec::new(),
                 revision: 0,
-                patch_decoder: None,
-                confirmed_patch_sections: Vec::new(),
             })),
             sender,
         };
 
-        reporter.report(SpawnedChildPipe::Stdout, b"first");
+        reporter.report(b"first");
         let first = receiver.borrow_and_update().clone().unwrap();
-        reporter.report(SpawnedChildPipe::Stderr, b"-second");
+        reporter.report(b"-second");
         let second = receiver.borrow_and_update().clone().unwrap();
 
         assert_eq!(first.output, Some((1, "first".to_string())));
-        assert!(first.confirmed_patch_sections.is_empty());
         assert_eq!(second.output, Some((2, "first-second".to_string())));
-        assert!(second.confirmed_patch_sections.is_empty());
     }
 
     /// Verifies exit codes and stream separation arrive intact from the

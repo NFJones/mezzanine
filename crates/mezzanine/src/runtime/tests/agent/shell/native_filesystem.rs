@@ -80,18 +80,13 @@ fn native_filesystem_source_preserves_owned_and_process_directory_separation() {
         .unwrap()
         .unwrap();
     assert_eq!(PathBuf::from(&scopes.current_directory), owned);
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
         let root = source.capture_root().unwrap();
         assert_eq!(root.cwd(), owned);
         assert_eq!(root.process_cwd(), fixture.root);
         root.revalidate().unwrap();
     }
-    #[cfg(target_os = "macos")]
-    assert!(
-        source.capture_root().is_err(),
-        "foreign process group evidence must remain fail-closed"
-    );
     assert_eq!(
         fixture.service.native_agent_working_directory("%1"),
         Some(owned.as_path())

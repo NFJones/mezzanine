@@ -198,9 +198,9 @@ pub use action_gates::apply_default_action_gates;
 pub use action_planning::{
     ActionPlanningError, ActionPlanningInput, ActionPlanningResult, PlannedBatchActionResults,
     action_auto_allow_reason, action_supports_auto_allow, failed_turn_execution_without_batch,
-    plan_action_result, plan_batch_action_results, plan_turn_execution_from_batch,
-    say_action_structured_content_json, shell_action_structured_content_json,
-    shell_structured_content_with_sandbox_effective_json,
+    plan_action_result, plan_batch_action_results, plan_semantic_patch_action_result,
+    plan_turn_execution_from_batch, say_action_structured_content_json,
+    shell_action_structured_content_json, shell_structured_content_with_sandbox_effective_json,
 };
 pub use action_recovery::{
     ActionRecoveryError, ActionRecoveryResult, BatchContinuationError, BatchContinuationInput,
@@ -368,7 +368,8 @@ pub use http::{
 };
 pub use local_action::{
     LocalActionKind, LocalActionPlan, LocalActionPlanningError, LocalActionPlanningResult,
-    LocalProgramDialect, action_is_local_shell_backed, local_action_plan, local_action_summary,
+    LocalActionPolicy, LocalProgramDialect, action_is_local_shell_backed, local_action_plan,
+    local_action_policy, local_action_summary,
 };
 pub use maap::{
     AGENT_OUTPUT_TEXT_DIFF_CONTENT_TYPE, AGENT_OUTPUT_TEXT_MARKDOWN_CONTENT_TYPE,

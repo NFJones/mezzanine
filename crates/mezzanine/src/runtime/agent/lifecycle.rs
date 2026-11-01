@@ -383,6 +383,9 @@ impl RuntimeSessionService {
         self.clear_agent_execution_group_ownership_for_turn(turn_id);
         self.clear_agent_issue_query_freshness_for_turn(turn_id);
         self.agent.agent_turn_shell_dispatch_history.remove(turn_id);
+        self.agent
+            .native_filesystem_actions
+            .forget_selected_turn(turn_id);
         self.clear_pending_shell_dispatch_blocked_recovery_attempts_for_turn(turn_id);
         self.agent.agent_turn_network_action_history.remove(turn_id);
         self.agent

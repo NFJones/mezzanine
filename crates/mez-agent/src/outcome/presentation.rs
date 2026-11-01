@@ -77,6 +77,13 @@ pub fn action_summary(action: &AgentAction, input: ActionPresentationInput<'_>) 
         }
         _ => {}
     }
+    if matches!(action.payload, AgentActionPayload::ApplyPatch { .. }) && input.local_plan.is_none()
+    {
+        return crate::local_action_summary(action)
+            .ok()
+            .flatten()
+            .map(|summary| action_terminal_preview(&summary));
+    }
     let summary = input
         .local_plan
         .map(|plan| plan.summary.as_str())
@@ -187,6 +194,7 @@ pub fn action_user_phrase(
         });
     }
     let (kind, target) = match &action.payload {
+        AgentActionPayload::ApplyPatch { .. } => ("local action", "apply_patch".to_string()),
         AgentActionPayload::McpServerSearch { query, .. } => {
             ("MCP server search", action_terminal_preview(query))
         }
@@ -259,7 +267,6 @@ pub fn action_user_phrase(
         | AgentActionPayload::Complete
         | AgentActionPayload::Abort { .. }
         | AgentActionPayload::ShellCommand { .. }
-        | AgentActionPayload::ApplyPatch { .. }
         | AgentActionPayload::WebSearch { .. }
         | AgentActionPayload::FetchUrl { .. } => return None,
     };
@@ -337,7 +344,9 @@ pub fn action_outcome_line(
     input: ActionPresentationInput<'_>,
 ) -> Option<ActionOutcomeLine> {
     let ActionUserPhrase { kind, target } = action_user_phrase(action, input)?;
-    let runtime_owned_action = input.local_plan.is_some() || input.network_plan.is_some();
+    let runtime_owned_action = input.local_plan.is_some()
+        || input.network_plan.is_some()
+        || matches!(action.payload, AgentActionPayload::ApplyPatch { .. });
     let target = if runtime_owned_action && !input.show_runtime_target {
         None
     } else {

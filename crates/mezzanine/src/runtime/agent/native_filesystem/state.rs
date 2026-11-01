@@ -166,6 +166,12 @@ pub(crate) struct NativeFilesystemOwner {
     pub(crate) ordinal: usize,
     /// Immutable original policy evidence; never reconstructed from a summary.
     pub(crate) permission: Option<Box<PermissionEvaluation>>,
+    /// Original configured sandbox intent, never a claim of OS confinement.
+    pub(crate) sandbox_intent: &'static str,
+    /// Private proof of the actual original approved request, if one was needed.
+    pub(in crate::runtime::agent) approval: Option<super::authorization::NativeFilesystemApproval>,
+    /// The controller planned this exact accepted action under auto-allow policy.
+    pub(in crate::runtime::agent) auto_allowed: bool,
 }
 
 /// Immutable admitted inputs shared with exactly one claimed producer.
@@ -253,6 +259,11 @@ pub(in crate::runtime::agent) struct NativeFilesystemActions {
     attempts: BTreeMap<u64, Attempt>,
     /// One explicitly shared writer exclusion per actor instance.
     coordinator: NativePatchWriteCoordinator,
+    /// Bounded semantic history exists only for actual provider-selected turns.
+    pub(in crate::runtime::agent) selection: super::selection::NativeFilesystemSelection,
+    /// Exact approved actions waiting for ordinary ordered selector admission.
+    pub(super) approvals:
+        BTreeMap<(String, String), super::authorization::NativeFilesystemApproval>,
 }
 
 impl Default for NativeFilesystemActions {
@@ -263,6 +274,8 @@ impl Default for NativeFilesystemActions {
             next: 1,
             attempts: BTreeMap::new(),
             coordinator: NativePatchWriteCoordinator::default(),
+            selection: super::selection::NativeFilesystemSelection::default(),
+            approvals: BTreeMap::new(),
         }
     }
 }
@@ -288,6 +301,31 @@ impl Attempt {
 }
 
 impl NativeFilesystemActions {
+    /// Drops only volatile selected-turn history and unused approval proofs.
+    /// Actual attempt/worker/original storage custody remains independently held.
+    pub(in crate::runtime::agent) fn forget_selected_turn(&mut self, turn: &str) {
+        self.selection.forget(turn);
+        self.approvals.retain(|(owner, _), _| owner != turn);
+    }
+
+    /// Retains the original native domain for deferred selection or approval.
+    /// This routing fact grants no permission: fresh source/decision validation
+    /// remains mandatory even when the current pane mode chooses another adapter.
+    pub(in crate::runtime::agent) fn requires_native_adapter(
+        &self,
+        turn: &str,
+        action: &str,
+    ) -> bool {
+        self.selection.waits_for(turn, action)
+            || self
+                .approvals
+                .contains_key(&(turn.to_string(), action.to_string()))
+    }
+
+    /// Capacity is backpressure before selection, never a mutation failure.
+    pub(super) fn has_capacity(&self) -> bool {
+        self.attempts.len() < MAX_ATTEMPTS
+    }
     /// Reserves a bounded exact original slot, without dispatching a producer.
     pub(super) fn queue(
         &mut self,

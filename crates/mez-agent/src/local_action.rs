@@ -173,9 +173,59 @@ pub fn local_action_adapter_plan(
     }
 }
 
+/// Non-executable policy/presentation facts, available before adapter lowering.
+/// No command program, sidecar, interpreter or worker request is generated.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LocalActionPolicy {
+    /// Semantic local action family.
+    pub kind: LocalActionKind,
+    /// Human-readable summary shared by every concrete adapter.
+    pub summary: String,
+    /// Fixed semantic classifier or the original model-authored shell command.
+    pub policy_command: String,
+}
+
+/// Validates local syntax and returns classification without generating source.
+/// Patch conversion/validation remains shared with the pane adapter; stripping
+/// unsupported by Mezzanine blocks is rejected before either adapter can execute.
+pub fn local_action_policy(
+    action: &AgentAction,
+) -> LocalActionPlanningResult<Option<LocalActionPolicy>> {
+    match &action.payload {
+        AgentActionPayload::ApplyPatch { patch, strip } => {
+            let effective = crate::semantic_patch::try_convert_unified_diff_to_mez_patch(patch)
+                .unwrap_or_else(|| patch.clone());
+            crate::semantic_patch::validate_apply_patch_payload(&effective)
+                .map_err(|error| LocalActionPlanningError::new(error.message()))?;
+            if strip.is_some() {
+                return Err(LocalActionPlanningError::new(
+                    "apply_patch strip is unsupported for Mezzanine patch blocks",
+                ));
+            }
+            Ok(Some(LocalActionPolicy {
+                kind: LocalActionKind::ApplyPatch,
+                summary: "I’ll apply a patch.".into(),
+                policy_command: "apply_patch".into(),
+            }))
+        }
+        AgentActionPayload::ShellCommand {
+            summary, command, ..
+        } => {
+            validate_agent_authored_shell_command(command)
+                .map_err(|error| LocalActionPlanningError::new(error.message()))?;
+            Ok(Some(LocalActionPolicy {
+                kind: LocalActionKind::ShellCommand,
+                summary: summary.clone(),
+                policy_command: command.clone(),
+            }))
+        }
+        _ => Ok(None),
+    }
+}
+
 /// Returns the canonical summary for a shell-backed local action.
 pub fn local_action_summary(action: &AgentAction) -> LocalActionPlanningResult<Option<String>> {
-    Ok(local_action_plan(action)?.map(|plan| plan.summary))
+    Ok(local_action_policy(action)?.map(|plan| plan.summary))
 }
 
 /// Returns whether an action is implemented by a local shell transaction.

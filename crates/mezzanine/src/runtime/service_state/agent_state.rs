@@ -264,6 +264,10 @@ pub(crate) struct BlockedAgentApprovalRef {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(crate) action_id: String,
+    /// Immutable original native filesystem domain, minted when blocked.
+    /// This is routing provenance, never approval or a substitute for its exact
+    /// source proof. Losing that proof must reject rather than choose a shell.
+    pub(crate) native_filesystem_domain: bool,
     /// Whether approval grants one exact unsandboxed retry for this action.
     pub(crate) sandbox_bypass_after_approval: bool,
 }

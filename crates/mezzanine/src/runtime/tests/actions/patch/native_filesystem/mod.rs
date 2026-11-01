@@ -1,8 +1,9 @@
 //! Actor filesystem-attempt ownership against real canonical execution slots.
 //!
-//! These fixtures register running results without invoking legacy shell
-//! lowering. They exercise actor queue/claim/cancellation/outcome ownership,
-//! not the still-pending asynchronous dispatch, commit leases or durability.
+//! Direct fixtures register running results without shell lowering to isolate
+//! actor queue, claim, cancellation and outcome ownership. Focused child modules
+//! exercise actual asynchronous producers, exact leases and durable retirement;
+//! selector cases additionally accept real provider batches before execution.
 
 use super::*;
 use crate::runtime::processes::native_patch::worker::NativePatchWorkerOutcome;
@@ -776,3 +777,7 @@ mod archive_transfer;
 /// Positive unissued custody remains separate from actual native joins.
 #[cfg(target_os = "linux")]
 mod refusal;
+
+/// Real provider selection precedes native descriptor work and settlement.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod selector;

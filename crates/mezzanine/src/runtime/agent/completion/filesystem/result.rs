@@ -22,6 +22,7 @@ pub(super) fn action_result(
     let certainty = certainty_name(raw.result.certainty);
     let metadata = serde_json::json!({
         "execution_target": "native_runtime", "sent_to_pane": false,
+        "configured_sandbox_intent": work.owner.sandbox_intent,
         "enforcement": NativeFilesystemEnforcement::RuntimeCapabilities.as_str(), "effect_certainty": certainty,
         "automatic_replay_allowed": false,
         "confirmed_effects": raw.result.confirmed_effects.iter().map(effect_json).collect::<Vec<_>>(),
@@ -62,6 +63,8 @@ pub(super) fn refusal_result(
     let mut result = action_result(work, refusal.outcome())?;
     result.status = if refusal.cancelled() {
         ActionStatus::Cancelled
+    } else if refusal.cause().kind() == crate::error::MezErrorKind::Forbidden {
+        ActionStatus::Denied
     } else {
         ActionStatus::Failed
     };

@@ -1,6 +1,6 @@
 //! Product inputs for provider-independent action-result planning.
 //!
-//! This adapter computes concrete permission, subagent-scope risk, local lowering,
+//! This adapter computes concrete permission, subagent-scope risk, non-executable local classification,
 //! and MCP approval facts, then delegates canonical action-result construction
 //! to `mez-agent`. Runtime execution and product error projection remain in the
 //! composition crate.
@@ -19,6 +19,40 @@ impl<'a, P> AgentTurnRunner<'a, P> {
         turn: &AgentTurnRecord,
         action: &AgentAction,
     ) -> Result<ActionResult> {
+        if matches!(action.payload, AgentActionPayload::ApplyPatch { .. }) {
+            let descriptor = mez_agent::local_action_policy(action)?.ok_or_else(|| {
+                MezError::invalid_state("semantic patch policy descriptor unavailable")
+            })?;
+            let risk = self
+                .subagent_scope
+                .map(|scope| {
+                    subagent_action_scope_violation(
+                        self.subagent_scope_enforcement,
+                        scope,
+                        action,
+                        &descriptor.policy_command,
+                        self.permissions.shell_classification(),
+                    )
+                })
+                .transpose()
+                .map_err(MezError::invalid_args)?
+                .flatten();
+            let evaluation = self
+                .permissions
+                .evaluate_command_structured(&descriptor.policy_command);
+            return mez_agent::plan_semantic_patch_action_result(
+                turn,
+                action,
+                ActionPlanningInput {
+                    local_permission_evaluation: Some(&evaluation),
+                    approval_policy: self.permissions.approval_policy(),
+                    approval_bypass: self.permissions.approval_bypass(),
+                    subagent_scope_risk: risk.as_deref(),
+                    ..ActionPlanningInput::default()
+                },
+            )
+            .map_err(|error| MezError::invalid_state(error.message()));
+        }
         let local_plan = local_action_plan(action)?;
         let network_plan = network_action_plan(action);
         let subagent_scope_risk = match (self.subagent_scope, local_plan.as_ref()) {

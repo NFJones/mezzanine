@@ -2723,6 +2723,7 @@ name = "mezzanine"
 version = "0.5.1"
 dependencies = [
  "base64",
+ "cc",
  "chrono",
  "clap",
  "clap_complete",

@@ -355,6 +355,10 @@ async fn qualify_with_lifecycle(
         let (mut stream, _) = listener.accept().await.unwrap();
         let after_patch = async_provider_concurrency_read_http_request(&mut stream).await;
         assert!(after_patch.contains("apply_patch"));
+        assert!(
+            after_patch.contains("native_runtime"),
+            "actual provider continuation lost native filesystem provenance"
+        );
         assert_eq!(
             std::fs::read(root.join("corrected.txt")).unwrap(),
             b"corrected once\n"
@@ -365,11 +369,14 @@ async fn qualify_with_lifecycle(
         async_provider_concurrency_write_chat_response(&mut stream, "completed corrected patch")
             .await;
     };
+    // Native filesystem authority must explicitly cover this private fixture;
+    // shell approval bypass does not invent a filesystem write grant.
+    let fixture_scope = serde_json::to_string(root.to_str().unwrap()).unwrap();
     let mut service = test_service();
     service.replace_config_layers(vec![ConfigLayer {
         name:"real-patch-repair".into(), path:None, format:ConfigFormat::Toml,
         scope:ConfigScope::Primary, trusted:true,
-        text:format!("[agents]\nshell_mode=\"native\"\nrouting={routed}\nsession_title_policy=\"objective\"\ndefault_provider=\"local-chat\"\ndefault_model_profile=\"default\"\n[agents.auto_sizing]\nroot_routing_policy=\"in-place\"\nrouter_model_profile=\"router\"\nsmall_model_profile=\"default\"\nmedium_model_profile=\"default\"\nlarge_model_profile=\"default\"\nallowed_reasoning_efforts=[\"high\"]\n[permissions]\nsandbox=\"policy-only\"\n[providers.local-chat]\nkind=\"openai-compatible\"\nbase_url=\"http://{address}/v1\"\nmodels=[\"local-chat-model\",\"router-model\"]\ndefault_model=\"local-chat-model\"\n[providers.local-chat.options]\nmaap_output=\"structured_json\"\nstructured_output=\"json_schema\"\n[model_profiles.router]\nprovider=\"local-chat\"\nmodel=\"router-model\"\ncontext_window_tokens=128000\n[model_profiles.default]\nprovider=\"local-chat\"\nmodel=\"local-chat-model\"\ncontext_window_tokens=128000\n"),
+        text:format!("[agents]\nshell_mode=\"native\"\nrouting={routed}\nsession_title_policy=\"objective\"\ndefault_provider=\"local-chat\"\ndefault_model_profile=\"default\"\n[agents.auto_sizing]\nroot_routing_policy=\"in-place\"\nrouter_model_profile=\"router\"\nsmall_model_profile=\"default\"\nmedium_model_profile=\"default\"\nlarge_model_profile=\"default\"\nallowed_reasoning_efforts=[\"high\"]\n[permissions]\nsandbox=\"policy-only\"\nread_scopes=[{fixture_scope}]\nwrite_scopes=[{fixture_scope}]\n[providers.local-chat]\nkind=\"openai-compatible\"\nbase_url=\"http://{address}/v1\"\nmodels=[\"local-chat-model\",\"router-model\"]\ndefault_model=\"local-chat-model\"\n[providers.local-chat.options]\nmaap_output=\"structured_json\"\nstructured_output=\"json_schema\"\n[model_profiles.router]\nprovider=\"local-chat\"\nmodel=\"router-model\"\ncontext_window_tokens=128000\n[model_profiles.default]\nprovider=\"local-chat\"\nmodel=\"local-chat-model\"\ncontext_window_tokens=128000\n"),
     }]).unwrap();
     service.set_auth_store(crate::security::auth::AuthStore::new(
         crate::security::auth::AuthPaths::under_config_root(&root.join("auth")),
@@ -399,6 +406,26 @@ async fn qualify_with_lifecycle(
         .unwrap();
     let stop = StdArc::new(AtomicBool::new(false));
     let stopped = StdArc::new(tokio::sync::Notify::new());
+    let writer_stop = AtomicBool::new(false);
+    let writer_stopped = tokio::sync::Notify::new();
+    // The original native producer needs actual checked storage before its next
+    // provider claim. Keep the real writer alive through provider retirement,
+    // then observe its exit before shutting down its actor request destination.
+    let writer = Box::pin(async {
+        let report = Box::pin(run_async_persistence_side_effect_service(
+            &handle,
+            AsyncRuntimeSideEffectServiceConfig {
+                max_polls: u64::MAX,
+                drain_limit: 64,
+                idle_interval: Duration::from_millis(1),
+            },
+            |_, _| writer_stop.load(Ordering::Acquire),
+        ))
+        .await
+        .unwrap();
+        assert_eq!(report.failed, 0);
+        writer_stopped.notify_one();
+    });
     let provider = async {
         let report = run_async_agent_provider_service(
             &handle,
@@ -461,7 +488,7 @@ async fn qualify_with_lifecycle(
                 .await
                 .unwrap()
                 .unwrap();
-            if matches!(
+            let can_finish = matches!(
                 summary_reply,
                 SummaryReply::ExhaustedBatch | SummaryReply::FailedRequest
             ) || lifecycle != Lifecycle::Keep
@@ -471,31 +498,20 @@ async fn qualify_with_lifecycle(
                     } else {
                         "completed corrected patch"
                     })
-                })
-            {
-                run_async_persistence_side_effect_service(
-                    &handle,
-                    AsyncRuntimeSideEffectServiceConfig {
-                        max_polls: 4,
-                        drain_limit: 64,
-                        idle_interval: Duration::from_millis(1),
-                    },
-                    |_, _| false,
-                )
-                .await
-                .unwrap();
-                if !handle.agent_turn_is_running("turn-1").await.unwrap() {
-                    break;
-                }
+                });
+            if can_finish && !handle.agent_turn_is_running("turn-1").await.unwrap() {
+                break;
             }
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
         stop.store(true, Ordering::SeqCst);
         stopped.notified().await;
+        writer_stop.store(true, Ordering::Release);
+        writer_stopped.notified().await;
         handle.shutdown().await.unwrap();
     };
-    let ((), report, (), mut exit) = tokio::time::timeout(Duration::from_secs(30), async {
-        tokio::join!(client, provider, server, actor.run())
+    let ((), report, (), (), mut exit) = tokio::time::timeout(Duration::from_secs(30), async {
+        tokio::join!(client, provider, server, writer, actor.run())
     })
     .await
     .unwrap();

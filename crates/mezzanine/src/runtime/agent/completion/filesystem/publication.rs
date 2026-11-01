@@ -16,7 +16,7 @@ pub(super) struct FilesystemPublicationSource {
     /// Ordered confirmed endpoint diffs; no shell framing/output is fabricated.
     endpoints: Vec<mez_agent::ActionPresentationProgress>,
     /// Native semantic certainty/count/diagnostic summary, with no shell lowering.
-    outcome: (bool, String),
+    outcome: Option<(bool, String)>,
 }
 
 impl FilesystemPublicationSource {
@@ -35,12 +35,24 @@ impl FilesystemPublicationSource {
                 )
             })
             .collect::<Result<Vec<_>>>()?;
-        let mut outcome = runtime_agent_action_outcome_line(&work.owner.action, result, false)
-            .ok_or_else(|| {
-                MezError::invalid_state("filesystem semantic outcome source unavailable")
-            })?;
-        if raw.receipts.iter().any(|receipt| receipt.diff_truncated) {
-            outcome.1.push_str("; diff preview truncated");
+        // Known unexecuted patch failures use the established correction or
+        // terminal diagnostic owner. This explicit absence is not an installed
+        // outcome acknowledgement; confirmed/unknown effects retain their row.
+        let suppress_failure = result.status == ActionStatus::Failed
+            && raw.result.certainty == mez_agent::native_action::NativeEffectCertainty::Unexecuted;
+        let mut outcome = if suppress_failure {
+            None
+        } else {
+            Some(
+                runtime_agent_action_outcome_line(&work.owner.action, result, false).ok_or_else(
+                    || MezError::invalid_state("filesystem semantic outcome source unavailable"),
+                )?,
+            )
+        };
+        if raw.receipts.iter().any(|receipt| receipt.diff_truncated)
+            && let Some((_, line)) = &mut outcome
+        {
+            line.push_str("; diff preview truncated");
         }
         Ok(Self {
             result: result.clone(),
@@ -235,13 +247,15 @@ impl RuntimeSessionService {
                     (&diff, Some(&owner.attempt), false),
                 )?;
             }
-            self.publish_ordered_runtime_outcome(
-                &owner.pane_id,
-                &execution,
-                &work.owner.action,
-                &source.result,
-                source.outcome.clone(),
-            )?;
+            if let Some(outcome) = &source.outcome {
+                self.publish_ordered_runtime_outcome(
+                    &owner.pane_id,
+                    &execution,
+                    &work.owner.action,
+                    &source.result,
+                    outcome.clone(),
+                )?;
+            }
             self.flush_ordered_provider_headers(&owner.pane_id, &execution)?;
             Ok(!self.completion_ordered_publication_pending(&owner, Some(owner.ordinal)))
         })();

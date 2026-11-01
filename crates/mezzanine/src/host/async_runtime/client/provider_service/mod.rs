@@ -1313,7 +1313,6 @@ where
     let _cancellation_guard = dispatch.cancellation.cancel_on_drop();
     let (progress_sender, mut progress_receiver) = tokio::sync::watch::channel(None);
     let mut last_progress_revision = 0_u64;
-    let mut confirmed_patch_sections = 0_usize;
     owner.start(dispatch, progress_sender, execute).await?;
     let worker = owner.join();
     tokio::pin!(worker);
@@ -1348,32 +1347,6 @@ where
                         },
                     ));
                 }
-                for section in progress
-                    .confirmed_patch_sections
-                    .iter()
-                    .skip(confirmed_patch_sections)
-                {
-                    batch.push(RuntimeEvent::NativeShellProgress(
-                        crate::runtime::RuntimeNativeShellProgress {
-                            presentation: mez_agent::ActionPresentationProgress::new(
-                                progress_turn_id.clone(),
-                                progress_action_id.clone(),
-                                mez_agent::ActionPresentationExecutionIdentity::Attempt(
-                                    progress_marker.clone(),
-                                ),
-                                u64::try_from(section.ordinal)
-                                    .unwrap_or(u64::MAX)
-                                    .saturating_add(1),
-                                mez_agent::ActionPresentationComponentIdentity::confirmed_mutation(
-                                    section.ordinal,
-                                    section.path.clone(),
-                                ),
-                                section.diff.clone(),
-                            ),
-                        },
-                    ));
-                }
-                confirmed_patch_sections = progress.confirmed_patch_sections.len();
                 if !batch.events.is_empty() {
                     submit_executor_progress_batch(&handle, batch, &progress_feedback).await;
                 }
@@ -1397,31 +1370,6 @@ where
                         revision,
                         mez_agent::ActionPresentationComponentIdentity::ShellOutput,
                         output_preview,
-                    ),
-                },
-            ));
-        }
-        for section in progress
-            .confirmed_patch_sections
-            .iter()
-            .skip(confirmed_patch_sections)
-        {
-            batch.push(RuntimeEvent::NativeShellProgress(
-                crate::runtime::RuntimeNativeShellProgress {
-                    presentation: mez_agent::ActionPresentationProgress::new(
-                        progress_turn_id.clone(),
-                        progress_action_id.clone(),
-                        mez_agent::ActionPresentationExecutionIdentity::Attempt(
-                            progress_marker.clone(),
-                        ),
-                        u64::try_from(section.ordinal)
-                            .unwrap_or(u64::MAX)
-                            .saturating_add(1),
-                        mez_agent::ActionPresentationComponentIdentity::confirmed_mutation(
-                            section.ordinal,
-                            section.path.clone(),
-                        ),
-                        section.diff.clone(),
                     ),
                 },
             ));

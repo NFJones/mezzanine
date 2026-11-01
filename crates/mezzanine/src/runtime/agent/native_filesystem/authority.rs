@@ -1,6 +1,6 @@
 //! Direct actor authority bridge for filesystem preparation and exact commits.
 //!
-//! This borrowed adapter exercises the same actor owner used by the upcoming
+//! This borrowed adapter exercises the same actor owner used by the
 //! async request bridge. It never promotes a scope snapshot into a write lease:
 //! mutations return to the serialized owner to acquire exact single-use commit
 //! admission and shared in-flight scheduling before publication.

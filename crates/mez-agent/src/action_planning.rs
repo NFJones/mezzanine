@@ -319,6 +319,87 @@ pub fn plan_action_result(
     }
 }
 
+/// Plans a semantic patch from product permission facts without shell lowering.
+/// Preserves explicit deny, scope-risk prompting and auto-allow policy. Returns
+/// a planning error for non-patches, invalid syntax or missing permission facts;
+/// a running result is admission intent, never execution or filesystem authority.
+pub fn plan_semantic_patch_action_result(
+    turn: &(impl AgentTurnResultIdentity + ?Sized),
+    action: &AgentAction,
+    input: ActionPlanningInput<'_>,
+) -> ActionPlanningResult<ActionResult> {
+    if !matches!(action.payload, AgentActionPayload::ApplyPatch { .. }) {
+        return Err(ActionPlanningError::new(
+            "semantic patch planning requires apply_patch",
+        ));
+    }
+    let descriptor = crate::local_action::local_action_policy(action)
+        .map_err(|error| ActionPlanningError::new(error.message()))?
+        .ok_or_else(|| ActionPlanningError::new("semantic patch descriptor unavailable"))?;
+    let evaluation = input.local_permission_evaluation;
+    let mut decision = evaluation
+        .map(|value| value.decision)
+        .or(input.local_rule_decision)
+        .ok_or_else(|| {
+            ActionPlanningError::new("semantic patch permission decision is required")
+        })?;
+    if decision == RuleDecision::Allow
+        && input.subagent_scope_risk.is_some()
+        && !prompt_gate_satisfied_by_policy(input)
+    {
+        decision = RuleDecision::Prompt;
+    }
+    let auto_allowed =
+        decision == RuleDecision::Prompt && input.approval_policy == ApprovalPolicy::AutoAllow;
+    let approval = if auto_allowed {
+        serde_json::json!({"state":"auto_allowed","kind":"apply_patch","action_id":action.id,"reason":descriptor.summary})
+    } else if decision == RuleDecision::Prompt {
+        serde_json::json!({"state":"pending","kind":"apply_patch","action_id":action.id,"command":descriptor.policy_command})
+    } else {
+        serde_json::Value::Null
+    };
+    let state = if decision == RuleDecision::Prompt && !auto_allowed {
+        "pending_approval"
+    } else {
+        "pending_dispatch"
+    };
+    let metadata = serde_json::json!({
+        "kind":"apply_patch", "summary":descriptor.summary, "command":descriptor.policy_command,
+        "policy_descriptor":"apply_patch", "execution_transport":"pending_local_dispatch", "sent_to_pane":false,
+        "stateful":false, "approval":approval, "matched_rules":evaluation.map(|value| value.matched_rule_ids.as_slice()).unwrap_or_default(),
+        "terminal_observation":{"state":state},
+    }).to_string();
+    let result = match decision {
+        RuleDecision::Forbid => ActionResult::failed(
+            turn,
+            action,
+            ActionStatus::Denied,
+            "policy_forbidden",
+            "local action denied by permission policy",
+        )
+        .map_err(ActionPlanningError::from_contract)?,
+        RuleDecision::Prompt if !auto_allowed => ActionResult::blocked(
+            turn,
+            action,
+            vec!["approval required before executing local action".into()],
+            metadata,
+        ),
+        _ => {
+            let content = if auto_allowed {
+                vec![
+                    "local action auto-allowed by model assessment".into(),
+                    descriptor.summary,
+                    APPROVAL_BROWSER_GUIDANCE.into(),
+                ]
+            } else {
+                vec!["local action accepted for local dispatch".into()]
+            };
+            ActionResult::running(turn, action, content, Some(metadata))
+        }
+    };
+    Ok(result.with_permission_evaluation(evaluation.cloned()))
+}
+
 /// Plans one local action after product lowering and permission classification.
 fn plan_local_action(
     turn: &(impl AgentTurnResultIdentity + ?Sized),
@@ -1591,5 +1672,67 @@ mod tests {
         assert!(preview.ends_with("..."));
         assert!(!preview.contains('\n'));
         assert!(!structured.to_string().contains(&payload));
+    }
+    /// Semantic planning preserves explicit deny and human prompt boundaries
+    /// without emitting a shell program, sidecar or generated-source byte count.
+    /// Auto-allow remains an explicit policy decision with a semantic rationale.
+    #[test]
+    fn semantic_patch_planning_needs_no_shell_lowering_and_keeps_policy_gates() {
+        let action = AgentAction {
+            id: "patch".into(),
+            payload: AgentActionPayload::ApplyPatch {
+                patch: "*** Begin Patch\n*** Add File: file\n+content\n*** End Patch".into(),
+                strip: None,
+            },
+        };
+        for (decision, status) in [
+            (RuleDecision::Allow, ActionStatus::Running),
+            (RuleDecision::Prompt, ActionStatus::Blocked),
+            (RuleDecision::Forbid, ActionStatus::Denied),
+        ] {
+            let result = plan_semantic_patch_action_result(
+                &TestTurn,
+                &action,
+                ActionPlanningInput {
+                    local_rule_decision: Some(decision),
+                    ..ActionPlanningInput::default()
+                },
+            )
+            .unwrap();
+            assert_eq!(result.status, status);
+            if let Some(text) = result.structured_content_json {
+                let metadata: serde_json::Value = serde_json::from_str(&text).unwrap();
+                assert_eq!(metadata["policy_descriptor"], "apply_patch");
+                for absent in [
+                    "generated_command_bytes",
+                    "input_sidecar",
+                    "stdout",
+                    "exit_code",
+                ] {
+                    assert!(metadata.get(absent).is_none());
+                }
+            }
+        }
+        let allowed = plan_semantic_patch_action_result(
+            &TestTurn,
+            &action,
+            ActionPlanningInput {
+                local_rule_decision: Some(RuleDecision::Prompt),
+                approval_policy: ApprovalPolicy::AutoAllow,
+                ..ActionPlanningInput::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(allowed.status, ActionStatus::Running);
+        assert!(
+            allowed
+                .structured_content_json
+                .unwrap()
+                .contains("auto_allowed")
+        );
+        assert!(
+            plan_semantic_patch_action_result(&TestTurn, &action, ActionPlanningInput::default())
+                .is_err()
+        );
     }
 }

@@ -22,8 +22,7 @@ use sha2::{Digest, Sha256};
 
 use mez_agent::permissions::{PathResolutionStatus, PathScopes};
 use mez_mux::process::{
-    ProcessCredentials, current_working_directory_for_pid, filesystem_credentials_for_pid,
-    process_start_token_for_pid,
+    ProcessCredentials, current_working_directory_for_pid, process_start_token_for_pid,
 };
 use rustix::fs::{
     AtFlags, FileType, Mode, OFlags, RenameFlags, fstat, openat, renameat, renameat_with, statat,
@@ -234,63 +233,14 @@ fn capture_directory(path: &Path) -> Result<(PhysicalPath, File)> {
     Ok((physical, file))
 }
 
-/// Opens the actual kernel cwd reference, not a second lookup of its pathname.
-/// Linux's proc entry intentionally follows the kernel process reference;
-/// Darwin only admits self here because foreign group evidence fails closed.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+/// Opens the cwd object with actual platform kernel evidence, never a helper.
 fn open_process_cwd(pid: u32) -> Result<File> {
-    #[cfg(target_os = "linux")]
-    let path = format!("/proc/{pid}/cwd");
-    #[cfg(target_os = "macos")]
-    let path = {
-        if pid != std::process::id() {
-            return Err(MezError::forbidden(
-                "native foreign process cwd witness unavailable",
-            ));
-        }
-        ".".to_string()
-    };
-    openat(
-        rustix::fs::CWD,
-        path,
-        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
-        Mode::empty(),
-    )
-    .map(File::from)
-    .map_err(|error| {
-        MezError::invalid_state(format!("native kernel cwd witness unavailable: {error}"))
-    })
+    super::native_context::open_process_cwd(pid)
 }
 
-/// Fails closed on platforms without a supported kernel cwd witness reader.
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
-fn open_process_cwd(_pid: u32) -> Result<File> {
-    Err(MezError::forbidden(
-        "native kernel cwd witness unsupported on this platform",
-    ))
-}
-
-/// Normalizes supplementary groups for exact effective-credential comparison.
+/// Reads normalized actual target credentials on either supported platform.
 fn normalized_credentials(pid: u32) -> Result<ProcessCredentials> {
-    // Darwin's existing shell-sandbox reader substitutes daemon supplementary
-    // groups for another PID. That approximation cannot authorize daemon-side
-    // filesystem access. Only our own process has independently known groups.
-    require_exact_group_evidence(!cfg!(target_os = "macos") || pid == std::process::id())?;
-    let mut credentials = filesystem_credentials_for_pid(pid)
-        .ok_or_else(|| MezError::invalid_state("native filesystem credentials unavailable"))?;
-    credentials.supplementary_group_ids.sort_unstable();
-    credentials.supplementary_group_ids.dedup();
-    Ok(credentials)
-}
-
-/// Fails closed when the platform cannot independently observe target groups.
-fn require_exact_group_evidence(available: bool) -> Result<()> {
-    if !available {
-        return Err(MezError::forbidden(
-            "native filesystem target supplementary groups cannot be verified on this platform",
-        ));
-    }
-    Ok(())
+    super::native_context::credentials(pid)
 }
 
 /// Authorized regular-file or missing-entry capability, with immutable preimage.
@@ -916,8 +866,9 @@ mod evidence_tests {
     /// daemon's groups even when the target's UID and primary GID match.
     #[test]
     fn unavailable_target_group_evidence_fails_closed() {
-        assert!(require_exact_group_evidence(false).is_err());
-        assert!(require_exact_group_evidence(true).is_ok());
+        assert!(normalized_credentials(0).is_err());
+        assert!(normalized_credentials(u32::MAX).is_err());
+        assert!(normalized_credentials(std::process::id()).is_ok());
     }
 
     /// Exercises the actual recapture boundary after old ancestry validation.
@@ -1091,11 +1042,19 @@ mod evidence_tests {
         std::fs::remove_dir_all(directory).unwrap();
     }
 
-    /// Darwin's shell-oriented reader substitutes daemon groups for another
-    /// PID, so the filesystem boundary rejects that reader before admission.
+    /// Actual Darwin kernel credentials support foreign roots without using
+    /// the shell-oriented reader's approximation; dead targets remain rejected.
     #[cfg(target_os = "macos")]
     #[test]
-    fn darwin_other_pid_credentials_are_not_independently_verified() {
-        assert!(normalized_credentials(std::process::id().saturating_add(1)).is_err());
+    fn darwin_foreign_root_uses_independently_verified_kernel_context() {
+        let mut child = std::process::Command::new("/bin/cat")
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        let root = NativeFilesystemRoot::capture(child.id());
+        child.kill().unwrap();
+        child.wait().unwrap();
+        assert!(root.is_ok());
+        assert!(root.unwrap().revalidate().is_err());
     }
 }

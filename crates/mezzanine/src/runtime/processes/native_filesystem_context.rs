@@ -58,6 +58,26 @@ pub(crate) struct NativeFilesystemContext {
 }
 
 impl NativeFilesystemContext {
+    /// Compares immutable mutation-source metadata for duplicate success guards.
+    /// Retaining both contexts pins mode allocations against ABA. Equality grants
+    /// no read/write permission and performs no filesystem or shell inference.
+    pub(crate) fn same_mutation_context(&self, other: &Self) -> bool {
+        self.turn == other.turn
+            && self.agent == other.agent
+            && self.conversation == other.conversation
+            && self.pane == other.pane
+            && self.session == other.session
+            && self.root == other.root
+            && self.process_directory == other.process_directory
+            && self.operation_directory == other.operation_directory
+            && self.navigation == other.navigation
+            && self.selected_directory == other.selected_directory
+            && Arc::ptr_eq(&self.pane_mode, &other.pane_mode)
+            && Arc::ptr_eq(&self.default_mode, &other.default_mode)
+            && self.config_generation == other.config_generation
+            && self.resources == other.resources
+            && self.child == other.child
+    }
     /// Captures physical process/operation cwd witnesses on a blocking worker.
     /// This does not authorize file access or publish the prepared root.
     #[allow(

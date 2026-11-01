@@ -661,11 +661,11 @@ fn runtime_native_shell_command_uses_snapshotted_configured_timeout() {
 /// Verifies native `apply_patch` hunk failures leave recovery shadow text as
 /// their sole pane-visible failure presentation.
 ///
-/// Native patch execution first snapshots the target, then dispatches a
-/// generated write phase. A failing write already queues the recovery shadow;
+/// Native descriptor execution reports a typed hunk failure without launching
+/// a shell. The existing correction policy queues the recovery shadow;
 /// the generic failed-action outcome must not add a second red error row.
-#[test]
-fn runtime_native_apply_patch_failure_shows_only_recovery_shadow_text() {
+#[tokio::test(flavor = "current_thread")]
+async fn runtime_native_apply_patch_failure_shows_only_recovery_shadow_text() {
     let mut service = test_runtime_service();
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
@@ -678,6 +678,13 @@ fn runtime_native_apply_patch_failure_shows_only_recovery_shadow_text() {
         .enter_or_resume("%1")
         .unwrap();
 
+    let cwd = std::env::current_dir().unwrap();
+    service.integration.replace_configured_permissions(
+        crate::runtime::config::runtime_configured_permissions_from_config(
+            &serde_json::json!({"permissions":{"read_scopes":[cwd],"write_scopes":[cwd]}}),
+        )
+        .unwrap(),
+    );
     let start = service.dispatch_runtime_control_body(
         r#"{"jsonrpc":"2.0","id":"agent-prompt","method":"agent/shell/command","params":{"idempotency_key":"agent-native-patch-failure","input":"patch Cargo.toml"}}"#,
         &primary,
@@ -719,28 +726,19 @@ fn runtime_native_apply_patch_failure_shows_only_recovery_shadow_text() {
         .unwrap();
     assert_eq!(execution.terminal_state, AgentTurnState::Running);
 
-    let read_dispatch = service
-        .claim_native_shell_action("turn-1", "patch-1")
-        .unwrap()
-        .expect("native apply-patch read should be queued");
+    let offers = service.pending_native_filesystem_actions();
+    assert_eq!(offers.len(), 1);
     assert!(
         service
-            .complete_native_shell_action(crate::runtime::execute_native_shell_dispatch(
-                read_dispatch
-            ))
+            .claim_native_shell_action("turn-1", "patch-1")
             .unwrap()
+            .is_none()
     );
-    let write_dispatch = service
-        .claim_native_shell_action("turn-1", "patch-1")
-        .unwrap()
-        .expect("native apply-patch write should be queued");
-    assert!(
-        service
-            .complete_native_shell_action(crate::runtime::execute_native_shell_dispatch(
-                write_dispatch
-            ))
-            .unwrap()
-    );
+    let producer = offers[0].attempt().root_producer().unwrap();
+    let actor = super::filesystem_fixture::FilesystemActor::new(service);
+    actor.start(&producer).await;
+    actor.settle(&producer).await;
+    let mut service = actor.finish().await;
 
     let pane_text = service
         .pane_screen("%1")
@@ -761,12 +759,12 @@ fn runtime_native_apply_patch_failure_shows_only_recovery_shadow_text() {
 /// Verifies native semantic-patch writes publish confirmed diffs before the
 /// worker reaches terminal completion.
 ///
-/// The generated write phase performs the real filesystem mutation and emits
-/// its authenticated ordinal/path/length record before a test-only barrier.
+/// The actual descriptor worker commits the file and retains its authenticated
+/// endpoint before a test-only barrier keeps its real handle unjoined.
 /// Native progress must carry that confirmation through the coalescing relay,
 /// promote it exactly once, and retain the same visible diff after settlement.
-#[test]
-fn runtime_native_apply_patch_shows_confirmed_diff_before_completion() {
+#[tokio::test(flavor = "current_thread")]
+async fn runtime_native_apply_patch_shows_confirmed_diff_before_completion() {
     let mut service = test_runtime_service();
     let primary = service
         .attach_primary("primary", true, Size::new(120, 40).unwrap(), 120)
@@ -786,11 +784,13 @@ fn runtime_native_apply_patch_shows_confirmed_diff_before_completion() {
     );
     let target = PathBuf::from(&target_rel);
     fs::create_dir_all(target.parent().unwrap()).unwrap();
-    let release_path = std::env::temp_dir().join(format!(
-        "mez-native-patch-progress-release-{}-{unique}",
-        std::process::id()
-    ));
-    let _ = fs::remove_file(&release_path);
+    let private = std::fs::canonicalize(target.parent().unwrap()).unwrap();
+    service.integration.replace_configured_permissions(
+        crate::runtime::config::runtime_configured_permissions_from_config(
+            &serde_json::json!({"permissions":{"read_scopes":[private],"write_scopes":[private]}}),
+        )
+        .unwrap(),
+    );
 
     let start = service.dispatch_runtime_control_body(
         r#"{"jsonrpc":"2.0","id":"agent-prompt","method":"agent/shell/command","params":{"idempotency_key":"agent-native-patch-progress","input":"create a note"}}"#,
@@ -832,93 +832,69 @@ fn runtime_native_apply_patch_shows_confirmed_diff_before_completion() {
         .unwrap();
     assert_eq!(execution.terminal_state, AgentTurnState::Running);
 
-    let read_dispatch = service
-        .claim_native_shell_action("turn-1", "patch-1")
-        .unwrap()
-        .expect("native apply-patch read should be queued");
+    let offers = service.pending_native_filesystem_actions();
+    assert_eq!(offers.len(), 1);
+    let producer = offers[0].attempt().root_producer().unwrap();
+    let actor = super::filesystem_fixture::FilesystemActor::new(service);
     assert!(
-        service
-            .complete_native_shell_action(crate::runtime::execute_native_shell_dispatch(
-                read_dispatch
-            ))
+        actor
+            .handle
+            .claim_native_filesystem_producer(producer.clone())
+            .await
             .unwrap()
     );
-    service
-        .append_pending_native_phase_command_for_tests(
-            "turn-1",
-            "patch-1",
-            &format!(
-                "while [ ! -e '{}' ]; do sleep 0.01; done\n",
-                release_path.display()
-            ),
-        )
-        .unwrap();
-    let write_dispatch = service
-        .claim_native_shell_action("turn-1", "patch-1")
-        .unwrap()
-        .expect("native apply-patch write should be queued");
-    let marker = write_dispatch.marker.clone();
-    let (progress_sender, mut progress_receiver) = tokio::sync::watch::channel(None);
-    let worker = thread::spawn(move || {
-        crate::runtime::execute_native_shell_dispatch_with_progress(write_dispatch, progress_sender)
-    });
-    let deadline = Instant::now() + Duration::from_secs(5);
-    let section = loop {
-        if let Some(progress) = progress_receiver.borrow_and_update().clone()
-            && let Some(section) = progress.confirmed_patch_sections.first().cloned()
-        {
-            break section;
+    let context = actor.handle.clone();
+    let runtime = tokio::runtime::Handle::current();
+    let recorder = producer.progress_recorder();
+    let (committed, ready) = tokio::sync::oneshot::channel();
+    let (release, held) = std::sync::mpsc::channel();
+    /// Releases only this original worker, including on assertion unwind.
+    struct Release(std::sync::mpsc::Sender<()>);
+    impl Drop for Release {
+        fn drop(&mut self) {
+            let _ = self.0.send(());
         }
-        assert!(
-            Instant::now() < deadline,
-            "native patch confirmation timed out"
-        );
-        thread::sleep(Duration::from_millis(5));
-    };
+    }
+    let release = Release(release);
     assert!(
-        !worker.is_finished(),
-        "native patch worker settled before progress"
-    );
-    assert_eq!(section.path, target_rel);
-    assert!(
-        service
-            .apply_native_shell_progress(crate::runtime::RuntimeNativeShellProgress {
-                presentation: mez_agent::ActionPresentationProgress::new(
-                    "turn-1",
-                    "patch-1",
-                    mez_agent::ActionPresentationExecutionIdentity::Attempt(marker),
-                    u64::try_from(section.ordinal)
-                        .unwrap_or(u64::MAX)
-                        .saturating_add(1),
-                    mez_agent::ActionPresentationComponentIdentity::confirmed_mutation(
-                        section.ordinal,
-                        section.path,
-                    ),
-                    section.diff,
-                ),
+        producer
+            .start(move |dispatch| {
+                let raw = crate::host::async_runtime::native_filesystem::execute_for_tests(
+                    dispatch, context, runtime, recorder,
+                );
+                committed.send(()).unwrap();
+                held.recv().unwrap();
+                raw
             })
+            .await
             .unwrap()
     );
-    let early_text = service
-        .pane_screen("%1")
+    ready.await.unwrap();
+    assert!(producer.joined_outcome().is_none());
+    let delivery = producer.progress_snapshot().unwrap();
+    assert!(
+        matches!(&delivery.confirmed().unwrap()[0].component, mez_agent::ActionPresentationComponentIdentity::ConfirmedMutation { path, .. } if path == &target_rel)
+    );
+    actor.handle.try_native_filesystem_progress(delivery);
+    let view = actor
+        .handle
+        .render_client_view(
+            ClientViewRole::Primary,
+            Size::new(120, 40).unwrap(),
+            TerminalClientLoopConfig::default(),
+        )
+        .await
         .unwrap()
-        .normal_content_lines()
-        .join("\n");
+        .unwrap();
+    let early_text = view.lines.join("\n");
     assert!(
         early_text.contains("native-confirmed-progress"),
         "{early_text}"
     );
-    assert_eq!(
-        service.action_presentation_progress_counts_for_tests("%1"),
-        (0, 1)
-    );
-
-    fs::write(&release_path, b"release").unwrap();
-    assert!(
-        service
-            .complete_native_shell_action(worker.join().unwrap())
-            .unwrap()
-    );
+    assert!(producer.joined_outcome().is_none());
+    drop(release);
+    actor.settle(&producer).await;
+    let mut service = actor.finish().await;
     let settled_text = service
         .pane_screen("%1")
         .unwrap()
@@ -934,7 +910,6 @@ fn runtime_native_apply_patch_shows_confirmed_diff_before_completion() {
         "native-confirmed-progress\n"
     );
 
-    let _ = fs::remove_file(release_path);
     let _ = fs::remove_dir_all(target.parent().unwrap());
     service.terminate_all_pane_processes().unwrap();
 }
