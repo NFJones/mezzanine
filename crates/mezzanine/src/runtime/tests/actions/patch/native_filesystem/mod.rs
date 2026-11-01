@@ -781,3 +781,6 @@ mod refusal;
 /// Real provider selection precedes native descriptor work and settlement.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod selector;
+
+#[cfg(target_os = "linux")]
+mod parents;

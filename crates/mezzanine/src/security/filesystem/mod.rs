@@ -7,7 +7,7 @@
 
 #[allow(
     dead_code,
-    reason = "native filesystem primitives await the dependent patch dispatcher"
+    reason = "directory primitives await separately authorized worker/result integration"
 )]
 pub(crate) mod capability;
 mod identity;

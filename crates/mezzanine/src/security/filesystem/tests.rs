@@ -10,7 +10,9 @@ use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::PathBuf;
 
+use super::capability::parent::NativeParentCapability;
 use super::capability::{NativeFileCapability, NativeFilesystemRoot};
+use super::native_io::NativeIoControl;
 use super::resolution::host_resolved_path_scopes;
 use mez_agent::permissions::PathScopes;
 
@@ -428,17 +430,22 @@ fn capability_parent_creation_is_explicit_and_scoped() {
             .is_err()
     );
     let parent = fixture.directory.join("parent");
-    NativeFileCapability::create_parent_directory(
+    let admission = NativeParentCapability::capture(
         &fixture.root,
         &fixture.scopes,
         parent.to_str().unwrap(),
+        NativeIoControl::bounded_only(),
     )
     .unwrap();
+    let mut created = admission.commit(&fixture.root, &fixture.scopes).unwrap();
+    created.observe(&fixture.root, &fixture.scopes).unwrap();
     assert_eq!(
         fs::metadata(&parent).unwrap().permissions().mode() & 0o777,
         0o700
     );
-    let capability = fixture.capability("parent/file");
+    let capability = capability
+        .recapture_with_created_parents(&fixture.root, &fixture.scopes, &[created])
+        .unwrap();
     let mut stage = capability
         .stage(&fixture.root, &fixture.scopes, b"new")
         .unwrap();
@@ -449,10 +456,11 @@ fn capability_parent_creation_is_explicit_and_scoped() {
     let mut read_only = fixture.scopes.clone();
     read_only.write_scopes.clear();
     assert!(
-        NativeFileCapability::create_parent_directory(
+        NativeParentCapability::capture(
             &fixture.root,
             &read_only,
-            fixture.directory.join("denied").to_str().unwrap()
+            fixture.directory.join("denied").to_str().unwrap(),
+            NativeIoControl::bounded_only(),
         )
         .is_err()
     );

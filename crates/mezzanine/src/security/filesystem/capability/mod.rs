@@ -12,6 +12,8 @@
 //! Original regular-file descriptors remain held with their raw preimages;
 //! numeric inode metadata alone is not a lifetime-long object witness.
 
+pub(crate) mod parent;
+
 use std::ffi::OsString;
 use std::fs::File;
 use std::path::Path;
@@ -43,6 +45,8 @@ struct NativeOperationDirectory {
 
 /// Local process lifetime and filesystem context captured without shell selection.
 pub(crate) struct NativeFilesystemRoot {
+    /// Opaque captured root allocation; separately admitted parent work cannot rebind it.
+    allocation: Arc<()>,
     /// Kernel process identifier, always paired with start token.
     pid: u32,
     /// Exact process lifetime captured before reading credentials/cwd.
@@ -122,6 +126,7 @@ impl NativeFilesystemRoot {
             None
         };
         let root = Self {
+            allocation: Arc::new(()),
             pid,
             start_token,
             credentials,
@@ -328,6 +333,12 @@ impl NativeFileCapability {
         Arc::clone(&self.allocation)
     }
 
+    /// Returns exact admitted spelling separately from the physical target.
+    /// Proposal construction must bind both rather than borrow another source.
+    pub(crate) fn requested_path(&self) -> &str {
+        &self.requested
+    }
+
     /// Returns captured exact bytes, separately from normalized matching text.
     pub(crate) fn preimage(&self) -> Option<&[u8]> {
         self.preimage.as_deref()
@@ -516,37 +527,6 @@ impl NativeFileCapability {
                 "native filesystem preimage or object changed",
             )),
         }
-    }
-
-    /// Creates exactly one missing directory under fresh explicit authority.
-    /// The caller must record this effect and recapture file capabilities after
-    /// creation; no recursive ancestors or cleanup of unowned entries is implied.
-    pub(crate) fn create_parent_directory(
-        root: &NativeFilesystemRoot,
-        current_scopes: &PathScopes,
-        requested: &str,
-    ) -> Result<std::path::PathBuf> {
-        root.revalidate()?;
-        let physical = resolve_physical(root.cwd(), requested)?;
-        authorize(current_scopes, root.cwd(), &physical.path, true)?;
-        if physical.missing.len() != 1 {
-            return Err(MezError::conflict(
-                "native parent creation requires exactly one missing directory",
-            ));
-        }
-        revalidate_ancestry(&physical)?;
-        let parent = &physical
-            .directories
-            .last()
-            .ok_or_else(|| MezError::invalid_state("native parent creation lost parent"))?
-            .file;
-        rustix::fs::mkdirat(
-            parent,
-            &physical.missing[0],
-            Mode::RUSR | Mode::WUSR | Mode::XUSR,
-        )
-        .map_err(std::io::Error::from)?;
-        Ok(physical.path)
     }
 
     /// Stages bounded bytes in an exclusive same-directory regular file. Missing

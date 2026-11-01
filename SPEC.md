@@ -12676,8 +12676,20 @@ consumption, including nonblocking opens to prevent special-node swaps from
 blocking reads. Current scopes and captured ancestry/object/preimage evidence
 MUST be checked before staging and publication. Parent-directory creation MUST
 be explicit, separately authorized and retained as an effect, not an implicit
-extension of a file-only grant. Staging MUST be exclusive, destination-bound
-and verified against exact planned bytes; cleanup MUST not remove a replaced
+extension of a file-only grant. Directory admission MUST bind the original
+root allocation, prepared missing destination and independent original/current
+parent grants. Its short lease uses a separate occurrence namespace, with at
+most 128 parent admissions per action, including unused or uncertain admissions.
+Positive mkdir completion MUST be retained before fallible post-creation work;
+cancellation or failed observation MUST NOT imply rollback or nonexecution.
+Portable mkdir does not return a directory descriptor. A subsequent held witness
+binds the first stable no-follow observation, not atomic mkdir-to-open identity
+against arbitrary external writers. Later observed replacement/relocation MUST
+revoke descendant transfer, and directory owners MUST NOT delete directories on
+Drop. Missing-file recapture MUST retain original ancestor objects and accept
+additional ancestors only through positively recorded held observations.
+Staging MUST be exclusive, destination-bound and verified against exact planned
+bytes; cleanup MUST not remove a replaced
 unowned entry. Adds MUST use atomic no-replace publication; updates replace one
 entry atomically and preserve ordinary mode bits while suppressing privilege
 bits. Ownership, ACLs and xattrs are not preserved by this primitive adapter;

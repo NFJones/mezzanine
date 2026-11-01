@@ -610,6 +610,21 @@ impl NativeFilesystemActions {
                 "native filesystem endpoint already admitted",
             ));
         }
+        // Parent keys occupy a separate namespace from file endpoints 0/1.
+        // Count admitted attempts, including failed/unknown ones: neither lost
+        // delivery nor a later operation can renew the action's parent budget.
+        if proposal.key().1 >= 2
+            && entry
+                .commits
+                .iter()
+                .filter(|(_, endpoint)| *endpoint >= 2)
+                .count()
+                >= crate::security::filesystem::capability::parent::MAX_NATIVE_PARENT_DIRECTORIES
+        {
+            return Err(MezError::conflict(
+                "native parent admission count exceeds action budget",
+            ));
+        }
         let guard = entry.fence.try_begin(&coordinator)?;
         let lease = crate::runtime::processes::native_patch::lease::NativePatchCommitLease::issue(
             proposal.clone(),

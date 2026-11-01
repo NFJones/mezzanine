@@ -168,3 +168,180 @@ fn proposal_hashing_observes_original_capability_work_fence() {
     assert_eq!(calls.load(Ordering::SeqCst), 5);
     assert!(!std::path::Path::new(&change.resolved_path).exists());
 }
+
+/// Supplies independently captured parent and missing-file intentions under the
+/// fixture's unchanged original fence, not a synthesized directory/file result.
+fn parent_inputs(
+    fixture: &Fixture,
+) -> (
+    NativeFileCapability,
+    crate::security::filesystem::capability::parent::NativeParentCapability,
+    ApplyPatchFileChange,
+    NativeCommitIdentity,
+) {
+    use crate::security::filesystem::capability::parent::NativeParentCapability;
+    use crate::security::filesystem::native_io::NativeIoControl;
+    let path = fixture
+        .directory
+        .join("parent/file")
+        .to_str()
+        .unwrap()
+        .to_string();
+    let fence = fixture.fence.clone();
+    let control = NativeIoControl::new(move || fence.check());
+    let intended = NativeFileCapability::capture_with_io_control(
+        &fixture.root,
+        &fixture.scopes,
+        &path,
+        true,
+        control.clone(),
+    )
+    .unwrap();
+    let parent = NativeParentCapability::capture(
+        &fixture.root,
+        &fixture.scopes,
+        fixture.directory.join("parent").to_str().unwrap(),
+        control,
+    )
+    .unwrap();
+    let change = ApplyPatchFileChange {
+        path: path.clone(),
+        resolved_path: path.clone(),
+        original: ApplyPatchOriginalState::Missing,
+        final_bytes: Some(b"new".to_vec()),
+    };
+    let identity = NativeCommitIdentity {
+        turn_id: "turn".into(),
+        action_id: "patch".into(),
+        transaction: "parent-tx".into(),
+        authority_generation: 1,
+        operation: mez_agent::native_action::NativePatchOperation::parse(
+            &format!("*** Begin Patch\n*** Add File: {path}\n+new\n*** End Patch"),
+            None,
+        )
+        .unwrap(),
+    };
+    (intended, parent, change, identity)
+}
+
+/// A directory proposal has its own exact short lease and occurrence key. Its
+/// positive mkdir owner survives lease release and can bind later descendants;
+/// this is primitive/lease coverage, not an assembled runtime result claim.
+#[test]
+fn parent_proposal_consumes_exact_separate_short_lease() {
+    let fixture = Fixture::new();
+    let (intended, parent, change, identity) = parent_inputs(&fixture);
+    let proposal =
+        NativePatchCommitProposal::capture_parent(&parent, &intended, &change, 0, 0).unwrap();
+    assert_eq!(proposal.key(), (0, 2));
+    assert!(proposal.before.is_none() && proposal.after.is_none());
+    proposal.authorize(&identity, &fixture.scopes).unwrap();
+    let lease = NativePatchCommitLease::issue(
+        proposal.clone(),
+        fixture.scopes.clone(),
+        fixture
+            .fence
+            .try_begin(&NativePatchWriteCoordinator::default())
+            .unwrap(),
+    )
+    .unwrap();
+    let (scopes, guard) = lease.enter(&proposal, &fixture.fence).unwrap();
+    let mut created = parent.commit(&fixture.root, &scopes).unwrap();
+    drop(guard);
+    created.observe(&fixture.root, &scopes).unwrap();
+    let ready = intended
+        .recapture_with_created_parents(&fixture.root, &scopes, &[created])
+        .unwrap();
+    let file_proposal = NativePatchCommitProposal::capture(&ready, &change, 0, 0).unwrap();
+    assert_eq!(file_proposal.key(), (0, 0));
+    file_proposal.authorize(&identity, &scopes).unwrap();
+}
+
+/// Identical intended path labels from a new capture cannot consume a parent
+/// lease bound to the original prepared missing-file allocation.
+#[test]
+fn parent_lease_rejects_different_intended_file_allocation() {
+    let fixture = Fixture::new();
+    let (intended, parent, change, _) = parent_inputs(&fixture);
+    let proposal =
+        NativePatchCommitProposal::capture_parent(&parent, &intended, &change, 0, 0).unwrap();
+    let lease = NativePatchCommitLease::issue(
+        proposal.clone(),
+        fixture.scopes.clone(),
+        fixture
+            .fence
+            .try_begin(&NativePatchWriteCoordinator::default())
+            .unwrap(),
+    )
+    .unwrap();
+    let other =
+        NativeFileCapability::capture(&fixture.root, &fixture.scopes, &change.path, true).unwrap();
+    let substituted =
+        NativePatchCommitProposal::capture_parent(&parent, &other, &change, 0, 0).unwrap();
+    assert!(lease.enter(&substituted, &fixture.fence).is_err());
+    assert!(!fixture.directory.join("parent").exists());
+}
+
+/// A broader fresh directory capture must not widen the missing file action's
+/// original file-only ceiling. Explicit parent admission is independently scoped.
+#[test]
+fn parent_proposal_rejects_original_file_only_scope_ceiling() {
+    let fixture = Fixture::new();
+    let (_, parent, change, _) = parent_inputs(&fixture);
+    let mut file_only = fixture.scopes.clone();
+    file_only.write_scopes = vec![change.path.clone()];
+    let intended =
+        NativeFileCapability::capture(&fixture.root, &file_only, &change.path, true).unwrap();
+    assert!(NativePatchCommitProposal::capture_parent(&parent, &intended, &change, 0, 0).is_err());
+    assert!(!fixture.directory.join("parent").exists());
+}
+
+/// Parent authority must be fresh and restricted to a create/move destination.
+/// A delete intent or current file-only narrowing cannot borrow parent rights.
+#[test]
+fn parent_proposal_rejects_wrong_effect_and_current_scope_narrowing() {
+    let fixture = Fixture::new();
+    let (intended, parent, change, mut identity) = parent_inputs(&fixture);
+    let proposal =
+        NativePatchCommitProposal::capture_parent(&parent, &intended, &change, 0, 0).unwrap();
+    let mut file_only = fixture.scopes.clone();
+    file_only.write_scopes = vec![change.path.clone()];
+    assert!(proposal.authorize(&identity, &file_only).is_err());
+    identity.operation.effects[0] = PatchEffect::Delete(change.path.clone());
+    assert!(proposal.authorize(&identity, &fixture.scopes).is_err());
+    assert!(!fixture.directory.join("parent").exists());
+}
+
+/// A recursive or excessive ordinal cannot produce a directory proposal, and
+/// an unrelated physical file capture cannot borrow another authored path.
+#[test]
+fn parent_proposal_rejects_invalid_ordinal_and_authored_spelling() {
+    let fixture = Fixture::new();
+    let (intended, parent, mut change, _) = parent_inputs(&fixture);
+    assert!(
+        NativePatchCommitProposal::capture_parent(
+            &parent,
+            &intended,
+            &change,
+            0,
+            MAX_NATIVE_PARENT_DIRECTORIES
+        )
+        .is_err()
+    );
+    change.path = "different-source".into();
+    assert!(NativePatchCommitProposal::capture_parent(&parent, &intended, &change, 0, 0).is_err());
+}
+
+/// File proposals must bind exact admitted spelling as well as physical bytes.
+/// Otherwise a held capture for another source could borrow an accepted action's
+/// path label while retaining an unrelated physical destination.
+#[test]
+fn file_proposal_rejects_different_authored_spelling() {
+    let fixture = Fixture::new();
+    let mut change = fixture.change.clone();
+    change.path = "different-source".into();
+    assert!(
+        NativePatchCommitProposal::capture(&fixture.capability, &change, 0, 0).is_err(),
+        "proposal accepted a different authored source spelling"
+    );
+}

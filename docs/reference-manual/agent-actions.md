@@ -153,6 +153,11 @@ context mismatch. Retained line-owner transfers and parsed descriptor copies
 share that allowance. Display truncation preserves full precomputed line counts.
 These internal native limits add no configuration setting or pane matcher limit.
 
+Native patch execution currently requires existing parent directories. Separate
+directory capability/lease primitives retain positive mkdir effects, but worker
+receipt and result integration is still required before native patches create
+missing parents. A grant for a file never implies permission to create its parent.
+
 Native filesystem worker confirmations use the shared confirmed-mutation display
 path. The producer retains a cumulative prefix before best-effort notification;
 final projection reconciles it, and final publication omits exact already-promoted

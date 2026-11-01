@@ -520,6 +520,8 @@ native_shell_timeout_ms = 600000
 # remain cooperative and cannot be interrupted by this setting.
 # Shared matching and native diffs retain that fence; finite CPU/text limits
 # are internal resource bounds, not additional configuration settings.
+# Native patches currently require existing parent directories; file-only grants
+# never implicitly authorize creating ancestors.
 shell_mode = "native"
 # Default bounded iteration count used by /loop.
 loop_limit = 8
