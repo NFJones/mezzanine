@@ -657,6 +657,20 @@ impl RuntimeSessionService {
         attempt: Option<&str>,
         error: &MezError,
     ) {
+        // Positive no-dispatch provenance owns required settlement failures too.
+        // It must not be inserted into `issued`, which certifies dispatch.
+        let refused = action_id.zip(attempt).is_some_and(|(action, attempt)| {
+            self.agent
+                .completion_settlements
+                .filesystem
+                .get(&(turn_id.to_owned(), action.to_owned(), attempt.to_owned()))
+                .is_some_and(|receipt| {
+                    self.agent
+                        .native_filesystem_actions
+                        .refusal(&receipt.attempt)
+                        .is_some()
+                })
+        });
         let Some(group) = self.agent.completion_settlements.groups.get_mut(turn_id) else {
             return;
         };
@@ -670,9 +684,10 @@ impl RuntimeSessionService {
         {
             return;
         }
-        // Action failures can name only an actually issued owner. Group-level
-        // stages are fixed call-site constants, not arbitrary worker labels.
+        // Action failures name an issued owner or positive unissued refusal.
+        // Group-level stages are fixed call-site constants, not worker labels.
         if let Some(action_id) = action_id
+            && !refused
             && !group.issued.iter().any(|(action, issued)| {
                 action == action_id && attempt.is_none_or(|attempt| attempt == issued)
             })

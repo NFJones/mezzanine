@@ -772,3 +772,7 @@ mod checked_archive;
 /// Exact original source and actual joined producer transfer controls.
 #[cfg(target_os = "linux")]
 mod archive_transfer;
+
+/// Positive unissued custody remains separate from actual native joins.
+#[cfg(target_os = "linux")]
+mod refusal;

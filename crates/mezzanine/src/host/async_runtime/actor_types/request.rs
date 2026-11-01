@@ -1095,6 +1095,26 @@ pub(in crate::host::async_runtime) enum AsyncRuntimeRequest {
         /// Acceptance only; sole dispatch custody never crosses this reply.
         reply: oneshot::Sender<Result<bool>>,
     },
+    /// Captures positive original no-dispatch provenance without issuing work.
+    RefuseNativeFilesystemProducer {
+        /// Actual enrolled root, already closed with no dispatch/worker.
+        producer: crate::runtime::native_filesystem::NativeFilesystemProducer,
+        /// Busy is pending; immutable refusal is not a joined outcome.
+        reply: oneshot::Sender<
+            Result<Option<crate::runtime::native_filesystem::NativeFilesystemRefusal>>,
+        >,
+    },
+    /// Accepts exact canonical/storage no-dispatch handoff before replying.
+    TransferRefusedNativeFilesystemProducer {
+        /// Actual original allocation, not a same-label replacement.
+        producer: crate::runtime::native_filesystem::NativeFilesystemProducer,
+        /// Actual checked original storage/no-save gate.
+        storage: crate::runtime::native_filesystem::NativeFilesystemArchiveSettlement,
+        /// Cached historical acceptance, distinct from worker-joined transfer.
+        reply: oneshot::Sender<
+            Result<Option<crate::runtime::native_filesystem::NativeFilesystemRefusalTransfer>>,
+        >,
+    },
     /// Commits exact source/observed-producer transfer before replying.
     TransferNativeFilesystemProducer {
         /// Original root allocation, never a reconstructed equal attempt owner.
@@ -1697,6 +1717,8 @@ impl AsyncRuntimeRequest {
             | Self::ClaimNativeShellAction { .. }
             | Self::RecoverNativeFilesystemProducers { .. }
             | Self::ClaimNativeFilesystemProducer { .. }
+            | Self::RefuseNativeFilesystemProducer { .. }
+            | Self::TransferRefusedNativeFilesystemProducer { .. }
             | Self::TransferNativeFilesystemProducer { .. }
             | Self::ObserveNativeFilesystemArchiveStorage { .. }
             | Self::ValidateNativeFilesystemArchiveSettlement { .. }

@@ -16,9 +16,11 @@ use crate::runtime::processes::native_patch::worker::NativePatchWorkerOutcome;
 use std::sync::Arc;
 
 mod archive;
+mod refusal;
 mod storage;
 mod transfer;
 pub(crate) use archive::NativeFilesystemArchiveAcceptance;
+pub(crate) use refusal::NativeFilesystemRefusalTransfer;
 pub(crate) use storage::NativeFilesystemArchiveSettlement;
 pub(crate) use transfer::NativeFilesystemTransfer;
 mod audit;
@@ -92,7 +94,7 @@ pub(super) struct FilesystemCompletionReceipt {
     /// Frozen canonical attribution shared with common group accounting.
     owner: ExternalCompletionOwner,
     /// Opaque actual actor allocation, checked independently of tuple labels.
-    attempt: NativeFilesystemAttempt,
+    pub(super) attempt: NativeFilesystemAttempt,
     /// Exact immutable admitted metadata until remaining transfer gates finish.
     work: Arc<NativeFilesystemWork>,
     /// Original raw result until canonical execution has accepted its facts.

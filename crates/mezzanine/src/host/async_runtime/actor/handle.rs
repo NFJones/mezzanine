@@ -1127,6 +1127,33 @@ impl AsyncRuntimeSessionHandle {
             .await?
     }
 
+    /// Captures only actual original queued refusal, never worker/join evidence.
+    pub(crate) async fn refuse_native_filesystem_producer(
+        &self,
+        producer: crate::runtime::native_filesystem::NativeFilesystemProducer,
+    ) -> Result<Option<crate::runtime::native_filesystem::NativeFilesystemRefusal>> {
+        self.request(
+            |reply| AsyncRuntimeRequest::RefuseNativeFilesystemProducer { producer, reply },
+        )
+        .await?
+    }
+
+    /// Accepts original no-dispatch canonical/storage handoff before reply.
+    pub(crate) async fn transfer_refused_native_filesystem_producer(
+        &self,
+        producer: crate::runtime::native_filesystem::NativeFilesystemProducer,
+        storage: crate::runtime::native_filesystem::NativeFilesystemArchiveSettlement,
+    ) -> Result<Option<crate::runtime::native_filesystem::NativeFilesystemRefusalTransfer>> {
+        self.request(
+            |reply| AsyncRuntimeRequest::TransferRefusedNativeFilesystemProducer {
+                producer,
+                storage,
+                reply,
+            },
+        )
+        .await?
+    }
+
     /// Transfers the exact registered joined producer under current original
     /// storage. The actor retains its opaque acknowledgement before replying.
     pub(crate) async fn transfer_native_filesystem_producer(

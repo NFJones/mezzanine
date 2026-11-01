@@ -12796,6 +12796,28 @@ transfer or cause it to execute again. Root removal MUST match this exact
 acknowledgement; transferring one action MUST leave unrelated sibling, group,
 provider continuation and failure gates intact.
 
+An original queued or rejected filesystem source MAY settle without dispatch
+only with positive no-dispatch provenance from its exact enrolled producer:
+admission closed, claim reservation settled, execution actually unstarted and
+no admitted work, dispatch, commit or confirmation. A missing worker, closed flag
+or cancelled fence alone MUST NOT certify this state. The semantic result MUST
+record `dispatch_state=not_dispatched`, unexecuted certainty and cancellation
+or the original recorded rejection. It MUST NOT fabricate a native worker join,
+shell output, exit status, signal or confirmed file effect. An actual actor
+rejection MAY be contained as an action failure; transport/shared failures and
+issued-source invariant failures MUST remain independently reportable.
+
+Refusal MUST retain the original canonical/context, non-executable completion
+hooks, audit, publication and checked-storage obligations. Required failures
+MUST retain the first cause and source, including after canonical projection
+releases its raw buffer. Repeated settlement polls MUST NOT re-enter facts or
+required gates. Only a distinct actor-issued refusal acknowledgement, cached
+before removing actor or root custody, MAY release this unissued owner. It MUST
+match the original producer, proof and fresh original storage acceptance;
+joined-producer transfer MUST NOT accept it. Lost replies MUST recover the same
+historical acknowledgement without replay, rebasing onto later execution or
+strongly retaining the source enrollment cell.
+
 The provider root MUST register filesystem producer custody before releasing
 its first claim poll. That registration MUST retain the same actual allocation
 in the original queued source, before any claim RPC can issue dispatch. Recovery

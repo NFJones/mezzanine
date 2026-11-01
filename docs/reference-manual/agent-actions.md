@@ -158,6 +158,13 @@ requires an exact acknowledgement of its original source and observed worker
 join. The acknowledgement survives a lost reply without repeating the file
 change; it cannot release another producer or an unfinished sibling action.
 
+For a filesystem source cancelled or rejected before dispatch, settlement uses
+a separate proof that the original producer never admitted native work. It
+records an unexecuted cancellation or the original rejection and still requires
+canonical history and original storage acceptance. It does not report a worker
+join. Repeated polls and lost replies preserve the same result; a required
+settlement failure retains ownership and its first error.
+
 Denied approvals and user cancellations are not automatically retried.
 Mezzanine may let the agent correct invalid arguments or other recoverable
 errors, but recovery does not authorize it to bypass your decision.

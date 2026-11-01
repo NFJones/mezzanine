@@ -53,6 +53,30 @@ pub(super) fn action_result(
     Ok(result)
 }
 
+/// Projects only the separate positive no-dispatch proof. Empty semantic data
+/// does not imply native join; cancellation/rejection remains original provenance.
+pub(super) fn refusal_result(
+    work: &NativeFilesystemWork,
+    refusal: &crate::runtime::processes::native_filesystem_producer::NativeFilesystemRefusal,
+) -> Result<ActionResult> {
+    let mut result = action_result(work, refusal.outcome())?;
+    result.status = if refusal.cancelled() {
+        ActionStatus::Cancelled
+    } else {
+        ActionStatus::Failed
+    };
+    let text = result
+        .structured_content_json
+        .as_deref()
+        .ok_or_else(|| MezError::invalid_state("filesystem refusal metadata absent"))?;
+    let mut metadata: serde_json::Value = serde_json::from_str(text)
+        .map_err(|_| MezError::invalid_state("filesystem refusal metadata invalid"))?;
+    metadata["dispatch_state"] = serde_json::json!("not_dispatched");
+    metadata["refusal_error_kind"] = serde_json::json!(format!("{:?}", refusal.cause().kind()));
+    result.structured_content_json = Some(metadata.to_string());
+    Ok(result)
+}
+
 /// Encodes only original semantic identity and validated outcome summary for
 /// completion matching. Shell command, exit-code, stdout and diff fields are
 /// deliberately absent; this payload can never authorize or execute a hook.
@@ -71,7 +95,7 @@ pub(super) fn completed_hook_payload(
         "semantic_action_type": work.owner.action.action_type(),
         "execution_target": "native_runtime", "sent_to_pane": false,
         "policy_descriptor": work.identity.operation.policy_descriptor(),
-        "action_status": if status == ActionStatus::Succeeded { "succeeded" } else { "failed" },
+        "action_status": match status { ActionStatus::Succeeded => "succeeded", ActionStatus::Cancelled => "cancelled", _ => "failed" },
         "effect_certainty": certainty_name(raw.result.certainty),
         "confirmed_endpoint_count": raw.receipts.len(),
         "completed_operation_count": raw.completed_operations.len(),

@@ -5,7 +5,7 @@
 //! canonical/storage transfer until its exact acknowledgement exists. Retirement
 //! closes queued admission before joining actual workers, and map removal requires
 //! that original acknowledgement. Pending source/storage and unissued refusal
-//! ownership remain explicit errors with custody retained, never fabricated joins.
+//! ownership require positive canonical/storage acceptance, never fabricated joins.
 //! Writer failure is accepted only from its observed actual join: native work
 //! still joins, and pending original source remains recoverable without replay.
 
@@ -127,7 +127,12 @@ impl FilesystemRootOwner {
             .0
             .producer
             .transfer_acknowledgement()?
-            .is_some_and(|ack| ack.acknowledges(&self.0.producer)))
+            .is_some_and(|ack| ack.acknowledges(&self.0.producer))
+            || self
+                .0
+                .producer
+                .refusal_acknowledgement()?
+                .is_some_and(|ack| ack.acknowledges(&self.0.producer)))
     }
     /// Installs one actual recovery handle before yielding. Concurrent sibling
     /// recoveries can project original facts needed by ordered publication.
@@ -263,8 +268,22 @@ async fn monitor(
             }
             break;
         }
-        if claim_and_start_native_filesystem_producer(handle.clone(), &producer).await? {
-            break;
+        match claim_and_start_native_filesystem_producer(handle.clone(), &producer).await {
+            Ok(true) => break,
+            Ok(false) => {}
+            Err(error) => {
+                producer.close()?;
+                // Only an actual actor-recorded rejection is an action refusal.
+                // Transport/shared failures and issued sources keep their error.
+                if handle
+                    .refuse_native_filesystem_producer(producer.clone())
+                    .await
+                    .is_ok_and(|proof| proof.is_some_and(|proof| !proof.cancelled()))
+                {
+                    return Ok(None);
+                }
+                return Err(error);
+            }
         }
         if producer.is_closed()? {
             return Ok(None);
@@ -302,14 +321,16 @@ async fn retire_filesystem_owner_with_dependencies(
     producer: &NativeFilesystemProducer,
     persistence: Option<&worker_ownership::PersistenceDependencies>,
 ) -> Result<()> {
-    if producer.retire().await?.is_none() {
-        return Err(MezError::invalid_state(
-            "filesystem root retains unissued source awaiting canonical refusal handoff",
-        ));
-    }
+    let unissued = producer.retire().await?.is_none();
     loop {
-        let accepted = crate::host::async_runtime::native_filesystem::transfer_joined_native_filesystem_producer(handle, producer).await?;
-        if accepted.is_some_and(|ack| ack.acknowledges(producer)) {
+        let acknowledged = if unissued {
+            crate::host::async_runtime::native_filesystem::transfer_refused_native_filesystem_producer(handle, producer).await?
+                .is_some_and(|ack| ack.acknowledges(producer))
+        } else {
+            crate::host::async_runtime::native_filesystem::transfer_joined_native_filesystem_producer(handle, producer).await?
+                .is_some_and(|ack| ack.acknowledges(producer))
+        };
+        if acknowledged {
             break;
         }
         if let Some(persistence) = persistence {

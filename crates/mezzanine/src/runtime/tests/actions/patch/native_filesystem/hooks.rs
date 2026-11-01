@@ -9,7 +9,7 @@ use crate::integrations::hooks::{HookDefinition, HookInvocation, HookOnFailure};
 
 /// Installs one program or focused-shell guard without replacing source epochs,
 /// path grants or the original turn. The effect adapter exposes queued launches.
-fn install_guard(fixture: &mut Fixture, required: bool, focused: bool) {
+pub(super) fn install_guard(fixture: &mut Fixture, required: bool, focused: bool) {
     fixture.service.use_hook_effect_adapter();
     fixture
         .service

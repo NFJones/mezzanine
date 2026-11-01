@@ -3137,6 +3137,33 @@ impl AsyncRuntimeSessionActor {
                 let _ = reply.send(result);
                 false
             }
+            AsyncRuntimeRequest::RefuseNativeFilesystemProducer { producer, reply } => {
+                let result = self.service.refuse_native_filesystem_producer(&producer);
+                self.settle_source_offer(super::SourceDispatch::Filesystem(
+                    crate::runtime::RuntimeNativeFilesystemOffer::new(producer.attempt().clone()),
+                ));
+                self.dispatch_bookkeeping_candidates();
+                let _ = reply.send(result);
+                self.notify_event_delivery();
+                false
+            }
+            AsyncRuntimeRequest::TransferRefusedNativeFilesystemProducer {
+                producer,
+                storage,
+                reply,
+            } => {
+                let previous_sources = self.ready_dispatch_sources();
+                let result = self
+                    .service
+                    .transfer_refused_native_filesystem_producer(&producer, &storage);
+                self.dispatch_bookkeeping_candidates();
+                if result.as_ref().is_ok_and(|accepted| accepted.is_some()) {
+                    self.queue_newly_ready_dispatch_sources(previous_sources);
+                }
+                let _ = reply.send(result);
+                self.notify_event_delivery();
+                false
+            }
             AsyncRuntimeRequest::TransferNativeFilesystemProducer {
                 producer,
                 storage,

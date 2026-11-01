@@ -217,6 +217,8 @@ enum Phase {
     Issued,
     Rejected,
     Retained,
+    /// Positive unissued source, never native dispatch or joined execution.
+    RefusalRetained,
 }
 
 /// One bounded actual owner with its original observed result, if available.
@@ -231,6 +233,8 @@ struct Attempt {
     scopes: Option<PathScopes>,
     /// Original immutable result; retries never clone or replay its effects.
     outcome: Option<Arc<NativePatchWorkerOutcome>>,
+    /// Actual original producer's immutable no-dispatch proof.
+    refusal: Option<crate::runtime::processes::native_filesystem_producer::NativeFilesystemRefusal>,
     /// Shared producer registration survives lost claim replies and monitors.
     enrollment: Arc<NativeFilesystemEnrollment>,
     /// Issued endpoint admissions are never replayed after delivery uncertainty.
@@ -340,6 +344,7 @@ impl NativeFilesystemActions {
                 phase: Phase::Queued,
                 scopes: None,
                 outcome: None,
+                refusal: None,
                 enrollment,
                 commits: BTreeSet::new(),
                 failure: None,
@@ -720,8 +725,113 @@ impl NativeFilesystemActions {
         Ok(())
     }
 
-    /// Transfers metadata only when no producer was ever admitted. Issued or
-    /// retained outcomes cannot be freed using a cancellation observation alone.
+    /// Validates original queued/rejected source without creating dispatch rights.
+    pub(in crate::runtime::agent) fn unissued_source(
+        &self,
+        token: &NativeFilesystemAttempt,
+        producer: &NativeFilesystemProducer,
+    ) -> Result<(Arc<NativeFilesystemWork>, Option<MezError>)> {
+        let entry = self
+            .get(token)
+            .ok_or_else(|| MezError::conflict("filesystem refusal source unavailable"))?;
+        if !matches!(entry.phase, Phase::Queued | Phase::Rejected)
+            || entry.scopes.is_some()
+            || !entry.commits.is_empty()
+            || entry.outcome.is_some()
+            || !entry
+                .producer()
+                .is_some_and(|original| original.same(producer))
+        {
+            return Err(MezError::conflict(
+                "filesystem refusal is not the original unissued producer",
+            ));
+        }
+        Ok((entry.work.clone(), entry.failure.as_deref().cloned()))
+    }
+
+    /// Retains positive original no-dispatch facts independently of worker joins.
+    pub(in crate::runtime::agent) fn retain_refusal(
+        &mut self,
+        token: &NativeFilesystemAttempt,
+        refusal: crate::runtime::processes::native_filesystem_producer::NativeFilesystemRefusal,
+    ) -> Result<()> {
+        let entry = self
+            .get_mut(token)
+            .ok_or_else(|| MezError::conflict("filesystem refusal source unavailable"))?;
+        if let Some(original) = &entry.refusal {
+            return if original.same(&refusal) {
+                Ok(())
+            } else {
+                Err(MezError::conflict("filesystem refusal proof changed"))
+            };
+        }
+        if !matches!(entry.phase, Phase::Queued | Phase::Rejected)
+            || !Arc::ptr_eq(&entry.work, refusal.work())
+            || !entry
+                .producer()
+                .is_some_and(|producer| refusal.belongs_to(&producer))
+            || !entry.commits.is_empty()
+            || entry.scopes.is_some()
+            || entry.outcome.is_some()
+        {
+            return Err(MezError::conflict(
+                "filesystem refusal original source changed",
+            ));
+        }
+        entry.fence.cancel();
+        entry.outcome = Some(refusal.outcome().clone());
+        entry.refusal = Some(refusal);
+        entry.phase = Phase::RefusalRetained;
+        Ok(())
+    }
+
+    /// Returns only actual retained no-dispatch provenance.
+    pub(in crate::runtime::agent) fn refusal(
+        &self,
+        token: &NativeFilesystemAttempt,
+    ) -> Option<crate::runtime::processes::native_filesystem_producer::NativeFilesystemRefusal>
+    {
+        self.get(token).and_then(|entry| entry.refusal.clone())
+    }
+
+    /// Removes only exact refused source after its opaque acknowledgement is stored.
+    pub(in crate::runtime::agent) fn transfer_refused(
+        &mut self,
+        token: &NativeFilesystemAttempt,
+        producer: &NativeFilesystemProducer,
+        refusal: &crate::runtime::processes::native_filesystem_producer::NativeFilesystemRefusal,
+        retain_ack: impl FnOnce() -> Result<()>,
+    ) -> Result<()> {
+        let entry = self
+            .get(token)
+            .ok_or_else(|| MezError::conflict("filesystem refusal source unavailable"))?;
+        if entry.phase != Phase::RefusalRetained
+            || !Arc::ptr_eq(&entry.work, refusal.work())
+            || !entry
+                .refusal
+                .as_ref()
+                .is_some_and(|original| original.same(refusal))
+            || !entry
+                .outcome
+                .as_ref()
+                .is_some_and(|raw| Arc::ptr_eq(raw, refusal.outcome()))
+            || !entry
+                .producer()
+                .is_some_and(|original| original.same(producer))
+            || !refusal.belongs_to(producer)
+            || !entry.commits.is_empty()
+        {
+            return Err(MezError::conflict(
+                "filesystem refusal handoff original source changed",
+            ));
+        }
+        retain_ack()?;
+        self.attempts.remove(&token.sequence);
+        Ok(())
+    }
+
+    /// Transfers metadata only before any producer enrollment. Registered root
+    /// custody requires exact joined or refusal acceptance, never queue removal.
     pub(super) fn take_unissued(
         &mut self,
         token: &NativeFilesystemAttempt,
@@ -729,7 +839,7 @@ impl NativeFilesystemActions {
         let entry = self
             .get(token)
             .ok_or_else(|| MezError::conflict("native filesystem attempt owner unavailable"))?;
-        if !matches!(entry.phase, Phase::Queued | Phase::Rejected) {
+        if !matches!(entry.phase, Phase::Queued | Phase::Rejected) || entry.producer().is_some() {
             return Err(MezError::conflict(
                 "native filesystem producer outcome still requires settlement",
             ));

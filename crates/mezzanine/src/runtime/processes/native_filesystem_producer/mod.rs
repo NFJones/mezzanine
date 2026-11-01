@@ -24,10 +24,12 @@ use crate::runtime::processes::native_patch::worker::NativePatchWorkerOutcome;
 mod archive;
 mod execution;
 mod progress;
+mod refusal;
 use execution::Execution;
 pub(crate) use progress::{
     NativeFilesystemProgress, NativeFilesystemProgressRecorder, endpoint_progress,
 };
+pub(crate) use refusal::NativeFilesystemRefusal;
 
 /// Short request-local admission state; no asynchronous wait holds this lock.
 struct Admission {
@@ -61,6 +63,10 @@ struct Inner {
     identity: NativeFilesystemProducerIdentity,
     /// One completed original handoff survives lost replies, without self-custody.
     transfer: Mutex<Option<crate::runtime::agent::NativeFilesystemTransfer>>,
+    /// Positive no-dispatch data, never stored as an execution join.
+    refusal: Mutex<Option<NativeFilesystemRefusal>>,
+    /// Exact no-dispatch canonical/storage handoff, separate from joined transfer.
+    refusal_transfer: Mutex<Option<crate::runtime::agent::NativeFilesystemRefusalTransfer>>,
     /// Exact opaque actor attempt whose work may be installed once.
     attempt: NativeFilesystemAttempt,
     /// Bounded synchronous claim/start/close transition owner.
@@ -155,6 +161,8 @@ impl NativeFilesystemProducer {
         Self(Arc::new(Inner {
             identity: NativeFilesystemProducerIdentity(Arc::new(())),
             transfer: Mutex::new(None),
+            refusal: Mutex::new(None),
+            refusal_transfer: Mutex::new(None),
             attempt: attempt.non_owning(),
             admission: Mutex::new(Admission {
                 closed: false,
@@ -176,6 +184,12 @@ impl NativeFilesystemProducer {
     pub(crate) fn register_root(&self) -> Result<()> {
         if self
             .transfer_acknowledgement()?
+            .is_some_and(|ack| ack.belongs_to(self))
+        {
+            return Ok(());
+        }
+        if self
+            .refusal_acknowledgement()?
             .is_some_and(|ack| ack.belongs_to(self))
         {
             return Ok(());

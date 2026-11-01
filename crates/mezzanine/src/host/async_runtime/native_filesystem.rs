@@ -146,6 +146,17 @@ pub(crate) async fn seal_joined_native_filesystem_archive(
     let Some(source) = prepare_joined_native_filesystem_archive(handle, producer).await? else {
         return Ok(None);
     };
+    seal_prepared_native_filesystem_archive(handle, producer, source).await
+}
+
+/// Uses the same actual storage-worker owner for joined and refused sources.
+/// Source provenance is established separately; no semantic empty result can
+/// substitute for checked original physical prefix/no-save acceptance.
+async fn seal_prepared_native_filesystem_archive(
+    handle: &AsyncRuntimeSessionHandle,
+    producer: &NativeFilesystemProducer,
+    source: crate::runtime::native_filesystem::NativeFilesystemArchiveAcceptance,
+) -> Result<Option<crate::runtime::native_filesystem::NativeFilesystemArchiveSettlement>> {
     if let Some(receipt) = producer.register_archive_worker(&source)?
         && let Err(error) = receipt.recheck().await
     {
@@ -170,6 +181,59 @@ pub(crate) async fn seal_joined_native_filesystem_archive(
         return Ok(None);
     }
     Ok(Some(settlement))
+}
+
+/// Settles positive original no-dispatch source without observing a fake worker
+/// join. Actual canonical/context/required storage gates remain independently
+/// enforced and lost replies recover the same historical refusal acknowledgement.
+pub(crate) async fn transfer_refused_native_filesystem_producer(
+    handle: &AsyncRuntimeSessionHandle,
+    producer: &NativeFilesystemProducer,
+) -> Result<Option<crate::runtime::native_filesystem::NativeFilesystemRefusalTransfer>> {
+    if let Some(accepted) = producer.refusal_acknowledgement()? {
+        return Ok(accepted.acknowledges(producer).then_some(accepted));
+    }
+    if let Some((source, receipt)) = producer.archive_worker()?
+        && let Err(error) = receipt.observe().await
+    {
+        return match handle
+            .observe_native_filesystem_archive_storage(source)
+            .await
+        {
+            Err(original) => Err(original),
+            _ => Err(error),
+        };
+    }
+    if handle
+        .refuse_native_filesystem_producer(producer.clone())
+        .await?
+        .is_none()
+    {
+        return Ok(None);
+    }
+    handle
+        .project_native_filesystem_completion(producer.attempt().clone())
+        .await?;
+    let Some(source) = handle
+        .prepare_native_filesystem_archive(producer.attempt().clone())
+        .await?
+    else {
+        return Ok(None);
+    };
+    if !handle
+        .validate_native_filesystem_archive(source.clone())
+        .await?
+    {
+        return Ok(None);
+    }
+    let Some(storage) = seal_prepared_native_filesystem_archive(handle, producer, source).await?
+    else {
+        return Ok(None);
+    };
+    let accepted = handle
+        .transfer_refused_native_filesystem_producer(producer.clone(), storage)
+        .await?;
+    Ok(accepted.filter(|ack| ack.acknowledges(producer)))
 }
 
 /// Starts a claimed producer once, retaining its actual blocking handle first.

@@ -28,3 +28,7 @@ pub(crate) use super::agent::NativeFilesystemArchiveSettlement;
 
 /// Exact historical source and observed-producer transfer acknowledgement.
 pub(crate) use super::agent::NativeFilesystemTransfer;
+
+/// Positive no-dispatch source and distinct original canonical/storage handoff.
+pub(crate) use super::agent::NativeFilesystemRefusalTransfer;
+pub(crate) use super::processes::native_filesystem_producer::NativeFilesystemRefusal;

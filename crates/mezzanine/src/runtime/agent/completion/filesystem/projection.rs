@@ -95,13 +95,21 @@ impl RuntimeSessionService {
         let raw = receipt.raw.as_ref().map(Arc::clone).ok_or_else(|| {
             MezError::invalid_state("filesystem projection lost original raw evidence")
         })?;
+        let refusal = self
+            .agent
+            .native_filesystem_actions
+            .refusal(&receipt.attempt);
         // Recover dropped/coalesced notifications while the original result is
         // still running. Display failure cannot invalidate committed effects.
         if let Some(producer) = self.retained_native_filesystem_producer(&receipt.attempt) {
             producer.validate_confirmed_outcome(&raw)?;
-            let progress = producer
-                .progress_snapshot()
-                .and_then(|delivery| self.apply_native_filesystem_progress(&delivery));
+            let progress = if refusal.is_none() {
+                producer
+                    .progress_snapshot()
+                    .and_then(|delivery| self.apply_native_filesystem_progress(&delivery))
+            } else {
+                Ok(false)
+            };
             if let Err(error) = progress
                 && let Some(receipt) = self.agent.completion_settlements.filesystem.get_mut(key)
             {
@@ -111,7 +119,11 @@ impl RuntimeSessionService {
             }
         }
         self.filesystem_completion_phase(key, FilesystemCompletionPhase::Projection)?;
-        let result = result::action_result(&work, &raw)?;
+        let result = if let Some(refusal) = &refusal {
+            result::refusal_result(&work, refusal)?
+        } else {
+            result::action_result(&work, &raw)?
+        };
         let publication = FilesystemPublicationSource::capture(&work, &raw, &result)?;
         self.agent
             .completion_settlements

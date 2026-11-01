@@ -209,7 +209,8 @@ mod child_failures;
 mod cleanup_ownership;
 mod completion;
 pub(crate) use completion::{
-    NativeFilesystemArchiveAcceptance, NativeFilesystemArchiveSettlement, NativeFilesystemTransfer,
+    NativeFilesystemArchiveAcceptance, NativeFilesystemArchiveSettlement,
+    NativeFilesystemRefusalTransfer, NativeFilesystemTransfer,
 };
 #[allow(
     dead_code,
