@@ -13,6 +13,7 @@ pub(crate) mod capability;
 mod identity;
 mod instructions;
 mod native_context;
+pub(crate) mod native_io;
 pub(crate) use instructions::read_scoped_instruction_file;
 mod resolution;
 

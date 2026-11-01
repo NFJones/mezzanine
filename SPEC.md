@@ -12695,6 +12695,11 @@ original payload/group/context and the original deadline while capacity is busy;
 an actual owner transfer wakes eligible waiters without renewing their budget or
 falling back to a changed pane transport. Acknowledged
 cancellation MUST fence future commits; a started syscall may remain in flight.
+Descriptor reads, staged writes, byte hashing and staged-byte verification MUST
+return to the original action fence between at most 64 KiB of byte processing;
+capability recapture MUST retain that fence without renewing its budget. A final
+checkpoint MUST precede rename/unlink, and a successful committing syscall MUST
+reach positive receipt retention without an intervening fallible checkpoint.
 Dropping a blocking worker or reaching a deadline MUST NOT prove nonexecution.
 Results MUST retain confirmed partial effects and identify in-flight or unknown
 effects without replay. Native results MUST report `native_runtime` and

@@ -516,6 +516,8 @@ native_shell_timeout_ms = 600000
 # executes commands through the pane shell. Native apply_patch uses an in-process
 # filesystem worker with runtime capabilities and a 30-second budget capped by
 # the turn deadline; it does not use native_shell_timeout_ms or an OS launcher.
+# File I/O checks that original budget between 64 KiB chunks; blocked OS calls
+# remain cooperative and cannot be interrupted by this setting.
 shell_mode = "native"
 # Default bounded iteration count used by /loop.
 loop_limit = 8

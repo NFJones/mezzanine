@@ -14,11 +14,8 @@
 
 use std::ffi::OsString;
 use std::fs::File;
-use std::io::{Read, Write};
 use std::path::Path;
 use std::sync::Arc;
-
-use sha2::{Digest, Sha256};
 
 use mez_agent::permissions::{PathResolutionStatus, PathScopes};
 use mez_mux::process::{
@@ -29,6 +26,7 @@ use rustix::fs::{
     unlinkat,
 };
 
+use super::native_io::NativeIoControl;
 use super::resolution::{PhysicalPath, resolve_physical, same_object};
 use crate::error::{MezError, Result};
 
@@ -259,6 +257,8 @@ pub(crate) struct NativeFileCapability {
     scopes: PathScopes,
     /// True when capture authorized mutation as well as snapshot reading.
     writable: bool,
+    /// Original caller work budget/cancellation, retained through recapture.
+    control: NativeIoControl,
 }
 
 impl NativeFileCapability {
@@ -271,6 +271,26 @@ impl NativeFileCapability {
         requested: &str,
         writable: bool,
     ) -> Result<Self> {
+        Self::capture_with_io_control(
+            root,
+            scopes,
+            requested,
+            writable,
+            NativeIoControl::bounded_only(),
+        )
+    }
+
+    /// Captures under an explicit original cancellation/deadline dependency.
+    /// Every later read, stage, verification and recapture retains this control;
+    /// it cannot grant access or renew an action budget.
+    pub(crate) fn capture_with_io_control(
+        root: &NativeFilesystemRoot,
+        scopes: &PathScopes,
+        requested: &str,
+        writable: bool,
+        control: NativeIoControl,
+    ) -> Result<Self> {
+        control.check()?;
         root.revalidate()?;
         let physical = resolve_physical(root.cwd(), requested)?;
         authorize(scopes, root.cwd(), &physical.path, writable)?;
@@ -285,7 +305,7 @@ impl NativeFileCapability {
                     "native file capability requires a regular file",
                 ));
             }
-            let (bytes, file) = read_exact_preimage(&physical)?;
+            let (bytes, file) = read_exact_preimage(&physical, &control)?;
             (Some(bytes), Some(file))
         } else {
             (None, None)
@@ -299,6 +319,7 @@ impl NativeFileCapability {
             original_file,
             scopes: scopes.clone(),
             writable,
+            control,
         })
     }
 
@@ -332,7 +353,13 @@ impl NativeFileCapability {
         authorize(&self.scopes, root.cwd(), self.path(), true)?;
         revalidate_ancestry(&self.physical)?;
         checkpoint()?;
-        let next = Self::capture(root, current_scopes, &self.requested, true)?;
+        let next = Self::capture_with_io_control(
+            root,
+            current_scopes,
+            &self.requested,
+            true,
+            self.control.clone(),
+        )?;
         if next.preimage.is_some() || next.path() != self.path() || next.physical.missing.len() != 1
         {
             return Err(MezError::conflict(
@@ -369,7 +396,12 @@ impl NativeFileCapability {
             ));
         }
         checkpoint()?;
-        let next = stage.capture_published_target(root, current_scopes, &self.requested)?;
+        let next = stage.capture_published_target(
+            root,
+            current_scopes,
+            &self.requested,
+            self.control.clone(),
+        )?;
         self.validate_recaptured_ancestry(&next)?;
         Ok(next)
     }
@@ -417,6 +449,7 @@ impl NativeFileCapability {
         root: &NativeFilesystemRoot,
         current_scopes: &PathScopes,
     ) -> Result<()> {
+        self.control.check()?;
         root.revalidate()?;
         if self.preimage.is_some() != self.original_file.is_some() {
             return Err(MezError::invalid_state(
@@ -446,7 +479,7 @@ impl NativeFileCapability {
                     && current.stat.st_mode == self.physical.stat.st_mode
                     && current.stat.st_uid == self.physical.stat.st_uid
                     && current.stat.st_gid == self.physical.stat.st_gid
-                    && read_exact_preimage(&current)?.0 == *bytes =>
+                    && read_exact_preimage(&current, &self.control)?.0 == *bytes =>
             {
                 Ok(())
             }
@@ -519,6 +552,10 @@ impl NativeFileCapability {
             .ok_or_else(|| MezError::invalid_state("native capability lost parent"))?
             .file
             .try_clone()?;
+        // Hash before creating an entry: a rejected checkpoint must never leave
+        // an exclusive file without its already-constructed cleanup guard.
+        let digest = self.control.digest(bytes)?;
+        self.control.check()?;
         let name = OsString::from(format!(".mez-native-stage-{}", rand::random::<u128>()));
         let descriptor = openat(
             &parent,
@@ -533,7 +570,7 @@ impl NativeFileCapability {
             file: File::from(descriptor),
             published: false,
             target: self.path().to_path_buf(),
-            digest: Sha256::digest(bytes).into(),
+            digest,
             byte_length: bytes.len() as u64,
             safe_mode: if self.preimage.is_some() {
                 Mode::from_bits_truncate(self.physical.stat.st_mode & 0o777)
@@ -541,9 +578,12 @@ impl NativeFileCapability {
                 Mode::RUSR | Mode::WUSR
             },
         };
-        stage.file.write_all(bytes)?;
+        self.control.write_all(&mut stage.file, bytes)?;
+        self.control.check()?;
         rustix::fs::fchmod(&stage.file, stage.safe_mode).map_err(std::io::Error::from)?;
+        self.control.check()?;
         stage.file.sync_all()?;
+        self.control.check()?;
         Ok(stage)
     }
 
@@ -582,11 +622,14 @@ impl NativeFileCapability {
             ));
         }
         stage.verify_owned_entry()?;
-        stage.verify_bytes()?;
+        stage.verify_bytes(&self.control)?;
         let target = self
             .path()
             .file_name()
             .ok_or_else(|| MezError::invalid_state("native target lacks entry name"))?;
+        self.control.check()?;
+        // After a successful committing syscall, do not insert a fallible
+        // checkpoint before positive publication evidence reaches the worker.
         if self.preimage.is_none() {
             renameat_with(
                 &stage.parent,
@@ -626,6 +669,8 @@ impl NativeFileCapability {
             .path()
             .file_name()
             .ok_or_else(|| MezError::invalid_state("native target lacks entry name"))?;
+        self.control.check()?;
+        // The caller records successful deletion before any future checkpoint.
         unlinkat(parent, name, AtFlags::empty()).map_err(std::io::Error::from)?;
         Ok(())
     }
@@ -660,11 +705,18 @@ impl NativeStagedFile {
         root: &NativeFilesystemRoot,
         current_scopes: &PathScopes,
         requested: &str,
+        control: NativeIoControl,
     ) -> Result<NativeFileCapability> {
         if !self.published {
             return Err(MezError::conflict("native stage has not been published"));
         }
-        let capability = NativeFileCapability::capture(root, current_scopes, requested, true)?;
+        let capability = NativeFileCapability::capture_with_io_control(
+            root,
+            current_scopes,
+            requested,
+            true,
+            control.clone(),
+        )?;
         if capability.path() != self.target
             || !same_object(
                 &capability.physical.stat,
@@ -686,7 +738,7 @@ impl NativeStagedFile {
         ) {
             return Err(MezError::conflict("native published entry parent changed"));
         }
-        self.verify_bytes()?;
+        self.verify_bytes(&control)?;
         Ok(capability)
     }
 
@@ -711,8 +763,8 @@ impl NativeStagedFile {
         clippy::useless_conversion,
         reason = "Darwin Mode bits are u16 while MetadataExt mode is always u32"
     )]
-    fn verify_bytes(&self) -> Result<()> {
-        use std::os::unix::fs::FileExt;
+    fn verify_bytes(&self, control: &NativeIoControl) -> Result<()> {
+        control.check()?;
         use std::os::unix::fs::MetadataExt;
         let metadata = self.file.metadata()?;
         // Check before rename, independently of inode and bytes. Cleanup still
@@ -726,13 +778,12 @@ impl NativeStagedFile {
         if metadata.len() != self.byte_length {
             return Err(MezError::conflict("native staged byte length changed"));
         }
-        let mut bytes = vec![0; self.byte_length as usize];
-        self.file.read_exact_at(&mut bytes, 0)?;
-        let digest: [u8; 32] = Sha256::digest(&bytes).into();
-        if digest != self.digest {
-            return Err(MezError::conflict("native staged bytes changed"));
+        if self.byte_length > MAX_FILE_BYTES {
+            return Err(MezError::invalid_args(
+                "native staged verification exceeds byte budget",
+            ));
         }
-        Ok(())
+        control.verify_digest(&self.file, self.byte_length, &self.digest)
     }
 }
 
@@ -797,7 +848,11 @@ pub(super) fn revalidate_ancestry(physical: &PhysicalPath) -> Result<()> {
 /// Opens and reads only a positively identified regular file, bounded by bytes.
 /// Nonblocking protects against a special-node swap between metadata and open.
 /// Returns its held descriptor with the bytes so original identity stays pinned.
-fn read_exact_preimage(physical: &PhysicalPath) -> Result<(Vec<u8>, File)> {
+fn read_exact_preimage(
+    physical: &PhysicalPath,
+    control: &NativeIoControl,
+) -> Result<(Vec<u8>, File)> {
+    control.check()?;
     let parent = &physical
         .directories
         .last()
@@ -828,15 +883,7 @@ fn read_exact_preimage(physical: &PhysicalPath) -> Result<(Vec<u8>, File)> {
             "native snapshot exceeds byte budget",
         ));
     }
-    let mut bytes = Vec::new();
-    Read::by_ref(&mut file)
-        .take(MAX_FILE_BYTES + 1)
-        .read_to_end(&mut bytes)?;
-    if bytes.len() as u64 > MAX_FILE_BYTES {
-        return Err(MezError::invalid_args(
-            "native snapshot exceeded byte budget during read",
-        ));
-    }
+    let bytes = control.read_bounded(&mut file, MAX_FILE_BYTES)?;
     Ok((bytes, file))
 }
 
@@ -1056,5 +1103,134 @@ mod evidence_tests {
         child.wait().unwrap();
         assert!(root.is_ok());
         assert!(root.unwrap().revalidate().is_err());
+    }
+
+    /// Real private descriptor authority for controlled staging boundaries.
+    struct ControlledIoFixture {
+        /// Unique subtree, retained until all capabilities and stages are dropped.
+        directory: std::path::PathBuf,
+        /// Actual calling process lifetime and cwd evidence.
+        root: NativeFilesystemRoot,
+        /// Explicit grants covering only the fixture, not the repository.
+        scopes: PathScopes,
+    }
+    impl ControlledIoFixture {
+        /// Captures independent root identity and narrow physical path grants.
+        fn new() -> Self {
+            let directory =
+                std::env::temp_dir().join(format!("mez-controlled-io-{}", rand::random::<u128>()));
+            std::fs::create_dir(&directory).unwrap();
+            let directory = std::fs::canonicalize(directory).unwrap();
+            let root = NativeFilesystemRoot::capture(std::process::id()).unwrap();
+            let grant = directory.to_str().unwrap().to_string();
+            let scopes = super::super::host_resolved_path_scopes(
+                root.cwd(),
+                std::slice::from_ref(&grant),
+                std::slice::from_ref(&grant),
+                &[],
+            )
+            .unwrap();
+            Self {
+                directory,
+                root,
+                scopes,
+            }
+        }
+    }
+    impl Drop for ControlledIoFixture {
+        /// Removes only this fixture's subtree after descriptor owners retire.
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.directory);
+        }
+    }
+
+    /// Cancellation during an actual partial staged write must return through
+    /// the original control and remove the owned temporary entry. It must not
+    /// publish a partial target or strand a file created before its cleanup guard.
+    #[test]
+    fn controlled_staging_cancellation_cleans_owned_entry() {
+        use super::super::native_io::NATIVE_IO_QUANTUM;
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let fixture = ControlledIoFixture::new();
+        let directory = fixture.directory.clone();
+        let observed = Arc::new(AtomicBool::new(false));
+        let seen = observed.clone();
+        let control = NativeIoControl::new(move || {
+            for entry in std::fs::read_dir(&directory)? {
+                let entry = entry?;
+                if entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".mez-native-stage-")
+                    && entry.metadata()?.len() >= NATIVE_IO_QUANTUM as u64
+                {
+                    seen.store(true, Ordering::Relaxed);
+                    return Err(MezError::conflict("cancel during staged write"));
+                }
+            }
+            Ok(())
+        });
+        let target = fixture.directory.join("target");
+        let capability = NativeFileCapability::capture_with_io_control(
+            &fixture.root,
+            &fixture.scopes,
+            target.to_str().unwrap(),
+            true,
+            control,
+        )
+        .unwrap();
+        let error = capability
+            .stage(
+                &fixture.root,
+                &fixture.scopes,
+                &vec![b'x'; NATIVE_IO_QUANTUM * 3],
+            )
+            .err()
+            .unwrap();
+        assert!(error.message().contains("cancel during staged write"));
+        assert!(observed.load(Ordering::Relaxed));
+        assert!(!target.exists());
+        assert_eq!(std::fs::read_dir(&fixture.directory).unwrap().count(), 0);
+    }
+
+    /// A retained stage and exact original preimage cannot renew a revoked
+    /// work budget. Both publication and deletion must stop before their
+    /// committing syscall, and cleanup must still remove the unpublished stage.
+    #[test]
+    fn controlled_publication_and_deletion_reject_revoked_budget() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let fixture = ControlledIoFixture::new();
+        let target = fixture.directory.join("target");
+        std::fs::write(&target, b"original").unwrap();
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let flag = cancelled.clone();
+        let control = NativeIoControl::new(move || {
+            if flag.load(Ordering::Relaxed) {
+                Err(MezError::conflict("original I/O budget cancelled"))
+            } else {
+                Ok(())
+            }
+        });
+        let capability = NativeFileCapability::capture_with_io_control(
+            &fixture.root,
+            &fixture.scopes,
+            target.to_str().unwrap(),
+            true,
+            control,
+        )
+        .unwrap();
+        let mut stage = capability
+            .stage(&fixture.root, &fixture.scopes, b"replacement")
+            .unwrap();
+        cancelled.store(true, Ordering::Relaxed);
+        assert!(
+            capability
+                .publish(&fixture.root, &fixture.scopes, &mut stage)
+                .is_err()
+        );
+        assert!(capability.delete(&fixture.root, &fixture.scopes).is_err());
+        assert_eq!(std::fs::read(&target).unwrap(), b"original");
+        drop(stage);
+        assert_eq!(std::fs::read_dir(&fixture.directory).unwrap().count(), 1);
     }
 }

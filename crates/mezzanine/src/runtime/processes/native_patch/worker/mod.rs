@@ -6,9 +6,9 @@
 //! immutable initial scopes remain an upper bound. Actual runtime dispatch and
 //! retirement must retain this worker and its returned evidence; dropping a
 //! blocking task cannot certify unexecuted effects. Cancellation is checked
-//! between bounded operations, not an interruption guarantee for OS syscalls or
-//! the current pure matcher. Missing-parent creation is a separate integration
-//! step; existing-parent staging never silently creates broader directories.
+//! between bounded descriptor I/O quanta and operations, not an interruption
+//! guarantee for OS syscalls or the current pure matcher. Missing-parent creation
+//! is a separate integration step; existing-parent staging never silently creates broader directories.
 
 use std::collections::BTreeMap;
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -31,6 +31,7 @@ use crate::error::{MezError, Result};
 use crate::security::filesystem::capability::{
     NativeFileCapability, NativeFilesystemRoot, NativeStagedFile,
 };
+use crate::security::filesystem::native_io::NativeIoControl;
 
 /// Immutable action ownership and upper-bound filesystem authority.
 pub(crate) struct NativePatchWorkerRequest {
@@ -235,12 +236,20 @@ fn execute(
             "native patch semantic identity changed",
         ));
     }
+    let original_fence = request.fence.clone();
+    let io_control = NativeIoControl::new(move || original_fence.check());
     let mut owners = BTreeMap::new();
     let mut snapshots = BTreeMap::new();
     let mut snapshot_bytes = 0usize;
     for path in request.identity.operation.patch.touched_paths() {
         let scopes = authorize(request, authority, NativePatchPhase::Snapshot, &path)?;
-        let capability = NativeFileCapability::capture(&request.root, &scopes, &path, true)?;
+        let capability = NativeFileCapability::capture_with_io_control(
+            &request.root,
+            &scopes,
+            &path,
+            true,
+            io_control.clone(),
+        )?;
         snapshot_bytes =
             snapshot_bytes.saturating_add(capability.preimage().map_or(0, <[u8]>::len));
         if snapshot_bytes > NATIVE_PATCH_SNAPSHOT_BYTES {

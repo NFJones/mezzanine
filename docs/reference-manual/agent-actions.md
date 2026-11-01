@@ -140,6 +140,12 @@ original context, independently of action IDs and shell text. They are skipped
 without reapplying the mutation. Partial or unknown effects never permit replay.
 Use the actual action result and [sandbox status](../safety-and-trust/sandboxing.md).
 
+Native descriptor reads, staged writes and byte verification check the original
+action cancellation/deadline between 64 KiB chunks. An unpublished cancelled
+stage is cleaned up through its owned descriptor. These checks cannot interrupt
+a blocked filesystem syscall; a completed rename or deletion remains a confirmed
+effect even if cancellation arrives immediately afterwards.
+
 Native filesystem worker confirmations use the shared confirmed-mutation display
 path. The producer retains a cumulative prefix before best-effort notification;
 final projection reconciles it, and final publication omits exact already-promoted
