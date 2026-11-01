@@ -482,6 +482,17 @@ original caller. Qualified noncommit releases both request and delivery charges;
 positive completion publishes one receipt, and duplicate completion never sends
 again. Product lifecycle integration must explicitly settle this retained work.
 
+The private storage adapter encodes a complete acceptance record in64KiB chunks,
+with a version1 stage header and final commit marker binding its full size,
+chunk count and SHA256. It preflights all encoded rows and framing before writing;
+there is no new256KiB payload limit. The original store allocation, occurrence and
+starting generation form one retained plan. Partial writes remain unpublished;
+retry validates the actual dense prefix and bytes rather than repairing corrupt
+committed custody. This serialized plan must settle before later store work.
+Chunk rows count against the current private store row/encoded-byte limits; the
+full product envelope/obligation/cache and total physical quotas remain separate
+integration work. Current runtime acceptance remains in memory.
+
 Only a never-issued reservation or an exactly qualified noncommit can be called
 unaccepted. Ambiguous writes retain the same original for reconciliation. A lost
 worker result requires actual join evidence before a new attempt; generic errors

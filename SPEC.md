@@ -15476,6 +15476,16 @@ Positive duplicate adoption MUST return the original fact without reinserting
 mail after ordinary replay eviction. These lower contracts do not by themselves
 upgrade the current runtime's in-memory acceptance to crash-durable delivery.
 
+The private chunked acceptance projection MUST bind an original store allocation,
+occurrence and starting generation before writing. Its version1 stage header and
+final marker MUST bind the complete encoded size, chunk count and SHA256. Each
+chunk transaction MUST stay within existing store batch limits; incomplete stage
+rows MUST NOT qualify acceptance. Full encoded row/key/checksum/framing costs and
+generation headroom MUST fit before the first append. Retry MUST validate the
+actual dense immutable prefix and generation, without reconstructing missing or
+corrupt committed chunks. The original serialized-store plan MUST settle before
+later store work; this storage adapter alone does not enable durable ingress.
+
 The lower service's explicit actor-owned terminal maintenance MUST reserve one
 fixed-size disposition slot per accepted recipient before success. It records
 `expired` only after the original strict TTL boundary, or `recipient_retired`

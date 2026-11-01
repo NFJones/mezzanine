@@ -25,6 +25,8 @@ use sha2::{Digest, Sha256};
 
 use crate::error::{MezError, Result};
 
+pub(crate) mod acceptance;
+
 /// Version of this private row/receipt store, independent of message snapshots.
 const SCHEMA_VERSION: i64 = 1;
 /// Maximum records in one off-actor transaction.
