@@ -12735,6 +12735,23 @@ beyond the 64-component live display limit. Late progress MUST NOT duplicate a
 terminal action's selected final diff. None of these display acknowledgements
 MUST authorize mutation, group continuation or producer retirement.
 
+Retained native filesystem archive candidates MUST distinguish producer
+retention from actual checked-read and append-admission acceptance. The latter
+MUST use an opaque receipt shared with the exact live candidate claim; matching
+generations, snapshot bytes, paths/counts or worker success booleans MUST NOT
+mint it. Entered failures MUST preserve their first error and original payload.
+Historical rows with matching current-turn content but conflicting actor/pane
+attribution MUST NOT satisfy original completion facts. Intentional shared MCP
+catalog deduplication retains its conversation-wide semantics. New snapshots
+MUST obtain fresh checked acceptance; older accepted generations cannot attest
+late facts. Saved-source freshness checks MUST reproject original canonical
+source without I/O before accepting a cached witness; missing preparation
+notifications MUST NOT leave an old acceptance current. Original no-save policy MAY acknowledge absence of an archive
+obligation after forced retirement while preserving the group's first failure.
+Native actor archive preparation MUST NOT select inline persistence. Checked
+logical source/append ownership MUST NOT imply physical append, durability,
+worker join, continuation or producer retirement; those gates remain distinct.
+
 Forced completion archive projection MUST use the actual moved original
 execution/context and their captured imported-history boundary, accepted
 compaction witnesses/prior epoch and routed-parent policy. Later live-map values

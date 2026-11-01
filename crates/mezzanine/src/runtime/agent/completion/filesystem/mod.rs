@@ -15,6 +15,8 @@ use crate::runtime::agent::native_filesystem::{NativeFilesystemAttempt, NativeFi
 use crate::runtime::processes::native_patch::worker::NativePatchWorkerOutcome;
 use std::sync::Arc;
 
+mod archive;
+pub(crate) use archive::NativeFilesystemArchiveAcceptance;
 mod audit;
 use audit::FilesystemAuditObligation;
 mod hooks;
@@ -112,6 +114,8 @@ pub(super) struct FilesystemCompletionReceipt {
     publication_source: Option<Arc<FilesystemPublicationSource>>,
     /// Optional display-install failure never resets required-gate evidence.
     publication_failure: Option<Box<MezError>>,
+    /// Exact checked archive admission, never a producer-release receipt.
+    archive_source: Option<NativeFilesystemArchiveAcceptance>,
     /// Remaining final diff selected once after exact progress reconciliation.
     final_publication_diff: Option<String>,
     /// First required failure; duplicates never reset it or replay the gate.
@@ -289,6 +293,7 @@ impl RuntimeSessionService {
                 reject_audit_ack_for_tests: false,
                 publication_source: None,
                 publication_failure: None,
+                archive_source: None,
                 final_publication_diff: None,
                 failure: None,
             }),

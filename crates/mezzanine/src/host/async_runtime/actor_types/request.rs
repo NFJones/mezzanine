@@ -1085,6 +1085,22 @@ pub(in crate::host::async_runtime) enum AsyncRuntimeRequest {
         /// Acceptance only; sole dispatch custody never crosses this reply.
         reply: oneshot::Sender<Result<bool>>,
     },
+    /// Rechecks canonical source behind an opaque archive gate; no I/O/release.
+    ValidateNativeFilesystemArchive {
+        /// Actual original gate, never matching labels or a caller success bit.
+        acceptance: crate::runtime::native_filesystem::NativeFilesystemArchiveAcceptance,
+        /// Source freshness only; false leaves both original owners retained.
+        reply: oneshot::Sender<Result<bool>>,
+    },
+    /// Observes exact original checked archive admission; never releases custody.
+    PrepareNativeFilesystemArchive {
+        /// Original actor attempt, not turn/action labels reconstructed by caller.
+        attempt: crate::runtime::native_filesystem::NativeFilesystemAttempt,
+        /// Pending is None; opaque accepted source is distinct from physical I/O.
+        reply: oneshot::Sender<
+            Result<Option<crate::runtime::native_filesystem::NativeFilesystemArchiveAcceptance>>,
+        >,
+    },
     /// Best-effort cumulative post-commit display data; custody stays in producer.
     NativeFilesystemProgress {
         /// Opaque registered producer and original receipt allocations.
@@ -1643,6 +1659,8 @@ impl AsyncRuntimeRequest {
             | Self::ClaimApprovedExternalAction { .. }
             | Self::ClaimNativeShellAction { .. }
             | Self::ClaimNativeFilesystemProducer { .. }
+            | Self::ValidateNativeFilesystemArchive { .. }
+            | Self::PrepareNativeFilesystemArchive { .. }
             | Self::NativeFilesystemProgress { .. }
             | Self::NativeFilesystemScopes { .. }
             | Self::NativeFilesystemCommit { .. }

@@ -7,6 +7,7 @@
 use super::RuntimePersistenceComponent;
 use crate::error::{MezError, Result};
 use crate::runtime::RuntimeBookkeepingCandidate;
+use crate::runtime::agent::RuntimeCompletionCheckedSource;
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
 
@@ -35,12 +36,18 @@ pub(crate) struct RuntimeCompletionCandidateWitness {
     generation: u64,
     snapshot_id: String,
     persistence_key: (String, String),
+    /// Shared actual candidate boundary; labels alone cannot grant acceptance.
+    checked_source: RuntimeCompletionCheckedSource,
 }
 
 impl RuntimeCompletionCandidateWitness {
     /// Returns the generation actually owned by the existing candidate queue.
     pub(crate) fn generation(&self) -> u64 {
         self.generation
+    }
+    /// Returns this exact candidate's checked-admission receipt, not durability.
+    pub(crate) fn checked_source(&self) -> &RuntimeCompletionCheckedSource {
+        &self.checked_source
     }
     /// Returns the exact canonical evidence digest, not merely a turn identity.
     pub(crate) fn snapshot_id(&self) -> &str {
@@ -108,6 +115,11 @@ impl RuntimePersistenceComponent {
                     generation: existing.generation,
                     snapshot_id,
                     persistence_key: existing.persistence_key.clone(),
+                    checked_source: existing.checked_source.clone().ok_or_else(|| {
+                        MezError::invalid_state(
+                            "completion candidate lacks exact checked-source owner",
+                        )
+                    })?,
                 },
             ));
         }
@@ -128,10 +140,13 @@ impl RuntimePersistenceComponent {
             ));
         }
         candidate.generation = generation;
+        let checked_source = RuntimeCompletionCheckedSource::pending();
+        candidate.checked_source = Some(checked_source.clone());
         let witness = RuntimeCompletionCandidateWitness {
             generation,
             snapshot_id,
             persistence_key: candidate.persistence_key.clone(),
+            checked_source,
         };
         self.bookkeeping_candidates.push(candidate);
         self.next_bookkeeping_generation = generation;
@@ -145,6 +160,8 @@ impl RuntimePersistenceComponent {
     ) {
         self.next_bookkeeping_generation = self.next_bookkeeping_generation.saturating_add(1);
         candidate.generation = self.next_bookkeeping_generation;
+        // Legacy retention cannot import another generation's checked receipt.
+        candidate.checked_source = None;
         self.bookkeeping_candidates.push(candidate);
     }
 

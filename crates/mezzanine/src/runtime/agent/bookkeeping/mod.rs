@@ -17,7 +17,9 @@ use crate::storage::token_usage::new_token_usage_event_id;
 use crate::storage::transcript::ConversationTranscriptRead;
 use mez_agent::TranscriptContextEvent;
 
+mod checked_source;
 mod completion_archive;
+pub(crate) use checked_source::RuntimeCompletionCheckedSource;
 mod projection;
 use crate::runtime::persistence::RuntimeBookkeepingClaimIdentity;
 use completion_archive::RuntimeCompletionArchiveRead;
@@ -101,6 +103,8 @@ impl RuntimeBookkeepingTranscriptReadWork {
 #[derive(Clone)]
 pub(crate) struct RuntimeBookkeepingCandidate {
     pub(crate) generation: u64,
+    /// Actual retained-candidate receipt; not part of immutable source bytes.
+    pub(crate) checked_source: Option<RuntimeCompletionCheckedSource>,
     pub(crate) turn: AgentTurnRecord,
     /// Conversation evidence retained even if its pane is replaced or removed.
     pub(crate) read: RuntimeBookkeepingTranscriptReadWork,
@@ -262,6 +266,9 @@ impl RuntimeBookkeepingCandidateWork {
             return Err((**error).clone());
         }
         if self.read.frozen_completion {
+            if let Some(source) = &self.candidate.checked_source {
+                source.enter()?;
+            }
             return self
                 .completion_archive
                 .as_ref()
@@ -375,7 +382,8 @@ impl RuntimeSessionService {
             && owner.read == work.candidate.read
             && owner.persistence_key == work.candidate.persistence_key
             && owner.entries == work.candidate.entries
-            && owner.directory == work.candidate.directory;
+            && owner.directory == work.candidate.directory
+            && owner.checked_source == work.candidate.checked_source;
         let still_bound = !frozen
             && self
                 .agent_shell_store()
@@ -470,6 +478,11 @@ impl RuntimeSessionService {
             return self.block_bookkeeping_after_error(candidate, error);
         }
         if entries.is_empty() {
+            if let Some(source) = &candidate.checked_source
+                && let Err(error) = source.accept()
+            {
+                return self.block_bookkeeping_after_error(candidate, error);
+            }
             return Ok(true);
         }
         let store = candidate.read.store.clone();
@@ -519,6 +532,11 @@ impl RuntimeSessionService {
         {
             return self.block_bookkeeping_after_error(candidate, error);
         }
+        if let Some(source) = &candidate.checked_source
+            && let Err(error) = source.accept()
+        {
+            return self.block_bookkeeping_after_error(candidate, error);
+        }
         Ok(true)
     }
 
@@ -529,6 +547,9 @@ impl RuntimeSessionService {
         mut candidate: RuntimeBookkeepingCandidate,
         error: MezError,
     ) -> Result<bool> {
+        if let Some(source) = &candidate.checked_source {
+            source.fail(&error);
+        }
         let primary = candidate
             .failure
             .get_or_insert_with(|| Box::new(error))
@@ -560,15 +581,37 @@ impl RuntimeSessionService {
         mut next: crate::runtime::persistence::RuntimeTranscriptNextSequence,
     ) -> Result<Vec<TranscriptEntry>> {
         use crate::runtime::persistence::RuntimeTranscriptNextSequence;
-        let mut identities = existing
-            .iter()
-            .map(Self::runtime_transcript_entry_identity)
-            .collect::<std::collections::BTreeSet<_>>();
+        let mut identities = BTreeMap::<_, std::collections::BTreeSet<_>>::new();
+        for row in existing {
+            identities
+                .entry(Self::runtime_transcript_entry_identity(row))
+                .or_default()
+                .insert((
+                    row.conversation_id.clone(),
+                    row.agent_id.clone(),
+                    row.pane_id.clone(),
+                ));
+        }
         let mut result = Vec::new();
         for mut entry in entries {
-            if !identities.insert(Self::runtime_transcript_entry_identity(&entry)) {
+            let identity = Self::runtime_transcript_entry_identity(&entry);
+            let attribution = (
+                entry.conversation_id.clone(),
+                entry.agent_id.clone(),
+                entry.pane_id.clone(),
+            );
+            if let Some(owners) = identities.get(&identity) {
+                // MCP catalog snapshots intentionally share a conversation-wide
+                // identity across turns. Current execution/user facts do not:
+                // matching content cannot adopt another actual actor or pane.
+                if !identity.0.is_empty() && owners.iter().any(|owner| owner != &attribution) {
+                    return Err(MezError::conflict(
+                        "original completion row has conflicting actor attribution",
+                    ));
+                }
                 continue;
             }
+            identities.insert(identity, std::collections::BTreeSet::from([attribution]));
             let RuntimeTranscriptNextSequence::Next(sequence) = next else {
                 return Err(MezError::invalid_state(
                     "completion transcript sequence is exhausted or unknown",
@@ -759,6 +802,7 @@ impl RuntimeSessionService {
         )?;
         let candidate = RuntimeBookkeepingCandidate {
             generation: 0,
+            checked_source: None,
             turn: turn.clone(),
             read: read.freeze_completion(),
             persistence_key: (turn.conversation_id.clone(), turn.turn_id.clone()),
@@ -883,6 +927,7 @@ impl RuntimeSessionService {
             self.persistence
                 .queue_bookkeeping_candidate(RuntimeBookkeepingCandidate {
                     generation: 0,
+                    checked_source: None,
                     turn: turn.clone(),
                     read: self.capture_bookkeeping_transcript_read(store.clone(), turn),
                     persistence_key,
@@ -1250,6 +1295,7 @@ impl RuntimeSessionService {
             self.persistence
                 .queue_bookkeeping_candidate(RuntimeBookkeepingCandidate {
                     generation: 0,
+                    checked_source: None,
                     turn: turn.clone(),
                     read: self.capture_bookkeeping_transcript_read(store.clone(), turn),
                     persistence_key,

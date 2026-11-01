@@ -74,6 +74,34 @@ pub(crate) async fn project_joined_native_filesystem_facts(
     Ok(Some(outcome))
 }
 
+/// Joins and projects original facts, then observes actual checked archive
+/// admission. Pending returns None while both original owners remain retained;
+/// acceptance alone never permits root-service producer removal or replay.
+pub(crate) async fn prepare_joined_native_filesystem_archive(
+    handle: &AsyncRuntimeSessionHandle,
+    producer: &NativeFilesystemProducer,
+) -> Result<Option<crate::runtime::native_filesystem::NativeFilesystemArchiveAcceptance>> {
+    if project_joined_native_filesystem_facts(handle, producer)
+        .await?
+        .is_none()
+    {
+        return Ok(None);
+    }
+    let Some(acceptance) = handle
+        .prepare_native_filesystem_archive(producer.attempt().clone())
+        .await?
+    else {
+        return Ok(None);
+    };
+    if !handle
+        .validate_native_filesystem_archive(acceptance.clone())
+        .await?
+    {
+        return Ok(None);
+    }
+    Ok(Some(acceptance))
+}
+
 /// Starts a claimed producer once, retaining its actual blocking handle first.
 /// No subprocess, shell adapter, environment discovery or PTY input is used.
 pub(crate) async fn start_native_filesystem_producer(

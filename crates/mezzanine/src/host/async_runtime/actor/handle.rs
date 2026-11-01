@@ -1113,6 +1113,28 @@ impl AsyncRuntimeSessionHandle {
             .await?
     }
 
+    /// Rechecks original canonical source rather than trusting a cached gate.
+    /// The returned bool is freshness only, never producer-transfer authority.
+    pub(crate) async fn validate_native_filesystem_archive(
+        &self,
+        acceptance: crate::runtime::native_filesystem::NativeFilesystemArchiveAcceptance,
+    ) -> Result<bool> {
+        self.request(
+            |reply| AsyncRuntimeRequest::ValidateNativeFilesystemArchive { acceptance, reply },
+        )
+        .await?
+    }
+
+    /// Requests original checked archive evidence without supplying acceptance.
+    /// No producer custody crosses this transport reply or a lost receiver.
+    pub(crate) async fn prepare_native_filesystem_archive(
+        &self,
+        attempt: crate::runtime::native_filesystem::NativeFilesystemAttempt,
+    ) -> Result<Option<crate::runtime::native_filesystem::NativeFilesystemArchiveAcceptance>> {
+        self.request(|reply| AsyncRuntimeRequest::PrepareNativeFilesystemArchive { attempt, reply })
+            .await?
+    }
+
     /// Offers cumulative display data without blocking an effect worker. The
     /// producer retains the same prefix if this bounded actor lane is full.
     pub(crate) fn try_native_filesystem_progress(

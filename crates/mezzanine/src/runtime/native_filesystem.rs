@@ -18,3 +18,6 @@ pub(crate) use super::processes::native_patch::lease::{
 pub(crate) use super::processes::native_patch::worker::{
     NativePatchAuthority, NativePatchWorkerOutcome, NativePatchWorkerRequest, execute_native_patch,
 };
+
+/// Opaque original checked archive admission, separate from producer transfer.
+pub(crate) use super::agent::NativeFilesystemArchiveAcceptance;

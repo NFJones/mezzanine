@@ -3118,6 +3118,19 @@ impl AsyncRuntimeSessionActor {
                 let _ = reply.send(result);
                 false
             }
+            AsyncRuntimeRequest::ValidateNativeFilesystemArchive { acceptance, reply } => {
+                let current = self
+                    .service
+                    .native_filesystem_archive_acceptance_is_current(&acceptance);
+                let _ = reply.send(Ok(current));
+                false
+            }
+            AsyncRuntimeRequest::PrepareNativeFilesystemArchive { attempt, reply } => {
+                let result = self.service.prepare_native_filesystem_archive(&attempt);
+                let _ = reply.send(result);
+                self.notify_event_delivery();
+                false
+            }
             AsyncRuntimeRequest::NativeFilesystemProgress { delivery } => {
                 let progress = delivery
                     .confirmed()

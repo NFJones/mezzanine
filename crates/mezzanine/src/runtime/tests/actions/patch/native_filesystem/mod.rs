@@ -762,3 +762,6 @@ mod progress;
 
 #[cfg(target_os = "linux")]
 mod archive;
+
+#[cfg(target_os = "linux")]
+mod checked_archive;

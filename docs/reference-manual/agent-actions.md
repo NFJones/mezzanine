@@ -143,7 +143,10 @@ switch the runtime patch selector away from its existing shell adapter.
 When file confirmations arrive after a turn has been retired, archive updates
 retain that turn's original context and history boundary. They cannot borrow a
 replacement conversation's state or replay a file change to reconstruct history.
-Missing original context keeps the archive handoff pending.
+Missing original context keeps the archive handoff pending. Retaining an archive
+candidate is separate from checking it and accepting its append. A changed
+snapshot needs a new check, and conflicting actor attribution keeps it pending.
+These acknowledgements do not by themselves prove that archive bytes reached disk.
 
 Denied approvals and user cancellations are not automatically retried.
 Mezzanine may let the agent correct invalid arguments or other recoverable
