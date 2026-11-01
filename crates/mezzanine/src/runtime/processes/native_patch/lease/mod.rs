@@ -30,10 +30,6 @@ enum NativePatchCommitPurpose {
     /// Existing exact authored file endpoint.
     File,
     /// Explicit separate ancestor creation; never an implied file write.
-    #[allow(
-        dead_code,
-        reason = "typed parent admission awaits worker directory-effect integration"
-    )]
     Parent {
         /// Original authored destination spelling from the accepted operation.
         intended_path: String,
@@ -114,10 +110,6 @@ impl NativePatchCommitProposal {
     /// Captures one separately scoped missing parent of an exact create target.
     /// Requires the first missing parent, original scope ceiling and held capture
     /// allocation; it does not grant mkdir or manufacture a file-byte proof.
-    #[allow(
-        dead_code,
-        reason = "typed parent admission awaits worker directory-effect integration"
-    )]
     pub(crate) fn capture_parent(
         parent: &NativeParentCapability,
         intended: &NativeFileCapability,

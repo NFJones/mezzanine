@@ -7,7 +7,7 @@
 
 use super::*;
 use crate::runtime::processes::native_patch::worker::{
-    NativePatchEndpointKind, NativePatchEndpointReceipt,
+    NATIVE_PATCH_FACT_BYTES, NATIVE_PATCH_RESULT_BYTES, effect_json,
 };
 use mez_agent::native_action::{
     NativeEffectCertainty, NativeFilesystemEnforcement, NativePatchPhase, PatchEffect,
@@ -27,21 +27,30 @@ pub(super) fn action_result(
         "automatic_replay_allowed": false,
         "confirmed_effects": raw.result.confirmed_effects.iter().map(effect_json).collect::<Vec<_>>(),
         "completed_operations": raw.completed_operations,
-        "confirmed_endpoints": raw.receipts.iter().map(|receipt| serde_json::json!({
-            "operation_ordinal": receipt.operation_ordinal, "endpoint_ordinal": receipt.endpoint_ordinal,
-            "path": receipt.path, "resolved_path": receipt.resolved_path, "kind": endpoint_name(receipt.kind),
-            "diff": receipt.diff, "diff_truncated": receipt.diff_truncated,
-            "added_lines": receipt.added_lines, "removed_lines": receipt.removed_lines,
-        })).collect::<Vec<_>>(),
+        "confirmed_endpoints": raw.receipts.iter().map(|receipt| receipt.metadata(true)).collect::<Vec<_>>(),
     }).to_string();
+    if metadata.len() > NATIVE_PATCH_RESULT_BYTES {
+        return Err(MezError::invalid_state(
+            "filesystem result exceeds admitted metadata budget",
+        ));
+    }
+    let files = raw
+        .receipts
+        .iter()
+        .filter(|receipt| receipt.is_file())
+        .count();
+    let directories = raw.receipts.len() - files;
+    let mut summary = format!("Native patch completed; {files} confirmed file endpoint(s).");
+    if directories > 0 {
+        summary.push_str(&format!(
+            " {directories} separately confirmed directory effect(s)."
+        ));
+    }
     let mut result = if raw.result.certainty == NativeEffectCertainty::Confirmed {
         ActionResult::succeeded(
             &work.owner.turn,
             &work.owner.action,
-            vec![format!(
-                "Native patch completed; {} confirmed file endpoint(s).",
-                raw.receipts.len()
-            )],
+            vec![summary],
             Some(metadata),
         )
     } else {
@@ -114,7 +123,9 @@ fn validate(work: &NativeFilesystemWork, raw: &NativePatchWorkerOutcome) -> Resu
     };
     if raw.result.identity != work.identity
         || raw.result.certainty == NativeEffectCertainty::InFlight
-        || raw.receipts.len() > effects.len().saturating_mul(2)
+        || raw.receipts.len()
+            > effects.len().saturating_mul(2)
+                + crate::security::filesystem::capability::parent::MAX_NATIVE_PARENT_DIRECTORIES
         || raw.completed_operations.len() > effects.len()
         || raw
             .completed_operations
@@ -124,10 +135,6 @@ fn validate(work: &NativeFilesystemWork, raw: &NativePatchWorkerOutcome) -> Resu
             .completed_operations
             .iter()
             .any(|ordinal| *ordinal >= effects.len())
-        || raw.receipts.windows(2).any(|pair| {
-            (pair[0].operation_ordinal, pair[0].endpoint_ordinal)
-                >= (pair[1].operation_ordinal, pair[1].endpoint_ordinal)
-        })
         || raw
             .receipts
             .iter()
@@ -142,7 +149,21 @@ fn validate(work: &NativeFilesystemWork, raw: &NativePatchWorkerOutcome) -> Resu
     {
         return Err(invalid());
     }
-    for receipt in &raw.receipts {
+    let facts = raw
+        .receipts
+        .iter()
+        .map(|receipt| receipt.metadata(false).to_string().len() + 1)
+        .sum::<usize>()
+        + raw
+            .result
+            .confirmed_effects
+            .iter()
+            .map(|effect| effect_json(effect).to_string().len() + 1)
+            .sum::<usize>();
+    if facts > NATIVE_PATCH_FACT_BYTES {
+        return Err(invalid());
+    }
+    for (index, receipt) in raw.receipts.iter().enumerate() {
         if receipt.path.len() > 4096
             || receipt.resolved_path.len() > 4096
             || !std::path::Path::new(&receipt.resolved_path).is_absolute()
@@ -150,7 +171,8 @@ fn validate(work: &NativeFilesystemWork, raw: &NativePatchWorkerOutcome) -> Resu
                 > mez_agent::semantic_patch_planning::native::NATIVE_PATCH_FILE_BYTES
             || receipt.removed_lines
                 > mez_agent::semantic_patch_planning::native::NATIVE_PATCH_FILE_BYTES
-            || !matches_endpoint(effects.get(receipt.operation_ordinal), receipt)
+            || !receipt.matches_effect(effects.get(receipt.operation_ordinal))
+            || !receipt.can_follow(raw.receipts[..index].iter())
             || (receipt.endpoint_ordinal == 1
                 && !raw.receipts.iter().any(|earlier| {
                     earlier.operation_ordinal == receipt.operation_ordinal
@@ -163,7 +185,9 @@ fn validate(work: &NativeFilesystemWork, raw: &NativePatchWorkerOutcome) -> Resu
     for ordinal in &raw.completed_operations {
         let has_endpoint = |endpoint| {
             raw.receipts.iter().any(|receipt| {
-                receipt.operation_ordinal == *ordinal && receipt.endpoint_ordinal == endpoint
+                receipt.is_file()
+                    && receipt.operation_ordinal == *ordinal
+                    && receipt.endpoint_ordinal == endpoint
             })
         };
         // Only updates may legitimately complete as unchanged shared-planner
@@ -201,36 +225,6 @@ fn validate(work: &NativeFilesystemWork, raw: &NativePatchWorkerOutcome) -> Resu
     Ok(())
 }
 
-/// Matches each positive endpoint to the original exact authored occurrence.
-fn matches_endpoint(effect: Option<&PatchEffect>, receipt: &NativePatchEndpointReceipt) -> bool {
-    match effect {
-        Some(PatchEffect::Create(path)) => {
-            receipt.endpoint_ordinal == 0
-                && receipt.path == *path
-                && receipt.kind == NativePatchEndpointKind::Created
-        }
-        Some(PatchEffect::Update(path)) => {
-            receipt.endpoint_ordinal == 0
-                && receipt.path == *path
-                && receipt.kind == NativePatchEndpointKind::Updated
-        }
-        Some(PatchEffect::Delete(path)) => {
-            receipt.endpoint_ordinal == 0
-                && receipt.path == *path
-                && receipt.kind == NativePatchEndpointKind::Deleted
-        }
-        Some(PatchEffect::Move {
-            source,
-            destination,
-        }) => match receipt.endpoint_ordinal {
-            0 => receipt.path == *destination && receipt.kind == NativePatchEndpointKind::Created,
-            1 => receipt.path == *source && receipt.kind == NativePatchEndpointKind::Deleted,
-            _ => false,
-        },
-        None => false,
-    }
-}
-
 /// Uses fixed protocol-safe certainty labels rather than debug strings.
 fn certainty_name(certainty: NativeEffectCertainty) -> &'static str {
     match certainty {
@@ -239,27 +233,5 @@ fn certainty_name(certainty: NativeEffectCertainty) -> &'static str {
         NativeEffectCertainty::Partial => "partial",
         NativeEffectCertainty::InFlight => "in_flight",
         NativeEffectCertainty::Unknown => "unknown",
-    }
-}
-
-/// Uses fixed endpoint kind labels for confirmed filesystem facts.
-fn endpoint_name(kind: NativePatchEndpointKind) -> &'static str {
-    match kind {
-        NativePatchEndpointKind::Created => "created",
-        NativePatchEndpointKind::Updated => "updated",
-        NativePatchEndpointKind::Deleted => "deleted",
-    }
-}
-
-/// Serializes exact semantic intent without suggesting a partial move completed.
-fn effect_json(effect: &PatchEffect) -> serde_json::Value {
-    match effect {
-        PatchEffect::Create(path) => serde_json::json!({"kind":"create","path":path}),
-        PatchEffect::Update(path) => serde_json::json!({"kind":"update","path":path}),
-        PatchEffect::Delete(path) => serde_json::json!({"kind":"delete","path":path}),
-        PatchEffect::Move {
-            source,
-            destination,
-        } => serde_json::json!({"kind":"move","source":source,"destination":destination}),
     }
 }

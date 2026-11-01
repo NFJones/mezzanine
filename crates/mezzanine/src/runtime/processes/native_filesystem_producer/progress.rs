@@ -50,23 +50,24 @@ impl NativeFilesystemProgressRecorder {
 }
 
 /// Creates a display identity from an actual endpoint without command hashes.
-/// Flattened operation/endpoint order distinguishes both ends of a move.
+/// Actual confirmation order distinguishes directories and both ends of a move.
 pub(crate) fn endpoint_progress(
     work: &NativeFilesystemWork,
     receipt: &NativePatchEndpointReceipt,
 ) -> Result<ActionPresentationProgress> {
-    let ordinal = receipt
-        .operation_ordinal
-        .checked_mul(2)
-        .and_then(|value| value.checked_add(receipt.endpoint_ordinal))
-        .ok_or_else(|| MezError::invalid_state("filesystem progress ordinal overflow"))?;
+    let ordinal = receipt.confirmation_ordinal;
+    let source = if receipt.is_file() {
+        receipt.diff.clone()
+    } else {
+        format!("Created directory {}\n", receipt.path.escape_default())
+    };
     let mut progress = ActionPresentationProgress::new(
         &work.owner.turn.turn_id,
         &work.owner.action.id,
         ActionPresentationExecutionIdentity::Attempt(work.identity.transaction.clone()),
         1,
         ActionPresentationComponentIdentity::confirmed_mutation(ordinal, &receipt.path),
-        &receipt.diff,
+        &source,
     );
     progress.source_truncated |= receipt.diff_truncated;
     Ok(progress)
@@ -94,14 +95,12 @@ impl NativeFilesystemProducer {
             .work
             .clone()
             .ok_or_else(|| MezError::conflict("filesystem progress has no issued original work"))?;
-        if !matches_endpoint(
+        if !receipt.matches_effect(
             work.identity
                 .operation
                 .effects
                 .get(receipt.operation_ordinal),
-            receipt,
         ) || receipt.operation_ordinal >= work.identity.operation.effects.len()
-            || receipt.endpoint_ordinal > 1
             || receipt.diff.len() > mez_agent::ACTION_PRESENTATION_PROGRESS_MAX_SOURCE_BYTES
             || receipt.path.len() > 4096
             || receipt.resolved_path.len() > 4096
@@ -115,35 +114,36 @@ impl NativeFilesystemProducer {
             .progress
             .lock()
             .map_err(|_| MezError::invalid_state("filesystem progress custody poisoned"))?;
-        if let Some(existing) = retained.iter().find(|existing| {
-            existing.operation_ordinal == receipt.operation_ordinal
-                && existing.endpoint_ordinal == receipt.endpoint_ordinal
-        }) {
+        if let Some(existing) = retained
+            .iter()
+            .find(|existing| existing.confirmation_ordinal == receipt.confirmation_ordinal)
+        {
             if existing.as_ref() != receipt {
                 return Err(MezError::conflict("filesystem confirmed progress changed"));
             }
         } else {
-            if retained.len() >= work.identity.operation.effects.len().saturating_mul(2) {
+            if retained.len()
+                >= work.identity.operation.effects.len().saturating_mul(2)
+                    + crate::security::filesystem::capability::parent::MAX_NATIVE_PARENT_DIRECTORIES
+            {
                 return Err(MezError::invalid_state(
                     "filesystem confirmation journal exceeds admitted endpoint count",
                 ));
             }
-            if receipt.endpoint_ordinal == 1
-                && !retained.iter().any(|prior| {
-                    prior.operation_ordinal == receipt.operation_ordinal
-                        && prior.endpoint_ordinal == 0
-                })
-            {
-                return Err(MezError::conflict(
-                    "filesystem move source confirmation lacks destination",
-                ));
-            }
-            if retained.last().is_some_and(|prior| {
-                (prior.operation_ordinal, prior.endpoint_ordinal)
-                    >= (receipt.operation_ordinal, receipt.endpoint_ordinal)
-            }) {
+            if !receipt.can_follow(retained.iter().map(AsRef::as_ref)) {
                 return Err(MezError::conflict(
                     "filesystem confirmed progress is out of order",
+                ));
+            }
+            let fact_bytes = self
+                .0
+                .progress_fact_bytes
+                .load(std::sync::atomic::Ordering::Relaxed)
+                .saturating_add(receipt.metadata(false).to_string().len() + 1);
+            if fact_bytes > crate::runtime::processes::native_patch::worker::NATIVE_PATCH_FACT_BYTES
+            {
+                return Err(MezError::invalid_args(
+                    "filesystem progress facts exceed admitted budget",
                 ));
             }
             if retained
@@ -158,6 +158,9 @@ impl NativeFilesystemProducer {
                 ));
             }
             retained.push(Arc::new(receipt.clone()));
+            self.0
+                .progress_fact_bytes
+                .store(fact_bytes, std::sync::atomic::Ordering::Relaxed);
         }
         if retained.len() > MAX_PROGRESS_ENDPOINTS {
             return Ok(None);
@@ -243,34 +246,5 @@ impl NativeFilesystemProgress {
             .iter()
             .map(|receipt| endpoint_progress(&work, receipt))
             .collect()
-    }
-}
-
-/// Validates semantic endpoint occurrence before any live confirmation can paint.
-fn matches_endpoint(
-    effect: Option<&mez_agent::native_action::PatchEffect>,
-    receipt: &NativePatchEndpointReceipt,
-) -> bool {
-    use crate::runtime::processes::native_patch::worker::NativePatchEndpointKind as Kind;
-    use mez_agent::native_action::PatchEffect;
-    match effect {
-        Some(PatchEffect::Create(path)) => {
-            receipt.endpoint_ordinal == 0 && receipt.path == *path && receipt.kind == Kind::Created
-        }
-        Some(PatchEffect::Update(path)) => {
-            receipt.endpoint_ordinal == 0 && receipt.path == *path && receipt.kind == Kind::Updated
-        }
-        Some(PatchEffect::Delete(path)) => {
-            receipt.endpoint_ordinal == 0 && receipt.path == *path && receipt.kind == Kind::Deleted
-        }
-        Some(PatchEffect::Move {
-            source,
-            destination,
-        }) => match receipt.endpoint_ordinal {
-            0 => receipt.path == *destination && receipt.kind == Kind::Created,
-            1 => receipt.path == *source && receipt.kind == Kind::Deleted,
-            _ => false,
-        },
-        None => false,
     }
 }

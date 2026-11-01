@@ -3,7 +3,9 @@
 //! The loopback server emits ordinary provider HTTP responses, never fabricated
 //! action results or completion events. Gates qualify rejection before effects;
 //! production native patch workers own the sole corrected filesystem mutation.
-//! Temporary runtime/auth/storage roots isolate the fixture from user settings.
+//! Corrected patches create missing parents, retaining distinct directory facts
+//! through actual provider continuation. Temporary runtime/auth/storage roots
+//! isolate the fixture from user settings.
 
 use super::*;
 
@@ -213,7 +215,7 @@ async fn qualify_with_lifecycle(
             "rationale":"invalid middle patch must reject all actions",
             "actions":[
                 {"type":"shell_command","summary":"first invalid sibling","command":"printf first >> forbidden-first"},
-                {"type":"apply_patch","patch":"*** Begin Patch\n*** Add File: corrected.txt\n+must not apply\n"},
+                {"type":"apply_patch","patch":"*** Begin Patch\n*** Add File: corrected/parents/file.txt\n+must not apply\n"},
                 {"type":"shell_command","summary":"last invalid sibling","command":"printf last >> forbidden-last"}
             ]
         }).to_string();
@@ -241,7 +243,7 @@ async fn qualify_with_lifecycle(
         correction_release.notified().await;
         if lifecycle != Lifecycle::Keep {
             use tokio::io::AsyncWriteExt;
-            let content = serde_json::json!({"rationale":"late valid correction", "actions":[{"type":"apply_patch","patch":"*** Begin Patch\n*** Add File: corrected.txt\n+late forbidden effect\n*** End Patch"}]}).to_string();
+            let content = serde_json::json!({"rationale":"late valid correction", "actions":[{"type":"apply_patch","patch":"*** Begin Patch\n*** Add File: corrected/parents/file.txt\n+late forbidden effect\n*** End Patch"}]}).to_string();
             let body = serde_json::json!({"model":"local-chat-model","choices":[{"message":{"role":"assistant","content":content,"tool_calls":[]}}]}).to_string();
             let response = format!(
                 "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
@@ -289,7 +291,7 @@ async fn qualify_with_lifecycle(
             let (mut stream, _) = listener.accept().await.unwrap();
             let summary = async_provider_concurrency_read_http_request(&mut stream).await;
             assert!(summary.contains("[failure summary state]"));
-            assert!(!root.join("corrected.txt").exists());
+            assert!(!root.join("corrected/parents/file.txt").exists());
             assert!(!root.join("forbidden-first").exists());
             assert!(!root.join("forbidden-last").exists());
             if summary_reply == SummaryReply::FailedRequest {
@@ -343,7 +345,7 @@ async fn qualify_with_lifecycle(
         }
         let corrected = serde_json::json!({
             "rationale":"replace the entire rejected batch",
-            "actions":[{"type":"apply_patch","patch":"*** Begin Patch\n*** Add File: corrected.txt\n+corrected once\n*** End Patch"}]
+            "actions":[{"type":"apply_patch","patch":"*** Begin Patch\n*** Add File: corrected/parents/file.txt\n+corrected once\n*** End Patch"}]
         }).to_string();
         async_provider_concurrency_write_chat_content_response(
             &mut stream,
@@ -359,8 +361,12 @@ async fn qualify_with_lifecycle(
             after_patch.contains("native_runtime"),
             "actual provider continuation lost native filesystem provenance"
         );
+        assert!(
+            after_patch.contains("directory_created"),
+            "actual provider continuation lost separately confirmed directory effects"
+        );
         assert_eq!(
-            std::fs::read(root.join("corrected.txt")).unwrap(),
+            std::fs::read(root.join("corrected/parents/file.txt")).unwrap(),
             b"corrected once\n"
         );
         assert!(!root.join("forbidden-first").exists());
@@ -448,7 +454,7 @@ async fn qualify_with_lifecycle(
             .await
             .unwrap();
         correction_seen.notified().await;
-        assert!(!root.join("corrected.txt").exists());
+        assert!(!root.join("corrected/parents/file.txt").exists());
         assert!(!root.join("forbidden-first").exists());
         assert!(!root.join("forbidden-last").exists());
         if prior_effect {
@@ -521,7 +527,7 @@ async fn qualify_with_lifecycle(
             exit.service.agent_turn_ledger().turns()[0].state,
             mez_agent::AgentTurnState::Interrupted
         );
-        assert!(!root.join("corrected.txt").exists());
+        assert!(!root.join("corrected/parents/file.txt").exists());
         assert!(!root.join("forbidden-first").exists());
         assert!(!root.join("forbidden-last").exists());
         assert_eq!(
@@ -682,10 +688,10 @@ async fn qualify_with_lifecycle(
             + u64::from(routed) * 2
     );
     if exhausted {
-        assert!(!root.join("corrected.txt").exists());
+        assert!(!root.join("corrected/parents/file.txt").exists());
     } else {
         assert_eq!(
-            std::fs::read(root.join("corrected.txt")).unwrap(),
+            std::fs::read(root.join("corrected/parents/file.txt")).unwrap(),
             b"corrected once\n"
         );
     }

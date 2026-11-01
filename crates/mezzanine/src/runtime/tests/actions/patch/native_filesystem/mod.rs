@@ -783,4 +783,6 @@ mod refusal;
 mod selector;
 
 #[cfg(target_os = "linux")]
+mod parent_integration;
+#[cfg(target_os = "linux")]
 mod parents;

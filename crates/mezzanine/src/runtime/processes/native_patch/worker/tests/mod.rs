@@ -1,7 +1,7 @@
 //! Real-filesystem worker regressions without process or pane adapters.
 //!
-//! Tests supply explicit authority callbacks in place of the pending actor
-//! bridge. They exercise actual capabilities, staging and commit receipts;
+//! Tests supply explicit authority callbacks to isolate the physical boundary.
+//! They exercise actual capabilities, staging and commit receipts;
 //! they do not certify the assembled dispatcher or native process association.
 
 use std::fs;
@@ -12,6 +12,7 @@ use super::*;
 use crate::runtime::processes::native_cancellation::NativeActionCancellation;
 use crate::runtime::processes::native_patch::commit::NativePatchWriteCoordinator;
 use crate::security::filesystem::host_resolved_path_scopes;
+use mez_agent::semantic_patch_planning::native::NATIVE_PATCH_DIFF_BYTES;
 
 /// Test-only authority simulation for the worker's physical boundary tests.
 /// Actor authorization is covered separately against actual canonical slots.
@@ -433,3 +434,5 @@ fn published_inode_cannot_transfer_into_a_replacement_parent() {
     assert_eq!(fs::read(parent.join("a")).unwrap(), b"first\n");
     fixture.assert_no_stages();
 }
+
+mod parents;

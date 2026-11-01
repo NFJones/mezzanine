@@ -196,7 +196,7 @@ impl RuntimeSessionService {
             .get(&work.owner.turn.pane_id)
             .is_some_and(|session| session.session_id == work.owner.turn.conversation_id)
         {
-            for receipt in &raw.receipts {
+            for receipt in raw.receipts.iter().filter(|receipt| receipt.is_file()) {
                 self.record_agent_modified_file_delta(
                     &work.owner.turn.pane_id,
                     receipt.path.clone(),

@@ -82,6 +82,8 @@ struct Inner {
     progress: Mutex<
         Vec<Arc<crate::runtime::processes::native_patch::worker::NativePatchEndpointReceipt>>,
     >,
+    /// Encoded immutable fact bytes, updated only under the progress journal lock.
+    progress_fact_bytes: std::sync::atomic::AtomicUsize,
 }
 
 impl Drop for Inner {
@@ -175,6 +177,7 @@ impl NativeFilesystemProducer {
             archive: Mutex::new(None),
             execution: tokio::sync::Mutex::new(Execution::Unstarted),
             progress: Mutex::new(Vec::new()),
+            progress_fact_bytes: std::sync::atomic::AtomicUsize::new(0),
         }))
     }
 

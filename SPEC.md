@@ -12688,6 +12688,22 @@ against arbitrary external writers. Later observed replacement/relocation MUST
 revoke descendant transfer, and directory owners MUST NOT delete directories on
 Drop. Missing-file recapture MUST retain original ancestor objects and accept
 additional ancestors only through positively recorded held observations.
+The worker MUST dispatch these separate parent commits before staging the target
+file, retain each positive directory receipt before notification/observation,
+and preserve it after later cancellation or file failure. Files sharing parents
+MUST reuse exact held observations without adopting unrecorded new ancestors.
+Directory facts MUST bind their authored/physical intended file destination,
+remain distinct from file endpoints and contribute no modified-file line counts.
+Actual contiguous confirmation order MUST include directory and file effects;
+short-lease occurrence keys MUST NOT be reused as display order. Journals MUST
+retain at most two file endpoints per operation plus 128 directory effects, with
+the existing 64-component live prefix and complete final facts. Before mutation,
+the complete accepted plan MUST fit 1 MiB of JSON-encoded authoritative facts and
+semantic intent including a 64 KiB envelope/diagnostic reserve. The separately
+bounded 256 KiB diff source may expand under JSON escaping; full canonical result
+metadata MUST fit 3 MiB. Display previews MUST NOT consume the fact allowance or
+cause loss of confirmations. Excess authoritative facts MUST fail before even
+an earlier independently planned file or directory is committed.
 Staging MUST be exclusive, destination-bound and verified against exact planned
 bytes; cleanup MUST not remove a replaced
 unowned entry. Adds MUST use atomic no-replace publication; updates replace one

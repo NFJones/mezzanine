@@ -123,6 +123,7 @@ is implied.
 - **Actions you can inspect and control:** commands, patches, approvals, MCP
   calls, and subagent work are explicit rather than hidden behind a chat UI.
   Native patches use an in-process filesystem worker with scoped permissions.
+  Missing parents require separate grants; confirmed directory effects survive later failures.
 - **Agents that can coordinate, not just delegate:** discover peers, exchange
   scoped messages, contain malformed messaging peers to their connections, and
   keep persistent collaborators in dedicated panes with

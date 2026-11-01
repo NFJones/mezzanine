@@ -984,7 +984,23 @@ pub(super) fn runtime_agent_action_outcome_line(
             // row. No confirmed effect or unknown completion is hidden.
             return None;
         }
+        let directories = value
+            .get("confirmed_endpoints")
+            .and_then(serde_json::Value::as_array)
+            .map_or(0, |endpoints| {
+                endpoints
+                    .iter()
+                    .filter(|endpoint| {
+                        endpoint.get("kind").and_then(serde_json::Value::as_str)
+                            == Some("directory_created")
+                    })
+                    .count()
+            });
+        let count = count.saturating_sub(directories);
         let mut line = format!("native patch: {certainty}; {count} confirmed file endpoint(s)");
+        if directories > 0 {
+            line.push_str(&format!("; {directories} directory effect(s)"));
+        }
         if let Some(error) = &result.error {
             line.push_str(&format!(
                 "; {}",

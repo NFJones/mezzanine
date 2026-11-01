@@ -5,10 +5,6 @@
 //! Descriptor-relative access prevents symlink redirection; callers must still
 //! revalidate authority and object identity before publishing mutations.
 
-#[allow(
-    dead_code,
-    reason = "directory primitives await separately authorized worker/result integration"
-)]
 pub(crate) mod capability;
 mod identity;
 mod instructions;

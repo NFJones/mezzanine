@@ -153,10 +153,14 @@ context mismatch. Retained line-owner transfers and parsed descriptor copies
 share that allowance. Display truncation preserves full precomputed line counts.
 These internal native limits add no configuration setting or pane matcher limit.
 
-Native patch execution currently requires existing parent directories. Separate
-directory capability/lease primitives retain positive mkdir effects, but worker
-receipt and result integration is still required before native patches create
-missing parents. A grant for a file never implies permission to create its parent.
+Native patches can create missing parents only with separate current directory
+write grants, bounded to 128 directory admissions per action. A file-only grant
+never authorizes creating its ancestors. Directory confirmations precede the file
+and remain visible if cancellation or a later write fails; they add no file line
+counts and are never rolled back. Repeated files sharing a new parent reuse its
+held observation. The worker checks the complete plan's encoded effect facts
+against a 1 MiB budget before mutation, separately from diff previews; canonical
+metadata is bounded to 3 MiB without dropping confirmed directory or file facts.
 
 Native filesystem worker confirmations use the shared confirmed-mutation display
 path. The producer retains a cumulative prefix before best-effort notification;

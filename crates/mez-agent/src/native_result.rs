@@ -138,9 +138,27 @@ pub fn native_patch_result(
                 })
             && operation.changes().iter().any(|change| {
                 change.final_bytes.is_some()
-                    && std::path::Path::new(&change.path).starts_with(&confirmation.path)
-                    && change.path != confirmation.path
+                    && matches!(
+                        change.original,
+                        crate::semantic_patch_planning::ApplyPatchOriginalState::Missing
+                    )
+                    && [&change.path, &change.resolved_path].iter().any(|path| {
+                        let target = std::path::Path::new(path);
+                        target != std::path::Path::new(&confirmation.path)
+                            && target.starts_with(&confirmation.path)
+                    })
             });
+        if is_parent
+            && confirmations.iter().any(|earlier| {
+                earlier.confirmation_ordinal < confirmation.confirmation_ordinal
+                    && ((earlier.operation_ordinal == confirmation.operation_ordinal
+                        && earlier.kind != NativeConfirmedKind::DirectoryCreated)
+                        || (earlier.kind == NativeConfirmedKind::DirectoryCreated
+                            && earlier.path == confirmation.path))
+            })
+        {
+            return Err(invalid("native directory confirmation violates creation order").into());
+        }
         if (!is_endpoint && !is_parent)
             || !seen.insert((
                 confirmation.operation_ordinal,

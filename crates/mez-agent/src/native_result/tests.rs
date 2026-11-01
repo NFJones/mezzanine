@@ -408,3 +408,96 @@ fn reversed_repeated_path_confirmations_are_rejected() {
         .is_ok()
     );
 }
+
+/// A separately confirmed physical parent can differ from the authored alias
+/// while remaining an exact strict ancestor of the plan's captured destination.
+/// Reversed order or pretending the file itself is its parent must still fail.
+#[test]
+fn native_directory_confirmation_uses_resolved_alias_and_creation_order() {
+    let source = "*** Begin Patch\n*** Add File: alias/new/file\n+x\n*** End Patch";
+    let action = AgentAction {
+        id: "patch".into(),
+        payload: AgentActionPayload::ApplyPatch {
+            patch: source.into(),
+            strip: None,
+        },
+    };
+    let identity = NativeCommitIdentity {
+        turn_id: "turn".into(),
+        action_id: "patch".into(),
+        transaction: "tx".into(),
+        authority_generation: 1,
+        operation: NativePatchOperation::parse(source, None).unwrap(),
+    };
+    let snapshots = std::collections::BTreeMap::from([(
+        "alias/new/file".into(),
+        ApplyPatchSnapshot {
+            path: "alias/new/file".into(),
+            resolved_path: "/repo/real/new/file".into(),
+            state: ApplyPatchSnapshotState::Missing,
+        },
+    )]);
+    let plan = plan_native_patch(
+        &identity.operation,
+        &snapshots,
+        &PatchWorkControl::native(&|| Ok(())),
+    )
+    .unwrap();
+    let directory = NativeConfirmedEndpoint {
+        operation_ordinal: 0,
+        confirmation_ordinal: 0,
+        path: "/repo/real/new".into(),
+        kind: NativeConfirmedKind::DirectoryCreated,
+    };
+    let file = NativeConfirmedEndpoint {
+        operation_ordinal: 0,
+        confirmation_ordinal: 1,
+        path: "alias/new/file".into(),
+        kind: NativeConfirmedKind::Written,
+    };
+    assert!(
+        native_patch_result(
+            &Turn,
+            &action,
+            &identity,
+            &plan,
+            NativeEffectCertainty::Confirmed,
+            &[directory.clone(), file.clone()],
+            "",
+            None
+        )
+        .is_ok()
+    );
+    let mut reversed_directory = directory.clone();
+    reversed_directory.confirmation_ordinal = 1;
+    let mut reversed_file = file;
+    reversed_file.confirmation_ordinal = 0;
+    assert!(
+        native_patch_result(
+            &Turn,
+            &action,
+            &identity,
+            &plan,
+            NativeEffectCertainty::Confirmed,
+            &[reversed_file, reversed_directory],
+            "",
+            None
+        )
+        .is_err()
+    );
+    let mut fake_parent = directory;
+    fake_parent.path = "/repo/real/new/file".into();
+    assert!(
+        native_patch_result(
+            &Turn,
+            &action,
+            &identity,
+            &plan,
+            NativeEffectCertainty::Partial,
+            &[fake_parent],
+            "",
+            None
+        )
+        .is_err()
+    );
+}

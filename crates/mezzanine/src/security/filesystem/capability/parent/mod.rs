@@ -165,6 +165,7 @@ impl NativeCreatedDirectory {
     }
 
     /// Returns actual original admission identity without fabricating a file write.
+    #[cfg(test)]
     pub(crate) fn commit_allocation(&self) -> Arc<()> {
         self.capability.commit_allocation()
     }
