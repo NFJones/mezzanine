@@ -102,6 +102,54 @@ pub(crate) async fn prepare_joined_native_filesystem_archive(
     Ok(Some(acceptance))
 }
 
+/// Observes original archive workers before any source replacement, registers
+/// new work in root custody before its first poll, and asks the actor to accept
+/// only genuine joined storage evidence. A Waiting read may be explicitly
+/// rechecked; this never appends or recovers a mutation or releases a producer.
+pub(crate) async fn seal_joined_native_filesystem_archive(
+    handle: &AsyncRuntimeSessionHandle,
+    producer: &NativeFilesystemProducer,
+) -> Result<Option<crate::runtime::native_filesystem::NativeFilesystemArchiveSettlement>> {
+    if let Some((source, receipt)) = producer.archive_worker()?
+        && let Err(error) = receipt.observe().await
+    {
+        return match handle
+            .observe_native_filesystem_archive_storage(source)
+            .await
+        {
+            Err(original) => Err(original),
+            _ => Err(error),
+        };
+    }
+    let Some(source) = prepare_joined_native_filesystem_archive(handle, producer).await? else {
+        return Ok(None);
+    };
+    if let Some(receipt) = producer.register_archive_worker(&source)?
+        && let Err(error) = receipt.recheck().await
+    {
+        return match handle
+            .observe_native_filesystem_archive_storage(source.clone())
+            .await
+        {
+            Err(original) => Err(original),
+            _ => Err(error),
+        };
+    }
+    let Some(settlement) = handle
+        .observe_native_filesystem_archive_storage(source)
+        .await?
+    else {
+        return Ok(None);
+    };
+    if !handle
+        .validate_native_filesystem_archive_settlement(settlement.clone())
+        .await?
+    {
+        return Ok(None);
+    }
+    Ok(Some(settlement))
+}
+
 /// Starts a claimed producer once, retaining its actual blocking handle first.
 /// No subprocess, shell adapter, environment discovery or PTY input is used.
 pub(crate) async fn start_native_filesystem_producer(

@@ -5368,7 +5368,7 @@ impl AgentTranscriptStore {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    fn existing_transcript_path_for(&self, conversation_id: &str) -> Result<PathBuf> {
+    pub(super) fn existing_transcript_path_for(&self, conversation_id: &str) -> Result<PathBuf> {
         let path = self.transcript_path_for(conversation_id)?;
         if path.exists() {
             return Ok(path);

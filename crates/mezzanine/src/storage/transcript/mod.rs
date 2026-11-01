@@ -50,7 +50,9 @@ mod history;
 mod prefix_projection;
 /// Atomic manual-prefix publication against frozen epoch and physical rows.
 mod prefix_publication;
+mod prefix_seal;
 pub(crate) use prefix_projection::{project_compaction_prefix, validate_compaction_prefix_source};
+pub(crate) use prefix_seal::{TranscriptPrefixExpectation, TranscriptPrefixSeal};
 /// Durable, exact-batch acceptance receipts for uncertain transcript writes.
 mod receipts;
 pub(crate) use append_batch::TranscriptAppendBatch;

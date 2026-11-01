@@ -18,6 +18,8 @@ use crate::storage::transcript::ConversationTranscriptRead;
 use mez_agent::TranscriptContextEvent;
 
 mod checked_source;
+mod physical_source;
+pub(crate) use physical_source::RuntimeTranscriptPrefixReceipt;
 mod completion_archive;
 pub(crate) use checked_source::RuntimeCompletionCheckedSource;
 mod projection;
@@ -457,16 +459,19 @@ impl RuntimeSessionService {
         {
             projection.insert(0, directory.clone());
         }
-        let mut entries = if frozen {
+        let (mut entries, source_through) = if frozen {
             match Self::new_completion_transcript_entries(projection, &history, next) {
                 Ok(entries) => entries,
                 Err(error) => return self.block_bookkeeping_after_error(candidate, error),
             }
         } else {
-            Self::new_runtime_transcript_entries(
-                projection,
-                &history,
-                first_sequence.unwrap_or(sequence),
+            (
+                Self::new_runtime_transcript_entries(
+                    projection,
+                    &history,
+                    first_sequence.unwrap_or(sequence),
+                ),
+                0,
             )
         };
         let admission = if candidate.read.frozen_completion {
@@ -477,9 +482,32 @@ impl RuntimeSessionService {
         if let Err(error) = admission {
             return self.block_bookkeeping_after_error(candidate, error);
         }
+        let physical = if candidate.checked_source.is_some() {
+            let source = match crate::storage::transcript::TranscriptPrefixExpectation::capture(
+                &turn.conversation_id,
+                history
+                    .iter()
+                    .filter(|row| row.sequence <= source_through)
+                    .chain(entries.iter()),
+            ) {
+                Ok(source) => source,
+                Err(error) => return self.block_bookkeeping_after_error(candidate, error),
+            };
+            let path = match candidate.read.store.transcript_path(&turn.conversation_id) {
+                Ok(path) => path,
+                Err(error) => return self.block_bookkeeping_after_error(candidate, error),
+            };
+            Some(RuntimeTranscriptPrefixReceipt::new(
+                candidate.read.store.clone(),
+                source,
+                path,
+            ))
+        } else {
+            None
+        };
         if entries.is_empty() {
-            if let Some(source) = &candidate.checked_source
-                && let Err(error) = source.accept()
+            if let (Some(source), Some(physical)) = (&candidate.checked_source, physical)
+                && let Err(error) = source.accept(physical)
             {
                 return self.block_bookkeeping_after_error(candidate, error);
             }
@@ -532,8 +560,8 @@ impl RuntimeSessionService {
         {
             return self.block_bookkeeping_after_error(candidate, error);
         }
-        if let Some(source) = &candidate.checked_source
-            && let Err(error) = source.accept()
+        if let (Some(source), Some(physical)) = (&candidate.checked_source, physical)
+            && let Err(error) = source.accept(physical)
         {
             return self.block_bookkeeping_after_error(candidate, error);
         }
@@ -573,26 +601,31 @@ impl RuntimeSessionService {
         Err(primary)
     }
 
-    /// Checked new-row allocation only; duplicates require no successor slot,
-    /// and a valid final MAX row is representable but cannot be followed by MAX+1.
+    /// Returns checked new rows and the minimal inclusive source frontier,
+    /// including the earliest actual row satisfying each deduplicated fact.
+    /// Duplicates require no successor slot; conflicting attribution and exhausted
+    /// allocation fail. A valid final MAX row cannot be followed by MAX+1.
     fn new_completion_transcript_entries(
         entries: Vec<TranscriptEntry>,
         existing: &[TranscriptEntry],
         mut next: crate::runtime::persistence::RuntimeTranscriptNextSequence,
-    ) -> Result<Vec<TranscriptEntry>> {
+    ) -> Result<(Vec<TranscriptEntry>, u64)> {
         use crate::runtime::persistence::RuntimeTranscriptNextSequence;
-        let mut identities = BTreeMap::<_, std::collections::BTreeSet<_>>::new();
+        let mut identities = BTreeMap::<_, BTreeMap<_, u64>>::new();
         for row in existing {
             identities
                 .entry(Self::runtime_transcript_entry_identity(row))
                 .or_default()
-                .insert((
+                .entry((
                     row.conversation_id.clone(),
                     row.agent_id.clone(),
                     row.pane_id.clone(),
-                ));
+                ))
+                .and_modify(|sequence| *sequence = (*sequence).min(row.sequence))
+                .or_insert(row.sequence);
         }
         let mut result = Vec::new();
+        let mut through = 0u64;
         for mut entry in entries {
             let identity = Self::runtime_transcript_entry_identity(&entry);
             let attribution = (
@@ -604,27 +637,31 @@ impl RuntimeSessionService {
                 // MCP catalog snapshots intentionally share a conversation-wide
                 // identity across turns. Current execution/user facts do not:
                 // matching content cannot adopt another actual actor or pane.
-                if !identity.0.is_empty() && owners.iter().any(|owner| owner != &attribution) {
+                if !identity.0.is_empty() && owners.keys().any(|owner| owner != &attribution) {
                     return Err(MezError::conflict(
                         "original completion row has conflicting actor attribution",
                     ));
                 }
+                if let Some(sequence) = owners.values().min() {
+                    through = through.max(*sequence);
+                }
                 continue;
             }
-            identities.insert(identity, std::collections::BTreeSet::from([attribution]));
             let RuntimeTranscriptNextSequence::Next(sequence) = next else {
                 return Err(MezError::invalid_state(
                     "completion transcript sequence is exhausted or unknown",
                 ));
             };
+            identities.insert(identity, BTreeMap::from([(attribution, sequence)]));
             entry.sequence = sequence;
+            through = through.max(sequence);
             next = sequence
                 .checked_add(1)
                 .map(RuntimeTranscriptNextSequence::Next)
                 .unwrap_or(RuntimeTranscriptNextSequence::Exhausted);
             result.push(entry);
         }
-        Ok(result)
+        Ok((result, through))
     }
 
     /// Captures the current transcript owner and pending receipts for checked bookkeeping.

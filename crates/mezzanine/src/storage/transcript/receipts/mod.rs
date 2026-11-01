@@ -356,6 +356,25 @@ impl AgentTranscriptStore {
         Ok(())
     }
 
+    /// Checks only recovery owners overlapping a physical source prefix. The
+    /// caller holds this exact conversation's append lease; later-only receipt
+    /// ownership cannot block verification of an earlier original source.
+    pub(super) fn prefix_has_pending_append_receipts(
+        &self,
+        conversation_id: &str,
+        through: u64,
+        _lease: &fs::File,
+    ) -> Result<bool> {
+        Ok(self
+            .read_locked_append_receipts(&[conversation_id])?
+            .iter()
+            .any(|(_, receipt, rows)| {
+                receipt.conversation_id == conversation_id
+                    && (rows.first().is_some_and(|row| row.sequence <= through)
+                        || (rows.is_empty() && receipt.compaction_epoch.is_some()))
+            }))
+    }
+
     /// Reports retained append ownership under the exact conversation lease.
     /// Failed child setup uses this fence before removing files: an accepted or
     /// uncertain payload must remain available for checked recovery. Invalid

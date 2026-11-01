@@ -12,6 +12,8 @@ mod initial_projection;
 mod occurrence;
 /// Prefix publication compares both frozen epoch authority and physical rows.
 mod prefix_proof;
+/// Physical prefix verification never substitutes logical admission for sync.
+mod prefix_seal;
 /// Exact-conversation receipt admission and retirement race coverage.
 mod receipt_admission;
 /// Epoch and row windows share one native mutation lane and pending-row check.

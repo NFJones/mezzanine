@@ -16,7 +16,9 @@ use crate::runtime::processes::native_patch::worker::NativePatchWorkerOutcome;
 use std::sync::Arc;
 
 mod archive;
+mod storage;
 pub(crate) use archive::NativeFilesystemArchiveAcceptance;
+pub(crate) use storage::NativeFilesystemArchiveSettlement;
 mod audit;
 use audit::FilesystemAuditObligation;
 mod hooks;
@@ -116,6 +118,8 @@ pub(super) struct FilesystemCompletionReceipt {
     publication_failure: Option<Box<MezError>>,
     /// Exact checked archive admission, never a producer-release receipt.
     archive_source: Option<NativeFilesystemArchiveAcceptance>,
+    /// Qualified original physical prefix or explicit original no-save policy.
+    archive_storage: Option<NativeFilesystemArchiveSettlement>,
     /// Remaining final diff selected once after exact progress reconciliation.
     final_publication_diff: Option<String>,
     /// First required failure; duplicates never reset it or replay the gate.
@@ -294,6 +298,7 @@ impl RuntimeSessionService {
                 publication_source: None,
                 publication_failure: None,
                 archive_source: None,
+                archive_storage: None,
                 final_publication_diff: None,
                 failure: None,
             }),

@@ -1113,6 +1113,31 @@ impl AsyncRuntimeSessionHandle {
             .await?
     }
 
+    /// Requests only actual original verifier evidence, not a supplied success.
+    pub(crate) async fn observe_native_filesystem_archive_storage(
+        &self,
+        source: crate::runtime::native_filesystem::NativeFilesystemArchiveAcceptance,
+    ) -> Result<Option<crate::runtime::native_filesystem::NativeFilesystemArchiveSettlement>> {
+        self.request(
+            |reply| AsyncRuntimeRequest::ObserveNativeFilesystemArchiveStorage { source, reply },
+        )
+        .await?
+    }
+
+    /// Checks original source/storage freshness without authorizing raw release.
+    pub(crate) async fn validate_native_filesystem_archive_settlement(
+        &self,
+        settlement: crate::runtime::native_filesystem::NativeFilesystemArchiveSettlement,
+    ) -> Result<bool> {
+        self.request(
+            |reply| AsyncRuntimeRequest::ValidateNativeFilesystemArchiveSettlement {
+                settlement,
+                reply,
+            },
+        )
+        .await?
+    }
+
     /// Rechecks original canonical source rather than trusting a cached gate.
     /// The returned bool is freshness only, never producer-transfer authority.
     pub(crate) async fn validate_native_filesystem_archive(

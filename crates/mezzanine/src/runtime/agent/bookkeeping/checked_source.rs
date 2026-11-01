@@ -17,7 +17,7 @@ enum CheckedSourceState {
     /// Original read entered; acceptance has not been observed.
     Entered,
     /// Checked rows are in existing history or an actual admitted append owner.
-    Accepted,
+    Accepted(RuntimeTranscriptPrefixReceipt),
     /// First boundary failure remains authoritative despite later callbacks.
     Failed(Box<MezError>),
 }
@@ -51,7 +51,21 @@ impl RuntimeCompletionCheckedSource {
     pub(crate) fn accepted(&self) -> bool {
         self.0
             .lock()
-            .is_ok_and(|state| matches!(*state, CheckedSourceState::Accepted))
+            .is_ok_and(|state| matches!(*state, CheckedSourceState::Accepted(_)))
+    }
+
+    /// Returns the exact original physical work bound at checked admission.
+    /// This grants no physical success or permission to discard its handle.
+    pub(crate) fn physical_receipt(&self) -> Result<Option<RuntimeTranscriptPrefixReceipt>> {
+        let state = self
+            .0
+            .lock()
+            .map_err(|_| MezError::invalid_state("completion checked-source owner poisoned"))?;
+        match &*state {
+            CheckedSourceState::Accepted(receipt) => Ok(Some(receipt.clone())),
+            CheckedSourceState::Failed(error) => Err((**error).clone()),
+            _ => Ok(None),
+        }
     }
 
     /// Preserves the first typed boundary failure for the original consumer.
@@ -87,14 +101,14 @@ impl RuntimeCompletionCheckedSource {
 
     /// Called only after exact claim/read validation and every required append
     /// admission suffix succeeds. No boolean supplied by a worker can invoke it.
-    pub(super) fn accept(&self) -> Result<()> {
+    pub(super) fn accept(&self, physical: RuntimeTranscriptPrefixReceipt) -> Result<()> {
         let mut state = self
             .0
             .lock()
             .map_err(|_| MezError::invalid_state("completion checked-source owner poisoned"))?;
         match &*state {
             CheckedSourceState::Entered => {
-                *state = CheckedSourceState::Accepted;
+                *state = CheckedSourceState::Accepted(physical);
                 Ok(())
             }
             CheckedSourceState::Failed(error) => Err((**error).clone()),

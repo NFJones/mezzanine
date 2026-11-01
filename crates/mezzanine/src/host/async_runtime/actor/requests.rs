@@ -3118,6 +3118,23 @@ impl AsyncRuntimeSessionActor {
                 let _ = reply.send(result);
                 false
             }
+            AsyncRuntimeRequest::ObserveNativeFilesystemArchiveStorage { source, reply } => {
+                let result = self
+                    .service
+                    .observe_native_filesystem_archive_storage(&source);
+                let _ = reply.send(result);
+                false
+            }
+            AsyncRuntimeRequest::ValidateNativeFilesystemArchiveSettlement {
+                settlement,
+                reply,
+            } => {
+                let current = self
+                    .service
+                    .native_filesystem_archive_settlement_is_current(&settlement);
+                let _ = reply.send(Ok(current));
+                false
+            }
             AsyncRuntimeRequest::ValidateNativeFilesystemArchive { acceptance, reply } => {
                 let current = self
                     .service
@@ -3127,6 +3144,9 @@ impl AsyncRuntimeSessionActor {
             }
             AsyncRuntimeRequest::PrepareNativeFilesystemArchive { attempt, reply } => {
                 let result = self.service.prepare_native_filesystem_archive(&attempt);
+                // Preparation can retain a new original archive candidate even
+                // when there is no unrelated runtime event to wake bookkeeping.
+                self.dispatch_bookkeeping_candidates();
                 let _ = reply.send(result);
                 self.notify_event_delivery();
                 false

@@ -29,6 +29,10 @@ pub(crate) struct NativeFilesystemArchiveAcceptance {
     attempt: NativeFilesystemAttempt,
     /// Original completion group allocation, not a matching public group label.
     group: Arc<()>,
+    /// Actual registered producer allocation, without retaining that owner.
+    producer: Option<
+        crate::runtime::processes::native_filesystem_producer::NativeFilesystemProducerIdentity,
+    >,
     /// Actual checked source or explicit original no-save policy.
     destination: ArchiveDestination,
 }
@@ -37,6 +41,57 @@ impl std::fmt::Debug for NativeFilesystemArchiveAcceptance {
     /// Never expose path, row bytes, private errors or opaque allocation values.
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str("NativeFilesystemArchiveAcceptance")
+    }
+}
+
+impl NativeFilesystemArchiveAcceptance {
+    /// Returns exact original attribution for root-owned verification custody.
+    pub(crate) fn attempt(&self) -> &NativeFilesystemAttempt {
+        &self.attempt
+    }
+
+    /// Rejects a lookalike producer even when its attempt labels are identical.
+    pub(crate) fn producer_is(
+        &self,
+        producer: &crate::runtime::processes::native_filesystem_producer::NativeFilesystemProducer,
+    ) -> bool {
+        self.producer.as_ref() == Some(&producer.identity())
+    }
+
+    /// Retrieves only the actual checked source's immutable physical work.
+    /// None denotes original no-save policy, never a fabricated physical fact.
+    pub(crate) fn physical_receipt(
+        &self,
+    ) -> Result<Option<crate::runtime::agent::RuntimeTranscriptPrefixReceipt>> {
+        match &self.destination {
+            ArchiveDestination::NoPersistence(_) => Ok(None),
+            ArchiveDestination::Saved(witness) => witness
+                .checked_source()
+                .physical_receipt()?
+                .map(Some)
+                .ok_or_else(|| {
+                    MezError::invalid_state(
+                        "filesystem physical source was not bound at checked admission",
+                    )
+                }),
+        }
+    }
+
+    /// Checks actual opaque source ownership, including its immutable witness.
+    pub(crate) fn same_source(&self, other: &Self) -> bool {
+        self.attempt == other.attempt
+            && self.producer == other.producer
+            && Arc::ptr_eq(&self.group, &other.group)
+            && match (&self.destination, &other.destination) {
+                (ArchiveDestination::Saved(left), ArchiveDestination::Saved(right)) => {
+                    left == right
+                }
+                (
+                    ArchiveDestination::NoPersistence(left),
+                    ArchiveDestination::NoPersistence(right),
+                ) => left == right,
+                _ => false,
+            }
     }
 }
 
@@ -123,6 +178,9 @@ impl RuntimeSessionService {
             let acceptance = NativeFilesystemArchiveAcceptance {
                 attempt: attempt.clone(),
                 group: Arc::clone(&group.identity),
+                producer: self
+                    .retained_native_filesystem_producer(attempt)
+                    .map(|producer| producer.identity()),
                 destination,
             };
             self.agent
@@ -183,7 +241,8 @@ impl RuntimeSessionService {
         let Some(stored) = &receipt.archive_source else {
             return false;
         };
-        if stored.attempt != acceptance.attempt
+        if stored.producer != acceptance.producer
+            || stored.attempt != acceptance.attempt
             || !Arc::ptr_eq(&stored.group, &acceptance.group)
             || !match (&stored.destination, &acceptance.destination) {
                 (ArchiveDestination::Saved(left), ArchiveDestination::Saved(right)) => {

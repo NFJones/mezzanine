@@ -763,5 +763,8 @@ mod progress;
 #[cfg(target_os = "linux")]
 mod archive;
 
+/// Qualified physical archive facts retain original actor and root custody.
+#[cfg(target_os = "linux")]
+mod archive_storage;
 #[cfg(target_os = "linux")]
 mod checked_archive;

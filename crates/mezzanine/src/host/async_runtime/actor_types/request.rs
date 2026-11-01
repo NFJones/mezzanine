@@ -1085,6 +1085,22 @@ pub(in crate::host::async_runtime) enum AsyncRuntimeRequest {
         /// Acceptance only; sole dispatch custody never crosses this reply.
         reply: oneshot::Sender<Result<bool>>,
     },
+    /// Observes only original registered verifier evidence; no caller status.
+    ObserveNativeFilesystemArchiveStorage {
+        /// Original logical source, including stale source for error attribution.
+        source: crate::runtime::native_filesystem::NativeFilesystemArchiveAcceptance,
+        /// Actual joined storage fact or pending; not producer-release authority.
+        reply: oneshot::Sender<
+            Result<Option<crate::runtime::native_filesystem::NativeFilesystemArchiveSettlement>>,
+        >,
+    },
+    /// Rechecks qualified original source/storage without executing I/O.
+    ValidateNativeFilesystemArchiveSettlement {
+        /// Opaque original observed gate, never reconstructible metadata.
+        settlement: crate::runtime::native_filesystem::NativeFilesystemArchiveSettlement,
+        /// Freshness only; the root retains custody independently.
+        reply: oneshot::Sender<Result<bool>>,
+    },
     /// Rechecks canonical source behind an opaque archive gate; no I/O/release.
     ValidateNativeFilesystemArchive {
         /// Actual original gate, never matching labels or a caller success bit.
@@ -1659,6 +1675,8 @@ impl AsyncRuntimeRequest {
             | Self::ClaimApprovedExternalAction { .. }
             | Self::ClaimNativeShellAction { .. }
             | Self::ClaimNativeFilesystemProducer { .. }
+            | Self::ObserveNativeFilesystemArchiveStorage { .. }
+            | Self::ValidateNativeFilesystemArchiveSettlement { .. }
             | Self::ValidateNativeFilesystemArchive { .. }
             | Self::PrepareNativeFilesystemArchive { .. }
             | Self::NativeFilesystemProgress { .. }

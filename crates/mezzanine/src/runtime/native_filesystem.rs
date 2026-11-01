@@ -21,3 +21,6 @@ pub(crate) use super::processes::native_patch::worker::{
 
 /// Opaque original checked archive admission, separate from producer transfer.
 pub(crate) use super::agent::NativeFilesystemArchiveAcceptance;
+
+/// Qualified storage gate, still separate from source/producer transfer.
+pub(crate) use super::agent::NativeFilesystemArchiveSettlement;

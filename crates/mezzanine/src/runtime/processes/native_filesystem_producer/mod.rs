@@ -19,6 +19,7 @@ use crate::runtime::processes::native_patch::commit::{
 };
 use crate::runtime::processes::native_patch::worker::NativePatchWorkerOutcome;
 
+mod archive;
 mod execution;
 mod progress;
 use execution::Execution;
@@ -40,14 +41,30 @@ struct Admission {
     dispatch: Option<Box<RuntimeNativeFilesystemDispatch>>,
 }
 
+/// Opaque producer allocation identity without retaining the producer itself.
+/// Gates may carry this identity without creating a worker/owner custody cycle.
+#[derive(Clone)]
+pub(crate) struct NativeFilesystemProducerIdentity(Arc<()>);
+impl PartialEq for NativeFilesystemProducerIdentity {
+    /// Unit value equality would alias every producer; compare actual allocation.
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+impl Eq for NativeFilesystemProducerIdentity {}
+
 /// Shared custody retained independently by root service and actor registry.
 struct Inner {
+    /// Original allocation identity survives in gates without retaining this owner.
+    identity: NativeFilesystemProducerIdentity,
     /// Exact opaque actor attempt whose work may be installed once.
     attempt: NativeFilesystemAttempt,
     /// Bounded synchronous claim/start/close transition owner.
     admission: Mutex<Admission>,
     /// Wakes retirement after a claim reservation finishes installing custody.
     claim_changed: tokio::sync::Notify,
+    /// One original archive verifier remains root-owned across actor replacement.
+    archive: Mutex<Option<archive::ArchiveWorkerOwner>>,
     /// Actual blocking task handle and original observed outcome.
     execution: tokio::sync::Mutex<Execution>,
     /// Bounded original confirmed receipts, independent of display delivery.
@@ -63,6 +80,9 @@ impl Drop for Inner {
             && let Some(fence) = &admission.fence
         {
             fence.cancel();
+        }
+        if let Ok(Some(owner)) = self.archive.get_mut() {
+            let _ = owner.receipt.close_for_replacement();
         }
     }
 }
@@ -99,6 +119,7 @@ impl NativeFilesystemProducer {
     /// Creates root custody before an asynchronous claim can be polled.
     pub(crate) fn new(attempt: NativeFilesystemAttempt) -> Self {
         Self(Arc::new(Inner {
+            identity: NativeFilesystemProducerIdentity(Arc::new(())),
             attempt,
             admission: Mutex::new(Admission {
                 closed: false,
@@ -108,6 +129,7 @@ impl NativeFilesystemProducer {
                 dispatch: None,
             }),
             claim_changed: tokio::sync::Notify::new(),
+            archive: Mutex::new(None),
             execution: tokio::sync::Mutex::new(Execution::Unstarted),
             progress: Mutex::new(Vec::new()),
         }))
@@ -127,6 +149,11 @@ impl NativeFilesystemProducer {
             .map_err(|_| MezError::invalid_state("native filesystem admission lock poisoned"))?
             .work
             .is_some())
+    }
+
+    /// Returns non-owning identity metadata for an actual registered producer.
+    pub(crate) fn identity(&self) -> NativeFilesystemProducerIdentity {
+        self.0.identity.clone()
     }
 
     /// Tests retained allocation identity, not equal attempt labels alone.
@@ -265,7 +292,12 @@ impl NativeFilesystemProducer {
                     Execution::Joined(Arc::new(execution::unstarted(&dispatch.work.identity)));
             }
         }
-        self.observe_locked(&mut execution).await
+        let outcome = self.observe_locked(&mut execution).await;
+        drop(execution);
+        if let Some((_, receipt)) = self.archive_worker()? {
+            receipt.observe().await?;
+        }
+        outcome
     }
 
     /// Observes an actual task while retaining its handle across each await.

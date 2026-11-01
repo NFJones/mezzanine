@@ -12752,6 +12752,27 @@ Native actor archive preparation MUST NOT select inline persistence. Checked
 logical source/append ownership MUST NOT imply physical append, durability,
 worker join, continuation or producer retirement; those gates remain distinct.
 
+Physical native filesystem archive acceptance MUST additionally verify the
+minimal required original RAW prefix under its conversation append lock. The
+expectation MUST bind every row field and occurrence, its inclusive frontier,
+and a finite captured maximum row size. Missing or short data and overlapping
+unsettled recovery receipts MUST remain pending; verification MUST NOT replay
+append recovery, file effects, deletion or epoch publication. Later-only receipts
+and unrelated later rows MUST NOT enlarge the required prefix. Verification MUST
+sync the exact verified file and owning directories and detect source replacement
+or mutation across that boundary. This is qualified historical storage evidence,
+not permanent retention or published compaction authority.
+
+The original registered producer MUST retain the actual verification handle
+before its first poll. Observer cancellation MUST NOT detach that handle or
+permit its replacement before observed join. Stale unstarted work MUST have its
+start admission closed before replacement. Only a joined genuine seal bound to
+the exact original source and producer allocation may satisfy saved storage;
+matching paths, counts, attempts or generic completion notifications cannot.
+Waiting reads MAY be explicitly rechecked; success and failure MUST be cached.
+Original no-save policy MUST remain distinct from a physical synchronization.
+Physical acceptance MUST NOT itself release raw outcomes, producers or groups.
+
 Forced completion archive projection MUST use the actual moved original
 execution/context and their captured imported-history boundary, accepted
 compaction witnesses/prior epoch and routed-parent policy. Later live-map values

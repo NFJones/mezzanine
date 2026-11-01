@@ -146,7 +146,12 @@ replacement conversation's state or replay a file change to reconstruct history.
 Missing original context keeps the archive handoff pending. Retaining an archive
 candidate is separate from checking it and accepting its append. A changed
 snapshot needs a new check, and conflicting actor attribution keeps it pending.
-These acknowledgements do not by themselves prove that archive bytes reached disk.
+These acknowledgements do not by themselves prove that archive bytes reached disk. Saved
+archive verification reads and synchronizes the exact required original prefix
+under its append lock and waits for overlapping recovery receipts to settle.
+It retains the actual worker across dropped observers and does not replay file
+changes or append recovery. This storage evidence does not release the original
+producer or promise permanent archive retention.
 
 Denied approvals and user cancellations are not automatically retried.
 Mezzanine may let the agent correct invalid arguments or other recoverable
