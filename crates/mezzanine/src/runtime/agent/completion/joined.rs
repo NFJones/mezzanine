@@ -64,7 +64,7 @@ impl RuntimeSessionService {
                 .keys()
                 .any(|(owner, _)| owner == turn_id)
             && execution.action_results.iter().all(|result| {
-                if self.agent_action_has_native_shell_owner(turn_id, &result.action_id)
+                if self.agent_action_has_native_owner(turn_id, &result.action_id)
                     || self.agent_action_has_running_shell_transaction(turn_id, &result.action_id)
                     || self.agent_action_has_pending_pre_shell_hook(turn_id, &result.action_id)
                     || self.agent.pending_apply_patch_phases.contains_key(

@@ -1216,7 +1216,7 @@ fn runtime_unavailable_recipient_abandons_unsent_shell_sibling() {
     );
     assert_eq!(action_result_block_count(&service, "msg-shell"), 1);
     assert!(
-        !service.agent_action_has_native_shell_owner("turn-1", "shell-unsent"),
+        !service.agent_action_has_native_owner("turn-1", "shell-unsent"),
         "no shell owner may exist for an abandoned sibling"
     );
     assert_eq!(service.pending_agent_provider_tasks().len(), 1);

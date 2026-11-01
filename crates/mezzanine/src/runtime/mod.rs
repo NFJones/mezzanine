@@ -529,8 +529,9 @@ pub use transitions::{
     HostClipboardEvent, HostClipboardPasteTarget, PaneEvent, PaneForegroundProcessObservation,
     PaneProcessEvent, PaneProcessInstance, PaneProcessIoEffect, PersistenceEvent,
     PersistenceTarget, PersistenceWriteMode, ProcessEvent, RenderInvalidationReason, RuntimeEvent,
-    RuntimeEventBatch, RuntimeEventIngressReport, RuntimeSideEffect, RuntimeTimerKey,
-    RuntimeTimerKind, RuntimeTransition, SessionArchiveOperation, ShutdownEvent, TimerEvent,
+    RuntimeEventBatch, RuntimeEventIngressReport, RuntimeNativeFilesystemOffer, RuntimeSideEffect,
+    RuntimeTimerKey, RuntimeTimerKind, RuntimeTransition, SessionArchiveOperation, ShutdownEvent,
+    TimerEvent,
 };
 
 pub(crate) use auto_sizing::runtime_execute_auto_sizing_with_async_provider;

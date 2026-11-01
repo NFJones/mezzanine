@@ -963,16 +963,17 @@ impl RuntimeSessionService {
         Ok(())
     }
 
-    /// Reports whether a native worker owns one running action.
-    pub(crate) fn agent_action_has_native_shell_owner(
-        &self,
-        turn_id: &str,
-        action_id: &str,
-    ) -> bool {
+    /// Reports retained native shell or filesystem ownership, including queued
+    /// work. It prevents competing dispatch/abandonment and proves no join.
+    pub(crate) fn agent_action_has_native_owner(&self, turn_id: &str, action_id: &str) -> bool {
         let identity = (turn_id.to_string(), action_id.to_string());
         self.agent
-            .pending_native_shell_dispatches
-            .contains_key(&identity)
+            .native_filesystem_actions
+            .owns_action(turn_id, action_id)
+            || self
+                .agent
+                .pending_native_shell_dispatches
+                .contains_key(&identity)
             || self
                 .agent
                 .claimed_native_shell_dispatches
@@ -1089,7 +1090,7 @@ impl RuntimeSessionService {
                     && local_shell_backed
                     && !self.agent_action_has_pending_pre_shell_hook(turn_id, &result.action_id)
                     && !self.agent_action_has_running_shell_transaction(turn_id, &result.action_id)
-                    && !self.agent_action_has_native_shell_owner(turn_id, &result.action_id)
+                    && !self.agent_action_has_native_owner(turn_id, &result.action_id)
             })
     }
 
@@ -1629,7 +1630,7 @@ impl RuntimeSessionService {
                 .ok_or_else(|| {
                     MezError::invalid_state("running shell result does not match an action")
                 })?;
-            if self.agent_action_has_native_shell_owner(&turn.turn_id, &action.id) {
+            if self.agent_action_has_native_owner(&turn.turn_id, &action.id) {
                 continue;
             }
             let action_index = batch

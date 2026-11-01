@@ -189,6 +189,8 @@ enum OwnedAgentWork {
     Provider(ProviderWorkerOwner),
     /// Native dispatch with its actual blocking handle and original result.
     Native(NativeWorkerOwner),
+    /// Actual filesystem producer retained before its first actor claim poll.
+    Filesystem(super::filesystem_ownership::FilesystemRootOwner),
 }
 
 /// One registered task, including explicit non-request ownership.
@@ -200,7 +202,50 @@ pub(super) struct WorkerOwnership {
 }
 
 /// Every root provider task is registered, so missing identity remains fatal.
-pub(super) type AgentProviderWorkerOwners = HashMap<tokio::task::Id, WorkerOwnership>;
+#[derive(Default)]
+pub(super) struct AgentProviderWorkerOwners {
+    /// Exact live/unadopted task registrations, excluding settled history.
+    entries: HashMap<tokio::task::Id, WorkerOwnership>,
+    /// External stop access never depends on this driver's async mutex.
+    filesystem: std::sync::Arc<super::filesystem_ownership::FilesystemRootStops>,
+}
+impl std::ops::Deref for AgentProviderWorkerOwners {
+    type Target = HashMap<tokio::task::Id, WorkerOwnership>;
+    /// Preserves existing bounded non-filesystem registry operations.
+    fn deref(&self) -> &Self::Target {
+        &self.entries
+    }
+}
+impl std::ops::DerefMut for AgentProviderWorkerOwners {
+    /// Mutations remain exclusive to the retained service driver.
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.entries
+    }
+}
+impl AgentProviderWorkerOwners {
+    /// Shares reduce-only controls without borrowing driver state across stop.
+    pub(super) fn filesystem_stops(
+        &self,
+    ) -> std::sync::Arc<super::filesystem_ownership::FilesystemRootStops> {
+        self.filesystem.clone()
+    }
+    /// Finds only the retained original allocation for this opaque source token.
+    pub(super) fn known_filesystem(
+        &self,
+        offer: &crate::runtime::RuntimeNativeFilesystemOffer,
+    ) -> Option<crate::runtime::native_filesystem::NativeFilesystemProducer> {
+        self.values()
+            .filter_map(filesystem_owner)
+            .find(|owner| owner.producer().attempt() == offer.attempt())
+            .map(|owner| owner.producer().clone())
+    }
+
+    /// Removes an acknowledged original owner and its reduce-only stop metadata.
+    fn remove_filesystem(&mut self, id: tokio::task::Id) {
+        self.filesystem.remove(id);
+        self.entries.remove(&id);
+    }
+}
 
 /// Cleanup evidence retained outside an abortable provider-service future.
 #[derive(Default)]
@@ -253,6 +298,48 @@ where
     )
 }
 
+/// Registers the exact filesystem producer outside its abortable monitor.
+pub(super) fn spawn_owned_filesystem_agent_worker<F>(
+    workers: &mut JoinSet<Result<AsyncAgentProviderWorkerResult>>,
+    owners: &mut AgentProviderWorkerOwners,
+    producer: crate::runtime::native_filesystem::NativeFilesystemProducer,
+    future: F,
+) -> tokio::task::AbortHandle
+where
+    F: Future<Output = Result<AsyncAgentProviderWorkerResult>> + Send + 'static,
+{
+    let stop_control = producer.clone();
+    let (registered, admission) = tokio::sync::oneshot::channel();
+    let task = spawn_owned_worker(
+        workers,
+        owners,
+        Some(OwnedAgentWork::Filesystem(
+            super::filesystem_ownership::FilesystemRootOwner::new(producer),
+        )),
+        async move {
+            admission.await.map_err(|_| {
+                MezError::invalid_state("filesystem root registration lost before claim")
+            })?;
+            future.await
+        },
+    );
+    // Tokio may poll concurrently on another thread immediately after spawn.
+    // Only this send, after map insertion, releases the monitor's first poll.
+    owners.filesystem.register(task.id(), &stop_control);
+    let _ = registered.send(());
+    task
+}
+
+/// Clones only actual filesystem custody while its root map entry stays installed.
+fn filesystem_owner(
+    ownership: &WorkerOwnership,
+) -> Option<super::filesystem_ownership::FilesystemRootOwner> {
+    match &ownership.request {
+        Some(OwnedAgentWork::Filesystem(producer)) => Some(producer.clone()),
+        _ => None,
+    }
+}
+
 /// Installs every root task identity synchronously before a service await.
 fn spawn_owned_worker<F>(
     workers: &mut JoinSet<Result<AsyncAgentProviderWorkerResult>>,
@@ -272,6 +359,27 @@ where
         },
     );
     task
+}
+
+/// Exposes the real retained allocation for isolated root-custody controls.
+#[cfg(all(test, target_os = "linux"))]
+pub(super) fn filesystem_owner_for_tests(
+    owners: &AgentProviderWorkerOwners,
+    id: tokio::task::Id,
+) -> Option<crate::runtime::native_filesystem::NativeFilesystemProducer> {
+    owners
+        .get(&id)
+        .and_then(filesystem_owner)
+        .map(|owner| owner.producer().clone())
+}
+
+/// Exposes the actual recovery-handle owner for cancellation qualification.
+#[cfg(all(test, target_os = "linux"))]
+pub(super) fn filesystem_recovery_for_tests(
+    owners: &AgentProviderWorkerOwners,
+    id: tokio::task::Id,
+) -> Option<super::filesystem_ownership::FilesystemRootOwner> {
+    owners.get(&id).and_then(filesystem_owner)
 }
 
 /// Takes the expense of an already joined auxiliary producer. Missing retained
@@ -356,6 +464,11 @@ async fn retire_request_owner(
     let owner = match owner {
         OwnedAgentWork::Provider(owner) => owner,
         OwnedAgentWork::Native(owner) => return retire_native_owner(handle, owner, cause).await,
+        OwnedAgentWork::Filesystem(_) => {
+            return Err(MezError::invalid_state(
+                "filesystem retirement must retain root map custody",
+            ));
+        }
     };
     let drain = {
         drains
@@ -409,6 +522,33 @@ pub(super) async fn record_owned_agent_provider_worker(
         Ok((id, _)) => *id,
         Err(error) => error.id(),
     };
+    if let Some(owner) = owners.get(&id).and_then(filesystem_owner) {
+        // Keep map custody while starting recovery. Its actual task handle is
+        // retained separately; serial monitor draining must not wait on siblings.
+        let result = match joined {
+            Err(error) if !error.is_cancelled() => {
+                Err(MezError::invalid_state(if error.is_panic() {
+                    "filesystem monitor failed: panic; original owner retained"
+                } else {
+                    "filesystem monitor join failed; original owner retained"
+                }))
+            }
+            Ok((_, Err(error))) => Err(error),
+            Ok((_, Ok(Some(_)))) => Err(MezError::invalid_state(
+                "filesystem monitor returned an unrelated runtime event",
+            )),
+            _ => {
+                if !owner.acknowledged()? {
+                    owner.start_recovery(handle).await;
+                }
+                Ok(())
+            }
+        };
+        if result.is_ok() && owner.acknowledged()? {
+            owners.remove_filesystem(id);
+        }
+        return result;
+    }
     let mut ownership = owners.remove(&id).ok_or_else(|| {
         MezError::invalid_state("provider worker completion has no retained ownership")
     })?;
@@ -442,6 +582,47 @@ pub(super) async fn record_owned_agent_provider_worker(
     }
 }
 
+/// Adopts only completed recovery joins; live I/O never blocks unrelated dispatch.
+pub(super) async fn drain_filesystem_recoveries(
+    handle: &AsyncRuntimeSessionHandle,
+    owners: &mut AgentProviderWorkerOwners,
+) -> Result<()> {
+    let completed: Vec<_> = owners
+        .iter()
+        .filter_map(|(id, ownership)| {
+            filesystem_owner(ownership)
+                .filter(|owner| owner.recovery_ready())
+                .map(|owner| (*id, owner))
+        })
+        .collect();
+    for (id, owner) in completed {
+        let retired = owner.observe_recovery(handle).await;
+        // A failed observer cannot invalidate a later genuine transfer. Observe
+        // its actual join first, release qualified custody, then report the
+        // original failure rather than keeping an already transferred owner.
+        let released = release_filesystem_custody(owners, id, &owner);
+        finish_provider_service_result(retired, released)?;
+    }
+    Ok(())
+}
+
+/// Releases only a qualified transfer after the caller observes the retained
+/// recovery join. Missing acknowledgement remains an explicit cleanup failure;
+/// acknowledgement-read failures cannot override an earlier observer error.
+fn release_filesystem_custody(
+    owners: &mut AgentProviderWorkerOwners,
+    id: tokio::task::Id,
+    owner: &super::filesystem_ownership::FilesystemRootOwner,
+) -> Result<()> {
+    if !owner.acknowledged()? {
+        return Err(MezError::invalid_state(
+            "filesystem root retains source awaiting original transfer acknowledgement",
+        ));
+    }
+    owners.remove_filesystem(id);
+    Ok(())
+}
+
 /// Keeps the original failure classification and typed facts when cleanup also
 /// fails. Secondary details are bounded categories rather than panic payloads.
 pub(super) fn finish_provider_service_result<T>(
@@ -468,6 +649,7 @@ pub(super) async fn retire_agent_provider_workers(
     owners: &mut AgentProviderWorkerOwners,
     failures: &mut ProviderCleanupFailures,
 ) -> Result<u64> {
+    owners.filesystem.request_stop();
     workers.abort_all();
     let mut report = AsyncAgentProviderPollReport {
         polls: 0,
@@ -490,7 +672,23 @@ pub(super) async fn retire_agent_provider_workers(
         reported.insert(key, usage);
         keep_cleanup_error(failures, delivery);
     }
-    for (_, ownership) in std::mem::take(owners) {
+    // Never move filesystem owners into a local drain: a driver panic must
+    // leave every not-yet-transferred producer in supervisor-visible state.
+    let recoveries: Vec<_> = owners.values().filter_map(filesystem_owner).collect();
+    for owner in recoveries {
+        owner.start_recovery(handle).await;
+    }
+    let retained_ids: Vec<_> = owners.keys().copied().collect();
+    for id in retained_ids {
+        if let Some(owner) = owners.get(&id).and_then(filesystem_owner) {
+            let retired = owner.observe_recovery(handle).await;
+            let released = release_filesystem_custody(owners, id, &owner);
+            keep_cleanup_error(failures, finish_provider_service_result(retired, released));
+            continue;
+        }
+        let Some(ownership) = owners.remove(&id) else {
+            continue;
+        };
         match ownership.request {
             Some(OwnedAgentWork::Native(owner)) => {
                 keep_cleanup_error(
@@ -511,6 +709,17 @@ pub(super) async fn retire_agent_provider_workers(
                         .await,
                     );
                 }
+            }
+            Some(OwnedAgentWork::Filesystem(producer)) => {
+                // The serialized map was checked above; retain rather than
+                // discard if a future owner variant changes this drain shape.
+                owners.insert(
+                    id,
+                    WorkerOwnership {
+                        request: Some(OwnedAgentWork::Filesystem(producer)),
+                        cause: ownership.cause,
+                    },
+                );
             }
             None => {}
         }

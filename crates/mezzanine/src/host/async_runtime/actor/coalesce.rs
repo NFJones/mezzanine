@@ -462,6 +462,9 @@ pub(super) fn runtime_side_effect_kind(effect: &RuntimeSideEffect) -> &'static s
             "dispatch-approved-external-action"
         }
         RuntimeSideEffect::DispatchNativeShellAction { .. } => "dispatch-native-shell-action",
+        RuntimeSideEffect::DispatchNativeFilesystemAction { .. } => {
+            "dispatch-native-filesystem-action"
+        }
         RuntimeSideEffect::DispatchAgentCompaction { .. } => "dispatch-agent-compaction",
         RuntimeSideEffect::DispatchAgentRemember { .. } => "dispatch-agent-remember",
         RuntimeSideEffect::DispatchAgentSessionTitle { .. } => "dispatch-agent-session-title",

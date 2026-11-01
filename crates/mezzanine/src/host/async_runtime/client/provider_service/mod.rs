@@ -43,6 +43,7 @@ use worker_ownership::{
     take_completed_auxiliary_usage, with_reported_auxiliary_failure_usage,
 };
 
+mod filesystem_ownership;
 mod native_ownership;
 use native_ownership::NativeWorkerOwner;
 
@@ -404,6 +405,7 @@ where
     };
 
     let mut result = async {
+        filesystem_ownership::recover_filesystem_workers(handle, workers, owners, drains).await?;
         loop {
             let state = *lifecycle.borrow();
             report.terminal_state = state;
@@ -866,6 +868,7 @@ async fn drain_completed_agent_provider_workers(
     while let Some(joined) = workers.try_join_next_with_id() {
         record_owned_agent_provider_worker(joined, handle, report, owners, drains).await?;
     }
+    worker_ownership::drain_filesystem_recoveries(handle, owners).await?;
     Ok(())
 }
 
@@ -1049,6 +1052,14 @@ async fn dispatch_agent_provider_side_effects(
                     owners,
                     None,
                     execute_approved_external_action(handle.clone(), dispatch),
+                );
+            }
+            RuntimeSideEffect::DispatchNativeFilesystemAction { offer } => {
+                filesystem_ownership::spawn_filesystem_action_worker(
+                    workers,
+                    owners,
+                    handle.clone(),
+                    offer,
                 );
             }
             RuntimeSideEffect::DispatchNativeShellAction { turn_id, action_id } => {

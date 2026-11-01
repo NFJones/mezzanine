@@ -122,6 +122,15 @@ impl RuntimeSessionService {
         // Both owners were validated before the producer stored its ack. There
         // is no await, fallible callback or actor reentry between these removals.
         self.agent.completion_settlements.filesystem.remove(&key);
+        // Own transfer is already historical and acknowledged. Resume only
+        // existing ordinary group intent; a suffix failure stays latched in its
+        // original group and cannot undo this handoff or replay the native work.
+        if let Err(error) = self.recover_retained_completion_settlement(&key.0) {
+            let _ = self.append_runtime_diagnostic_event(format!(
+                r#"{{"kind":"filesystem_transfer_settlement_suffix_failed","error_kind":"{:?}"}}"#,
+                error.kind(),
+            ));
+        }
         Ok(Some(accepted))
     }
 }

@@ -413,7 +413,7 @@ impl RuntimeSessionService {
                     .iter()
                     .filter(|result| {
                         result.status == ActionStatus::Running
-                            && !self.agent_action_has_native_shell_owner(&key.0, &result.action_id)
+                            && !self.agent_action_has_native_owner(&key.0, &result.action_id)
                             && !self.agent_action_has_running_shell_transaction(
                                 &key.0,
                                 &result.action_id,
@@ -427,7 +427,7 @@ impl RuntimeSessionService {
                     return Ok(false);
                 };
                 Ok(pending.iter().any(|id| {
-                    self.agent_action_has_native_shell_owner(&key.0, id)
+                    self.agent_action_has_native_owner(&key.0, id)
                         || self.agent_action_has_running_shell_transaction(&key.0, id)
                         || self.agent_action_has_pending_pre_shell_hook(&key.0, id)
                         || updated.action_results.iter().any(|result| {

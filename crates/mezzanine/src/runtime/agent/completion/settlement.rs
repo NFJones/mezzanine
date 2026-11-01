@@ -282,6 +282,11 @@ impl RuntimeSessionService {
         &self,
         turn_id: &str,
     ) -> bool {
+        // Filesystem source/storage/producer ownership also holds ordinary
+        // terminal settlement, even when all optional paint already installed.
+        if self.filesystem_completion_pending(turn_id) {
+            return true;
+        }
         let Some(group) = self.agent.completion_settlements.groups.get(turn_id) else {
             return false;
         };

@@ -1124,6 +1124,13 @@ impl AsyncRuntimeSessionActor {
             }
             side_effects.push(RuntimeSideEffect::DispatchNativeShellAction { turn_id, action_id });
         }
+        for offer in self.service.pending_native_filesystem_actions() {
+            if self.offered_dispatch_sources.contains(&super::SourceDispatch::Filesystem(offer.clone()))
+                || self.side_effect_routes.any_provider(|effect| matches!(effect, RuntimeSideEffect::DispatchNativeFilesystemAction { offer: queued } if *queued == offer)) {
+                continue;
+            }
+            side_effects.push(RuntimeSideEffect::DispatchNativeFilesystemAction { offer });
+        }
         for pane_id in self.service.pending_agent_compaction_tasks() {
             let Some(task_generation) = self
                 .service

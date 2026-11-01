@@ -114,6 +114,34 @@ impl Drop for ClaimReservation<'_> {
     }
 }
 
+/// Reduce-only root stop control, independent of the driver state mutex.
+/// Its weak owner cannot keep a producer/task alive or attest retirement.
+#[derive(Clone)]
+pub(crate) struct NativeFilesystemProducerStop {
+    /// Shared original queue fence, granting cancellation only.
+    attempt: NativeFilesystemAttempt,
+    /// Never strongly retains a producer or its actual worker handles.
+    owner: std::sync::Weak<Inner>,
+}
+impl NativeFilesystemProducerStop {
+    /// Signals the original attempt atomically before any admission lock waits.
+    pub(crate) fn fence(&self) {
+        self.attempt.cancel();
+    }
+
+    /// Fences queued work first, then closes local admission when available.
+    /// Poisoned admission still has its attempt fenced; actual retirement must
+    /// report that poison rather than treating this stop request as evidence.
+    pub(crate) fn request_stop(&self) {
+        self.attempt.cancel();
+        if let Some(owner) = self.owner.upgrade()
+            && let Ok(mut admission) = owner.admission.lock()
+        {
+            admission.closed = true;
+        }
+    }
+}
+
 /// Exact per-offer producer registration, not an execution or settlement receipt.
 #[derive(Clone)]
 pub(crate) struct NativeFilesystemProducer(Arc<Inner>);
@@ -137,6 +165,23 @@ impl NativeFilesystemProducer {
             execution: tokio::sync::Mutex::new(Execution::Unstarted),
             progress: Mutex::new(Vec::new()),
         }))
+    }
+
+    /// Creates reduce-only cancellation without strongly retaining this owner.
+    pub(crate) fn stop_control(&self) -> NativeFilesystemProducerStop {
+        NativeFilesystemProducerStop {
+            attempt: self.0.attempt.clone(),
+            owner: Arc::downgrade(&self.0),
+        }
+    }
+
+    /// Reports closed admission without starting or consuming original work.
+    pub(crate) fn is_closed(&self) -> Result<bool> {
+        self.0
+            .admission
+            .lock()
+            .map(|admission| admission.closed)
+            .map_err(|_| MezError::invalid_state("native filesystem admission lock poisoned"))
     }
 
     /// Returns exact actor identity; numeric labels cannot create this handle.
@@ -222,6 +267,9 @@ impl NativeFilesystemProducer {
     /// Closes admission and signals issued work before waiting for any join.
     /// InFlight reports a held commit guard, not a stopped producer or mutation.
     pub(crate) fn close(&self) -> Result<Option<NativePatchFenceStatus>> {
+        // Closing an unpolled root owner must fence its queued actor source too.
+        // Drop of an unregistered lookalike is deliberately not this operation.
+        self.0.attempt.cancel();
         let mut admission =
             self.0.admission.lock().map_err(|_| {
                 MezError::invalid_state("native filesystem admission lock poisoned")

@@ -12796,6 +12796,24 @@ transfer or cause it to execute again. Root removal MUST match this exact
 acknowledgement; transferring one action MUST leave unrelated sibling, group,
 provider continuation and failure gates intact.
 
+The provider root MUST register filesystem producer custody before releasing
+its first claim poll. Startup recovery MUST recover the original queued source
+or registered allocation, including lost offers, without redispatching effects.
+An offered source MUST NOT be duplicated by unrelated provider poll timers.
+Filesystem ownership MUST count as a runtime progress path and prevent shell
+recovery or sibling cancellation from treating its action as unstarted.
+
+Supervisor stop MUST fence every retained filesystem source before awaiting
+worker joins, independently of the provider driver's async state lock. Late
+registrations after stop MUST be fenced before their first claim. Actual
+recovery handles MUST remain retained across cancellation of their observers;
+all sibling recoveries MUST start before waiting for ordered publication.
+A recovery observer error MUST remain reportable even if another observer later
+obtains the genuine original acknowledgement. After joining the failed observer,
+root custody MAY be removed only on that exact acknowledgement. Missing unissued
+canonical refusal handoff MUST retain custody explicitly, never claim a worker
+join or fabricate a completion acknowledgement.
+
 Forced completion archive projection MUST use the actual moved original
 execution/context and their captured imported-history boundary, accepted
 compaction witnesses/prior epoch and routed-parent policy. Later live-map values

@@ -21,6 +21,8 @@ pub(crate) enum SourceDispatch {
     External(String, String),
     /// One exact native phase, fenced by its existing transaction marker.
     Native(String, String, String),
+    /// One opaque filesystem source; registered producers own paused retries.
+    Filesystem(crate::runtime::RuntimeNativeFilesystemOffer),
     /// One queued compactor, fenced by its existing task generation.
     Compaction(String, u64),
     /// One memory request, fenced by its existing observation identity.
@@ -42,6 +44,9 @@ impl SourceDispatch {
             RuntimeSideEffect::DispatchNativeShellAction { turn_id, action_id } => service
                 .pending_native_shell_action_marker(turn_id, action_id)
                 .map(|marker| Self::Native(turn_id.clone(), action_id.clone(), marker.to_string())),
+            RuntimeSideEffect::DispatchNativeFilesystemAction { offer } => {
+                Some(Self::Filesystem(offer.clone()))
+            }
             RuntimeSideEffect::DispatchAgentCompaction {
                 pane_id,
                 task_generation,
@@ -69,6 +74,10 @@ impl SourceDispatch {
                 service.pending_native_shell_action_marker(turn_id, action_id)
                     == Some(marker.as_str())
             }
+            Self::Filesystem(offer) => service
+                .pending_native_filesystem_actions()
+                .iter()
+                .any(|pending| pending == offer),
             Self::Compaction(pane, generation) => {
                 service.pending_agent_compaction_task_generation(pane) == Some(*generation)
                     && service.agent_compaction_task_is_current(pane, *generation)
@@ -174,7 +183,12 @@ impl AsyncRuntimeSessionActor {
             .iter()
             .filter_map(|effect| SourceDispatch::from_effect(effect, &self.service))
         {
-            if self.refused_dispatch_sources.remove(&source) && source.is_owned(&self.service) {
+            let refused = self.refused_dispatch_sources.remove(&source);
+            // Filesystem root registration deliberately precedes async claim.
+            // Fence every drained offer during that window, not only retries.
+            if (refused || matches!(source, SourceDispatch::Filesystem(_)))
+                && source.is_owned(&self.service)
+            {
                 self.offered_dispatch_sources.insert(source);
             }
         }

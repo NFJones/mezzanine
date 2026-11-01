@@ -9,6 +9,9 @@ use crate::runtime::RuntimeSessionService;
 use std::sync::Mutex;
 
 mod crash_qualification;
+/// Root filesystem registration, source transfer and recovery-handle custody.
+#[cfg(target_os = "linux")]
+mod filesystem_retirement;
 mod native_retirement;
 
 /// Records prepared requests and injects authoritative parser-produced errors.

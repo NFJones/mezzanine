@@ -598,7 +598,7 @@ impl RuntimeSessionService {
             .contains_key(&identity)
             || self.agent.apply_patch_batch_states.contains_key(&identity)
             || self.agent_action_has_running_shell_transaction(turn_id, action_id)
-            || self.agent_action_has_native_shell_owner(turn_id, action_id)
+            || self.agent_action_has_native_owner(turn_id, action_id)
             || self.agent_action_has_pending_pre_shell_hook(turn_id, action_id)
     }
 

@@ -537,6 +537,7 @@ impl RuntimeSideEffectRouter {
             RuntimeSideEffect::DispatchAgentProvider { .. }
                 | RuntimeSideEffect::DispatchApprovedExternalAction { .. }
                 | RuntimeSideEffect::DispatchNativeShellAction { .. }
+                | RuntimeSideEffect::DispatchNativeFilesystemAction { .. }
                 | RuntimeSideEffect::DispatchRecordBrowserRefresh { .. }
                 | RuntimeSideEffect::DispatchAgentCompaction { .. }
                 | RuntimeSideEffect::DispatchAgentRemember { .. }
@@ -817,6 +818,17 @@ impl RuntimeSideEffectRouter {
         self.commands
             .drain(..limit.min(self.commands.len()))
             .collect()
+    }
+
+    /// Withdraws only descriptors being recovered from their actual filesystem
+    /// source. Other families and authoritative payload custody remain untouched.
+    pub(super) fn withdraw_filesystem_offers(&mut self) {
+        self.provider.retain(|effect| {
+            !matches!(
+                effect,
+                RuntimeSideEffect::DispatchNativeFilesystemAction { .. }
+            )
+        });
     }
 
     /// Drains provider-service work in FIFO order without inspecting unrelated

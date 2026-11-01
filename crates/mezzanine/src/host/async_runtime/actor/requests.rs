@@ -3113,8 +3113,27 @@ impl AsyncRuntimeSessionActor {
                 }
                 false
             }
+            AsyncRuntimeRequest::RecoverNativeFilesystemProducers { reply } => {
+                let recovery = self.service.recoverable_native_filesystem_actions();
+                self.side_effect_routes.withdraw_filesystem_offers();
+                self.offered_dispatch_sources
+                    .retain(|source| !matches!(source, super::SourceDispatch::Filesystem(_)));
+                self.refused_dispatch_sources
+                    .retain(|source| !matches!(source, super::SourceDispatch::Filesystem(_)));
+                for (offer, producer) in &recovery {
+                    if producer.is_none() {
+                        self.offered_dispatch_sources
+                            .insert(super::SourceDispatch::Filesystem(offer.clone()));
+                    }
+                }
+                let _ = reply.send(recovery);
+                false
+            }
             AsyncRuntimeRequest::ClaimNativeFilesystemProducer { producer, reply } => {
                 let result = self.service.claim_native_filesystem_producer(&producer);
+                self.settle_source_offer(super::SourceDispatch::Filesystem(
+                    crate::runtime::RuntimeNativeFilesystemOffer::new(producer.attempt().clone()),
+                ));
                 let _ = reply.send(result);
                 false
             }
@@ -3123,9 +3142,14 @@ impl AsyncRuntimeSessionActor {
                 storage,
                 reply,
             } => {
+                let previous_sources = self.ready_dispatch_sources();
                 let result = self
                     .service
                     .transfer_native_filesystem_producer(&producer, &storage);
+                self.dispatch_bookkeeping_candidates();
+                if result.as_ref().is_ok_and(|accepted| accepted.is_some()) {
+                    self.queue_newly_ready_dispatch_sources(previous_sources);
+                }
                 let _ = reply.send(result);
                 self.notify_event_delivery();
                 false

@@ -779,6 +779,7 @@ impl AsyncRuntimeSessionActor {
             RuntimeSideEffect::DispatchAgentProvider { .. }
                 | RuntimeSideEffect::DispatchApprovedExternalAction { .. }
                 | RuntimeSideEffect::DispatchNativeShellAction { .. }
+                | RuntimeSideEffect::DispatchNativeFilesystemAction { .. }
                 | RuntimeSideEffect::DispatchRecordBrowserRefresh { .. }
                 | RuntimeSideEffect::DispatchAgentCompaction { .. }
                 | RuntimeSideEffect::DispatchAgentRemember { .. }

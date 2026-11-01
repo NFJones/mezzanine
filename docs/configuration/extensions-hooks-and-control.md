@@ -126,3 +126,17 @@ top-level keys are rejected rather than silently interpreted as configuration.
 
 Return to [Configuration overview](overview.md) or validate the final file with
 `mez config validate`.
+
+Filesystem producer custody in the provider service is registered before its
+first actor claim. Startup recovers lost queued offers or the actual registered
+producer; recovery never reconstructs a worker from action labels. Stop fences
+all registered sources without waiting for the provider driver's async lock,
+and a registration racing after stop is fenced before admission. Cancelled
+monitors retain their actual recovery handles until original completion transfer
+is acknowledged. A failed recovery observer remains an error even if another
+observer later obtains that acknowledgement and releases root custody.
+
+This ownership plumbing does not activate the in-process patch selector.
+Unissued canonical refusal handoff and supervised persistence shutdown ordering
+remain prerequisites for that cutover; missing handoff retains explicit ownership
+rather than claiming completion.

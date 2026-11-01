@@ -1104,6 +1104,20 @@ impl AsyncRuntimeSessionHandle {
         .await?
     }
 
+    /// Recovers original filesystem tokens/allocations for the sole provider
+    /// driver after lost offers or monitor/service replacement. No work is issued.
+    pub(crate) async fn recover_native_filesystem_producers(
+        &self,
+    ) -> Result<
+        Vec<(
+            crate::runtime::RuntimeNativeFilesystemOffer,
+            Option<crate::runtime::native_filesystem::NativeFilesystemProducer>,
+        )>,
+    > {
+        self.request(|reply| AsyncRuntimeRequest::RecoverNativeFilesystemProducers { reply })
+            .await
+    }
+
     /// Claims into shared custody created before this future is polled.
     pub(crate) async fn claim_native_filesystem_producer(
         &self,

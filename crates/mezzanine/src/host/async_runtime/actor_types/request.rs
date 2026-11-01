@@ -1078,6 +1078,16 @@ pub(in crate::host::async_runtime) enum AsyncRuntimeRequest {
         /// Returns immutable worker input when the queued action is claimable.
         reply: oneshot::Sender<Result<Option<RuntimeNativeShellDispatch>>>,
     },
+    /// Recovers original filesystem source custody for the sole provider driver.
+    RecoverNativeFilesystemProducers {
+        /// Actual registered allocations, or opaque original unclaimed tokens.
+        reply: oneshot::Sender<
+            Vec<(
+                crate::runtime::RuntimeNativeFilesystemOffer,
+                Option<crate::runtime::native_filesystem::NativeFilesystemProducer>,
+            )>,
+        >,
+    },
     /// Installs filesystem dispatch in retained producer custody before replying.
     ClaimNativeFilesystemProducer {
         /// Shared registration retained before this claim can be polled.
@@ -1685,6 +1695,7 @@ impl AsyncRuntimeRequest {
             | Self::ClaimConfiguredAgentProviderTask { .. }
             | Self::ClaimApprovedExternalAction { .. }
             | Self::ClaimNativeShellAction { .. }
+            | Self::RecoverNativeFilesystemProducers { .. }
             | Self::ClaimNativeFilesystemProducer { .. }
             | Self::TransferNativeFilesystemProducer { .. }
             | Self::ObserveNativeFilesystemArchiveStorage { .. }

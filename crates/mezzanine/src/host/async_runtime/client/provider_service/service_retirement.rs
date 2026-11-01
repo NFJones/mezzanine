@@ -44,6 +44,8 @@ pub(super) struct ProviderServiceState {
 pub(in crate::host::async_runtime) struct AgentProviderWorkRetirement {
     /// Monotonic stop request; no deadline, policy or claim is renewed.
     shutdown: Arc<AtomicBool>,
+    /// Reduce-only filesystem stop prefix never waits for the driver state lock.
+    filesystem: Arc<super::filesystem_ownership::FilesystemRootStops>,
     /// One driver borrow, not a global or actor lock. Child workers run freely.
     pub(super) state: Arc<Mutex<ProviderServiceState>>,
     /// Original actor destination retained until actual worker retirement.
@@ -53,9 +55,12 @@ pub(in crate::host::async_runtime) struct AgentProviderWorkRetirement {
 impl AgentProviderWorkRetirement {
     /// Creates one standalone or supervisor-retained work owner.
     pub(super) fn new(handle: AsyncRuntimeSessionHandle) -> Self {
+        let state = ProviderServiceState::default();
+        let filesystem = state.owners.filesystem_stops();
         Self {
             shutdown: Arc::default(),
-            state: Arc::default(),
+            filesystem,
+            state: Arc::new(Mutex::new(state)),
             handle,
         }
     }
@@ -63,6 +68,7 @@ impl AgentProviderWorkRetirement {
     /// Signals before wrapper abort; actual joins remain required afterwards.
     fn request_stop(&self) {
         self.shutdown.store(true, Ordering::Release);
+        self.filesystem.request_stop();
     }
 
     /// Reports the supervisor's monotonic request to the normal service loop.
@@ -97,6 +103,8 @@ struct DriverState {
 
 /// External handle owner; the driver receives only separate work custody.
 struct ProviderDriver {
+    /// Reduce-only source fence survives last external wrapper loss.
+    filesystem: Arc<super::filesystem_ownership::FilesystemRootStops>,
     /// Last-owner drop requests stop before a handle can become detached.
     shutdown: Arc<AtomicBool>,
     /// One observation path, shared by wrapper and supervisor takeover.
@@ -111,6 +119,7 @@ impl Drop for ProviderDriver {
     /// supervision still observes the driver join; drop alone is no receipt.
     fn drop(&mut self) {
         self.shutdown.store(true, Ordering::Release);
+        self.filesystem.request_stop();
     }
 }
 
@@ -137,6 +146,7 @@ impl AgentProviderServiceRetirement {
     pub(in crate::host::async_runtime) fn new(handle: AsyncRuntimeSessionHandle) -> Self {
         let work = AgentProviderWorkRetirement::new(handle);
         let driver = Arc::new(ProviderDriver {
+            filesystem: work.filesystem.clone(),
             shutdown: work.shutdown.clone(),
             task: Mutex::new(DriverState::default()),
             #[cfg(test)]

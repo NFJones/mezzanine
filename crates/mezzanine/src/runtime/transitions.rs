@@ -950,6 +950,29 @@ pub struct ShutdownEvent {
     pub failed: bool,
 }
 
+/// Opaque original filesystem source offered to the provider service.
+/// This descriptor grants no mutation authority and cannot be reconstructed
+/// from turn/action labels. Root custody must precede its first claim poll.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct RuntimeNativeFilesystemOffer {
+    /// Actual registered source including reduce-only queued cancellation.
+    attempt: crate::runtime::agent::native_filesystem::NativeFilesystemAttempt,
+}
+impl RuntimeNativeFilesystemOffer {
+    /// Wraps only an actual actor-registered original source.
+    pub(crate) fn new(
+        attempt: crate::runtime::agent::native_filesystem::NativeFilesystemAttempt,
+    ) -> Self {
+        Self { attempt }
+    }
+    /// Returns the opaque original source, never current mutable turn labels.
+    pub(crate) fn attempt(
+        &self,
+    ) -> &crate::runtime::agent::native_filesystem::NativeFilesystemAttempt {
+        &self.attempt
+    }
+}
+
 /// Side-effect request emitted by the runtime actor after handling events.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RuntimeSideEffect {
@@ -1092,6 +1115,11 @@ pub enum RuntimeSideEffect {
         turn_id: String,
         /// Stable action identity within the turn.
         action_id: String,
+    },
+    /// Register root custody before claiming this original filesystem action.
+    DispatchNativeFilesystemAction {
+        /// Opaque source, not an issued dispatch or mutation permission.
+        offer: RuntimeNativeFilesystemOffer,
     },
     /// Start a model-backed conversation compaction outside the actor.
     DispatchAgentCompaction {

@@ -383,6 +383,46 @@ impl RuntimeSessionService {
         result
     }
 
+    /// Reports retained original filesystem progress without claiming worker
+    /// termination, source acceptance or permission to redispatch the action.
+    pub(crate) fn native_filesystem_turn_has_owner(&self, turn: &str) -> bool {
+        self.agent.native_filesystem_actions.owns_turn(turn)
+    }
+
+    /// Lists only original unregistered provider-lane sources, never issued work.
+    pub(crate) fn pending_native_filesystem_actions(
+        &self,
+    ) -> Vec<crate::runtime::RuntimeNativeFilesystemOffer> {
+        self.agent
+            .native_filesystem_actions
+            .pending()
+            .into_iter()
+            .map(crate::runtime::RuntimeNativeFilesystemOffer::new)
+            .collect()
+    }
+
+    /// Supplies original registry custody to the sole replacement provider driver.
+    /// Registered producers retain actual handles; unregistered tokens remain
+    /// metadata only and still require fresh ordinary actor claim admission.
+    pub(crate) fn recoverable_native_filesystem_actions(
+        &self,
+    ) -> Vec<(
+        crate::runtime::RuntimeNativeFilesystemOffer,
+        Option<crate::runtime::native_filesystem::NativeFilesystemProducer>,
+    )> {
+        self.agent
+            .native_filesystem_actions
+            .recoverable()
+            .into_iter()
+            .map(|(attempt, producer)| {
+                (
+                    crate::runtime::RuntimeNativeFilesystemOffer::new(attempt),
+                    producer,
+                )
+            })
+            .collect()
+    }
+
     /// Registers shared producer custody before issuance and installs dispatch
     /// there synchronously. A lost reply cannot lose the actual claimed work.
     pub(crate) fn claim_native_filesystem_producer(

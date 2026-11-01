@@ -31,6 +31,8 @@ pub(crate) struct NativeFilesystemAttempt {
     realm: Arc<()>,
     /// Checked actor-local sequence, never reused in this allocation.
     sequence: u64,
+    /// Reduce-only cancellation reaches queued state before any actor RPC/claim.
+    fence: NativePatchCommitFence,
 }
 
 impl PartialEq for NativeFilesystemAttempt {
@@ -40,6 +42,27 @@ impl PartialEq for NativeFilesystemAttempt {
     }
 }
 impl Eq for NativeFilesystemAttempt {}
+
+impl PartialOrd for NativeFilesystemAttempt {
+    /// Strong realm allocations make this in-process source ordering ABA-safe.
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+impl Ord for NativeFilesystemAttempt {
+    /// Pointer ordering is private source bookkeeping, never serialized authority.
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        Arc::as_ptr(&self.realm)
+            .cmp(&Arc::as_ptr(&other.realm))
+            .then(self.sequence.cmp(&other.sequence))
+    }
+}
+impl NativeFilesystemAttempt {
+    /// Monotonically fences the original queued or issued work, granting no rights.
+    pub(crate) fn cancel(&self) {
+        self.fence.cancel();
+    }
+}
 
 impl std::fmt::Debug for NativeFilesystemAttempt {
     /// Prints only a numeric identifier, without addresses or patch payloads.
@@ -207,6 +230,7 @@ impl NativeFilesystemActions {
         let token = NativeFilesystemAttempt {
             realm: Arc::clone(&self.realm),
             sequence: self.next,
+            fence: fence.clone(),
         };
         let work = Arc::new(NativeFilesystemWork {
             owner,
@@ -228,6 +252,44 @@ impl NativeFilesystemActions {
         );
         self.next = next;
         Ok((token, work))
+    }
+
+    /// Offers original unclaimed sources, including fenced refusal metadata.
+    /// Claim revalidates the fence; this list grants no execution rights. Paused owners
+    /// already have root custody and must not produce duplicate producer offers.
+    pub(super) fn pending(&self) -> Vec<NativeFilesystemAttempt> {
+        self.attempts
+            .iter()
+            .filter(|(_, entry)| entry.phase == Phase::Queued && entry.producer.is_none())
+            .map(|(sequence, entry)| NativeFilesystemAttempt {
+                realm: self.realm.clone(),
+                sequence: *sequence,
+                fence: entry.fence.clone(),
+            })
+            .collect()
+    }
+
+    /// Recovers original untransferred sources and actual registered producers.
+    /// This metadata snapshot cannot grant scopes or reconstruct a worker.
+    pub(super) fn recoverable(
+        &self,
+    ) -> Vec<(
+        NativeFilesystemAttempt,
+        Option<crate::runtime::processes::native_filesystem_producer::NativeFilesystemProducer>,
+    )> {
+        self.attempts
+            .iter()
+            .map(|(sequence, entry)| {
+                (
+                    NativeFilesystemAttempt {
+                        realm: self.realm.clone(),
+                        sequence: *sequence,
+                        fence: entry.fence.clone(),
+                    },
+                    entry.producer.clone(),
+                )
+            })
+            .collect()
     }
 
     /// Resolves only handles belonging to this actual actor allocation.
@@ -495,6 +557,22 @@ impl NativeFilesystemActions {
         if let Some(entry) = self.get(token) {
             entry.fence.cancel();
         }
+    }
+
+    /// Retained original work is a recoverable progress owner until transfer,
+    /// including queued refusal and checked-storage obligations after native join.
+    pub(super) fn owns_turn(&self, turn: &str) -> bool {
+        self.attempts
+            .values()
+            .any(|entry| entry.work.owner.turn.turn_id == turn)
+    }
+
+    /// Protects queued/issued native action ownership from shell redispatch or
+    /// false unstarted-sibling classification. This grants no mutation or join proof.
+    pub(in crate::runtime::agent) fn owns_action(&self, turn: &str, action: &str) -> bool {
+        self.attempts.values().any(|entry| {
+            entry.work.owner.turn.turn_id == turn && entry.work.owner.action.id == action
+        })
     }
 
     /// Keeps navigation blocked while any original filesystem owner is pending.

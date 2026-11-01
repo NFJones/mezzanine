@@ -306,14 +306,53 @@ async fn cancelled_observers_preserve_actual_blocking_handle_and_outcome() {
     assert!(!fixture.root.join("file").exists());
 }
 
-/// Retirement closes admission while claim preparation is gated outside the
-/// admission lock. The later exact dispatch is retained and cancelled, never
-/// launched, and retirement waits for that actual claim reservation to settle.
+/// Retirement closes admission after the actor has issued a real dispatch but
+/// before its callback returns outside the admission lock. That late dispatch
+/// is retained and cancelled, never launched; retirement waits for the actual
+/// claim reservation rather than inventing a completed or absent worker.
 #[tokio::test(flavor = "current_thread")]
 async fn closing_during_claim_preserves_late_unstarted_dispatch_without_locking_cancel() {
     let mut fixture = Fixture::new();
     let attempt = fixture.queue();
     let producer = NativeFilesystemProducer::new(attempt);
+    let service = std::mem::replace(&mut fixture.service, test_runtime_service());
+    let (started, entered) = tokio::sync::oneshot::channel();
+    let (release, wait) = std::sync::mpsc::channel();
+    let release = Release(release);
+    let claiming = producer.clone();
+    let claim = tokio::task::spawn_blocking(move || {
+        let mut service = service;
+        let accepted = claiming.claim_with(|attempt| {
+            let dispatch = service.claim_native_filesystem_action(attempt)?;
+            started.send(()).unwrap();
+            wait.recv().unwrap();
+            Ok(dispatch)
+        });
+        (service, accepted)
+    });
+    entered.await.unwrap();
+    assert!(producer.close().unwrap().is_none());
+    let mut retire = Box::pin(producer.retire());
+    assert!(futures_util::poll!(retire.as_mut()).is_pending());
+    drop(release);
+    let (service, accepted) = claim.await.unwrap();
+    fixture.service = service;
+    assert!(!accepted.unwrap());
+    let outcome = retire.await.unwrap().unwrap();
+    assert_eq!(outcome.result.certainty, NativeEffectCertainty::Unexecuted);
+    assert!(producer.is_claimed().unwrap());
+    assert!(!fixture.root.join("file").exists());
+}
+
+/// Stop before actual actor validation fences the original queue immediately,
+/// even while its producer claim callback is outside the admission lock. The
+/// rejected original source remains available for no-dispatch settlement; no
+/// dispatch, worker join or synthetic outcome may be invented by retirement.
+#[tokio::test(flavor = "current_thread")]
+async fn closing_before_actor_validation_refuses_claim_without_fabricating_outcome() {
+    let mut fixture = Fixture::new();
+    let attempt = fixture.queue();
+    let producer = NativeFilesystemProducer::new(attempt.clone());
     let service = std::mem::replace(&mut fixture.service, test_runtime_service());
     let (started, entered) = tokio::sync::oneshot::channel();
     let (release, wait) = std::sync::mpsc::channel();
@@ -335,10 +374,22 @@ async fn closing_during_claim_preserves_late_unstarted_dispatch_without_locking_
     drop(release);
     let (service, accepted) = claim.await.unwrap();
     fixture.service = service;
-    assert!(!accepted.unwrap());
-    let outcome = retire.await.unwrap().unwrap();
-    assert_eq!(outcome.result.certainty, NativeEffectCertainty::Unexecuted);
-    assert!(producer.is_claimed().unwrap());
+    assert!(accepted.unwrap_err().message().contains("cancelled"));
+    assert!(retire.await.unwrap().is_none());
+    assert!(!producer.is_claimed().unwrap());
+    assert!(producer.joined_outcome().is_none());
+    assert!(
+        fixture
+            .service
+            .native_filesystem_attempt_failure(&attempt)
+            .is_some()
+    );
+    assert!(
+        fixture
+            .service
+            .take_unissued_native_filesystem_owner(&attempt)
+            .is_ok()
+    );
     assert!(!fixture.root.join("file").exists());
 }
 
