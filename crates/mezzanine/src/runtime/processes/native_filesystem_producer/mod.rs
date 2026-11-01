@@ -57,6 +57,8 @@ impl Eq for NativeFilesystemProducerIdentity {}
 struct Inner {
     /// Original allocation identity survives in gates without retaining this owner.
     identity: NativeFilesystemProducerIdentity,
+    /// One completed original handoff survives lost replies, without self-custody.
+    transfer: Mutex<Option<crate::runtime::agent::NativeFilesystemTransfer>>,
     /// Exact opaque actor attempt whose work may be installed once.
     attempt: NativeFilesystemAttempt,
     /// Bounded synchronous claim/start/close transition owner.
@@ -67,7 +69,8 @@ struct Inner {
     archive: Mutex<Option<archive::ArchiveWorkerOwner>>,
     /// Actual blocking task handle and original observed outcome.
     execution: tokio::sync::Mutex<Execution>,
-    /// Bounded original confirmed receipts, independent of display delivery.
+    /// Original endpoint journal bounded by admitted operations and diff budget;
+    /// live delivery exposes only its first 64 confirmations.
     progress: Mutex<
         Vec<Arc<crate::runtime::processes::native_patch::worker::NativePatchEndpointReceipt>>,
     >,
@@ -120,6 +123,7 @@ impl NativeFilesystemProducer {
     pub(crate) fn new(attempt: NativeFilesystemAttempt) -> Self {
         Self(Arc::new(Inner {
             identity: NativeFilesystemProducerIdentity(Arc::new(())),
+            transfer: Mutex::new(None),
             attempt,
             admission: Mutex::new(Admission {
                 closed: false,
@@ -256,6 +260,74 @@ impl NativeFilesystemProducer {
         Ok(true)
     }
 
+    /// Inspects only cached actual native join evidence; never starts work or
+    /// consumes a handle. A busy observer leaves transfer pending.
+    pub(crate) fn joined_outcome(&self) -> Option<Arc<NativePatchWorkerOutcome>> {
+        let execution = self.0.execution.try_lock().ok()?;
+        match &*execution {
+            Execution::Joined(raw) => Some(Arc::clone(raw)),
+            _ => None,
+        }
+    }
+
+    /// Requires every actual captured confirmation in the raw outcome before
+    /// canonical projection or transfer. Missing/revised facts or poisoned custody
+    /// fail; the journal includes endpoints beyond live display in worker order.
+    pub(crate) fn validate_confirmed_outcome(&self, raw: &NativePatchWorkerOutcome) -> Result<()> {
+        let progress = self
+            .0
+            .progress
+            .lock()
+            .map_err(|_| MezError::invalid_state("filesystem confirmation custody poisoned"))?;
+        if progress.len() <= raw.receipts.len()
+            && progress
+                .iter()
+                .zip(&raw.receipts)
+                .all(|(captured, actual)| captured.as_ref() == actual)
+        {
+            Ok(())
+        } else {
+            Err(MezError::conflict(
+                "filesystem outcome omits retained confirmed endpoints",
+            ))
+        }
+    }
+
+    /// Recovers the one original actor-installed acknowledgement after reply loss.
+    pub(crate) fn transfer_acknowledgement(
+        &self,
+    ) -> Result<Option<crate::runtime::agent::NativeFilesystemTransfer>> {
+        Ok(self
+            .0
+            .transfer
+            .lock()
+            .map_err(|_| MezError::invalid_state("filesystem transfer custody poisoned"))?
+            .clone())
+    }
+
+    /// Installs opaque actor-issued evidence before synchronous owner removal.
+    /// No caller scalar can construct it; changing an accepted transfer fails.
+    pub(crate) fn retain_transfer_acknowledgement(
+        &self,
+        acknowledgement: crate::runtime::agent::NativeFilesystemTransfer,
+    ) -> Result<()> {
+        if !acknowledgement.belongs_to(self) {
+            return Err(MezError::conflict(
+                "filesystem transfer does not match actual joined producer",
+            ));
+        }
+        let mut accepted = self
+            .0
+            .transfer
+            .lock()
+            .map_err(|_| MezError::invalid_state("filesystem transfer custody poisoned"))?;
+        if accepted.is_some() {
+            return Err(MezError::conflict("filesystem transfer already accepted"));
+        }
+        *accepted = Some(acknowledgement);
+        Ok(())
+    }
+
     /// Borrows actual join custody; cancellation of this future cannot remove
     /// the handle or consume an observed immutable outcome. None is unstarted.
     pub(crate) async fn observe(&self) -> Result<Option<Arc<NativePatchWorkerOutcome>>> {
@@ -309,7 +381,20 @@ impl NativeFilesystemProducer {
             let result = worker.await;
             let outcome = match result {
                 Ok(outcome) => outcome,
-                Err(error) => Arc::new(execution::lost(&work.identity, error.is_cancelled())),
+                Err(error) => {
+                    let mut lost = execution::lost(&work.identity, error.is_cancelled());
+                    // A failed join proves neither absent effects nor completed
+                    // operations. Preserve only actual post-commit receipts
+                    // already captured in the bounded prefix. Poison recovery
+                    // retains those immutable facts without claiming success.
+                    let progress = match self.0.progress.lock() {
+                        Ok(progress) => progress,
+                        Err(poisoned) => poisoned.into_inner(),
+                    };
+                    lost.receipts
+                        .extend(progress.iter().map(|receipt| (**receipt).clone()));
+                    Arc::new(lost)
+                }
             };
             *execution = Execution::Joined(outcome);
         }

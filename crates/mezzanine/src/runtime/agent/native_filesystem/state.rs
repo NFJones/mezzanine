@@ -504,6 +504,50 @@ impl NativeFilesystemActions {
             .any(|entry| entry.work.owner.turn.pane_id == pane)
     }
 
+    /// Verifies original actor allocation even after its active entry was removed.
+    pub(in crate::runtime::agent) fn owns_realm(&self, token: &NativeFilesystemAttempt) -> bool {
+        Arc::ptr_eq(&self.realm, &token.realm)
+    }
+
+    /// Removes one exact observed original owner after retaining its opaque ack.
+    /// All checks precede the only fallible callback; successful retention is
+    /// followed solely by infallible removal in this serialized actor operation.
+    pub(in crate::runtime::agent) fn transfer_joined(
+        &mut self,
+        token: &NativeFilesystemAttempt,
+        work: &Arc<NativeFilesystemWork>,
+        producer: &crate::runtime::processes::native_filesystem_producer::NativeFilesystemProducer,
+        raw: &Arc<NativePatchWorkerOutcome>,
+        retain_acknowledgement: impl FnOnce() -> Result<()>,
+    ) -> Result<()> {
+        let entry = self
+            .get(token)
+            .ok_or_else(|| MezError::conflict("filesystem transfer registry owner unavailable"))?;
+        if let Some(error) = &entry.failure {
+            return Err((**error).clone());
+        }
+        if entry.phase != Phase::Retained
+            || !Arc::ptr_eq(&entry.work, work)
+            || !entry
+                .producer
+                .as_ref()
+                .is_some_and(|original| original.same(producer))
+            || !entry
+                .outcome
+                .as_ref()
+                .is_some_and(|original| Arc::ptr_eq(original, raw))
+        {
+            return Err(MezError::conflict(
+                "filesystem transfer original work or observed result changed",
+            ));
+        }
+        retain_acknowledgement()?;
+        // The exact validated entry cannot disappear: no callback has access to
+        // actor state and no await/reentry occurs after acknowledgement retention.
+        self.attempts.remove(&token.sequence);
+        Ok(())
+    }
+
     /// Transfers metadata only when no producer was ever admitted. Issued or
     /// retained outcomes cannot be freed using a cancellation observation alone.
     pub(super) fn take_unissued(

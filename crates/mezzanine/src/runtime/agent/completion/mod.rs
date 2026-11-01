@@ -24,7 +24,9 @@ mod provider_handoff;
 pub(super) use provider_handoff::CompletionProviderHandoff;
 use provider_handoff::ProviderHandoffOwner;
 mod filesystem;
-pub(crate) use filesystem::{NativeFilesystemArchiveAcceptance, NativeFilesystemArchiveSettlement};
+pub(crate) use filesystem::{
+    NativeFilesystemArchiveAcceptance, NativeFilesystemArchiveSettlement, NativeFilesystemTransfer,
+};
 mod native;
 use filesystem::FilesystemCompletionReceipt;
 use native::NativeCompletionReceipt;

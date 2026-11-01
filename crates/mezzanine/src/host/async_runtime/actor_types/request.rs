@@ -1085,6 +1085,17 @@ pub(in crate::host::async_runtime) enum AsyncRuntimeRequest {
         /// Acceptance only; sole dispatch custody never crosses this reply.
         reply: oneshot::Sender<Result<bool>>,
     },
+    /// Commits exact source/observed-producer transfer before replying.
+    TransferNativeFilesystemProducer {
+        /// Original root allocation, never a reconstructed equal attempt owner.
+        producer: crate::runtime::native_filesystem::NativeFilesystemProducer,
+        /// Actual original checked storage gate or explicit no-save policy.
+        storage: crate::runtime::native_filesystem::NativeFilesystemArchiveSettlement,
+        /// Historical ack retained before owner removal; lost replies may retry.
+        reply: oneshot::Sender<
+            Result<Option<crate::runtime::native_filesystem::NativeFilesystemTransfer>>,
+        >,
+    },
     /// Observes only original registered verifier evidence; no caller status.
     ObserveNativeFilesystemArchiveStorage {
         /// Original logical source, including stale source for error attribution.
@@ -1675,6 +1686,7 @@ impl AsyncRuntimeRequest {
             | Self::ClaimApprovedExternalAction { .. }
             | Self::ClaimNativeShellAction { .. }
             | Self::ClaimNativeFilesystemProducer { .. }
+            | Self::TransferNativeFilesystemProducer { .. }
             | Self::ObserveNativeFilesystemArchiveStorage { .. }
             | Self::ValidateNativeFilesystemArchiveSettlement { .. }
             | Self::ValidateNativeFilesystemArchive { .. }

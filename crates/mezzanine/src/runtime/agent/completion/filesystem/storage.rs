@@ -32,6 +32,30 @@ impl std::fmt::Debug for NativeFilesystemArchiveSettlement {
     }
 }
 
+impl NativeFilesystemArchiveSettlement {
+    /// Original checked source used by exact producer-transfer validation.
+    pub(super) fn source(&self) -> &NativeFilesystemArchiveAcceptance {
+        &self.source
+    }
+
+    /// Matches actual original source and physical receipt allocations, or
+    /// explicit original no-save policy. Matching path/count metadata is insufficient.
+    pub(super) fn same_storage(&self, other: &Self) -> bool {
+        self.source.same_source(&other.source)
+            && match (&self.destination, &other.destination) {
+                (
+                    ArchiveStorageDestination::Saved(left),
+                    ArchiveStorageDestination::Saved(right),
+                ) => left == right,
+                (
+                    ArchiveStorageDestination::NoPersistence,
+                    ArchiveStorageDestination::NoPersistence,
+                ) => true,
+                _ => false,
+            }
+    }
+}
+
 impl RuntimeSessionService {
     /// Observes actual root-held verification, never a caller result bit. Old
     /// verification errors retain original attribution; success additionally

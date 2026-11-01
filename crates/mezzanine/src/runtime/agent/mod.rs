@@ -208,7 +208,9 @@ mod bookkeeping;
 mod child_failures;
 mod cleanup_ownership;
 mod completion;
-pub(crate) use completion::{NativeFilesystemArchiveAcceptance, NativeFilesystemArchiveSettlement};
+pub(crate) use completion::{
+    NativeFilesystemArchiveAcceptance, NativeFilesystemArchiveSettlement, NativeFilesystemTransfer,
+};
 #[allow(
     dead_code,
     reason = "filesystem attempt ownership is being connected to runtime dispatch"

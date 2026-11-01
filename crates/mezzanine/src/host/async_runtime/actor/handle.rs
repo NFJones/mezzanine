@@ -1113,6 +1113,23 @@ impl AsyncRuntimeSessionHandle {
             .await?
     }
 
+    /// Transfers the exact registered joined producer under current original
+    /// storage. The actor retains its opaque acknowledgement before replying.
+    pub(crate) async fn transfer_native_filesystem_producer(
+        &self,
+        producer: crate::runtime::native_filesystem::NativeFilesystemProducer,
+        storage: crate::runtime::native_filesystem::NativeFilesystemArchiveSettlement,
+    ) -> Result<Option<crate::runtime::native_filesystem::NativeFilesystemTransfer>> {
+        self.request(
+            |reply| AsyncRuntimeRequest::TransferNativeFilesystemProducer {
+                producer,
+                storage,
+                reply,
+            },
+        )
+        .await?
+    }
+
     /// Requests only actual original verifier evidence, not a supplied success.
     pub(crate) async fn observe_native_filesystem_archive_storage(
         &self,

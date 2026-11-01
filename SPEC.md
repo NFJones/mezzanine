@@ -12773,6 +12773,29 @@ Waiting reads MAY be explicitly rechecked; success and failure MUST be cached.
 Original no-save policy MUST remain distinct from a physical synchronization.
 Physical acceptance MUST NOT itself release raw outcomes, producers or groups.
 
+Actual post-commit endpoint custody MUST be bounded by the admitted semantic
+endpoint count and aggregate diff budget, independently of the 64-component
+live display limit. If a genuine native join fails after confirmations, its
+unknown outcome MUST preserve every captured endpoint, including display
+overflow, without inferring completed operations or promoting certainty. Transfer
+and canonical projection MUST reject a raw outcome that omits captured
+confirmations before releasing ownership or changing canonical facts.
+
+Final native filesystem producer transfer MUST additionally validate the exact
+original registered producer allocation and its actual observed native join,
+including retained raw-result allocation identity, under fresh original storage
+and checked-source acceptance. The serialized actor MUST retain an opaque
+acknowledgement before removing either filesystem receipt or active attempt.
+A lost reply MUST recover that completed original acknowledgement without
+replaying effects or adopting a new source. Acknowledgement custody MUST be
+bounded by the original producer and MUST NOT strongly retain that producer.
+Foreign actor realms, lookalike producers, unjoined workers, substituted raw
+results, stale uncommitted sources and entered required failures MUST NOT
+release ownership. Later group changes MUST NOT invalidate a completed historical
+transfer or cause it to execute again. Root removal MUST match this exact
+acknowledgement; transferring one action MUST leave unrelated sibling, group,
+provider continuation and failure gates intact.
+
 Forced completion archive projection MUST use the actual moved original
 execution/context and their captured imported-history boundary, accepted
 compaction witnesses/prior epoch and routed-parent policy. Later live-map values

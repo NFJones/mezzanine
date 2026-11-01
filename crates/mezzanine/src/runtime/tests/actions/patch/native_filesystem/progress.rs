@@ -224,9 +224,9 @@ async fn native_filesystem_progress_rejects_forged_sources_and_stale_conversatio
     );
 }
 
-/// Live custody stops at the shared 64-component limit; a real 65th committed
-/// endpoint remains in the full original outcome and final remaining diff. The
-/// capacity boundary therefore changes display timing, never effect truth.
+/// Live display stops at the shared 64-component limit; a real 65th committed
+/// endpoint remains in the bounded confirmation journal, full original outcome
+/// and final remaining diff. The display boundary never truncates effect truth.
 #[tokio::test(flavor = "current_thread")]
 async fn native_filesystem_progress_capacity_keeps_final_overflow_endpoint() {
     let fixture = Fixture::with_patch(false, |root| {

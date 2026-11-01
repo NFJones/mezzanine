@@ -1,9 +1,10 @@
 //! Bounded cumulative post-commit confirmations under original producer custody.
 //!
 //! The actual descriptor callback records before best-effort actor notification.
-//! Snapshots retain actual receipt allocations, not caller labels or authority.
-//! Coalescing cannot lose retained confirmations; the full final worker outcome
-//! independently owns every effect beyond the bounded live-display capacity.
+//! The journal retains every actual endpoint within the admitted operation and
+//! aggregate diff budgets. Snapshots expose only the first 64 immutable receipt
+//! allocations for live display. Overflow remains available after a genuine join
+//! failure, independently of notification coalescing or a lost final outcome.
 //! The blocking task retains only a weak recorder, so its callback cannot keep
 //! its own producer/JoinHandle alive or suppress external-owner-loss fencing.
 
@@ -103,6 +104,7 @@ impl NativeFilesystemProducer {
             || receipt.endpoint_ordinal > 1
             || receipt.diff.len() > mez_agent::ACTION_PRESENTATION_PROGRESS_MAX_SOURCE_BYTES
             || receipt.path.len() > 4096
+            || receipt.resolved_path.len() > 4096
         {
             return Err(MezError::invalid_args(
                 "filesystem progress exceeds original bounds",
@@ -121,8 +123,10 @@ impl NativeFilesystemProducer {
                 return Err(MezError::conflict("filesystem confirmed progress changed"));
             }
         } else {
-            if retained.len() >= MAX_PROGRESS_ENDPOINTS {
-                return Ok(None);
+            if retained.len() >= work.identity.operation.effects.len().saturating_mul(2) {
+                return Err(MezError::invalid_state(
+                    "filesystem confirmation journal exceeds admitted endpoint count",
+                ));
             }
             if receipt.endpoint_ordinal == 1
                 && !retained.iter().any(|prior| {
@@ -155,6 +159,9 @@ impl NativeFilesystemProducer {
             }
             retained.push(Arc::new(receipt.clone()));
         }
+        if retained.len() > MAX_PROGRESS_ENDPOINTS {
+            return Ok(None);
+        }
         Ok(Some(NativeFilesystemProgress {
             producer: self.clone(),
             receipts: retained.clone(),
@@ -170,7 +177,10 @@ impl NativeFilesystemProducer {
                 .progress
                 .lock()
                 .map_err(|_| MezError::invalid_state("filesystem progress snapshot poisoned"))?
-                .clone(),
+                .iter()
+                .take(MAX_PROGRESS_ENDPOINTS)
+                .cloned()
+                .collect(),
         })
     }
 
@@ -217,7 +227,8 @@ impl NativeFilesystemProgress {
             .progress
             .lock()
             .map_err(|_| MezError::invalid_state("filesystem progress validation poisoned"))?;
-        if self.receipts.len() > retained.len()
+        if self.receipts.len() > MAX_PROGRESS_ENDPOINTS
+            || self.receipts.len() > retained.len()
             || !self
                 .receipts
                 .iter()

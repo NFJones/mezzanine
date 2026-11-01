@@ -3,6 +3,8 @@
 //! A changed latest response is never temporarily replaced to paint an older
 //! result. Failed backing remains the original owner after forced retirement;
 //! captured absence cannot fall back to a newly installed execution/context.
+//! Captured post-commit confirmations must be present in raw evidence before
+//! canonical facts change; missing/revised endpoint data fails with custody held.
 //! Successful canonical fact projection leaves later required gates pending.
 
 use super::*;
@@ -96,6 +98,7 @@ impl RuntimeSessionService {
         // Recover dropped/coalesced notifications while the original result is
         // still running. Display failure cannot invalidate committed effects.
         if let Some(producer) = self.retained_native_filesystem_producer(&receipt.attempt) {
+            producer.validate_confirmed_outcome(&raw)?;
             let progress = producer
                 .progress_snapshot()
                 .and_then(|delivery| self.apply_native_filesystem_progress(&delivery));

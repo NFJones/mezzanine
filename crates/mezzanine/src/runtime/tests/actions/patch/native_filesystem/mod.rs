@@ -768,3 +768,7 @@ mod archive;
 mod archive_storage;
 #[cfg(target_os = "linux")]
 mod checked_archive;
+
+/// Exact original source and actual joined producer transfer controls.
+#[cfg(target_os = "linux")]
+mod archive_transfer;

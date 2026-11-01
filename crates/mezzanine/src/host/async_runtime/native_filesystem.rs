@@ -102,6 +102,28 @@ pub(crate) async fn prepare_joined_native_filesystem_archive(
     Ok(Some(acceptance))
 }
 
+/// Completes exact source/actual-producer handoff without replay. The root
+/// removes only this acknowledged allocation, using acknowledges before removal.
+/// Cached committed evidence survives reply loss and later group changes.
+pub(crate) async fn transfer_joined_native_filesystem_producer(
+    handle: &AsyncRuntimeSessionHandle,
+    producer: &NativeFilesystemProducer,
+) -> Result<Option<crate::runtime::native_filesystem::NativeFilesystemTransfer>> {
+    if let Some(accepted) = producer.transfer_acknowledgement()? {
+        return Ok(accepted.acknowledges(producer).then_some(accepted));
+    }
+    let Some(storage) = seal_joined_native_filesystem_archive(handle, producer).await? else {
+        return Ok(None);
+    };
+    let Some(accepted) = handle
+        .transfer_native_filesystem_producer(producer.clone(), storage)
+        .await?
+    else {
+        return Ok(None);
+    };
+    Ok(accepted.acknowledges(producer).then_some(accepted))
+}
+
 /// Observes original archive workers before any source replacement, registers
 /// new work in root custody before its first poll, and asks the actor to accept
 /// only genuine joined storage evidence. A Waiting read may be explicitly
@@ -210,6 +232,18 @@ fn execute(
             progress_handle.try_native_filesystem_progress(delivery);
         }
     })
+}
+
+/// Executes the genuine descriptor/RPC path through a
+/// test-only boundary. It cannot invent a confirmed endpoint or override authority.
+#[cfg(test)]
+pub(crate) fn execute_for_tests(
+    dispatch: RuntimeNativeFilesystemDispatch,
+    handle: AsyncRuntimeSessionHandle,
+    runtime: tokio::runtime::Handle,
+    progress_owner: crate::runtime::native_filesystem::NativeFilesystemProgressRecorder,
+) -> NativePatchWorkerOutcome {
+    execute(dispatch, handle, runtime, progress_owner)
 }
 
 /// Blocking-side authority client; concrete mutations still need actor leases.

@@ -16,7 +16,7 @@ use crate::runtime::processes::native_filesystem_producer::NativeFilesystemProdu
 use std::time::Duration;
 
 /// Waits for actual off-actor bookkeeping rather than manufacturing admission.
-async fn checked(
+pub(super) async fn checked(
     actor: &ActorFixture,
     producer: &NativeFilesystemProducer,
 ) -> NativeFilesystemArchiveAcceptance {
@@ -36,7 +36,7 @@ async fn checked(
 }
 
 /// Drives the real durable journal/append/settle lane before physical verification.
-async fn persist(actor: &ActorFixture) {
+pub(super) async fn persist(actor: &ActorFixture) {
     let report = run_async_persistence_side_effect_service(
         &actor.handle,
         AsyncRuntimeSideEffectServiceConfig {

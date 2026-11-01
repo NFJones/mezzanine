@@ -24,3 +24,6 @@ pub(crate) use super::agent::NativeFilesystemArchiveAcceptance;
 
 /// Qualified storage gate, still separate from source/producer transfer.
 pub(crate) use super::agent::NativeFilesystemArchiveSettlement;
+
+/// Exact historical source and observed-producer transfer acknowledgement.
+pub(crate) use super::agent::NativeFilesystemTransfer;

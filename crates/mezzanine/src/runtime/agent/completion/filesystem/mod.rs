@@ -17,8 +17,10 @@ use std::sync::Arc;
 
 mod archive;
 mod storage;
+mod transfer;
 pub(crate) use archive::NativeFilesystemArchiveAcceptance;
 pub(crate) use storage::NativeFilesystemArchiveSettlement;
+pub(crate) use transfer::NativeFilesystemTransfer;
 mod audit;
 use audit::FilesystemAuditObligation;
 mod hooks;
@@ -455,7 +457,7 @@ impl RuntimeSessionService {
     }
 
     /// Filesystem canonical facts still own audit/publication/archive obligations.
-    /// No current phase is a finished transfer; later integration supplies it.
+    /// Only an exact completed producer transfer removes this obligation.
     pub(in crate::runtime::agent) fn filesystem_completion_pending(&self, turn_id: &str) -> bool {
         self.agent
             .completion_settlements

@@ -136,8 +136,10 @@ Native filesystem worker confirmations use the shared confirmed-mutation display
 path. The producer retains a cumulative prefix before best-effort notification;
 final projection reconciles it, and final publication omits exact already-promoted
 diffs. The live display holds at most 64 endpoint components per action; remaining
-confirmed effects stay in the complete final result. Held installs and stale
-conversations retain the original facts. This component does not by itself
+confirmed effects stay in the complete final result. A worker lost after commits
+keeps its captured confirmations, including display overflow, in an unknown
+result; those facts do not prove whole-operation completion. Held installs and
+stale conversations retain the original facts. This component does not by itself
 switch the runtime patch selector away from its existing shell adapter.
 
 When file confirmations arrive after a turn has been retired, archive updates
@@ -151,7 +153,10 @@ archive verification reads and synchronizes the exact required original prefix
 under its append lock and waits for overlapping recovery receipts to settle.
 It retains the actual worker across dropped observers and does not replay file
 changes or append recovery. This storage evidence does not release the original
-producer or promise permanent archive retention.
+producer or promise permanent archive retention. Releasing that producer also
+requires an exact acknowledgement of its original source and observed worker
+join. The acknowledgement survives a lost reply without repeating the file
+change; it cannot release another producer or an unfinished sibling action.
 
 Denied approvals and user cancellations are not automatically retried.
 Mezzanine may let the agent correct invalid arguments or other recoverable

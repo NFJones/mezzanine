@@ -3118,6 +3118,18 @@ impl AsyncRuntimeSessionActor {
                 let _ = reply.send(result);
                 false
             }
+            AsyncRuntimeRequest::TransferNativeFilesystemProducer {
+                producer,
+                storage,
+                reply,
+            } => {
+                let result = self
+                    .service
+                    .transfer_native_filesystem_producer(&producer, &storage);
+                let _ = reply.send(result);
+                self.notify_event_delivery();
+                false
+            }
             AsyncRuntimeRequest::ObserveNativeFilesystemArchiveStorage { source, reply } => {
                 let result = self
                     .service
