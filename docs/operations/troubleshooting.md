@@ -37,9 +37,10 @@ override merely to avoid an unexplained boundary failure.
 
 Native shell mode runs outside the pane PTY; a full-screen application alone
 does not block it. It rejects interactive or stateful shell work instead of
-falling back to pane input. Its patches are still shell-backed, not process-free
-filesystem actions. Check the reported transport and failure before changing
-mode or retrying an action that may already have effects.
+falling back to pane input. Native patches use an in-process filesystem worker
+with scoped capabilities and require no shell helper or sandbox launcher.
+Inspect their confirmed endpoints and certainty before retrying a failed or
+interrupted patch; a partial result can retain committed changes.
 
 ## Provider, authentication, or MCP is unavailable
 

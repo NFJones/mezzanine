@@ -69,6 +69,13 @@ new agent work on a logging failure until the destination is repaired. Preserve
 existing records and inspect potentially applied effects before retrying. Do not
 disable required logging merely to hide the failure.
 
+Native patches with an audit record obligation have an additional settlement
+gate: producer transfer requires physical acceptance of the original record
+and its worker's observed join. A post-commit logging failure retains confirmed
+filesystem effects and blocks settlement; it cannot undo those effects. This
+does not remove the path-safety limits above or make other action families
+durable before execution. See [native integration boundaries](../configuration/extensions-hooks-and-control.md).
+
 ## Understand redaction and integrity limits
 
 Known credential values are omitted by dedicated event producers, and generic

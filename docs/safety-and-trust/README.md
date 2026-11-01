@@ -16,8 +16,8 @@ The chapters below identify current behavior and important gaps.
 - Approval is permission to act, not confinement or proof of harmlessness.
 - Inspect effective sandbox enforcement, not only the configured backend.
 - Review project trust and connector exposure independently of shell isolation.
-- Native patches remain shell-backed; planned process-free filesystem actions
-  are not integrated.
+- Native patches run in process with current filesystem capabilities. Shell
+  commands retain their selected transport and sandbox lifecycle.
 - Required audit logging currently has an asynchronous durability gap. Review
   [audit limits](audit-and-diagnostics.md) before relying on it for compliance.
 

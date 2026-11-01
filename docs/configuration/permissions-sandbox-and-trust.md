@@ -38,14 +38,15 @@ shell; native shell mode derives shell identity, working directory, and
 canonical path authority from the pane root process and host metadata without
 pane input. Optional values named by `permissions.env_whitelist` instead come
 from the immutable Mez server-startup environment snapshot, not the active
-pane's environment. Native workloads compose a cleared-base environment from
+pane's environment. Native shell workloads compose a cleared-base environment from
 validated identity/path evidence, documented runtime requirements, and those
 selected startup values; unset or unsafe values are omitted with redacted
 diagnostics. An explicit `[]` forwards none of the optional values. The same
-selection applies to ordinary Bubblewrap and Seatbelt workloads; internal
-semantic `apply_patch` phases retain their fixed environment. Executable
-presence does not prove capability: the exact runtime probe remains mandatory
-and fail-closed.
+selection applies to ordinary Bubblewrap and Seatbelt shell workloads. Native
+semantic `apply_patch` runs in process and forwards no shell environment; pane
+patch helpers retain their fixed environment. For sandboxed shell launches,
+executable presence does not prove capability: the exact runtime probe remains
+mandatory and fail-closed.
 Runtime-owned web, fetch, and MCP actions are separate capability
 and approval boundaries rather than child shell processes. `host-access` is a
 primary-user-only approval mode that runs local shell work outside the selected

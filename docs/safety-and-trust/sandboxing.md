@@ -32,7 +32,7 @@ an OS upgrade.
 Status distinguishes configured intent from effective enforcement. `unavailable`
 means the backend executable is missing; `not-probed` with `unknown` networking
 means no matching runtime proof and compiled launch plan are available.
-`policy-only` and host access have `none` enforcement and `unenforced`
+For shell launches, `policy-only` and host access have `none` enforcement and `unenforced`
 networking. An `isolated` or `connected` network claim requires both the plan
 and its capability proof. A CLI preview is not an attestation of every action
 or remote process; inspect the affected action's result as well.
@@ -152,7 +152,8 @@ the Mez server's startup environment. Pane-root metadata helps infer the shell,
 working directory, and process identity; its environment is not forwarded
 wholesale. Deliberately forwarded credentials can still reach native work.
 Sandbox payloads use their managed environment and configured whitelist;
-semantic patches do not forward optional environment values. Do not treat
+native semantic patches run in process and forward no shell environment, while
+pane patch helpers retain their fixed environment. Do not treat
 environment composition as credential removal or assume an interactive shell
 export changes a native action's environment. Configure only required forwarding
 and check the mode and effective policy when a tool loses `PATH`, proxy,
