@@ -201,6 +201,25 @@ pub(super) struct WorkerOwnership {
     cause: RetirementCause,
 }
 
+/// Exact same-actor writer leases shared with actual filesystem recovery tasks.
+pub(super) type PersistenceDependencies = std::sync::Arc<
+    std::sync::Mutex<
+        Vec<crate::host::async_runtime::persistence_retirement::PersistenceDependency>,
+    >,
+>;
+
+/// Signals only captured writers through short synchronous control access.
+/// Poison recovery conserves reduce-only stop access and grants no new writes.
+pub(super) fn stop_persistence_dependencies(dependencies: &PersistenceDependencies) {
+    let dependencies = match dependencies.lock() {
+        Ok(dependencies) => dependencies,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    for dependency in dependencies.iter() {
+        dependency.request_stop();
+    }
+}
+
 /// Every root provider task is registered, so missing identity remains fatal.
 #[derive(Default)]
 pub(super) struct AgentProviderWorkerOwners {
@@ -208,6 +227,8 @@ pub(super) struct AgentProviderWorkerOwners {
     entries: HashMap<tokio::task::Id, WorkerOwnership>,
     /// External stop access never depends on this driver's async mutex.
     filesystem: std::sync::Arc<super::filesystem_ownership::FilesystemRootStops>,
+    /// Shared writer health/custody outlives monitor and cleanup observers.
+    persistence: PersistenceDependencies,
 }
 impl std::ops::Deref for AgentProviderWorkerOwners {
     type Target = HashMap<tokio::task::Id, WorkerOwnership>;
@@ -223,6 +244,11 @@ impl std::ops::DerefMut for AgentProviderWorkerOwners {
     }
 }
 impl AgentProviderWorkerOwners {
+    /// Shares original writer leases without borrowing the driver's async lock.
+    pub(super) fn persistence_dependencies(&self) -> PersistenceDependencies {
+        self.persistence.clone()
+    }
+
     /// Shares reduce-only controls without borrowing driver state across stop.
     pub(super) fn filesystem_stops(
         &self,
@@ -310,12 +336,14 @@ where
 {
     let stop_control = producer.clone();
     let (registered, admission) = tokio::sync::oneshot::channel();
+    let root = super::filesystem_ownership::FilesystemRootOwner::new(
+        producer,
+        owners.persistence_dependencies(),
+    );
     let task = spawn_owned_worker(
         workers,
         owners,
-        Some(OwnedAgentWork::Filesystem(
-            super::filesystem_ownership::FilesystemRootOwner::new(producer),
-        )),
+        Some(OwnedAgentWork::Filesystem(root)),
         async move {
             admission.await.map_err(|_| {
                 MezError::invalid_state("filesystem root registration lost before claim")

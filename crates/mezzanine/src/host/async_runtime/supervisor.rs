@@ -4,7 +4,9 @@
 //! session alive. Every exit path aborts and joins remaining Tokio wrappers and
 //! retires separately retained provider drivers and saved-fork jobs. Provider
 //! drivers finish their original request cleanup after wrapper abort; retained
-//! worker state supports cleanup if the driver itself fails. Actor ingress stays
+//! worker state supports cleanup if the driver itself fails. Actual persistence
+//! drivers remain alive through all retained publishers and join after their
+//! final ordered drain, independently of wrapper cancellation. Actor ingress stays
 //! available until those joins finish. The first failure stays causal, with
 //! bounded named secondary diagnostics. Wrapper completion is distinct from
 //! OS-process retirement and does not authorize effect replay.
@@ -99,10 +101,10 @@ impl AsyncRuntimeServiceExit {
 
 /// Named async service future scheduled by the runtime service supervisor.
 ///
-/// This wrapper deliberately owns only the service name, auxiliary lifecycle
-/// role, and future. Socket binding, runtime session ownership, listener
-/// internals, and lifecycle predicates stay with the caller-provided future so
-/// the supervisor remains a narrow task orchestration primitive.
+/// This wrapper carries the service name, auxiliary lifecycle role, future and
+/// typed retirement metadata. Concrete adapters retain actual producer/writer
+/// handles separately; cancelling this future does not certify their joins.
+/// Socket binding and protocol behavior remain with the concrete service.
 pub struct AsyncRuntimeService {
     /// Stores the name value for this data structure.
     ///
@@ -123,6 +125,9 @@ pub struct AsyncRuntimeService {
     pub(super) saved_fork_retirement: Option<super::client::SavedForkServiceRetirement>,
     /// Provider/native custody retained outside this abortable service future.
     pub(super) agent_provider_retirement: Option<super::client::AgentProviderServiceRetirement>,
+    /// Original ordered writer retained beyond wrapper abort until producers join.
+    pub(super) persistence_retirement:
+        Option<super::persistence_retirement::PersistenceServiceRetirement>,
 }
 
 impl AsyncRuntimeService {
@@ -140,6 +145,7 @@ impl AsyncRuntimeService {
             future: Box::pin(future),
             saved_fork_retirement: None,
             agent_provider_retirement: None,
+            persistence_retirement: None,
         }
     }
 
@@ -158,6 +164,7 @@ impl AsyncRuntimeService {
             future: Box::pin(future),
             saved_fork_retirement: None,
             agent_provider_retirement: None,
+            persistence_retirement: None,
         }
     }
 
@@ -224,6 +231,13 @@ pub struct AsyncRuntimeServiceSupervisor {
     saved_fork_retirements: Vec<super::client::SavedForkServiceRetirement>,
     /// Actual request tasks/outcomes surviving provider-wrapper cancellation.
     agent_provider_retirements: Vec<super::client::AgentProviderServiceRetirement>,
+    /// Named actual writer handles, distinct from cancelled wrapper reports.
+    persistence_retirements: Vec<(
+        String,
+        super::persistence_retirement::PersistenceServiceRetirement,
+    )>,
+    /// Keeps every writer available through all supervised retained publishers.
+    persistence_dependencies: Vec<super::persistence_retirement::PersistenceDependency>,
 }
 
 impl AsyncRuntimeServiceSupervisor {
@@ -233,6 +247,32 @@ impl AsyncRuntimeServiceSupervisor {
     /// trimming and unique within the supervised set.
     pub fn new(services: Vec<AsyncRuntimeService>) -> Result<Self> {
         validate_async_runtime_services(&services)?;
+
+        // Bind before ANY wrapper can poll or be cancelled. Identity is the
+        // actual actor admission allocation, never a service/session name.
+        let persistence_retirements: Vec<_> = services
+            .iter()
+            .filter_map(|service| {
+                service
+                    .persistence_retirement
+                    .clone()
+                    .map(|owner| (service.name.clone(), owner))
+            })
+            .collect();
+        let mut persistence_dependencies = Vec::new();
+        for (_, writer) in &persistence_retirements {
+            persistence_dependencies.push(writer.dependency()?);
+            for provider in services
+                .iter()
+                .filter_map(|service| service.agent_provider_retirement.as_ref())
+            {
+                provider.retain_persistence_dependency(writer)?;
+            }
+        }
+        // Pre-poll wrapper abort must never leave its writer unstarted.
+        for (_, writer) in &persistence_retirements {
+            writer.start()?;
+        }
 
         let mut tasks = JoinSet::new();
         let mut task_names = HashMap::new();
@@ -256,16 +296,19 @@ impl AsyncRuntimeServiceSupervisor {
             task_names,
             saved_fork_retirements,
             agent_provider_retirements,
+            persistence_retirements,
+            persistence_dependencies,
         })
     }
 
     /// Runs supervised services until all finish, one requests shutdown, or
     /// `cancellation` completes.
     ///
-    /// When shutdown is requested, still-running services are aborted and reported
-    /// with `AsyncRuntimeServiceExitKind::Shutdown`. When only auxiliary services
-    /// remain, they are aborted and reported as completed so background loops do not
-    /// keep supervision alive after primary listener work has drained.
+    /// Shutdown aborts still-running wrappers and reports them as `Shutdown`.
+    /// When only auxiliary wrappers remain, cancellation is reported as normal
+    /// completion. Independently retained producer work retires before the actual
+    /// persistence writers finish their final drain/join. Original errors remain
+    /// causal; wrapper cancellation cannot claim these retained resources joined.
     pub async fn run_until_shutdown<C>(
         mut self,
         cancellation: C,
@@ -274,7 +317,7 @@ impl AsyncRuntimeServiceSupervisor {
         C: Future<Output = ()>,
     {
         let mut failures = TeardownErrors::default();
-        let report = match self.run_services_until_shutdown(cancellation).await {
+        let mut report = match self.run_services_until_shutdown(cancellation).await {
             Ok(report) => Some(report),
             Err(error) => {
                 failures.record("service supervision", error);
@@ -298,6 +341,25 @@ impl AsyncRuntimeServiceSupervisor {
         for retirement in &self.saved_fork_retirements {
             if let Err(error) = retirement.retire().await {
                 failures.record("saved fork retirement", error);
+            }
+        }
+        // Actual writers outlive wrapper abort and every retained publisher.
+        // Releasing the barrier permits their final ordered drain, then joins
+        // the original task; neither wrapper status nor idle polls prove this.
+        self.persistence_dependencies.clear();
+        for (name, retirement) in &self.persistence_retirements {
+            match retirement.retire().await {
+                Ok(actual) => {
+                    if let Some(service) = report.as_mut().and_then(|report| {
+                        report
+                            .services
+                            .iter_mut()
+                            .find(|service| service.name == *name)
+                    }) {
+                        service.exit.work_units = actual.completed.saturating_add(actual.failed);
+                    }
+                }
+                Err(error) => failures.record("persistence retirement", error),
             }
         }
         failures.finish()?;
@@ -466,6 +528,9 @@ impl AsyncRuntimeServiceSupervisor {
     /// Signals exact nested work before any abortable service wrapper is joined.
     /// A stop request is not a receipt; the outer driver still awaits retirement.
     fn request_worker_retirement(&self) {
+        for (_, writer) in &self.persistence_retirements {
+            writer.request_stop();
+        }
         for retirement in &self.agent_provider_retirements {
             retirement.request_stop();
         }
@@ -502,6 +567,21 @@ pub(super) fn validate_async_runtime_services(services: &[AsyncRuntimeService]) 
         return Err(MezError::invalid_args(
             "async runtime supervisor requires at least one service",
         ));
+    }
+
+    let writers: Vec<_> = services
+        .iter()
+        .filter_map(|service| service.persistence_retirement.as_ref())
+        .collect();
+    for (index, writer) in writers.iter().enumerate() {
+        if writers[..index]
+            .iter()
+            .any(|earlier| earlier.same_writer_actor(writer))
+        {
+            return Err(MezError::invalid_args(
+                "async runtime supervisor requires one persistence writer per actor",
+            ));
+        }
     }
 
     let mut names = HashSet::new();

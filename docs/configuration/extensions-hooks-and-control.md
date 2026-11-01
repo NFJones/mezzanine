@@ -137,6 +137,24 @@ is acknowledged. A failed recovery observer remains an error even if another
 observer later obtains that acknowledgement and releases root custody.
 
 This ownership plumbing does not activate the in-process patch selector.
-Unissued canonical refusal handoff and supervised persistence shutdown ordering
-remain prerequisites for that cutover; missing handoff retains explicit ownership
-rather than claiming completion.
+Unissued canonical refusal handoff remains a prerequisite for that cutover;
+missing handoff retains explicit ownership rather than claiming completion.
+
+The supervised persistence builder now retains the actual ordered writer outside
+its abortable service wrapper. The supervisor binds dependencies by actual actor
+identity before starting wrappers, rejects duplicate writers for one actor, and
+keeps the writer available through provider and saved-fork retirement. It then
+joins the original writer after its final drain. A finite normal poll budget can
+finish the wrapper while this same writer serves final records; it does not renew
+an action deadline or replay effects. Observed drain mode stops new optional
+objective-cache admission while essential final records remain serviceable.
+Already admitted cache jobs keep their separately owned bounded physical slot.
+Reports use the actual final write count.
+
+Provider work retains its own writer dependency across cancellation of outer
+supervision and cleanup observers. An actual writer failure remains an error:
+filesystem retirement joins its native worker and retains the original source
+without claiming durable transfer. Replacement services reconcile original
+claimed storage and the registered producer; they do not execute the patch again.
+Actual writer join results remain cached independently of observer lifetime.
+Dropping the final owner requests stop and does not prove a completed drain.

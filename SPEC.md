@@ -12814,6 +12814,38 @@ root custody MAY be removed only on that exact acknowledgement. Missing unissued
 canonical refusal handoff MUST retain custody explicitly, never claim a worker
 join or fabricate a completion acknowledgement.
 
+Supervised persistence MUST retain its actual ordered-writer task and observed
+join result outside abortable service wrappers. Before wrappers can first poll,
+the supervisor MUST bind dependencies by actual actor admission identity and
+start the sole registered writer for that actor. Duplicate writer registrations
+for one actor MUST fail before tasks start. A writer for another actor MUST NOT
+satisfy a provider's persistence dependency.
+
+Wrapper cancellation and finite normal poll completion MUST NOT terminate the
+writer while retained publishers can still emit required final records. The
+supervisor MUST retire provider/native publishers and saved-fork work before
+releasing its writer barrier, then observe the original final drain/join. Actual
+provider work MUST retain its own writer dependency across cancelled outer and
+cleanup observers; dependencies grant no mutation rights or action-budget renewal.
+Observing drain-only stop MUST suppress admission of new optional objective-cache
+jobs while essential source records remain serviceable behind the publisher
+barrier. Already admitted optional jobs retain their separate bounded physical
+slot; writer-task retirement MUST NOT pretend those jobs were cancelled/joined.
+Historical actual writer results MUST remain cached across lost join observers.
+Normal wrapper progress reports MUST be reconciled with the actual writer's
+final completed/failed work count without charging or replaying writes twice.
+
+A failed actual writer MUST NOT make dependent filesystem recovery wait forever
+for nonexistent storage progress or fabricate a successful transfer. Recovery
+MUST observe the actual native join, preserve its original source/outcome and
+report the observed writer failure when original transfer remains pending. A
+finished-task readiness check alone MUST NOT establish failure or success; the
+retained actual join result MUST be observed and cached. A replacement writer
+and provider root MAY reconcile original claimed storage and recover the actual
+registered producer without repeating its filesystem effects. Later exact
+acknowledgement MAY release older root custody while its original error remains
+reportable. Last-owner drop signals stop only, never an observed writer receipt.
+
 Forced completion archive projection MUST use the actual moved original
 execution/context and their captured imported-history boundary, accepted
 compaction witnesses/prior epoch and routed-parent policy. Later live-map values

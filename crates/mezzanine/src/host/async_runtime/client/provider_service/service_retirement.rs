@@ -5,7 +5,10 @@
 //! task's handle. The driver therefore finishes its original cleanup even when
 //! a request owner is temporarily local to a join future. If the driver fails,
 //! retained per-service state permits observed cleanup of remaining workers.
-//! Normal supervision never detaches cleanup or grants effect-replay authority.
+//! Same-actor persistence dependencies live in the actual work state, independent
+//! of outer and cleanup observers; final writer records remain serviceable until
+//! publisher retirement finishes. Normal supervision never detaches cleanup or
+//! grants effect-replay authority.
 //! Last-owner drop requests stop but is not an observed retirement receipt.
 
 use super::worker_ownership::{
@@ -50,6 +53,9 @@ pub(in crate::host::async_runtime) struct AgentProviderWorkRetirement {
     pub(super) state: Arc<Mutex<ProviderServiceState>>,
     /// Original actor destination retained until actual worker retirement.
     handle: AsyncRuntimeSessionHandle,
+    /// Same-actor writers survive cancelled outer/cleanup observers until this
+    /// actual work retirement finishes. No dependency lock crosses an await.
+    persistence: super::worker_ownership::PersistenceDependencies,
 }
 
 impl AgentProviderWorkRetirement {
@@ -57,17 +63,20 @@ impl AgentProviderWorkRetirement {
     pub(super) fn new(handle: AsyncRuntimeSessionHandle) -> Self {
         let state = ProviderServiceState::default();
         let filesystem = state.owners.filesystem_stops();
+        let persistence = state.owners.persistence_dependencies();
         Self {
             shutdown: Arc::default(),
             filesystem,
             state: Arc::new(Mutex::new(state)),
             handle,
+            persistence,
         }
     }
 
     /// Signals before wrapper abort; actual joins remain required afterwards.
     fn request_stop(&self) {
         self.shutdown.store(true, Ordering::Release);
+        super::worker_ownership::stop_persistence_dependencies(&self.persistence);
         self.filesystem.request_stop();
     }
 
@@ -103,6 +112,8 @@ struct DriverState {
 
 /// External handle owner; the driver receives only separate work custody.
 struct ProviderDriver {
+    /// Writer stop remains reachable on outer-owner loss without async state.
+    persistence: super::worker_ownership::PersistenceDependencies,
     /// Reduce-only source fence survives last external wrapper loss.
     filesystem: Arc<super::filesystem_ownership::FilesystemRootStops>,
     /// Last-owner drop requests stop before a handle can become detached.
@@ -119,6 +130,7 @@ impl Drop for ProviderDriver {
     /// supervision still observes the driver join; drop alone is no receipt.
     fn drop(&mut self) {
         self.shutdown.store(true, Ordering::Release);
+        super::worker_ownership::stop_persistence_dependencies(&self.persistence);
         self.filesystem.request_stop();
     }
 }
@@ -146,6 +158,7 @@ impl AgentProviderServiceRetirement {
     pub(in crate::host::async_runtime) fn new(handle: AsyncRuntimeSessionHandle) -> Self {
         let work = AgentProviderWorkRetirement::new(handle);
         let driver = Arc::new(ProviderDriver {
+            persistence: work.persistence.clone(),
             filesystem: work.filesystem.clone(),
             shutdown: work.shutdown.clone(),
             task: Mutex::new(DriverState::default()),
@@ -153,6 +166,28 @@ impl AgentProviderServiceRetirement {
             started: AtomicBool::new(false),
         });
         Self { work, driver }
+    }
+
+    /// Retains only a writer for this exact actor before any service is polled.
+    /// The actual driver's work clone owns the dependency, not its wrapper.
+    pub(in crate::host::async_runtime) fn retain_persistence_dependency(
+        &self,
+        writer: &crate::host::async_runtime::persistence_retirement::PersistenceServiceRetirement,
+    ) -> Result<()> {
+        if writer.same_actor(&self.work.handle) {
+            let dependency = writer.dependency()?;
+            self.work
+                .persistence
+                .lock()
+                .map_err(|_| {
+                    MezError::invalid_state("provider persistence dependency lock poisoned")
+                })?
+                .push(dependency);
+            if self.work.stopping() {
+                writer.request_stop();
+            }
+        }
+        Ok(())
     }
 
     /// Supplies only work custody to the driver, never its own join owner.
@@ -237,9 +272,20 @@ impl AgentProviderServiceRetirement {
             Some(error) => finish_provider_service_result(Err(error), driver.map(|_| ())),
             None => driver,
         };
-        match self.work.retire_remaining().await {
+        let result = match self.work.retire_remaining().await {
             Ok(completed) => primary.map(|count| count.saturating_add(completed)),
             Err(error) => finish_provider_service_result(primary, Err(error)),
-        }
+        };
+        // No await follows release. Cancelled observers leave this work-owned
+        // barrier installed until a resumed actual retirement attempt finishes.
+        let released = self
+            .work
+            .persistence
+            .lock()
+            .map(|mut dependencies| {
+                dependencies.clear();
+            })
+            .map_err(|_| MezError::invalid_state("provider persistence dependency lock poisoned"));
+        finish_provider_service_result(result, released)
     }
 }

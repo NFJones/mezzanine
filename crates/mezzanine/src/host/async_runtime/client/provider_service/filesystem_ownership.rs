@@ -6,6 +6,8 @@
 //! closes queued admission before joining actual workers, and map removal requires
 //! that original acknowledgement. Pending source/storage and unissued refusal
 //! ownership remain explicit errors with custody retained, never fabricated joins.
+//! Writer failure is accepted only from its observed actual join: native work
+//! still joins, and pending original source remains recoverable without replay.
 
 use super::*;
 use crate::runtime::RuntimeNativeFilesystemOffer;
@@ -81,6 +83,8 @@ struct FilesystemRootInner {
     producer: NativeFilesystemProducer,
     /// Actual recovery join/result retained even when an observer is dropped.
     recovery: tokio::sync::Mutex<FilesystemRecovery>,
+    /// Actual writer health shared independently of the driver state mutex.
+    persistence: worker_ownership::PersistenceDependencies,
 }
 /// No observer can move a running actual handle out across an await.
 enum FilesystemRecovery {
@@ -103,10 +107,14 @@ impl Drop for FilesystemRootInner {
 }
 impl FilesystemRootOwner {
     /// Creates independent root recovery custody before first claim admission.
-    pub(super) fn new(producer: NativeFilesystemProducer) -> Self {
+    pub(super) fn new(
+        producer: NativeFilesystemProducer,
+        persistence: worker_ownership::PersistenceDependencies,
+    ) -> Self {
         Self(std::sync::Arc::new(FilesystemRootInner {
             producer,
             recovery: tokio::sync::Mutex::new(FilesystemRecovery::Unstarted),
+            persistence,
         }))
     }
     /// Returns the actual registered allocation, never a same-label replacement.
@@ -128,8 +136,10 @@ impl FilesystemRootOwner {
         if matches!(*state, FilesystemRecovery::Unstarted) {
             let producer = self.0.producer.clone();
             let handle = handle.clone();
+            let persistence = self.0.persistence.clone();
             *state = FilesystemRecovery::Running(tokio::spawn(async move {
-                retire_filesystem_owner(&handle, &producer).await
+                retire_filesystem_owner_with_dependencies(&handle, &producer, Some(&persistence))
+                    .await
             }));
         }
     }
@@ -277,9 +287,20 @@ async fn monitor(
 /// Observes real native/storage handles before requesting exact original transfer.
 /// Missing admission retains explicit unissued ownership. Pending storage waits
 /// with the root entry installed; it is not a new required failure or completion.
+#[cfg(all(test, target_os = "linux"))]
 pub(super) async fn retire_filesystem_owner(
     handle: &AsyncRuntimeSessionHandle,
     producer: &NativeFilesystemProducer,
+) -> Result<()> {
+    retire_filesystem_owner_with_dependencies(handle, producer, None).await
+}
+
+/// Observes real native joins even after writer failure, then retains explicit
+/// unavailable source custody rather than waiting forever or fabricating an ack.
+async fn retire_filesystem_owner_with_dependencies(
+    handle: &AsyncRuntimeSessionHandle,
+    producer: &NativeFilesystemProducer,
+    persistence: Option<&worker_ownership::PersistenceDependencies>,
 ) -> Result<()> {
     if producer.retire().await?.is_none() {
         return Err(MezError::invalid_state(
@@ -290,6 +311,18 @@ pub(super) async fn retire_filesystem_owner(
         let accepted = crate::host::async_runtime::native_filesystem::transfer_joined_native_filesystem_producer(handle, producer).await?;
         if accepted.is_some_and(|ack| ack.acknowledges(producer)) {
             break;
+        }
+        if let Some(persistence) = persistence {
+            let dependencies = persistence.lock().map_err(|_| {
+                MezError::invalid_state("filesystem persistence dependency lock poisoned")
+            })?;
+            for writer in dependencies.iter() {
+                if let Some(error) = writer.failure()? {
+                    return Err(error.with_context(
+                        "filesystem root retains source after required persistence driver failure",
+                    ));
+                }
+            }
         }
         if handle.lifecycle_state_watcher().has_changed().is_err() {
             return Err(MezError::invalid_state(

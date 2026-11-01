@@ -999,3 +999,319 @@ async fn filesystem_root_supervisor_cancellation_retains_actual_driver_and_trans
     persistence.await.unwrap();
     drop(finish(&handle, actor).await);
 }
+
+/// Real supervised persistence remains available for final original source
+/// emitted after native join. A rescue writer only reaps the pre-fix failure;
+/// requiring it always fails this test after all genuine workers retire.
+#[tokio::test(flavor = "current_thread")]
+async fn filesystem_root_supervised_persistence_outlives_native_producer_retirement() {
+    Box::pin(qualify_supervised_filesystem_persistence(
+        u64::MAX,
+        PersistenceShutdownScenario::Normal,
+    ))
+    .await;
+}
+
+/// Finite normal polling releases the wrapper without terminating its actual
+/// writer before held producer retirement creates the original final records.
+#[tokio::test(flavor = "current_thread")]
+async fn filesystem_root_finite_persistence_budget_preserves_final_drain() {
+    Box::pin(qualify_supervised_filesystem_persistence(
+        1,
+        PersistenceShutdownScenario::Normal,
+    ))
+    .await;
+}
+
+/// Cancelling supervision and both provider/writer cleanup observers conserves
+/// the same actual handles; resumed retirement obtains the original exact ack.
+#[tokio::test(flavor = "current_thread")]
+async fn filesystem_root_supervised_persistence_survives_cancelled_cleanup_observers() {
+    Box::pin(qualify_supervised_filesystem_persistence(
+        u64::MAX,
+        PersistenceShutdownScenario::CancelledObservers,
+    ))
+    .await;
+}
+
+/// Actual writer task failure must observe native join, report unavailable
+/// original custody without false ack, and allow original-source-only recovery.
+#[tokio::test(flavor = "current_thread")]
+async fn filesystem_root_failed_persistence_retains_source_for_replacement_writer() {
+    Box::pin(qualify_supervised_filesystem_persistence(
+        u64::MAX,
+        PersistenceShutdownScenario::WriterFailure,
+    ))
+    .await;
+}
+
+/// Writer failure after finite wrapper completion still requires an actual
+/// retained join; readiness alone cannot certify unavailable or successful I/O.
+#[tokio::test(flavor = "current_thread")]
+async fn filesystem_root_failed_persistence_after_finite_wrapper_remains_observable() {
+    Box::pin(qualify_supervised_filesystem_persistence(
+        1,
+        PersistenceShutdownScenario::WriterFailure,
+    ))
+    .await;
+}
+
+/// Test variation changes only the owned observation/failure boundary.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PersistenceShutdownScenario {
+    /// Observe ordinary supervised producer-before-writer retirement.
+    Normal,
+    /// Drop original outer and cleanup observers, then resume actual joins.
+    CancelledObservers,
+    /// Cancel the actual writer and recover with its original registered source.
+    WriterFailure,
+}
+
+/// Shared actual provider/descriptor/writer fixture for five lifetime owners.
+async fn qualify_supervised_filesystem_persistence(
+    max_polls: u64,
+    scenario: PersistenceShutdownScenario,
+) {
+    use crate::host::async_runtime::native_filesystem::execute_for_tests;
+    let (root, runtime_service, offers) = Box::pin(fixture(1)).await;
+    let (handle, actor) = actor(runtime_service);
+    let service = crate::host::async_runtime::provider::build_async_agent_provider_service(
+        "filesystem-root-supervisor",
+        handle.clone(),
+        AsyncAgentProviderServiceConfig::new(1).unwrap(),
+    )
+    .unwrap();
+    let retirement = service.agent_provider_retirement.as_ref().unwrap().clone();
+    let producer = NativeFilesystemProducer::new(offers[0].attempt().clone());
+    let executing = producer.clone();
+    let context = handle.clone();
+    let runtime = tokio::runtime::Handle::current();
+    let recorder = producer.progress_recorder();
+    let (entered, ready) = tokio::sync::oneshot::channel();
+    let (release, gate) = std::sync::mpsc::channel();
+    /// Always releases this original blocking worker on fixture unwind.
+    struct Release(std::sync::mpsc::Sender<()>);
+    impl Drop for Release {
+        /// No task other than the captured worker receives this signal.
+        fn drop(&mut self) {
+            let _ = self.0.send(());
+        }
+    }
+    let release = Release(release);
+    {
+        let mut state = retirement.work.state.lock().await;
+        let ProviderServiceState {
+            workers, owners, ..
+        } = &mut *state;
+        worker_ownership::spawn_owned_filesystem_agent_worker(
+            workers,
+            owners,
+            producer.clone(),
+            async move {
+                assert!(
+                    context
+                        .claim_native_filesystem_producer(executing.clone())
+                        .await?
+                );
+                assert!(
+                    executing
+                        .start(move |dispatch| {
+                            let actual = execute_for_tests(dispatch, context, runtime, recorder);
+                            entered.send(()).unwrap();
+                            gate.recv().unwrap();
+                            actual
+                        })
+                        .await?
+                );
+                std::future::pending::<Result<AsyncAgentProviderWorkerResult>>().await
+            },
+        );
+    }
+    ready.await.unwrap();
+    let persistence = crate::host::async_runtime::build_async_persistence_side_effect_service(
+        "filesystem-persistence",
+        handle.clone(),
+        crate::host::async_runtime::AsyncRuntimeSideEffectServiceConfig {
+            max_polls,
+            drain_limit: 64,
+            idle_interval: Duration::from_millis(1),
+        },
+    )
+    .unwrap();
+    let writer_owner = persistence.persistence_retirement.as_ref().unwrap().clone();
+    let primary =
+        crate::host::async_runtime::AsyncRuntimeService::new("filesystem-primary", async {
+            std::future::pending::<()>().await;
+            Ok(crate::host::async_runtime::AsyncRuntimeServiceExit::completed(0))
+        });
+    let (cancel, cancelled) = tokio::sync::oneshot::channel();
+    let mut supervision = tokio::spawn(
+        crate::host::async_runtime::supervise_async_runtime_services(
+            vec![service, persistence, primary],
+            async {
+                let _ = cancelled.await;
+            },
+        ),
+    );
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while !retirement.driver_started_for_tests() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    cancel.send(()).unwrap();
+    if scenario == PersistenceShutdownScenario::WriterFailure {
+        writer_owner.abort_driver_for_tests();
+    }
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while !producer.is_closed().unwrap() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(
+        tokio::time::timeout(Duration::from_millis(30), &mut supervision)
+            .await
+            .is_err()
+    );
+    let stranded = match scenario {
+        PersistenceShutdownScenario::CancelledObservers => {
+            supervision.abort();
+            assert!(supervision.await.unwrap_err().is_cancelled());
+            let mut writer_join = Box::pin(writer_owner.retire());
+            assert!(futures_util::poll!(writer_join.as_mut()).is_pending());
+            drop(writer_join);
+            let mut provider_join = Box::pin(retirement.retire());
+            assert!(futures_util::poll!(provider_join.as_mut()).is_pending());
+            drop(provider_join);
+            assert!(producer.transfer_acknowledgement().unwrap().is_none());
+            drop(release);
+            tokio::time::timeout(Duration::from_secs(10), retirement.retire())
+                .await
+                .unwrap()
+                .unwrap();
+            let actual = tokio::time::timeout(Duration::from_secs(10), writer_owner.retire())
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(actual.failed, 0);
+            assert!(actual.completed > 0);
+            false
+        }
+        PersistenceShutdownScenario::WriterFailure => {
+            drop(release);
+            let error = tokio::time::timeout(Duration::from_secs(10), &mut supervision)
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap_err();
+            assert!(error.message().contains("persistence"));
+            assert!(producer.joined_outcome().is_some());
+            assert!(producer.transfer_acknowledgement().unwrap().is_none());
+            assert_eq!(retirement.work.state.lock().await.owners.len(), 1);
+            // A replacement writer reconciles original claimed source. Recovery
+            // receives the ACTUAL registered producer, never reruns the patch.
+            let replacement =
+                crate::host::async_runtime::provider::build_async_agent_provider_service(
+                    "replacement-provider",
+                    handle.clone(),
+                    AsyncAgentProviderServiceConfig::new(1).unwrap(),
+                )
+                .unwrap();
+            let replacement_writer =
+                crate::host::async_runtime::build_async_persistence_side_effect_service(
+                    "replacement-persistence",
+                    handle.clone(),
+                    crate::host::async_runtime::AsyncRuntimeSideEffectServiceConfig {
+                        max_polls: u64::MAX,
+                        drain_limit: 64,
+                        idle_interval: Duration::from_millis(1),
+                    },
+                )
+                .unwrap();
+            let primary = crate::host::async_runtime::AsyncRuntimeService::new(
+                "replacement-primary",
+                async {
+                    std::future::pending::<()>().await;
+                    Ok(crate::host::async_runtime::AsyncRuntimeServiceExit::completed(0))
+                },
+            );
+            let (cancel, cancelled) = tokio::sync::oneshot::channel();
+            let recovered = tokio::spawn(
+                crate::host::async_runtime::supervise_async_runtime_services(
+                    vec![replacement, replacement_writer, primary],
+                    async {
+                        let _ = cancelled.await;
+                    },
+                ),
+            );
+            tokio::time::timeout(Duration::from_secs(10), async {
+                while producer.transfer_acknowledgement().unwrap().is_none() {
+                    tokio::time::sleep(Duration::from_millis(1)).await;
+                }
+            })
+            .await
+            .unwrap();
+            cancel.send(()).unwrap();
+            tokio::time::timeout(Duration::from_secs(10), recovered)
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+            let mut state = retirement.work.state.lock().await;
+            let error = worker_ownership::drain_filesystem_recoveries(&handle, &mut state.owners)
+                .await
+                .unwrap_err();
+            assert!(error.message().contains("persistence driver"));
+            false
+        }
+        PersistenceShutdownScenario::Normal => {
+            drop(release);
+            let completed = tokio::time::timeout(Duration::from_secs(10), &mut supervision).await;
+            let stranded = completed.is_err();
+            let result = match completed {
+                Ok(result) => result,
+                Err(_) => {
+                    let (stop, rescue) = writer(handle.clone());
+                    let result = tokio::time::timeout(Duration::from_secs(10), &mut supervision)
+                        .await
+                        .unwrap();
+                    stop.store(true, Ordering::Release);
+                    rescue.await.unwrap();
+                    result
+                }
+            };
+            let report = result.unwrap().unwrap();
+            assert!(
+                report
+                    .services
+                    .iter()
+                    .find(|service| service.name == "filesystem-persistence")
+                    .unwrap()
+                    .exit
+                    .work_units
+                    > 0
+            );
+            stranded
+        }
+    };
+    assert!(retirement.work.state.lock().await.owners.is_empty());
+    assert!(
+        producer
+            .transfer_acknowledgement()
+            .unwrap()
+            .unwrap()
+            .acknowledges(&producer)
+    );
+    assert_eq!(
+        std::fs::read(root.0.join("native-files/f0")).unwrap(),
+        b"root-0\n"
+    );
+    drop(finish(&handle, actor).await);
+    assert!(
+        !stranded,
+        "supervised persistence stopped before original producer transfer"
+    );
+}

@@ -137,6 +137,8 @@ mod events;
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 mod pane_io;
+/// Actual writer lifetime shared by supervised producer retirement.
+mod persistence_retirement;
 /// Exposes the provider module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this

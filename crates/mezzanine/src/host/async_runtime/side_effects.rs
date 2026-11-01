@@ -1021,13 +1021,32 @@ pub fn build_async_status_pill_side_effect_service(
 
 /// Drains persistence side effects, performs bounded Tokio file writes, and
 /// reports completion or failure back through typed actor events.
+#[cfg(test)]
 pub async fn run_async_persistence_side_effect_service<S>(
     handle: &AsyncRuntimeSessionHandle,
     config: AsyncRuntimeSideEffectServiceConfig,
-    mut should_stop: S,
+    should_stop: S,
 ) -> Result<AsyncPersistenceSideEffectServiceReport>
 where
     S: FnMut(u64, RuntimeLifecycleState) -> bool,
+{
+    run_async_persistence_side_effect_service_with_retirement(handle, config, should_stop, || true)
+        .await
+}
+
+/// Separates stop/admission from an empty-queue retirement barrier. Observed
+/// stop suppresses new optional cache jobs immediately; registered publishers
+/// may still enqueue essential records until their actual retirement finishes.
+/// Configuration and I/O/actor errors retain the public runner's semantics.
+pub(super) async fn run_async_persistence_side_effect_service_with_retirement<S, F>(
+    handle: &AsyncRuntimeSessionHandle,
+    config: AsyncRuntimeSideEffectServiceConfig,
+    mut should_stop: S,
+    mut can_finish: F,
+) -> Result<AsyncPersistenceSideEffectServiceReport>
+where
+    S: FnMut(u64, RuntimeLifecycleState) -> bool,
+    F: FnMut() -> bool,
 {
     config.validate()?;
     let mut lifecycle_watcher = handle.lifecycle_state_watcher();
@@ -1067,14 +1086,14 @@ where
 
         let effects = handle.drain_persistence_claims(config.drain_limit).await?;
         if effects.is_empty() {
-            if stopping {
+            if stopping && can_finish() {
                 return Ok(report);
             }
             report.polls = report.polls.saturating_add(1);
             if report.polls >= config.max_polls {
                 return Ok(report);
             }
-            if should_stop(report.polls, state) {
+            if should_stop(report.polls, state) && can_finish() {
                 return Ok(report);
             }
             wait_for_side_effects_or_bounded_idle(
@@ -1734,22 +1753,27 @@ where
     Ok(report)
 }
 
-/// Builds an auxiliary supervised service for persistence side effects.
+/// Builds an auxiliary wrapper with independently retained ordered-writer custody.
+///
+/// Invalid drain configuration returns an error before work starts. The supervisor
+/// binds same-actor publisher dependencies before polling wrappers and rejects
+/// duplicate writers for one actor. Normal poll/lifecycle completion can finish
+/// this wrapper while the same actual writer serves final publisher records;
+/// supervised retirement then observes its final drain and cached actual join.
+/// Wrapper cancellation alone is neither writer termination nor a storage ack.
 pub fn build_async_persistence_side_effect_service(
     name: impl Into<String>,
     handle: AsyncRuntimeSessionHandle,
     config: AsyncRuntimeSideEffectServiceConfig,
 ) -> Result<AsyncRuntimeService> {
     config.validate()?;
-    Ok(AsyncRuntimeService::new_auxiliary(name, async move {
-        let report = run_async_persistence_side_effect_service(&handle, config, |_, state| {
-            is_terminal_runtime_lifecycle_state(state)
-        })
-        .await?;
-        Ok(AsyncRuntimeServiceExit::completed(
-            report.completed.saturating_add(report.failed),
-        ))
-    }))
+    let retirement =
+        super::persistence_retirement::PersistenceServiceRetirement::new(handle, config);
+    let owned = retirement.clone();
+    let mut service =
+        AsyncRuntimeService::new_auxiliary(name, async move { owned.run_wrapper().await });
+    service.persistence_retirement = Some(retirement);
+    Ok(service)
 }
 
 /// Drains render invalidation effects, composes frames through the actor, and
