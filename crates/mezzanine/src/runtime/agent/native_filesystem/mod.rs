@@ -8,6 +8,7 @@
 //! before switching native patches away from their existing shell adapter.
 
 pub(crate) mod authority;
+mod progress;
 mod state;
 pub(super) use state::NativeFilesystemActions;
 use state::NativeFilesystemOwner;

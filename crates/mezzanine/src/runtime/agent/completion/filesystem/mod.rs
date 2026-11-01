@@ -112,6 +112,8 @@ pub(super) struct FilesystemCompletionReceipt {
     publication_source: Option<Arc<FilesystemPublicationSource>>,
     /// Optional display-install failure never resets required-gate evidence.
     publication_failure: Option<Box<MezError>>,
+    /// Remaining final diff selected once after exact progress reconciliation.
+    final_publication_diff: Option<String>,
     /// First required failure; duplicates never reset it or replay the gate.
     failure: Option<Box<MezError>>,
 }
@@ -140,6 +142,64 @@ impl fmt::Debug for FilesystemCompletionReceipt {
 pub(in crate::runtime::agent) struct UnissuedFilesystemCompletion(ExternalCompletionKey);
 
 impl RuntimeSessionService {
+    /// Checks display binding only; original confirmed receipts remain owned
+    /// even when current paint is forbidden by retirement or replacement.
+    pub(in crate::runtime::agent) fn filesystem_progress_paint_current(
+        &self,
+        attempt: &NativeFilesystemAttempt,
+    ) -> Result<bool> {
+        let key = self.filesystem_completion_key(attempt)?;
+        let receipt = self
+            .agent
+            .completion_settlements
+            .filesystem
+            .get(&key)
+            .ok_or_else(|| MezError::invalid_state("filesystem progress owner unavailable"))?;
+        Ok(receipt.failure.is_none()
+            && self.completion_paint_owner_is_current(&receipt.owner)
+            && self.completion_settlement_binding_current(&receipt.owner.turn_id)
+            && self.filesystem_publication_predecessors_ready(receipt)
+            && self
+                .agent_turn_executions()
+                .get(&receipt.owner.turn_id)
+                .is_some_and(|execution| {
+                    execution.action_results.iter().any(|result| {
+                        result.action_id == receipt.owner.action_id
+                            && result.status == ActionStatus::Running
+                    })
+                }))
+    }
+
+    /// Installs the original intent prefix before live mutation rows. A queued
+    /// or held header is not an installation acknowledgement.
+    pub(in crate::runtime::agent) fn filesystem_progress_header_ready(
+        &mut self,
+        attempt: &NativeFilesystemAttempt,
+    ) -> Result<bool> {
+        let key = self.filesystem_completion_key(attempt)?;
+        let receipt = self
+            .agent
+            .completion_settlements
+            .filesystem
+            .get(&key)
+            .ok_or_else(|| MezError::invalid_state("filesystem progress header owner lost"))?;
+        let work = Arc::clone(&receipt.work);
+        let owner = receipt.owner.clone();
+        let execution = self.filesystem_execution_for_publication(&work)?;
+        self.queue_ordered_provider_header(&owner.pane_id, &execution, &work.owner.action)?;
+        self.flush_ordered_provider_headers(&owner.pane_id, &execution)?;
+        Ok(self
+            .presentation
+            .agent_published_provider_headers
+            .contains(&(
+                owner.pane_id,
+                owner.turn_id,
+                owner.conversation_id,
+                owner.group,
+                owner.ordinal,
+            )))
+    }
+
     /// Reports entered phase for focused gate tests without changing any owner.
     #[cfg(test)]
     pub(crate) fn filesystem_completion_phase_for_tests(
@@ -229,6 +289,7 @@ impl RuntimeSessionService {
                 reject_audit_ack_for_tests: false,
                 publication_source: None,
                 publication_failure: None,
+                final_publication_diff: None,
                 failure: None,
             }),
         );

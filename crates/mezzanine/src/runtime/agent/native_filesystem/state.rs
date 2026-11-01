@@ -374,6 +374,23 @@ impl NativeFilesystemActions {
         self.get(token).and_then(|entry| entry.producer.clone())
     }
 
+    /// Matches live display data only to a registered issued/retained producer.
+    /// This predicate carries no scope, lease or mutation authority.
+    pub(super) fn progress_is_registered(
+        &self,
+        progress: &mez_agent::ActionPresentationProgress,
+    ) -> bool {
+        self.attempts.values().any(|entry| {
+            matches!(entry.phase, Phase::Issued | Phase::Retained)
+                && entry.work.owner.turn.turn_id == progress.turn_id
+                && entry.work.owner.action.id == progress.action_id
+                && entry
+                    .producer
+                    .as_ref()
+                    .is_some_and(|producer| producer.matches_progress(progress))
+        })
+    }
+
     /// Acquires commit scheduling in the serialized actor after policy checks.
     /// A granted occurrence remains spent even if delivery or lease entry fails:
     /// neither uncertainty nor a later display retry authorizes mutation replay.

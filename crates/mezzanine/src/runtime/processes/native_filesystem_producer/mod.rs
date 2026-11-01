@@ -20,7 +20,11 @@ use crate::runtime::processes::native_patch::commit::{
 use crate::runtime::processes::native_patch::worker::NativePatchWorkerOutcome;
 
 mod execution;
+mod progress;
 use execution::Execution;
+pub(crate) use progress::{
+    NativeFilesystemProgress, NativeFilesystemProgressRecorder, endpoint_progress,
+};
 
 /// Short request-local admission state; no asynchronous wait holds this lock.
 struct Admission {
@@ -46,6 +50,10 @@ struct Inner {
     claim_changed: tokio::sync::Notify,
     /// Actual blocking task handle and original observed outcome.
     execution: tokio::sync::Mutex<Execution>,
+    /// Bounded original confirmed receipts, independent of display delivery.
+    progress: Mutex<
+        Vec<Arc<crate::runtime::processes::native_patch::worker::NativePatchEndpointReceipt>>,
+    >,
 }
 
 impl Drop for Inner {
@@ -101,6 +109,7 @@ impl NativeFilesystemProducer {
             }),
             claim_changed: tokio::sync::Notify::new(),
             execution: tokio::sync::Mutex::new(Execution::Unstarted),
+            progress: Mutex::new(Vec::new()),
         }))
     }
 

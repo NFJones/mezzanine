@@ -81,8 +81,9 @@ pub(crate) async fn start_native_filesystem_producer(
     producer: &NativeFilesystemProducer,
 ) -> Result<bool> {
     let runtime = tokio::runtime::Handle::current();
+    let progress_owner = producer.progress_recorder();
     producer
-        .start(move |dispatch| execute(dispatch, handle, runtime))
+        .start(move |dispatch| execute(dispatch, handle, runtime, progress_owner))
         .await
 }
 
@@ -91,6 +92,7 @@ fn execute(
     dispatch: RuntimeNativeFilesystemDispatch,
     handle: AsyncRuntimeSessionHandle,
     runtime: tokio::runtime::Handle,
+    progress_owner: crate::runtime::native_filesystem::NativeFilesystemProgressRecorder,
 ) -> NativePatchWorkerOutcome {
     let identity = Arc::new(dispatch.work.identity.clone());
     let root = match dispatch
@@ -119,6 +121,7 @@ fn execute(
         scopes: dispatch.scopes,
         fence: dispatch.fence.clone(),
     };
+    let progress_handle = handle.clone();
     let authority = ActorAuthority {
         handle,
         runtime,
@@ -126,7 +129,11 @@ fn execute(
         identity,
         fence: dispatch.fence,
     };
-    execute_native_patch(request, authority, |_| {})
+    execute_native_patch(request, authority, |receipt| {
+        if let Ok(Some(delivery)) = progress_owner.record_confirmed_progress(receipt) {
+            progress_handle.try_native_filesystem_progress(delivery);
+        }
+    })
 }
 
 /// Blocking-side authority client; concrete mutations still need actor leases.

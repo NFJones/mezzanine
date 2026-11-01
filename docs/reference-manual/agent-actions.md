@@ -132,6 +132,14 @@ reported as `pane_shell`. Neither selecting native mode nor seeing a configured
 sandbox name proves process-free patch execution or effective OS confinement.
 Use the actual action result and [sandbox status](../safety-and-trust/sandboxing.md).
 
+Native filesystem worker confirmations use the shared confirmed-mutation display
+path. The producer retains a cumulative prefix before best-effort notification;
+final projection reconciles it, and final publication omits exact already-promoted
+diffs. The live display holds at most 64 endpoint components per action; remaining
+confirmed effects stay in the complete final result. Held installs and stale
+conversations retain the original facts. This component does not by itself
+switch the runtime patch selector away from its existing shell adapter.
+
 Denied approvals and user cancellations are not automatically retried.
 Mezzanine may let the agent correct invalid arguments or other recoverable
 errors, but recovery does not authorize it to bypass your decision.

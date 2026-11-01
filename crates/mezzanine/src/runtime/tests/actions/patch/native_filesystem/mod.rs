@@ -745,3 +745,6 @@ mod audit_physical;
 
 #[cfg(target_os = "linux")]
 mod publication;
+
+#[cfg(target_os = "linux")]
+mod progress;

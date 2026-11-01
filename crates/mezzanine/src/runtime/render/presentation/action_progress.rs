@@ -551,6 +551,54 @@ impl RuntimeSessionService {
             })
     }
 
+    /// Checks actual promoted acknowledgement for one exact confirmed source.
+    /// Native final diff selection uses this only after reconciliation, never as
+    /// mutation authority or proof of a canonical result/archive transfer.
+    pub(crate) fn confirmed_progress_source_is_promoted(
+        &self,
+        progress: &ActionPresentationProgress,
+    ) -> bool {
+        let key = RuntimeActionPresentationProgressKey {
+            turn_id: progress.turn_id.clone(),
+            action_id: progress.action_id.clone(),
+            execution: progress.execution.clone(),
+            component: progress.component.clone(),
+        };
+        self.presentation
+            .action_presentation_progress
+            .values()
+            .any(|owner| {
+                !owner.retirement_requested.contains(&key)
+                    && owner.promoted_components.get(&key).is_some_and(|source| {
+                        source.source == progress.source
+                            && source.source_truncated == progress.source_truncated
+                    })
+            })
+    }
+
+    /// Reports an exact retained transient confirmation that must finish promotion
+    /// or retirement before a final source can safely display the same bytes.
+    pub(crate) fn confirmed_progress_source_is_retained(
+        &self,
+        progress: &ActionPresentationProgress,
+    ) -> bool {
+        let key = RuntimeActionPresentationProgressKey {
+            turn_id: progress.turn_id.clone(),
+            action_id: progress.action_id.clone(),
+            execution: progress.execution.clone(),
+            component: progress.component.clone(),
+        };
+        self.presentation
+            .action_presentation_progress
+            .values()
+            .any(|owner| {
+                owner.components.get(&key).is_some_and(|source| {
+                    source.source == progress.source
+                        && source.source_truncated == progress.source_truncated
+                })
+            })
+    }
+
     /// Reports whether final managed output contains every promoted mutation.
     pub(crate) fn promoted_action_patch_output_matches(
         &self,
@@ -744,7 +792,7 @@ impl RuntimeSessionService {
                     &progress.turn_id,
                     &progress.action_id,
                     marker,
-                ))
+                ) || self.native_filesystem_progress_is_registered(progress))
             }
             ActionPresentationExecutionIdentity::Transaction(marker) => self
                 .running_shell_transaction(marker)

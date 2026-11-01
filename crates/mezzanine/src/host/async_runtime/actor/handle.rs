@@ -1113,6 +1113,17 @@ impl AsyncRuntimeSessionHandle {
             .await?
     }
 
+    /// Offers cumulative display data without blocking an effect worker. The
+    /// producer retains the same prefix if this bounded actor lane is full.
+    pub(crate) fn try_native_filesystem_progress(
+        &self,
+        delivery: crate::runtime::native_filesystem::NativeFilesystemProgress,
+    ) {
+        let _ = self.sender.try_send(AsyncRuntimeRequestEnvelope::new(
+            AsyncRuntimeRequest::NativeFilesystemProgress { delivery },
+        ));
+    }
+
     /// Reads current actor-authorized scopes for a bounded typed preparation.
     pub(crate) async fn native_filesystem_scopes(
         &self,

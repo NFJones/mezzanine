@@ -1085,6 +1085,11 @@ pub(in crate::host::async_runtime) enum AsyncRuntimeRequest {
         /// Acceptance only; sole dispatch custody never crosses this reply.
         reply: oneshot::Sender<Result<bool>>,
     },
+    /// Best-effort cumulative post-commit display data; custody stays in producer.
+    NativeFilesystemProgress {
+        /// Opaque registered producer and original receipt allocations.
+        delivery: crate::runtime::native_filesystem::NativeFilesystemProgress,
+    },
     /// Resolves typed preparation grants for one original filesystem attempt.
     NativeFilesystemScopes {
         /// Opaque exact actor allocation and attempt identity.
@@ -1638,6 +1643,7 @@ impl AsyncRuntimeRequest {
             | Self::ClaimApprovedExternalAction { .. }
             | Self::ClaimNativeShellAction { .. }
             | Self::ClaimNativeFilesystemProducer { .. }
+            | Self::NativeFilesystemProgress { .. }
             | Self::NativeFilesystemScopes { .. }
             | Self::NativeFilesystemCommit { .. }
             | Self::RetainNativeFilesystemOutcome { .. }

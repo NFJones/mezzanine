@@ -12721,6 +12721,20 @@ worker or prove nonexecution. Physical acceptance MUST require that actual
 worker's observed join. Path/count notifications and equal-looking records MUST
 NOT acknowledge another original receipt. Late physical evidence MUST retain
 original attribution and MUST NOT erase an earlier append-acknowledgement error.
+Native workers MUST record bounded cumulative post-commit progress under their
+actual registered producer before best-effort nonblocking actor notification.
+The blocking worker's callback MUST NOT strongly retain its own producer/task
+owner or delay external-owner-loss cancellation. Coalesced or dropped
+notifications MUST NOT lose the retained prefix. Live paint
+MUST require exact original producer data, running action, current conversation
+and predecessor readiness; matching labels or changed revisions are insufficient.
+Final projection MUST reconcile retained confirmations before changing the action
+result. Final publication MUST omit only exact already-promoted endpoint sources,
+retain unpromoted sources across display failures, and preserve full final effects
+beyond the 64-component live display limit. Late progress MUST NOT duplicate a
+terminal action's selected final diff. None of these display acknowledgements
+MUST authorize mutation, group continuation or producer retirement.
+
 Native final publication MUST retain validated confirmed endpoint diffs and a
 semantic certainty/count outcome under the original response/ordinal owner,
 including positive partial effects. Rendering MUST NOT lower a shell adapter to

@@ -8,7 +8,9 @@
 pub(crate) use super::agent::native_filesystem::{
     NativeFilesystemAttempt, RuntimeNativeFilesystemDispatch,
 };
-pub(crate) use super::processes::native_filesystem_producer::NativeFilesystemProducer;
+pub(crate) use super::processes::native_filesystem_producer::{
+    NativeFilesystemProducer, NativeFilesystemProgress, NativeFilesystemProgressRecorder,
+};
 pub(crate) use super::processes::native_patch::commit::NativePatchCommitFence;
 pub(crate) use super::processes::native_patch::lease::{
     NativePatchCommitLease, NativePatchCommitProposal,

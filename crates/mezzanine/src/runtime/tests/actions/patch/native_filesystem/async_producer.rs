@@ -496,3 +496,49 @@ async fn unexpected_producer_join_failure_retains_original_unknown_evidence() {
     ));
     assert!(!fixture.root.join("file").exists());
 }
+
+/// Holds the same progress-recorder capture used by the real worker behind a
+/// controlled gate. Dropping the last external producer must cancel its fence
+/// before release; a callback must not keep its own task owner alive. This is a
+/// no-mutation lifecycle test, not evidence of observed join after owner loss.
+#[tokio::test(flavor = "current_thread")]
+async fn progress_callback_does_not_prevent_last_owner_cancellation() {
+    let mut fixture = Fixture::new();
+    let producer = NativeFilesystemProducer::new(fixture.queue());
+    // Claim actual policy/fence work without registering an extra actor-held
+    // producer; this leaves exactly the one external owner tested below.
+    assert!(
+        producer
+            .claim_with(|attempt| fixture.service.claim_native_filesystem_action(attempt))
+            .unwrap()
+    );
+    let recorder = producer.progress_recorder();
+    let (started, entered) = tokio::sync::oneshot::channel();
+    let (finished, observed) = tokio::sync::oneshot::channel();
+    let (release, wait) = std::sync::mpsc::channel();
+    let release = Release(release);
+    assert!(
+        producer
+            .start(move |dispatch| {
+                assert!(started.send(dispatch.fence.clone()).is_ok());
+                wait.recv().unwrap();
+                std::hint::black_box(&recorder);
+                let cancelled = dispatch.fence.check().is_err();
+                finished.send(cancelled).unwrap();
+                unexecuted(&dispatch)
+            })
+            .await
+            .unwrap()
+    );
+    let fence = entered.await.unwrap();
+    drop(producer);
+    let cancelled_while_blocked = fence.check().is_err();
+    drop(release);
+    let worker_observed_cancellation = observed.await.unwrap();
+    assert!(
+        cancelled_while_blocked,
+        "progress callback retained its own producer owner"
+    );
+    assert!(worker_observed_cancellation);
+    assert!(!fixture.root.join("file").exists());
+}

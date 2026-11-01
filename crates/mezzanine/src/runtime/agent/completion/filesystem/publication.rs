@@ -14,7 +14,7 @@ pub(super) struct FilesystemPublicationSource {
     /// Exact canonical result, compared before any current-pane publication.
     result: ActionResult,
     /// Ordered confirmed endpoint diffs; no shell framing/output is fabricated.
-    diff: String,
+    endpoints: Vec<mez_agent::ActionPresentationProgress>,
     /// Native semantic certainty/count/diagnostic summary, with no shell lowering.
     outcome: (bool, String),
 }
@@ -26,21 +26,25 @@ impl FilesystemPublicationSource {
         raw: &NativePatchWorkerOutcome,
         result: &ActionResult,
     ) -> Result<Self> {
-        let mut diff = raw
+        let endpoints = raw
             .receipts
             .iter()
-            .map(|receipt| receipt.diff.as_str())
-            .collect::<String>();
-        if raw.receipts.iter().any(|receipt| receipt.diff_truncated) {
-            diff.push_str("\n[Native diff preview truncated]\n");
-        }
-        let outcome = runtime_agent_action_outcome_line(&work.owner.action, result, false)
+            .map(|receipt| {
+                crate::runtime::processes::native_filesystem_producer::endpoint_progress(
+                    work, receipt,
+                )
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let mut outcome = runtime_agent_action_outcome_line(&work.owner.action, result, false)
             .ok_or_else(|| {
                 MezError::invalid_state("filesystem semantic outcome source unavailable")
             })?;
+        if raw.receipts.iter().any(|receipt| receipt.diff_truncated) {
+            outcome.1.push_str("; diff preview truncated");
+        }
         Ok(Self {
             result: result.clone(),
-            diff,
+            endpoints,
             outcome,
         })
     }
@@ -167,11 +171,54 @@ impl RuntimeSessionService {
         };
         let before = acknowledgements(self);
         let install = (|| -> Result<bool> {
+            let selected = self
+                .agent
+                .completion_settlements
+                .filesystem
+                .get(key)
+                .and_then(|receipt| receipt.final_publication_diff.clone());
+            let diff = if let Some(selected) = selected {
+                selected
+            } else {
+                self.reconcile_action_presentation_progress_for_execution(
+                    &owner.turn_id,
+                    &owner.action_id,
+                    &mez_agent::ActionPresentationExecutionIdentity::Attempt(owner.attempt.clone()),
+                    &source.result,
+                )?;
+                let mut remaining = String::new();
+                for progress in &source.endpoints {
+                    if self.confirmed_progress_source_is_promoted(progress) {
+                        continue;
+                    }
+                    if self.confirmed_progress_source_is_retained(progress) {
+                        return Err(MezError::conflict(
+                            "filesystem confirmed progress promotion pending",
+                        ));
+                    }
+                    remaining.push_str(&progress.source);
+                }
+                if source
+                    .endpoints
+                    .iter()
+                    .any(|progress| progress.source_truncated)
+                    && !remaining.is_empty()
+                {
+                    remaining.push_str("\n[Native diff preview truncated]\n");
+                }
+                self.agent
+                    .completion_settlements
+                    .filesystem
+                    .get_mut(key)
+                    .ok_or_else(|| MezError::invalid_state("filesystem publication owner lost"))?
+                    .final_publication_diff = Some(remaining.clone());
+                remaining
+            };
             if self
                 .presentation
                 .agent_published_provider_results
                 .iter()
-                .any(|(key, text)| key == &ordered && text != &source.diff)
+                .any(|(key, text)| key == &ordered && text != &diff)
             {
                 return Err(MezError::conflict(
                     "filesystem RESULT differs from its original confirmed source",
@@ -179,13 +226,13 @@ impl RuntimeSessionService {
             }
 
             self.queue_ordered_provider_header(&owner.pane_id, &execution, &work.owner.action)?;
-            if !source.diff.is_empty() {
+            if !diff.is_empty() {
                 self.queue_ordered_provider_result_source(
                     &owner.pane_id,
                     &execution,
                     &work.owner.action,
                     &source.result,
-                    (&source.diff, Some(&owner.attempt), false),
+                    (&diff, Some(&owner.attempt), false),
                 )?;
             }
             self.publish_ordered_runtime_outcome(
@@ -245,6 +292,15 @@ impl RuntimeSessionService {
         {
             return false;
         }
+        self.filesystem_publication_predecessors_ready(receipt)
+    }
+
+    /// Checks original action order for both live confirmations and final sources.
+    pub(super) fn filesystem_publication_predecessors_ready(
+        &self,
+        receipt: &FilesystemCompletionReceipt,
+    ) -> bool {
+        let owner = &receipt.owner;
         let Some(execution) = self.agent_turn_executions().get(&owner.turn_id) else {
             return false;
         };

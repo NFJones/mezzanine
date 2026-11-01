@@ -3118,6 +3118,26 @@ impl AsyncRuntimeSessionActor {
                 let _ = reply.send(result);
                 false
             }
+            AsyncRuntimeRequest::NativeFilesystemProgress { delivery } => {
+                let progress = delivery
+                    .confirmed()
+                    .ok()
+                    .and_then(|progress| progress.first().cloned());
+                let applied = self.service.apply_native_filesystem_progress(&delivery);
+                if !matches!(applied, Ok(false))
+                    && let Some(progress) = progress
+                    && let Some(turn) = self.service.agent_turn_ledger().turn(&progress.turn_id)
+                {
+                    let transition = self.service.runtime_pane_transition_with_render(
+                        &turn.pane_id,
+                        true,
+                        Some(crate::runtime::RenderInvalidationReason::AgentPrompt),
+                    );
+                    let _ = self.queue_runtime_side_effects(transition.side_effects);
+                    self.notify_event_delivery();
+                }
+                false
+            }
             AsyncRuntimeRequest::NativeFilesystemScopes {
                 attempt,
                 identity,
