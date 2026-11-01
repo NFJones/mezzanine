@@ -12735,6 +12735,17 @@ beyond the 64-component live display limit. Late progress MUST NOT duplicate a
 terminal action's selected final diff. None of these display acknowledgements
 MUST authorize mutation, group continuation or producer retirement.
 
+Forced completion archive projection MUST use the actual moved original
+execution/context and their captured imported-history boundary, accepted
+compaction witnesses/prior epoch and routed-parent policy. Later live-map values
+MUST NOT replace that source. Late confirmed filesystem facts MUST produce fresh
+original-target candidate rows, not just updated evidence around an older
+snapshot. Captured source absence or invalid original compaction anchors MUST
+fail closed while preserving existing candidate and raw effect custody. Full
+restored chronology MUST retain the shared per-group occurrence numbering for
+both execution rows and terminal compaction certificates; forced archive intent
+MUST NOT imply worker termination, accepted append or producer transfer.
+
 Native final publication MUST retain validated confirmed endpoint diffs and a
 semantic certainty/count outcome under the original response/ordinal owner,
 including positive partial effects. Rendering MUST NOT lower a shell adapter to

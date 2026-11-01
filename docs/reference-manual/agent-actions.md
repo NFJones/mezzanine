@@ -140,6 +140,11 @@ confirmed effects stay in the complete final result. Held installs and stale
 conversations retain the original facts. This component does not by itself
 switch the runtime patch selector away from its existing shell adapter.
 
+When file confirmations arrive after a turn has been retired, archive updates
+retain that turn's original context and history boundary. They cannot borrow a
+replacement conversation's state or replay a file change to reconstruct history.
+Missing original context keeps the archive handoff pending.
+
 Denied approvals and user cancellations are not automatically retried.
 Mezzanine may let the agent correct invalid arguments or other recoverable
 errors, but recovery does not authorize it to bypass your decision.

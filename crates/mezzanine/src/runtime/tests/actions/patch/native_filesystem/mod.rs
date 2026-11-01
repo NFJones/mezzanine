@@ -63,6 +63,16 @@ impl Fixture {
         owned_directory: bool,
         actions: impl FnOnce(&std::path::Path) -> Vec<mez_agent::AgentAction>,
     ) -> Self {
+        Self::with_context(owned_directory, actions, |_, _| {})
+    }
+
+    /// Prepares canonical source before the original patch assistant is accepted.
+    /// Fixture source may include imported-boundary or actual compaction cases.
+    fn with_context(
+        owned_directory: bool,
+        actions: impl FnOnce(&std::path::Path) -> Vec<mez_agent::AgentAction>,
+        prepare: impl FnOnce(&mut RuntimeSessionService, &AgentTurnRecord),
+    ) -> Self {
         let root = temp_root("native-filesystem-attempt");
         fs::create_dir_all(&root).unwrap();
         let root = fs::canonicalize(root).unwrap();
@@ -140,6 +150,7 @@ impl Fixture {
             final_turn: false,
             terminal_state: AgentTurnState::Running,
         };
+        prepare(&mut service, &turn);
         append_test_execution_assistant_context(&mut service, &turn, &execution);
         service
             .agent_turn_executions_mut()
@@ -748,3 +759,6 @@ mod publication;
 
 #[cfg(target_os = "linux")]
 mod progress;
+
+#[cfg(target_os = "linux")]
+mod archive;

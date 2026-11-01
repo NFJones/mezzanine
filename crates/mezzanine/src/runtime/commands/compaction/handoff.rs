@@ -106,14 +106,11 @@ impl RuntimeSessionService {
         Ok(())
     }
 
-    /// Restores witnessed raw source for canonical persistence, not execution.
-    /// Immutable chronological identities keep barriers and native groups ordered.
-    /// Duplicate witness sequences and changed live source fail before capture;
-    /// only the exact accepted summary at its own anchor may replace raw source.
-    pub(in crate::runtime) fn terminal_compaction_source_chronology(
-        &self,
-        turn_id: &str,
+    /// Restores exact accepted witnesses supplied by their original owner.
+    /// Detached archive projection never consults a replacement live turn map.
+    pub(in crate::runtime) fn terminal_compaction_source_chronology_from_source(
         context: &AgentContext,
+        handoff: Option<&RuntimeTurnCompactionHandoff>,
     ) -> Result<Vec<mez_agent::ConversationEvent>> {
         let mut events = context
             .chronology()
@@ -121,7 +118,7 @@ impl RuntimeSessionService {
             .cloned()
             .map(|event| (event.sequence(), event))
             .collect::<std::collections::BTreeMap<_, _>>();
-        if let Some(handoff) = self.agent.agent_turn_compaction_handoffs.get(turn_id) {
+        if let Some(handoff) = handoff {
             let mut witnessed = std::collections::BTreeSet::new();
             for (witness_index, witness) in handoff.witnesses.iter().enumerate() {
                 for (source_index, event) in witness.source.iter().enumerate() {
@@ -198,6 +195,7 @@ impl RuntimeSessionService {
 
     /// Encodes only accepted anchored summaries whose complete source has typed
     /// ownership. Unknown/legacy coverage leaves the original epoch authoritative.
+    #[cfg(test)]
     pub(in crate::runtime) fn terminal_compaction_handoff_content(
         &self,
         turn_id: &str,
@@ -208,23 +206,27 @@ impl RuntimeSessionService {
         let context = self.agent_turn_contexts().get(turn_id).ok_or_else(|| {
             MezError::conflict("accepted terminal compaction context is unavailable")
         })?;
-        let chronology = self.terminal_compaction_source_chronology(turn_id, context)?;
+        Self::terminal_compaction_handoff_from_source(context, handoff)
+    }
+
+    /// Validates and encodes original anchored summaries without live-map access.
+    /// The exact same full chronology occurrence map governs rows/certificates.
+    pub(in crate::runtime) fn terminal_compaction_handoff_from_source(
+        context: &AgentContext,
+        handoff: &RuntimeTurnCompactionHandoff,
+    ) -> Result<Option<String>> {
+        let chronology =
+            Self::terminal_compaction_source_chronology_from_source(context, Some(handoff))?;
         let occurrences = Self::terminal_execution_occurrences(&chronology)?;
         let mut replacements = Vec::new();
         for witness in &handoff.witnesses {
-            if self
-                .agent_turn_contexts()
-                .get(turn_id)
-                .is_none_or(|context| {
-                    !context.chronology().iter().any(|event| {
-                        event.sequence().get() == witness.anchor
-                            && (event.block().source == ContextSourceKind::CompactionSelective
-                                || (event.block().source == ContextSourceKind::Memory
-                                    && event.block().label == "context compaction summary"))
-                            && event.block().content == witness.summary
-                    })
-                })
-            {
+            if !context.chronology().iter().any(|event| {
+                event.sequence().get() == witness.anchor
+                    && (event.block().source == ContextSourceKind::CompactionSelective
+                        || (event.block().source == ContextSourceKind::Memory
+                            && event.block().label == "context compaction summary"))
+                    && event.block().content == witness.summary
+            }) {
                 return Err(MezError::conflict(
                     "accepted terminal compaction summary anchor changed",
                 ));

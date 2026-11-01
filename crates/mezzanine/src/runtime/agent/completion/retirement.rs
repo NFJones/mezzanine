@@ -143,6 +143,10 @@ impl<T> CompletionCapture<Option<T>> {
 pub(super) struct CompletionFailedBacking {
     pub(super) execution: CompletionCapture<Option<AgentTurnExecution>>,
     pub(super) context: CompletionCapture<Option<mez_agent::AgentContext>>,
+    /// Actual imported-history and accepted compaction witnesses moved with context.
+    pub(super) projection_metadata: CompletionCapture<
+        Option<crate::runtime::agent::bookkeeping::RuntimeTranscriptProjectionMetadata>,
+    >,
     pub(super) pending_native: CompletionCapture<Vec<crate::runtime::RuntimeNativeShellDispatch>>,
     pub(super) patch_states: CompletionCapture<Vec<(String, RuntimeApplyPatchBatchState)>>,
     pub(super) patch_phases: CompletionCapture<Vec<(String, RuntimePendingApplyPatchPhase)>>,
@@ -819,6 +823,15 @@ impl RuntimeSessionService {
         } else {
             take_execution.then(|| self.agent_turn_executions_mut().remove(turn_id))
         };
+        let projection_metadata = if take_context {
+            Some(if self.agent_turn_contexts().contains_key(turn_id) {
+                Some(self.take_transcript_projection_metadata(turn_id))
+            } else {
+                None
+            })
+        } else {
+            None
+        };
         let context = take_context.then(|| self.agent_turn_contexts_mut().remove(turn_id));
         if let Some(group) = self.agent.completion_settlements.groups.get_mut(turn_id) {
             let backing = group.failed_backing.get_or_insert_with(Default::default);
@@ -827,6 +840,9 @@ impl RuntimeSessionService {
             }
             if let Some(context) = context {
                 backing.context.capture_once(|| context);
+            }
+            if let Some(metadata) = projection_metadata {
+                backing.projection_metadata.capture_once(|| metadata);
             }
             if let Some(native) = pending_native {
                 backing.pending_native.capture_once(|| native);
@@ -934,13 +950,51 @@ impl RuntimeSessionService {
             .provider_handoff
             .as_ref()
             .is_some_and(|owner| owner.rejection.is_some() && owner.source_frozen);
+        let failed = group.failed_backing.as_ref().filter(|_| !frozen_refusal);
         let execution = self
             .agent_turn_executions()
             .get(turn_id)
             .or_else(|| group.correction_execution.as_ref())
-            .filter(|_| !frozen_refusal && self.agent_turn_contexts().contains_key(turn_id));
-        let fresh_source = execution.is_some();
-        let mut candidate = if let Some(execution) = execution {
+            .filter(|_| {
+                !frozen_refusal
+                    && failed.is_none()
+                    && self.agent_turn_contexts().contains_key(turn_id)
+            });
+        let fresh_source = failed.is_some() || execution.is_some();
+        let mut candidate = if let Some(backing) = failed {
+            let execution = backing.execution.as_ref().ok_or_else(|| {
+                MezError::invalid_state("original failed archive execution unavailable")
+            })?;
+            let context = backing.context.as_ref().ok_or_else(|| {
+                MezError::invalid_state("original failed archive context unavailable")
+            })?;
+            let metadata = backing.projection_metadata.as_ref().ok_or_else(|| {
+                MezError::invalid_state("original failed archive metadata unavailable")
+            })?;
+            if crate::runtime::agent::provider_execution::provider_log_execution_group_id(
+                execution,
+            )? != group.group
+            {
+                return Err(MezError::conflict(
+                    "failed archive execution differs from original group",
+                ));
+            }
+            let CompletionTranscriptTarget::Original { read, directory } = &group.transcript else {
+                return Err(MezError::invalid_state(
+                    "original failed archive target unavailable",
+                ));
+            };
+            Self::completion_bookkeeping_candidate_from_projection(
+                &group.turn,
+                execution,
+                read.as_ref().clone(),
+                directory.clone(),
+                crate::runtime::agent::bookkeeping::RuntimeTranscriptProjection::new(
+                    Some(context),
+                    metadata,
+                ),
+            )?
+        } else if let Some(execution) = execution {
             let CompletionTranscriptTarget::Original { read, directory } = &group.transcript else {
                 return Err(MezError::invalid_state(
                     "completion archive target is unavailable",
