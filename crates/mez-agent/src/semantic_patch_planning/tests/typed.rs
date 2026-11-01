@@ -1,5 +1,6 @@
 //! Typed patch engine regressions independent of filesystem and shell execution.
 
+use super::super::work::PatchWorkControl;
 use super::*;
 
 /// Snapshot preconditions must retain captured raw CRLF bytes instead of a
@@ -53,6 +54,7 @@ fn native_plan_keeps_move_dependencies_and_intermediate_preimages() {
     let plan = native::plan_native_patch(
         &operation,
         &snapshots(&[("a", Some(b"old\r\n")), ("z", None)]),
+        &PatchWorkControl::native(&|| Ok(())),
     )
     .unwrap();
     assert!(plan.errors().is_empty());
@@ -92,6 +94,7 @@ fn native_plan_preserves_noops_and_independent_partial_plans() {
             ("new", None),
             ("bad", Some(b"actual\n")),
         ]),
+        &PatchWorkControl::native(&|| Ok(())),
     )
     .unwrap();
     assert!(plan.operations()[0].changes().is_empty());
@@ -112,7 +115,9 @@ fn native_diff_is_bounded_without_losing_typed_changes() {
         original: ApplyPatchOriginalState::Regular("old\n".as_bytes().to_vec()),
         final_bytes: Some("雪".as_bytes().to_vec()),
     };
-    let complete = native::native_unified_diff(&change, usize::MAX).unwrap();
+    let complete =
+        native::native_unified_diff(&change, usize::MAX, &PatchWorkControl::native(&|| Ok(())))
+            .unwrap();
     assert!(!complete.truncated);
     assert!(
         complete
@@ -120,13 +125,15 @@ fn native_diff_is_bounded_without_losing_typed_changes() {
             .contains("@@ -1,1 +1,1 @@\n-old\n+雪\n\\ No newline at end of file\n")
     );
     let original = change.clone();
-    let bounded = native::native_unified_diff(&change, 64).unwrap();
+    let bounded =
+        native::native_unified_diff(&change, 64, &PatchWorkControl::native(&|| Ok(()))).unwrap();
     assert!(bounded.source.len() <= 64);
     assert!(bounded.truncated);
     assert_eq!(change, original);
     assert_eq!(
         complete,
-        native::native_unified_diff(&change, usize::MAX).unwrap()
+        native::native_unified_diff(&change, usize::MAX, &PatchWorkControl::native(&|| Ok(())))
+            .unwrap()
     );
 }
 
@@ -164,17 +171,35 @@ fn native_planning_rejects_resource_and_identity_violations() {
             .is_err()
     );
     let operation = NativePatchOperation::parse(source, None).unwrap();
-    assert!(native::plan_native_patch(&operation, &snapshots(&[("unrelated", None)])).is_err());
+    assert!(
+        native::plan_native_patch(
+            &operation,
+            &snapshots(&[("unrelated", None)]),
+            &PatchWorkControl::native(&|| Ok(()))
+        )
+        .is_err()
+    );
     let mut forged = operation.clone();
     forged.effects.clear();
-    assert!(native::plan_native_patch(&forged, &snapshots(&[("a", None)])).is_err());
+    assert!(
+        native::plan_native_patch(
+            &forged,
+            &snapshots(&[("a", None)]),
+            &PatchWorkControl::native(&|| Ok(()))
+        )
+        .is_err()
+    );
     let mut nonregular = snapshots(&[("a", None)]);
     nonregular.get_mut("a").unwrap().state = ApplyPatchSnapshotState::NonRegular;
     assert_eq!(
-        native::plan_native_patch(&operation, &nonregular)
-            .unwrap()
-            .errors()
-            .len(),
+        native::plan_native_patch(
+            &operation,
+            &nonregular,
+            &PatchWorkControl::native(&|| Ok(()))
+        )
+        .unwrap()
+        .errors()
+        .len(),
         1
     );
 }
@@ -189,19 +214,24 @@ fn native_diff_preserves_empty_file_endpoint_identity() {
         original: ApplyPatchOriginalState::Missing,
         final_bytes: Some(Vec::new()),
     };
-    let diff = native::native_unified_diff(&add, usize::MAX).unwrap();
+    let diff = native::native_unified_diff(&add, usize::MAX, &PatchWorkControl::native(&|| Ok(())))
+        .unwrap();
     assert!(
         diff.source
             .contains("--- /dev/null\n+++ b/empty\n@@ -0,0 +0,0 @@")
     );
-    assert!(native::native_unified_diff(&add, 0).unwrap().truncated);
+    assert!(
+        native::native_unified_diff(&add, 0, &PatchWorkControl::native(&|| Ok(())))
+            .unwrap()
+            .truncated
+    );
     let delete = ApplyPatchFileChange {
         original: ApplyPatchOriginalState::Regular(Vec::new()),
         final_bytes: None,
         ..add
     };
     assert!(
-        native::native_unified_diff(&delete, usize::MAX)
+        native::native_unified_diff(&delete, usize::MAX, &PatchWorkControl::native(&|| Ok(())))
             .unwrap()
             .source
             .contains("+++ /dev/null")

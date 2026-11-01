@@ -7,6 +7,7 @@ use super::super::commit::{NativePatchFenceStatus, NativePatchWriteCoordinator};
 use super::*;
 use crate::runtime::processes::native_cancellation::NativeActionCancellation;
 use crate::security::filesystem::{capability::NativeFilesystemRoot, host_resolved_path_scopes};
+use sha2::{Digest, Sha256};
 
 /// Actual private file capture and current-process authority without children.
 struct Fixture {
@@ -123,4 +124,47 @@ fn changed_final_digest_and_foreign_fence_cannot_enter_admitted_endpoint() {
     assert!(lease.enter(&proposal, &foreign).is_err());
     assert_eq!(fixture.fence.cancel(), NativePatchFenceStatus::Fenced);
     assert!(!fixture.directory.join("file").exists());
+}
+
+/// Proposal byte proofs must retain the capability's original work control,
+/// including revocation during hashing of an actual multi-quantum final image.
+/// No proposal or filesystem effect may escape after that original fence fails.
+#[test]
+fn proposal_hashing_observes_original_capability_work_fence() {
+    use crate::security::filesystem::native_io::{NATIVE_IO_QUANTUM, NativeIoControl};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    let fixture = Fixture::new();
+    let armed = Arc::new(AtomicBool::new(false));
+    let calls = Arc::new(AtomicUsize::new(0));
+    let (observed_armed, observed_calls) = (armed.clone(), calls.clone());
+    let control = NativeIoControl::new(move || {
+        if observed_armed.load(Ordering::SeqCst)
+            && observed_calls.fetch_add(1, Ordering::SeqCst) >= 4
+        {
+            Err(MezError::conflict("original proposal byte proof cancelled"))
+        } else {
+            Ok(())
+        }
+    });
+    let capability = NativeFileCapability::capture_with_io_control(
+        &fixture.root,
+        &fixture.scopes,
+        &fixture.change.path,
+        true,
+        control,
+    )
+    .unwrap();
+    let mut change = fixture.change.clone();
+    change.final_bytes = Some(vec![b'x'; NATIVE_IO_QUANTUM * 4]);
+    armed.store(true, Ordering::SeqCst);
+    let error = NativePatchCommitProposal::capture(&capability, &change, 0, 0)
+        .err()
+        .unwrap();
+    assert!(
+        error
+            .message()
+            .contains("original proposal byte proof cancelled")
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 5);
+    assert!(!std::path::Path::new(&change.resolved_path).exists());
 }

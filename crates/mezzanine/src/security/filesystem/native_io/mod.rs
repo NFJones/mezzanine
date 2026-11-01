@@ -74,6 +74,26 @@ impl NativeIoControl {
         Ok(bytes)
     }
 
+    /// Compares exact raw preimages through bounded byte requests, including
+    /// empty/mismatched inputs, without renewing the original work budget.
+    pub(crate) fn equal_bytes(&self, left: &[u8], right: &[u8]) -> Result<bool> {
+        self.check()?;
+        if left.len() != right.len() {
+            return Ok(false);
+        }
+        for (left, right) in left
+            .chunks(NATIVE_IO_QUANTUM)
+            .zip(right.chunks(NATIVE_IO_QUANTUM))
+        {
+            self.check()?;
+            if left != right {
+                return Ok(false);
+            }
+        }
+        self.check()?;
+        Ok(true)
+    }
+
     /// Hashes immutable bounded input without hiding a whole-file CPU step.
     pub(crate) fn digest(&self, bytes: &[u8]) -> Result<[u8; 32]> {
         self.check()?;

@@ -145,6 +145,13 @@ action cancellation/deadline between 64 KiB chunks. An unpublished cancelled
 stage is cleaned up through its owned descriptor. These checks cannot interrupt
 a blocked filesystem syscall; a completed rename or deletion remains a confirmed
 effect even if cancellation arrives immediately afterwards.
+Shared hunk matching, normalization, diagnostics, snapshot preparation and native
+diffs also check that original fence. Native preparation has a cumulative work
+allowance of 1 GiB of charged byte/visit units and at most 262,144 text lines per
+file. Exhaustion stops planning before mutation; it is not reported as a hunk
+context mismatch. Retained line-owner transfers and parsed descriptor copies
+share that allowance. Display truncation preserves full precomputed line counts.
+These internal native limits add no configuration setting or pane matcher limit.
 
 Native filesystem worker confirmations use the shared confirmed-mutation display
 path. The producer retains a cumulative prefix before best-effort notification;

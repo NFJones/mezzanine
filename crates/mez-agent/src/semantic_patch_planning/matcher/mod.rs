@@ -3,9 +3,15 @@
 //! This module owns the current-file matching strategy for parsed Mezzanine
 //! patch hunks. It keeps tolerant matching, range-hint disambiguation,
 //! structural-anchor scoping, replacement construction, and model-facing
-//! mismatch diagnostics out of the patch facade.
+//! mismatch diagnostics out of the patch facade. Search helpers receive an
+//! explicit work control and abandon scans after its sticky terminal failure;
+//! the hunk owner checks that failure before generating ordinary diagnostics.
+
+mod diagnostics;
+use diagnostics::apply_patch_hunk_mismatch_error;
 
 use super::snapshot::ApplyPatchTextFile;
+use super::work::PatchWorkControl;
 use crate::semantic_patch::{
     MezPatchHunk, MezPatchHunkLine, MezPatchRangeHint, SemanticPatchPlanningError as MezError,
     SemanticPatchPlanningResult as Result,
@@ -18,10 +24,12 @@ use crate::semantic_patch::{
 /// - `file`: Current text file state before applying the hunks.
 /// - `hunks`: Parsed update hunks to apply in order.
 pub(super) fn apply_patch_hunks_to_file(
+    work: &PatchWorkControl<'_>,
     path: &str,
     mut file: ApplyPatchTextFile,
     hunks: &[MezPatchHunk],
 ) -> Result<ApplyPatchTextFile> {
+    work.check()?;
     if let Some(hunk) = hunks.iter().find(|hunk| hunk.replace_whole_file) {
         if hunks.len() != 1 {
             return Err(MezError::invalid_args(format!(
@@ -33,25 +41,39 @@ pub(super) fn apply_patch_hunks_to_file(
                 "apply_patch: whole-file replacement hunk for {path} must contain only added lines"
             )));
         }
-        file.lines = hunk.new.clone();
+        file.lines = work.copy_lines(&hunk.new)?;
         return Ok(file);
     }
     let mut cursor = 0usize;
     for hunk in hunks {
-        let hunk_match = find_hunk_position(&file, hunk, cursor)
-            .map_err(|problem| apply_patch_hunk_mismatch_error(path, &file, hunk, problem))?;
-        let replacement = replacement_lines(hunk, &file, &hunk_match)?;
+        work.check()?;
+        let found = find_hunk_position(work, &file, hunk, cursor);
+        // A cancelled search is terminal, never an ordinary mismatch diagnostic.
+        work.check()?;
+        let hunk_match = match found {
+            Ok(found) => found,
+            Err(problem) => {
+                let diagnostic = apply_patch_hunk_mismatch_error(work, path, &file, hunk, problem);
+                work.check()?;
+                return Err(diagnostic);
+            }
+        };
+        let replacement = replacement_lines(work, hunk, &file, &hunk_match)?;
         let replacement_len = replacement.len();
-        file.lines.splice(
+        work.replace_lines(
+            &mut file.lines,
             hunk_match.position..hunk_match.position + hunk_match.span_len(),
             replacement,
-        );
+        )?;
         cursor = hunk_match.position + replacement_len;
     }
+    work.check()?;
     Ok(file)
 }
 
+/// Constructs replacement text under the same work control; errors preserve the original file owner.
 fn replacement_lines(
+    work: &PatchWorkControl<'_>,
     hunk: &MezPatchHunk,
     file: &ApplyPatchTextFile,
     hunk_match: &ApplyPatchHunkMatch,
@@ -59,8 +81,11 @@ fn replacement_lines(
     let mut old_index = 0usize;
     let mut next_source_offset = 0usize;
     let mut lines = Vec::new();
-    let gap_policies = old_line_gap_policies(hunk);
+    let gap_policies = old_line_gap_policies(work, hunk);
     for line in &hunk.lines {
+        if !work.spend(1) {
+            work.check()?;
+        }
         match line {
             MezPatchHunkLine::Context(_) => {
                 let gap_policy = *gap_policies
@@ -72,6 +97,7 @@ fn replacement_lines(
                     )
                 })?;
                 append_skipped_blank_context_lines(
+                    work,
                     &mut lines,
                     file,
                     hunk_match.position,
@@ -87,7 +113,10 @@ fn replacement_lines(
                             "apply_patch: internal hunk replacement range was invalid",
                         )
                     })?;
-                lines.push(source.clone());
+                if !work.line_allowed(lines.len()) {
+                    work.check()?;
+                }
+                lines.push(work.copy_text(source)?);
                 old_index += 1;
                 next_source_offset = offset.saturating_add(1);
             }
@@ -101,6 +130,7 @@ fn replacement_lines(
                     )
                 })?;
                 append_skipped_blank_context_lines(
+                    work,
                     &mut lines,
                     file,
                     hunk_match.position,
@@ -111,16 +141,28 @@ fn replacement_lines(
                 next_source_offset = offset.saturating_add(1);
                 old_index += 1;
             }
-            MezPatchHunkLine::Add(text) => lines.push(text.clone()),
+            MezPatchHunkLine::Add(text) => {
+                if !work.line_allowed(lines.len()) {
+                    work.check()?;
+                }
+                lines.push(work.copy_text(text)?);
+            }
         }
     }
     Ok(lines)
 }
 
-fn old_line_gap_policies(hunk: &MezPatchHunk) -> Vec<ApplyPatchBlankGapPolicy> {
+/// Derives blank-context policy from bounded source lines, abandoning terminal work.
+fn old_line_gap_policies(
+    work: &PatchWorkControl<'_>,
+    hunk: &MezPatchHunk,
+) -> Vec<ApplyPatchBlankGapPolicy> {
     let mut policies = Vec::with_capacity(hunk.old.len());
     let mut previous_old_kind = None;
     for line in &hunk.lines {
+        if !work.spend(1) {
+            return Vec::new();
+        }
         match line {
             MezPatchHunkLine::Context(_) => {
                 let policy = match previous_old_kind {
@@ -161,7 +203,9 @@ enum ApplyPatchBlankGapPolicy {
     Delete,
 }
 
+/// Preserves only accepted blank context through controlled copies; rejects inconsistent offsets.
 fn append_skipped_blank_context_lines(
+    work: &PatchWorkControl<'_>,
     output: &mut Vec<String>,
     file: &ApplyPatchTextFile,
     position: usize,
@@ -178,460 +222,45 @@ fn append_skipped_blank_context_lines(
         ));
     }
     for offset in start_offset..end_offset {
+        if !work.spend(1) {
+            work.check()?;
+        }
         let source = file.lines.get(position + offset).ok_or_else(|| {
             MezError::invalid_args("apply_patch: internal hunk replacement range was invalid")
         })?;
-        if !source.trim().is_empty() {
+        if !work.trim(source, true).is_empty() {
             return Err(MezError::invalid_args(
                 "apply_patch: internal hunk replacement range was invalid",
             ));
         }
         if policy == ApplyPatchBlankGapPolicy::Preserve {
-            output.push(source.clone());
+            if !work.line_allowed(output.len()) {
+                work.check()?;
+            }
+            output.push(work.copy_text(source)?);
         }
     }
     Ok(())
 }
 
-fn apply_patch_hunk_mismatch_error(
-    path: &str,
-    file: &ApplyPatchTextFile,
-    hunk: &MezPatchHunk,
-    problem: ApplyPatchHunkMatchProblem,
-) -> MezError {
-    let (
-        failure_code,
-        reason,
-        candidate_spans,
-        context_center,
-        missing_anchor,
-        mode,
-        attempts,
-        scope,
-        range_rejection,
-    ) = match problem {
-        ApplyPatchHunkMatchProblem::Missing {
-            context_center,
-            missing_anchor,
-            attempts,
-            scope,
-            range_rejection,
-        } => (
-            "HUNK_CONTEXT_MISMATCH",
-            "hunk context was not found in the current file",
-            Vec::new(),
-            context_center,
-            missing_anchor,
-            None,
-            attempts,
-            scope,
-            range_rejection,
-        ),
-        ApplyPatchHunkMatchProblem::Ambiguous {
-            candidate_spans,
-            mode,
-            attempts,
-            scope,
-            range_rejection,
-        } => {
-            let reason = match mode {
-                Some(ApplyPatchMatchMode::Exact) | None => {
-                    "exact hunk context is ambiguous in the current file"
-                }
-                Some(ApplyPatchMatchMode::TrimEnd) => {
-                    "trim_end hunk context is ambiguous in the current file"
-                }
-                Some(ApplyPatchMatchMode::Trim) => {
-                    "trim hunk context is ambiguous in the current file"
-                }
-                Some(ApplyPatchMatchMode::Normalized) => {
-                    "normalized hunk context is ambiguous in the current file"
-                }
-            };
-            (
-                "HUNK_CONTEXT_AMBIGUOUS",
-                reason,
-                candidate_spans,
-                None,
-                None,
-                mode,
-                attempts,
-                scope,
-                range_rejection,
-            )
-        }
-    };
-    let candidate_lines = candidate_spans
-        .iter()
-        .map(|span| span.start_line)
-        .collect::<Vec<_>>();
-    let mut message = format!(
-        "apply_patch: hunk did not match: {path}\n\
-         apply_patch: {reason}\n\
-         apply_patch: failure_code={failure_code}\n\
-         apply_patch: affected_path={path}\n\
-         apply_patch: failed old-context line count: {}",
-        hunk.old.len()
-    );
-    if !attempts.is_empty() {
-        message.push_str(&format!(
-            "\napply_patch: matching_attempts={}",
-            apply_patch_match_attempts_summary(&attempts)
-        ));
-    }
-    if let Some(mode) = mode {
-        message.push_str(&format!(
-            "\napply_patch: ambiguous_matching_mode={}",
-            mode.as_str()
-        ));
-    }
-    message.push_str(&format!("\napply_patch: matching_scope={}", scope.as_str()));
-    if !hunk.anchors.is_empty() {
-        message.push_str(&format!(
-            "\napply_patch: hunk header anchor(s): {}",
-            hunk.anchors.join(" -> ")
-        ));
-    }
-    if let Some(range_hint) = hunk.range_hint {
-        message.push_str(&format!(
-            "\napply_patch: hunk header old-line hint: {}",
-            range_hint.old_start
-        ));
-    }
-    if let Some(anchor) = &missing_anchor {
-        message.push_str(&format!(
-            "\napply_patch: hunk header anchor was not found in order: {}",
-            apply_patch_mismatch_excerpt(anchor)
-        ));
-    }
-    if !candidate_lines.is_empty() {
-        message.push_str(&format!(
-            "\napply_patch: candidate match line(s): {}",
-            candidate_lines
-                .iter()
-                .map(ToString::to_string)
-                .collect::<Vec<_>>()
-                .join(", ")
-        ));
-    }
-    if !candidate_spans.is_empty() {
-        message.push_str(&format!(
-            "\napply_patch: candidate match span(s): {}",
-            candidate_spans
-                .iter()
-                .map(|span| {
-                    if span.start_line == span.end_line {
-                        span.start_line.to_string()
-                    } else {
-                        format!("{}-{}", span.start_line, span.end_line)
-                    }
-                })
-                .collect::<Vec<_>>()
-                .join(", ")
-        ));
-    }
-    let candidate_context_ranges = apply_patch_candidate_context_ranges(file, &candidate_spans);
-    if !candidate_context_ranges.is_empty() {
-        message.push_str(&format!(
-            "\napply_patch: suggested_candidate_read_range(s): {}",
-            candidate_context_ranges
-                .iter()
-                .map(|(start, end)| format!("{path}:{start}-{end}"))
-                .collect::<Vec<_>>()
-                .join(", ")
-        ));
-    }
-    if let Some(rejection) = range_rejection {
-        message.push_str(&format!(
-            "\napply_patch: range_hint_disambiguation=rejected reason={} hint_line={}",
-            rejection.reason.as_str(),
-            rejection.hint_line
-        ));
-        if let Some(distance) = rejection.nearest_distance {
-            message.push_str(&format!(" nearest_distance={distance}"));
-        }
-        if let Some(distance) = rejection.next_distance {
-            message.push_str(&format!(" next_distance={distance}"));
-        }
-    }
-    let replacement_hint = apply_patch_replacement_presence_hint(file, hunk, scope);
-    if let Some(hint) = &replacement_hint {
-        message.push_str(&format!(
-            "\napply_patch: replacement_hint={} span(s): {}",
-            hint.kind.as_str(),
-            hint.spans
-                .iter()
-                .map(|span| {
-                    if span.start_line == span.end_line {
-                        span.start_line.to_string()
-                    } else {
-                        format!("{}-{}", span.start_line, span.end_line)
-                    }
-                })
-                .collect::<Vec<_>>()
-                .join(", ")
-        ));
-        message.push_str(
-            "\napply_patch: replacement_hint_next_step=skip_or_reconcile_already_applied_change",
-        );
-    }
-    if let Some(first_line) = hunk.old.first() {
-        let anchor_lines = apply_patch_anchor_line_numbers(&file.lines, first_line);
-        if anchor_lines.is_empty() {
-            message.push_str("\napply_patch: first old-context line was not found anywhere");
-            if let Some((mode, nearby_lines)) =
-                apply_patch_non_exact_anchor_line_numbers(&file.lines, first_line)
-            {
-                message.push_str(&format!(
-                    "\napply_patch: first old-context line nearest non-exact match mode={} current line(s): {}",
-                    mode.as_str(),
-                    nearby_lines
-                        .iter()
-                        .map(ToString::to_string)
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                ));
-            }
-        } else {
-            message.push_str(&format!(
-                "\napply_patch: first old-context line appears at current line(s): {}",
-                anchor_lines
-                    .iter()
-                    .map(ToString::to_string)
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ));
-        }
-    }
-    let context_center = context_center
-        .or_else(|| {
-            candidate_lines
-                .first()
-                .and_then(|line| line.checked_sub(1))
-                .or_else(|| {
-                    hunk.old
-                        .first()
-                        .and_then(|line| apply_patch_first_old_context_center(&file.lines, line))
-                })
-        })
-        .or_else(|| (!file.lines.is_empty()).then_some(0));
-    if replacement_hint.is_some() {
-        message.push_str(
-            "\napply_patch: suggested_next_step=skip_or_reconcile_already_applied_change\
-             \napply_patch: retry_without_reread=false",
-        );
-    } else if missing_anchor.is_some() {
-        message.push_str(
-            "\napply_patch: suggested_next_step=fix_or_refresh_header_anchor\
-             \napply_patch: retry_without_reread=false",
-        );
-    } else if !candidate_context_ranges.is_empty() {
-        message.push_str(
-            "\napply_patch: suggested_next_step=reread_candidate_regions\
-             \napply_patch: retry_without_reread=false",
-        );
-    } else if let Some(center) = context_center
-        && let Some((start, end)) = apply_patch_current_context_range(file, center)
-    {
-        message.push_str(
-            "\napply_patch: suggested_next_step=reread_region\
-             \napply_patch: retry_without_reread=false",
-        );
-        message.push_str(&format!(
-            "\napply_patch: suggested_read_range={path}:{start}-{end}"
-        ));
-    } else {
-        message.push_str(
-            "\napply_patch: suggested_next_step=reread_target_file\
-             \napply_patch: retry_without_reread=false",
-        );
-    }
-    if let Some(center) = context_center {
-        message.push_str(&apply_patch_current_context_message(file, center));
-    }
-    message.push_str("\napply_patch: failed old context follows:");
-    for line in hunk.old.iter().take(APPLY_PATCH_MISMATCH_CONTEXT_LINES) {
-        message.push_str("\napply_patch:   ");
-        message.push_str(&apply_patch_mismatch_excerpt(line));
-    }
-    if hunk.old.len() > APPLY_PATCH_MISMATCH_CONTEXT_LINES {
-        message.push_str(&format!(
-            "\napply_patch:   ... ({} more old-context lines omitted)",
-            hunk.old.len() - APPLY_PATCH_MISMATCH_CONTEXT_LINES
-        ));
-    }
-    if replacement_hint.is_some() {
-        message.push_str(
-            "\napply_patch: next step: inspect the reported replacement span(s); if the intended change is already present, skip this hunk or reconcile the surrounding edit instead of forcing another retry",
-        );
-    } else if missing_anchor.is_some() {
-        message.push_str(&format!(
-            "\napply_patch: next step: refresh or correct the missing @@ header anchor for {path}, then retry with current anchor context"
-        ));
-    } else if candidate_context_ranges.is_empty() {
-        message.push_str(&format!(
-            "\napply_patch: next step: read {path} around the reported line(s), then retry with a smaller fresh Mezzanine patch using a distinctive @@ header anchor"
-        ));
-    } else {
-        message.push_str(&format!(
-            "\napply_patch: next step: read {path} around the reported candidate range(s), then retry with a smaller fresh Mezzanine patch using a distinctive @@ header anchor"
-        ));
-    }
-    message.push_str(
-        "\napply_patch: do not retry substantially the same patch without fresh target context",
-    );
-    MezError::invalid_args(message)
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ApplyPatchReplacementPresenceKind {
-    FullReplacementBlockPresent,
-    DistinctiveAddedLinesPresent,
-}
-
-impl ApplyPatchReplacementPresenceKind {
-    fn as_str(self) -> &'static str {
-        match self {
-            ApplyPatchReplacementPresenceKind::FullReplacementBlockPresent => {
-                "full_replacement_block_present"
-            }
-            ApplyPatchReplacementPresenceKind::DistinctiveAddedLinesPresent => {
-                "distinctive_added_lines_present"
-            }
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct ApplyPatchReplacementPresenceHint {
-    kind: ApplyPatchReplacementPresenceKind,
-    spans: Vec<ApplyPatchCandidateSpan>,
-}
-
-fn apply_patch_replacement_presence_hint(
-    file: &ApplyPatchTextFile,
-    hunk: &MezPatchHunk,
-    scope: ApplyPatchSearchScope,
-) -> Option<ApplyPatchReplacementPresenceHint> {
-    let ranges = apply_patch_replacement_search_ranges(file, hunk, scope);
-    if !hunk.new.is_empty() && hunk.new != hunk.old {
-        let spans = apply_patch_exact_sequence_spans(&file.lines, &hunk.new, &ranges);
-        if !spans.is_empty() {
-            return Some(ApplyPatchReplacementPresenceHint {
-                kind: ApplyPatchReplacementPresenceKind::FullReplacementBlockPresent,
-                spans,
-            });
-        }
-    }
-
-    let distinctive_added_lines = hunk
-        .lines
-        .iter()
-        .filter_map(|line| match line {
-            MezPatchHunkLine::Add(text) => Some(text),
-            MezPatchHunkLine::Context(_) | MezPatchHunkLine::Remove(_) => None,
-        })
-        .filter(|line| apply_patch_added_line_is_distinctive(line, &hunk.old))
-        .fold(Vec::<&String>::new(), |mut lines, line| {
-            if !lines.contains(&line) {
-                lines.push(line);
-            }
-            lines
-        });
-    if distinctive_added_lines.is_empty() {
-        return None;
-    }
-
-    let mut spans = Vec::new();
-    for line in distinctive_added_lines {
-        let line_spans =
-            apply_patch_exact_sequence_spans(&file.lines, std::slice::from_ref(line), &ranges);
-        if line_spans.is_empty() {
-            return None;
-        }
-        spans.extend(line_spans);
-        if spans.len() >= APPLY_PATCH_MATCH_CANDIDATE_LIMIT {
-            spans.truncate(APPLY_PATCH_MATCH_CANDIDATE_LIMIT);
-            break;
-        }
-    }
-    Some(ApplyPatchReplacementPresenceHint {
-        kind: ApplyPatchReplacementPresenceKind::DistinctiveAddedLinesPresent,
-        spans,
-    })
-}
-
-fn apply_patch_replacement_search_ranges(
-    file: &ApplyPatchTextFile,
-    hunk: &MezPatchHunk,
-    scope: ApplyPatchSearchScope,
-) -> Vec<(usize, usize)> {
-    if !hunk.anchors.is_empty() {
-        let chains = ordered_anchor_chains(&file.lines, &hunk.anchors, 0);
-        if !chains.is_empty() {
-            if scope == ApplyPatchSearchScope::StructuralAnchorScope {
-                let structural_ranges = structural_anchor_ranges(&file.lines, &chains);
-                if !structural_ranges.is_empty() {
-                    return structural_ranges;
-                }
-            }
-            let ordered_ranges = ordered_anchor_search_ranges(&file.lines, &chains, 0);
-            if !ordered_ranges.is_empty() {
-                return ordered_ranges;
-            }
-        }
-    }
-    vec![(0, file.lines.len())]
-}
-
-fn apply_patch_exact_sequence_spans(
-    lines: &[String],
-    needle: &[String],
-    ranges: &[(usize, usize)],
-) -> Vec<ApplyPatchCandidateSpan> {
-    let mut spans = Vec::new();
-    for (start, end) in ranges {
-        let matches =
-            find_line_sequence_matches(lines, needle, *start, *end, ApplyPatchMatchMode::Exact);
-        spans.extend(matches.lines.into_iter().map(|position| {
-            ApplyPatchCandidateSpan::from_position_and_len(position, needle.len())
-        }));
-        if spans.len() >= APPLY_PATCH_MATCH_CANDIDATE_LIMIT {
-            spans.truncate(APPLY_PATCH_MATCH_CANDIDATE_LIMIT);
-            break;
-        }
-    }
-    spans
-}
-
-fn apply_patch_added_line_is_distinctive(line: &str, old: &[String]) -> bool {
-    let trimmed = line.trim();
-    !trimmed.is_empty()
-        && !matches!(trimmed, "{" | "}" | ");" | "," | ".")
-        && trimmed
-            .chars()
-            .any(|character| character.is_ascii_alphanumeric() || character == '_')
-        && !old.iter().any(|old_line| old_line == line)
-}
-
-fn apply_patch_match_attempts_summary(attempts: &[ApplyPatchMatchAttempt]) -> String {
-    attempts
-        .iter()
-        .map(|attempt| {
-            let count = if attempt.capped {
-                format!(">={}", attempt.candidate_count)
-            } else {
-                attempt.candidate_count.to_string()
-            };
-            format!("{}:{count}", attempt.mode.as_str())
-        })
-        .collect::<Vec<_>>()
-        .join(",")
-}
-
-const APPLY_PATCH_MISMATCH_CONTEXT_LINES: usize = 8;
-const APPLY_PATCH_MISMATCH_LINE_CHARS: usize = 160;
+/// Maximum exact anchor positions retained for mismatch context.
 const APPLY_PATCH_MISMATCH_ANCHOR_LIMIT: usize = 5;
+
+/// Finds bounded exact anchor evidence under the same original search control.
+fn apply_patch_anchor_line_numbers(
+    work: &PatchWorkControl<'_>,
+    lines: &[String],
+    anchor: &str,
+) -> Vec<usize> {
+    lines
+        .iter()
+        .enumerate()
+        .take_while(|_| work.spend(1))
+        .filter_map(|(index, line)| work.equal(line, anchor).then_some(index + 1))
+        .take(APPLY_PATCH_MISMATCH_ANCHOR_LIMIT)
+        .collect()
+}
+
 const APPLY_PATCH_MATCH_CANDIDATE_LIMIT: usize = 8;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -808,26 +437,29 @@ enum ApplyPatchHunkMatchProblem {
     },
 }
 
+/// Resolves an authored hunk through shared scopes; its caller prioritizes sticky work failure.
 fn find_hunk_position(
+    work: &PatchWorkControl<'_>,
     file: &ApplyPatchTextFile,
     hunk: &MezPatchHunk,
     cursor: usize,
 ) -> std::result::Result<ApplyPatchHunkMatch, ApplyPatchHunkMatchProblem> {
     if hunk.anchors.is_empty() {
         return find_unanchored_hunk_position(
+            work,
             &file.lines,
             &hunk.old,
-            &old_line_gap_policies(hunk),
+            &old_line_gap_policies(work, hunk),
             cursor,
             hunk.range_hint,
         );
     }
 
-    let chains = ordered_anchor_chains(&file.lines, &hunk.anchors, cursor);
+    let chains = ordered_anchor_chains(work, &file.lines, &hunk.anchors, cursor);
     if chains.is_empty() {
         return Err(ApplyPatchHunkMatchProblem::Missing {
             context_center: None,
-            missing_anchor: first_missing_ordered_anchor(&file.lines, &hunk.anchors, cursor),
+            missing_anchor: first_missing_ordered_anchor(work, &file.lines, &hunk.anchors, cursor),
             attempts: Vec::new(),
             scope: ApplyPatchSearchScope::OrderedAnchorRange,
             range_rejection: None,
@@ -860,12 +492,13 @@ fn find_hunk_position(
         });
     }
 
-    let structural_ranges = structural_anchor_ranges(&file.lines, &chains);
+    let structural_ranges = structural_anchor_ranges(work, &file.lines, &chains);
     if !structural_ranges.is_empty() {
         match find_hunk_position_in_ranges(
+            work,
             &file.lines,
             &hunk.old,
-            &old_line_gap_policies(hunk),
+            &old_line_gap_policies(work, hunk),
             &structural_ranges,
             hunk.range_hint,
             ApplyPatchSearchScope::StructuralAnchorScope,
@@ -892,9 +525,10 @@ fn find_hunk_position(
 
     let ranges = ordered_anchor_search_ranges(&file.lines, &chains, cursor);
     find_hunk_position_in_ranges(
+        work,
         &file.lines,
         &hunk.old,
-        &old_line_gap_policies(hunk),
+        &old_line_gap_policies(work, hunk),
         &ranges,
         hunk.range_hint,
         ApplyPatchSearchScope::OrderedAnchorRange,
@@ -927,6 +561,7 @@ fn find_hunk_position(
     })
 }
 
+/// Builds ordered search intervals from the bounded set of accepted anchor chains.
 fn ordered_anchor_search_ranges(
     lines: &[String],
     chains: &[Vec<usize>],
@@ -944,7 +579,9 @@ fn ordered_anchor_search_ranges(
     ranges
 }
 
+/// Selects an unanchored match and context evidence without renewing work admission.
 fn find_unanchored_hunk_position(
+    work: &PatchWorkControl<'_>,
     lines: &[String],
     old: &[String],
     blank_gap_policies: &[ApplyPatchBlankGapPolicy],
@@ -959,7 +596,7 @@ fn find_unanchored_hunk_position(
             old_line_offsets: Vec::new(),
         });
     }
-    find_unanchored_hunk_position_layered(lines, old, blank_gap_policies, cursor, range_hint)
+    find_unanchored_hunk_position_layered(work, lines, old, blank_gap_policies, cursor, range_hint)
         .map_err(|failure| match failure {
             ApplyPatchLineSequenceFailure::Missing {
                 attempts,
@@ -967,7 +604,7 @@ fn find_unanchored_hunk_position(
                 ..
             } => ApplyPatchHunkMatchProblem::Missing {
                 context_center: old.first().and_then(|line| {
-                    apply_patch_anchor_line_numbers(lines, line)
+                    apply_patch_anchor_line_numbers(work, lines, line)
                         .first()
                         .and_then(|line| line.checked_sub(1))
                 }),
@@ -1008,7 +645,9 @@ enum ApplyPatchLineSequenceFailure {
     },
 }
 
+/// Searches scoped candidates across matching modes using the original work control.
 fn find_hunk_position_in_ranges(
+    work: &PatchWorkControl<'_>,
     lines: &[String],
     old: &[String],
     blank_gap_policies: &[ApplyPatchBlankGapPolicy],
@@ -1021,7 +660,7 @@ fn find_hunk_position_in_ranges(
         let mut candidates = Vec::new();
         let mut capped = false;
         for (start, end) in ranges {
-            let matches = find_line_sequence_matches(lines, old, *start, *end, *mode);
+            let matches = find_line_sequence_matches(work, lines, old, *start, *end, *mode);
             capped |= matches.capped;
             candidates.extend(
                 matches
@@ -1046,6 +685,7 @@ fn find_hunk_position_in_ranges(
             return Ok(hunk_match);
         }
         let tolerant_matches = find_line_sequence_matches_omitting_blank_context(
+            work,
             lines,
             old,
             blank_gap_policies,
@@ -1077,7 +717,9 @@ fn find_hunk_position_in_ranges(
     })
 }
 
+/// Preserves cursor-first tolerant matching while sharing one terminal work owner.
 fn find_unanchored_hunk_position_layered(
+    work: &PatchWorkControl<'_>,
     lines: &[String],
     old: &[String],
     blank_gap_policies: &[ApplyPatchBlankGapPolicy],
@@ -1087,9 +729,9 @@ fn find_unanchored_hunk_position_layered(
     let mut attempts = Vec::new();
     let scope = ApplyPatchSearchScope::FullFile;
     for mode in APPLY_PATCH_MATCH_MODES {
-        let mut matches = find_line_sequence_matches(lines, old, cursor, lines.len(), *mode);
+        let mut matches = find_line_sequence_matches(work, lines, old, cursor, lines.len(), *mode);
         if matches.lines.is_empty() && cursor > 0 {
-            matches = find_line_sequence_matches(lines, old, 0, lines.len(), *mode);
+            matches = find_line_sequence_matches(work, lines, old, 0, lines.len(), *mode);
         }
         let candidates = matches
             .lines
@@ -1120,6 +762,7 @@ fn find_unanchored_hunk_position_layered(
             vec![(0, lines.len())]
         };
         let tolerant_matches = find_line_sequence_matches_omitting_blank_context(
+            work,
             lines,
             old,
             blank_gap_policies,
@@ -1293,12 +936,17 @@ fn apply_patch_preferred_position(
     range_hint.map(|hint| hint.old_start.saturating_sub(1).min(line_count))
 }
 
-fn structural_anchor_ranges(lines: &[String], chains: &[Vec<usize>]) -> Vec<(usize, usize)> {
+/// Derives merged structural scopes from bounded chains under original scan admission.
+fn structural_anchor_ranges(
+    work: &PatchWorkControl<'_>,
+    lines: &[String],
+    chains: &[Vec<usize>],
+) -> Vec<(usize, usize)> {
     let ranges = chains
         .iter()
         .filter_map(|chain| {
             let anchor_line = chain.last().copied()?;
-            rust_like_block_scope(lines, anchor_line)
+            rust_like_block_scope(work, lines, anchor_line)
         })
         .collect::<Vec<_>>();
     merge_overlapping_ranges(ranges)
@@ -1319,9 +967,14 @@ fn merge_overlapping_ranges(mut ranges: Vec<(usize, usize)>) -> Vec<(usize, usiz
     merged
 }
 
-fn rust_like_block_scope(lines: &[String], anchor_line: usize) -> Option<(usize, usize)> {
+/// Scans a bounded structural region; malformed syntax or terminal work abandons scope inference.
+fn rust_like_block_scope(
+    work: &PatchWorkControl<'_>,
+    lines: &[String],
+    anchor_line: usize,
+) -> Option<(usize, usize)> {
     let anchor_text = lines.get(anchor_line)?;
-    if !looks_like_rust_structural_anchor(anchor_text) {
+    if !looks_like_rust_structural_anchor(work, anchor_text) {
         return None;
     }
     let mut depth = 0isize;
@@ -1333,7 +986,7 @@ fn rust_like_block_scope(lines: &[String], anchor_line: usize) -> Option<(usize,
         .skip(anchor_line)
         .take(APPLY_PATCH_STRUCTURAL_ANCHOR_SCAN_LINES)
     {
-        let (opens, closes) = rust_like_brace_counts(line, &mut in_block_comment)?;
+        let (opens, closes) = rust_like_brace_counts(work, line, &mut in_block_comment)?;
         if opens > 0 {
             saw_open = true;
         }
@@ -1351,8 +1004,9 @@ fn rust_like_block_scope(lines: &[String], anchor_line: usize) -> Option<(usize,
 
 const APPLY_PATCH_STRUCTURAL_ANCHOR_SCAN_LINES: usize = 400;
 
-fn looks_like_rust_structural_anchor(line: &str) -> bool {
-    let line = line.trim_start();
+/// Recognizes structural prefixes with controlled leading-whitespace scans.
+fn looks_like_rust_structural_anchor(work: &PatchWorkControl<'_>, line: &str) -> bool {
+    let line = work.trim_start(line);
     RUST_STRUCTURAL_ANCHOR_PREFIXES
         .iter()
         .any(|prefix| line.starts_with(prefix))
@@ -1378,7 +1032,12 @@ const RUST_STRUCTURAL_ANCHOR_PREFIXES: &[&str] = &[
     "pub mod ",
 ];
 
-fn rust_like_brace_counts(line: &str, in_block_comment: &mut bool) -> Option<(usize, usize)> {
+/// Counts supported Rust-like braces with cooperative character scans; uncertain literals return None.
+fn rust_like_brace_counts(
+    work: &PatchWorkControl<'_>,
+    line: &str,
+    in_block_comment: &mut bool,
+) -> Option<(usize, usize)> {
     let mut opens = 0usize;
     let mut closes = 0usize;
     let mut chars = line.chars().peekable();
@@ -1386,6 +1045,9 @@ fn rust_like_brace_counts(line: &str, in_block_comment: &mut bool) -> Option<(us
     let mut in_char = false;
     let mut escaped = false;
     while let Some(character) = chars.next() {
+        if !work.spend(character.len_utf8()) {
+            return None;
+        }
         if *in_block_comment {
             if character == '*' && chars.peek() == Some(&'/') {
                 chars.next();
@@ -1419,7 +1081,7 @@ fn rust_like_brace_counts(line: &str, in_block_comment: &mut bool) -> Option<(us
                 chars.next();
                 *in_block_comment = true;
             }
-            'r' if rust_like_raw_string_literal_start(&mut chars) => return None,
+            'r' if rust_like_raw_string_literal_start(work, &mut chars) => return None,
             '"' => in_string = true,
             '\'' => in_char = true,
             '{' => opens += 1,
@@ -1430,7 +1092,9 @@ fn rust_like_brace_counts(line: &str, in_block_comment: &mut bool) -> Option<(us
     Some((opens, closes))
 }
 
+/// Detects raw literal prefixes while bounding repeated hash-marker scans.
 fn rust_like_raw_string_literal_start(
+    work: &PatchWorkControl<'_>,
     chars: &mut std::iter::Peekable<std::str::Chars<'_>>,
 ) -> bool {
     let mut clone = chars.clone();
@@ -1439,31 +1103,47 @@ fn rust_like_raw_string_literal_start(
     }
     let mut saw_hash = false;
     while clone.peek() == Some(&'#') {
+        if !work.spend(1) {
+            return false;
+        }
         saw_hash = true;
         clone.next();
     }
     saw_hash && clone.peek() == Some(&'"')
 }
 
-fn ordered_anchor_chains(lines: &[String], anchors: &[String], cursor: usize) -> Vec<Vec<usize>> {
+/// Finds ordered literal anchors with cooperative linear substring scans and a fixed candidate cap.
+fn ordered_anchor_chains(
+    work: &PatchWorkControl<'_>,
+    lines: &[String],
+    anchors: &[String],
+    cursor: usize,
+) -> Vec<Vec<usize>> {
     if anchors.is_empty() {
         return vec![Vec::new()];
     }
 
     let mut chains = Vec::new();
     for (index, line) in lines.iter().enumerate().skip(cursor.min(lines.len())) {
-        if !line.contains(&anchors[0]) {
+        if !work.spend(1) {
+            return Vec::new();
+        }
+        if !work.contains(line, &anchors[0]) {
             continue;
         }
         let mut chain = vec![index];
         let mut next_start = index + 1;
         let mut complete = true;
         for anchor in &anchors[1..] {
+            if !work.spend(1) {
+                return Vec::new();
+            }
             if let Some((next_index, _)) = lines
                 .iter()
                 .enumerate()
                 .skip(next_start)
-                .find(|(_, line)| line.contains(anchor))
+                .take_while(|_| work.spend(1))
+                .find(|(_, line)| work.contains(line, anchor))
             {
                 chain.push(next_index);
                 next_start = next_index + 1;
@@ -1482,18 +1162,24 @@ fn ordered_anchor_chains(lines: &[String], anchors: &[String], cursor: usize) ->
     chains
 }
 
+/// Finds the first unavailable ordered anchor under the original search control.
 fn first_missing_ordered_anchor(
+    work: &PatchWorkControl<'_>,
     lines: &[String],
     anchors: &[String],
     cursor: usize,
 ) -> Option<String> {
     let mut next_start = cursor.min(lines.len());
     for anchor in anchors {
+        if !work.spend(1) {
+            return None;
+        }
         if let Some((next_index, _)) = lines
             .iter()
             .enumerate()
             .skip(next_start)
-            .find(|(_, line)| line.contains(anchor))
+            .take_while(|_| work.spend(1))
+            .find(|(_, line)| work.contains(line, anchor))
         {
             next_start = next_index + 1;
         } else {
@@ -1503,7 +1189,9 @@ fn first_missing_ordered_anchor(
     None
 }
 
+/// Scans candidate starts under finite byte/visit admission, abandoning terminal work.
 fn find_line_sequence_matches(
+    work: &PatchWorkControl<'_>,
     lines: &[String],
     needle: &[String],
     start: usize,
@@ -1528,7 +1216,10 @@ fn find_line_sequence_matches(
     let mut matches = Vec::new();
     let mut capped = false;
     for index in start..=last_start {
-        if line_sequence_matches(&lines[index..index + needle.len()], needle, mode) {
+        if !work.spend(1) {
+            break;
+        }
+        if line_sequence_matches(work, &lines[index..index + needle.len()], needle, mode) {
             matches.push(index);
             if matches.len() >= APPLY_PATCH_MATCH_CANDIDATE_LIMIT {
                 capped = true;
@@ -1542,7 +1233,9 @@ fn find_line_sequence_matches(
     }
 }
 
+/// Searches allowed blank-context gaps without changing normal candidate ambiguity rules.
 fn find_line_sequence_matches_omitting_blank_context(
+    work: &PatchWorkControl<'_>,
     lines: &[String],
     needle: &[String],
     blank_gap_policies: &[ApplyPatchBlankGapPolicy],
@@ -1568,7 +1261,11 @@ fn find_line_sequence_matches_omitting_blank_context(
             continue;
         }
         for index in start..end {
+            if !work.spend(1) {
+                break;
+            }
             if let Some(match_result) = line_sequence_match_omitting_blank_context_at(
+                work,
                 lines,
                 needle,
                 blank_gap_policies,
@@ -1593,7 +1290,9 @@ fn find_line_sequence_matches_omitting_blank_context(
     }
 }
 
+/// Checks one tolerant candidate and its exact retained source offsets under work admission.
 fn line_sequence_match_omitting_blank_context_at(
+    work: &PatchWorkControl<'_>,
     lines: &[String],
     needle: &[String],
     blank_gap_policies: &[ApplyPatchBlankGapPolicy],
@@ -1617,10 +1316,13 @@ fn line_sequence_match_omitting_blank_context_at(
     let mut old_line_offsets = Vec::with_capacity(needle.len());
     let mut skipped_blank = false;
     for (needle_index, expected) in needle.iter().enumerate() {
+        if !work.spend(1) {
+            return None;
+        }
         if actual_index >= end {
             return None;
         }
-        if patch_line_matches(&lines[actual_index], expected, mode) {
+        if patch_line_matches(work, &lines[actual_index], expected, mode) {
             old_line_offsets.push(actual_index.saturating_sub(position));
             actual_index += 1;
             continue;
@@ -1629,13 +1331,19 @@ fn line_sequence_match_omitting_blank_context_at(
             return None;
         }
         let blank_start = actual_index;
-        while actual_index < end && lines[actual_index].trim().is_empty() {
+        while actual_index < end
+            && work.running()
+            && work.trim(&lines[actual_index], true).is_empty()
+        {
+            if !work.spend(1) {
+                return None;
+            }
             actual_index += 1;
         }
         if actual_index == blank_start || actual_index >= end {
             return None;
         }
-        if !patch_line_matches(&lines[actual_index], expected, mode) {
+        if !patch_line_matches(work, &lines[actual_index], expected, mode) {
             return None;
         }
         skipped_blank = true;
@@ -1648,7 +1356,9 @@ fn line_sequence_match_omitting_blank_context_at(
     })
 }
 
+/// Compares candidate lines with short-circuiting terminal work propagation.
 fn line_sequence_matches(
+    work: &PatchWorkControl<'_>,
     actual: &[String],
     expected: &[String],
     mode: ApplyPatchMatchMode,
@@ -1657,23 +1367,37 @@ fn line_sequence_matches(
         && actual
             .iter()
             .zip(expected)
-            .all(|(actual, expected)| patch_line_matches(actual, expected, mode))
+            .all(|(actual, expected)| patch_line_matches(work, actual, expected, mode))
 }
 
-fn patch_line_matches(actual: &str, expected: &str, mode: ApplyPatchMatchMode) -> bool {
+/// Applies the selected whitespace/Unicode policy through controlled long-line comparisons.
+fn patch_line_matches(
+    work: &PatchWorkControl<'_>,
+    actual: &str,
+    expected: &str,
+    mode: ApplyPatchMatchMode,
+) -> bool {
+    if !work.spend(1) {
+        return false;
+    }
     match mode {
-        ApplyPatchMatchMode::Exact => actual == expected,
-        ApplyPatchMatchMode::TrimEnd => actual.trim_end() == expected.trim_end(),
-        ApplyPatchMatchMode::Trim => actual.trim() == expected.trim(),
-        ApplyPatchMatchMode::Normalized => {
-            normalized_patch_line(actual) == normalized_patch_line(expected)
+        ApplyPatchMatchMode::Exact => work.equal(actual, expected),
+        ApplyPatchMatchMode::TrimEnd => {
+            work.equal(work.trim(actual, false), work.trim(expected, false))
         }
+        ApplyPatchMatchMode::Trim => work.equal(work.trim(actual, true), work.trim(expected, true)),
+        ApplyPatchMatchMode::Normalized => work.equal(
+            &normalized_patch_line(work, actual),
+            &normalized_patch_line(work, expected),
+        ),
     }
 }
 
-fn normalized_patch_line(line: &str) -> String {
-    line.trim()
+/// Normalizes the established Unicode substitutions with cooperative character processing.
+fn normalized_patch_line(work: &PatchWorkControl<'_>, line: &str) -> String {
+    work.trim(line, true)
         .chars()
+        .take_while(|character| work.spend(character.len_utf8()))
         .map(|character| match character {
             '\u{2010}' | '\u{2011}' | '\u{2012}' | '\u{2013}' | '\u{2014}' | '\u{2015}'
             | '\u{2212}' => '-',
@@ -1687,188 +1411,5 @@ fn normalized_patch_line(line: &str) -> String {
         .collect()
 }
 
-fn apply_patch_anchor_line_numbers(lines: &[String], anchor: &str) -> Vec<usize> {
-    lines
-        .iter()
-        .enumerate()
-        .filter_map(|(index, line)| (line == anchor).then_some(index + 1))
-        .take(APPLY_PATCH_MISMATCH_ANCHOR_LIMIT)
-        .collect()
-}
-
-fn apply_patch_first_old_context_center(lines: &[String], anchor: &str) -> Option<usize> {
-    apply_patch_anchor_line_numbers(lines, anchor)
-        .first()
-        .copied()
-        .or_else(|| {
-            apply_patch_non_exact_anchor_line_numbers(lines, anchor)
-                .and_then(|(_, line_numbers)| line_numbers.first().copied())
-        })
-        .and_then(|line| line.checked_sub(1))
-}
-
-fn apply_patch_non_exact_anchor_line_numbers(
-    lines: &[String],
-    anchor: &str,
-) -> Option<(ApplyPatchMatchMode, Vec<usize>)> {
-    APPLY_PATCH_MATCH_MODES
-        .iter()
-        .copied()
-        .filter(|mode| *mode != ApplyPatchMatchMode::Exact)
-        .find_map(|mode| {
-            let line_numbers = lines
-                .iter()
-                .enumerate()
-                .filter_map(|(index, line)| {
-                    patch_line_matches(line, anchor, mode).then_some(index + 1)
-                })
-                .take(APPLY_PATCH_MISMATCH_ANCHOR_LIMIT)
-                .collect::<Vec<_>>();
-            (!line_numbers.is_empty()).then_some((mode, line_numbers))
-        })
-}
-
-fn apply_patch_mismatch_excerpt(line: &str) -> String {
-    let mut excerpt: String = line.chars().take(APPLY_PATCH_MISMATCH_LINE_CHARS).collect();
-    if line.chars().count() > APPLY_PATCH_MISMATCH_LINE_CHARS {
-        excerpt.push_str("...");
-    }
-    excerpt
-}
-
-fn apply_patch_current_context_message(file: &ApplyPatchTextFile, center: usize) -> String {
-    if file.lines.is_empty() {
-        return "\napply_patch: current file is empty".to_string();
-    }
-    let Some((start_line, end_line)) = apply_patch_current_context_range(file, center) else {
-        return "\napply_patch: current file is empty".to_string();
-    };
-    let mut message = format!(
-        "\napply_patch: current file context near line {} follows:",
-        center + 1
-    );
-    for index in start_line.saturating_sub(1)..end_line {
-        message.push_str(&format!(
-            "\napply_patch:   {:>4}: {}",
-            index + 1,
-            apply_patch_mismatch_excerpt(&file.lines[index])
-        ));
-    }
-    message
-}
-
-fn apply_patch_current_context_range(
-    file: &ApplyPatchTextFile,
-    center: usize,
-) -> Option<(usize, usize)> {
-    if file.lines.is_empty() {
-        return None;
-    }
-    let start = center.saturating_sub(APPLY_PATCH_MISMATCH_CONTEXT_LINES / 2);
-    let end = (center + (APPLY_PATCH_MISMATCH_CONTEXT_LINES / 2) + 1).min(file.lines.len());
-    Some((start + 1, end))
-}
-
-fn apply_patch_candidate_context_ranges(
-    file: &ApplyPatchTextFile,
-    candidate_spans: &[ApplyPatchCandidateSpan],
-) -> Vec<(usize, usize)> {
-    let mut ranges = Vec::new();
-    for span in candidate_spans {
-        let center = span.start_line.saturating_sub(1);
-        if let Some(range) = apply_patch_current_context_range(file, center)
-            && !ranges.contains(&range)
-        {
-            ranges.push(range);
-        }
-    }
-    ranges
-}
-
 #[cfg(test)]
-mod tests {
-    use super::{
-        ApplyPatchBlankGapPolicy, find_unanchored_hunk_position_layered, rust_like_brace_counts,
-        structural_anchor_ranges,
-    };
-
-    /// Verifies tolerant unanchored search uses non-overlapping cursor-before
-    /// and cursor-after ranges. A match at or after the cursor used to be
-    /// discovered once in the cursor-forward range and again in the full-file
-    /// fallback range, which made a unique blank-gap match look ambiguous.
-    #[test]
-    fn unanchored_tolerant_search_does_not_duplicate_cursor_forward_match() {
-        let lines = ["before", "target", "", "after", "tail"]
-            .into_iter()
-            .map(str::to_string)
-            .collect::<Vec<_>>();
-        let old = ["target", "after"]
-            .into_iter()
-            .map(str::to_string)
-            .collect::<Vec<_>>();
-        let blank_gap_policies = [
-            ApplyPatchBlankGapPolicy::Disallow,
-            ApplyPatchBlankGapPolicy::Preserve,
-        ];
-
-        let result =
-            find_unanchored_hunk_position_layered(&lines, &old, &blank_gap_policies, 1, None);
-
-        assert!(result.is_ok());
-    }
-
-    /// Verifies raw-string detection does not disable structural brace counts
-    /// merely because ordinary string or comment text contains the byte
-    /// sequence `r\"`. Structural anchor scoping depends on this helper
-    /// returning counts for ordinary Rust-like code.
-    #[test]
-    fn rust_like_brace_counts_ignores_raw_string_markers_inside_strings_and_comments() {
-        let mut in_block_comment = false;
-
-        let counts = rust_like_brace_counts(
-            r#"fn target() { let text = "mentions r\" without raw syntax"; } // r\" comment"#,
-            &mut in_block_comment,
-        );
-
-        assert_eq!(counts, Some((1, 1)));
-    }
-
-    /// Verifies real Rust raw string literals still disable structural brace
-    /// counting. The brace scanner intentionally bails out for raw strings so
-    /// braces inside raw-string bodies cannot corrupt anchor scope detection.
-    #[test]
-    fn rust_like_brace_counts_still_rejects_actual_raw_string_literals() {
-        let mut in_block_comment = false;
-
-        let counts = rust_like_brace_counts(
-            r##"fn target() { let text = r#"{"#; }"##,
-            &mut in_block_comment,
-        );
-
-        assert_eq!(counts, None);
-    }
-
-    /// Verifies structural anchor scope ranges are merged before hunk matching
-    /// searches them. Nested anchors can otherwise produce overlapping ranges,
-    /// causing a unique old-context position inside the overlap to be collected
-    /// twice and reported as an ambiguous hunk match.
-    #[test]
-    fn structural_anchor_ranges_merge_nested_scope_overlaps() {
-        let lines = [
-            "fn outer() {",
-            "    impl Thing {",
-            "        fn update(&self) {",
-            "            println!(\"old\");",
-            "        }",
-            "    }",
-            "}",
-        ]
-        .into_iter()
-        .map(str::to_string)
-        .collect::<Vec<_>>();
-
-        let ranges = structural_anchor_ranges(&lines, &[vec![0], vec![1]]);
-
-        assert_eq!(ranges, vec![(0, 7)]);
-    }
-}
+mod tests;

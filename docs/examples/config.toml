@@ -518,6 +518,8 @@ native_shell_timeout_ms = 600000
 # the turn deadline; it does not use native_shell_timeout_ms or an OS launcher.
 # File I/O checks that original budget between 64 KiB chunks; blocked OS calls
 # remain cooperative and cannot be interrupted by this setting.
+# Shared matching and native diffs retain that fence; finite CPU/text limits
+# are internal resource bounds, not additional configuration settings.
 shell_mode = "native"
 # Default bounded iteration count used by /loop.
 loop_limit = 8

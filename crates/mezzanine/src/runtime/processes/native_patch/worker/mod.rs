@@ -7,8 +7,9 @@
 //! retirement must retain this worker and its returned evidence; dropping a
 //! blocking task cannot certify unexecuted effects. Cancellation is checked
 //! between bounded descriptor I/O quanta and operations, not an interruption
-//! guarantee for OS syscalls or the current pure matcher. Missing-parent creation
-//! is a separate integration step; existing-parent staging never silently creates broader directories.
+//! guarantee for OS syscalls. The shared matcher, snapshots and native diff use
+//! that same original fence with a finite CPU work allowance. Missing-parent
+//! creation is a separate integration step; existing-parent staging never silently creates broader directories.
 
 use std::collections::BTreeMap;
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -24,6 +25,9 @@ use mez_agent::semantic_patch_planning::native::{
 use mez_agent::semantic_patch_planning::{
     ApplyPatchFileChange, ApplyPatchOriginalState, ApplyPatchSnapshot, ApplyPatchSnapshotState,
 };
+
+use mez_agent::semantic_patch::SemanticPatchPlanningError;
+use mez_agent::semantic_patch_planning::work::PatchWorkControl;
 
 use super::commit::NativePatchCommitFence;
 use super::lease::{NativePatchCommitLease, NativePatchCommitProposal};
@@ -236,6 +240,13 @@ fn execute(
             "native patch semantic identity changed",
         ));
     }
+    let checkpoint = || {
+        request
+            .fence
+            .check()
+            .map_err(|error| SemanticPatchPlanningError::invalid_args(error.message()))
+    };
+    let work = PatchWorkControl::native(&checkpoint);
     let original_fence = request.fence.clone();
     let io_control = NativeIoControl::new(move || original_fence.check());
     let mut owners = BTreeMap::new();
@@ -262,11 +273,10 @@ fn execute(
             .to_str()
             .ok_or_else(|| MezError::invalid_args("native patch physical path is not UTF-8"))?
             .to_string();
-        let state = capability
-            .preimage()
-            .map_or(ApplyPatchSnapshotState::Missing, |bytes| {
-                ApplyPatchSnapshotState::Regular(bytes.to_vec())
-            });
+        let state = match capability.preimage() {
+            Some(bytes) => ApplyPatchSnapshotState::Regular(work.copy_bytes(bytes)?),
+            None => ApplyPatchSnapshotState::Missing,
+        };
         snapshots.insert(
             path.clone(),
             ApplyPatchSnapshot {
@@ -279,7 +289,7 @@ fn execute(
     }
     outcome.result.phase = NativePatchPhase::Plan;
     request.fence.check()?;
-    let plan = plan_native_patch(&request.identity.operation, &snapshots)?;
+    let plan = plan_native_patch(&request.identity.operation, &snapshots, &work)?;
     request.fence.check()?;
     let mut diff_budget = NATIVE_PATCH_DIFF_BYTES;
     for operation in plan.operations() {
@@ -314,6 +324,7 @@ fn execute(
                 endpoint_ordinal,
                 change,
                 &mut diff_budget,
+                &work,
             )?;
         }
         outcome.completed_operations.push(operation.ordinal());
@@ -346,6 +357,7 @@ fn publish_endpoint(
     endpoint_ordinal: usize,
     change: &ApplyPatchFileChange,
     diff_budget: &mut usize,
+    work: &PatchWorkControl<'_>,
 ) -> Result<()> {
     outcome.result.phase = NativePatchPhase::Stage;
     let scopes = authorize(request, authority, NativePatchPhase::Stage, &change.path)?;
@@ -357,14 +369,14 @@ fn publish_endpoint(
         ApplyPatchOriginalState::Missing => None,
         ApplyPatchOriginalState::Regular(bytes) => Some(bytes.as_slice()),
     };
-    if capability.preimage() != expected
+    if !capability.preimage_matches(expected)?
         || capability.path().to_str() != Some(change.resolved_path.as_str())
     {
         return Err(MezError::conflict(
             "native patch exact preimage or resolution changed",
         ));
     }
-    let diff = native_unified_diff(change, *diff_budget)?;
+    let diff = native_unified_diff(change, *diff_budget, work)?;
     *diff_budget = diff_budget.saturating_sub(diff.source.len());
     request.fence.check()?;
     let stage = change
@@ -411,11 +423,8 @@ fn publish_endpoint(
         kind,
         diff: diff.source,
         diff_truncated: diff.truncated,
-        added_lines: change
-            .final_bytes
-            .as_ref()
-            .map_or(0, |bytes| line_count(bytes)),
-        removed_lines: expected.map_or(0, line_count),
+        added_lines: diff.new_lines,
+        removed_lines: diff.old_lines,
     };
     outcome.receipts.push(receipt);
     outcome.result.phase = NativePatchPhase::Settle;
@@ -428,14 +437,6 @@ fn publish_endpoint(
             .ok_or_else(|| MezError::invalid_state("native patch lost commit receipt"))?,
     );
     Ok(())
-}
-
-/// Counts complete raw text lines without allocating a truncated display copy.
-fn line_count(bytes: &[u8]) -> usize {
-    if bytes.is_empty() {
-        return 0;
-    }
-    bytes.iter().filter(|byte| **byte == b'\n').count() + usize::from(!bytes.ends_with(b"\n"))
 }
 
 #[cfg(test)]

@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::semantic_patch_planning::native::{NativePatchPlan, plan_native_patch};
+use crate::semantic_patch_planning::work::PatchWorkControl;
 use crate::semantic_patch_planning::{ApplyPatchSnapshot, ApplyPatchSnapshotState};
 
 /// Minimal stable turn identity without filesystem or process adapters.
@@ -54,7 +55,12 @@ fn fixture() -> (
         )
     })
     .collect();
-    let plan = plan_native_patch(&identity.operation, &snapshots).unwrap();
+    let plan = plan_native_patch(
+        &identity.operation,
+        &snapshots,
+        &PatchWorkControl::native(&|| Ok(())),
+    )
+    .unwrap();
     let endpoint = NativeConfirmedEndpoint {
         operation_ordinal: 0,
         confirmation_ordinal: 0,
@@ -256,7 +262,12 @@ fn native_projection_distinguishes_inflight_unknown_and_confirmed_noop() {
             state: ApplyPatchSnapshotState::Regular(b"old\n".to_vec()),
         },
     )]);
-    let noop = plan_native_patch(&identity.operation, &snapshots).unwrap();
+    let noop = plan_native_patch(
+        &identity.operation,
+        &snapshots,
+        &PatchWorkControl::native(&|| Ok(())),
+    )
+    .unwrap();
     let unplanned = NativeConfirmedEndpoint {
         operation_ordinal: 0,
         confirmation_ordinal: 0,
@@ -336,7 +347,12 @@ fn reversed_repeated_path_confirmations_are_rejected() {
             state: ApplyPatchSnapshotState::Regular(b"old\n".to_vec()),
         },
     )]);
-    let plan = plan_native_patch(&identity.operation, &snapshots).unwrap();
+    let plan = plan_native_patch(
+        &identity.operation,
+        &snapshots,
+        &PatchWorkControl::native(&|| Ok(())),
+    )
+    .unwrap();
     let reversed = [
         NativeConfirmedEndpoint {
             operation_ordinal: 1,

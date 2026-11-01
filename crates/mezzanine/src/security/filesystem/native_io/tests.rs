@@ -127,3 +127,18 @@ fn bounded_read_preserves_bytes_and_rejects_oversize() {
     );
     assert!(control.read_bounded(&mut fixture.open(), u64::MAX).is_err());
 }
+
+/// Exact raw comparison must check the original fence inside a multi-quantum
+/// preimage, preserve byte identity, and retain revocation for empty inputs too.
+#[test]
+fn exact_preimage_comparison_observes_original_work_control() {
+    let bytes = vec![b'x'; NATIVE_IO_QUANTUM * 4];
+    let control = NativeIoControl::bounded_only();
+    assert!(control.equal_bytes(&bytes, &bytes).unwrap());
+    let mut different = bytes.clone();
+    different[NATIVE_IO_QUANTUM * 3] = b'y';
+    assert!(!control.equal_bytes(&bytes, &different).unwrap());
+    assert!(!control.equal_bytes(&bytes, b"short").unwrap());
+    assert!(cancel_on(3).equal_bytes(&bytes, &bytes).is_err());
+    assert!(cancel_on(1).equal_bytes(&[], &[]).is_err());
+}

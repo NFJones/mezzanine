@@ -23,6 +23,8 @@ mod snapshot;
 #[cfg(test)]
 mod tests;
 mod transaction;
+/// Explicit original-fence admission for bounded native planning work.
+pub mod work;
 
 use matcher::apply_patch_hunks_to_file;
 use path_resolution::apply_patch_path_resolution_lines;
@@ -31,7 +33,7 @@ pub use snapshot::{
 };
 use snapshot::{
     ApplyPatchTextFile, ensure_missing_state, ensure_regular_state,
-    parse_apply_patch_snapshot_output, snapshot_text_state,
+    parse_apply_patch_snapshot_output, snapshot_text_state_with_work,
 };
 pub use transaction::{
     ApplyPatchConfirmedSection, ApplyPatchProgress, ApplyPatchProgressDecoder,
@@ -416,21 +418,39 @@ pub fn apply_mez_patch_to_snapshots(
     patch: &MezPatch,
     snapshots: &BTreeMap<String, ApplyPatchSnapshot>,
 ) -> Result<ApplyPatchPlan> {
+    apply_mez_patch_to_snapshots_with_work(patch, snapshots, &work::PatchWorkControl::unlimited())
+}
+
+/// Runs the shared matcher under an explicit control, propagating terminal
+/// cancellation/resource failures instead of collecting them as hunk errors.
+fn apply_mez_patch_to_snapshots_with_work(
+    patch: &MezPatch,
+    snapshots: &BTreeMap<String, ApplyPatchSnapshot>,
+    work: &work::PatchWorkControl<'_>,
+) -> Result<ApplyPatchPlan> {
+    work.check()?;
     let mut current = BTreeMap::new();
     let mut original = BTreeMap::new();
     for (path, snapshot) in snapshots {
-        let state = snapshot_text_state(snapshot)?;
-        original.insert(path.clone(), state.clone());
+        let state = snapshot_text_state_with_work(snapshot, work)?;
+        original.insert(
+            path.clone(),
+            state
+                .as_ref()
+                .map(|file| file.clone_with_work(work))
+                .transpose()?,
+        );
         current.insert(path.clone(), state);
     }
     let mut errors = Vec::new();
     for operation in &patch.operations {
-        if let Err(error) = apply_mez_patch_operation_to_current(operation, &mut current) {
+        if let Err(error) = apply_mez_patch_operation_to_current(operation, &mut current, work) {
             let path = match operation {
                 MezPatchOperation::Add { path, .. }
                 | MezPatchOperation::Delete { path }
                 | MezPatchOperation::Update { path, .. } => path.clone(),
             };
+            work.check()?;
             errors.push((path, error.message().to_string()));
         }
     }
@@ -443,22 +463,26 @@ pub fn apply_mez_patch_to_snapshots(
         })?;
         let original_state = match &snapshot.state {
             ApplyPatchSnapshotState::Regular(bytes) => {
-                ApplyPatchOriginalState::Regular(bytes.clone())
+                ApplyPatchOriginalState::Regular(work.copy_bytes(bytes)?)
             }
             ApplyPatchSnapshotState::Missing => ApplyPatchOriginalState::Missing,
             _ => return apply_patch_parse_error("snapshot was not regular or missing"),
         };
-        let final_bytes = current
-            .get(&path)
-            .cloned()
-            .flatten()
-            .map(|file| file.into_bytes());
-        // A semantic no-op must not normalize line endings merely because
-        // matching text uses LF. Changed files retain raw original bytes above.
-        let unchanged = original.get(&path) == current.get(&path);
+        // A semantic no-op preserves the exact captured CRLF/raw preimage.
+        let unchanged = match (original.get(&path), current.get(&path)) {
+            (Some(Some(left)), Some(Some(right))) => left.equal_with_work(right, work),
+            (Some(None), Some(None)) | (None, None) => true,
+            _ => false,
+        };
+        work.check()?;
         if unchanged {
             continue;
         }
+        let final_bytes = current
+            .get(&path)
+            .and_then(Option::as_ref)
+            .map(|file| file.bytes_with_work(work))
+            .transpose()?;
         changes.push(ApplyPatchFileChange {
             path,
             resolved_path: snapshot.resolved_path.clone(),
@@ -466,19 +490,25 @@ pub fn apply_mez_patch_to_snapshots(
             final_bytes,
         });
     }
+    work.check()?;
     Ok(ApplyPatchPlan { changes, errors })
 }
 
 fn apply_mez_patch_operation_to_current(
     operation: &MezPatchOperation,
     current: &mut BTreeMap<String, Option<ApplyPatchTextFile>>,
+    work: &work::PatchWorkControl<'_>,
 ) -> Result<()> {
+    work.check()?;
     match operation {
         MezPatchOperation::Add { path, content } => {
             ensure_missing_state(path, current.get(path))?;
             current.insert(
                 path.clone(),
-                Some(ApplyPatchTextFile::from_lines(content.clone(), true)),
+                Some(ApplyPatchTextFile::from_lines(
+                    work.copy_lines(content)?,
+                    true,
+                )),
             );
         }
         MezPatchOperation::Delete { path } => {
@@ -491,11 +521,11 @@ fn apply_mez_patch_operation_to_current(
             hunks,
             trailing_newline,
         } => {
-            let mut file = ensure_regular_state(path, current.get(path))?.clone();
+            let mut file = ensure_regular_state(path, current.get(path))?.clone_with_work(work)?;
             if let Some(value) = trailing_newline {
                 file.trailing_newline = *value;
             }
-            file = apply_patch_hunks_to_file(path, file, hunks)?;
+            file = apply_patch_hunks_to_file(work, path, file, hunks)?;
             if let Some(target) = move_to {
                 ensure_missing_state(target, current.get(target))?;
                 current.insert(path.clone(), None);

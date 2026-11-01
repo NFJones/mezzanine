@@ -12700,6 +12700,20 @@ return to the original action fence between at most 64 KiB of byte processing;
 capability recapture MUST retain that fence without renewing its budget. A final
 checkpoint MUST precede rename/unlink, and a successful committing syscall MUST
 reach positive receipt retention without an intervening fallible checkpoint.
+Shared matching, anchor scans, normalization, diagnostic searches, snapshot
+text preparation and native diff generation MUST retain the same original work
+fence. A terminal cancellation or resource failure MUST abort the native plan,
+not become a repairable per-operation mismatch permitting partial plan dispatch.
+Native preparation additionally bounds cumulative work to 1 GiB of charged byte
+comparisons/copies and visits, and text bookkeeping to 262,144 lines per file;
+these are computational bounds, not model or filesystem permissions. Retained
+String-owner transfers and semantic descriptor copies MUST share that allowance
+and cooperative control rather than using uncharged bulk moves or deep clones. The pane
+adapter retains its existing matching policy without these native-only limits.
+Commit-proposal hashes and exact raw preimage comparisons MUST also retain
+the captured descriptor I/O fence, including subsequent revalidation.
+Full raw line statistics MUST be prepared before commit; receipt retention MUST
+not perform a fallible scan after a positively completed mutation.
 Dropping a blocking worker or reaching a deadline MUST NOT prove nonexecution.
 Results MUST retain confirmed partial effects and identify in-flight or unknown
 effects without replay. Native results MUST report `native_runtime` and

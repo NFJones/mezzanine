@@ -11,9 +11,10 @@
 
 use std::collections::BTreeMap;
 
+use super::work::{PATCH_WORK_QUANTUM, PatchWorkControl};
 use super::{
     ApplyPatchFileChange, ApplyPatchOriginalState, ApplyPatchSnapshot, ApplyPatchSnapshotState,
-    apply_mez_patch_to_snapshots,
+    apply_mez_patch_to_snapshots_with_work,
 };
 use crate::native_action::{NativePatchOperation, PatchEffect};
 use crate::semantic_patch::{MezPatch, SemanticPatchPlanningError, SemanticPatchPlanningResult};
@@ -85,11 +86,14 @@ impl NativePatchPlan {
 }
 
 /// Plans an exact operation against typed snapshots using the shared matcher.
-/// Rejects bounded-resource violations before returning any oversized plan.
+/// Requires the original caller work control and aborts the whole plan on its
+/// terminal failure; ordinary independent hunk errors remain in the plan.
 pub fn plan_native_patch(
     operation: &NativePatchOperation,
     snapshots: &BTreeMap<String, ApplyPatchSnapshot>,
+    work: &PatchWorkControl<'_>,
 ) -> SemanticPatchPlanningResult<NativePatchPlan> {
+    work.check()?;
     let fail = || {
         SemanticPatchPlanningError::invalid_args(
             "apply_patch: native planning resource budget exceeded",
@@ -128,29 +132,32 @@ pub fn plan_native_patch(
             }
         }
     }
-    let mut current = snapshots.clone();
+    let mut current = BTreeMap::new();
+    for (path, snapshot) in snapshots {
+        current.insert(path.clone(), copy_snapshot(snapshot, work)?);
+    }
     let mut retained = 0usize;
     let mut plan = NativePatchPlan {
-        operation: operation.clone(),
+        operation: work.copy_native_operation(operation)?,
         operations: Vec::new(),
         errors: Vec::new(),
     };
     for (ordinal, parsed) in operation.patch.operations.iter().enumerate() {
+        work.check()?;
         let one = MezPatch {
-            operations: vec![parsed.clone()],
+            operations: vec![work.copy_parsed_operation(parsed)?],
         };
         let touched = one.touched_paths();
-        let subset = touched
-            .iter()
-            .filter_map(|path| {
-                current
-                    .get(path)
-                    .map(|snapshot| (path.clone(), snapshot.clone()))
-            })
-            .collect();
-        let mut matched = match apply_mez_patch_to_snapshots(&one, &subset) {
+        let mut subset = BTreeMap::new();
+        for path in &touched {
+            if let Some(snapshot) = current.get(path) {
+                subset.insert(path.clone(), copy_snapshot(snapshot, work)?);
+            }
+        }
+        let mut matched = match apply_mez_patch_to_snapshots_with_work(&one, &subset, work) {
             Ok(matched) => matched,
             Err(error) => {
+                work.check()?;
                 plan.errors.push((
                     ordinal,
                     touched.iter().next().cloned().unwrap_or_default(),
@@ -159,15 +166,11 @@ pub fn plan_native_patch(
                 continue;
             }
         };
-        let effect = operation
-            .effects
-            .get(ordinal)
-            .ok_or_else(|| {
-                SemanticPatchPlanningError::invalid_args(
-                    "apply_patch: inconsistent semantic operation identity",
-                )
-            })?
-            .clone();
+        let effect = work.copy_effect(operation.effects.get(ordinal).ok_or_else(|| {
+            SemanticPatchPlanningError::invalid_args(
+                "apply_patch: inconsistent semantic operation identity",
+            )
+        })?)?;
         if !matched.errors.is_empty() {
             plan.errors.extend(
                 matched
@@ -207,7 +210,7 @@ pub fn plan_native_patch(
                 SemanticPatchPlanningError::invalid_args("apply_patch: typed snapshot disappeared")
             })?;
             snapshot.state = match &change.final_bytes {
-                Some(bytes) => ApplyPatchSnapshotState::Regular(bytes.clone()),
+                Some(bytes) => ApplyPatchSnapshotState::Regular(work.copy_bytes(bytes)?),
                 None => ApplyPatchSnapshotState::Missing,
             };
         }
@@ -217,7 +220,27 @@ pub fn plan_native_patch(
             changes: matched.changes,
         });
     }
+    work.check()?;
     Ok(plan)
+}
+
+/// Copies one exact typed snapshot through bounded original work admission.
+fn copy_snapshot(
+    snapshot: &ApplyPatchSnapshot,
+    work: &PatchWorkControl<'_>,
+) -> SemanticPatchPlanningResult<ApplyPatchSnapshot> {
+    work.check()?;
+    let state = match &snapshot.state {
+        ApplyPatchSnapshotState::Regular(bytes) => {
+            ApplyPatchSnapshotState::Regular(work.copy_bytes(bytes)?)
+        }
+        state => state.clone(),
+    };
+    Ok(ApplyPatchSnapshot {
+        path: snapshot.path.clone(),
+        resolved_path: snapshot.resolved_path.clone(),
+        state,
+    })
 }
 
 /// Bounded native display source; truncation never changes the semantic plan.
@@ -227,6 +250,10 @@ pub struct NativeUnifiedDiff {
     pub source: String,
     /// True when source exceeded its display budget.
     pub truncated: bool,
+    /// Full original raw line count, computed cooperatively before publication.
+    pub old_lines: usize,
+    /// Full final raw line count, independent of display truncation.
+    pub new_lines: usize,
 }
 
 /// Writes one fragment into the bounded UTF-8 source buffer.
@@ -249,34 +276,40 @@ fn append(diff: &mut NativeUnifiedDiff, fragment: &str, budget: usize) {
 pub fn native_unified_diff(
     change: &ApplyPatchFileChange,
     requested_budget: usize,
+    work: &PatchWorkControl<'_>,
 ) -> SemanticPatchPlanningResult<NativeUnifiedDiff> {
+    work.check()?;
     let old = match &change.original {
         ApplyPatchOriginalState::Regular(bytes) => bytes.as_slice(),
         ApplyPatchOriginalState::Missing => &[],
     };
     let new = change.final_bytes.as_deref().unwrap_or_default();
-    if old.len() > NATIVE_PATCH_FILE_BYTES || new.len() > NATIVE_PATCH_FILE_BYTES {
+    if old.len() > NATIVE_PATCH_FILE_BYTES
+        || new.len() > NATIVE_PATCH_FILE_BYTES
+        || change.path.len() > 4096
+    {
         return Err(SemanticPatchPlanningError::invalid_args(
             "apply_patch: native diff input budget exceeded",
         ));
     }
-    let decode = |bytes| {
-        std::str::from_utf8(bytes).map_err(|_| {
-            SemanticPatchPlanningError::invalid_args("apply_patch: native diff requires UTF-8")
-        })
-    };
-    let old = decode(old)?;
-    let new = decode(new)?;
+    let old_count = line_count(old, work)?;
+    let new_count = line_count(new, work)?;
+    let old = work.decode_text(old)?;
+    let new = work.decode_text(new)?;
     let mut diff = NativeUnifiedDiff {
         source: String::new(),
         truncated: false,
+        old_lines: old_count,
+        new_lines: new_count,
     };
-    if old == new
+    if work.equal(&old, &new)
         && matches!(change.original, ApplyPatchOriginalState::Regular(_))
         && change.final_bytes.is_some()
     {
+        work.check()?;
         return Ok(diff);
     }
+    work.check()?;
     let budget = requested_budget.min(NATIVE_PATCH_DIFF_BYTES);
     let label = change.path.escape_default().to_string();
     let old_label = if matches!(change.original, ApplyPatchOriginalState::Missing) {
@@ -294,8 +327,6 @@ pub fn native_unified_diff(
         &format!("diff -- {label}\n--- {old_label}\n+++ {new_label}\n"),
         budget,
     );
-    let old_count = old.split_inclusive('\n').count();
-    let new_count = new.split_inclusive('\n').count();
     append(
         &mut diff,
         &format!(
@@ -307,17 +338,49 @@ pub fn native_unified_diff(
         ),
         budget,
     );
-    for (prefix, text) in [("-", old), ("+", new)] {
-        for line in text.split_inclusive('\n') {
-            append(&mut diff, prefix, budget);
-            append(&mut diff, line, budget);
-            if !line.ends_with('\n') {
-                append(&mut diff, "\n\\ No newline at end of file\n", budget);
+    for (prefix, text) in [("-", old.as_str()), ("+", new.as_str())] {
+        let mut line_start = true;
+        let mut last_newline = true;
+        // Split at UTF-8 boundaries in <=64KiB pieces, including long lines.
+        let mut offset = 0;
+        while offset < text.len() && !diff.truncated {
+            let mut end = text.len().min(offset + PATCH_WORK_QUANTUM);
+            while !text.is_char_boundary(end) {
+                end -= 1;
             }
-            if diff.truncated {
-                break;
+            if !work.spend(end - offset) {
+                work.check()?;
             }
+            for fragment in text[offset..end].split_inclusive('\n') {
+                if line_start {
+                    append(&mut diff, prefix, budget);
+                }
+                append(&mut diff, fragment, budget);
+                last_newline = fragment.ends_with('\n');
+                line_start = last_newline;
+                if diff.truncated {
+                    break;
+                }
+            }
+            offset = end;
+        }
+        if !last_newline && !diff.truncated {
+            append(&mut diff, "\n\\ No newline at end of file\n", budget);
         }
     }
+    work.check()?;
     Ok(diff)
+}
+
+/// Counts raw newline-delimited lines through bounded actual byte scans.
+fn line_count(bytes: &[u8], work: &PatchWorkControl<'_>) -> SemanticPatchPlanningResult<usize> {
+    let mut count = 0;
+    for chunk in bytes.chunks(PATCH_WORK_QUANTUM) {
+        if !work.spend(chunk.len()) {
+            work.check()?;
+        }
+        count += chunk.iter().filter(|byte| **byte == b'\n').count();
+    }
+    work.check()?;
+    Ok(count + usize::from(!bytes.is_empty() && !bytes.ends_with(b"\n")))
 }

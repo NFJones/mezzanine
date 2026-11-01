@@ -15,7 +15,6 @@ use std::time::{Duration, Instant};
 use mez_agent::native_action::{NativeCommitIdentity, PatchEffect};
 use mez_agent::permissions::{PathResolutionStatus, PathScopes};
 use mez_agent::semantic_patch_planning::{ApplyPatchFileChange, ApplyPatchOriginalState};
-use sha2::{Digest, Sha256};
 
 use super::commit::{NativePatchCommitFence, NativePatchCommitGuard};
 use crate::error::{MezError, Result};
@@ -53,7 +52,7 @@ impl NativePatchCommitProposal {
             ApplyPatchOriginalState::Missing => None,
             ApplyPatchOriginalState::Regular(bytes) => Some(bytes.as_slice()),
         };
-        if capability.preimage() != before
+        if !capability.preimage_matches(before)?
             || capability.path().to_str() != Some(change.resolved_path.as_str())
             || change.path.len() > 4096
             || change.resolved_path.len() > 4096
@@ -71,11 +70,14 @@ impl NativePatchCommitProposal {
             path: change.path.clone(),
             resolved: change.resolved_path.clone(),
             allocation: capability.commit_allocation(),
-            before: before.map(|bytes| Sha256::digest(bytes).into()),
+            before: before
+                .map(|bytes| capability.planned_digest(bytes))
+                .transpose()?,
             after: change
                 .final_bytes
                 .as_ref()
-                .map(|bytes| Sha256::digest(bytes).into()),
+                .map(|bytes| capability.planned_digest(bytes))
+                .transpose()?,
         })
     }
 

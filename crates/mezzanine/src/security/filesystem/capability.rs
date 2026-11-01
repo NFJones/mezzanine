@@ -333,6 +333,28 @@ impl NativeFileCapability {
         self.preimage.as_deref()
     }
 
+    /// Compares missing/existing raw preimages under the retained original fence.
+    /// Equal content does not itself establish object or mutation authority.
+    pub(crate) fn preimage_matches(&self, expected: Option<&[u8]>) -> Result<bool> {
+        self.control.check()?;
+        match (self.preimage(), expected) {
+            (Some(actual), Some(expected)) => self.control.equal_bytes(actual, expected),
+            (None, None) => Ok(true),
+            _ => Ok(false),
+        }
+    }
+
+    /// Derives one bounded exact byte proof without hiding whole-file hashing.
+    /// This grants no access; commit proposals still bind the captured allocation.
+    pub(crate) fn planned_digest(&self, bytes: &[u8]) -> Result<[u8; 32]> {
+        if bytes.len() as u64 > MAX_FILE_BYTES {
+            return Err(MezError::invalid_args(
+                "native byte proof exceeds file budget",
+            ));
+        }
+        self.control.digest(bytes)
+    }
+
     /// Recaptures a positively deleted entry for a later ordered create.
     /// The original ancestry and parent must still be held and the entry must
     /// remain missing; a replacement directory or competing file is rejected.
@@ -479,7 +501,9 @@ impl NativeFileCapability {
                     && current.stat.st_mode == self.physical.stat.st_mode
                     && current.stat.st_uid == self.physical.stat.st_uid
                     && current.stat.st_gid == self.physical.stat.st_gid
-                    && read_exact_preimage(&current, &self.control)?.0 == *bytes =>
+                    && self
+                        .control
+                        .equal_bytes(&read_exact_preimage(&current, &self.control)?.0, bytes)? =>
             {
                 Ok(())
             }

@@ -6,6 +6,7 @@
 //! file-change representation shared by native and shell adapters. Raw captured
 //! bytes are retained for exact preconditions; no-op matching preserves them.
 
+use super::work::PatchWorkControl;
 use super::{
     APPLY_PATCH_CONTENT_BEGIN_MARKER, APPLY_PATCH_CONTENT_END_MARKER,
     APPLY_PATCH_FILE_BEGIN_MARKER, APPLY_PATCH_FILE_END_MARKER, APPLY_PATCH_READ_BEGIN_MARKER,
@@ -78,21 +79,58 @@ pub(super) struct ApplyPatchTextFile {
 }
 
 impl ApplyPatchTextFile {
-    /// Builds text-file state from regular file bytes.
-    ///
-    /// # Parameters
-    /// - `path`: Path used only for diagnostic context.
-    /// - `bytes`: Exact file bytes captured by the read phase.
-    pub(super) fn from_bytes(path: &str, bytes: &[u8]) -> Result<Self> {
-        let text = String::from_utf8(bytes.to_vec()).map_err(|_| {
-            SemanticPatchPlanningError::invalid_args(format!(
-                "apply_patch: file is not valid UTF-8: {path}"
-            ))
+    /// Decodes and splits a captured file while retaining caller work admission.
+    pub(super) fn from_bytes_with_work(
+        path: &str,
+        bytes: &[u8],
+        work: &PatchWorkControl<'_>,
+    ) -> Result<Self> {
+        let text = work.decode_text(bytes).map_err(|error| {
+            SemanticPatchPlanningError::invalid_args(format!("{}: {path}", error.message()))
         })?;
         Ok(Self {
-            lines: text.lines().map(ToString::to_string).collect(),
+            lines: work.text_lines(&text)?,
             trailing_newline: text.ends_with('\n'),
         })
+    }
+
+    /// Clones line ownership through bounded copies and finite bookkeeping.
+    pub(super) fn clone_with_work(&self, work: &PatchWorkControl<'_>) -> Result<Self> {
+        let lines = work.copy_lines(&self.lines)?;
+        Ok(Self {
+            lines,
+            trailing_newline: self.trailing_newline,
+        })
+    }
+
+    /// Compares normalized text without hiding long-line byte comparisons.
+    pub(super) fn equal_with_work(&self, other: &Self, work: &PatchWorkControl<'_>) -> bool {
+        self.trailing_newline == other.trailing_newline
+            && self.lines.len() == other.lines.len()
+            && self
+                .lines
+                .iter()
+                .zip(&other.lines)
+                .all(|(left, right)| work.equal(left, right))
+    }
+
+    /// Serializes exact normalized lines through bounded copies before commit.
+    pub(super) fn bytes_with_work(&self, work: &PatchWorkControl<'_>) -> Result<Vec<u8>> {
+        let mut bytes = Vec::new();
+        for (index, line) in self.lines.iter().enumerate() {
+            if !work.line_allowed(index) {
+                work.check()?;
+            }
+            if index > 0 {
+                work.append_bytes(&mut bytes, b"\n")?;
+            }
+            work.append_bytes(&mut bytes, line.as_bytes())?;
+        }
+        if !self.lines.is_empty() && self.trailing_newline {
+            work.append_bytes(&mut bytes, b"\n")?;
+        }
+        work.check()?;
+        Ok(bytes)
     }
 
     /// Builds text-file state from already parsed lines.
@@ -105,15 +143,6 @@ impl ApplyPatchTextFile {
             lines,
             trailing_newline,
         }
-    }
-
-    /// Serializes text-file state back to bytes.
-    pub(super) fn into_bytes(self) -> Vec<u8> {
-        let mut text = self.lines.join("\n");
-        if !self.lines.is_empty() && self.trailing_newline {
-            text.push('\n');
-        }
-        text.into_bytes()
     }
 }
 
@@ -242,17 +271,16 @@ fn decode_base64_bytes(encoded: &str, label: &str) -> Result<Vec<u8>> {
         })
 }
 
-/// Converts one raw snapshot into optional text-file state.
-///
-/// # Parameters
-/// - `snapshot`: The remote snapshot to normalize.
-pub(super) fn snapshot_text_state(
+/// Converts typed state under the original work admission, preserving missing
+/// versus nonregular states and returning UTF-8 or permission diagnostics.
+pub(super) fn snapshot_text_state_with_work(
     snapshot: &ApplyPatchSnapshot,
+    work: &PatchWorkControl<'_>,
 ) -> Result<Option<ApplyPatchTextFile>> {
     match &snapshot.state {
-        ApplyPatchSnapshotState::Regular(bytes) => {
-            Ok(Some(ApplyPatchTextFile::from_bytes(&snapshot.path, bytes)?))
-        }
+        ApplyPatchSnapshotState::Regular(bytes) => Ok(Some(
+            ApplyPatchTextFile::from_bytes_with_work(&snapshot.path, bytes, work)?,
+        )),
         ApplyPatchSnapshotState::Missing => Ok(None),
         ApplyPatchSnapshotState::NonRegular => Err(MezError::invalid_args(format!(
             "apply_patch: refusing to patch non-regular file: {}",
