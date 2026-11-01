@@ -230,6 +230,7 @@ fn recipient_binding_snapshot_rejects_incomplete_or_conflicting_evidence() {
     for version in 2..=4 {
         let mut legacy = before.clone();
         legacy.schema_version = version;
+        legacy.sender_provenance = None;
         legacy.registration_floors = None;
         legacy.retained_messages[0].recipient_bindings = None;
         candidates.push(legacy);

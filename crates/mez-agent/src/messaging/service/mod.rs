@@ -28,9 +28,10 @@ use super::types::{
     MessageDeliverySnapshot, MessageEnvelopeSnapshot, MessageExtensionFieldSnapshot,
     MessageFanoutDiagnostics, MessageIdentitySnapshot, MessagePresenceSnapshot,
     MessageQueuedEnvelopeSnapshot, MessageRecipientBindingSnapshot, MessageRecipientOfferSnapshot,
-    MessageRecipientSnapshot, MessageRetiredDeliveryFloorSnapshot, MessageScope, MessageSequence,
-    MessageService, MessageServiceSnapshot, PresenceRecord, ProjectScopeId, QueuedEnvelope,
-    Recipient, ResolvedMessageAudience, RetiredDeliveryFloor, SenderIdentity, SequencedEnvelope,
+    MessageRecipientSnapshot, MessageRetiredDeliveryFloorSnapshot, MessageScope,
+    MessageSenderProvenanceSnapshot, MessageSequence, MessageService, MessageServiceSnapshot,
+    PresenceRecord, ProjectScopeId, QueuedEnvelope, Recipient, ResolvedMessageAudience,
+    RetiredDeliveryFloor, SenderIdentity, SequencedEnvelope,
 };
 use super::validation::{
     normalize_objective, normalize_optional_objective, validate_message_type, validate_protocol,
@@ -42,6 +43,7 @@ mod discovery;
 pub use acceptance_proof::{MessageAcceptanceProof, MessageAcceptanceReservation};
 mod identity;
 mod recipient_binding;
+mod sender_provenance;
 mod snapshot;
 mod snapshot_codec;
 mod snapshot_validation;
@@ -605,6 +607,7 @@ mod tests {
     mod pending;
     mod pending_limits;
     mod recipient_binding;
+    mod sender_restore;
     mod shared_retirement;
     mod terminal_outcomes;
 
@@ -746,6 +749,7 @@ mod tests {
 
             let mut legacy_floor = snapshot.clone();
             legacy_floor.schema_version = 2;
+            legacy_floor.sender_provenance = None;
             assert!(MessageService::from_snapshot_state(&legacy_floor).is_err());
 
             let mut restored = MessageService::from_snapshot_state(&snapshot).unwrap();
@@ -926,7 +930,7 @@ mod tests {
                 .unwrap();
 
             let snapshot = service.snapshot_state();
-            assert_eq!(snapshot.schema_version, 8);
+            assert_eq!(snapshot.schema_version, 9);
             assert!(
                 snapshot
                     .registered_agents
@@ -1159,6 +1163,7 @@ mod tests {
 
             let mut legacy = service.snapshot_state();
             legacy.schema_version = 1;
+            legacy.sender_provenance = None;
             legacy.custody_messages = None;
             legacy.registration_floors = None;
             for identity in &mut legacy.registered_agents {

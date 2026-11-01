@@ -464,6 +464,7 @@ fn legacy_schema3_generic_floor_roundtrip_is_unchanged() {
     service.retire_agent_identity(&pane.agent_id);
     let mut legacy = service.snapshot_state();
     legacy.schema_version = 3;
+    legacy.sender_provenance = None;
     legacy.custody_messages = None;
     legacy.registration_floors = None;
     for row in &mut legacy.retained_messages {
@@ -502,7 +503,7 @@ fn legacy_schema3_generic_floor_roundtrip_is_unchanged() {
 fn fresh_snapshot_rejects_forged_or_unreferenced_versions() {
     let (service, _) = objective_history_fixture();
     let before = service.snapshot_state();
-    assert_eq!(before.schema_version, 8);
+    assert_eq!(before.schema_version, 9);
     let mut corruptions = Vec::new();
     let mut empty = before.clone();
     empty.retired_delivery_floors[0].fresh_sender_versions = Some(Vec::new());
@@ -575,7 +576,7 @@ fn fresh_snapshot_rejects_forged_or_unreferenced_versions() {
     unsent_anchor.retired_delivery_floors[0].identity.objective = Some("C unsent".to_string());
     corruptions.push(unsent_anchor);
     let mut unsupported = before.clone();
-    unsupported.schema_version = 9;
+    unsupported.schema_version = 10;
     corruptions.push(unsupported);
     let mut active = before.clone();
     active
@@ -585,6 +586,7 @@ fn fresh_snapshot_rejects_forged_or_unreferenced_versions() {
     for schema in 1..=3 {
         let mut legacy = before.clone();
         legacy.schema_version = schema;
+        legacy.sender_provenance = None;
         corruptions.push(legacy.clone());
         legacy.retired_delivery_floors[0].fresh_sender_versions = Some(Vec::new());
         corruptions.push(legacy);

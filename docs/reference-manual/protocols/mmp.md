@@ -297,7 +297,7 @@ from a snapshot's presentation outbox.
 Trusted in-process callers can narrow each custody budget using
 `PendingDeliveryLimits` with `MessageService::with_pending_limits`. Values must
 be positive and cannot exceed the ceilings above. No wire/config control is
-introduced. Policy is destination-owned, not saved in schema8 message state:
+introduced. Policy is destination-owned, not saved in schema9 message state:
 `from_snapshot_state` explicitly uses production defaults, while a narrowed
 destination must use `from_snapshot_state_with_pending_limits` with its policy.
 Over-cap current or reconstructed legacy custody is refused, never truncated.
@@ -421,7 +421,7 @@ at shutdown; independently registered pane-less identities remain untouched.
 Cleanup ownership corruption is critical and reaches completion after pane
 termination, rather than being reported as a successful peer closure.
 
-Private MMP snapshot schema8 retains schema4's distinction of fresh raw sender provenance from
+Private MMP snapshot schema9 retains schema4's distinction of fresh raw sender provenance from
 reusable delivery floors. It preserves the exact objective versions in retained
 authored mail, including when the current objective changed again without a
 send. Every version must be referenced by canonical mail and agree on immutable
@@ -429,13 +429,31 @@ agent/project/pane/window/role/capabilities; mail, receipts and audience are not
 rewritten. Releasing the final replay/custody reference removes unreferenced
 versions, then the empty raw floor. This bounds version count by canonical authored occurrences, not by the
 payload-only byte budget. Schemas1–3 reject the fresh-version field even when
-empty. Active/reusable-owner exact validation is unchanged; this is not general
-live-owner objective-history repair or a raw reconnect/rebind operation.
+empty. Current registration, recipient intervals and live proof checks remain separate
+from historical source metadata. This does not provide raw reconnect authority.
 Snapshot restoration also reserves exact recipient binding IDs still referenced by
 retained mail, including raw non-senders and senders whose authored floor has
 already evicted. A fresh generated owner cannot acquire that recipient's old
 direct or fanout mail through historical reads. This uses existing bounded mail rather
 than restoring idle registrations or keeping extra identity tombstones.
+
+Schema9 adds a complete, ordered, metadata-only sender-provenance table for
+canonical replay and custody sources. Each entry preserves a fixed-size, versioned digest of the exact original
+sender, plus its interval and fresh-retirement classification. The full identity
+stays in the canonical envelope; the table does not duplicate its strings. Re-registering an address,
+refreshing an objective or changing current discovery metadata cannot rewrite
+older authored mail. Snapshot capture omits retirement floors for active
+registrations; their exact active registration interval still excludes old mail.
+The table is cross-checked against canonical envelopes and receipts and stays
+within their count/metadata reservations. It does not create live acceptance,
+recipient rights, socket credentials or restarted task authority.
+
+Valid legacy records are checked before being captured in schema9. A schema5–8
+active identity with an exact redundant old retirement floor can omit that floor
+when its registration high-water proves the old interval ended. Unknown or
+conflicting legacy provenance remains an error; input snapshots are preserved.
+Missing, extra, reordered or contradictory schema9 provenance and future schemas
+are rejected. This remains snapshot recovery, not acceptance-atomic disk storage.
 
 Schema5 records each active registration's acceptance sequence floor and each
 retained occurrence's exact accepted recipient intervals. A floor is the last

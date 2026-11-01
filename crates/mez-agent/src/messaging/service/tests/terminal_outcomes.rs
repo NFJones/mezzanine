@@ -338,6 +338,7 @@ fn terminal_snapshot_rejects_contradictions_and_preserves_legacy_unknown_owner()
     corruptions.push(bad);
     let mut bad = before.clone();
     bad.schema_version = 7;
+    bad.sender_provenance = None;
     corruptions.push(bad);
     for bad in corruptions {
         let decoded: MessageServiceSnapshot =
@@ -349,6 +350,7 @@ fn terminal_snapshot_rejects_contradictions_and_preserves_legacy_unknown_owner()
     legacy_source.retire_agent_identity(&sender.agent_id);
     let mut legacy = legacy_source.snapshot_state();
     legacy.schema_version = 7;
+    legacy.sender_provenance = None;
     for row in &mut legacy.retained_messages {
         row.terminal_recipients = None;
         row.sender_registered_after_sequence = None;

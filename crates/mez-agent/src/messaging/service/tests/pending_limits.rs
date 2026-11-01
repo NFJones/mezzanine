@@ -223,6 +223,7 @@ fn pending_limits_restore_refuses_each_over_cap_dimension() {
     // bindings plus unadvanced cursors still prove these unread obligations.
     let mut legacy = snapshot.clone();
     legacy.schema_version = 6;
+    legacy.sender_provenance = None;
     legacy.retention_messages = 2;
     legacy
         .retained_messages

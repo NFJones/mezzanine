@@ -300,9 +300,10 @@ fn acknowledgement_snapshot_validates_offers_and_upgrades_schema5_fail_closed() 
     corruptions.push(bad);
     let mut bad = before.clone();
     bad.schema_version = 5;
+    bad.sender_provenance = None;
     corruptions.push(bad);
     let mut bad = before.clone();
-    bad.schema_version = 9;
+    bad.schema_version = 10;
     corruptions.push(bad);
     for bad in corruptions {
         let decoded =
@@ -313,6 +314,7 @@ fn acknowledgement_snapshot_validates_offers_and_upgrades_schema5_fail_closed() 
     }
     let mut legacy = before.clone();
     legacy.schema_version = 5;
+    legacy.sender_provenance = None;
     legacy.custody_messages = None;
     for row in &mut legacy.retained_messages {
         row.offered_recipients = None;

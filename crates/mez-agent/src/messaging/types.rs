@@ -853,6 +853,10 @@ pub struct MessageServiceSnapshot {
     /// ended.
     #[serde(default)]
     pub retired_delivery_floors: Vec<MessageRetiredDeliveryFloorSnapshot>,
+    /// Schema9 exact historical sender facts, independent of current discovery.
+    /// Legacy absence never fabricates original acceptance or socket authority.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sender_provenance: Option<Vec<MessageSenderProvenanceSnapshot>>,
     /// Stores the retained messages value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
@@ -878,6 +882,22 @@ impl MessageServiceSnapshot {
             .iter()
             .chain(self.custody_messages.iter().flatten())
     }
+}
+
+/// Frozen original sender metadata for one retained canonical occurrence.
+/// This supplies historical consistency only, never current delivery authority.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MessageSenderProvenanceSnapshot {
+    /// Original accepted occurrence sequence, independent of a reused address.
+    pub sequence: MessageSequence,
+    /// SHA256 of versioned length-framed original identity fields. The full
+    /// identity remains in the canonical envelope, not another payload/index.
+    pub sender_sha256: [u8; 32],
+    /// Original interval, or explicit legacy unknown; never inferred on restore.
+    pub registered_after_sequence: Option<MessageSequence>,
+    /// The retained retirement owner is fresh-only, not a reusable identity.
+    /// This consistency marker never supplies transport reconnect authority.
+    pub fresh_retirement: bool,
 }
 
 /// Serializable MMP sender or registered agent identity.

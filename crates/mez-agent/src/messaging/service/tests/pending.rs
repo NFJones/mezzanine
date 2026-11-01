@@ -523,6 +523,7 @@ fn pending_restore_refuses_unprovable_legacy_advanced_cursors() {
     let committed = service.snapshot_state();
     let mut proven = committed.clone();
     proven.schema_version = 6;
+    proven.sender_provenance = None;
     proven.custody_messages = None;
     for row in &mut proven.retained_messages {
         row.acknowledged_recipients = None;
@@ -546,6 +547,7 @@ fn pending_restore_refuses_unprovable_legacy_advanced_cursors() {
     for schema in [5, 6] {
         let mut legacy = committed.clone();
         legacy.schema_version = schema;
+        legacy.sender_provenance = None;
         legacy.custody_messages = None;
         for row in &mut legacy.retained_messages {
             row.acknowledged_recipients = None;

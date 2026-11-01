@@ -15411,12 +15411,29 @@ live or historical delivery rights. Existing availability, selector and project
 audience checks continue to constrain delivery; frozen membership is not a
 permission grant.
 
-Private message snapshot schema8 MUST preserve active registration sequence
+Private message snapshot schema9 MUST preserve active registration sequence
 floors and each retained occurrence's exact recipient bindings. The floor is
 the acceptance high-water at registration: any mail belonging to a previous
 registration falls at or below the replacement floor. Restoring schemas2–4 with
 retained mail MUST report unknown acceptance-time recipients rather than invent
 them from current selector membership; the original snapshot remains untouched.
+Schema9 MUST additionally preserve complete exact sender provenance for each
+canonical occurrence, independently of current discovery metadata or address
+reuse. Provenance MUST agree with the original envelope and captured sender
+interval, contain no payload copy, and remain bounded by canonical count and
+metadata reservations. A fixed-size, versioned identity digest MUST check the
+full original identity in the canonical envelope without another string copy.
+Active registration floors MUST NOT be serialized as
+retired-owner authority. Restored sender provenance MUST NOT supply live
+acceptance proofs, reconnect credentials, old recipient rights or task authority.
+
+Schemas5–8 with an exact active identity and a redundant retirement floor MAY
+normalize that floor only when the active registration high-water proves its
+old interval ended. Unknown historical identity/interval facts MUST NOT be
+invented. Legacy validation MUST precede capture into schema9; the input snapshot
+MUST remain unchanged. Fresh-only retired sender provenance MUST retain its
+existing exact version and no-reconnect restrictions.
+
 Legacy empty-mail snapshots remain restorable, and schema1 retains its existing
 audience-less-mail discard behavior. Recipient binding IDs MUST remain reserved
 for generated-ID allocation while their canonical mail is retained, including

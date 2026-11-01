@@ -16,6 +16,9 @@
 //! retained custody; unknown evicted source is never reconstructed.
 //! Schema8 preserves pre-reserved terminal dispositions and exact sender
 //! intervals. Legacy unknown sender intervals never acquire handoff authority.
+//! Schema9 separates exact immutable sender provenance from current discovery
+//! and active delivery floors. Legacy exact reused floors normalize by omission;
+//! unproven historical metadata is never reconstructed.
 
 use super::snapshot_validation::validate_message_service_snapshot;
 use super::*;
@@ -43,6 +46,7 @@ impl MessageService {
         let mut retired_delivery_floors = self
             .retired_delivery_floors
             .values()
+            .filter(|floor| !self.registered.contains_key(&floor.identity.agent_id))
             .map(|floor| MessageRetiredDeliveryFloorSnapshot {
                 identity: identity_snapshot(&floor.identity),
                 last_sequence: floor.last_sequence,
@@ -68,7 +72,8 @@ impl MessageService {
 
         MessageServiceSnapshot {
             protocol: MMP_PROTOCOL.to_string(),
-            schema_version: 8,
+            schema_version: 9,
+            sender_provenance: Some(super::sender_provenance::capture(self)),
             next_sequence: self.next_sequence,
             retention_messages: self.retention_messages,
             retention_bytes: self.retention_bytes,
@@ -169,6 +174,9 @@ impl MessageService {
         }
         let mut retired_delivery_floors = HashMap::new();
         for floor in &snapshot.retired_delivery_floors {
+            if super::sender_provenance::redundant_legacy_floor(snapshot, floor) {
+                continue;
+            }
             let identity = sender_identity_from_snapshot(&floor.identity, snapshot.schema_version)?;
             let fresh_sender_versions = floor
                 .fresh_sender_versions

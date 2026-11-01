@@ -5,6 +5,9 @@
 //! Schema4 fresh raw floors additionally require complete, unique, exact sender
 //! versions referenced by canonical retained authored mail. This does not change
 //! active/reusable identity comparisons or infer sender authority from objectives.
+//! Schema9 additionally cross-checks original sender facts against bounded
+//! canonical occurrences, independently of current discovery metadata. Restored
+//! provenance never supplies live acceptance or old registration rights.
 
 use super::*;
 
@@ -14,7 +17,7 @@ pub(super) fn validate_message_service_snapshot(
     snapshot: &MessageServiceSnapshot,
     pending_limits: PendingDeliveryLimits,
 ) -> Result<()> {
-    if snapshot.protocol != MMP_PROTOCOL || !matches!(snapshot.schema_version, 1..=8) {
+    if snapshot.protocol != MMP_PROTOCOL || !matches!(snapshot.schema_version, 1..=9) {
         return Err(MessageError::invalid_args(
             "snapshot MMP state has unsupported protocol or schema version",
         ));
@@ -45,6 +48,7 @@ pub(super) fn validate_message_service_snapshot(
     super::pending::validate_pending_snapshot(snapshot, pending_limits)?;
     validate_recipient_bindings(snapshot, &registered_by_id)?;
     super::offers::validate_delivery_offer_snapshot(snapshot)?;
+    let sender_provenance = super::sender_provenance::validate(snapshot)?;
     for presence in &snapshot.presence {
         sender_identity_from_snapshot(&presence.identity, snapshot.schema_version)?;
         parse_presence_status(&presence.status)?;
@@ -95,9 +99,15 @@ pub(super) fn validate_message_service_snapshot(
     }
     let mut retired_identities = HashMap::new();
     let mut fresh_sender_versions = HashMap::new();
+    let mut seen_retired = HashSet::new();
     if snapshot.schema_version >= 3 {
         for floor in &snapshot.retired_delivery_floors {
             let identity = sender_identity_from_snapshot(&floor.identity, snapshot.schema_version)?;
+            if !seen_retired.insert(floor.identity.agent_id.as_str()) {
+                return Err(MessageError::invalid_args(
+                    "snapshot MMP retired delivery floor identities must be unique",
+                ));
+            }
             if floor.last_sequence >= snapshot.next_sequence {
                 return Err(MessageError::invalid_args(
                     "snapshot MMP retired delivery floor exceeds the retained sequence range",
@@ -106,6 +116,9 @@ pub(super) fn validate_message_service_snapshot(
             if registered_by_id.contains_key(identity.agent_id.as_str())
                 || subscription_ids.contains(identity.agent_id.as_str())
             {
+                if super::sender_provenance::redundant_legacy_floor(snapshot, floor) {
+                    continue;
+                }
                 return Err(MessageError::invalid_args(
                     "snapshot MMP retired delivery floor identity must not be active",
                 ));
@@ -200,8 +213,9 @@ pub(super) fn validate_message_service_snapshot(
                 queued_bytes = queued_bytes.saturating_add(retained.envelope.payload.len());
             }
             let envelope = envelope_from_snapshot(&retained.envelope, snapshot.schema_version)?;
-            if registered_by_id.get(envelope.sender.agent_id.as_str())
-                != Some(&&retained.envelope.sender)
+            if !sender_provenance.contains(&retained.sequence)
+                && registered_by_id.get(envelope.sender.agent_id.as_str())
+                    != Some(&&retained.envelope.sender)
                 && retired_identities.get(&envelope.sender.agent_id) != Some(&envelope.sender)
                 && !fresh_sender_versions
                     .get(&envelope.sender.agent_id)
@@ -273,8 +287,9 @@ pub(super) fn validate_message_service_snapshot(
         let mut accepted_by_id = HashMap::new();
         for accepted in &snapshot.accepted_messages {
             let envelope = envelope_from_snapshot(&accepted.envelope, snapshot.schema_version)?;
-            if registered_by_id.get(envelope.sender.agent_id.as_str())
-                != Some(&&accepted.envelope.sender)
+            if !sender_provenance.contains(&accepted.delivery.sequence)
+                && registered_by_id.get(envelope.sender.agent_id.as_str())
+                    != Some(&&accepted.envelope.sender)
                 && retired_identities.get(&envelope.sender.agent_id) != Some(&envelope.sender)
                 && !fresh_sender_versions
                     .get(&envelope.sender.agent_id)
