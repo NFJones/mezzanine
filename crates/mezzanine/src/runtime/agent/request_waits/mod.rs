@@ -29,7 +29,7 @@ const TASK_IDENTITY_BYTES: usize = 512;
 /// Fixed-size original parent root/process evidence. Unknown OS observation is
 /// distinct from a legitimately process-free pane; executable text is absent.
 #[derive(Debug)]
-struct ParentAnchor {
+pub(in crate::runtime::agent) struct ParentAnchor {
     /// Runtime-owned root PID, adapter epoch and independent kernel lifetime.
     root: Option<RootAnchor>,
     /// Observed process role, PID, adapter generation and kernel start token.
@@ -166,7 +166,10 @@ impl Default for RuntimeRequestWaits {
 
 impl RuntimeSessionService {
     /// Captures native process/root tokens without retaining executable paths.
-    fn capture_request_parent_anchor(&self, turn: &AgentTurnRecord) -> ParentAnchor {
+    pub(in crate::runtime::agent) fn capture_request_parent_anchor(
+        &self,
+        turn: &AgentTurnRecord,
+    ) -> ParentAnchor {
         let root = self
             .primary_pid_for_live_pane_process(&turn.pane_id)
             .map(|pid| RootAnchor {
@@ -191,7 +194,7 @@ impl RuntimeSessionService {
 
     /// Revalidates original OS incarnation before lifecycle-driven admission.
     /// Uncertainty holds the edge; a replacement process cannot inherit it.
-    fn request_parent_anchor_is_current(
+    pub(in crate::runtime::agent) fn request_parent_anchor_is_current(
         &self,
         turn: &AgentTurnRecord,
         anchor: &ParentAnchor,

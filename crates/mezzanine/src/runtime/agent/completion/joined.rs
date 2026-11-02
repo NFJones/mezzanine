@@ -51,6 +51,7 @@ impl RuntimeSessionService {
             return false;
         };
         self.ensure_completion_required_gates_ready(turn_id).is_ok()
+            && !self.message_completion_pending(turn_id)
             && self.completion_group_publication_ready(turn_id)
             && !self.execution_has_pending_shell_dispatch(turn_id, execution)
             && !self
@@ -193,6 +194,15 @@ impl RuntimeSessionService {
             .remove(turn_id)
             .ok_or_else(|| MezError::invalid_state("joined source disappeared before transfer"))?;
         let group = self.agent.completion_settlements.groups.remove(turn_id);
+        // Quiescent original execution/context now retain these accepted results.
+        // Consume only completed source capabilities; matching old callbacks can
+        // no longer recreate a send or pin another copy of its semantic payload.
+        self.agent
+            .completion_settlements
+            .messages
+            .retain(|_, receipt| {
+                receipt.owner.turn_id != turn_id || receipt.owner.group != group_id
+            });
         let mut external = BTreeMap::new();
         for key in external_keys {
             if let Some(receipt) = self.agent.completion_settlements.external.remove(&key) {

@@ -300,7 +300,11 @@ impl RuntimeSessionService {
                 || (self.parent_has_pending_joined_tasks(turn_id)
                     && runtime_execution_ready_for_provider_continuation(&execution)
                     && !self.joined_coordination_batch_continues(turn_id, &execution));
-            if waiting_for_peer_message || waiting_for_joined_subagents {
+            let waiting_for_message_storage = self.message_completion_pending(turn_id);
+            if waiting_for_peer_message
+                || waiting_for_joined_subagents
+                || waiting_for_message_storage
+            {
                 if waiting_for_joined_subagents {
                     self.retain_joined_parent_execution(turn, &execution)?;
                 }
@@ -316,6 +320,8 @@ impl RuntimeSessionService {
                     turn_id,
                     if waiting_for_peer_message {
                         "scheduler running -> waiting reason=peer_message_wait capacity=released"
+                    } else if waiting_for_message_storage {
+                        "scheduler running -> waiting reason=message_storage capacity=released"
                     } else {
                         "scheduler running -> waiting reason=waiting_for_subagents capacity=released"
                     },
@@ -326,6 +332,8 @@ impl RuntimeSessionService {
                     turn_id,
                     if waiting_for_peer_message {
                         "provider_task removed reason=peer_message_wait"
+                    } else if waiting_for_message_storage {
+                        "provider_task removed reason=message_storage"
                     } else {
                         "provider_task removed reason=waiting_for_subagents"
                     },

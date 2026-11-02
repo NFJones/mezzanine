@@ -37,7 +37,7 @@ pub use service::{
     MessageAcknowledgementAttempt, MessageAcknowledgementCommit, MessageAcknowledgementEntry,
     MessageAcknowledgementJoin, MessageAcknowledgementStore, MessageAcknowledgementTicket,
     MessageAcknowledgementUncertain, MessageAcknowledgementWrite,
-    MessageAcknowledgementWriteOutcome, MessageStorageScope,
+    MessageAcknowledgementWriteOutcome, MessageSenderRegistration, MessageStorageScope,
 };
 pub use types::{
     AgentPresenceStatus, Delivery, DeliveryBatch, DeliveryCursor, DeliveryStatus, Envelope,

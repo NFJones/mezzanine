@@ -9,16 +9,7 @@
 
 use super::*;
 
-/// Actual existing canonical backing selected before writing any result facts.
-#[derive(Clone, Copy)]
-enum Source {
-    /// Original execution/context remain in the active canonical maps.
-    Live,
-    /// Forced retirement moved actual original backing into its group.
-    Failed,
-    /// Original correction execution is retained under the same group.
-    Correction,
-}
+use super::super::original::CompletionExecutionSource as Source;
 
 impl RuntimeSessionService {
     /// Commits original facts/context and advances non-executable hook, audit
@@ -226,40 +217,7 @@ impl RuntimeSessionService {
         &self,
         work: &NativeFilesystemWork,
     ) -> Result<(Source, AgentTurnExecution)> {
-        let group = self
-            .agent
-            .completion_settlements
-            .groups
-            .get(&work.owner.turn.turn_id)
-            .filter(|group| group.group == work.owner.group)
-            .ok_or_else(|| {
-                MezError::invalid_state("filesystem original completion group changed")
-            })?;
-        let (source, execution) = if let Some(backing) = &group.failed_backing {
-            (Source::Failed, backing.execution.as_ref())
-        } else if let retirement::CompletionCapture::Captured(execution) =
-            &group.correction_execution
-        {
-            (Source::Correction, execution.as_ref())
-        } else {
-            (
-                Source::Live,
-                self.agent_turn_executions().get(&work.owner.turn.turn_id),
-            )
-        };
-        let execution = execution.ok_or_else(|| {
-            MezError::invalid_state("filesystem original execution backing unavailable")
-        })?;
-        if super::super::super::provider_execution::provider_log_execution_group_id(execution)?
-            != work.owner.group
-            || execution.request.turn_id != work.owner.turn.turn_id
-            || execution.request.agent_id != work.owner.turn.agent_id
-        {
-            return Err(MezError::conflict(
-                "filesystem latest execution is not its original source",
-            ));
-        }
-        Ok((source, execution.clone()))
+        self.completion_original_execution(&work.owner.turn, &work.owner.group)
     }
 
     /// Writes back to the same selected owner without swapping the latest view.
@@ -269,37 +227,7 @@ impl RuntimeSessionService {
         source: Source,
         execution: AgentTurnExecution,
     ) -> Result<()> {
-        match source {
-            Source::Live => {
-                self.agent_turn_executions_mut()
-                    .insert(turn_id.to_owned(), execution);
-            }
-            Source::Failed => {
-                let backing = self
-                    .agent
-                    .completion_settlements
-                    .groups
-                    .get_mut(turn_id)
-                    .and_then(|group| group.failed_backing.as_mut())
-                    .ok_or_else(|| {
-                        MezError::invalid_state("filesystem failed backing disappeared")
-                    })?;
-                backing.execution = retirement::CompletionCapture::Captured(Some(execution));
-            }
-            Source::Correction => {
-                let group = self
-                    .agent
-                    .completion_settlements
-                    .groups
-                    .get_mut(turn_id)
-                    .ok_or_else(|| {
-                        MezError::invalid_state("filesystem correction backing disappeared")
-                    })?;
-                group.correction_execution =
-                    retirement::CompletionCapture::Captured(Some(execution));
-            }
-        }
-        Ok(())
+        self.store_completion_original_execution(turn_id, source, execution)
     }
 
     /// Commits exact original group chronology and original provider-native calls.
@@ -309,54 +237,12 @@ impl RuntimeSessionService {
         source: Source,
         result: &ActionResult,
     ) -> Result<()> {
-        if matches!(source, Source::Live | Source::Correction) {
-            if self
-                .agent
-                .agent_execution_groups_by_turn
-                .get(&work.owner.turn.turn_id)
-                .and_then(|groups| groups.get(&work.owner.action.id))
-                != Some(&work.owner.group)
-            {
-                return Err(MezError::conflict(
-                    "filesystem original context group binding changed",
-                ));
-            }
-            return self.append_action_result_context_if_absent(&work.owner.turn.turn_id, result);
-        }
-        let group = self
-            .agent
-            .completion_settlements
-            .groups
-            .get_mut(&work.owner.turn.turn_id)
-            .ok_or_else(|| {
-                MezError::invalid_state("filesystem original context group unavailable")
-            })?;
-        let action_ids = group
-            .actions
-            .iter()
-            .map(|(id, _, _)| id.clone())
-            .collect::<Vec<_>>();
-        let context = group
-            .failed_backing
-            .as_mut()
-            .and_then(|backing| match &mut backing.context {
-                retirement::CompletionCapture::Captured(context) => context.as_mut(),
-                retirement::CompletionCapture::NotCaptured => None,
-            })
-            .ok_or_else(|| {
-                MezError::invalid_state("filesystem original captured context unavailable")
-            })?;
-        context
-            .commit_settled_action_results_in_group(
-                std::slice::from_ref(result),
-                work.owner.group.clone(),
-            )
-            .map_err(|error| MezError::invalid_state(error.to_string()))?;
-        super::super::super::outcome::append_provider_tool_results_in_group(
-            context,
+        self.commit_completion_original_context(
+            &work.owner.turn.turn_id,
             &work.owner.group,
-            &action_ids,
-            &group.provider_calls,
+            &work.owner.action.id,
+            source,
+            result,
         )
     }
 }

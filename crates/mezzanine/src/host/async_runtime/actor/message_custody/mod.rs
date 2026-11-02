@@ -18,9 +18,10 @@ use std::future::{Future, pending};
 use futures_util::FutureExt;
 use mez_agent::messaging::{DeliveryCursor, FanoutBatch, MessageError};
 
+mod actions;
 mod native;
 mod raw;
-use crate::runtime::RuntimePreparedTrackedMessage;
+use crate::runtime::{RuntimeMessageActionAdmission, RuntimePreparedTrackedMessage};
 use raw::RawCompletion;
 pub(super) use raw::RawMessageContinuation;
 use tokio::sync::oneshot;
@@ -45,6 +46,8 @@ enum Wake {
 
 /// Content-free callback from the root owned by this actor allocation.
 pub(super) enum CustodyEvent {
+    /// Bounded source-admission wake; no physical or canonical completion proof.
+    AdmissionReady,
     /// Actual joined disposition, still requiring canonical lower adoption.
     Observed(Result<CustodyWorkerStatus>),
     /// Original job's backoff expired; no new admission may replace it.
@@ -53,6 +56,8 @@ pub(super) enum CustodyEvent {
 
 /// Original actor continuation paired with the root's one exclusive job.
 enum Pending {
+    /// Original native action permission/group and exact lower admission.
+    Action(RuntimeMessageActionAdmission),
     /// Full raw body is already in the charged lower reservation, not this owner.
     Acceptance(RawMessageContinuation),
     /// Original tracked native metadata remains in the runtime request owner.
@@ -114,6 +119,7 @@ impl AsyncRuntimeSessionActor {
         if self.message_custody.is_some() {
             return Err(MezError::conflict("MMP custody root already registered"));
         }
+        self.service.enable_stored_message_actions()?;
         self.message_custody = Some(Box::new(ActorMessageCustody {
             root,
             wake: Some(Wake::Observe),
@@ -138,12 +144,24 @@ impl AsyncRuntimeSessionActor {
             .message_custody
             .as_ref()
             .and_then(|owner| owner.wake.map(|wake| (owner.root.clone(), wake)));
+        let sources_ready = self.message_custody.as_ref().is_some_and(|owner| {
+            owner.pending.is_none()
+                && owner.wake.is_none()
+                && owner.failure.is_none()
+                && owner.shutdown.is_none()
+        }) && !self.service.pending_stored_message_actions().is_empty();
+        let continuation_wait = self.service.stored_message_continuation_needs_wake();
         async move {
             match next {
                 Some((root, Wake::Observe)) => CustodyEvent::Observed(root.observe().await),
                 Some((_, Wake::Retry(at))) => {
                     tokio::time::sleep_until(at).await;
                     CustodyEvent::Retry
+                }
+                None if sources_ready => CustodyEvent::AdmissionReady,
+                None if continuation_wait => {
+                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                    CustodyEvent::AdmissionReady
                 }
                 None => pending().await,
             }
@@ -156,6 +174,7 @@ impl AsyncRuntimeSessionActor {
         if let Some(event) = self.message_custody_wakeup().now_or_never() {
             self.apply_message_custody_event(event);
         }
+        self.pump_stored_message_actions();
         let ready = self.message_custody.as_ref().is_some_and(|owner| {
             owner.shutdown.is_some() && owner.pending.is_none() && owner.wake.is_none()
         });
@@ -182,8 +201,24 @@ impl AsyncRuntimeSessionActor {
         let mut completion = None;
         let mut native_adopted = false;
         let result = match event {
+            CustodyEvent::AdmissionReady => Ok(()),
             CustodyEvent::Observed(Ok(CustodyWorkerStatus::Idle)) => {
-                if let Some(Pending::Native { ticket, .. }) = &owner.pending {
+                if let Some(Pending::Action(admission)) = &owner.pending {
+                    let source = admission.source().clone();
+                    self.service
+                        .adopt_stored_message_action(admission, |_, _| {
+                            Err(MezError::invalid_state(
+                                "original message has no published acceptance",
+                            ))
+                        })
+                        .and_then(|_| self.service.project_stored_message_action(&source))
+                        .map(|_| {
+                            owner.pending.take();
+                            owner.failure = None;
+                            owner.wake = None;
+                            native_adopted = true;
+                        })
+                } else if let Some(Pending::Native { ticket, .. }) = &owner.pending {
                     let ticket = ticket.clone();
                     self.service
                         .adopt_prepared_tracked_runtime_message(&ticket, |_, _| {
@@ -213,7 +248,20 @@ impl AsyncRuntimeSessionActor {
                 Ok(())
             }
             CustodyEvent::Observed(Ok(CustodyWorkerStatus::AwaitingAdoption)) => {
-                if matches!(&owner.pending, Some(Pending::Acceptance(_))) {
+                if let Some(Pending::Action(admission)) = &owner.pending {
+                    let source = admission.source().clone();
+                    self.service
+                        .adopt_stored_message_action(admission, |messages, requests| {
+                            owner.root.adopt(messages, requests)
+                        })
+                        .and_then(|_| self.service.project_stored_message_action(&source))
+                        .map(|_| {
+                            owner.pending.take();
+                            owner.failure = None;
+                            owner.wake = None;
+                            native_adopted = true;
+                        })
+                } else if matches!(&owner.pending, Some(Pending::Acceptance(_))) {
                     owner
                         .root
                         .adopt(self.service.message_service_mut(), None)
@@ -245,7 +293,19 @@ impl AsyncRuntimeSessionActor {
                 }
             }
             CustodyEvent::Observed(Ok(CustodyWorkerStatus::AwaitingRefusal)) => {
-                if matches!(&owner.pending, Some(Pending::Acceptance(_))) {
+                if let Some(Pending::Action(admission)) = &owner.pending {
+                    let source = admission.source().clone();
+                    self.service
+                        .refuse_stored_message_action(admission, |messages, requests| {
+                            owner.root.release_rejected(messages, requests)
+                        })
+                        .and_then(|()| self.service.project_stored_message_action(&source))
+                        .map(|_| {
+                            owner.pending.take();
+                            owner.failure = None;
+                            owner.wake = None;
+                        })
+                } else if matches!(&owner.pending, Some(Pending::Acceptance(_))) {
                     owner
                         .root
                         .release_rejected(self.service.message_service_mut(), None)
@@ -312,7 +372,7 @@ impl AsyncRuntimeSessionActor {
             CustodyEvent::Observed(Ok(CustodyWorkerStatus::RetryAt(at)))
                 if matches!(
                     &owner.pending,
-                    Some(Pending::Acceptance(_) | Pending::Native { .. })
+                    Some(Pending::Acceptance(_) | Pending::Native { .. } | Pending::Action(_))
                 ) =>
             {
                 owner.wake = Some(Wake::Retry(at));
@@ -330,6 +390,16 @@ impl AsyncRuntimeSessionActor {
                 "MMP retry has no matching original actor continuation",
             )),
             CustodyEvent::Retry => match owner.pending {
+                Some(Pending::Action(ref admission)) => self
+                    .service
+                    .retry_stored_message_action(admission, |messages| {
+                        if owner.shutdown.is_some() {
+                            owner.root.recover_failed_stage(messages, Instant::now())
+                        } else {
+                            owner.root.retry(messages, Instant::now())
+                        }
+                    })
+                    .map(|_| owner.wake = Some(Wake::Observe)),
                 Some(Pending::Native { ref ticket, .. }) => self
                     .service
                     .validate_prepared_tracked_runtime_message(ticket)
@@ -363,12 +433,27 @@ impl AsyncRuntimeSessionActor {
             }
         };
         if let Err(error) = result {
+            let source_owned = match &owner.pending {
+                Some(Pending::Action(admission)) => self
+                    .service
+                    .stored_message_action_outcome_is_owned(admission.source()),
+                _ => false,
+            };
             owner.failure = Some(error);
-            owner.wake = Some(Wake::Retry(
-                Instant::now() + std::time::Duration::from_secs(1),
-            ));
+            if source_owned {
+                // Actual root settlement already transferred outcome custody to
+                // the original completion owner. A required projection failure
+                // is returned at shutdown, never retried as physical storage.
+                owner.pending.take();
+                owner.wake = None;
+            } else {
+                owner.wake = Some(Wake::Retry(
+                    Instant::now() + std::time::Duration::from_secs(1),
+                ));
+            }
         }
         if native_adopted {
+            self.deliver_stored_message_action_input();
             self.notify_message_delivery();
         }
         if let Some((raw, result)) = completion {
@@ -448,7 +533,11 @@ impl AsyncRuntimeSessionActor {
         &mut self,
         reply: oneshot::Sender<Result<RuntimeLifecycleState>>,
     ) -> bool {
+        let message_stop = self.service.stop_stored_message_actions();
         if let Some(owner) = self.message_custody.as_mut() {
+            if let Err(error) = message_stop {
+                owner.failure.get_or_insert(error);
+            }
             owner.root.request_stop();
             self.sender.close();
             if owner.shutdown.is_some() {

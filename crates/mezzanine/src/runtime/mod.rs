@@ -224,7 +224,8 @@ pub struct RuntimeSessionService {
 /// declaration makes the boundary available to the crate.
 mod agent;
 pub(crate) use agent::{
-    RuntimeAgentComponent, RuntimePowerInhibitionStatus, RuntimePreparedTrackedMessage,
+    RuntimeAgentComponent, RuntimeMessageActionAdmission, RuntimePowerInhibitionStatus,
+    RuntimePreparedTrackedMessage,
 };
 /// Exposes runtime agent provider dispatch and loop state records.
 ///

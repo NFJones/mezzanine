@@ -992,18 +992,32 @@ impl RuntimeSessionService {
                 .ok_or_else(|| {
                     MezError::invalid_state("running message result does not match an action")
                 })?;
+            if self.stored_message_actions_enabled() {
+                self.agent_turn_executions_mut()
+                    .insert(turn.turn_id.clone(), execution.clone());
+            }
+            let expected = execution.clone();
             let outcome = self.execute_message_action_for_turn(turn, index, &action)?;
             execution.action_results[index] = outcome.result;
+            if self.stored_message_actions_enabled() {
+                self.adopt_completion_canonical_transition(turn, &expected, execution)?;
+            }
             executed = executed.saturating_add(1);
             if let Some(error) = outcome.post_accept_error {
                 return Err(error);
             }
         }
-        self.admit_request_wait_actions(turn, execution)?;
+        let expected = execution.clone();
+        if !self.message_completion_pending(&turn.turn_id) {
+            self.admit_request_wait_actions(turn, execution)?;
+        }
         execution.terminal_state = runtime_agent_turn_state_from_action_results(
             &execution.action_results,
             execution.final_turn,
         );
+        if self.stored_message_actions_enabled() {
+            self.adopt_completion_canonical_transition(turn, &expected, execution)?;
+        }
         self.finalize_settled_outbound_message_previews(&turn.pane_id, &turn.turn_id, execution)?;
         Ok(executed)
     }
@@ -1018,6 +1032,33 @@ impl RuntimeSessionService {
         turn: &AgentTurnRecord,
         action_index: usize,
         action: &AgentAction,
+    ) -> Result<RuntimeMessageActionOutcome> {
+        self.execute_message_action_for_turn_authorized(turn, action_index, action, None)
+    }
+
+    /// Uses the original approval only after the caller validates its full digest.
+    pub(super) fn execute_approved_message_action_for_turn(
+        &mut self,
+        turn: &AgentTurnRecord,
+        action_index: usize,
+        action: &AgentAction,
+        approval_id: &str,
+    ) -> Result<RuntimeMessageActionOutcome> {
+        self.execute_message_action_for_turn_authorized(
+            turn,
+            action_index,
+            action,
+            Some(approval_id),
+        )
+    }
+
+    /// Preserves authorization source while common semantic validation runs.
+    fn execute_message_action_for_turn_authorized(
+        &mut self,
+        turn: &AgentTurnRecord,
+        action_index: usize,
+        action: &AgentAction,
+        approval_id: Option<&str>,
     ) -> Result<RuntimeMessageActionOutcome> {
         let AgentActionPayload::SendMessage {
             recipient,
@@ -1093,7 +1134,6 @@ impl RuntimeSessionService {
             Self::runtime_message_result_with_scope(&mut result, recipient, scope);
             return Ok(result.into());
         }
-        let sender = self.runtime_message_sender_identity(turn)?;
         let recipient_target = match runtime_message_recipient(recipient) {
             Ok(target) => target,
             Err(error) => {
@@ -1121,6 +1161,12 @@ impl RuntimeSessionService {
                 return Ok(result.into());
             }
         };
+        if self.stored_message_actions_enabled() {
+            return self
+                .queue_stored_message_action(turn, action_index, action, approval_id)
+                .map(Into::into);
+        }
+        let sender = self.runtime_message_sender_identity(turn)?;
         let message_id = format!("{}:{}", turn.turn_id, action.id);
         let now_ms = current_unix_seconds().saturating_mul(1000);
         let envelope = Envelope {

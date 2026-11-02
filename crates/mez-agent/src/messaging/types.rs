@@ -716,6 +716,8 @@ pub struct MessageService {
     /// Nonserializable identity of this live owner. Retained acceptance proofs
     /// cannot authenticate against another service or snapshot restoration.
     pub(super) acceptance_runtime: Arc<()>,
+    /// One nonserializable identity per currently live registration allocation.
+    pub(super) registration_tokens: HashMap<AgentId, Arc<()>>,
     /// Restored history is not a live acceptance event in this runtime.
     pub(super) acceptance_history_through: MessageSequence,
     /// Stores the ids value for this data structure.

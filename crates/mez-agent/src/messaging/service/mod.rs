@@ -61,6 +61,7 @@ pub use admission::{
 mod discovery;
 pub use acceptance_proof::{MessageAcceptanceProof, MessageAcceptanceReservation};
 mod identity;
+pub use identity::MessageSenderRegistration;
 mod recipient_binding;
 mod sender_provenance;
 mod snapshot;
@@ -80,8 +81,8 @@ mod terminal_outcomes;
 
 /// Compares immutable sender provenance without conflating mutable objective
 /// telemetry with project membership, native association or capability identity.
-/// This is used only for explicit fresh provenance construction/validation;
-/// ordinary registered and reusable snapshot comparisons remain exact.
+/// This also detects live authority changes that invalidate unissued source
+/// tokens; ordinary registered and reusable snapshot comparisons remain exact.
 fn same_immutable_sender(left: &SenderIdentity, right: &SenderIdentity) -> bool {
     left.agent_id == right.agent_id
         && left.project_scope == right.project_scope
@@ -113,6 +114,7 @@ impl MessageService {
             admission: None,
             acknowledgement: None,
             acceptance_runtime: Arc::new(()),
+            registration_tokens: HashMap::new(),
             acceptance_history_through: 0,
             ids: IdFactory::default(),
             registered: HashMap::new(),
@@ -352,6 +354,7 @@ impl MessageService {
         let original_floor = self.registration_floors.get(agent_id).copied();
         self.mark_admission_sender_retired(agent_id, false, original_floor);
         let identity = self.registered.remove(agent_id);
+        self.registration_tokens.remove(agent_id);
         self.registration_floors.remove(agent_id);
         self.presence.remove(agent_id);
         self.subscriptions.remove(agent_id);

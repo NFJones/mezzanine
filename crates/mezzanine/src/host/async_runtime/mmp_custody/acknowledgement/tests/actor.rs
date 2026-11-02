@@ -172,26 +172,47 @@ async fn actor_drains_original_ack_after_storage_failure_and_shutdown_observer_l
         )
         .unwrap();
     let runner = tokio::spawn(actor.run());
+    // Let the actor consume its initial root observation before another
+    // observer can compete for that same serialized root lane.
+    handle.lifecycle_state().await.unwrap();
     let sender = handle.clone();
-    let caller = tokio::spawn(async move { sender.acknowledge_message_fanout(batch).await });
-    loop {
-        if matches!(
-            root.observe().await.unwrap(),
-            CustodyWorkerStatus::AcknowledgementRetryAt(_)
-        ) {
-            break;
+    let mut caller = tokio::spawn(async move { sender.acknowledge_message_fanout(batch).await });
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        tokio::select! {
+            _ = fixture.probe.started.notified() => {}
+            result = &mut caller => panic!("ACK returned before physical worker entry: {result:?}"),
         }
-        tokio::task::yield_now().await;
-    }
+        loop {
+            if matches!(
+                root.observe().await.unwrap(),
+                CustodyWorkerStatus::AcknowledgementRetryAt(_)
+            ) {
+                break;
+            }
+            if caller.is_finished() {
+                panic!(
+                    "ACK returned before physical refusal: {:?}",
+                    (&mut caller).await
+                );
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("original ACK did not reach its joined physical refusal");
     assert_eq!(fixture.disk(), original);
     assert!(!caller.is_finished());
     caller.abort();
     assert!(caller.await.unwrap_err().is_cancelled());
     let shutdown_handle = handle.clone();
     let shutdown = tokio::spawn(async move { shutdown_handle.shutdown().await });
-    while !handle.sender.closed.load(Ordering::Acquire) {
-        tokio::task::yield_now().await;
-    }
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        while !handle.sender.closed.load(Ordering::Acquire) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("shutdown did not fence ingress");
     shutdown.abort();
     assert!(shutdown.await.unwrap_err().is_cancelled());
     assert!(!runner.is_finished());
@@ -199,7 +220,10 @@ async fn actor_drains_original_ack_after_storage_failure_and_shutdown_observer_l
         .connection()
         .execute_batch("DROP TRIGGER fail_ack;")
         .unwrap();
-    let exited = runner.await.unwrap();
+    let exited = tokio::time::timeout(std::time::Duration::from_secs(10), runner)
+        .await
+        .expect("original ACK did not drain after storage recovery")
+        .unwrap();
     assert_eq!(
         exited
             .service

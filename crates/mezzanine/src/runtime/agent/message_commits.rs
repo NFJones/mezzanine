@@ -186,6 +186,11 @@ impl RuntimeSessionService {
     /// still owes settlement. A cancelled observer or missing current receipt is
     /// insufficient evidence; this preflight changes no identity or pane state.
     pub(crate) fn ensure_runtime_message_transfers_settled_for_restore(&self) -> Result<()> {
+        if self.has_pending_stored_message_actions() {
+            return Err(MezError::conflict(
+                "original message action storage/result custody pending",
+            ));
+        }
         self.ensure_no_prepared_tracked_message_for_restore()?;
         let messages = self.control.message_service();
         if messages.has_unpublished_acceptance() || messages.has_unpublished_acknowledgement() {

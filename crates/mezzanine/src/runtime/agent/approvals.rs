@@ -763,7 +763,21 @@ impl RuntimeSessionService {
             // the frozen native request as approval for executable shell work.
             self.retain_native_filesystem_approval(&turn, &action, &execution, approval_id)?;
         }
-        if turn.state == AgentTurnState::Blocked {
+        let stored_message_approval = self.stored_message_actions_enabled()
+            && match &action.payload {
+                AgentActionPayload::SendMessage {
+                    recipient,
+                    content_type,
+                    ..
+                } => self
+                    .macro_managed_message_target(
+                        recipient,
+                        &super::runtime_maap_message_content_type(content_type),
+                    )
+                    .is_none(),
+                _ => false,
+            };
+        if turn.state == AgentTurnState::Blocked && !stored_message_approval {
             self.agent.agent_scheduler.requeue_blocked(&turn.turn_id)?;
             self.append_agent_trace_turn_event(
                 &turn.pane_id,
@@ -1064,6 +1078,44 @@ impl RuntimeSessionService {
                 // evidence instead of deleting the last accepted result.
                 let group = super::provider_execution::provider_log_execution_group_id(&execution)?;
                 self.reserve_completion_group(&turn.turn_id, &group)?;
+                if stored_message_approval {
+                    // Original decision/body/group are retained before either
+                    // storage or provider capacity can defer this operation.
+                    let expected = execution.clone();
+                    let outcome = self.execute_approved_message_action_for_turn(
+                        &turn,
+                        result_index,
+                        &action,
+                        approval_id,
+                    )?;
+                    execution.action_results[result_index] = outcome.result;
+                    execution.terminal_state = runtime_agent_turn_state_from_action_results(
+                        &execution.action_results,
+                        execution.final_turn,
+                    );
+                    self.adopt_completion_canonical_transition(&turn, &expected, &execution)?;
+                    self.agent.blocked_agent_approval_refs.remove(approval_id);
+                    if execution.action_results[result_index].is_terminal() {
+                        self.append_action_result_context_if_absent(
+                            &turn.turn_id,
+                            &execution.action_results[result_index],
+                        )?;
+                    }
+                    if !self.message_completion_pending(&turn.turn_id) {
+                        self.retain_completion_settlement_intent(
+                            &turn.turn_id,
+                            if execution.terminal_state == AgentTurnState::Failed {
+                                super::completion::CompletionSettlementIntent::Failure
+                            } else {
+                                super::completion::CompletionSettlementIntent::Ordinary
+                            },
+                        );
+                        self.retain_stored_message_continuation(&turn.turn_id)?;
+                    }
+                    self.queue_ordered_provider_header(&turn.pane_id, &execution, &action)?;
+                    self.flush_ordered_provider_headers(&turn.pane_id, &execution)?;
+                    return Ok(Some(1));
+                }
                 if !self.queue_ordered_provider_header(&turn.pane_id, &execution, &action)? {
                     self.append_agent_status_text_to_terminal_buffer(
                         &turn.pane_id,
@@ -1074,7 +1126,12 @@ impl RuntimeSessionService {
                         ),
                     )?;
                 }
-                let outcome = self.execute_message_action_for_turn(&turn, result_index, &action)?;
+                let outcome = self.execute_approved_message_action_for_turn(
+                    &turn,
+                    result_index,
+                    &action,
+                    approval_id,
+                )?;
                 execution.action_results[result_index] = outcome.result;
                 // Own the authoritative result before any subsequent fallible
                 // publication or continuation. Cleanup must never recover the

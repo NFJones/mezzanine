@@ -11,6 +11,21 @@ use super::{
 };
 
 impl RuntimeSessionService {
+    /// Identifies this adapter's exact managed-child route without executing it.
+    /// Permission/source owners use the same predicate before choosing their
+    /// dispatch domain; a match grants no child, send or task authority.
+    pub(in crate::runtime::agent) fn macro_managed_message_target(
+        &self,
+        recipient: &str,
+        content_type: &str,
+    ) -> Option<String> {
+        if content_type != "text/plain; charset=utf-8" {
+            return None;
+        }
+        macro_message_recipient_agent_id(recipient)
+            .filter(|id| self.agent.macro_managed_subagent_agents.contains_key(id))
+    }
+
     /// Starts a normal child agent-shell turn for a macro step message.
     ///
     /// The bridge is intentionally limited to macro-managed child agents and
@@ -37,10 +52,8 @@ impl RuntimeSessionService {
         payload: &str,
     ) -> Result<Option<ActionResult>> {
         let _ = scope;
-        if content_type != "text/plain; charset=utf-8" {
-            return Ok(None);
-        }
-        let Some(child_agent_id) = macro_message_recipient_agent_id(recipient) else {
+        let Some(child_agent_id) = self.macro_managed_message_target(recipient, content_type)
+        else {
             return Ok(None);
         };
         let Some(macro_owner) = self

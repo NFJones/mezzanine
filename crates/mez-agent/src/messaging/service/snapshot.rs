@@ -355,6 +355,10 @@ impl MessageService {
                 .chain(bound_recipient_ids)
                 .chain(recipient_ids),
         );
+        let registration_tokens = registered
+            .keys()
+            .map(|id| (id.clone(), Arc::new(())))
+            .collect();
         let mut service = Self {
             admission: None,
             acknowledgement: None,
@@ -387,6 +391,7 @@ impl MessageService {
             fanout_after_recipient: None,
             fanout_diagnostics: MessageFanoutDiagnostics::default(),
             acceptance_runtime: Arc::new(()),
+            registration_tokens,
             acceptance_history_through: snapshot.next_sequence - 1,
             next_sequence: snapshot.next_sequence,
             retention_messages: snapshot.retention_messages,

@@ -17,6 +17,11 @@
 use super::*;
 use std::fmt;
 
+mod messages;
+mod original;
+pub(crate) use messages::RuntimeMessageActionAdmission;
+#[cfg(test)]
+pub(crate) use messages::RuntimeMessageActionSource;
 mod retirement;
 use retirement::CompletionGroup;
 pub(in crate::runtime) use retirement::CompletionScope;
@@ -134,6 +139,16 @@ impl fmt::Debug for ExternalCompletionReceipt {
 /// Receipts belong to existing admitted active execution slots, not history.
 #[derive(Default)]
 pub(super) struct RuntimeCompletionSettlements {
+    /// Internal actor root enables original native message-source deferral.
+    message_storage_enabled: bool,
+    /// Shutdown fences fresh semantic sources without revoking issued custody.
+    message_storage_stopping: bool,
+    /// FIFO allocation for bounded native source admission.
+    next_message_source: u64,
+    /// Actual original group identities awaiting fair scheduler re-admission.
+    message_continuations: BTreeMap<String, std::sync::Arc<()>>,
+    /// Exact original message sources share group lifetime and failed backing.
+    messages: BTreeMap<(String, String), Box<messages::MessageCompletionReceipt>>,
     external: BTreeMap<ExternalCompletionKey, Box<ExternalCompletionReceipt>>,
     native: BTreeMap<NativeCompletionKey, Box<NativeCompletionReceipt>>,
     /// Filesystem-native receipts share original group gates without shell facts.
@@ -170,6 +185,7 @@ impl fmt::Debug for RuntimeCompletionSettlements {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("RuntimeCompletionSettlements")
+            .field("messages", &self.messages)
             .field("external", &self.external)
             .field("native", &self.native)
             .field("filesystem", &self.filesystem)

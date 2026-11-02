@@ -243,6 +243,9 @@ mod outcome;
 mod presentation;
 mod presentation_occurrence;
 mod request_waits;
+pub(crate) use completion::RuntimeMessageActionAdmission;
+#[cfg(test)]
+pub(crate) use completion::RuntimeMessageActionSource;
 pub(crate) use presentation::RuntimeProviderLogInput;
 pub(crate) use request_waits::RuntimePreparedTrackedMessage;
 mod project_accounting;

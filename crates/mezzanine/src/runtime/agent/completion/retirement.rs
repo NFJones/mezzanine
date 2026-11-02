@@ -1588,6 +1588,15 @@ impl RuntimeSessionService {
         {
             return Ok(());
         }
+        if let Err(error) = self.cancel_queued_stored_message_actions(Some(&turn.turn_id)) {
+            self.record_completion_required_failure(
+                &turn.turn_id,
+                "message_queued_retirement",
+                None,
+                None,
+                &error,
+            );
+        }
         if let Err(error) = self.retain_interrupted_worker_effects(turn) {
             self.record_completion_required_failure(
                 &turn.turn_id,
@@ -1597,7 +1606,8 @@ impl RuntimeSessionService {
                 &error,
             );
         }
-        let raw_pending = self.filesystem_completion_issued_pending(&turn.turn_id)
+        let raw_pending = self.message_completion_issued_pending(&turn.turn_id)
+            || self.filesystem_completion_issued_pending(&turn.turn_id)
             || self
                 .agent
                 .completion_settlements
@@ -1722,7 +1732,8 @@ impl RuntimeSessionService {
             return self.finalize_completion_provider_refusal(turn, execution, reason);
         }
         self.ensure_completion_required_gates_ready(&turn.turn_id)?;
-        let publication_pending = self.filesystem_completion_pending(&turn.turn_id)
+        let publication_pending = self.message_completion_pending(&turn.turn_id)
+            || self.filesystem_completion_pending(&turn.turn_id)
             || self
                 .agent
                 .completion_settlements
@@ -1913,7 +1924,8 @@ impl RuntimeSessionService {
             }
             CompletionTranscriptTarget::NoPersistencePolicy(_) => true,
         };
-        let raw_pending = self.filesystem_completion_pending(turn_id)
+        let raw_pending = self.message_completion_pending(turn_id)
+            || self.filesystem_completion_pending(turn_id)
             || self
                 .agent
                 .completion_settlements
@@ -1986,7 +1998,8 @@ impl RuntimeSessionService {
         let Some(group) = self.agent.completion_settlements.groups.get(turn_id) else {
             return;
         };
-        if self.filesystem_completion_pending(turn_id)
+        if self.message_completion_pending(turn_id)
+            || self.filesystem_completion_pending(turn_id)
             || group.scope.is_some()
             || group.primary_failure.is_some()
             || group.failed_backing.is_some()
@@ -1996,6 +2009,12 @@ impl RuntimeSessionService {
             return;
         }
         let group_id = group.group.clone();
+        self.agent
+            .completion_settlements
+            .messages
+            .retain(|_, receipt| {
+                receipt.owner.turn_id != turn_id || receipt.owner.group != group_id
+            });
         self.agent
             .completion_settlements
             .external
