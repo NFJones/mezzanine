@@ -41,6 +41,14 @@ use super::validation::{
     validate_sender_identity,
 };
 
+mod acknowledgement;
+pub(super) use acknowledgement::PendingAcknowledgement;
+pub use acknowledgement::{
+    MessageAcknowledgementAttempt, MessageAcknowledgementCommit, MessageAcknowledgementEntry,
+    MessageAcknowledgementJoin, MessageAcknowledgementStore, MessageAcknowledgementTicket,
+    MessageAcknowledgementUncertain, MessageAcknowledgementWrite,
+    MessageAcknowledgementWriteOutcome,
+};
 mod acceptance_proof;
 mod admission;
 pub(super) use admission::PendingMessageAdmission;
@@ -103,6 +111,7 @@ impl MessageService {
     pub fn with_limits(retention_messages: usize, retention_bytes: usize) -> Self {
         Self {
             admission: None,
+            acknowledgement: None,
             acceptance_runtime: Arc::new(()),
             acceptance_history_through: 0,
             ids: IdFactory::default(),
@@ -408,6 +417,16 @@ impl MessageService {
         if sequence <= cursor.last_sequence {
             return Ok(cursor.clone());
         }
+        if self
+            .acknowledgement
+            .as_ref()
+            .is_some_and(|pending| pending.recipient() == recipient)
+        {
+            return Err(MessageError::new(
+                MessageErrorKind::Capacity,
+                "MMP acknowledgement already reserved",
+            ));
+        }
         let after = cursor.last_sequence;
         self.validate_delivery_ack(recipient, after, sequence)?;
         self.commit_pending_ack(recipient, after, sequence)?;
@@ -426,7 +445,9 @@ impl MessageService {
     pub fn receive_for(&self, recipient: &AgentId, now_ms: u64) -> Vec<Envelope> {
         self.queue
             .iter()
-            .filter(|queued| !expired(queued, now_ms))
+            .filter(|queued| {
+                !expired(queued, now_ms) && !self.acknowledgement_excludes(queued.sequence)
+            })
             .filter(|queued| {
                 self.registered.get(recipient).is_some_and(|identity| {
                     self.recipient_is_available(&identity.agent_id)

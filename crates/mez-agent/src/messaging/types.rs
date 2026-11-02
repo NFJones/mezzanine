@@ -708,6 +708,8 @@ pub(super) struct RetiredDeliveryFloor {
 pub struct MessageService {
     /// Charged unpublished occurrence, excluded from every delivery projection.
     pub(super) admission: Option<super::service::PendingMessageAdmission>,
+    /// Charged frozen ACK prefix; payload stays in the canonical pending owner.
+    pub(super) acknowledgement: Option<super::service::PendingAcknowledgement>,
 
     /// Nonserializable identity of this live owner. Retained acceptance proofs
     /// cannot authenticate against another service or snapshot restoration.

@@ -98,6 +98,7 @@ impl MessageService {
             };
             let message_bytes = queued.envelope.payload.len();
             if !expired(queued, now_ms)
+                && !self.acknowledgement_excludes(queued.sequence)
                 && !self.recipient_is_terminal(queued, &identity.agent_id)
                 && !filter.native_commits.is_some_and(|excluded| {
                     excluded.contains(&(identity.agent_id.clone(), queued.sequence))

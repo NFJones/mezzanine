@@ -517,6 +517,24 @@ bounded metadata tombstone stays charged, and later compaction must preserve
 allocator/terminal history. Reusing the existing header cell supports cleanup at
 the database page ceiling; total physical/quota qualification remains unfinished.
 
+The lower storage-qualified ACK path reserves the original recipient interval,
+offered cumulative prefix and endpoint clock without advancing the cursor. It
+protects pending slots from same-recipient bypass and conflicting terminal work;
+expiry exclusions prevent new rollback offers while unresolved. The linear worker
+shares charged canonical sources, hashes their original acceptance encoding off
+actor, and drops those references before returning a payload-free positive fact.
+The version1 `MMPACK01` binary record uses little-endian fixed fields: original and
+endpoint sequences, registration floor, offer clock, recipient length and entry
+count, followed by recipient bytes and45-byte entries (sequence, binding index,
+decision byte, source SHA256). Encoding is bounded below one256KiB transaction.
+The private store verifies complete original source chunks/checksums/hash before
+committing or reconciling exact ACK bytes. Missing, changed, future-format or
+memory-only source cannot qualify success. Only positive actor adoption advances
+slots/cursor; retired or replacement subscriptions cannot inherit that update.
+Actual canonical/application commit must precede this request. Owned actor/control
+scheduling, ACK headroom, journal compaction and restart folding remain unfinished;
+this storage component does not enable durable runtime mode by itself.
+
 Only a never-issued reservation or an exactly qualified noncommit can be called
 unaccepted. Ambiguous writes retain the same original for reconciliation. A lost
 worker result requires actual join evidence before a new attempt; generic errors

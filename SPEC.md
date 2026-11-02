@@ -15516,6 +15516,26 @@ requires allocator/terminal-history preservation. Worker recovery intent MUST
 survive later lost results and MUST NOT revert to acceptance on ordinary retry.
 Actual ACK/control scheduling and ingress integration remain separate work.
 
+A storage-qualified ACK MUST freeze its original offered prefix, recipient
+registration, endpoint clock and commit/expiry decisions before I/O. Its bounded
+reservation MUST preserve canonical pending custody and prevent same-recipient
+ACK bypass or conflicting terminal maintenance until settlement. Tickets and
+positive facts MUST remain payload-free; the linear worker MAY share canonical
+source references while those sources remain fully charged in pending custody,
+and MUST drop them before returning a positive fact. Source fingerprinting MUST
+run off actor over the original immutable acceptance encoding. A version1
+`MMPACK01` record MUST bind recipient, original/endpoint sequences, registration,
+offer clock and each occurrence/binding/decision plus complete source SHA256.
+Storage MUST verify actual accepted source framing/chunks and complete SHA256,
+then commit the bounded ACK record before any cursor/slot publication. Lost reply
+reconciliation MUST check actual identical postimages; memory-only or differing
+sources MUST NOT qualify durable ACK. Errors retain original uncertainty. Positive
+adoption MUST apply frozen decisions without reviving retired subscriptions or
+advancing replacement registrations; duplicate facts MUST NOT mutate newer work.
+Canonical/application commit remains the trusted caller's prerequisite. These
+lower/storage boundaries alone do not wire actor/control scheduling, reserve all
+ACK headroom, or provide restart folding and allocator-safe journal compaction.
+
 The lower service's explicit actor-owned terminal maintenance MUST reserve one
 fixed-size disposition slot per accepted recipient before success. It records
 `expired` only after the original strict TTL boundary, or `recipient_retired`

@@ -14,7 +14,7 @@ use std::io::{self, Write};
 use mez_agent::messaging::{
     MessageAcceptanceStore, MessageAcceptanceStoreError, MessageAcceptanceWrite, MessageError,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use super::*;
 
@@ -49,7 +49,8 @@ impl AcceptancePlan {
 }
 
 /// Complete immutable content identity stored both before and after chunk writes.
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct Header {
     /// Rejects reinterpretation as another private chunk format.
     record_version: u32,
@@ -72,6 +73,48 @@ pub(crate) struct PlannedAcceptanceStore<'a> {
 }
 
 impl MmpCustodyStore {
+    /// Verifies the actual complete accepted original before durable ACK work.
+    /// Marker labels alone are insufficient: every bounded chunk, its framing
+    /// and complete SHA256 must still agree. Unknown formats fail closed.
+    pub(super) fn validate_accepted_occurrence(&self, sequence: u64) -> Result<[u8; 32]> {
+        let prefix = format!("a1:{sequence:016x}:");
+        let marker = self
+            .read(&format!("{prefix}commit"))?
+            .ok_or_else(|| MezError::invalid_state("MMP ACK original acceptance is unavailable"))?;
+        let header: Header = serde_json::from_slice(&marker).map_err(encoding_error)?;
+        if header.record_version != RECORD_VERSION
+            || header.sequence != sequence
+            || header.encoded_bytes == 0
+            || header.encoded_bytes > self.limits.logical_bytes
+            || header.chunks != header.encoded_bytes.div_ceil(CHUNK_BYTES)
+            || self.read(&format!("{prefix}stage"))?.as_deref() != Some(marker.as_slice())
+        {
+            return Err(MezError::invalid_state(
+                "MMP ACK original acceptance framing changed",
+            ));
+        }
+        let mut hash = Sha256::new();
+        let mut remaining = header.encoded_bytes;
+        for index in 0..header.chunks {
+            let bytes = self
+                .read(&chunk_key(&prefix, index))?
+                .ok_or_else(|| MezError::invalid_state("MMP ACK original payload chunk missing"))?;
+            if bytes.len() != remaining.min(CHUNK_BYTES) {
+                return Err(MezError::invalid_state(
+                    "MMP ACK original chunk framing changed",
+                ));
+            }
+            remaining -= bytes.len();
+            hash.update(&bytes);
+        }
+        if remaining != 0 || <[u8; 32]>::from(hash.finalize()) != header.digest {
+            return Err(MezError::invalid_state(
+                "MMP ACK original payload digest changed",
+            ));
+        }
+        Ok(header.digest)
+    }
+
     /// Captures a plan before issuance, on the owned I/O worker. The runtime root
     /// must retain it before handing out an attempt and reuse it after worker loss.
     pub fn acceptance_plan(&self, sequence: u64) -> Result<AcceptancePlan> {

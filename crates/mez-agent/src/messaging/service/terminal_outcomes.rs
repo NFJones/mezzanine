@@ -70,7 +70,9 @@ impl MessageService {
                 return Err(unavailable());
             }
             for (index, (recipient, floor)) in queued.recipient_bindings.iter().enumerate() {
-                if acknowledged[index] || protected.contains(&(recipient.clone(), queued.sequence))
+                if acknowledged[index]
+                    || protected.contains(&(recipient.clone(), queued.sequence))
+                    || self.acknowledgement_protects(queued.sequence, recipient)
                 {
                     continue;
                 }
@@ -122,7 +124,9 @@ impl MessageService {
         let mut changed = 0;
         for (queued, acknowledged, mut terminals) in guards {
             for (index, (recipient, floor)) in queued.recipient_bindings.iter().enumerate() {
-                if acknowledged[index] || protected.contains(&(recipient.clone(), queued.sequence))
+                if acknowledged[index]
+                    || protected.contains(&(recipient.clone(), queued.sequence))
+                    || self.acknowledgement_protects(queued.sequence, recipient)
                 {
                     continue;
                 }

@@ -356,6 +356,7 @@ impl MessageService {
         );
         let mut service = Self {
             admission: None,
+            acknowledgement: None,
             ids,
             registered,
             registration_floors: if snapshot.schema_version >= 5 {

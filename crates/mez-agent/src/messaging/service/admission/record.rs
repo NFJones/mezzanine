@@ -98,9 +98,18 @@ impl Serialize for Bindings<'_> {
     }
 }
 impl Serialize for MessageAcceptanceWrite {
+    /// Streams the same immutable canonical view used by source fingerprints.
+    fn serialize<S: Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
+        FrozenRecord(&self.row).serialize(serializer)
+    }
+}
+
+/// Borrowed canonical fields, independent of mutable ACK/offer/terminal state.
+struct FrozenRecord<'a>(&'a QueuedEnvelope);
+impl Serialize for FrozenRecord<'_> {
     /// Streams only the original immutable semantic record, never live capabilities.
     fn serialize<S: Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
-        let envelope = &self.row.envelope;
+        let envelope = &self.0.envelope;
         let sender = &envelope.sender;
         let (kind, value) = match &envelope.recipient {
             Recipient::Agent(id) => ("agent", Some(id.as_str())),
@@ -111,7 +120,7 @@ impl Serialize for MessageAcceptanceWrite {
             Recipient::Capability(value) => ("capability", Some(value.as_str())),
             Recipient::Group(value) => ("group", Some(value.as_str())),
         };
-        let audience = match &self.row.audience {
+        let audience = match &self.0.audience {
             ResolvedMessageAudience::Session => Audience {
                 kind: "session",
                 project_scope: None,
@@ -123,9 +132,9 @@ impl Serialize for MessageAcceptanceWrite {
         };
         Record {
             schema_version: 1,
-            sequence: self.row.sequence,
-            accepted_at_ms: self.row.accepted_at_ms,
-            sender_registered_after_sequence: self.row.sender_registered_after_sequence,
+            sequence: self.0.sequence,
+            accepted_at_ms: self.0.accepted_at_ms,
+            sender_registered_after_sequence: self.0.sender_registered_after_sequence,
             envelope: Input {
                 protocol: envelope.protocol,
                 id: &envelope.id,
@@ -151,8 +160,31 @@ impl Serialize for MessageAcceptanceWrite {
                 extension_fields: Extensions(&envelope.extension_fields),
             },
             audience,
-            recipient_bindings: Bindings(&self.row.recipient_bindings),
+            recipient_bindings: Bindings(&self.0.recipient_bindings),
         }
         .serialize(serializer)
     }
+}
+
+/// Hashes the exact accepted record off actor without an encoded payload copy.
+pub(super) fn source_digest(
+    row: &QueuedEnvelope,
+) -> std::result::Result<[u8; 32], serde_json::Error> {
+    use sha2::{Digest, Sha256};
+    /// Streaming checksum sink with no retained serialization buffer.
+    struct HashWriter(Sha256);
+    impl std::io::Write for HashWriter {
+        /// Consumes arbitrary borrowed encoder fragments without copying them.
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.update(bytes);
+            Ok(bytes.len())
+        }
+        /// Hashing has no buffered output to flush.
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut hash = HashWriter(Sha256::new());
+    serde_json::to_writer(&mut hash, &FrozenRecord(row))?;
+    Ok(hash.0.finalize().into())
 }

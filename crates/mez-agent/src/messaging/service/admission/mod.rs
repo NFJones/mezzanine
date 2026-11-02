@@ -19,6 +19,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use super::*;
 
 mod record;
+/// Computes immutable source integrity on the owned ACK worker, not the actor.
+pub(super) fn acknowledgement_source_digest(
+    row: &QueuedEnvelope,
+) -> std::result::Result<[u8; 32], serde_json::Error> {
+    record::source_digest(row)
+}
 
 /// Conservative logical headroom for actor attempt escrow and shared controls.
 const RECEIPT_TRACKING_BYTES: usize = 256;
