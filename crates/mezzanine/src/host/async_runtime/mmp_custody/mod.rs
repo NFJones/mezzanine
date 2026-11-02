@@ -7,7 +7,7 @@
 //! input loss; ordinary uncertainty uses the retained input and a fresh nonce.
 //! Positive completion stays retained until exact lower/request adoption.
 //!
-//! Stop closes new issuance but preserves already-issued reconciliation and
+//! Stop closes new sends but preserves accepted-input ACK drains, reconciliation and
 //! publication. Backoff is monotonic1,2,4..30 seconds after each observed failure,
 //! with one worker per root and no provider permit. The owning actor/supervisor
 //! must keep this root until settlement. This component does not yet wire ingress,
@@ -36,6 +36,8 @@ use crate::error::{MezError, Result};
 use crate::storage::mmp_custody::acceptance::AcceptancePlan;
 use crate::storage::mmp_custody::{CustodyStoreLimits, MmpCustodyStore};
 
+mod acknowledgement;
+
 /// Retained source chosen by trusted session setup, never by an envelope.
 #[derive(Clone)]
 struct Destination {
@@ -58,6 +60,10 @@ pub(crate) enum CustodyWorkerStatus {
     AwaitingAdoption,
     /// Exact joined qualified noncommit awaits paired lower/request release.
     AwaitingRefusal,
+    /// Actual joined ACK commit awaits its original lower cursor publication.
+    AcknowledgementAwaitingAdoption,
+    /// Original uncertain/lost ACK can retry after this monotonic deadline.
+    AcknowledgementRetryAt(Instant),
     /// Original uncertain/lost attempt can retry after this monotonic deadline.
     RetryAt(Instant),
     /// Opening failed; no lower write was issued by this root.
@@ -113,6 +119,17 @@ enum State {
         result: Result<Box<Written>>,
         retry_at: Instant,
     },
+    /// Actual ACK worker shares the same exclusive connection/position lane.
+    Acknowledging {
+        admission: acknowledgement::Admission,
+        worker: JoinHandle<Result<acknowledgement::Written>>,
+    },
+    /// Retained exact ACK disposition after its actual handle was joined.
+    Acknowledged {
+        admission: acknowledgement::Admission,
+        result: Result<Box<acknowledgement::Written>>,
+        retry_at: Instant,
+    },
     /// Bounded failed-open diagnostic; cannot imply any issued write was unsent.
     Unavailable(MezError),
 }
@@ -133,6 +150,9 @@ struct Inner {
     /// Test-only actual blocking gate and postcommit panic injection.
     #[cfg(test)]
     probe: Option<Arc<tests::Probe>>,
+    /// ACK-only physical gate/panic probe, independent of acceptance fixtures.
+    #[cfg(test)]
+    ack_probe: Option<Arc<acknowledgement::tests::Probe>>,
 }
 
 /// One session's owned storage lifecycle; observers may clone it safely.
@@ -152,6 +172,8 @@ impl MmpCustodyRoot {
             runtime,
             #[cfg(test)]
             None,
+            #[cfg(test)]
+            None,
         )
     }
 
@@ -160,6 +182,7 @@ impl MmpCustodyRoot {
         destination: Destination,
         runtime: Handle,
         #[cfg(test)] probe: Option<Arc<tests::Probe>>,
+        #[cfg(test)] ack_probe: Option<Arc<acknowledgement::tests::Probe>>,
     ) -> Self {
         let source = destination.clone();
         let worker = runtime.spawn_blocking(move || open_destination(&source));
@@ -171,6 +194,8 @@ impl MmpCustodyRoot {
             stopping: AtomicBool::new(false),
             #[cfg(test)]
             probe,
+            #[cfg(test)]
+            ack_probe,
         }))
     }
 
@@ -183,6 +208,11 @@ impl MmpCustodyRoot {
                 Ok(state) => state,
                 Err(_) => return Poll::Ready(Err(ownership_error())),
             };
+            if matches!(&*state, State::Acknowledging { .. })
+                && acknowledgement::poll_join(&mut state, cx).is_pending()
+            {
+                return Poll::Pending;
+            }
             match &mut *state {
                 State::Opening(worker) => match Pin::new(worker).poll(cx) {
                     Poll::Pending => return Poll::Pending,
@@ -251,11 +281,12 @@ impl MmpCustodyRoot {
                 }
                 _ => None,
             },
+            State::Acknowledged { .. } => acknowledgement::failure(&state),
             _ => None,
         })
     }
 
-    /// Closes new issuance without aborting or fabricating settlement of a write.
+    /// Closes new send issuance without aborting or fabricating settlement of a write.
     pub fn request_stop(&self) {
         self.0.stopping.store(true, Ordering::Release);
     }
@@ -513,6 +544,7 @@ impl MmpCustodyRoot {
             if let Some(probe) = &probe {
                 probe.before_write();
             }
+            let store = store.filter(|store| plan.matches_store(store));
             let mut store = match store {
                 Some(store) => store,
                 None => MmpCustodyStore::open_with_limits(
@@ -578,6 +610,10 @@ impl Drop for Inner {
                     let result = worker.await;
                     let _ = runtime.spawn_blocking(move || drop(result)).await;
                 }
+                State::Acknowledging { worker, .. } => {
+                    let result = worker.await;
+                    let _ = runtime.spawn_blocking(move || drop(result)).await;
+                }
                 state => {
                     let _ = runtime.spawn_blocking(move || drop(state)).await;
                 }
@@ -610,6 +646,16 @@ fn status(state: &State) -> CustodyWorkerStatus {
                 ..
             }) => CustodyWorkerStatus::AwaitingRefusal,
             _ => CustodyWorkerStatus::RetryAt(*retry_at),
+        },
+        State::Acknowledging { .. } => CustodyWorkerStatus::Running,
+        State::Acknowledged {
+            result, retry_at, ..
+        } => match result.as_deref() {
+            Ok(acknowledgement::Written {
+                outcome: mez_agent::messaging::MessageAcknowledgementWriteOutcome::Committed(_),
+                ..
+            }) => CustodyWorkerStatus::AcknowledgementAwaitingAdoption,
+            _ => CustodyWorkerStatus::AcknowledgementRetryAt(*retry_at),
         },
         State::Unavailable(_) => CustodyWorkerStatus::Unavailable,
     }

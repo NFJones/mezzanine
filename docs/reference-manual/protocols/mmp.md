@@ -535,6 +535,18 @@ Actual canonical/application commit must precede this request. Owned actor/contr
 scheduling, ACK headroom, journal compaction and restart folding remain unfinished;
 this storage component does not enable durable runtime mode by itself.
 
+Acceptance and ACK jobs share the same root-owned connection and settled store
+position. Busy checks precede lower issuance. The root retains the ACK's actual
+handle, original plan, uncertainty and positive fact independently of observers;
+only original lower adoption releases its lane. Lost input requires the actual
+joined worker, and retry uses fresh nonce plus monotonic backoff. Hashing and
+storage run on the blocking worker. Stop closes new sends and permits ACK drains
+for already accepted/application-committed input. A known foreign connection is
+discarded off actor before reopening the trusted path under the original plan;
+returning the original allocation can recover without another record or write.
+This does not grant authority from a matching owner label or implement actor
+registry/supervisor, ingress, full control headroom or restart folding.
+
 Only a never-issued reservation or an exactly qualified noncommit can be called
 unaccepted. Ambiguous writes retain the same original for reconciliation. A lost
 worker result requires actual join evidence before a new attempt; generic errors

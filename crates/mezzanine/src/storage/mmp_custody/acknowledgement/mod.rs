@@ -24,6 +24,21 @@ pub(crate) struct AcknowledgementPlan {
     generation: u64,
 }
 
+impl AcknowledgementPlan {
+    /// Checks cached allocation identity without changing the original source plan.
+    pub(crate) fn matches_store(&self, store: &MmpCustodyStore) -> bool {
+        self.store_id == store.store_id
+    }
+
+    /// Uses an idle root's already observed position without actor-side SQL.
+    pub(super) fn from_position(store_id: Vec<u8>, generation: u64) -> Self {
+        Self {
+            store_id,
+            generation,
+        }
+    }
+}
+
 /// Trusted synchronous port borrowing the serialized original store.
 pub(crate) struct PlannedAcknowledgementStore<'a> {
     /// One existing canonical store, never selected from envelope path fields.

@@ -37,6 +37,20 @@ pub(crate) struct AcceptancePlan {
 }
 
 impl AcceptancePlan {
+    /// Checks cached allocation identity without I/O; equal labels are insufficient.
+    pub(crate) fn matches_store(&self, store: &MmpCustodyStore) -> bool {
+        self.store_id == store.store_id
+    }
+
+    /// Converts only an idle settled root position to the next ACK transaction.
+    /// Unsettled jobs must retain their original plan instead of calling this.
+    pub(crate) fn for_acknowledgement(&self) -> super::acknowledgement::AcknowledgementPlan {
+        super::acknowledgement::AcknowledgementPlan::from_position(
+            self.store_id.clone(),
+            self.generation,
+        )
+    }
+
     /// Binds an idle root's already-observed store position to its next occurrence.
     /// The root may call this only before issuance, with no unsettled store work.
     pub(crate) fn for_sequence(&self, sequence: u64) -> Self {

@@ -88,6 +88,7 @@ impl Fixture {
             },
             Handle::current(),
             Some(self.probe.clone()),
+            None,
         )
     }
     /// Reads actual SQLite row/generation facts, never observer status text.
@@ -561,12 +562,13 @@ async fn failed_private_open_is_unavailable_without_issuing_original() {
 }
 
 /// A same-label replacement private store after actual postcommit worker loss
-/// cannot inherit the original plan. Retry stays uncertain, writes no new row,
-/// and preserves the old original's actual bytes at its separately retained path.
+/// cannot inherit the original plan. Retry stays uncertain with no new row;
+/// returning the original allocation then reconciles without a new disk write.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn replacement_store_after_actual_worker_loss_cannot_adopt_original_plan() {
     let fixture = Fixture::new(true);
     let retained = Fixture::new(true);
+    let replaced = Fixture::new(true);
     fixture
         .probe
         .panic_after_commit
@@ -593,15 +595,24 @@ async fn replacement_store_after_actual_worker_loss_cannot_adopt_original_plan()
     drop(MmpCustodyStore::open(&fixture.path, "original-session").unwrap());
     assert_eq!(fixture.disk(), (0, 0));
     assert!(root.retry(&mut service, due).unwrap());
-    assert!(matches!(
-        root.observe().await.unwrap(),
-        CustodyWorkerStatus::RetryAt(_)
-    ));
+    let CustodyWorkerStatus::RetryAt(due) = root.observe().await.unwrap() else {
+        panic!("expected foreign allocation refusal")
+    };
     assert_eq!(fixture.disk(), (0, 0));
     assert_eq!(retained.disk(), original);
     assert!(root.failure().unwrap().is_some());
     assert!(root.adopt(&mut service, None).is_err());
     assert!(service.has_unpublished_acceptance());
+    std::fs::rename(&fixture.path, &replaced.path).unwrap();
+    std::fs::rename(&retained.path, &fixture.path).unwrap();
+    assert!(root.retry(&mut service, due).unwrap());
+    assert_eq!(
+        root.observe().await.unwrap(),
+        CustodyWorkerStatus::AwaitingAdoption
+    );
+    assert_eq!(fixture.disk(), original);
+    assert_eq!(replaced.disk(), (0, 0));
+    assert!(root.adopt(&mut service, None).unwrap().accepted);
 }
 
 /// A failed real marker can explicitly recover to a qualified paired refusal,

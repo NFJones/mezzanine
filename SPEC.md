@@ -15536,6 +15536,20 @@ Canonical/application commit remains the trusted caller's prerequisite. These
 lower/storage boundaries alone do not wire actor/control scheduling, reserve all
 ACK headroom, or provide restart folding and allocator-safe journal compaction.
 
+The same owned session storage root MUST serialize acceptance and ACK workers
+through one connection and settled position. A busy root MUST reject before
+lower ACK issuance; an ACK's actual handle, original plan, input/attempt and
+positive result MUST remain owned through observer cancellation, failure and
+foreign adoption. ACK hashing/storage/position reads MUST run off actor. Lost
+ACK input MUST require its exact observed worker join; uncertain retry MUST keep
+the original data/plan with fresh nonce and monotonic backoff. Stop MUST preserve
+ACK drains for already accepted, canonically committed input while fencing new
+sends. Only exact lower ACK adoption MAY release the root for its next job.
+A cached foreign-allocation connection MUST be discarded off actor before retry
+reopens the trusted destination under the unchanged original plan; an equal
+owner label MUST NOT rebind it. These root jobs do not by themselves install the
+actor registry/supervisor or native/raw/bridge ingress and control scheduling.
+
 The lower service's explicit actor-owned terminal maintenance MUST reserve one
 fixed-size disposition slot per accepted recipient before success. It records
 `expired` only after the original strict TTL boundary, or `recipient_retired`
