@@ -517,3 +517,5 @@ async fn original_ack_plan_rejects_replacement_then_recovers_returned_original_s
     );
     assert_eq!(fixture.probe.attempts.load(Ordering::SeqCst), 3);
 }
+
+mod actor;

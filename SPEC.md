@@ -15550,6 +15550,24 @@ reopens the trusted destination under the unchanged original plan; an equal
 owner label MUST NOT rebind it. These root jobs do not by themselves install the
 actor registry/supervisor or native/raw/bridge ingress and control scheduling.
 
+An internally registered actor ACK owner MUST retain the exact root and original
+reply independently of a cancelled socket observer. It MUST observe storage on
+busy ingress turns as well as idle wakeups, with no provider permit or actor I/O.
+Fanout ACK success MUST follow actual join, durable ACK commit and exact lower
+cursor adoption. A busy lane MUST issue no replacement; duplicate settled ACKs
+MUST add no record. For raw transport fanout the caller prerequisite is its
+confirmed batch write, which is not proof of peer reading, action execution or
+native canonical-context commit. Native context ACK requires its own actual
+application commit and dedup evidence.
+
+Graceful actor shutdown with a registered root MUST close request admission and
+retain the service/root through any issued original ACK's retries and canonical
+settlement before returning the service, even if ACK or shutdown reply observers
+are cancelled. This boundary does not cover forced actor abortion or runtime
+destruction. Normal product construction remains without this internal root;
+all-producer acceptance, native dedup/restore, supervisory abort retention and full
+quota/control integration remain required before enabling durable product mode.
+
 The lower service's explicit actor-owned terminal maintenance MUST reserve one
 fixed-size disposition slot per accepted recipient before success. It records
 `expired` only after the original strict TTL boundary, or `recipient_retired`

@@ -10,8 +10,9 @@
 //! Stop closes new sends but preserves accepted-input ACK drains, reconciliation and
 //! publication. Backoff is monotonic1,2,4..30 seconds after each observed failure,
 //! with one worker per root and no provider permit. The owning actor/supervisor
-//! must keep this root until settlement. This component does not yet wire ingress,
-//! control-drain scheduling, restart dedup or total storage/cache quotas.
+//! must keep this root until settlement. The actor ACK adapter now retains its
+//! original root/reply through graceful shutdown; send ingress, native control
+//! drains, supervisory abort, restart dedup and total quotas remain unfinished.
 
 use std::future::{Future, poll_fn};
 use std::path::PathBuf;

@@ -40,7 +40,7 @@ impl AsyncRuntimeSessionActor {
     /// Attempts every remaining raw lease before actor exit. The first integrity
     /// error is returned without preventing healthy later leases from retiring.
     /// Failed entries remain owned; shutdown's reply reports them as critical.
-    fn retire_all_raw_message_identities(&mut self) -> crate::Result<()> {
+    pub(super) fn retire_all_raw_message_identities(&mut self) -> crate::Result<()> {
         let identities = self
             .message_state
             .raw_identities
@@ -935,22 +935,10 @@ impl AsyncRuntimeSessionActor {
                 false
             }
             AsyncRuntimeRequest::AcknowledgeMessageFanout { batch, reply } => {
-                let result = self
-                    .service
-                    .message_service_mut()
-                    .acknowledge_fanout_batch(&batch)
-                    .map_err(Into::into);
-                let _ = reply.send(result);
+                self.acknowledge_message_fanout(batch, reply);
                 false
             }
-            AsyncRuntimeRequest::Shutdown { reply } => {
-                let result = self
-                    .retire_all_raw_message_identities()
-                    .map(|()| self.service.lifecycle_state());
-                let _ = self.service.clear_runtime_mcp_transports();
-                let _ = reply.send(result);
-                true
-            }
+            AsyncRuntimeRequest::Shutdown { reply } => self.begin_message_custody_shutdown(reply),
             _ => unreachable!("only MMP and shutdown enter synchronous message dispatch"),
         }
     }

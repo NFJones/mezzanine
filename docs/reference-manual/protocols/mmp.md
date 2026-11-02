@@ -547,6 +547,22 @@ returning the original allocation can recover without another record or write.
 This does not grant authority from a matching owner label or implement actor
 registry/supervisor, ingress, full control headroom or restart folding.
 
+An internal actor ACK adapter now retains the registered root and original reply,
+polling actual joins both under busy ingress and while idle. After the raw
+transport confirms its batch write, this path reserves the original cursor and
+replies only after the ACK record commits and the actor adopts it. A cancelled
+reply observer cannot discard the job; a busy lane issues nothing and a settled
+duplicate writes no extra record. A completed socket write does not prove peer
+reading/action execution or native context commit. Native delivery still needs
+its separate canonical input/dedup boundary.
+
+Graceful shutdown closes actor admission and retains the service/root through
+issued ACK settlement, including storage retries and cancelled shutdown observers.
+It does not protect canonical settlement against forced actor abort or runtime
+destruction. Ordinary product construction still uses the in-memory path; the
+internal root is not enabled there until native/raw/bridge acceptance, restore,
+supervision and full storage quotas/control journals are integrated.
+
 Only a never-issued reservation or an exactly qualified noncommit can be called
 unaccepted. Ambiguous writes retain the same original for reconciliation. A lost
 worker result requires actual join evidence before a new attempt; generic errors

@@ -313,6 +313,7 @@ impl AsyncRuntimeSessionActor {
                     delivery_notify: message_delivery_notify,
                 },
             ),
+            message_custody: None,
             event_delivery_notify,
             event_delivery_revision_tx,
             client_clipboard_routes: Default::default(),
@@ -475,6 +476,18 @@ impl AsyncRuntimeSessionActor {
         // Hold its claims until receipt sync completes off actor ownership.
         let _ = self.start_transcript_receipt_admission(0, super::TranscriptReceiptReply::Startup);
         loop {
+            // Poll owned storage once even while ordinary ingress stays busy.
+            // Observation is cancellable; its actual handle remains in the root.
+            if self.poll_message_custody() {
+                break;
+            }
+            if self.message_custody_shutdown_pending() {
+                // Admission is closed. Do not execute already-queued ingress
+                // while retaining the original physical ACK through settlement.
+                let event = self.message_custody_wakeup().await;
+                self.apply_message_custody_event(event);
+                continue;
+            }
             if self.request_scheduler.requests_since_clipboard_cleanup
                 >= MAX_REQUESTS_BEFORE_CLIPBOARD_CLEANUP
                 && self.queued_request_count() > 0
@@ -484,11 +497,16 @@ impl AsyncRuntimeSessionActor {
                 self.request_scheduler.requests_since_clipboard_cleanup = 0;
                 continue;
             }
+            let custody_wakeup = self.message_custody_wakeup();
             let envelope = if let Some(envelope) = self.dequeue_request() {
                 envelope
             } else {
                 tokio::select! {
                     biased;
+                    event = custody_wakeup => {
+                        self.apply_message_custody_event(event);
+                        continue;
+                    },
                     () = self.request_ingress_notify.notified() => continue,
                     Some(cleanup) = self.client_clipboard_route_cleanup_rx.recv() => {
                         self.apply_transport_cancellation_cleanup(cleanup).await;

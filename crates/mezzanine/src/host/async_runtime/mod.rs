@@ -132,7 +132,7 @@ mod daemon;
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 mod events;
-/// Original MMP storage worker custody, awaiting ingress/supervisor integration.
+/// Original MMP storage custody with actor ACK ownership; ingress activation pending.
 #[allow(
     dead_code,
     reason = "durable MMP ingress integration continues under e048f9a8"

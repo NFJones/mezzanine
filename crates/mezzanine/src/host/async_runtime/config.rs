@@ -885,6 +885,8 @@ pub struct AsyncRuntimeSessionActor {
     /// Exact raw MMP ownership and its shared delivery signal, owned together
     /// for the actor lifetime independently of restored messaging service state.
     pub(super) message_state: Box<AsyncRuntimeMessageState>,
+    /// Exact custody root and pending ACK reply, retained through graceful shutdown.
+    pub(super) message_custody: Option<Box<super::actor::message_custody::ActorMessageCustody>>,
     /// Stores the event delivery notify value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
