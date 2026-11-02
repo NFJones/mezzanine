@@ -9,7 +9,7 @@
 //! rather than permission to reconstruct mail. This is a storage port, not a
 //! mailbox or a runtime ingress/restart implementation.
 
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 
 use mez_agent::messaging::{
     MessageAcceptanceStore, MessageAcceptanceStoreError, MessageAcceptanceWrite, MessageError,
@@ -78,6 +78,50 @@ struct Header {
     digest: [u8; 32],
 }
 
+/// One bounded cursor over chunks in the caller's open SQLite read snapshot.
+/// The cursor never returns a complete-record buffer or a verification fact.
+struct AcceptedChunks<'a> {
+    store: &'a MmpCustodyStore,
+    prefix: String,
+    next: usize,
+    chunks: usize,
+    chunk: Vec<u8>,
+    offset: usize,
+    remaining: usize,
+    hash: Sha256,
+}
+
+impl Read for AcceptedChunks<'_> {
+    /// Loads and checks at most one original chunk before supplying bytes.
+    fn read(&mut self, output: &mut [u8]) -> io::Result<usize> {
+        if output.is_empty() || self.remaining == 0 {
+            return Ok(0);
+        }
+        if self.offset == self.chunk.len() {
+            if self.next >= self.chunks {
+                return Err(io::Error::other("MMP acceptance source chunk missing"));
+            }
+            self.chunk = self
+                .store
+                .read(&chunk_key(&self.prefix, self.next))
+                .map_err(io::Error::other)?
+                .ok_or_else(|| io::Error::other("MMP acceptance source chunk missing"))?;
+            if self.chunk.len() != self.remaining.min(CHUNK_BYTES) {
+                return Err(io::Error::other("MMP acceptance chunk framing changed"));
+            }
+            self.next += 1;
+            self.offset = 0;
+        }
+        let count = output.len().min(self.chunk.len() - self.offset);
+        let bytes = &self.chunk[self.offset..self.offset + count];
+        output[..count].copy_from_slice(bytes);
+        self.hash.update(bytes);
+        self.offset += count;
+        self.remaining -= count;
+        Ok(count)
+    }
+}
+
 /// Trusted synchronous port borrowing the one serialized existing store.
 pub(crate) struct PlannedAcceptanceStore<'a> {
     /// Concrete private connection; no path comes from envelope data.
@@ -91,10 +135,53 @@ impl MmpCustodyStore {
     /// Marker labels alone are insufficient: every bounded chunk, its framing
     /// and complete SHA256 must still agree. Unknown formats fail closed.
     pub(super) fn validate_accepted_occurrence(&self, sequence: u64) -> Result<[u8; 32]> {
+        self.stream_accepted_occurrence(sequence, &mut io::sink())
+            .map(|(digest, _)| digest)
+    }
+
+    /// Streams one committed immutable acceptance under one SQLite read snapshot.
+    ///
+    /// The private marker, original stage, each bounded chunk and the full digest
+    /// are checked against the same database snapshot. The sink may receive an
+    /// incomplete prefix before an error; its caller must quarantine that output
+    /// and discard it unless this method returns the verified digest and byte
+    /// count. This is source material for a future restore fold, not a mailbox,
+    /// acceptance, recipient registration or application-commit authority.
+    /// Reads and sink writes are synchronous and belong on the storage worker.
+    pub(crate) fn stream_accepted_occurrence(
+        &self,
+        sequence: u64,
+        sink: &mut impl Write,
+    ) -> Result<([u8; 32], usize)> {
+        let (_, digest, bytes) = self.with_verified_accepted_occurrence(sequence, |reader| {
+            io::copy(reader, sink).map_err(|error| {
+                MezError::invalid_state(format!("MMP acceptance stream failed: {error}"))
+            })?;
+            Ok(())
+        })?;
+        Ok((digest, bytes))
+    }
+
+    /// Runs a bounded decoder over one committed source in a consistent snapshot.
+    ///
+    /// The decoder must consume the entire stream and must not publish side
+    /// effects while it runs. Its private result is returned only after the
+    /// marker, all chunks and the final digest verify. Decoder errors, early
+    /// return and source corruption discard the result and grant no authority.
+    /// The decoder and database reads are synchronous storage-worker work.
+    pub(crate) fn with_verified_accepted_occurrence<T>(
+        &self,
+        sequence: u64,
+        decode: impl FnOnce(&mut dyn Read) -> Result<T>,
+    ) -> Result<(T, [u8; 32], usize)> {
+        let transaction = self
+            .connection
+            .unchecked_transaction()
+            .map_err(database_error)?;
         let prefix = format!("a1:{sequence:016x}:");
         let marker = self
             .read(&format!("{prefix}commit"))?
-            .ok_or_else(|| MezError::invalid_state("MMP ACK original acceptance is unavailable"))?;
+            .ok_or_else(|| MezError::invalid_state("MMP original acceptance is unavailable"))?;
         let header: Header = serde_json::from_slice(&marker).map_err(encoding_error)?;
         if header.record_version != RECORD_VERSION
             || header.sequence != sequence
@@ -104,29 +191,32 @@ impl MmpCustodyStore {
             || self.read(&format!("{prefix}stage"))?.as_deref() != Some(marker.as_slice())
         {
             return Err(MezError::invalid_state(
-                "MMP ACK original acceptance framing changed",
+                "MMP original acceptance framing changed",
             ));
         }
-        let mut hash = Sha256::new();
-        let mut remaining = header.encoded_bytes;
-        for index in 0..header.chunks {
-            let bytes = self
-                .read(&chunk_key(&prefix, index))?
-                .ok_or_else(|| MezError::invalid_state("MMP ACK original payload chunk missing"))?;
-            if bytes.len() != remaining.min(CHUNK_BYTES) {
-                return Err(MezError::invalid_state(
-                    "MMP ACK original chunk framing changed",
-                ));
-            }
-            remaining -= bytes.len();
-            hash.update(&bytes);
-        }
-        if remaining != 0 || <[u8; 32]>::from(hash.finalize()) != header.digest {
+        let mut reader = AcceptedChunks {
+            store: self,
+            prefix,
+            next: 0,
+            chunks: header.chunks,
+            chunk: Vec::new(),
+            offset: 0,
+            remaining: header.encoded_bytes,
+            hash: Sha256::new(),
+        };
+        let decoded = decode(&mut reader)?;
+        if reader.remaining != 0 || reader.next != header.chunks {
             return Err(MezError::invalid_state(
-                "MMP ACK original payload digest changed",
+                "MMP acceptance decoder did not consume the complete source",
             ));
         }
-        Ok(header.digest)
+        if <[u8; 32]>::from(reader.hash.finalize()) != header.digest {
+            return Err(MezError::invalid_state(
+                "MMP original acceptance digest changed",
+            ));
+        }
+        transaction.commit().map_err(database_error)?;
+        Ok((decoded, header.digest, header.encoded_bytes))
     }
 
     /// Captures a plan before issuance, on the owned I/O worker. The runtime root

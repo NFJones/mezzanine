@@ -49,6 +49,249 @@ fn large_escaped_original_streams_to_bounded_transactions_before_publication() {
     assert_eq!(stored_bytes(&reopened, ticket.sequence()), expected);
 }
 
+/// A reopened store must provide the exact committed original as a bounded
+/// stream, including escaped payload and frozen metadata. The sink observes at
+/// most one storage chunk at a time and receives no independent authority.
+#[test]
+fn committed_original_streams_from_reopened_store_without_a_full_record_buffer() {
+    /// Retains only a digest and byte counts, never the encoded source itself.
+    struct MeasuringSink {
+        hash: Sha256,
+        bytes: usize,
+        largest_write: usize,
+    }
+    impl Write for MeasuringSink {
+        /// Hashes each borrowed chunk and records its largest actual write.
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            self.hash.update(bytes);
+            self.bytes += bytes.len();
+            self.largest_write = self.largest_write.max(bytes.len());
+            Ok(bytes.len())
+        }
+        /// This sink has no buffered output.
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    let fixture = Fixture::new();
+    let (_service, ticket, write) = original("\0\"\n\\".repeat(256 * 1024));
+    let expected = serde_json::to_vec(&write).unwrap();
+    let mut store = MmpCustodyStore::open(&fixture.0, "session").unwrap();
+    let plan = store.acceptance_plan(ticket.sequence()).unwrap();
+    assert!(matches!(
+        write.persist(&mut store.acceptance_port(&plan)),
+        MessageAcceptanceWriteOutcome::Committed(_)
+    ));
+    drop(store);
+    let store = MmpCustodyStore::open(&fixture.0, "session").unwrap();
+    let mut sink = MeasuringSink {
+        hash: Sha256::new(),
+        bytes: 0,
+        largest_write: 0,
+    };
+    let (digest, bytes) = store
+        .stream_accepted_occurrence(ticket.sequence(), &mut sink)
+        .unwrap();
+    assert_eq!(bytes, expected.len());
+    assert_eq!(sink.bytes, expected.len());
+    assert!(sink.largest_write <= CHUNK_BYTES);
+    assert_eq!(digest, <[u8; 32]>::from(Sha256::digest(&expected)));
+    assert_eq!(digest, <[u8; 32]>::from(sink.hash.finalize()));
+}
+
+/// A committed marker cannot validate a changed later chunk, even if its row
+/// checksum was recomputed. A partial sink prefix must be discarded by the
+/// caller; a missing original must fail before emitting any bytes at all.
+#[test]
+fn acceptance_stream_rejects_missing_or_changed_original_without_certifying_prefix() {
+    let fixture = Fixture::new();
+    let (_service, ticket, write) = original("original".repeat(40_000));
+    let mut store = MmpCustodyStore::open(&fixture.0, "session").unwrap();
+    let plan = store.acceptance_plan(ticket.sequence()).unwrap();
+    store.acceptance_port(&plan).commit(&write).unwrap();
+    let key = chunk_key(&format!("a1:{:016x}:", ticket.sequence()), 1);
+    let mut changed = store.read(&key).unwrap().unwrap();
+    changed[0] ^= 1;
+    let checksum = Sha256::digest(&changed).to_vec();
+    store
+        .connection
+        .execute(
+            "UPDATE records SET value=?1,digest=?2 WHERE key=?3",
+            rusqlite::params![changed, checksum, key],
+        )
+        .unwrap();
+    let mut quarantined = Vec::new();
+    assert!(
+        store
+            .stream_accepted_occurrence(ticket.sequence(), &mut quarantined)
+            .is_err()
+    );
+    assert!(!quarantined.is_empty());
+    let decoded = store.with_verified_accepted_occurrence(ticket.sequence(), |reader| {
+        serde_json::from_reader::<_, serde_json::Value>(reader)
+            .map_err(|error| MezError::invalid_state(error.to_string()))
+    });
+    assert!(
+        decoded.is_err(),
+        "a decodable changed body is not a verified source"
+    );
+    let mut missing = Vec::new();
+    assert!(
+        store
+            .stream_accepted_occurrence(ticket.sequence() + 1, &mut missing)
+            .is_err()
+    );
+    assert!(missing.is_empty());
+}
+
+/// A failing sink must return a contextual error without changing the store or
+/// consuming its source. A later reader can still verify the exact original.
+#[test]
+fn acceptance_stream_sink_failure_preserves_original_for_retry() {
+    /// Fails the first actual write, independently of the SQLite reader.
+    struct FailingSink;
+    impl Write for FailingSink {
+        /// Reports an actual sink error without accepting any bytes.
+        fn write(&mut self, _: &[u8]) -> io::Result<usize> {
+            Err(io::Error::other("injected sink failure"))
+        }
+        /// This sink has no buffered output.
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    let fixture = Fixture::new();
+    let (_service, ticket, write) = original("original".repeat(40_000));
+    let expected = serde_json::to_vec(&write).unwrap();
+    let mut store = MmpCustodyStore::open(&fixture.0, "session").unwrap();
+    let plan = store.acceptance_plan(ticket.sequence()).unwrap();
+    store.acceptance_port(&plan).commit(&write).unwrap();
+    let before: i64 = store
+        .connection
+        .query_row("SELECT generation FROM state", [], |row| row.get(0))
+        .unwrap();
+    let error = store
+        .stream_accepted_occurrence(ticket.sequence(), &mut FailingSink)
+        .unwrap_err();
+    assert!(error.to_string().contains("injected sink failure"));
+    let mut recovered = Vec::new();
+    let (_, length) = store
+        .stream_accepted_occurrence(ticket.sequence(), &mut recovered)
+        .unwrap();
+    assert_eq!(length, expected.len());
+    assert_eq!(recovered, expected);
+    let after: i64 = store
+        .connection
+        .query_row("SELECT generation FROM state", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(after, before);
+}
+
+/// A concurrent connection cannot commit a changed chunk between source reads.
+/// The actual reader holds one SQLite snapshot through the final digest check,
+/// so the sink cannot receive a mixture of two committed store revisions.
+#[test]
+fn acceptance_stream_holds_one_snapshot_against_concurrent_write() {
+    /// Coordinates the other connection after the first source chunk is read.
+    struct CoordinatingSink {
+        started: Option<std::sync::mpsc::Sender<()>>,
+        completed: std::sync::mpsc::Receiver<bool>,
+        bytes: usize,
+    }
+    impl Write for CoordinatingSink {
+        /// Waits only for the competing transaction's bounded result once.
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            if let Some(started) = self.started.take() {
+                started.send(()).unwrap();
+                assert!(
+                    self.completed
+                        .recv_timeout(std::time::Duration::from_secs(5))
+                        .unwrap(),
+                    "concurrent writer committed during acceptance read"
+                );
+            }
+            self.bytes += bytes.len();
+            Ok(bytes.len())
+        }
+        /// This sink has no buffered output.
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    let fixture = Fixture::new();
+    let (_service, ticket, write) = original("original".repeat(40_000));
+    let expected_len = serde_json::to_vec(&write).unwrap().len();
+    let mut store = MmpCustodyStore::open(&fixture.0, "session").unwrap();
+    let plan = store.acceptance_plan(ticket.sequence()).unwrap();
+    store.acceptance_port(&plan).commit(&write).unwrap();
+    let path = fixture.0.join("custody.sqlite");
+    let key = chunk_key(&format!("a1:{:016x}:", ticket.sequence()), 1);
+    let (start_tx, start_rx) = std::sync::mpsc::channel();
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    let writer = std::thread::spawn(move || {
+        let connection = rusqlite::Connection::open(path).unwrap();
+        connection
+            .busy_timeout(std::time::Duration::from_millis(100))
+            .unwrap();
+        start_rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap();
+        let result = connection.execute("UPDATE records SET value=X'00' WHERE key=?1", [&key]);
+        let locked = matches!(
+            result,
+            Err(rusqlite::Error::SqliteFailure(error, _))
+                if matches!(error.code, rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked)
+        );
+        done_tx.send(locked).unwrap();
+    });
+    let mut sink = CoordinatingSink {
+        started: Some(start_tx),
+        completed: done_rx,
+        bytes: 0,
+    };
+    let (_, bytes) = store
+        .stream_accepted_occurrence(ticket.sequence(), &mut sink)
+        .unwrap();
+    writer.join().unwrap();
+    assert_eq!(bytes, expected_len);
+    assert_eq!(sink.bytes, expected_len);
+}
+
+/// A decoder may consume the original directly without staging a second full
+/// encoded copy, but its result is returned only after complete source checks.
+/// An early successful callback cannot qualify an unread suffix as verified.
+#[test]
+fn acceptance_decoder_requires_complete_verified_input() {
+    let fixture = Fixture::new();
+    let (_service, ticket, write) = original("original".repeat(40_000));
+    let mut store = MmpCustodyStore::open(&fixture.0, "session").unwrap();
+    let plan = store.acceptance_plan(ticket.sequence()).unwrap();
+    store.acceptance_port(&plan).commit(&write).unwrap();
+    let (decoded, _, _) = store
+        .with_verified_accepted_occurrence(ticket.sequence(), |reader| {
+            serde_json::from_reader::<_, serde_json::Value>(reader)
+                .map_err(|error| MezError::invalid_state(error.to_string()))
+        })
+        .unwrap();
+    assert_eq!(decoded["sequence"], ticket.sequence());
+    assert_eq!(decoded["envelope"]["id"], "original");
+    assert_eq!(
+        decoded["envelope"]["payload"].as_str().unwrap().len(),
+        320_000
+    );
+    let error = store
+        .with_verified_accepted_occurrence(ticket.sequence(), |reader| {
+            let mut first = [0; 1];
+            reader.read_exact(&mut first).map_err(MezError::from)?;
+            Ok(first)
+        })
+        .unwrap_err();
+    assert!(error.to_string().contains("did not consume"));
+}
+
 /// Aborting the final marker leaves a real dense private chunk prefix, no lower
 /// acceptance, and an ambiguous linear original. Reopening and retrying the same
 /// retained plan verifies existing bytes and publishes exactly one final marker.

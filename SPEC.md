@@ -15521,6 +15521,17 @@ actual dense immutable prefix and generation, without reconstructing missing or
 corrupt committed chunks. The original serialized-store plan MUST settle before
 later store work; this storage adapter alone does not enable durable ingress.
 
+Reading an accepted original for storage validation or future restore MUST use a
+single consistent store snapshot and stream bounded chunks without materializing
+the complete encoded record. The stage, final marker, chunk framing, row checksums
+and full original digest MUST agree before the read qualifies. A sink MAY receive
+an incomplete prefix before a read or sink error; callers MUST quarantine and
+discard that prefix unless the complete read succeeds. A streaming decoder MUST
+consume the complete source, withhold its result until verification succeeds and
+perform no externally visible effects while decoding. Streamed bytes alone MUST
+NOT grant acceptance, recipient registration, native input commit or restore
+authority; trusted restore folding and deduplication remain separate requirements.
+
 An MMP storage worker root MUST retain the actual opening/write handle, original
 store plan and exact lower attempt before any observer awaits completion. Dropped
 observers MUST NOT consume those handles or inputs. Tracked issuance MUST validate
