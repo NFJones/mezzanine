@@ -12,7 +12,8 @@
 use std::io::{self, Read, Write};
 
 use mez_agent::messaging::{
-    MessageAcceptanceStore, MessageAcceptanceStoreError, MessageAcceptanceWrite, MessageError,
+    MessageAcceptanceDecodeLimits, MessageAcceptanceSource, MessageAcceptanceStore,
+    MessageAcceptanceStoreError, MessageAcceptanceWrite, MessageError, decode_message_acceptance,
 };
 use serde::{Deserialize, Serialize};
 
@@ -131,6 +132,29 @@ pub(crate) struct PlannedAcceptanceStore<'a> {
 }
 
 impl MmpCustodyStore {
+    /// Decodes one quarantined original only after its complete source verifies.
+    ///
+    /// The supplied limits must cover the policy under which this store accepted
+    /// the original. Neither a verified record nor matching labels restore any
+    /// registration, native input, acknowledgment or delivery authority.
+    pub(crate) fn read_accepted_source(
+        &self,
+        sequence: u64,
+        limits: MessageAcceptanceDecodeLimits,
+    ) -> Result<(MessageAcceptanceSource, [u8; 32], usize)> {
+        self.with_verified_accepted_occurrence(sequence, |reader| {
+            let source = decode_message_acceptance(reader, limits).map_err(|error| {
+                MezError::invalid_state(format!("MMP acceptance decode failed: {error}"))
+            })?;
+            if source.sequence() != sequence {
+                return Err(MezError::invalid_state(
+                    "MMP acceptance record sequence disagrees with its committed marker",
+                ));
+            }
+            Ok(source)
+        })
+    }
+
     /// Verifies the actual complete accepted original before durable ACK work.
     /// Marker labels alone are insufficient: every bounded chunk, its framing
     /// and complete SHA256 must still agree. Unknown formats fail closed.

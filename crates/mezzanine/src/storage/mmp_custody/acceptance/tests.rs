@@ -9,6 +9,78 @@ use mez_agent::messaging::{
 
 use super::test_fixture::{Fixture, original, stored_bytes};
 
+/// Supplies the lower owner's current admission ceilings to the test decoder.
+fn decode_limits() -> MessageAcceptanceDecodeLimits {
+    MessageAcceptanceDecodeLimits {
+        payload_bytes: 1024 * 1024,
+        auxiliary_bytes: 16 * 1024 * 1024,
+        recipient_count: 4096,
+        recipient_bytes: 1024 * 1024,
+    }
+}
+
+/// A reopened SQLite store supplies a real, heavily escaped accepted original
+/// directly to the bounded typed decoder. The candidate emerges only after the
+/// full original marker, chunks and digest verify; no delivery is installed.
+#[test]
+fn verified_store_decodes_exact_original_with_bounded_payload() {
+    let fixture = Fixture::new();
+    let payload = "\0\"\n\\".repeat(256 * 1024);
+    let (_service, ticket, write) = original(payload.clone());
+    let expected = serde_json::to_vec(&write).unwrap();
+    let mut store = MmpCustodyStore::open(&fixture.0, "session").unwrap();
+    let plan = store.acceptance_plan(ticket.sequence()).unwrap();
+    assert!(matches!(
+        write.persist(&mut store.acceptance_port(&plan)),
+        MessageAcceptanceWriteOutcome::Committed(_)
+    ));
+    drop(store);
+    let store = MmpCustodyStore::open(&fixture.0, "session").unwrap();
+    let (decoded, digest, bytes) = store
+        .read_accepted_source(ticket.sequence(), decode_limits())
+        .unwrap();
+    assert_eq!(decoded.sequence(), ticket.sequence());
+    assert_eq!(decoded.envelope().payload, payload);
+    assert_eq!(bytes, expected.len());
+    assert_eq!(digest, <[u8; 32]>::from(Sha256::digest(&expected)));
+    assert!(!decoded.recipient_bindings().is_empty());
+    let mut narrowed = decode_limits();
+    narrowed.payload_bytes -= 1;
+    assert!(
+        store
+            .read_accepted_source(ticket.sequence(), narrowed)
+            .is_err()
+    );
+}
+
+/// Even well-framed decoded bytes do not escape when a later source chunk has
+/// changed: the final original digest must agree before the typed value returns.
+#[test]
+fn typed_source_is_withheld_when_committed_digest_changes() {
+    let fixture = Fixture::new();
+    let (_service, ticket, write) = original("original".repeat(40_000));
+    let mut store = MmpCustodyStore::open(&fixture.0, "session").unwrap();
+    let plan = store.acceptance_plan(ticket.sequence()).unwrap();
+    store.acceptance_port(&plan).commit(&write).unwrap();
+    let key = chunk_key(&format!("a1:{:016x}:", ticket.sequence()), 1);
+    let mut changed = store.read(&key).unwrap().unwrap();
+    let position = changed.iter().position(|byte| *byte == b'o').unwrap();
+    changed[position] = b'p';
+    let checksum = Sha256::digest(&changed).to_vec();
+    store
+        .connection
+        .execute(
+            "UPDATE records SET value=?1,digest=?2 WHERE key=?3",
+            rusqlite::params![changed, checksum, key],
+        )
+        .unwrap();
+    let error = store
+        .read_accepted_source(ticket.sequence(), decode_limits())
+        .err()
+        .unwrap();
+    assert!(error.to_string().contains("digest changed"), "{error}");
+}
+
 /// Escaping expands a valid one-MiB payload far beyond one256KiB transaction.
 /// The real port still preserves every original byte, TTL and frozen identity,
 /// uses bounded rows, and only its completed marker qualifies lower publication.

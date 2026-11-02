@@ -19,6 +19,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use super::*;
 
 mod record;
+mod record_decode;
+mod record_reader;
+pub use record_decode::{
+    MessageAcceptanceDecodeLimits, MessageAcceptanceSource, decode_message_acceptance,
+};
 /// Computes immutable source integrity on the owned ACK worker, not the actor.
 pub(super) fn acknowledgement_source_digest(
     row: &QueuedEnvelope,

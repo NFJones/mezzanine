@@ -15531,6 +15531,14 @@ consume the complete source, withhold its result until verification succeeds and
 perform no externally visible effects while decoding. Streamed bytes alone MUST
 NOT grant acceptance, recipient registration, native input commit or restore
 authority; trusted restore folding and deduplication remain separate requirements.
+The version1 acceptance decoder MUST preserve the original envelope, acceptance
+time, sender interval, resolved audience and sorted recipient intervals. It MUST
+reject unknown framing, malformed fields, contradictory audience or recipient
+data, and trailing input. Payload, envelope metadata and recipient bindings MUST
+be bounded during decoding using trusted limits that cover the original admission
+policy; encoded escapes MUST NOT bypass decoded-byte limits. A decoded candidate
+remains quarantined until the complete original digest and marker verify, and it
+does not by itself restore a live sender or recipient registration.
 
 An MMP storage worker root MUST retain the actual opening/write handle, original
 store plan and exact lower attempt before any observer awaits completion. Dropped

@@ -30,14 +30,15 @@ pub use requests::{
     MessageRequestReceipt, MessageRequests,
 };
 pub use service::{
-    MessageAcceptanceAttempt, MessageAcceptanceCommit, MessageAcceptanceJoin,
-    MessageAcceptanceProof, MessageAcceptanceRejected, MessageAcceptanceReservation,
-    MessageAcceptanceStore, MessageAcceptanceStoreError, MessageAcceptanceTicket,
-    MessageAcceptanceUncertain, MessageAcceptanceWrite, MessageAcceptanceWriteOutcome,
-    MessageAcknowledgementAttempt, MessageAcknowledgementCommit, MessageAcknowledgementEntry,
-    MessageAcknowledgementJoin, MessageAcknowledgementStore, MessageAcknowledgementTicket,
-    MessageAcknowledgementUncertain, MessageAcknowledgementWrite,
-    MessageAcknowledgementWriteOutcome, MessageSenderRegistration, MessageStorageScope,
+    MessageAcceptanceAttempt, MessageAcceptanceCommit, MessageAcceptanceDecodeLimits,
+    MessageAcceptanceJoin, MessageAcceptanceProof, MessageAcceptanceRejected,
+    MessageAcceptanceReservation, MessageAcceptanceSource, MessageAcceptanceStore,
+    MessageAcceptanceStoreError, MessageAcceptanceTicket, MessageAcceptanceUncertain,
+    MessageAcceptanceWrite, MessageAcceptanceWriteOutcome, MessageAcknowledgementAttempt,
+    MessageAcknowledgementCommit, MessageAcknowledgementEntry, MessageAcknowledgementJoin,
+    MessageAcknowledgementStore, MessageAcknowledgementTicket, MessageAcknowledgementUncertain,
+    MessageAcknowledgementWrite, MessageAcknowledgementWriteOutcome, MessageSenderRegistration,
+    MessageStorageScope, decode_message_acceptance,
 };
 pub use types::{
     AgentPresenceStatus, Delivery, DeliveryBatch, DeliveryCursor, DeliveryStatus, Envelope,
