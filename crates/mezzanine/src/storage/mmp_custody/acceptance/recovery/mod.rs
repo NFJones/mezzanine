@@ -231,6 +231,54 @@ impl Abort {
     }
 }
 
+/// Validates a fully cleaned abort descriptor as descriptive nonacceptance.
+/// Its sequence cannot confer sender, receipt, or recipient authority.
+pub(super) fn validate_finalized_abort(
+    bytes: &[u8],
+    sequence: u64,
+    generation: u64,
+    logical_bytes: usize,
+) -> Result<()> {
+    let abort = Abort::decode(bytes)?;
+    let declared = abort
+        .initial_generation
+        .checked_add(abort.chunks as u64)
+        .and_then(|value| value.checked_add(2))
+        .ok_or_else(changed)?;
+    let completed = abort
+        .declared_generation
+        .checked_add(abort.chunks as u64)
+        .ok_or_else(changed)?;
+    // The original cell was the encoded header. Its digest bytes can vary in
+    // decimal width, but the other fields and resulting chunk count are known.
+    // Bound the padded descriptor to the range any real original header could
+    // have occupied without attempting to reconstruct the missing original.
+    let header = |digest| Header {
+        record_version: RECORD_VERSION,
+        sequence,
+        encoded_bytes: abort.encoded_bytes,
+        chunks: abort.encoded_bytes.div_ceil(CHUNK_BYTES),
+        digest,
+    };
+    let shortest = serde_json::to_vec(&header([0; 32]))
+        .map_err(encoding_error)?
+        .len();
+    let longest = serde_json::to_vec(&header([255; 32]))
+        .map_err(encoding_error)?
+        .len();
+    if abort.sequence != sequence
+        || abort.encoded_bytes == 0
+        || abort.encoded_bytes > logical_bytes
+        || abort.chunks > abort.encoded_bytes.div_ceil(CHUNK_BYTES)
+        || abort.declared_generation != declared
+        || completed > generation
+        || !(shortest..=longest).contains(&bytes.len())
+    {
+        return Err(changed());
+    }
+    Ok(())
+}
+
 /// Parses one fixed little-endian field after bounds checking its original frame.
 fn integer(bytes: &[u8], offset: usize) -> Result<u64> {
     let field = bytes.get(offset..offset + 8).ok_or_else(changed)?;

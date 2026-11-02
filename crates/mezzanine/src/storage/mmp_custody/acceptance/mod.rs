@@ -21,6 +21,16 @@ use super::*;
 
 mod recovery;
 
+/// Recognizes and checks only a fully cleaned abort disposition.
+pub(super) fn validate_finalized_abort(
+    bytes: &[u8],
+    sequence: u64,
+    generation: u64,
+    logical_bytes: usize,
+) -> Result<()> {
+    recovery::validate_finalized_abort(bytes, sequence, generation, logical_bytes)
+}
+
 /// Keeps encoded buffers and individual transactions below the generic batch cap.
 const CHUNK_BYTES: usize = 64 * 1024;
 /// Row format version independent of SQLite schema1 and admission input version1.

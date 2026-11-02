@@ -15545,6 +15545,16 @@ referenced verified acceptance in the same store snapshot. An expiry exclusion
 MUST agree with the original acceptance clock, TTL and recorded offer time. This
 storage evidence alone MUST NOT establish a recovered native input commit or
 authorize cursor advancement.
+Any descriptive custody inventory MUST use one consistent store snapshot for
+the complete key scan and all referenced originals and acknowledgments. It MUST
+reject unknown or malformed rows, missing or extra source chunks, and unfinished
+stages instead of returning a partial inventory. A fully cleaned abort MAY be
+listed as nonacceptance evidence, but MUST NOT become accepted mail. Sequence
+gaps alone MUST NOT be treated as missing acceptances. Inventory references MUST
+be bounded and MUST NOT by themselves restore delivery or native-input authority.
+The observed store generation MUST be sufficient to account for the present row
+count under the store's maximum writes per transaction; a nonempty store at
+generation zero MUST NOT qualify as a consistent inventory.
 
 An MMP storage worker root MUST retain the actual opening/write handle, original
 store plan and exact lower attempt before any observer awaits completion. Dropped

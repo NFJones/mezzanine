@@ -63,7 +63,7 @@ impl MmpCustodyStore {
 
     /// Checks one ACK and its sources under the caller's same-store snapshot.
     /// Any output remains private until all inventory checks and commit succeed.
-    pub(super) fn read_stored_acknowledgement_in_snapshot(
+    pub(in crate::storage::mmp_custody) fn read_stored_acknowledgement_in_snapshot(
         &self,
         transaction: &rusqlite::Transaction<'_>,
         key: &str,
