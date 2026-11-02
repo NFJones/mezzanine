@@ -283,6 +283,51 @@ mod tests {
         assert!(!prompt.contains("16. "));
     }
 
+    /// Protects assembly of a built-in section substantially larger than the
+    /// former 44,000-byte prompt budget. The complete section and later policy
+    /// must survive without truncation; provider context limits are separate.
+    #[test]
+    fn prompt_assembly_preserves_large_system_sections() {
+        struct LargePromptAssets {
+            section: String,
+            fallback: TestPromptAssets,
+        }
+
+        impl AgentPromptAssetSource for LargePromptAssets {
+            fn system_fragment<'a>(&'a self, path: &str) -> AgentPromptResult<&'a str> {
+                if path == "autonomy.md" {
+                    Ok(&self.section)
+                } else {
+                    self.fallback.system_fragment(path)
+                }
+            }
+
+            fn provider_fragment<'a>(&'a self, path: &str) -> AgentPromptResult<&'a str> {
+                self.fallback.provider_fragment(path)
+            }
+        }
+
+        let section = format!(
+            "{}\nend of large section",
+            "large policy line\n".repeat(8_192)
+        );
+        let prompt = assemble_agent_system_prompt(
+            &AgentPromptProfile::for_model("test-model"),
+            &[],
+            &LargePromptAssets {
+                section: section.clone(),
+                fallback: TestPromptAssets,
+            },
+        )
+        .unwrap();
+
+        assert!(prompt.len() > 44_000);
+        assert!(prompt.contains(&format!(
+            "2. Autonomy\n{section}\n\n3. Repository Instructions"
+        )));
+        assert!(prompt.contains("15. Peer Messaging\ngeneric system contract"));
+    }
+
     /// Verifies model identity is the only variable prompt-profile field and
     /// provider or subagent state cannot alter the durable prompt shape.
     #[test]
