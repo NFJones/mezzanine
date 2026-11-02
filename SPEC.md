@@ -15611,6 +15611,12 @@ consumed frame length without an extra queued payload/frame copy. Fresh send ACK
 MUST follow actual durable commit and exact actor adoption; finalization MUST NOT
 redispatch the original frame. Mutable sender telemetry changing after reservation
 MUST NOT rewrite or invalidate that original acceptance.
+Elapsed storage and retry time MUST count against the original TTL before native
+input delivery. The raw continuation MUST advance its original logical clock by
+monotonic elapsed time for completion delivery and subsequent timer scheduling,
+using saturating arithmetic. It MUST NOT reset acceptance time, renew TTL or
+inject an already expired source merely because physical commit succeeded. An
+actual committed acceptance remains a historical fact even if delivery expires.
 
 Cached storage-qualified duplicates MUST match the live original root allocation
 as well as authenticated sender, immutable envelope and audience. Matching owner

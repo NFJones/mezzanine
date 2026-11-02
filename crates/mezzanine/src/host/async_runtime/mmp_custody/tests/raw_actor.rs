@@ -37,7 +37,7 @@ async fn actor_fixture(
 
 /// Actual hello registers the sender through ordinary audited identity dispatch.
 /// Its lease receiver remains independent of later per-frame reply cancellation.
-async fn hello(
+pub(super) async fn hello(
     handle: &AsyncRuntimeSessionHandle,
 ) -> (
     MessageConnection,
@@ -74,7 +74,7 @@ fn send(connection: &MessageConnection, target: &SenderIdentity, id: &str) -> Ve
 }
 
 /// Decodes only actual framed actor replies, never a fabricated acceptance label.
-fn body(frame: &[u8]) -> serde_json::Value {
+pub(super) fn body(frame: &[u8]) -> serde_json::Value {
     serde_json::from_str(&decode_mmp_frame(frame, 2 * 1024 * 1024).unwrap().0).unwrap()
 }
 

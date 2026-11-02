@@ -24,6 +24,8 @@ pub(in crate::host::async_runtime::actor) struct RawMessageContinuation {
     pub(in crate::host::async_runtime::actor) connection: MessageConnection,
     /// Clock at original selection, never refreshed to restart an accepted TTL.
     pub(in crate::host::async_runtime::actor) now_ms: u64,
+    /// Monotonic selection anchor; storage/retry time consumes the original TTL.
+    selected_at: Instant,
     /// Exact consumed input length for the original frame's eventual response.
     pub(in crate::host::async_runtime::actor) consumed: usize,
     /// Socket's exact fresh-registration lease, independent of reply cancellation.
@@ -38,6 +40,15 @@ pub(in crate::host::async_runtime::actor) struct RawMessageContinuation {
 }
 
 impl RawMessageContinuation {
+    /// Advances the original logical delivery clock by monotonic elapsed time.
+    /// This observation never changes acceptance time, envelope TTL or identity;
+    /// saturation keeps extreme timestamps from wrapping into fresh eligibility.
+    pub(in crate::host::async_runtime::actor) fn observation_now_ms(&self) -> u64 {
+        self.now_ms.saturating_add(
+            u64::try_from(self.selected_at.elapsed().as_millis()).unwrap_or(u64::MAX),
+        )
+    }
+
     /// Captures the original connection before either direct or deferred dispatch.
     pub(in crate::host::async_runtime::actor) fn new(
         connection: MessageConnection,
@@ -50,6 +61,7 @@ impl RawMessageContinuation {
             previous_agent_id: connection.agent_id.clone(),
             connection,
             now_ms,
+            selected_at: Instant::now(),
             consumed: 0,
             owner,
             reply,
@@ -200,7 +212,7 @@ impl AsyncRuntimeSessionActor {
             RawCompletion::Acceptance(delivery) => {
                 if self
                     .service
-                    .deliver_pending_runtime_agent_messages(raw.now_ms)
+                    .deliver_pending_runtime_agent_messages(raw.observation_now_ms())
                     .is_err()
                 {
                     eprintln!("mez: native MMP delivery deferred after storage acceptance");

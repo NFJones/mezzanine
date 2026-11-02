@@ -12,7 +12,7 @@ use tokio::sync::oneshot;
 
 /// Creates a real native conversation/turn and subscribed external peer, then
 /// registers the root before its first tracked claim. No provider task is run.
-async fn actor_fixture(
+pub(super) async fn actor_fixture(
     fixture: &Fixture,
 ) -> (
     AsyncRuntimeSessionHandle,

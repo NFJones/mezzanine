@@ -569,6 +569,12 @@ reserving a sequence, then retains only original connection/lease/reply metadata
 beside the charged lower source. Actual commit and actor adoption precede the
 send ACK; finalization never redispatches the original frame. Busy sends reserve
 no occurrence. Objective changes after reservation cannot rewrite that source.
+The original raw continuation also captures a monotonic selection instant.
+Completion delivery and its next timer use the original logical clock plus
+elapsed storage/retry time, with saturating arithmetic. Acceptance time and TTL
+remain unchanged: an expired source cannot enter native input after a slow write,
+while its actually committed acceptance remains historical truth. Live finite
+and infinite-TTL sources still follow ordinary native delivery.
 
 Live duplicate replies require the exact issuing root allocation, authenticated
 sender, immutable envelope and audience. Memory-only receipts, a matching owner

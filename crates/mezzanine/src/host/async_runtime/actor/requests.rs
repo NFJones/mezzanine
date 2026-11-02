@@ -111,9 +111,9 @@ impl AsyncRuntimeSessionActor {
         continuation: super::message_custody::RawMessageContinuation,
         result: crate::Result<(Vec<u8>, usize)>,
     ) {
+        let now_ms = continuation.observation_now_ms();
         let super::message_custody::RawMessageContinuation {
             connection,
-            now_ms,
             owner,
             reply,
             previous_agent_id,
