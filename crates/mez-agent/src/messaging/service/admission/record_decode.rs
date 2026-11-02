@@ -16,6 +16,7 @@ use super::record_reader::RecordReader;
 use super::*;
 
 /// Independent bounds supplied by the trusted destination, not stored JSON.
+#[derive(Clone, Copy)]
 pub struct MessageAcceptanceDecodeLimits {
     /// Maximum original payload bytes, independent of metadata.
     pub payload_bytes: usize,

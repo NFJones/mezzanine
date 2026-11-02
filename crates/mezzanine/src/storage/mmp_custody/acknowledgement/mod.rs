@@ -15,6 +15,8 @@ use mez_agent::messaging::{
 
 use super::*;
 
+mod recovery;
+
 /// Payload-free exact store position retained before physical ACK issuance.
 #[derive(Debug, Clone)]
 pub(crate) struct AcknowledgementPlan {

@@ -15539,6 +15539,12 @@ be bounded during decoding using trusted limits that cover the original admissio
 policy; encoded escapes MUST NOT bypass decoded-byte limits. A decoded candidate
 remains quarantined until the complete original digest and marker verify, and it
 does not by itself restore a live sender or recipient registration.
+Reading a stored acknowledgment MUST validate its content-addressed key, bounded
+decision framing, original sequence order and recipient interval against every
+referenced verified acceptance in the same store snapshot. An expiry exclusion
+MUST agree with the original acceptance clock, TTL and recorded offer time. This
+storage evidence alone MUST NOT establish a recovered native input commit or
+authorize cursor advancement.
 
 An MMP storage worker root MUST retain the actual opening/write handle, original
 store plan and exact lower attempt before any observer awaits completion. Dropped

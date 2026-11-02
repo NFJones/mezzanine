@@ -4,10 +4,298 @@
 
 use super::*;
 use mez_agent::messaging::{
-    Envelope, MessageAcceptanceWriteOutcome, MessageAcknowledgementAttempt,
-    MessageAcknowledgementJoin, MessageAcknowledgementTicket, MessageAcknowledgementWriteOutcome,
-    MessageScope, MessageService, Recipient,
+    Envelope, MessageAcceptanceDecodeLimits, MessageAcceptanceWriteOutcome,
+    MessageAcknowledgementAttempt, MessageAcknowledgementJoin, MessageAcknowledgementTicket,
+    MessageAcknowledgementWriteOutcome, MessageScope, MessageService, Recipient,
 };
+
+/// Supplies the lower owner's existing independent acceptance ceilings.
+fn decode_limits() -> MessageAcceptanceDecodeLimits {
+    MessageAcceptanceDecodeLimits {
+        payload_bytes: 1024 * 1024,
+        auxiliary_bytes: 16 * 1024 * 1024,
+        recipient_count: 4096,
+        recipient_bytes: 1024 * 1024,
+    }
+}
+
+/// Reopening a real committed ACK retains its original recipient interval and
+/// exact source decision. Reading verifies storage only and does not advance the
+/// lower service cursor or establish a recovered native application commit.
+#[test]
+fn reopened_acknowledgement_reads_exact_source_without_advancing_cursor() {
+    let fixture = Fixture::new();
+    let mut store = MmpCustodyStore::open(&fixture.0, "session").unwrap();
+    let (service, _ticket, write) = prepared(&mut store);
+    let recipient = write.recipient().clone();
+    let mut bytes = Vec::new();
+    write.write_record(&mut bytes).unwrap();
+    let key = ack_key(&bytes);
+    let plan = store.acknowledgement_plan().unwrap();
+    assert!(matches!(
+        write.persist(&mut store.acknowledgement_port(&plan)),
+        MessageAcknowledgementWriteOutcome::Committed(_)
+    ));
+    drop(store);
+    let store = MmpCustodyStore::open(&fixture.0, "session").unwrap();
+    let decoded = store
+        .read_stored_acknowledgement(&key, decode_limits())
+        .unwrap();
+    assert_eq!(decoded.recipient, recipient.as_str());
+    assert_eq!(decoded.registered_after_sequence, 0);
+    assert_eq!(decoded.after_sequence, 0);
+    assert_eq!(decoded.endpoint_sequence, 1);
+    assert_eq!(decoded.observed_at_ms, 20);
+    assert_eq!(decoded.decisions.len(), 1);
+    assert_eq!(decoded.decisions[0].sequence, 1);
+    assert_eq!(decoded.decisions[0].binding_index, 0);
+    assert!(decoded.decisions[0].acknowledged);
+    assert_eq!(service.subscription(&recipient).unwrap().last_sequence, 0);
+}
+
+/// A checksummed and correctly content-addressed ACK with a forged binding slot
+/// cannot be adopted merely because its occurrence or recipient label matches.
+/// It must still refer to the exact frozen binding of the verified original.
+#[test]
+fn stored_acknowledgement_rejects_forged_original_binding() {
+    let fixture = Fixture::new();
+    let mut store = MmpCustodyStore::open(&fixture.0, "session").unwrap();
+    let (_service, _ticket, write) = prepared(&mut store);
+    let mut bytes = Vec::new();
+    write.write_record(&mut bytes).unwrap();
+    let offset = 48 + write.recipient().as_str().len();
+    bytes[offset + 8..offset + 12].copy_from_slice(&1u32.to_le_bytes());
+    let key = ack_key(&bytes);
+    let generation = store.acknowledgement_plan().unwrap().generation;
+    store
+        .commit(
+            generation,
+            &[CustodyWrite {
+                key: &key,
+                previous: None,
+                value: Some(&bytes),
+            }],
+        )
+        .unwrap();
+    let error = store
+        .read_stored_acknowledgement(&key, decode_limits())
+        .err()
+        .unwrap();
+    assert!(error.to_string().contains("binding is missing"), "{error}");
+}
+
+/// Changing an original source after ACK publication, even with a recomputed
+/// per-row checksum, cannot yield a verified ACK. The acceptance marker's full
+/// digest and the ACK's stored source digest both remain required.
+#[test]
+fn stored_acknowledgement_rejects_changed_original_source() {
+    let fixture = Fixture::new();
+    let mut store = MmpCustodyStore::open(&fixture.0, "session").unwrap();
+    let (_service, _ticket, write) = prepared(&mut store);
+    let mut bytes = Vec::new();
+    write.write_record(&mut bytes).unwrap();
+    let key = ack_key(&bytes);
+    let plan = store.acknowledgement_plan().unwrap();
+    assert!(matches!(
+        write.persist(&mut store.acknowledgement_port(&plan)),
+        MessageAcknowledgementWriteOutcome::Committed(_)
+    ));
+    let chunk_key = "a1:0000000000000001:chunk:00000001";
+    let mut changed = store.read(chunk_key).unwrap().unwrap();
+    let index = changed.iter().position(|byte| *byte == b'o').unwrap();
+    changed[index] = b'p';
+    let checksum = Sha256::digest(&changed).to_vec();
+    store
+        .connection
+        .execute(
+            "UPDATE records SET value=?1,digest=?2 WHERE key=?3",
+            rusqlite::params![changed, checksum, chunk_key],
+        )
+        .unwrap();
+    let error = store
+        .read_stored_acknowledgement(&key, decode_limits())
+        .err()
+        .unwrap();
+    assert!(error.to_string().contains("digest changed"), "{error}");
+}
+
+/// A real cumulative ACK can exclude an unoffered expired earlier occurrence
+/// and acknowledge a later offered one. The stored reader must preserve both
+/// decisions and validate expiry against the original clock and endpoint offer.
+#[test]
+fn stored_acknowledgement_preserves_expiry_exclusion_and_later_ack() {
+    let fixture = Fixture::new();
+    let mut store = MmpCustodyStore::open(&fixture.0, "session").unwrap();
+    let mut service = MessageService::default();
+    let sender = service.register_agent(None, None, "sender", vec![]);
+    let recipient = service.register_agent(None, None, "target", vec![]);
+    service.subscribe(&recipient.agent_id).unwrap();
+    for (id, ttl_ms) in [("expired", Some(5)), ("live", None)] {
+        let envelope = Envelope {
+            protocol: "mmp/1",
+            id: id.into(),
+            message_type: "send".into(),
+            time: "fixture".into(),
+            sender: sender.clone(),
+            recipient: Recipient::Agent(recipient.agent_id.clone()),
+            correlation_id: None,
+            ttl_ms,
+            content_type: "text/plain".into(),
+            payload: id.into(),
+            extension_fields: vec![],
+        };
+        let ticket = service
+            .prepare_acceptance(
+                &sender.agent_id,
+                envelope,
+                MessageScope::Session,
+                10,
+                4096,
+                None,
+            )
+            .unwrap();
+        let plan = store.acceptance_plan(ticket.sequence()).unwrap();
+        let write = service.begin_acceptance_write(&ticket).unwrap();
+        let MessageAcceptanceWriteOutcome::Committed(commit) =
+            write.persist(&mut store.acceptance_port(&plan))
+        else {
+            panic!("acceptance must commit")
+        };
+        service.publish_acceptance(&commit).unwrap();
+    }
+    let offered = service
+        .receive_subscribed(&recipient.agent_id, 20, 10)
+        .unwrap();
+    assert_eq!(offered.messages.len(), 1);
+    assert_eq!(offered.messages[0].sequence, 2);
+    let ticket = service
+        .prepare_acknowledgement(&recipient.agent_id, 2, 512 * 1024)
+        .unwrap()
+        .unwrap();
+    let write = service.begin_acknowledgement_write(&ticket).unwrap();
+    let mut bytes = Vec::new();
+    write.write_record(&mut bytes).unwrap();
+    let key = ack_key(&bytes);
+    let plan = store.acknowledgement_plan().unwrap();
+    assert!(matches!(
+        write.persist(&mut store.acknowledgement_port(&plan)),
+        MessageAcknowledgementWriteOutcome::Committed(_)
+    ));
+    let decoded = store
+        .read_stored_acknowledgement(&key, decode_limits())
+        .unwrap();
+    assert_eq!(decoded.observed_at_ms, 20);
+    assert_eq!(decoded.decisions.len(), 2);
+    assert_eq!(decoded.decisions[0].sequence, 1);
+    assert!(!decoded.decisions[0].acknowledged);
+    assert_eq!(decoded.decisions[1].sequence, 2);
+    assert!(decoded.decisions[1].acknowledged);
+
+    // Recompute both row checksum and content key for a forged earlier offer
+    // clock; the original first message was not yet expired at that instant.
+    bytes[32..40].copy_from_slice(&10u64.to_le_bytes());
+    let forged_key = ack_key(&bytes);
+    let generation = store.acknowledgement_plan().unwrap().generation;
+    store
+        .commit(
+            generation,
+            &[CustodyWrite {
+                key: &forged_key,
+                previous: None,
+                value: Some(&bytes),
+            }],
+        )
+        .unwrap();
+    let error = store
+        .read_stored_acknowledgement(&forged_key, decode_limits())
+        .err()
+        .unwrap();
+    assert!(error.to_string().contains("expiry exclusion"), "{error}");
+}
+
+/// A row whose content address and row checksum have both been recomputed must
+/// still reject a forged source digest, rather than treating key integrity as
+/// evidence that its referenced original occurrence was the same message.
+#[test]
+fn stored_acknowledgement_rejects_forged_source_digest() {
+    let fixture = Fixture::new();
+    let mut store = MmpCustodyStore::open(&fixture.0, "session").unwrap();
+    let (_service, _ticket, write) = prepared(&mut store);
+    let mut bytes = Vec::new();
+    write.write_record(&mut bytes).unwrap();
+    let offset = 48 + write.recipient().as_str().len();
+    bytes[offset + 13] ^= 0x80;
+    let key = ack_key(&bytes);
+    let generation = store.acknowledgement_plan().unwrap().generation;
+    store
+        .commit(
+            generation,
+            &[CustodyWrite {
+                key: &key,
+                previous: None,
+                value: Some(&bytes),
+            }],
+        )
+        .unwrap();
+    let error = store
+        .read_stored_acknowledgement(&key, decode_limits())
+        .err()
+        .unwrap();
+    assert!(
+        error.to_string().contains("source digest changed"),
+        "{error}"
+    );
+}
+
+/// ACK and source validation share one physical SQLite read snapshot. A real
+/// competing connection cannot commit a changed original between those reads,
+/// and a transaction belonging to another store cannot qualify the operation.
+#[test]
+fn stored_acknowledgement_and_original_share_exact_store_snapshot() {
+    let fixture = Fixture::new();
+    let mut store = MmpCustodyStore::open(&fixture.0, "session").unwrap();
+    let (_service, _ticket, write) = prepared(&mut store);
+    let mut bytes = Vec::new();
+    write.write_record(&mut bytes).unwrap();
+    let key = ack_key(&bytes);
+    let plan = store.acknowledgement_plan().unwrap();
+    assert!(matches!(
+        write.persist(&mut store.acknowledgement_port(&plan)),
+        MessageAcknowledgementWriteOutcome::Committed(_)
+    ));
+    let transaction = store.connection.unchecked_transaction().unwrap();
+    assert!(store.read(&key).unwrap().is_some());
+    let path = fixture.0.join("custody.sqlite");
+    let writer = std::thread::spawn(move || {
+        let connection = rusqlite::Connection::open(path).unwrap();
+        connection
+            .busy_timeout(std::time::Duration::from_millis(100))
+            .unwrap();
+        let result = connection.execute(
+            "UPDATE records SET value=X'00' WHERE key=?1",
+            ["a1:0000000000000001:chunk:00000000"],
+        );
+        matches!(result, Err(rusqlite::Error::SqliteFailure(error, _)) if matches!(error.code, rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked))
+    });
+    assert!(
+        writer.join().unwrap(),
+        "competing write committed inside the snapshot"
+    );
+    let decoded = store
+        .read_stored_acknowledgement_in_snapshot(&transaction, &key, decode_limits())
+        .unwrap();
+    assert_eq!(decoded.endpoint_sequence, 1);
+    transaction.commit().unwrap();
+
+    let other_fixture = Fixture::new();
+    let other = MmpCustodyStore::open(&other_fixture.0, "another-session").unwrap();
+    let foreign = other.connection.unchecked_transaction().unwrap();
+    let error = store
+        .read_stored_acknowledgement_in_snapshot(&foreign, &key, decode_limits())
+        .err()
+        .unwrap();
+    assert!(error.to_string().contains("another store"), "{error}");
+}
 
 /// Owns one generated private directory, removed on normal/unwind cleanup.
 struct Fixture(std::path::PathBuf);

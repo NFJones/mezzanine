@@ -142,7 +142,25 @@ impl MmpCustodyStore {
         sequence: u64,
         limits: MessageAcceptanceDecodeLimits,
     ) -> Result<(MessageAcceptanceSource, [u8; 32], usize)> {
-        self.with_verified_accepted_occurrence(sequence, |reader| {
+        let transaction = self
+            .connection
+            .unchecked_transaction()
+            .map_err(database_error)?;
+        let result = self.read_accepted_source_in_snapshot(&transaction, sequence, limits)?;
+        transaction.commit().map_err(database_error)?;
+        Ok(result)
+    }
+
+    /// Decodes an original inside the caller's existing same-store snapshot.
+    /// The caller must keep the result private until its entire read transaction
+    /// and every cross-record validation have succeeded.
+    pub(super) fn read_accepted_source_in_snapshot(
+        &self,
+        transaction: &rusqlite::Transaction<'_>,
+        sequence: u64,
+        limits: MessageAcceptanceDecodeLimits,
+    ) -> Result<(MessageAcceptanceSource, [u8; 32], usize)> {
+        self.verified_accepted_in_snapshot(transaction, sequence, |reader| {
             let source = decode_message_acceptance(reader, limits).map_err(|error| {
                 MezError::invalid_state(format!("MMP acceptance decode failed: {error}"))
             })?;
@@ -202,6 +220,24 @@ impl MmpCustodyStore {
             .connection
             .unchecked_transaction()
             .map_err(database_error)?;
+        let result = self.verified_accepted_in_snapshot(&transaction, sequence, decode)?;
+        transaction.commit().map_err(database_error)?;
+        Ok(result)
+    }
+
+    /// Validates one source against the caller's already-open store snapshot.
+    /// The caller retains and commits the transaction before publishing results.
+    fn verified_accepted_in_snapshot<T>(
+        &self,
+        transaction: &rusqlite::Transaction<'_>,
+        sequence: u64,
+        decode: impl FnOnce(&mut dyn Read) -> Result<T>,
+    ) -> Result<(T, [u8; 32], usize)> {
+        if !std::ptr::eq(&self.connection, &**transaction) {
+            return Err(MezError::invalid_state(
+                "MMP acceptance snapshot belongs to another store",
+            ));
+        }
         let prefix = format!("a1:{sequence:016x}:");
         let marker = self
             .read(&format!("{prefix}commit"))?
@@ -239,7 +275,6 @@ impl MmpCustodyStore {
                 "MMP original acceptance digest changed",
             ));
         }
-        transaction.commit().map_err(database_error)?;
         Ok((decoded, header.digest, header.encoded_bytes))
     }
 
