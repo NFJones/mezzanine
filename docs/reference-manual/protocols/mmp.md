@@ -563,6 +563,30 @@ destruction. Ordinary product construction still uses the in-memory path; the
 internal root is not enabled there until native/raw/bridge acceptance, restore,
 supervision and full storage quotas/control journals are integrated.
 
+The internal raw storage adapter now parses authenticated send/task messages and
+explicit ACKs separately from acceptance. It selects idle root capacity before
+reserving a sequence, then retains only original connection/lease/reply metadata
+beside the charged lower source. Actual commit and actor adoption precede the
+send ACK; finalization never redispatches the original frame. Busy sends reserve
+no occurrence. Objective changes after reservation cannot rewrite that source.
+
+Live duplicate replies require the exact issuing root allocation, authenticated
+sender, immutable envelope and audience. Memory-only receipts, a matching owner
+label, generic qualification without that root, or restored snapshot data cannot
+upgrade this authority. Reopened roots need actual source reconciliation; durable
+lookup after replay eviction remains unfinished. The opaque live root scope is
+never serialized as a reconnect or native-task capability.
+
+Cancelled raw callers and retired socket leases do not abandon issued originals
+or revive their sender identities. Active storage failures retry the same original.
+On graceful shutdown, exact failed-stage reconciliation preserves a committed
+acceptance or releases only a qualified noncommit/complete abort, then returns the
+original wire result. Explicit raw ACKs use the same physical lane as fanout ACKs
+and update the connection cursor only after adoption. Identity/discovery/presence/
+receive still use their ordinary audited adapter. Normal product construction
+continues without this internal root; native/bridge acceptance, native context/
+dedup/restore, supervisor retention and complete quota/control integration remain.
+
 Only a never-issued reservation or an exactly qualified noncommit can be called
 unaccepted. Ambiguous writes retain the same original for reconciliation. A lost
 worker result requires actual join evidence before a new attempt; generic errors

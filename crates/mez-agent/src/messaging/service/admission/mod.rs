@@ -29,6 +29,32 @@ pub(super) fn acknowledgement_source_digest(
 /// Conservative logical headroom for actor attempt escrow and shared controls.
 const RECEIPT_TRACKING_BYTES: usize = 256;
 
+/// Live identity of one trusted storage root, never serialized or wire-owned.
+/// Each default creates a new allocation; clones name the same original root.
+/// Equality compares allocations, so matching labels or reopened stores cannot
+/// upgrade another root's cached receipt without actual reconciliation.
+#[derive(Clone, Default)]
+pub struct MessageStorageScope {
+    /// Root allocation remains alive while any qualified cached receipt refers to it.
+    identity: Arc<()>,
+}
+
+impl PartialEq for MessageStorageScope {
+    /// Requires the actual original allocation, not equal unit values or labels.
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.identity, &other.identity)
+    }
+}
+impl Eq for MessageStorageScope {}
+impl fmt::Debug for MessageStorageScope {
+    /// Hides allocation addresses and supplies no persisted authority label.
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("MessageStorageScope")
+            .finish_non_exhaustive()
+    }
+}
+
 /// Same-runtime, payload-free identity retained by receipts and tickets.
 #[derive(Debug)]
 struct AdmissionIdentity {
@@ -51,6 +77,8 @@ pub(in crate::messaging) struct PendingMessageAdmission {
     identity: Arc<AdmissionIdentity>,
     /// One issued write attempt. An ambiguous result cannot free this charge.
     attempt: Option<Arc<()>>,
+    /// Original issuing root; generic/memory qualification cannot provide it.
+    storage_scope: Option<MessageStorageScope>,
     /// Original sender retirement observed during the pending write, if any.
     sender_retired_fresh: Option<bool>,
 }
@@ -292,6 +320,47 @@ impl MessageAcceptanceUncertain {
 }
 
 impl MessageService {
+    /// Returns only an exact live storage-qualified duplicate under the current
+    /// authenticated sender/audience. Memory-only or snapshot-restored receipts
+    /// cannot qualify durable success. This does no I/O, offers or fresh admission;
+    /// retained replay eviction still requires the product's future disk lookup.
+    pub fn storage_qualified_duplicate(
+        &mut self,
+        sender: &AgentId,
+        envelope: &Envelope,
+        storage_scope: &MessageStorageScope,
+        scope: MessageScope,
+        now_ms: u64,
+    ) -> Result<Option<Delivery>> {
+        validate_protocol(envelope.protocol)?;
+        validate_message_type(&envelope.message_type)?;
+        let identity = self
+            .registered
+            .get(sender)
+            .ok_or_else(|| MessageError::forbidden("unregistered agent connection"))?;
+        if &envelope.sender != identity {
+            return Err(MessageError::forbidden(
+                "message sender does not match authenticated agent connection",
+            ));
+        }
+        let audience = resolve_message_audience(identity, scope)?;
+        let Some(accepted) = self.accepted_messages.get_mut(&envelope.id) else {
+            return Ok(None);
+        };
+        if accepted.envelope.as_ref() != envelope || accepted.audience != audience {
+            return Err(MessageError::conflict(MMP_DUPLICATE_MESSAGE_ID_MESSAGE));
+        }
+        if accepted.storage_scope.as_ref() != Some(storage_scope) {
+            return Err(MessageError::conflict(
+                "MMP receipt lacks live storage qualification",
+            ));
+        }
+        if envelope_expired_at(&accepted.envelope, accepted.accepted_at_ms, now_ms) {
+            accepted.delivery.status = DeliveryStatus::Expired;
+        }
+        Ok(Some(accepted.delivery.clone()))
+    }
+
     /// Reports a retained unpublished original for trusted scheduler admission.
     /// This is neither an acceptance assertion nor permission to cancel I/O.
     pub fn has_unpublished_acceptance(&self) -> bool {
@@ -444,6 +513,7 @@ impl MessageService {
             row,
             identity: allocation.clone(),
             attempt: None,
+            storage_scope: None,
             sender_retired_fresh: None,
         });
         Ok(MessageAcceptanceTicket {
@@ -457,6 +527,26 @@ impl MessageService {
         &mut self,
         ticket: &MessageAcceptanceTicket,
     ) -> Result<MessageAcceptanceWrite> {
+        self.issue_acceptance_write(ticket, None)
+    }
+
+    /// Issues the same original under its trusted live root allocation. Only
+    /// actual adoption can attach this scope to a cached receipt; retries retain
+    /// it and snapshot restore never recreates it from serialized data.
+    pub fn begin_storage_acceptance_write(
+        &mut self,
+        ticket: &MessageAcceptanceTicket,
+        storage_scope: &MessageStorageScope,
+    ) -> Result<MessageAcceptanceWrite> {
+        self.issue_acceptance_write(ticket, Some(storage_scope))
+    }
+
+    /// Shares issuance validation; an already-issued original cannot change root.
+    fn issue_acceptance_write(
+        &mut self,
+        ticket: &MessageAcceptanceTicket,
+        storage_scope: Option<&MessageStorageScope>,
+    ) -> Result<MessageAcceptanceWrite> {
         self.require_admission_owner(&ticket.identity)?;
         let pending = self.admission.as_mut().ok_or_else(admission_changed)?;
         if !Arc::ptr_eq(&pending.identity, &ticket.identity) || pending.attempt.is_some() {
@@ -464,6 +554,7 @@ impl MessageService {
         }
         let attempt = Arc::new(());
         pending.attempt = Some(attempt.clone());
+        pending.storage_scope = storage_scope.cloned();
         Ok(MessageAcceptanceWrite {
             identity: pending.identity.clone(),
             attempt,
@@ -559,6 +650,7 @@ impl MessageService {
         self.accepted_messages.insert(
             row.envelope.id.clone(),
             AcceptedMessage {
+                storage_scope: pending.storage_scope,
                 envelope: row.envelope.clone(),
                 audience: row.audience.clone(),
                 delivery: commit.identity.delivery.clone(),

@@ -1,4 +1,4 @@
-//! Actor ownership of original MMP storage completion and fanout ACK replies.
+//! Actor ownership of original MMP storage completion and raw transport replies.
 //!
 //! A registered root is observed directly by the actor, independently of socket
 //! reply receivers and provider slots. Actual joins precede lower publication;
@@ -7,16 +7,20 @@
 //! retains the actor/service/root until that ACK is canonically settled.
 //!
 //! Registration is deliberately internal and is not enabled by normal product
-//! construction yet: native/raw/bridge acceptance, native input dedup, restore,
+//! construction yet: native/bridge acceptance, native input dedup, restore,
 //! durable retirement and total quotas must all be integrated before advertising
 //! durable mode. This owner handles graceful shutdown, not forced actor abort or
-//! runtime destruction. Other root jobs must acquire their own actor continuations
+//! runtime destruction. Native root jobs must acquire their own actor continuations
 //! before registration can be enabled for general ingress.
 
 use std::future::{Future, pending};
 
 use futures_util::FutureExt;
-use mez_agent::messaging::{DeliveryCursor, FanoutBatch};
+use mez_agent::messaging::{DeliveryCursor, FanoutBatch, MessageError};
+
+mod raw;
+use raw::RawCompletion;
+pub(super) use raw::RawMessageContinuation;
 use tokio::sync::oneshot;
 use tokio::time::Instant;
 
@@ -41,8 +45,24 @@ enum Wake {
 pub(super) enum CustodyEvent {
     /// Actual joined disposition, still requiring canonical lower adoption.
     Observed(Result<CustodyWorkerStatus>),
-    /// Original ACK's backoff expired; no new admission may replace it.
+    /// Original job's backoff expired; no new admission may replace it.
     Retry,
+}
+
+/// Original actor continuation paired with the root's one exclusive job.
+enum Pending {
+    /// Full raw body is already in the charged lower reservation, not this owner.
+    Acceptance(RawMessageContinuation),
+    /// Actual application/transport commit preceded this original ACK request.
+    Acknowledgement(AcknowledgementReply),
+}
+
+/// Exact original observer flavor, neither can cancel physical/canonical custody.
+enum AcknowledgementReply {
+    /// Successful raw peer batch write awaiting canonical transport cursor.
+    Fanout(oneshot::Sender<Result<DeliveryCursor>>),
+    /// Explicit raw ACK frame awaiting its original connection cursor result.
+    Raw(RawMessageContinuation),
 }
 
 /// One registered private store with the original pending observer reply.
@@ -52,8 +72,8 @@ pub(in crate::host::async_runtime) struct ActorMessageCustody {
     /// None disables polling an idle/failed root and prevents a busy loop.
     wake: Option<Wake>,
     /// Receiver cancellation cannot remove this issued original continuation.
-    acknowledgement: Option<oneshot::Sender<Result<DeliveryCursor>>>,
-    /// Shutdown is completed only after actual join and canonical adoption.
+    pending: Option<Pending>,
+    /// Shutdown is completed only after actual join and canonical settlement.
     shutdown: Option<oneshot::Sender<Result<RuntimeLifecycleState>>>,
     /// Bounded diagnostic; never a qualification of noncommit or unsent input.
     failure: Option<MezError>,
@@ -65,7 +85,7 @@ impl std::fmt::Debug for ActorMessageCustody {
         formatter
             .debug_struct("ActorMessageCustody")
             .field("wake", &self.wake)
-            .field("acknowledgement", &self.acknowledgement.is_some())
+            .field("pending", &self.pending.is_some())
             .field("shutdown", &self.shutdown.is_some())
             .field("failed", &self.failure.is_some())
             .finish()
@@ -90,7 +110,7 @@ impl AsyncRuntimeSessionActor {
         self.message_custody = Some(Box::new(ActorMessageCustody {
             root,
             wake: Some(Wake::Observe),
-            acknowledgement: None,
+            pending: None,
             shutdown: None,
             failure: None,
         }));
@@ -130,7 +150,7 @@ impl AsyncRuntimeSessionActor {
             self.apply_message_custody_event(event);
         }
         let ready = self.message_custody.as_ref().is_some_and(|owner| {
-            owner.shutdown.is_some() && owner.acknowledgement.is_none() && owner.wake.is_none()
+            owner.shutdown.is_some() && owner.pending.is_none() && owner.wake.is_none()
         });
         if ready {
             let reply = self
@@ -152,6 +172,7 @@ impl AsyncRuntimeSessionActor {
         let Some(owner) = self.message_custody.as_mut() else {
             return;
         };
+        let mut completion = None;
         let result = match event {
             CustodyEvent::Observed(Ok(CustodyWorkerStatus::Idle)) => {
                 owner.wake = None;
@@ -165,38 +186,120 @@ impl AsyncRuntimeSessionActor {
                 owner.wake = None;
                 Ok(())
             }
-            CustodyEvent::Observed(Ok(CustodyWorkerStatus::AcknowledgementAwaitingAdoption)) => {
-                owner
-                    .root
-                    .adopt_acknowledgement(self.service.message_service_mut())
-                    .map(|cursor| {
-                        if let Some(reply) = owner.acknowledgement.take() {
-                            let _ = reply.send(Ok(cursor));
-                        }
-                        owner.failure = None;
-                        owner.wake = Some(Wake::Observe);
-                    })
+            CustodyEvent::Observed(Ok(CustodyWorkerStatus::AwaitingAdoption)) => {
+                if matches!(&owner.pending, Some(Pending::Acceptance(_))) {
+                    owner
+                        .root
+                        .adopt(self.service.message_service_mut(), None)
+                        .map(|delivery| {
+                            if let Some(Pending::Acceptance(raw)) = owner.pending.take() {
+                                completion = Some((raw, RawCompletion::Acceptance(delivery)));
+                            }
+                            owner.failure = None;
+                            owner.wake = Some(Wake::Observe);
+                        })
+                } else {
+                    Err(MezError::invalid_state(
+                        "MMP acceptance has no original actor continuation",
+                    ))
+                }
             }
-            CustodyEvent::Observed(Ok(CustodyWorkerStatus::AcknowledgementRetryAt(at))) => {
+            CustodyEvent::Observed(Ok(CustodyWorkerStatus::AwaitingRefusal)) => {
+                if matches!(&owner.pending, Some(Pending::Acceptance(_))) {
+                    owner
+                        .root
+                        .release_rejected(self.service.message_service_mut(), None)
+                        .map(|()| {
+                            if let Some(Pending::Acceptance(raw)) = owner.pending.take() {
+                                completion = Some((
+                                    raw,
+                                    RawCompletion::Rejected(MessageError::invalid_state(
+                                        "MMP original storage admission did not commit",
+                                    )),
+                                ));
+                            }
+                            owner.failure = None;
+                            owner.wake = Some(Wake::Observe);
+                        })
+                } else {
+                    Err(MezError::invalid_state(
+                        "MMP refusal has no original actor continuation",
+                    ))
+                }
+            }
+            CustodyEvent::Observed(Ok(CustodyWorkerStatus::AcknowledgementAwaitingAdoption)) => {
+                if matches!(&owner.pending, Some(Pending::Acknowledgement(_))) {
+                    owner
+                        .root
+                        .adopt_acknowledgement(self.service.message_service_mut())
+                        .map(|cursor| {
+                            match owner.pending.take() {
+                                Some(Pending::Acknowledgement(AcknowledgementReply::Fanout(
+                                    reply,
+                                ))) => {
+                                    let _ = reply.send(Ok(cursor));
+                                }
+                                Some(Pending::Acknowledgement(AcknowledgementReply::Raw(raw))) => {
+                                    completion =
+                                        Some((raw, RawCompletion::Acknowledgement(cursor)));
+                                }
+                                _ => {}
+                            }
+                            owner.failure = None;
+                            owner.wake = Some(Wake::Observe);
+                        })
+                } else {
+                    Err(MezError::invalid_state(
+                        "MMP ACK has no original actor continuation",
+                    ))
+                }
+            }
+            CustodyEvent::Observed(Ok(CustodyWorkerStatus::RetryAt(at)))
+                if matches!(&owner.pending, Some(Pending::Acceptance(_))) =>
+            {
                 owner.wake = Some(Wake::Retry(at));
                 Ok(())
             }
-            CustodyEvent::Retry => owner
-                .root
-                .retry_acknowledgement(self.service.message_service_mut(), Instant::now())
-                .map(|_| owner.wake = Some(Wake::Observe)),
-            CustodyEvent::Observed(Err(error)) => Err(error),
-            // Acceptance continuations are not registered by this ACK adapter.
-            // Fail closed if trusted setup violates exclusive scheduling.
-            CustodyEvent::Observed(Ok(_)) => Err(MezError::invalid_state(
-                "MMP custody result has no actor continuation",
+            CustodyEvent::Observed(Ok(CustodyWorkerStatus::AcknowledgementRetryAt(at)))
+                if matches!(&owner.pending, Some(Pending::Acknowledgement(_))) =>
+            {
+                owner.wake = Some(Wake::Retry(at));
+                Ok(())
+            }
+            CustodyEvent::Observed(Ok(
+                CustodyWorkerStatus::RetryAt(_) | CustodyWorkerStatus::AcknowledgementRetryAt(_),
+            )) => Err(MezError::invalid_state(
+                "MMP retry has no matching original actor continuation",
             )),
+            CustodyEvent::Retry => match owner.pending {
+                Some(Pending::Acceptance(_)) => {
+                    let service = self.service.message_service_mut();
+                    let retried = if owner.shutdown.is_some() {
+                        owner.root.recover_failed_stage(service, Instant::now())
+                    } else {
+                        owner.root.retry(service, Instant::now())
+                    };
+                    retried.map(|_| owner.wake = Some(Wake::Observe))
+                }
+                _ => owner
+                    .root
+                    .retry_acknowledgement(self.service.message_service_mut(), Instant::now())
+                    .map(|_| owner.wake = Some(Wake::Observe)),
+            },
+            CustodyEvent::Observed(Err(error)) => Err(error),
+            CustodyEvent::Observed(Ok(CustodyWorkerStatus::Running)) => {
+                owner.wake = Some(Wake::Observe);
+                Ok(())
+            }
         };
         if let Err(error) = result {
             owner.failure = Some(error);
             owner.wake = Some(Wake::Retry(
                 Instant::now() + std::time::Duration::from_secs(1),
             ));
+        }
+        if let Some((raw, result)) = completion {
+            self.complete_stored_raw_message(raw, result);
         }
     }
 
@@ -218,7 +321,7 @@ impl AsyncRuntimeSessionActor {
             let _ = reply.send(result);
             return;
         };
-        if owner.wake.is_some() || owner.acknowledgement.is_some() || owner.failure.is_some() {
+        if owner.wake.is_some() || owner.pending.is_some() || owner.failure.is_some() {
             let _ = reply.send(Err(MezError::conflict(
                 "MMP custody ACK lane busy or unavailable",
             )));
@@ -238,7 +341,9 @@ impl AsyncRuntimeSessionActor {
                 Ok(()) => {
                     // Registered synchronously before any observer can await or
                     // publish the actual worker's result. Reply loss is inert.
-                    owner.acknowledgement = Some(reply);
+                    owner.pending = Some(Pending::Acknowledgement(AcknowledgementReply::Fanout(
+                        reply,
+                    )));
                     owner.wake = Some(Wake::Observe);
                 }
                 Err(error) => {
@@ -264,7 +369,7 @@ impl AsyncRuntimeSessionActor {
         }
     }
 
-    /// Fences fresh root sends and defers exit while an original ACK/open is owned.
+    /// Fences fresh sends and retains original acceptance/ACK/open until settlement.
     /// The ordinary ephemeral actor retains its existing immediate shutdown path.
     pub(super) fn begin_message_custody_shutdown(
         &mut self,

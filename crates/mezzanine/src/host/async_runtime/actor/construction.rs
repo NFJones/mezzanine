@@ -483,7 +483,7 @@ impl AsyncRuntimeSessionActor {
             }
             if self.message_custody_shutdown_pending() {
                 // Admission is closed. Do not execute already-queued ingress
-                // while retaining the original physical ACK through settlement.
+                // while retaining the original write through settlement.
                 let event = self.message_custody_wakeup().await;
                 self.apply_message_custody_event(event);
                 continue;

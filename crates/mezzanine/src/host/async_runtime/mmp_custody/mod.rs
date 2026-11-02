@@ -10,8 +10,8 @@
 //! Stop closes new sends but preserves accepted-input ACK drains, reconciliation and
 //! publication. Backoff is monotonic1,2,4..30 seconds after each observed failure,
 //! with one worker per root and no provider permit. The owning actor/supervisor
-//! must keep this root until settlement. The actor ACK adapter now retains its
-//! original root/reply through graceful shutdown; send ingress, native control
+//! must keep this root until settlement. The raw/ACK actor adapter retains its
+//! original root/reply through graceful shutdown; native/bridge sends and control
 //! drains, supervisory abort, restart dedup and total quotas remain unfinished.
 
 use std::future::{Future, poll_fn};
@@ -27,7 +27,7 @@ use std::time::Duration;
 use mez_agent::messaging::{
     Delivery, MessageAcceptanceAttempt, MessageAcceptanceJoin, MessageAcceptanceTicket,
     MessageAcceptanceWrite, MessageAcceptanceWriteOutcome, MessageError, MessageRequests,
-    MessageService,
+    MessageService, MessageStorageScope,
 };
 use tokio::runtime::Handle;
 use tokio::task::JoinHandle;
@@ -146,6 +146,8 @@ struct Inner {
     destination: Destination,
     /// Runtime used to install blocking workers and fallback retirement custody.
     runtime: Handle,
+    /// Live identity shared only with receipts issued by this exact root.
+    storage_scope: MessageStorageScope,
     /// Reduce-only admission closure; issued reconciliation remains permitted.
     stopping: AtomicBool,
     /// Test-only actual blocking gate and postcommit panic injection.
@@ -161,6 +163,12 @@ struct Inner {
 pub(crate) struct MmpCustodyRoot(Arc<Inner>);
 
 impl MmpCustodyRoot {
+    /// Borrows original live root authority for qualified duplicate lookup.
+    /// Equal owner labels or a newly opened root cannot recreate this allocation.
+    pub fn storage_scope(&self) -> &MessageStorageScope {
+        &self.0.storage_scope
+    }
+
     /// Starts private opening on one owned blocking worker before returning.
     /// Calling setup must use an existing Tokio runtime; no provider slot is used.
     pub fn open(root: PathBuf, owner: String, limits: CustodyStoreLimits, runtime: Handle) -> Self {
@@ -192,6 +200,7 @@ impl MmpCustodyRoot {
             observer: tokio::sync::Mutex::new(()),
             destination,
             runtime,
+            storage_scope: MessageStorageScope::default(),
             stopping: AtomicBool::new(false),
             #[cfg(test)]
             probe,
@@ -319,7 +328,7 @@ impl MmpCustodyRoot {
         let tracked = requests.is_some();
         let plan = opened.anchor.for_sequence(ticket.sequence());
         let write = service
-            .begin_acceptance_write(ticket)
+            .begin_storage_acceptance_write(ticket, &self.0.storage_scope)
             .map_err(lower_error)?;
         let admission = Admission {
             plan,

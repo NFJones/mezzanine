@@ -757,3 +757,5 @@ async fn lost_cleanup_receipt_keeps_recovery_intent_through_actual_worker_join()
     assert!(!service.has_unpublished_acceptance());
     assert_eq!(fixture.probe.attempts.load(Ordering::SeqCst), 3);
 }
+
+mod raw_actor;

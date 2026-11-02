@@ -56,7 +56,7 @@ pub use admission::{
     MessageAcceptanceAttempt, MessageAcceptanceCommit, MessageAcceptanceJoin,
     MessageAcceptanceRejected, MessageAcceptanceStore, MessageAcceptanceStoreError,
     MessageAcceptanceTicket, MessageAcceptanceUncertain, MessageAcceptanceWrite,
-    MessageAcceptanceWriteOutcome,
+    MessageAcceptanceWriteOutcome, MessageStorageScope,
 };
 mod discovery;
 pub use acceptance_proof::{MessageAcceptanceProof, MessageAcceptanceReservation};
@@ -269,6 +269,7 @@ impl MessageService {
         self.accepted_messages.insert(
             message_id,
             AcceptedMessage {
+                storage_scope: None,
                 envelope: accepted_envelope,
                 audience,
                 delivery: delivery.clone(),

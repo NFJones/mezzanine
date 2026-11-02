@@ -8,6 +8,12 @@
 
 use mez_core::ids::{AgentId, StableId};
 
+mod storage;
+pub use storage::{
+    MmpStoragePreparation, MmpStorageRequest, mmp_acceptance_response,
+    mmp_acknowledgement_response, mmp_storage_error_response, parse_mmp_storage_request,
+};
+
 use super::error::{MessageError, Result};
 use super::json::{
     delivery_batch_json, json_escape, json_number_field, json_object_field, json_optional,
@@ -45,12 +51,7 @@ pub fn dispatch_mmp_body(
     }
     match dispatch_mmp_body_result(body, service, connection, now_ms) {
         Ok(response) => response,
-        Err(error) => mmp_error(
-            mmp_error_code(&error),
-            error.message(),
-            false,
-            mmp_delivery_status(&error),
-        ),
+        Err(error) => mmp_storage_error_response(&error),
     }
 }
 
@@ -65,13 +66,7 @@ fn dispatch_mmp_body_result(
     connection: &mut MessageConnection,
     now_ms: u64,
 ) -> Result<String> {
-    let protocol = json_string_field(body, "protocol")
-        .ok_or_else(|| MessageError::invalid_args("MMP envelope requires protocol"))?;
-    validate_protocol(&protocol)?;
-    let message_type = json_string_field(body, "type")
-        .or_else(|| json_string_field(body, "message_type"))
-        .ok_or_else(|| MessageError::invalid_args("MMP envelope requires type"))?;
-    validate_message_type(&message_type)?;
+    let message_type = request_message_type(body)?;
 
     match message_type.as_str() {
         "hello" => {
@@ -167,12 +162,7 @@ fn dispatch_mmp_body_result(
             let scope = parse_transport_message_scope(body)?;
             let envelope = parse_transport_envelope(body, message_type, sender)?;
             let delivery = service.accept_at_with_scope(&agent_id, envelope, scope, now_ms)?;
-            Ok(format!(
-                r#"{{"protocol":"mmp/1","type":"ack","message_id":"{}","queued_recipients":{},"status":"{}"}}"#,
-                json_escape(&delivery.message_id),
-                delivery.queued_recipients,
-                delivery_status_name(delivery.status)
-            ))
+            Ok(mmp_acceptance_response(&delivery))
         }
         "transport/receive" | "mmp.receive" => {
             let agent_id = require_registered_connection(connection)?.clone();
@@ -192,15 +182,24 @@ fn dispatch_mmp_body_result(
                 .map_err(|_| MessageError::invalid_args("ack sequence is invalid"))?;
             let cursor = service.advance_subscription(&agent_id, sequence)?;
             connection.delivery_cursor = Some(cursor.clone());
-            Ok(format!(
-                r#"{{"protocol":"mmp/1","type":"ack","last_sequence":{}}}"#,
-                cursor.last_sequence
-            ))
+            Ok(mmp_acknowledgement_response(&cursor))
         }
         _ => Err(MessageError::invalid_args(
             "message type is not accepted on this endpoint",
         )),
     }
+}
+
+/// Checks the common request header before either immediate or prepared dispatch.
+fn request_message_type(body: &str) -> Result<String> {
+    let protocol = json_string_field(body, "protocol")
+        .ok_or_else(|| MessageError::invalid_args("MMP envelope requires protocol"))?;
+    validate_protocol(&protocol)?;
+    let message_type = json_string_field(body, "type")
+        .or_else(|| json_string_field(body, "message_type"))
+        .ok_or_else(|| MessageError::invalid_args("MMP envelope requires type"))?;
+    validate_message_type(&message_type)?;
+    Ok(message_type)
 }
 
 /// Runs the parse transport envelope operation for this subsystem.

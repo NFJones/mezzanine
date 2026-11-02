@@ -64,25 +64,71 @@ impl AsyncRuntimeSessionActor {
         &mut self,
         input: Vec<u8>,
         max_content_length: usize,
-        mut connection: mez_agent::messaging::MessageConnection,
+        connection: mez_agent::messaging::MessageConnection,
         now_ms: u64,
         owner: Option<tokio::sync::watch::Sender<Option<mez_core::ids::AgentId>>>,
         reply: tokio::sync::oneshot::Sender<crate::Result<AsyncMessageInputResult>>,
     ) {
-        let previous_lifecycle_state = self.service.lifecycle_state();
-        let previous_agent_id = connection.agent_id.clone();
-        let mut result = self
-            .service
-            .handle_message_input(&input, max_content_length, &mut connection, now_ms)
-            .and_then(|(output, consumed)| {
-                self.queue_deferred_pane_io_side_effects_from_service()?;
-                self.queue_peer_message_delivery_timer_if_needed(now_ms)?;
-                Ok(AsyncMessageInputResult {
-                    output,
-                    consumed,
-                    connection: connection.clone(),
-                })
-            });
+        let mut continuation = super::message_custody::RawMessageContinuation::new(
+            connection,
+            now_ms,
+            owner,
+            reply,
+            self.service.lifecycle_state(),
+        );
+        if self.message_custody.is_some() {
+            match self.prepare_stored_raw_message(
+                &input,
+                max_content_length,
+                &continuation.connection,
+            ) {
+                Ok(Some((prepared, consumed))) => {
+                    continuation.consumed = consumed;
+                    self.start_stored_raw_message(continuation, prepared);
+                    return;
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    self.finish_raw_message_input(continuation, Err(error));
+                    return;
+                }
+            }
+        }
+        let result = self.service.handle_message_input(
+            &input,
+            max_content_length,
+            &mut continuation.connection,
+            now_ms,
+        );
+        self.finish_raw_message_input(continuation, result);
+    }
+
+    /// Finishes either ordinary dispatch or one actual storage-qualified result.
+    /// Identity lease publication and cancelled-observer cleanup are shared; no
+    /// original frame is replayed after storage commits or a caller disappears.
+    pub(super) fn finish_raw_message_input(
+        &mut self,
+        continuation: super::message_custody::RawMessageContinuation,
+        result: crate::Result<(Vec<u8>, usize)>,
+    ) {
+        let super::message_custody::RawMessageContinuation {
+            connection,
+            now_ms,
+            owner,
+            reply,
+            previous_agent_id,
+            previous_lifecycle_state,
+            ..
+        } = continuation;
+        let mut result = result.and_then(|(output, consumed)| {
+            self.queue_deferred_pane_io_side_effects_from_service()?;
+            self.queue_peer_message_delivery_timer_if_needed(now_ms)?;
+            Ok(AsyncMessageInputResult {
+                output,
+                consumed,
+                connection: connection.clone(),
+            })
+        });
         // Dispatch may have committed hello before audit/effect admission
         // failed. Own that identity before publishing or sending a reply.
         if owner.is_some()

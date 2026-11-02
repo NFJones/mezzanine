@@ -15568,6 +15568,35 @@ destruction. Normal product construction remains without this internal root;
 all-producer acceptance, native dedup/restore, supervisory abort retention and full
 quota/control integration remain required before enabling durable product mode.
 
+Internally registered raw transport storage dispatch MUST parse and authenticate
+send/task-status/task-result and explicit ACK requests without allocating an
+occurrence or mutating cursors. It MUST select available root capacity before
+lower reservation. The actor MUST retain the original connection/lease/reply and
+consumed frame length without an extra queued payload/frame copy. Fresh send ACK
+MUST follow actual durable commit and exact actor adoption; finalization MUST NOT
+redispatch the original frame. Mutable sender telemetry changing after reservation
+MUST NOT rewrite or invalidate that original acceptance.
+
+Cached storage-qualified duplicates MUST match the live original root allocation
+as well as authenticated sender, immutable envelope and audience. Matching owner
+labels, memory-only acceptance, generic port qualification without that root, or
+serialized/restored receipt data MUST NOT supply this live authority. A newly
+opened root requires actual reconciliation before qualifying older receipts.
+This root scope MUST NOT be serialized as a reconnect or native task capability.
+After replay eviction, durable disk lookup/dedup remains required before product
+activation; this live cache is not a complete durable idempotency ledger.
+
+Raw caller loss/lease retirement MUST preserve issued acceptance through original
+join/adoption without reviving the sender registration. Active storage retries
+MUST keep the same source/plan. Graceful shutdown of a failed original MAY use
+exact failed-stage reconciliation: an actual committed source stays positive;
+only qualified absence/complete abort cleanup permits release and a wire rejection.
+An explicit raw ACK MUST share the same root lane as transport fanout ACKs and
+update its original connection cursor only after canonical adoption. Ordinary
+identity/discovery/presence/receive requests keep their existing audited adapter.
+These internal raw paths do not enable durable native/bridge ingress, native
+context/dedup/restore, supervisory abort retention or complete quotas/control.
+
 The lower service's explicit actor-owned terminal maintenance MUST reserve one
 fixed-size disposition slot per accepted recipient before success. It records
 `expired` only after the original strict TTL boundary, or `recipient_retired`

@@ -265,3 +265,69 @@ async fn actor_never_reports_durable_ack_success_for_memory_only_source() {
         CustodyWorkerStatus::AcknowledgementRetryAt(_)
     ));
 }
+
+/// An explicit raw ACK frame shares the same physical gate as transport fanout
+/// ACKs and updates its original connection cursor only after actual adoption.
+/// Its duplicate remains inert and cannot create a second durable ACK record.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn actor_explicit_raw_ack_waits_for_storage_and_updates_original_connection() {
+    let fixture = Fixture::new(false);
+    let (handle, actor, batch, _) = actor_fixture(&fixture).await;
+    let original = fixture.disk();
+    let connection = mez_agent::messaging::MessageConnection {
+        agent_id: Some(batch.recipient),
+        delivery_cursor: Some(batch.batch.cursor),
+    };
+    let input = crate::protocol::message::encode_mmp_body(
+        r#"{"protocol":"mmp/1","type":"ack","sequence":1}"#,
+    );
+    let runner = tokio::spawn(actor.run());
+    let sender = handle.clone();
+    let original_input = input.clone();
+    let caller = tokio::spawn(async move {
+        sender
+            .handle_message_input(original_input, 4096, connection, 30)
+            .await
+    });
+    fixture.probe.started.notified().await;
+    assert!(!caller.is_finished());
+    assert_eq!(fixture.disk(), original);
+    assert!(handle.lifecycle_state().await.is_ok());
+    fixture.probe.release();
+    let response = caller.await.unwrap().unwrap();
+    assert_eq!(
+        response
+            .connection
+            .delivery_cursor
+            .as_ref()
+            .unwrap()
+            .last_sequence,
+        1
+    );
+    let body = crate::protocol::message::decode_mmp_frame(&response.output, 4096)
+        .unwrap()
+        .0;
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&body).unwrap()["last_sequence"],
+        1
+    );
+    let settled = fixture.disk();
+    assert_eq!(settled, (original.0 + 1, original.1 + 1));
+    let duplicate = handle
+        .handle_message_input(input, 4096, response.connection, 40)
+        .await
+        .unwrap();
+    assert_eq!(
+        duplicate
+            .connection
+            .delivery_cursor
+            .as_ref()
+            .unwrap()
+            .last_sequence,
+        1
+    );
+    assert_eq!(fixture.disk(), settled);
+    assert_eq!(fixture.probe.attempts.load(Ordering::SeqCst), 1);
+    handle.shutdown().await.unwrap();
+    runner.await.unwrap();
+}

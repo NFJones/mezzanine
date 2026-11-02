@@ -15,7 +15,10 @@ mod service;
 mod types;
 mod validation;
 
-pub use dispatch::dispatch_mmp_body;
+pub use dispatch::{
+    MmpStoragePreparation, MmpStorageRequest, dispatch_mmp_body, mmp_acceptance_response,
+    mmp_acknowledgement_response, mmp_storage_error_response, parse_mmp_storage_request,
+};
 pub use error::{MessageError, MessageErrorKind, Result};
 pub use json::delivery_batch_json;
 pub use outcomes::{
@@ -34,7 +37,7 @@ pub use service::{
     MessageAcknowledgementAttempt, MessageAcknowledgementCommit, MessageAcknowledgementEntry,
     MessageAcknowledgementJoin, MessageAcknowledgementStore, MessageAcknowledgementTicket,
     MessageAcknowledgementUncertain, MessageAcknowledgementWrite,
-    MessageAcknowledgementWriteOutcome,
+    MessageAcknowledgementWriteOutcome, MessageStorageScope,
 };
 pub use types::{
     AgentPresenceStatus, Delivery, DeliveryBatch, DeliveryCursor, DeliveryStatus, Envelope,

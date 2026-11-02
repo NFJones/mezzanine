@@ -324,6 +324,7 @@ impl MessageService {
             accepted_messages.insert(
                 envelope.id.clone(),
                 AcceptedMessage {
+                    storage_scope: None,
                     envelope,
                     audience: audience_from_snapshot(accepted.audience.as_ref())?,
                     delivery,

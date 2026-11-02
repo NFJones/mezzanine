@@ -452,6 +452,8 @@ pub struct Delivery {
 /// Accepted message metadata retained for idempotent resend handling.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct AcceptedMessage {
+    /// Live storage adoption fact; snapshots cannot recreate this authority.
+    pub(super) storage_scope: Option<super::service::MessageStorageScope>,
     /// Stores the envelope value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
