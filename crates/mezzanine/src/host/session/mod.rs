@@ -1197,6 +1197,8 @@ mod tests {
 
     /// Initial session startup must use the caller launch directory carried
     /// by the factory request instead of inheriting the persistent host cwd.
+    /// The child deliberately writes its observation in two parts, so readiness
+    /// requires retaining the complete record rather than reading a prefix.
     #[tokio::test(flavor = "current_thread")]
     async fn session_factory_uses_explicit_initial_launch_directory() {
         let root = test_root("launch-directory");
@@ -1206,7 +1208,7 @@ mod tests {
         let mut request = test_request("launch-directory", root.clone(), root.join("control.sock"));
         request.startup = SessionRuntimeStartup::Initial {
             explicit_command: Some(format!(
-                "printf '%s\\n%s\\n%s\\n%s\\n%s\\n' \"$PWD\" \"$HOME\" \"$COLUMNS\" \"$LINES\" \"${{CARGO_MANIFEST_DIR-unset}}\" > {}; sleep 30",
+                "sh -c 'printf \"%s\\n%s\\n%s\\n%s\\n\" \"$PWD\" \"$HOME\" \"$COLUMNS\" \"$LINES\" > \"$1\"; sleep 0.2; printf \"%s\\n\" \"${{CARGO_MANIFEST_DIR-unset}}\" >> \"$1\"; sleep 30' sh {}",
                 observed.to_string_lossy()
             )),
             start_directory: Some(launch_directory.clone()),
@@ -1219,14 +1221,19 @@ mod tests {
         };
 
         let (runtime, native, witnesses) = create_metadata_runtime(request).await;
-        tokio::time::timeout(Duration::from_secs(2), async {
-            while fs::read_to_string(&observed).map_or(true, |value| value.trim().is_empty()) {
+        let observed = tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if let Ok(value) = fs::read_to_string(&observed)
+                    && value.ends_with('\n')
+                    && value.lines().count() >= 5
+                {
+                    break value;
+                }
                 tokio::task::yield_now().await;
             }
         })
         .await
         .unwrap();
-        let observed = fs::read_to_string(&observed).unwrap();
         let lines = observed.lines().collect::<Vec<_>>();
         let launch_directory = launch_directory.canonicalize().unwrap();
         let root = root.canonicalize().unwrap();

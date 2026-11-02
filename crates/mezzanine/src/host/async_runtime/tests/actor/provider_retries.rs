@@ -448,8 +448,10 @@ async fn async_actor_discards_streaming_output_before_retrying_premature_sse_eof
 /// earlier shorter retry budget. This test drives five consecutive rate-limit
 /// failures through the actor-owned retry timer path, checks the backoff delay
 /// for every scheduled retry, and verifies the sixth failure exhausts the
-/// policy instead of scheduling an extra retry.
-#[tokio::test(flavor = "current_thread")]
+/// policy instead of scheduling an extra retry. A paused clock and a known
+/// handoff delay ensure the assertion checks the remaining original timer,
+/// rather than accidentally treating queued waiting as a policy violation.
+#[tokio::test(start_paused = true, flavor = "current_thread")]
 async fn async_actor_retries_rate_limits_five_times_with_exponential_backoff() {
     let mut service = test_service();
     let primary = service
@@ -501,6 +503,10 @@ async fn async_actor_retries_rate_limits_five_times_with_exponential_backoff() {
             assert_eq!(failure_report.accepted, 1);
             assert_eq!(failure_report.applied, 1);
 
+            // The worker receives the remaining time, not the original jitter.
+            // Advance deterministically so this test covers that handoff too.
+            let handoff_ms = 50;
+            tokio::time::advance(std::time::Duration::from_millis(handoff_ms)).await;
             let timer_effects = handle.drain_timer_side_effects(8).await.unwrap();
             let (retry_key, retry_delay_ms) = timer_effects
                 .iter()
@@ -516,8 +522,9 @@ async fn async_actor_retries_rate_limits_five_times_with_exponential_backoff() {
             assert_eq!(retry_key.owner_id, expected_turn);
             assert_eq!(retry_key.generation, attempt as u64);
             assert!(
-                (maximum_delay_ms / 2..=maximum_delay_ms).contains(&retry_delay_ms),
-                "attempt {attempt} delay {retry_delay_ms} exceeded jitter bounds"
+                (maximum_delay_ms / 2 - handoff_ms..=maximum_delay_ms - handoff_ms)
+                    .contains(&retry_delay_ms),
+                "attempt {attempt} remaining delay {retry_delay_ms} exceeded jitter bounds after {handoff_ms}ms"
             );
 
             let mut retry = RuntimeEventBatch::new();
