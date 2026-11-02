@@ -10,6 +10,7 @@
 //! None of these operations admits tasks, schedules providers or retries work.
 
 use super::{AgentId, Result, RuntimeSessionService};
+use crate::error::MezError;
 use mez_agent::messaging::SequencedEnvelope;
 use std::collections::BTreeSet;
 
@@ -181,11 +182,27 @@ impl RuntimeSessionService {
         Ok(false)
     }
 
+    /// Refuses replacement while any original acceptance, ACK or native metadata
+    /// still owes settlement. A cancelled observer or missing current receipt is
+    /// insufficient evidence; this preflight changes no identity or pane state.
+    pub(crate) fn ensure_runtime_message_transfers_settled_for_restore(&self) -> Result<()> {
+        self.ensure_no_prepared_tracked_message_for_restore()?;
+        let messages = self.control.message_service();
+        if messages.has_unpublished_acceptance() || messages.has_unpublished_acknowledgement() {
+            Err(MezError::conflict(
+                "original MMP storage work must settle before restore",
+            ))
+        } else {
+            Ok(())
+        }
+    }
+
     /// Ends original native receive/transfer owners before replacing runtime
     /// state. No live private proof or outbound action owner may alias a restored
     /// occurrence with the same public IDs. Snapshot display rows are rebuilt
     /// separately and never restore these capabilities.
     pub(crate) fn retire_runtime_message_transfers_for_restore(&mut self) -> Result<()> {
+        self.ensure_runtime_message_transfers_settled_for_restore()?;
         let recipients = self
             .runtime_native_commit_recipients()
             .into_iter()
@@ -204,7 +221,7 @@ impl RuntimeSessionService {
         }
         self.agent.received_peer_message_presentations.clear();
         self.agent.outbound_delivery_owners.clear();
-        self.retire_request_waits_for_restore();
+        self.retire_request_waits_for_restore()?;
         Ok(())
     }
 

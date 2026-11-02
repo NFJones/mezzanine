@@ -404,3 +404,58 @@ fn stale_cancellation_cannot_release_replacement_reservation() {
         .unwrap();
     assert_eq!(requests.usage(), (0, 0, 0));
 }
+
+/// Receipt lookup must follow the actual prepared allocation rather than equal
+/// public actor/message/origin values. Consumption removes lookup authority and
+/// cannot let the original ticket recreate a dependency receipt or send again.
+#[test]
+fn published_receipt_lookup_requires_original_admission_and_ends_on_consumption() {
+    let (mut service, mut requests, origin, envelope) = fixture();
+    let mut foreign_service =
+        MessageService::from_snapshot_state(&service.snapshot_state()).unwrap();
+    let mut foreign_requests = MessageRequests::default();
+    let foreign = foreign_requests
+        .prepare_acceptance(
+            &mut foreign_service,
+            origin.clone(),
+            envelope.clone(),
+            MessageScope::Session,
+            10,
+        )
+        .unwrap();
+    let ticket = requests
+        .prepare_acceptance(
+            &mut service,
+            origin.clone(),
+            envelope,
+            MessageScope::Session,
+            10,
+        )
+        .unwrap();
+    assert!(requests.receipt_for_admission(&ticket).is_none());
+    let MessageAcceptanceWriteOutcome::Committed(commit) = service
+        .begin_acceptance_write(&ticket)
+        .unwrap()
+        .persist(&mut Store(true))
+    else {
+        panic!("actual port must qualify")
+    };
+    let generation = requests
+        .publish_acceptance(&mut service, &commit)
+        .unwrap()
+        .generation();
+    assert_eq!(
+        requests
+            .receipt_for_admission(&ticket)
+            .unwrap()
+            .generation(),
+        generation
+    );
+    assert!(requests.receipt_for_admission(&foreign).is_none());
+    assert!(foreign_requests.receipt_for_admission(&ticket).is_none());
+    assert!(requests.consume(generation, &origin));
+    assert!(requests.receipt_for_admission(&ticket).is_none());
+    foreign_requests
+        .cancel_prepared_acceptance(&mut foreign_service, &foreign)
+        .unwrap();
+}

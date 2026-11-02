@@ -223,7 +223,9 @@ pub struct RuntimeSessionService {
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 mod agent;
-pub(crate) use agent::{RuntimeAgentComponent, RuntimePowerInhibitionStatus};
+pub(crate) use agent::{
+    RuntimeAgentComponent, RuntimePowerInhibitionStatus, RuntimePreparedTrackedMessage,
+};
 /// Exposes runtime agent provider dispatch and loop state records.
 ///
 /// The nested module keeps provider-backed agent worker records out of the

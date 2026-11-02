@@ -587,6 +587,29 @@ receive still use their ordinary audited adapter. Normal product construction
 continues without this internal root; native/bridge acceptance, native context/
 dedup/restore, supervisor retention and complete quota/control integration remain.
 
+Tracked native storage preparation now retains original recipient-task slots,
+parent-process evidence and semantic fingerprint beside the lower reservation.
+These slots cannot authorize a wait before acceptance, but they observe captured
+task terminal/retirement/cohort-consumption events while publication is pending.
+The original native/lower opaque tickets gate adoption and release. A paired
+receipt lookup uses the actual admission allocation, not public IDs; an actual
+lower publication followed by lost callback result can therefore finish native
+metadata installation without publishing another send. Conversation and expiry
+pruning retain that exact charged receipt until installation; other receipts in
+the same conversation still retire independently. The original TTL is not renewed,
+and ordinary pruning resumes after adoption. Consumed, restored and foreign
+capabilities cannot recreate that receipt or dependency.
+
+An internal actor tracked-native receipt entry selects idle capacity first and
+retains the original runtime/lower/root owners through real join and metadata
+adoption, including cancelled observers and graceful shutdown. Exact qualified
+abort releases all reservations; generic error does not. Snapshot replacement
+refuses unsettled acceptance/ACK/native metadata before pane teardown, even if lower publication has
+already succeeded. This is a trusted harness receipt boundary, not permission
+capture, final native action-result publication or canonical received-input proof.
+Normal action/approval, untracked and bridge continuations still need integration;
+normal product construction continues without durable mode enabled.
+
 Only a never-issued reservation or an exactly qualified noncommit can be called
 unaccepted. Ambiguous writes retain the same original for reconciliation. A lost
 worker result requires actual join evidence before a new attempt; generic errors

@@ -10,6 +10,7 @@ mod lifecycle;
 mod partial_send;
 mod protocol;
 mod retention;
+mod storage;
 mod terminal;
 
 use super::*;

@@ -172,6 +172,13 @@ live approvals. If a saved directory cannot be used, Mez falls back to the
 user's home directory and reports the recovery state. Review interrupted agent
 work before retrying a non-idempotent action.
 
+An internal MMP acceptance, ACK or tracked native metadata reservation must settle
+before live snapshot replacement can proceed. The refusal happens before current panes are torn down;
+a cancelled observer or generic storage error does not prove the send unaccepted.
+A never-issued reservation can be explicitly cancelled, while issued work needs
+its original actual commit or qualified noncommit reconciliation. This internal
+boundary does not enable general crash-durable native workflow restart.
+
 ## Recover an agent conversation
 
 Agent transcripts, presentation logs, and pane session metadata are persisted

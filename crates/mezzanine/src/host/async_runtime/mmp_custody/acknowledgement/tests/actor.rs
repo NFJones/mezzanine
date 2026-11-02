@@ -243,16 +243,28 @@ async fn actor_never_reports_durable_ack_success_for_memory_only_source() {
         AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
     actor.register_message_custody(root.clone()).unwrap();
     let runner = tokio::spawn(actor.run());
-    let caller = tokio::spawn(async move { handle.acknowledge_message_fanout(batch).await });
-    loop {
-        if matches!(
-            root.observe().await.unwrap(),
-            CustodyWorkerStatus::AcknowledgementRetryAt(_)
-        ) {
-            break;
+    handle.lifecycle_state().await.unwrap();
+    let sender = handle.clone();
+    let mut caller = tokio::spawn(async move { sender.acknowledge_message_fanout(batch).await });
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        loop {
+            if matches!(
+                root.observe().await.unwrap(),
+                CustodyWorkerStatus::AcknowledgementRetryAt(_)
+            ) {
+                break;
+            }
+            if caller.is_finished() {
+                panic!(
+                    "ACK returned before physical refusal: {:?}",
+                    (&mut caller).await
+                );
+            }
+            tokio::task::yield_now().await;
         }
-        tokio::task::yield_now().await;
-    }
+    })
+    .await
+    .expect("memory-only ACK did not reach its joined physical refusal");
     assert!(!caller.is_finished());
     assert_eq!(fixture.disk(), (0, 0));
     caller.abort();

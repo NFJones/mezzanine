@@ -218,6 +218,7 @@ impl RuntimeSessionService {
         resume_plan: crate::storage::snapshot::LayoutLoadPlan,
         caller_client_id: &mez_core::ids::ClientId,
     ) -> Result<String> {
+        self.ensure_runtime_message_transfers_settled_for_restore()?;
         let previous_session = self.session.clone();
         let previous_window_created_at_unix_seconds =
             self.session.window_created_at_unix_seconds().clone();

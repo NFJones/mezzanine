@@ -759,3 +759,5 @@ async fn lost_cleanup_receipt_keeps_recovery_intent_through_actual_worker_join()
 }
 
 mod raw_actor;
+
+mod native_actor;

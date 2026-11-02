@@ -529,7 +529,7 @@ impl RuntimeSessionService {
         let terminal_task = slot.task.clone();
         self.agent.request_waits.edges.remove(&turn.turn_id);
         if terminal_outcome && let Some(task) = terminal_task {
-            for slots in self.agent.request_waits.recipients.values_mut() {
+            for slots in self.agent.request_waits.recipient_sets_mut() {
                 for slot in slots {
                     if slot.task.as_ref().is_some_and(|other| {
                         other.turn == task.turn

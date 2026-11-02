@@ -225,6 +225,12 @@ impl MessageAcknowledgementWrite {
 }
 
 impl MessageService {
+    /// Reports a reserved or issued original ACK for trusted replacement fencing.
+    /// This is observational state, never commit, absence or actual-join evidence.
+    pub fn has_unpublished_acknowledgement(&self) -> bool {
+        self.acknowledgement.is_some()
+    }
+
     /// Freezes one valid offered prefix without advancing any slot or cursor.
     /// None is an inert duplicate/regressive ACK. Bounded preflight errors change
     /// no state. Caller must prove canonical/application commit before calling.

@@ -15467,6 +15467,41 @@ Matching positive adoption MUST attach the receipt to that original caller; a
 foreign fact or a consumed receipt MUST NOT authorize another send. The product
 owner remains responsible for settling retained work after caller teardown.
 
+Native tracked storage preparation MUST retain exact original recipient task
+slots, parent-process anchor and semantic fingerprint under the lower handoff
+reservation before I/O. Unpublished metadata MUST remain absent from accepted
+receipt/edge selection but MUST observe genuine terminal, retirement and cohort
+consumption events of those captured tasks. Later actor state MUST NOT substitute
+another task, caller, conversation or selector result. No extra payload mailbox
+or unreserved terminal content may be retained.
+
+Native metadata callbacks MUST require both the original opaque native allocation
+and its exact lower request admission. Published receipt lookup MUST use that live
+admission capability, never equal public IDs. If actual lower publication precedes
+a lost callback result, later native adoption MUST reconcile its actual paired
+receipt without re-entering storage publication. Conversation/expiry pruning
+MUST retain that exact charged published receipt until native installation ends;
+retiring other receipts in the same conversation MUST NOT remove it indirectly.
+This protection MUST NOT renew the original TTL: ordinary pruning resumes after
+installation. Custody inspection MAY consult its original pending outcome slots
+without exposing them to wait/edge selection. Duplicate installed adoption
+MUST be inert; consumed/restored/foreign ownership MUST NOT recreate a dependency.
+Restore MUST refuse unsettled lower acceptance/ACK or native metadata ownership
+before replacing live state or tearing down panes, including when lower request
+publication already occurred but native metadata installation remains pending.
+Explicit never-issued cancellation or qualified original noncommit MAY release
+both lower/request and native metadata; generic failure or caller loss MUST NOT.
+
+An internal actor tracked-native receipt entry MUST select idle root capacity
+before preparation and retain its original native ticket/reply through actual
+join, paired lower/request publication and native metadata adoption. Graceful
+shutdown MUST retain that complete owner through positive reconciliation or
+qualified abort/refusal. This entry assumes trusted original harness permission
+and source capture: it is not a new wire authority, permission evaluation, native
+action-result publication or native context-commit proof. Ordinary native action/
+approval and untracked/bridge source continuations remain required before product
+activation; these metadata/actor boundaries alone do not enable durable mode.
+
 A storage-qualified path MUST keep issued or ambiguous work charged until its
 actual joined outcome is reconciled. Only a never-issued reservation or an exact
 qualified noncommit may be released as unaccepted. Lost worker results require

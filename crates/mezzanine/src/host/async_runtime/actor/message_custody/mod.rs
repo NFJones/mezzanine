@@ -18,7 +18,9 @@ use std::future::{Future, pending};
 use futures_util::FutureExt;
 use mez_agent::messaging::{DeliveryCursor, FanoutBatch, MessageError};
 
+mod native;
 mod raw;
+use crate::runtime::RuntimePreparedTrackedMessage;
 use raw::RawCompletion;
 pub(super) use raw::RawMessageContinuation;
 use tokio::sync::oneshot;
@@ -53,6 +55,11 @@ pub(super) enum CustodyEvent {
 enum Pending {
     /// Full raw body is already in the charged lower reservation, not this owner.
     Acceptance(RawMessageContinuation),
+    /// Original tracked native metadata remains in the runtime request owner.
+    Native {
+        ticket: RuntimePreparedTrackedMessage,
+        reply: oneshot::Sender<Result<mez_agent::messaging::Delivery>>,
+    },
     /// Actual application/transport commit preceded this original ACK request.
     Acknowledgement(AcknowledgementReply),
 }
@@ -173,10 +180,29 @@ impl AsyncRuntimeSessionActor {
             return;
         };
         let mut completion = None;
+        let mut native_adopted = false;
         let result = match event {
             CustodyEvent::Observed(Ok(CustodyWorkerStatus::Idle)) => {
-                owner.wake = None;
-                Ok(())
+                if let Some(Pending::Native { ticket, .. }) = &owner.pending {
+                    let ticket = ticket.clone();
+                    self.service
+                        .adopt_prepared_tracked_runtime_message(&ticket, |_, _| {
+                            Err(MezError::invalid_state(
+                                "MMP native original has no published receipt",
+                            ))
+                        })
+                        .map(|delivery| {
+                            if let Some(Pending::Native { reply, .. }) = owner.pending.take() {
+                                let _ = reply.send(Ok(delivery));
+                                native_adopted = true;
+                            }
+                            owner.failure = None;
+                            owner.wake = None;
+                        })
+                } else {
+                    owner.wake = None;
+                    Ok(())
+                }
             }
             CustodyEvent::Observed(Ok(CustodyWorkerStatus::Unavailable)) => {
                 owner.failure =
@@ -194,6 +220,20 @@ impl AsyncRuntimeSessionActor {
                         .map(|delivery| {
                             if let Some(Pending::Acceptance(raw)) = owner.pending.take() {
                                 completion = Some((raw, RawCompletion::Acceptance(delivery)));
+                            }
+                            owner.failure = None;
+                            owner.wake = Some(Wake::Observe);
+                        })
+                } else if let Some(Pending::Native { ticket, .. }) = &owner.pending {
+                    let ticket = ticket.clone();
+                    self.service
+                        .adopt_prepared_tracked_runtime_message(&ticket, |messages, requests| {
+                            owner.root.adopt(messages, Some(requests))
+                        })
+                        .map(|delivery| {
+                            if let Some(Pending::Native { reply, .. }) = owner.pending.take() {
+                                let _ = reply.send(Ok(delivery));
+                                native_adopted = true;
                             }
                             owner.failure = None;
                             owner.wake = Some(Wake::Observe);
@@ -217,6 +257,21 @@ impl AsyncRuntimeSessionActor {
                                         "MMP original storage admission did not commit",
                                     )),
                                 ));
+                            }
+                            owner.failure = None;
+                            owner.wake = Some(Wake::Observe);
+                        })
+                } else if let Some(Pending::Native { ticket, .. }) = &owner.pending {
+                    let ticket = ticket.clone();
+                    self.service
+                        .release_rejected_tracked_runtime_message(&ticket, |messages, requests| {
+                            owner.root.release_rejected(messages, Some(requests))
+                        })
+                        .map(|()| {
+                            if let Some(Pending::Native { reply, .. }) = owner.pending.take() {
+                                let _ = reply.send(Err(MezError::invalid_state(
+                                    "original tracked MMP admission did not commit",
+                                )));
                             }
                             owner.failure = None;
                             owner.wake = Some(Wake::Observe);
@@ -255,7 +310,10 @@ impl AsyncRuntimeSessionActor {
                 }
             }
             CustodyEvent::Observed(Ok(CustodyWorkerStatus::RetryAt(at)))
-                if matches!(&owner.pending, Some(Pending::Acceptance(_))) =>
+                if matches!(
+                    &owner.pending,
+                    Some(Pending::Acceptance(_) | Pending::Native { .. })
+                ) =>
             {
                 owner.wake = Some(Wake::Retry(at));
                 Ok(())
@@ -272,6 +330,18 @@ impl AsyncRuntimeSessionActor {
                 "MMP retry has no matching original actor continuation",
             )),
             CustodyEvent::Retry => match owner.pending {
+                Some(Pending::Native { ref ticket, .. }) => self
+                    .service
+                    .validate_prepared_tracked_runtime_message(ticket)
+                    .and_then(|()| {
+                        let messages = self.service.message_service_mut();
+                        if owner.shutdown.is_some() {
+                            owner.root.recover_failed_stage(messages, Instant::now())
+                        } else {
+                            owner.root.retry(messages, Instant::now())
+                        }
+                    })
+                    .map(|_| owner.wake = Some(Wake::Observe)),
                 Some(Pending::Acceptance(_)) => {
                     let service = self.service.message_service_mut();
                     let retried = if owner.shutdown.is_some() {
@@ -297,6 +367,9 @@ impl AsyncRuntimeSessionActor {
             owner.wake = Some(Wake::Retry(
                 Instant::now() + std::time::Duration::from_secs(1),
             ));
+        }
+        if native_adopted {
+            self.notify_message_delivery();
         }
         if let Some((raw, result)) = completion {
             self.complete_stored_raw_message(raw, result);

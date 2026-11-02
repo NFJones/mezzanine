@@ -7,7 +7,9 @@
 //! establish ownership. Ordinary mail can resume inference without consuming an
 //! explicit edge. Restore discards these capabilities rather than replaying work.
 
+mod admission;
 mod handoff;
+pub(crate) use admission::RuntimePreparedTrackedMessage;
 
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
@@ -137,6 +139,8 @@ pub(super) struct RuntimeRequestWaits {
     requests: MessageRequests,
     /// Bounded per-recipient task/outcome data charged to those reservations.
     recipients: BTreeMap<u64, Vec<RecipientState>>,
+    /// Original native metadata beside the sole unpublished lower request.
+    pending: Option<admission::PendingTrackedMessage>,
     /// At most one selected edge per waiting turn; unchanged reparks reuse it.
     edges: BTreeMap<String, Edge>,
     /// Fixed-size process evidence charged to reserved receipt overhead.
@@ -152,6 +156,7 @@ impl Default for RuntimeRequestWaits {
             label_epoch: rand::random(),
             requests: MessageRequests::default(),
             recipients: BTreeMap::new(),
+            pending: None,
             edges: BTreeMap::new(),
             anchors: BTreeMap::new(),
             fingerprints: BTreeMap::new(),
@@ -329,10 +334,35 @@ impl RuntimeSessionService {
                 "tracked send belongs to another original owner",
             ));
         }
+        let metadata =
+            self.capture_tracked_request_metadata(turn, &origin, &envelope, scope, fingerprint)?;
+        let receipt = self.agent.request_waits.requests.accept(
+            self.control.message_service_mut(),
+            origin,
+            envelope,
+            scope,
+            now_ms,
+        )?;
+        let generation = receipt.generation();
+        let delivery = receipt.delivery().clone();
+        self.install_tracked_request_metadata(generation, metadata);
+        Ok(delivery)
+    }
+
+    /// Captures exact task/parent/fingerprint headroom before acceptance or
+    /// storage preparation. This preflight changes no lower custody state.
+    fn capture_tracked_request_metadata(
+        &self,
+        turn: &AgentTurnRecord,
+        origin: &MessageRequestOrigin,
+        envelope: &Envelope,
+        scope: MessageScope,
+        fingerprint: [u8; 32],
+    ) -> mez_agent::messaging::Result<admission::TrackedRequestMetadata> {
         let recipients = self
             .control
             .message_service()
-            .preview_message_recipients(&envelope, scope)?;
+            .preview_message_recipients(envelope, scope)?;
         let limits = self.agent.request_waits.requests.limits();
         let (_, used_units, used_bytes) = self.agent.request_waits.requests.usage();
         let origin_count = self
@@ -383,27 +413,32 @@ impl RuntimeSessionService {
         }
         let anchor = self.capture_request_parent_anchor(turn);
         drop(recipients);
-        let receipt = self.agent.request_waits.requests.accept(
-            self.control.message_service_mut(),
-            origin,
-            envelope,
-            scope,
-            now_ms,
-        )?;
-        let generation = receipt.generation();
-        let delivery = receipt.delivery().clone();
-        // No actor callback or mutation of message registration occurred between
-        // preview and acceptance; both use the same immutable eligible ordering.
+        Ok(admission::TrackedRequestMetadata {
+            slots,
+            anchor,
+            fingerprint,
+        })
+    }
+
+    /// Moves reserved metadata under its actual lower generation without any
+    /// later task lookup, selector resolution or additional payload retention.
+    fn install_tracked_request_metadata(
+        &mut self,
+        generation: u64,
+        metadata: admission::TrackedRequestMetadata,
+    ) {
         self.agent
             .request_waits
             .recipients
-            .insert(generation, slots);
-        self.agent.request_waits.anchors.insert(generation, anchor);
+            .insert(generation, metadata.slots);
+        self.agent
+            .request_waits
+            .anchors
+            .insert(generation, metadata.anchor);
         self.agent
             .request_waits
             .fingerprints
-            .insert(generation, fingerprint);
-        Ok(delivery)
+            .insert(generation, metadata.fingerprint);
     }
 
     /// Selects only an actual outstanding tracked request in this conversation.
@@ -594,8 +629,7 @@ impl RuntimeSessionService {
         ) || !self
             .agent
             .request_waits
-            .recipients
-            .values()
+            .recipient_sets()
             .flatten()
             .any(|slot| {
                 slot.outcome.is_none()
@@ -655,7 +689,7 @@ impl RuntimeSessionService {
             .owned_child_failures
             .get(&child.turn_id)
             .map(|receipt| receipt.label.clone());
-        for slots in self.agent.request_waits.recipients.values_mut() {
+        for slots in self.agent.request_waits.recipient_sets_mut() {
             for slot in slots {
                 if !slot.task.as_ref().is_some_and(|task| {
                     task.turn == child.turn_id
@@ -709,7 +743,7 @@ impl RuntimeSessionService {
     /// Records intentional retirement of the captured owned task without a
     /// failure diagnostic, automatic replay, or fabricated progress witness.
     pub(super) fn retain_request_task_retired(&mut self, child: &AgentTurnRecord) {
-        for slots in self.agent.request_waits.recipients.values_mut() {
+        for slots in self.agent.request_waits.recipient_sets_mut() {
             for slot in slots {
                 if slot.task.as_ref().is_some_and(|task| {
                     task.turn == child.turn_id
@@ -737,8 +771,7 @@ impl RuntimeSessionService {
         if self
             .agent
             .request_waits
-            .recipients
-            .get(&generation)
+            .custody_recipient_slots(generation)
             .is_some_and(|slots| {
                 slots.iter().any(|slot| {
                     slot.outcome.is_some()
@@ -770,6 +803,9 @@ impl RuntimeSessionService {
     /// Expiry removes no retained source, creates no provider wake and cannot
     /// recreate selection authority from a still-readable transport occurrence.
     fn prune_request_wait_owners_at(&mut self, now_ms: u64) {
+        // Actual lower publication may precede native installation after a lost
+        // callback result. Keep that exact charged receipt until upper adoption.
+        let pending_generation = self.agent.request_waits.pending_published_generation();
         let protected = self
             .agent
             .request_waits
@@ -777,7 +813,8 @@ impl RuntimeSessionService {
             .receipts()
             .filter(|receipt| {
                 receipt.has_finite_expiry()
-                    && self.request_expiry_has_outcome(receipt.generation(), now_ms)
+                    && (pending_generation == Some(receipt.generation())
+                        || self.request_expiry_has_outcome(receipt.generation(), now_ms))
             })
             .map(|receipt| receipt.generation())
             .collect::<std::collections::BTreeSet<_>>();
@@ -795,6 +832,9 @@ impl RuntimeSessionService {
                 .requests
                 .receipts()
                 .filter_map(|receipt| {
+                    if pending_generation == Some(receipt.generation()) {
+                        return None;
+                    }
                     let pane = receipt.origin().agent_id.as_str().strip_prefix("agent-")?;
                     (!self
                         .control
@@ -803,33 +843,26 @@ impl RuntimeSessionService {
                         || self.agent_shell_store().get(pane).is_none_or(|shell| {
                             shell.session_id != receipt.origin().conversation_id
                         }))
-                    .then(|| {
-                        (
-                            receipt.origin().agent_id.clone(),
-                            receipt.origin().conversation_id.clone(),
-                        )
-                    })
+                    .then_some(receipt.generation())
                 })
                 .collect::<Vec<_>>();
-        for (sender, conversation) in retired {
-            let generations = self
+        for generation in retired {
+            let Some(origin) = self
                 .agent
                 .request_waits
                 .requests
-                .receipts()
-                .filter(|receipt| {
-                    receipt.origin().agent_id == sender
-                        && receipt.origin().conversation_id == conversation
-                })
-                .map(|receipt| receipt.generation())
-                .collect::<Vec<_>>();
-            for generation in generations {
-                self.release_request_sources(generation);
-            }
+                .receipt(generation)
+                .map(|receipt| receipt.origin().clone())
+            else {
+                continue;
+            };
+            self.release_request_sources(generation);
+            // Retire only this proven receipt. Bulk conversation retirement can
+            // also remove the protected pending receipt in the same conversation.
             self.agent
                 .request_waits
                 .requests
-                .retire_conversation(&sender, &conversation);
+                .consume(generation, &origin);
         }
         self.agent.request_waits.recipients.retain(|generation, _| {
             self.agent
@@ -1003,7 +1036,8 @@ impl RuntimeSessionService {
 
     /// Drops same-runtime capabilities on snapshot restore, never reconstructing
     /// them from model IDs, retained mail, or serialized lifecycle history.
-    pub(super) fn retire_request_waits_for_restore(&mut self) {
+    pub(super) fn retire_request_waits_for_restore(&mut self) -> Result<()> {
+        self.ensure_no_prepared_tracked_message_for_restore()?;
         let generations = self
             .agent
             .request_waits
@@ -1015,6 +1049,7 @@ impl RuntimeSessionService {
             self.release_request_sources(generation);
         }
         self.agent.request_waits = RuntimeRequestWaits::default();
+        Ok(())
     }
 
     /// Releases only this receipt's canonical peer pins after handoff or explicit

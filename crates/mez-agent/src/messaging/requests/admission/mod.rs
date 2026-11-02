@@ -139,6 +139,21 @@ impl MessageRequests {
         Ok(&pending.origin)
     }
 
+    /// Borrows a live published receipt only for its actual original reservation.
+    /// Public IDs, another service and restored snapshots cannot synthesize this
+    /// capability. Consumption returns None and never recreates dependency state.
+    pub fn receipt_for_admission(
+        &self,
+        ticket: &MessageAcceptanceTicket,
+    ) -> Option<&MessageRequestReceipt> {
+        self.receipts.values().find(|receipt| {
+            receipt
+                .admission_ticket
+                .as_ref()
+                .is_some_and(|original| original.same_reservation(ticket))
+        })
+    }
+
     /// Adopts only the matching committed occurrence into its original caller.
     /// Positive duplicate completion borrows the same retained receipt without
     /// sending again. Missing/consumed ownership is an error, never permission

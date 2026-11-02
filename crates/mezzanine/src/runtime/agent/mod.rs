@@ -244,6 +244,7 @@ mod presentation;
 mod presentation_occurrence;
 mod request_waits;
 pub(crate) use presentation::RuntimeProviderLogInput;
+pub(crate) use request_waits::RuntimePreparedTrackedMessage;
 mod project_accounting;
 mod provider_context;
 mod provider_execution;
