@@ -16043,6 +16043,30 @@ quantum. A narrowed cache MUST refuse a larger original before decoding its
 oversized body; using the default payload ceiling during an earlier scan and
 only refusing during later row construction violates the same reservation.
 
+Owned recovery MUST retain one immutable original input and its actual blocking
+worker handle independently of observers. Cancellation MUST NOT publish a
+partial service, release the kernel store fence or authorize a duplicate worker.
+A lost worker MUST actually join before retry; retry MUST use the same input,
+first observed store allocation/generation/watermark position and monotonic
+1,2,4,...30-second backoff. A positive joined result MUST remain retained until
+its exact one-time adoption and MUST NOT be replaced by another read.
+
+Recovery opening MUST require an existing private directory, existing owner lock
+and existing current-schema database. Missing or blank originals MUST NOT be
+created, initialized or migrated as replacements. Read qualification and the
+same root/position MUST be revalidated after reconstruction before publication.
+Final-root retirement MUST drain its actual worker and dispose of unpublished
+input/candidate state before releasing the original kernel fence.
+
+The joined startup candidate MUST retain the actual root and keep original
+checkpoint input metadata charged through cancellable session qualification.
+Input MUST be discarded before its metadata reservation; candidate retirement
+MUST dispose of state before releasing its root owner. Native checkpoint tuples
+remain descriptive, and empty endpoint maps MUST NOT acquire native authority
+from those bytes. The owned storage recovery worker is implemented; actual host
+session/root registration, native continuity, canonical commit deduplication and
+the other durable activation gates remain required.
+
 Immutable envelope auxiliary metadata MUST additionally fit a 16 MiB logical
 budget over the deduplicated replay/custody union after normal replay eviction.
 Charge 1,024 bytes per occurrence plus 64 bytes and four times UTF-8 length for

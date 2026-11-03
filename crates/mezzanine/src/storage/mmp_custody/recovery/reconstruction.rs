@@ -9,6 +9,7 @@
 use mez_agent::messaging::{
     MessageError, MessageService, MessageStorageLimits, MessageStorageRecoveredRecord,
     MessageStorageRecovery, MessageStorageRecoveryStore, MessageStorageScope,
+    MessageStorageSnapshotLease,
 };
 
 use super::*;
@@ -17,6 +18,8 @@ use super::*;
 struct Port<'a> {
     store: &'a MmpCustodyStore,
     checkpoint: Arc<MessageServiceSnapshot>,
+    /// Survives the callback so owned root custody can charge retained input.
+    input_lease: Option<MessageStorageSnapshotLease>,
 }
 
 impl OwnedCustodyStore<'_> {
@@ -24,6 +27,8 @@ impl OwnedCustodyStore<'_> {
     /// All originals and durable ACKs share one SQLite snapshot; corrupt,
     /// incomplete or over-budget history returns no candidate. No raw/native
     /// registration or shell epoch is restored by this storage-only operation.
+    /// The input lease must outlive every retained checkpoint input reference;
+    /// root adoption drops its owned input before releasing this reservation.
     pub(crate) fn reconstruct_cold_service(
         &mut self,
         checkpoint: Arc<MessageServiceSnapshot>,
@@ -31,21 +36,28 @@ impl OwnedCustodyStore<'_> {
         limits: MessageStorageLimits,
         retention_messages: usize,
         retention_bytes: usize,
-    ) -> Result<MessageService> {
+    ) -> Result<(MessageService, MessageStorageSnapshotLease)> {
         self.revalidate()?;
+        let mut port = Port {
+            store: self.store_mut(),
+            checkpoint,
+            input_lease: None,
+        };
         let service = MessageService::recover_storage_custody(
             scope,
             limits,
             retention_messages,
             retention_bytes,
-            &mut Port {
-                store: self.store_mut(),
-                checkpoint,
-            },
+            &mut port,
         )
         .map_err(|error| invalid(&format!("cold reconstruction failed: {error}")))?;
+        let input_lease = port
+            .input_lease
+            .take()
+            .ok_or_else(|| invalid("missing input reservation"))?;
+        drop(port);
         self.revalidate()?;
-        Ok(service)
+        Ok((service, input_lease))
     }
 }
 
@@ -66,7 +78,7 @@ impl Port<'_> {
     /// Withholds the whole candidate until every source and the transaction join
     /// are qualified. Phantom headroom narrows the shared 8-MiB storage scan to
     /// the lower destination's actual policy without enlarging either budget.
-    fn recover_in_snapshot(&self, target: &mut MessageStorageRecovery) -> Result<u64> {
+    fn recover_in_snapshot(&mut self, target: &mut MessageStorageRecovery) -> Result<u64> {
         let (base, ceiling) = target.metadata_budget().map_err(lower_error)?;
         let phantom = (8 * 1024 * 1024usize)
             .checked_sub(ceiling)
@@ -92,7 +104,17 @@ impl Port<'_> {
             .checked_sub(base)
             .and_then(|v| v.checked_sub(phantom))
             .ok_or_else(|| invalid("recovery metadata charge"))?;
-        let _history = target.hold_metadata(held).map_err(lower_error)?;
+        let history_metadata = held
+            .checked_sub(evidence.checkpoint_metadata)
+            .ok_or_else(|| invalid("input metadata charge"))?;
+        self.input_lease = Some(
+            target
+                .hold_metadata(evidence.checkpoint_metadata)
+                .map_err(lower_error)?,
+        );
+        let history_lease = target
+            .hold_metadata(history_metadata)
+            .map_err(lower_error)?;
         let data = evidence
             .checkpoint
             .storage_snapshot
@@ -141,7 +163,10 @@ impl Port<'_> {
                 .map_err(lower_error)?;
         }
         self.store.finish_transaction(transaction)?;
-        Ok(evidence.next_sequence)
+        let next_sequence = evidence.next_sequence;
+        drop(evidence);
+        drop(history_lease);
+        Ok(next_sequence)
     }
 }
 

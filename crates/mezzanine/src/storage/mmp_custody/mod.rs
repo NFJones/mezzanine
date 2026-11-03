@@ -188,6 +188,27 @@ impl MmpCustodyStore {
     /// Filesystem permissions follow the existing private SQLite conventions;
     /// same-user concurrent path replacement is not a filesystem sandbox.
     pub fn open_with_limits(root: &Path, owner: &str, limits: CustodyStoreLimits) -> Result<Self> {
+        Self::open_policy(root, owner, limits, true)
+    }
+
+    /// Opens only an existing current-schema allocation for owned recovery.
+    /// Missing directories/databases and legacy schemas fail without creating
+    /// empty replacements or migrating an unqualified original.
+    pub(crate) fn open_existing(
+        root: &Path,
+        owner: &str,
+        limits: CustodyStoreLimits,
+    ) -> Result<Self> {
+        Self::open_policy(root, owner, limits, false)
+    }
+
+    /// Shares private-file validation while making allocation authority explicit.
+    fn open_policy(
+        root: &Path,
+        owner: &str,
+        limits: CustodyStoreLimits,
+        create: bool,
+    ) -> Result<Self> {
         validate_identifier(owner)?;
         let ceiling = CustodyStoreLimits::default();
         if limits.records == 0
@@ -199,22 +220,24 @@ impl MmpCustodyStore {
         {
             return Err(MezError::invalid_args("invalid MMP custody storage policy"));
         }
-        if !root.exists() {
+        if create && !root.exists() {
             let mut builder = fs::DirBuilder::new();
             builder.recursive(true).mode(0o700);
             builder.create(root).map_err(MezError::from)?;
         }
         let directory = open_private_directory(root)?;
         let path = root.join("custody.sqlite");
-        match OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(&path)
-        {
-            Ok(_) => (),
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => (),
-            Err(error) => return Err(error.into()),
+        if create {
+            match OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(&path)
+            {
+                Ok(_) => (),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => (),
+                Err(error) => return Err(error.into()),
+            }
         }
         validate_private_path(&path, false)?;
         let database_identity = FileIdentity::from_metadata(&fs::symlink_metadata(&path)?);
@@ -251,7 +274,7 @@ impl MmpCustodyStore {
         let version: i64 = connection
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .map_err(database_error)?;
-        if !matches!(version, 0 | 1 | SCHEMA_VERSION) {
+        if (!create && version != SCHEMA_VERSION) || !matches!(version, 0 | 1 | SCHEMA_VERSION) {
             return Err(MezError::invalid_state(
                 "unsupported MMP custody store schema",
             ));
@@ -287,6 +310,11 @@ impl MmpCustodyStore {
         let current_version: i64 = transaction
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .map_err(database_error)?;
+        if !create && current_version != SCHEMA_VERSION {
+            return Err(MezError::invalid_state(
+                "MMP recovery store schema changed during open",
+            ));
+        }
         if current_version == 0 {
             let tables: i64 = transaction
                 .query_row(

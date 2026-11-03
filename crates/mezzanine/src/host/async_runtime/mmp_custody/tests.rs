@@ -1017,3 +1017,4 @@ mod payload_load;
 mod native_binding;
 
 mod checkpoint;
+mod recovery;

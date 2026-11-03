@@ -32,6 +32,8 @@ pub(crate) struct CustodyRecoveryEvidence {
     pub history: CustodyHistory,
     /// Allocator floor from the persistent original watermark, never row maxima.
     pub next_sequence: u64,
+    /// Input-only projection charge to retain through actual worker adoption.
+    pub checkpoint_metadata: usize,
 }
 
 impl OwnedCustodyStore<'_> {
@@ -84,15 +86,13 @@ impl MmpCustodyStore {
         let mut count = ByteCount(0);
         serde_json::to_writer(&mut count, checkpoint.as_ref())
             .map_err(|_| invalid("checkpoint metadata size"))?;
+        let checkpoint_metadata = count
+            .0
+            .checked_mul(8)
+            .ok_or_else(|| invalid("metadata overflow"))?;
         let mut metadata = SCRATCH_METADATA;
         charge(&mut metadata, metadata_base)?;
-        charge(
-            &mut metadata,
-            count
-                .0
-                .checked_mul(8)
-                .ok_or_else(|| invalid("metadata overflow"))?,
-        )?;
+        charge(&mut metadata, checkpoint_metadata)?;
         checkpoint
             .validate_storage_snapshot()
             .map_err(|_| invalid("invalid cold checkpoint"))?;
@@ -177,6 +177,7 @@ impl MmpCustodyStore {
             checkpoint,
             history,
             next_sequence,
+            checkpoint_metadata,
         })
     }
 }

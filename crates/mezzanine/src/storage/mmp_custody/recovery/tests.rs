@@ -576,7 +576,7 @@ fn reopened_store_reconstructs_cold_pending_and_lost_ack_without_endpoint_author
     let fence = RootOwnership::acquire(&fixture.0).unwrap();
     let mut store = MmpCustodyStore::open(&fixture.0, "original-session").unwrap();
     let scope = MessageStorageScope::default();
-    let mut service = fence
+    let (mut service, _input_lease) = fence
         .bind_store(&mut store)
         .unwrap()
         .reconstruct_cold_service(checkpoint, &scope, Default::default(), 1000, 1024 * 1024)
@@ -690,7 +690,7 @@ fn cold_reconstruction_capacity_refusal_preserves_original_store_for_retry() {
             .is_err()
     );
     assert!(before.same_position(&store.acceptance_plan(0).unwrap()));
-    let recovered = fence
+    let (recovered, _input_lease) = fence
         .bind_store(&mut store)
         .unwrap()
         .reconstruct_cold_service(checkpoint, &scope, Default::default(), 1000, 1024 * 1024)
@@ -717,7 +717,7 @@ fn cold_reconstruction_metadata_preflight_honors_narrowed_destination() {
         metadata_bytes: 3 * 1024 * 1024,
         ..Default::default()
     };
-    let service = fence
+    let (service, _input_lease) = fence
         .bind_store(&mut store)
         .unwrap()
         .reconstruct_cold_service(
@@ -751,7 +751,7 @@ fn cold_reconstruction_preserves_genuine_ack_offer_clocks_across_rollback() {
         let fence = RootOwnership::acquire(&fixture.0).unwrap();
         let mut store = MmpCustodyStore::open(&fixture.0, "original-session").unwrap();
         let scope = MessageStorageScope::default();
-        let service = fence
+        let (service, _input_lease) = fence
             .bind_store(&mut store)
             .unwrap()
             .reconstruct_cold_service(checkpoint, &scope, Default::default(), 1000, 1024 * 1024)
@@ -812,7 +812,7 @@ fn cold_reconstruction_narrow_cache_refuses_before_oversized_inventory_decode() 
         limits.cache_payload_bytes
     );
     assert!(before.same_position(&store.acceptance_plan(0).unwrap()));
-    let service = fence
+    let (service, _input_lease) = fence
         .bind_store(&mut store)
         .unwrap()
         .reconstruct_cold_service(checkpoint, &scope, Default::default(), 1000, 1024 * 1024)

@@ -110,7 +110,18 @@ impl RootOwnership {
     /// Acquires a nonblocking fence before a runtime root opens its store.
     /// Rejects unsafe lock paths and an already-owned destination.
     pub(crate) fn acquire(root: &Path) -> Result<Self> {
-        if !root.exists() {
+        Self::acquire_policy(root, true)
+    }
+
+    /// Acquires an already existing private root/lock without creating a new
+    /// destination. Missing original custody remains unavailable during recovery.
+    pub(crate) fn acquire_existing(root: &Path) -> Result<Self> {
+        Self::acquire_policy(root, false)
+    }
+
+    /// Makes filesystem allocation authority explicit before touching a path.
+    fn acquire_policy(root: &Path, create: bool) -> Result<Self> {
+        if create && !root.exists() {
             let mut builder = fs::DirBuilder::new();
             builder.recursive(true).mode(0o700);
             builder.create(root)?;
@@ -119,7 +130,15 @@ impl RootOwnership {
         let descriptor = openat(
             &directory,
             "owner.lock",
-            OFlags::RDWR | OFlags::CREATE | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC,
+            OFlags::RDWR
+                | OFlags::NOFOLLOW
+                | OFlags::NONBLOCK
+                | OFlags::CLOEXEC
+                | if create {
+                    OFlags::CREATE
+                } else {
+                    OFlags::empty()
+                },
             Mode::RUSR | Mode::WUSR,
         )
         .map_err(std::io::Error::from)?;

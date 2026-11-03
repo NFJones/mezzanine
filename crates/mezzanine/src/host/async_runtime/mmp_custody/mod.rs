@@ -41,6 +41,8 @@ use crate::storage::mmp_custody::{CustodyStoreLimits, MmpCustodyStore};
 mod acknowledgement;
 mod checkpoint;
 mod payload_load;
+mod recovery;
+pub(crate) use recovery::{CustodyRecoveryRequest, RecoveredMessageCustody};
 
 /// Retained source chosen by trusted session setup, never by an envelope.
 #[derive(Clone)]
@@ -78,6 +80,10 @@ pub(crate) enum CustodyWorkerStatus {
     SnapshotAwaitingAdoption,
     /// Original read-only capture can retry after this monotonic deadline.
     SnapshotRetryAt(Instant),
+    /// Original cold reconstruction joined and awaits exact startup adoption.
+    RecoveryAwaitingAdoption,
+    /// An actually joined recovery can retry the same input after this deadline.
+    RecoveryRetryAt(Instant),
     /// Opening failed; no lower write was issued by this root.
     Unavailable,
 }
@@ -165,6 +171,17 @@ enum State {
     Snapshotted {
         admission: checkpoint::Admission,
         result: Result<Box<checkpoint::Written>>,
+        retry_at: Instant,
+    },
+    /// Original immutable input and actual read handle held until real join.
+    Recovering {
+        admission: recovery::Admission,
+        worker: JoinHandle<Result<recovery::Written>>,
+    },
+    /// Positive cold service/input lease or original read failure awaits adoption.
+    Recovered {
+        admission: recovery::Admission,
+        result: Result<Box<recovery::Written>>,
         retry_at: Instant,
     },
     /// Bounded failed-open diagnostic; cannot imply any issued write was unsent.
@@ -286,6 +303,11 @@ impl MmpCustodyRoot {
             {
                 return Poll::Pending;
             }
+            if matches!(&*state, State::Recovering { .. })
+                && recovery::poll_join(&mut state, cx).is_pending()
+            {
+                return Poll::Pending;
+            }
             match &mut *state {
                 State::Opening(worker) => match Pin::new(worker).poll(cx) {
                     Poll::Pending => return Poll::Pending,
@@ -357,6 +379,9 @@ impl MmpCustodyRoot {
             State::Acknowledged { .. } => acknowledgement::failure(&state),
             State::Loaded { .. } => payload_load::failure(&state),
             State::Snapshotted {
+                result: Err(error), ..
+            }
+            | State::Recovered {
                 result: Err(error), ..
             } => Some(error.clone()),
             _ => None,
@@ -722,6 +747,12 @@ impl Drop for Inner {
                         .spawn_blocking(move || drop((result, admission)))
                         .await;
                 }
+                State::Recovering { admission, worker } => {
+                    let result = worker.await;
+                    let _ = runtime
+                        .spawn_blocking(move || drop((admission, result)))
+                        .await;
+                }
                 State::Acknowledging { admission, worker } => {
                     let result = worker.await;
                     let _ = runtime
@@ -812,6 +843,16 @@ fn status(state: &State) -> CustodyWorkerStatus {
                 CustodyWorkerStatus::SnapshotAwaitingAdoption
             } else {
                 CustodyWorkerStatus::SnapshotRetryAt(*retry_at)
+            }
+        }
+        State::Recovering { .. } => CustodyWorkerStatus::Running,
+        State::Recovered {
+            result, retry_at, ..
+        } => {
+            if result.is_ok() {
+                CustodyWorkerStatus::RecoveryAwaitingAdoption
+            } else {
+                CustodyWorkerStatus::RecoveryRetryAt(*retry_at)
             }
         }
         State::Unavailable(_) => CustodyWorkerStatus::Unavailable,

@@ -608,6 +608,12 @@ impl AsyncRuntimeSessionActor {
                     .retry_acknowledgement(self.service.message_service_mut(), Instant::now())
                     .map(|_| owner.wake = Some(Wake::Observe)),
             },
+            CustodyEvent::Observed(Ok(
+                CustodyWorkerStatus::RecoveryAwaitingAdoption
+                | CustodyWorkerStatus::RecoveryRetryAt(_),
+            )) => Err(MezError::invalid_state(
+                "MMP recovery must finish before root actor registration",
+            )),
             CustodyEvent::Observed(Err(error)) => Err(error),
             CustodyEvent::Observed(Ok(CustodyWorkerStatus::Running)) => {
                 owner.wake = Some(Wake::Observe);
