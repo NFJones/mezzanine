@@ -910,3 +910,234 @@ fn restart_preflight_quarantines_abort_before_first_deletion() {
         sequence: 1, encoded_bytes: 1.., present_chunks, total_chunks,
     }) if present_chunks == total_chunks && total_chunks > 0));
 }
+
+/// A source-free restart declaration must preserve an unrelated committed
+/// occurrence and its actual acknowledgement. The resulting unresolved abort
+/// remains quarantined, and neither prior acceptance nor ACK is regenerated.
+#[test]
+fn restart_declaration_preserves_committed_source_and_acknowledgement() {
+    let fixture = Fixture::new();
+    let mut store = MmpCustodyStore::open(&fixture.0, "session").unwrap();
+    let mut service = MessageService::default();
+    let sender = service.register_agent(None, None, "sender", vec![]);
+    let target = service.register_agent(None, None, "target", vec![]);
+    service.subscribe(&target.agent_id).unwrap();
+    assert_eq!(
+        accept(&mut store, &mut service, &sender, &target.agent_id, "first"),
+        1
+    );
+    service
+        .receive_subscribed(&target.agent_id, 20, 10)
+        .unwrap();
+    let ticket = service
+        .prepare_acknowledgement(&target.agent_id, 1, 512 * 1024)
+        .unwrap()
+        .unwrap();
+    let write = service.begin_acknowledgement_write(&ticket).unwrap();
+    let plan = store.acknowledgement_plan().unwrap();
+    let MessageAcknowledgementWriteOutcome::Committed(commit) =
+        write.persist(&mut store.acknowledgement_port(&plan))
+    else {
+        panic!("expected committed acknowledgement")
+    };
+    service.publish_acknowledgement(&commit).unwrap();
+    let ticket = service
+        .prepare_acceptance(
+            &sender.agent_id,
+            envelope(&sender, &target.agent_id, "pending"),
+            MessageScope::Session,
+            30,
+            4096,
+            None,
+        )
+        .unwrap();
+    let plan = store.acceptance_plan(ticket.sequence()).unwrap();
+    store.connection.execute_batch("CREATE TRIGGER fail_marker BEFORE INSERT ON records WHEN NEW.key LIKE '%:commit' BEGIN SELECT RAISE(ABORT,'fixture marker failure'); END;").unwrap();
+    let write = service.begin_acceptance_write(&ticket).unwrap();
+    assert!(matches!(
+        write.persist(&mut store.acceptance_port(&plan)),
+        MessageAcceptanceWriteOutcome::Unknown(_)
+    ));
+    store
+        .connection
+        .execute_batch("DROP TRIGGER fail_marker")
+        .unwrap();
+    let before = store.inspect_restart_inventory(limits()).unwrap();
+    let source_digest = before.inventory.occurrences[0].digest;
+    let ack_key = before.inventory.acknowledgement_keys[0].clone();
+    let ack = store.read(&ack_key).unwrap().unwrap();
+    drop(service);
+    drop(store);
+    let owner = super::super::ownership::RootOwnership::acquire(&fixture.0).unwrap();
+    let mut store = MmpCustodyStore::open(&fixture.0, "session").unwrap();
+    store.connection.execute_batch("CREATE TRIGGER delete_ack AFTER UPDATE OF value ON records WHEN NEW.key='a1:0000000000000002:stage' BEGIN DELETE FROM records WHERE key LIKE 'k1:%'; END;").unwrap();
+    let mut owned = owner.bind_store(&mut store).unwrap();
+    assert!(owned.declare_restart_cleanup(limits()).is_err());
+    assert_eq!(
+        owned.store_mut().read(&ack_key).unwrap().as_ref(),
+        Some(&ack)
+    );
+    assert_eq!(
+        owned
+            .store_mut()
+            .inspect_restart_inventory(limits())
+            .unwrap()
+            .inventory
+            .generation,
+        before.inventory.generation
+    );
+    owned
+        .store_mut()
+        .connection
+        .execute_batch("DROP TRIGGER delete_ack")
+        .unwrap();
+    assert_eq!(owned.declare_restart_cleanup(limits()).unwrap(), Some(2));
+    let after = owned
+        .store_mut()
+        .inspect_restart_inventory(limits())
+        .unwrap();
+    assert_eq!(after.inventory.occurrences.len(), 1);
+    assert_eq!(after.inventory.occurrences[0].digest, source_digest);
+    assert_eq!(after.inventory.acknowledgement_keys, vec![ack_key.clone()]);
+    assert_eq!(owned.store_mut().read(&ack_key).unwrap(), Some(ack));
+    assert!(matches!(
+        after.pending,
+        Some(PendingCustodyRef::Aborting { sequence: 2, .. })
+    ));
+}
+
+/// Deleting a complete unrelated committed namespace from an update trigger
+/// leaves a superficially valid sequence gap. Restart declaration must detect
+/// the omitted original and roll back the stage update and all trigger effects.
+#[test]
+fn restart_declaration_rolls_back_omitted_committed_original() {
+    let fixture = Fixture::new();
+    let mut store = MmpCustodyStore::open(&fixture.0, "session").unwrap();
+    let mut service = MessageService::default();
+    let sender = service.register_agent(None, None, "sender", vec![]);
+    let target = service.register_agent(None, None, "target", vec![]);
+    assert_eq!(
+        accept(&mut store, &mut service, &sender, &target.agent_id, "first"),
+        1
+    );
+    let ticket = service
+        .prepare_acceptance(
+            &sender.agent_id,
+            envelope(&sender, &target.agent_id, "pending"),
+            MessageScope::Session,
+            30,
+            4096,
+            None,
+        )
+        .unwrap();
+    let plan = store.acceptance_plan(ticket.sequence()).unwrap();
+    store.connection.execute_batch("CREATE TRIGGER fail_marker BEFORE INSERT ON records WHEN NEW.key LIKE '%:commit' BEGIN SELECT RAISE(ABORT,'fixture marker failure'); END;").unwrap();
+    let write = service.begin_acceptance_write(&ticket).unwrap();
+    assert!(matches!(
+        write.persist(&mut store.acceptance_port(&plan)),
+        MessageAcceptanceWriteOutcome::Unknown(_)
+    ));
+    store
+        .connection
+        .execute_batch("DROP TRIGGER fail_marker")
+        .unwrap();
+    let before = store.inspect_restart_inventory(limits()).unwrap();
+    let source_digest = before.inventory.occurrences[0].digest;
+    store.connection.execute_batch("CREATE TRIGGER delete_original AFTER UPDATE OF value ON records WHEN NEW.key='a1:0000000000000002:stage' BEGIN DELETE FROM records WHERE key LIKE 'a1:0000000000000001:%'; END;").unwrap();
+    let owner = super::super::ownership::RootOwnership::acquire(&fixture.0).unwrap();
+    let mut owned = owner.bind_store(&mut store).unwrap();
+    assert!(
+        owned.declare_restart_cleanup(limits()).is_err(),
+        "deleting a committed original must roll back"
+    );
+    let after = owned
+        .store_mut()
+        .inspect_restart_inventory(limits())
+        .unwrap();
+    assert_eq!(after.inventory.generation, before.inventory.generation);
+    assert_eq!(after.inventory.occurrences.len(), 1);
+    assert_eq!(after.inventory.occurrences[0].digest, source_digest);
+    assert!(matches!(
+        after.pending,
+        Some(PendingCustodyRef::Unfinished { sequence: 2, .. })
+    ));
+}
+
+/// A finalized abort remains sequence evidence even though it is not mail.
+/// A trigger that removes it while declaring a later stage must roll back both
+/// effects, rather than silently allowing an allocator-relevant gap.
+#[test]
+fn restart_declaration_rolls_back_omitted_abort_tombstone() {
+    let fixture = Fixture::new();
+    let mut store = MmpCustodyStore::open(&fixture.0, "session").unwrap();
+    let mut service = MessageService::default();
+    let sender = service.register_agent(None, None, "sender", vec![]);
+    let target = service.register_agent(None, None, "target", vec![]);
+    let ticket = service
+        .prepare_acceptance(
+            &sender.agent_id,
+            envelope(&sender, &target.agent_id, "aborted"),
+            MessageScope::Session,
+            10,
+            4096,
+            None,
+        )
+        .unwrap();
+    let plan = store.acceptance_plan(ticket.sequence()).unwrap();
+    store.connection.execute_batch("CREATE TRIGGER fail_chunk BEFORE INSERT ON records WHEN NEW.key LIKE '%:chunk:%' BEGIN SELECT RAISE(ABORT,'fixture chunk failure'); END;").unwrap();
+    let write = service.begin_acceptance_write(&ticket).unwrap();
+    let MessageAcceptanceWriteOutcome::Unknown(unknown) =
+        write.persist(&mut store.acceptance_port(&plan))
+    else {
+        panic!("expected interrupted original")
+    };
+    store
+        .connection
+        .execute_batch("DROP TRIGGER fail_chunk")
+        .unwrap();
+    let retry = service.retry_acceptance_write(unknown).unwrap();
+    let MessageAcceptanceWriteOutcome::NotCommitted(rejected) =
+        retry.persist(&mut store.acceptance_recovery_port(&plan))
+    else {
+        panic!("expected finalized abort")
+    };
+    service.release_rejected_acceptance(&rejected).unwrap();
+    let tombstone = store.read("a1:0000000000000001:stage").unwrap().unwrap();
+    let ticket = service
+        .prepare_acceptance(
+            &sender.agent_id,
+            envelope(&sender, &target.agent_id, "pending"),
+            MessageScope::Session,
+            30,
+            4096,
+            None,
+        )
+        .unwrap();
+    assert_eq!(ticket.sequence(), 2);
+    let plan = store.acceptance_plan(ticket.sequence()).unwrap();
+    store.connection.execute_batch("CREATE TRIGGER fail_marker BEFORE INSERT ON records WHEN NEW.key LIKE '%:commit' BEGIN SELECT RAISE(ABORT,'fixture marker failure'); END;").unwrap();
+    let write = service.begin_acceptance_write(&ticket).unwrap();
+    assert!(matches!(
+        write.persist(&mut store.acceptance_port(&plan)),
+        MessageAcceptanceWriteOutcome::Unknown(_)
+    ));
+    store.connection.execute_batch("DROP TRIGGER fail_marker; CREATE TRIGGER delete_abort AFTER UPDATE OF value ON records WHEN NEW.key='a1:0000000000000002:stage' BEGIN DELETE FROM records WHERE key='a1:0000000000000001:stage'; END;").unwrap();
+    let before = store.inspect_restart_inventory(limits()).unwrap();
+    assert_eq!(before.inventory.aborted_sequences, vec![1]);
+    let owner = super::super::ownership::RootOwnership::acquire(&fixture.0).unwrap();
+    let mut owned = owner.bind_store(&mut store).unwrap();
+    assert!(owned.declare_restart_cleanup(limits()).is_err());
+    assert_eq!(
+        owned.store_mut().read("a1:0000000000000001:stage").unwrap(),
+        Some(tombstone)
+    );
+    let after = owned
+        .store_mut()
+        .inspect_restart_inventory(limits())
+        .unwrap();
+    assert_eq!(after.inventory.generation, before.inventory.generation);
+    assert!(matches!(
+        after.pending,
+        Some(PendingCustodyRef::Unfinished { sequence: 2, .. })
+    ));
+}

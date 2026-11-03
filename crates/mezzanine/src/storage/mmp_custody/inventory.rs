@@ -136,13 +136,24 @@ impl MmpCustodyStore {
             .connection
             .unchecked_transaction()
             .map_err(database_error)?;
+        let result = self.restart_inventory_in_snapshot(&transaction, limits)?;
+        transaction.commit().map_err(database_error)?;
+        Ok(result)
+    }
+
+    /// Validates restart inventory inside the caller's same-store transaction.
+    /// Its descriptive result remains private until that transaction commits.
+    pub(in crate::storage::mmp_custody) fn restart_inventory_in_snapshot(
+        &self,
+        transaction: &rusqlite::Transaction<'_>,
+        limits: MessageAcceptanceDecodeLimits,
+    ) -> Result<RestartInventory> {
         let mut pending = PendingScan {
             enabled: true,
             found: None,
             batch: Vec::new(),
         };
-        let inventory = self.scan_inventory(&transaction, limits, &mut pending)?;
-        transaction.commit().map_err(database_error)?;
+        let inventory = self.scan_inventory(transaction, limits, &mut pending)?;
         Ok(RestartInventory {
             inventory,
             pending: pending.found,

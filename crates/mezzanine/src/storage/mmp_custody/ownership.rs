@@ -54,6 +54,12 @@ impl OwnedCustodyStore<'_> {
     pub(crate) fn store_mut(&mut self) -> &mut MmpCustodyStore {
         self.store
     }
+
+    /// Rechecks the live owner and original store binding at a worker boundary.
+    pub(crate) fn revalidate(&mut self) -> Result<()> {
+        let _bound = self._owner.bind_store(self.store)?;
+        Ok(())
+    }
 }
 
 impl RootOwnership {

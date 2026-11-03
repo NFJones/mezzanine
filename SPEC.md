@@ -15579,6 +15579,17 @@ stage or partially cleaned version2 abort while validating every other row,
 source and acknowledgment in the same complete store snapshot. It MUST reject
 unknown, corrupt, inconsistent or additional unresolved rows. Its result is
 descriptive only and MUST NOT authorize cleanup, nonacceptance or delivery.
+An owned restart worker MAY declare cleanup of one unfinished stage without the
+original in-memory write only while holding the matching live root fence. It
+MUST validate the complete restart inventory and the exact marker-free stage,
+last batch, generation and store identity in the same immediate transaction as
+the equal-sized version2 abort declaration. It MUST revalidate the resulting
+inventory and verify that every other row is unchanged before committing, and
+check the root binding again before reporting the outcome. This declaration does
+not delete chunks or confer sender, recipient, nonacceptance or delivery
+authority; later cleanup and allocator
+recovery remain separate requirements. An error after commit is uncertain and
+MUST be reconciled from the actual store.
 
 An MMP storage worker root MUST retain the actual opening/write handle, original
 store plan and exact lower attempt before any observer awaits completion. Dropped
