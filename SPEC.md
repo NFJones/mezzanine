@@ -15586,12 +15586,17 @@ Explicit failed-stage recovery MUST preserve an actual committed acceptance.
 Only exact absence at the untouched original generation, or validated private
 stage cleanup, MAY qualify noncommit. A cleanup decision MUST bind the original
 store/occurrence/generation and header hash before deleting any payload chunk.
-The version1 `MMPABT01`80-byte descriptor MUST replace the original private stage
-header at the same encoded length with zero padding; recovery MUST NOT require a
-new row for that decision. Initial admission MUST reserve generation headroom for
-all chunk writes, abort publication and bounded tail deletion. Cleanup retries
-MUST validate actual remaining-prefix bytes, checksums, count and generation,
-without repairing missing/corrupt custody or accepting future descriptor versions.
+The version2 `MMPABT02`136-byte descriptor MUST replace the original private
+stage header at the same encoded length with zero padding; recovery MUST NOT
+require a new row for that decision. Each tail deletion MUST atomically update
+the descriptor with the prior stage and deleted row digests, permitting exact
+last-batch reconstruction. Initial admission MUST reserve generation headroom
+for all chunk writes, abort publication and bounded tail deletion. Cleanup
+retries MUST validate actual remaining-prefix bytes, checksums, count, generation
+and last batch, and compare the last deleted-row digest with the retained original.
+They MUST NOT repair missing/corrupt custody or accept other descriptor versions.
+This private prototype has no active product durable mode;
+an older `MMPABT01` descriptor is rejected rather than inferred as version2.
 Only completed cleanup MAY release paired lower/request ownership. The bounded
 terminal tombstone MUST remain charged to storage policy; removing it later
 requires allocator/terminal-history preservation. Worker recovery intent MUST

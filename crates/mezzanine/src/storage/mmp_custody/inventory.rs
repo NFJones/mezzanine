@@ -265,7 +265,7 @@ impl MmpCustodyStore {
             let stage = self
                 .read(&stage_key)?
                 .ok_or_else(|| invalid("occurrence stage is missing"))?;
-            if group.chunks != 0 || !stage.starts_with(b"MMPABT01") {
+            if group.chunks != 0 || !stage.starts_with(b"MMPABT02") {
                 return Err(invalid("uncommitted occurrence requires reconciliation"));
             }
             super::acceptance::validate_finalized_abort(

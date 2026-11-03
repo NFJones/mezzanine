@@ -140,6 +140,230 @@ fn lost_cleanup_progress_reconciles_after_reopen_without_reaccepting_original() 
     service.release_rejected_acceptance(&rejected).unwrap();
 }
 
+/// When a real cleanup stops after deleting several tail chunks, the surviving
+/// descriptor must retain the exact previous-stage and deleted-chunk preimages
+/// needed to independently reproduce the last atomic batch after process loss.
+/// The retained source below is a test oracle, not a restart prerequisite.
+#[test]
+fn interrupted_cleanup_retains_a_reconstructable_last_deletion_batch() {
+    let fixture = Fixture::new();
+    let (mut service, ticket, write) = original("payload".repeat(60_000));
+    let encoded = serde_json::to_vec(&write).unwrap();
+    let mut store = MmpCustodyStore::open(&fixture.0, "session").unwrap();
+    let plan = store.acceptance_plan(ticket.sequence()).unwrap();
+    fail_marker(&store);
+    let MessageAcceptanceWriteOutcome::Unknown(unknown) =
+        write.persist(&mut store.acceptance_port(&plan))
+    else {
+        panic!("expected partial original")
+    };
+    let prefix = format!("a1:{:016x}:", ticket.sequence());
+    let blocked = chunk_key(&prefix, 0);
+    store.connection.execute_batch(&format!("CREATE TRIGGER fail_cleanup BEFORE DELETE ON records WHEN OLD.key='{blocked}' BEGIN SELECT RAISE(ABORT,'fixture cleanup failure'); END;")).unwrap();
+    let write = service.retry_acceptance_write(unknown).unwrap();
+    assert!(matches!(
+        write.persist(&mut store.acceptance_recovery_port(&plan)),
+        MessageAcceptanceWriteOutcome::Unknown(_)
+    ));
+    let stage_key = format!("{prefix}stage");
+    let stage = store.read(&stage_key).unwrap().unwrap();
+    assert!(stage.starts_with(b"MMPABT02"));
+    let abort = Abort::decode(&stage).unwrap();
+    assert_eq!(abort.remaining, 1);
+    assert!(abort.chunks > abort.remaining);
+    let index = usize::from(abort.remaining);
+    let start = index * CHUNK_BYTES;
+    let end = (start + CHUNK_BYTES).min(encoded.len());
+    assert_eq!(
+        abort.last_deleted_digest,
+        <[u8; 32]>::from(Sha256::digest(&encoded[start..end]))
+    );
+    let (_, _, batch) = position(&store, &prefix).unwrap();
+    verify_abort_batch(&prefix, &stage, &abort, &batch).unwrap();
+}
+
+/// A changed store allocation, last-batch digest or deletion preimage cannot
+/// qualify a retry as cleanup progress, even when a forged descriptor has both
+/// a valid row checksum and a matching recomputed batch. The retained original
+/// must prevent each fault from deleting the real remaining stage or chunk.
+#[test]
+fn cleanup_retry_rejects_changed_last_batch_or_deletion_evidence() {
+    for fault in ["batch", "deleted-digest", "store-id", "consistent-forgery"] {
+        let fixture = Fixture::new();
+        let (mut service, ticket, write) = original("payload".repeat(60_000));
+        let mut store = MmpCustodyStore::open(&fixture.0, "session").unwrap();
+        let plan = store.acceptance_plan(ticket.sequence()).unwrap();
+        fail_marker(&store);
+        let MessageAcceptanceWriteOutcome::Unknown(unknown) =
+            write.persist(&mut store.acceptance_port(&plan))
+        else {
+            panic!("expected partial original")
+        };
+        let prefix = format!("a1:{:016x}:", ticket.sequence());
+        let blocked = chunk_key(&prefix, 0);
+        store.connection.execute_batch(&format!("CREATE TRIGGER fail_cleanup BEFORE DELETE ON records WHEN OLD.key='{blocked}' BEGIN SELECT RAISE(ABORT,'fixture cleanup failure'); END;")).unwrap();
+        let write = service.retry_acceptance_write(unknown).unwrap();
+        let MessageAcceptanceWriteOutcome::Unknown(unknown) =
+            write.persist(&mut store.acceptance_recovery_port(&plan))
+        else {
+            panic!("expected interrupted cleanup")
+        };
+        store
+            .connection
+            .execute_batch("DROP TRIGGER fail_cleanup")
+            .unwrap();
+        let stage_key = format!("{prefix}stage");
+        if fault == "batch" {
+            store
+                .connection
+                .execute("UPDATE state SET batch=zeroblob(32)", [])
+                .unwrap();
+        } else if fault == "store-id" {
+            let mut changed = store.store_id.clone();
+            changed[0] ^= 1;
+            store
+                .connection
+                .execute("UPDATE state SET store_id=?1", [&changed])
+                .unwrap();
+        } else {
+            let mut stage = store.read(&stage_key).unwrap().unwrap();
+            stage[104] ^= 1;
+            let digest = Sha256::digest(&stage);
+            store
+                .connection
+                .execute(
+                    "UPDATE records SET value=?1,digest=?2 WHERE key=?3",
+                    params![&stage, digest.as_slice(), &stage_key],
+                )
+                .unwrap();
+            if fault == "consistent-forgery" {
+                let abort = Abort::decode(&stage).unwrap();
+                let deleted = chunk_key(&prefix, usize::from(abort.remaining));
+                let batch = batch_digest(&[
+                    CustodyWrite {
+                        key: &stage_key,
+                        previous: Some(&abort.previous_stage_digest),
+                        value: Some(&stage),
+                    },
+                    CustodyWrite {
+                        key: &deleted,
+                        previous: Some(&abort.last_deleted_digest),
+                        value: None,
+                    },
+                ])
+                .unwrap();
+                store
+                    .connection
+                    .execute("UPDATE state SET batch=?1", [&batch])
+                    .unwrap();
+            }
+        }
+        let before = state(&store);
+        let stage = store.read(&stage_key).unwrap().unwrap();
+        let chunk = store.read(&blocked).unwrap().unwrap();
+        let write = service.retry_acceptance_write(unknown).unwrap();
+        assert!(
+            matches!(
+                write.persist(&mut store.acceptance_recovery_port(&plan)),
+                MessageAcceptanceWriteOutcome::Unknown(_)
+            ),
+            "{fault}"
+        );
+        assert_eq!(state(&store), before);
+        assert_eq!(store.read(&stage_key).unwrap().unwrap(), stage);
+        assert_eq!(store.read(&blocked).unwrap().unwrap(), chunk);
+    }
+}
+
+/// The smallest possible canonical version1 stage header remains large enough
+/// for the fixed version2 descriptor, so accepting a genuine source never
+/// depends on enlarging the preallocated stage cell during cleanup.
+#[test]
+fn smallest_version1_header_can_hold_the_version2_abort_descriptor() {
+    let header = Header {
+        record_version: RECORD_VERSION,
+        sequence: 1,
+        encoded_bytes: 1,
+        chunks: 1,
+        digest: [0; 32],
+    };
+    assert!(serde_json::to_vec(&header).unwrap().len() >= ABORT_BYTES);
+}
+
+/// A single short source chunk is hashed through its actual final byte, not a
+/// full chunk-sized buffer. A lost completed refusal can then reconcile the
+/// same descriptor without another deletion or generation increment.
+#[test]
+fn completed_short_chunk_cleanup_reconciles_without_another_write() {
+    let fixture = Fixture::new();
+    let (_service, ticket, write) = original("short".into());
+    let mut store = MmpCustodyStore::open(&fixture.0, "session").unwrap();
+    let plan = store.acceptance_plan(ticket.sequence()).unwrap();
+    let (header, _) = record_header(&write, store.limits.logical_bytes).unwrap();
+    assert_eq!(header.chunks, 1);
+    assert!(header.encoded_bytes < CHUNK_BYTES);
+    fail_marker(&store);
+    assert!(store.acceptance_port(&plan).commit(&write).is_err());
+    assert!(matches!(
+        store.acceptance_recovery_port(&plan).commit(&write),
+        Err(MessageAcceptanceStoreError::NotCommitted(_))
+    ));
+    let before = state(&store);
+    assert!(matches!(
+        store.acceptance_recovery_port(&plan).commit(&write),
+        Err(MessageAcceptanceStoreError::NotCommitted(_))
+    ));
+    assert_eq!(state(&store), before);
+}
+
+/// A trigger that rejects the first tail deletion fires after the stage update
+/// has been attempted in the same transaction. SQLite must roll both changes
+/// back, leaving the initial declaration and its exact batch recoverable after
+/// reopening; retry then deletes the original chunks and settles once.
+#[test]
+fn failed_tail_delete_rolls_back_the_paired_descriptor_update() {
+    let fixture = Fixture::new();
+    let (mut service, ticket, write) = original("payload".repeat(40_000));
+    let mut store = MmpCustodyStore::open(&fixture.0, "session").unwrap();
+    let plan = store.acceptance_plan(ticket.sequence()).unwrap();
+    fail_marker(&store);
+    let MessageAcceptanceWriteOutcome::Unknown(unknown) =
+        write.persist(&mut store.acceptance_port(&plan))
+    else {
+        panic!("expected partial original")
+    };
+    store.connection.execute_batch("CREATE TRIGGER fail_cleanup BEFORE DELETE ON records BEGIN SELECT RAISE(ABORT,'fixture cleanup failure'); END;").unwrap();
+    let write = service.retry_acceptance_write(unknown).unwrap();
+    let MessageAcceptanceWriteOutcome::Unknown(unknown) =
+        write.persist(&mut store.acceptance_recovery_port(&plan))
+    else {
+        panic!("expected rejected atomic deletion")
+    };
+    let prefix = format!("a1:{:016x}:", ticket.sequence());
+    let stage = store.read(&format!("{prefix}stage")).unwrap().unwrap();
+    let abort = Abort::decode(&stage).unwrap();
+    assert!(abort.chunks > 0);
+    assert_eq!(abort.remaining, abort.chunks);
+    let (generation, count, batch) = position(&store, &prefix).unwrap();
+    assert_eq!(generation, abort.declared_generation);
+    assert_eq!(count, usize::from(abort.chunks) + 1);
+    verify_abort_batch(&prefix, &stage, &abort, &batch).unwrap();
+    drop(store);
+    let mut store = MmpCustodyStore::open(&fixture.0, "session").unwrap();
+    store
+        .connection
+        .execute_batch("DROP TRIGGER fail_cleanup")
+        .unwrap();
+    let write = service.retry_acceptance_write(unknown).unwrap();
+    let MessageAcceptanceWriteOutcome::NotCommitted(rejected) =
+        write.persist(&mut store.acceptance_recovery_port(&plan))
+    else {
+        panic!("expected qualified cleanup after reopening")
+    };
+    service.release_rejected_acceptance(&rejected).unwrap();
+    assert_eq!(state(&store).1, 1);
+}
+
 /// Missing/corrupt actual private chunks cannot be interpreted as harmless
 /// cleanup progress. Generation and checksums must agree before any deletion;
 /// removing a committed marker likewise cannot turn accepted mail into refusal.
@@ -287,7 +511,7 @@ fn empty_original_absence_is_exactly_fenced_before_qualifying_refusal() {
 /// disposition must fail closed without deletion, rewriting or acceptance.
 #[test]
 fn future_or_malformed_abort_frames_fail_closed_even_with_valid_row_checksum() {
-    for kind in 0..3 {
+    for kind in 0..4 {
         let fixture = Fixture::new();
         let (_service, ticket, write) = original("payload".repeat(40_000));
         let mut store = MmpCustodyStore::open(&fixture.0, "session").unwrap();
@@ -301,9 +525,10 @@ fn future_or_malformed_abort_frames_fail_closed_even_with_valid_row_checksum() {
         let key = format!("a1:{:016x}:stage", ticket.sequence());
         let mut bytes = store.read(&key).unwrap().unwrap();
         match kind {
-            0 => bytes[7] = b'2',
+            0 => bytes[7] = b'3',
             1 => bytes[ABORT_BYTES] = 1,
-            _ => bytes[48] ^= 1,
+            2 => bytes[48] ^= 1,
+            _ => bytes[7] = b'1',
         }
         let hash = Sha256::digest(&bytes);
         store

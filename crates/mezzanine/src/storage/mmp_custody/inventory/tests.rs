@@ -252,6 +252,17 @@ fn inventory_refuses_unsettled_stage_then_records_real_finalized_abort() {
         )
         .unwrap();
     assert!(store.inventory_custody(limits()).is_err());
+    let mut legacy = original.clone();
+    legacy[7] = b'1';
+    let digest = Sha256::digest(&legacy).to_vec();
+    store
+        .connection
+        .execute(
+            "UPDATE records SET value=?1,digest=?2 WHERE key=?3",
+            rusqlite::params![legacy, digest, key],
+        )
+        .unwrap();
+    assert!(store.inventory_custody(limits()).is_err());
     let mut changed = original;
     changed[24..32].copy_from_slice(&u64::MAX.to_le_bytes());
     let digest = Sha256::digest(&changed).to_vec();
