@@ -15995,6 +15995,25 @@ limitation. Current schema10 host checkpoint creation does not yet implement tru
 canonical-context deduplication or crash-safe transport/disposition settlement;
 these remain required before durable product activation.
 
+Original-store recovery qualification MUST check the complete settled inventory
+and source-bound ACK history in the same SQLite read snapshot as the captured
+references. It MUST retain originals accepted after capture and positive ACKs
+whose results were lost after capture. A copied allocation, changed physical
+binding, generation or watermark below the captured floor, incomplete source,
+or checkpoint metadata contradicting its immutable source MUST withhold the
+candidate. Positive checkpoint slot bits require original durable ACK evidence.
+The allocator floor MUST cover the persistent watermark even when no original
+rows survive; a maximum surviving sequence alone is insufficient.
+
+Recovery input, temporary validation indexes, inventory, ACK fold and bounded
+decoder scratch MUST share the 8 MiB metadata ceiling. Payload decoding MUST
+retain at most one original body of at most 1 MiB at a time. The current fenced
+storage qualification returns only unpublished observations; it MUST NOT create
+live native registrations, inject context, or bypass generic restore refusal.
+Until terminal journals exist, snapshot terminal bits alone MUST refuse recovery
+qualification rather than authorize discarded custody. Actual root/session
+installation and canonical commit qualification remain required.
+
 Immutable envelope auxiliary metadata MUST additionally fit a 16 MiB logical
 budget over the deduplicated replay/custody union after normal replay eviction.
 Charge 1,024 bytes per occurrence plus 64 bytes and four times UTF-8 length for

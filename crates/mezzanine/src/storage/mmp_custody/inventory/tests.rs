@@ -703,7 +703,7 @@ fn inventory_uses_one_actual_same_store_snapshot() {
     };
     assert!(
         store
-            .scan_inventory(&foreign, limits(), &mut pending)
+            .scan_inventory(&foreign, limits(), &mut pending, 0)
             .is_err()
     );
 }
@@ -1066,7 +1066,7 @@ fn restart_preflight_validates_all_accepted_sources_and_acknowledgements() {
         batch: Vec::new(),
     };
     let snapshot = store
-        .scan_inventory(&transaction, limits(), &mut pending)
+        .scan_inventory(&transaction, limits(), &mut pending, 0)
         .unwrap();
     assert_eq!(snapshot.acknowledgement_keys.len(), 1);
     assert!(matches!(

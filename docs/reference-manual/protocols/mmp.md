@@ -380,6 +380,15 @@ Generic restore rejects schema10. These descriptive facts do not yet provide
 trusted whole-session cold reconstruction, context-commit-before-ACK dedup or
 native transport/disposition settlement; those remain activation gates.
 
+The fenced storage recovery reader now checks cold references together with the
+complete inventory and ACK history in one SQLite snapshot. It preserves later
+accepted originals and lost positive ACK results as unpublished observations,
+rejects copied stores and contradictory source/ACK facts, and uses the persistent
+watermark for the allocator floor even after row removal. Input, inventory, fold
+and decoder scratch share the metadata budget; bodies are decoded one at a time.
+Snapshot terminal bits without durable journals refuse qualification. This reader
+does not yet install a recovered root/session or restore native authority.
+
 The opt-in requires an actually empty original store. It is not enabled by
 normal product construction: trusted cold recovery, native restart deduplication
 and all ingress remain separate integration gates. Existing stores and saved

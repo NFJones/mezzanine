@@ -159,7 +159,7 @@ impl MmpCustodyStore {
             found: None,
             batch: Vec::new(),
         };
-        let inventory = self.scan_inventory(transaction, limits, &mut pending)?;
+        let inventory = self.scan_inventory(transaction, limits, &mut pending, 0)?;
         Ok(RestartInventory {
             inventory,
             pending: pending.found,
@@ -173,12 +173,23 @@ impl MmpCustodyStore {
         transaction: &rusqlite::Transaction<'_>,
         limits: MessageAcceptanceDecodeLimits,
     ) -> Result<CustodyInventory> {
+        self.inventory_in_snapshot_with_metadata(transaction, limits, 0)
+    }
+
+    /// Reserves caller-owned recovery input and decode scratch under the same
+    /// metadata ceiling before the inventory retains its first reference.
+    pub(super) fn inventory_in_snapshot_with_metadata(
+        &self,
+        transaction: &rusqlite::Transaction<'_>,
+        limits: MessageAcceptanceDecodeLimits,
+        metadata_base: usize,
+    ) -> Result<CustodyInventory> {
         let mut pending = PendingScan {
             enabled: false,
             found: None,
             batch: Vec::new(),
         };
-        self.scan_inventory(transaction, limits, &mut pending)
+        self.scan_inventory(transaction, limits, &mut pending, metadata_base)
     }
 
     /// Performs the shared bounded scan under the caller's exact transaction.
@@ -187,7 +198,10 @@ impl MmpCustodyStore {
         transaction: &rusqlite::Transaction<'_>,
         limits: MessageAcceptanceDecodeLimits,
         pending: &mut PendingScan,
+        metadata_base: usize,
     ) -> Result<CustodyInventory> {
+        let mut metadata = 0usize;
+        charge(&mut metadata, metadata_base)?;
         if !std::ptr::eq(&self.connection, &**transaction) {
             return Err(invalid("snapshot belongs to another store"));
         }
@@ -217,7 +231,6 @@ impl MmpCustodyStore {
             aborted_sequences: Vec::new(),
             retained_metadata: 0,
         };
-        let mut metadata = 0usize;
         let mut group: Option<Group> = None;
         let mut seen_rows = 0usize;
         {

@@ -52,6 +52,10 @@ pub(crate) struct CustodyHistory {
     /// One above the highest *surviving* occurrence or abort, if representable.
     /// This is not a durable watermark and must never itself seed an allocator.
     pub observed_next_sequence: Option<u64>,
+    /// Total conservative retained charge, including the caller's baseline and
+    /// the simultaneous hash/sorted fold allocations. Later recovery phases
+    /// must preserve this charge while retaining this evidence.
+    pub(super) retained_metadata: usize,
 }
 
 impl MmpCustodyStore {
@@ -66,7 +70,22 @@ impl MmpCustodyStore {
             .connection
             .unchecked_transaction()
             .map_err(database_error)?;
-        let inventory = self.inventory_in_snapshot(&transaction, limits)?;
+        let history = self.fold_custody_history_in_snapshot(&transaction, limits, 0)?;
+        self.finish_transaction(transaction)?;
+        Ok(history)
+    }
+
+    /// Folds evidence inside the caller's original-store read transaction.
+    /// The supplied baseline includes retained input and bounded decoder scratch;
+    /// no result may escape until the caller commits all cross-record checks.
+    pub(super) fn fold_custody_history_in_snapshot(
+        &self,
+        transaction: &rusqlite::Transaction<'_>,
+        limits: MessageAcceptanceDecodeLimits,
+        metadata_base: usize,
+    ) -> Result<CustodyHistory> {
+        let inventory =
+            self.inventory_in_snapshot_with_metadata(transaction, limits, metadata_base)?;
         let highest = inventory
             .occurrences
             .iter()
@@ -78,7 +97,7 @@ impl MmpCustodyStore {
         let mut acknowledgements: HashMap<(u64, u32), u64> = HashMap::new();
         let mut expiries: HashMap<u64, u64> = HashMap::new();
         for key in &inventory.acknowledgement_keys {
-            let ack = self.read_stored_acknowledgement_in_snapshot(&transaction, key, limits)?;
+            let ack = self.read_stored_acknowledgement_in_snapshot(transaction, key, limits)?;
             for decision in ack.decisions {
                 if decision.acknowledged {
                     let entry = (decision.sequence, decision.binding_index);
@@ -124,12 +143,12 @@ impl MmpCustodyStore {
             }
         }));
         folded_expiries.sort_unstable();
-        self.finish_transaction(transaction)?;
         Ok(CustodyHistory {
             inventory,
             acknowledgements: folded_acknowledgements,
             expiries: folded_expiries,
             observed_next_sequence: highest.checked_add(1),
+            retained_metadata: metadata,
         })
     }
 }

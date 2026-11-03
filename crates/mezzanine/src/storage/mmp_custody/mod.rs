@@ -32,6 +32,7 @@ mod checkpoint;
 mod history;
 mod inventory;
 pub(crate) mod ownership;
+mod recovery;
 
 /// Version of this private row/receipt store, independent of message snapshots.
 const SCHEMA_VERSION: i64 = 2;
