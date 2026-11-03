@@ -15555,6 +15555,12 @@ be bounded and MUST NOT by themselves restore delivery or native-input authority
 The observed store generation MUST be sufficient to account for the present row
 count under the store's maximum writes per transaction; a nonempty store at
 generation zero MUST NOT qualify as a consistent inventory.
+Read-only inspection of an unfinished acceptance MAY examine one marker-free
+stage and its dense checksum-validated prefix in a single store snapshot. It
+MUST verify that the last committed batch matches the final stage or chunk
+append; a missing marker with surviving marker-batch evidence MUST NOT be
+classified as an unfinished append. Such local evidence MUST NOT authorize
+cleanup, nonacceptance, delivery, or omission of the remaining store inventory.
 
 An MMP storage worker root MUST retain the actual opening/write handle, original
 store plan and exact lower attempt before any observer awaits completion. Dropped

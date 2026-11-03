@@ -20,6 +20,7 @@ use serde::{Deserialize, Serialize};
 use super::*;
 
 mod recovery;
+mod restart;
 
 /// Recognizes and checks only a fully cleaned abort disposition.
 pub(super) fn validate_finalized_abort(
