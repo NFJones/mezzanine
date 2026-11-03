@@ -58,18 +58,10 @@ impl MmpCustodyStore {
         if sequence == 0 || !std::ptr::eq(&self.connection, &**transaction) {
             return Err(changed());
         }
-        let (generation, batch, store_id): (i64, Option<Vec<u8>>, Option<Vec<u8>>) = transaction
-            .query_row(
-                "SELECT generation,CASE WHEN length(batch)=32 THEN batch ELSE NULL END,CASE WHEN length(store_id)=16 THEN store_id ELSE NULL END FROM state WHERE singleton=1",
-                [],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-            )
-            .map_err(database_error)?;
-        let generation = u64::try_from(generation).map_err(|_| changed())?;
-        let batch = batch.ok_or_else(changed)?;
-        let store_id = store_id
-            .filter(|id| *id == self.store_id)
-            .ok_or_else(changed)?;
+        let state = self.checked_state(transaction)?;
+        let generation = u64::try_from(state.generation).map_err(|_| changed())?;
+        let batch = state.batch;
+        let store_id = self.store_id.clone();
         let prefix = format!("a1:{sequence:016x}:");
         let stage_key = format!("{prefix}stage");
         let stage = read_record(transaction, &stage_key)?.ok_or_else(changed)?;

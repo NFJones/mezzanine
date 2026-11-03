@@ -47,18 +47,14 @@ pub(crate) struct PlannedAcknowledgementStore<'a> {
     store: &'a mut MmpCustodyStore,
     /// Original source allocation and position retained outside any worker.
     plan: &'a AcknowledgementPlan,
+    /// Test-only interleaving after source validation and before ACK settlement.
+    #[cfg(test)]
+    after_sources: Option<&'a dyn Fn()>,
 }
 impl MmpCustodyStore {
     /// Captures physical position off actor before issuing one original ACK.
     pub fn acknowledgement_plan(&self) -> Result<AcknowledgementPlan> {
-        let generation: i64 = self
-            .connection
-            .query_row(
-                "SELECT generation FROM state WHERE singleton=1",
-                [],
-                |row| row.get(0),
-            )
-            .map_err(database_error)?;
+        let generation = self.checked_state(&self.connection)?.generation;
         Ok(AcknowledgementPlan {
             store_id: self.store_id.clone(),
             generation: u64::try_from(generation)
@@ -70,7 +66,26 @@ impl MmpCustodyStore {
         &'a mut self,
         plan: &'a AcknowledgementPlan,
     ) -> PlannedAcknowledgementStore<'a> {
-        PlannedAcknowledgementStore { store: self, plan }
+        PlannedAcknowledgementStore {
+            store: self,
+            plan,
+            #[cfg(test)]
+            after_sources: None,
+        }
+    }
+
+    /// Supplies a deterministic competing-writer interleaving to tests only.
+    #[cfg(test)]
+    fn acknowledgement_port_with_probe<'a>(
+        &'a mut self,
+        plan: &'a AcknowledgementPlan,
+        after_sources: &'a dyn Fn(),
+    ) -> PlannedAcknowledgementStore<'a> {
+        PlannedAcknowledgementStore {
+            store: self,
+            plan,
+            after_sources: Some(after_sources),
+        }
     }
 }
 impl MessageAcknowledgementStore for PlannedAcknowledgementStore<'_> {
@@ -103,6 +118,22 @@ impl PlannedAcknowledgementStore<'_> {
         if !remainder.is_empty() || encoded_entries.len() != record.entries().count() {
             return Err(MezError::invalid_state("MMP ACK entry framing changed"));
         }
+        // The same immediate transaction fences source validation, existing
+        // ACK reconciliation and any new ACK write against other writers.
+        let transaction = rusqlite::Transaction::new_unchecked(
+            &self.store.connection,
+            TransactionBehavior::Immediate,
+        )
+        .map_err(database_error)?;
+        let state = self.store.checked_state(&transaction)?;
+        if u64::try_from(state.generation)
+            .map_err(|_| MezError::invalid_state("invalid MMP ACK generation"))?
+            < self.plan.generation
+        {
+            return Err(MezError::invalid_state(
+                "MMP ACK store generation rolled back",
+            ));
+        }
         let mut previous = 0;
         for (entry, encoded) in record.entries().zip(encoded_entries) {
             if entry.sequence <= previous || entry.sequence <= record.registered_after_sequence() {
@@ -110,7 +141,9 @@ impl PlannedAcknowledgementStore<'_> {
                     "MMP ACK original occurrence order changed",
                 ));
             }
-            let original = self.store.validate_accepted_occurrence(entry.sequence)?;
+            let original = self
+                .store
+                .validate_accepted_occurrence_in_snapshot(&transaction, entry.sequence)?;
             if encoded[13..] != original {
                 return Err(MezError::conflict(
                     "MMP ACK original source content changed",
@@ -121,14 +154,22 @@ impl PlannedAcknowledgementStore<'_> {
         if previous != record.endpoint_sequence() {
             return Err(MezError::invalid_state("MMP ACK endpoint source missing"));
         }
+        #[cfg(test)]
+        if let Some(after_sources) = self.after_sources {
+            after_sources();
+        }
         let key = ack_key(&bytes);
-        if let Some(existing) = self.store.read(&key)? {
+        if let Some(existing) = read_record(&transaction, &key)? {
             if existing != bytes {
                 return Err(MezError::conflict("MMP ACK committed postimage changed"));
             }
+            // The ACK may predate this plan; a later valid batch need not be
+            // this ACK's batch. Exact content and source checks are decisive.
+            transaction.commit().map_err(database_error)?;
             return Ok(());
         }
-        self.store.commit(
+        self.store.commit_in_transaction(
+            &transaction,
             self.plan.generation,
             &[CustodyWrite {
                 key: &key,
@@ -136,6 +177,19 @@ impl PlannedAcknowledgementStore<'_> {
                 value: Some(&bytes),
             }],
         )?;
+        // A write trigger can alter a referenced original inside this same
+        // transaction. Revalidate before commit so no ACK outlives its source.
+        for (entry, encoded) in record.entries().zip(encoded_entries) {
+            let original = self
+                .store
+                .validate_accepted_occurrence_in_snapshot(&transaction, entry.sequence)?;
+            if encoded[13..] != original {
+                return Err(MezError::conflict(
+                    "MMP ACK original source content changed",
+                ));
+            }
+        }
+        transaction.commit().map_err(database_error)?;
         Ok(())
     }
 }

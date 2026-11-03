@@ -58,6 +58,226 @@ fn committed_original_survives_restart_and_lost_reply_without_second_write() {
     assert!(MmpCustodyStore::open(&fixture.0, "new-pane-same-address").is_err());
 }
 
+/// A connection's cached allocation and owner do not replace the persisted
+/// state observed inside its transaction. Changing either after open, or
+/// corrupting generation/batch framing, must reject both fresh writes and
+/// lost-reply reconciliation without creating a receipt or mutating records.
+#[test]
+fn commit_rechecks_persisted_owner_allocation_and_batch_framing() {
+    let mut admitted = Vec::new();
+    for fault in [
+        "fresh-id",
+        "retry-id",
+        "fresh-owner",
+        "retry-owner",
+        "initial-batch",
+        "oversized-batch",
+        "later-empty-batch",
+    ] {
+        let fixture = Fixture::new();
+        let mut store = MmpCustodyStore::open(&fixture.0, "session-original").unwrap();
+        let original = [CustodyWrite {
+            key: "original",
+            previous: None,
+            value: Some(b"original"),
+        }];
+        let retry = fault.starts_with("retry-");
+        let has_original = retry || fault == "later-empty-batch";
+        if has_original {
+            store.commit(0, &original).unwrap();
+        }
+        let trusted_id = store.store_id.clone();
+        let trusted_batch: Vec<u8> = store
+            .connection
+            .query_row("SELECT batch FROM state WHERE singleton=1", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        match fault {
+            "fresh-id" | "retry-id" => {
+                let mut id = store.store_id.clone();
+                id[0] ^= 1;
+                store
+                    .connection
+                    .execute("UPDATE state SET store_id=?1", [&id])
+                    .unwrap();
+            }
+            "fresh-owner" | "retry-owner" => {
+                store
+                    .connection
+                    .execute("UPDATE state SET owner='different-session'", [])
+                    .unwrap();
+            }
+            "initial-batch" => {
+                store
+                    .connection
+                    .execute("UPDATE state SET batch=zeroblob(32)", [])
+                    .unwrap();
+            }
+            "oversized-batch" => {
+                store
+                    .connection
+                    .execute("UPDATE state SET batch=zeroblob(262145)", [])
+                    .unwrap();
+            }
+            "later-empty-batch" => {
+                store
+                    .connection
+                    .execute("UPDATE state SET batch=X''", [])
+                    .unwrap();
+            }
+            _ => unreachable!(),
+        }
+        let before: (i64, i64) = store
+            .connection
+            .query_row(
+                "SELECT generation,(SELECT COUNT(*) FROM records) FROM state",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        let next = [CustodyWrite {
+            key: "next",
+            previous: None,
+            value: Some(b"next"),
+        }];
+        let result = if retry {
+            store.commit(0, &original)
+        } else if has_original {
+            store.commit(1, &next)
+        } else {
+            store.commit(0, &original)
+        };
+        if result.is_ok() {
+            admitted.push(fault);
+        } else {
+            let after: (i64, i64) = store
+                .connection
+                .query_row(
+                    "SELECT generation,(SELECT COUNT(*) FROM records) FROM state",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .unwrap();
+            assert_eq!(after, before, "{fault}");
+            store
+                .connection
+                .execute(
+                    "UPDATE state SET owner='session-original',store_id=?1,batch=?2",
+                    params![&trusted_id, &trusted_batch],
+                )
+                .unwrap();
+            let receipt = if retry {
+                store.commit(0, &original)
+            } else if has_original {
+                store.commit(1, &next)
+            } else {
+                store.commit(0, &original)
+            }
+            .unwrap();
+            assert_eq!(receipt.store_id(), trusted_id, "{fault}");
+            assert_eq!(
+                receipt.generation(),
+                if has_original && !retry { 2 } else { 1 },
+                "{fault}"
+            );
+        }
+    }
+    assert!(
+        admitted.is_empty(),
+        "corrupt state issued a receipt: {admitted:?}"
+    );
+}
+
+/// Reopening does not materialize or accept oversized owner, allocation or
+/// batch fields from a corrupt private store. Each actual SQLite fixture is
+/// rejected before it can provide a usable store or a future receipt.
+#[test]
+fn opening_rejects_oversized_persisted_state_fields() {
+    for fault in ["owner", "id", "batch"] {
+        let fixture = Fixture::new();
+        let store = MmpCustodyStore::open(&fixture.0, "session-original").unwrap();
+        match fault {
+            "owner" => {
+                store
+                    .connection
+                    .execute("UPDATE state SET owner=?1", ["x".repeat(262_145)])
+                    .unwrap();
+            }
+            "id" => {
+                store.connection.execute_batch("PRAGMA ignore_check_constraints=ON; UPDATE state SET store_id=zeroblob(262145);").unwrap();
+            }
+            "batch" => {
+                store
+                    .connection
+                    .execute("UPDATE state SET batch=zeroblob(262145)", [])
+                    .unwrap();
+            }
+            _ => unreachable!(),
+        }
+        drop(store);
+        assert!(
+            MmpCustodyStore::open(&fixture.0, "session-original").is_err(),
+            "{fault}"
+        );
+    }
+}
+
+/// Actual SQLite triggers can alter the persisted owner, allocation or row
+/// while a batch is being applied. A successful receipt must reflect the final
+/// transaction state and exact postimages, so each altered batch is rolled
+/// back rather than being published under the state checked before insertion.
+#[test]
+fn commit_rechecks_final_state_and_postimages_after_write_triggers() {
+    let mut admitted = Vec::new();
+    for fault in ["owner", "id", "postimage"] {
+        let fixture = Fixture::new();
+        let mut store = MmpCustodyStore::open(&fixture.0, "session-original").unwrap();
+        let mut id = store.store_id.clone();
+        id[0] ^= 1;
+        let id_hex: String = id.iter().map(|byte| format!("{byte:02x}")).collect();
+        let digest = Sha256::digest([0]);
+        let digest_hex: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
+        let effect = match fault {
+            "owner" => "UPDATE state SET owner='foreign'".to_owned(),
+            "id" => format!("UPDATE state SET store_id=X'{id_hex}'"),
+            "postimage" => {
+                format!("UPDATE records SET value=X'00',digest=X'{digest_hex}' WHERE key=NEW.key")
+            }
+            _ => unreachable!(),
+        };
+        store
+            .connection
+            .execute_batch(&format!(
+                "CREATE TRIGGER change_state AFTER INSERT ON records BEGIN {effect}; END;"
+            ))
+            .unwrap();
+        let writes = [CustodyWrite {
+            key: "one",
+            previous: None,
+            value: Some(b"original"),
+        }];
+        if store.commit(0, &writes).is_ok() {
+            admitted.push(fault);
+        } else {
+            let state: (i64, i64) = store
+                .connection
+                .query_row(
+                    "SELECT generation,(SELECT COUNT(*) FROM records) FROM state",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .unwrap();
+            assert_eq!(state, (0, 0), "{fault}");
+            assert_eq!(store.read("one").unwrap(), None, "{fault}");
+        }
+    }
+    assert!(
+        admitted.is_empty(),
+        "trigger changed a committed postimage: {admitted:?}"
+    );
+}
+
 /// Failure of a later expected preimage must roll back every earlier mutation
 /// in the same batch. A stale actor generation cannot delete accepted evidence.
 #[test]

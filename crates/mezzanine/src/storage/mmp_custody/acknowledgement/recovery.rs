@@ -72,6 +72,7 @@ impl MmpCustodyStore {
         if !std::ptr::eq(&self.connection, &**transaction) {
             return Err(invalid("snapshot belongs to another store"));
         }
+        self.checked_state(transaction)?;
         let bytes = self
             .read(key)?
             .ok_or_else(|| invalid("record is unavailable"))?;

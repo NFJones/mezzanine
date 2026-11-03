@@ -205,12 +205,21 @@ impl MmpCustodyStore {
         })
     }
 
-    /// Verifies the actual complete accepted original before durable ACK work.
+    /// Verifies an accepted original inside the caller's existing snapshot.
     /// Marker labels alone are insufficient: every bounded chunk, its framing
     /// and complete SHA256 must still agree. Unknown formats fail closed.
-    pub(super) fn validate_accepted_occurrence(&self, sequence: u64) -> Result<[u8; 32]> {
-        self.stream_accepted_occurrence(sequence, &mut io::sink())
-            .map(|(digest, _)| digest)
+    pub(super) fn validate_accepted_occurrence_in_snapshot(
+        &self,
+        transaction: &rusqlite::Transaction<'_>,
+        sequence: u64,
+    ) -> Result<[u8; 32]> {
+        self.verified_accepted_in_snapshot(transaction, sequence, |reader| {
+            io::copy(reader, &mut io::sink()).map_err(|error| {
+                MezError::invalid_state(format!("MMP acceptance stream failed: {error}"))
+            })?;
+            Ok(())
+        })
+        .map(|(_, digest, _)| digest)
     }
 
     /// Streams one committed immutable acceptance under one SQLite read snapshot.
@@ -270,6 +279,7 @@ impl MmpCustodyStore {
                 "MMP acceptance snapshot belongs to another store",
             ));
         }
+        self.checked_state(transaction)?;
         let prefix = format!("a1:{sequence:016x}:");
         let marker = self
             .read(&format!("{prefix}commit"))?
@@ -313,20 +323,60 @@ impl MmpCustodyStore {
     /// Captures a plan before issuance, on the owned I/O worker. The runtime root
     /// must retain it before handing out an attempt and reuse it after worker loss.
     pub fn acceptance_plan(&self, sequence: u64) -> Result<AcceptancePlan> {
-        let generation: i64 = self
-            .connection
-            .query_row(
-                "SELECT generation FROM state WHERE singleton=1",
-                [],
-                |row| row.get(0),
-            )
-            .map_err(database_error)?;
+        let generation = self.checked_state(&self.connection)?.generation;
         Ok(AcceptancePlan {
             store_id: self.store_id.clone(),
             generation: u64::try_from(generation)
                 .map_err(|_| MezError::invalid_state("invalid MMP acceptance generation"))?,
             sequence,
         })
+    }
+
+    /// Revalidates the complete original and trusted store state in one pinned
+    /// snapshot before an acceptance port can return a positive result.
+    fn verify_committed_plan(
+        &self,
+        plan: &AcceptancePlan,
+        header: &Header,
+        header_bytes: &[u8],
+    ) -> Result<()> {
+        let transaction = self
+            .connection
+            .unchecked_transaction()
+            .map_err(database_error)?;
+        let state = self.checked_state(&transaction)?;
+        let prefix = format!("a1:{:016x}:", plan.sequence);
+        let stage_key = format!("{prefix}stage");
+        let marker_key = format!("{prefix}commit");
+        let marker_batch = batch_digest(&[CustodyWrite {
+            key: &marker_key,
+            previous: None,
+            value: Some(header_bytes),
+        }])?;
+        let expected = plan
+            .generation
+            .checked_add(header.chunks as u64)
+            .and_then(|generation| generation.checked_add(2))
+            .ok_or_else(|| MezError::invalid_state("MMP acceptance generation overflow"))?;
+        let rows: i64 = transaction
+            .query_row(
+                "SELECT COUNT(*) FROM records WHERE substr(key,1,length(?1))=?1",
+                [&prefix],
+                |row| row.get(0),
+            )
+            .map_err(database_error)?;
+        if state.generation as u64 != expected
+            || state.batch != marker_batch
+            || checked_count(rows)? != header.chunks + 2
+            || read_record(&transaction, &stage_key)?.as_deref() != Some(header_bytes)
+            || read_record(&transaction, &marker_key)?.as_deref() != Some(header_bytes)
+            || self.validate_accepted_occurrence_in_snapshot(&transaction, plan.sequence)?
+                != header.digest
+        {
+            return Err(MezError::invalid_state("MMP committed acceptance changed"));
+        }
+        transaction.commit().map_err(database_error)?;
+        Ok(())
     }
 
     /// Borrows a port for one original plan; actual allocation and sequence checks
@@ -476,6 +526,9 @@ impl PlannedAcceptanceStore<'_> {
                 &header_bytes,
             )?;
         }
+        drop(writer);
+        self.store
+            .verify_committed_plan(self.plan, &header, &header_bytes)?;
         Ok(())
     }
 }

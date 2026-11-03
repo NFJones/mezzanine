@@ -22,13 +22,8 @@ pub(super) fn inspect_partial_abort(
     if sequence == 0 || !std::ptr::eq(&store.connection, &**transaction) {
         return Err(changed());
     }
-    let (stored_generation, stored_batch, stored_id): (i64, Option<Vec<u8>>, Option<Vec<u8>>) = transaction.query_row(
-        "SELECT generation,CASE WHEN length(batch)=32 THEN batch ELSE NULL END,CASE WHEN length(store_id)=16 THEN store_id ELSE NULL END FROM state WHERE singleton=1",
-        [], |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?)),
-    ).map_err(database_error)?;
-    if u64::try_from(stored_generation).map_err(|_| changed())? != generation
-        || stored_batch.as_deref() != Some(batch)
-        || stored_id.as_deref() != Some(store.store_id.as_slice())
+    let state = store.checked_state(transaction)?;
+    if u64::try_from(state.generation).map_err(|_| changed())? != generation || state.batch != batch
     {
         return Err(changed());
     }

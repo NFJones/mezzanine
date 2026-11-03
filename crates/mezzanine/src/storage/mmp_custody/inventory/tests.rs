@@ -683,6 +683,58 @@ fn restart_preflight_validates_all_accepted_sources_and_acknowledgements() {
         result.pending,
         Some(PendingCustodyRef::Unfinished { sequence: 2, .. })
     ));
+    let trusted_id = store.store_id.clone();
+    let trusted_batch: Vec<u8> = store
+        .connection
+        .query_row("SELECT batch FROM state WHERE singleton=1", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    for fault in ["id", "owner", "batch"] {
+        match fault {
+            "id" => {
+                let mut id = trusted_id.clone();
+                id[0] ^= 1;
+                store
+                    .connection
+                    .execute("UPDATE state SET store_id=?1", [&id])
+                    .unwrap();
+            }
+            "owner" => {
+                store
+                    .connection
+                    .execute("UPDATE state SET owner='foreign'", [])
+                    .unwrap();
+            }
+            "batch" => {
+                store
+                    .connection
+                    .execute("UPDATE state SET batch=X''", [])
+                    .unwrap();
+            }
+            _ => unreachable!(),
+        }
+        assert!(
+            store.inspect_restart_inventory(limits()).is_err(),
+            "{fault}"
+        );
+        assert!(store.inspect_unfinished_acceptance(2).is_err(), "{fault}");
+        assert!(store.read_accepted_source(1, limits()).is_err(), "{fault}");
+        assert!(
+            store
+                .read_stored_acknowledgement(&ack_key, limits())
+                .is_err(),
+            "{fault}"
+        );
+        store
+            .connection
+            .execute(
+                "UPDATE state SET owner='session',store_id=?1,batch=?2",
+                rusqlite::params![&trusted_id, &trusted_batch],
+            )
+            .unwrap();
+    }
+    assert!(store.inspect_restart_inventory(limits()).is_ok());
     let ack = store.read(&ack_key).unwrap().unwrap();
     let mut changed_ack = ack.clone();
     changed_ack[0] ^= 1;

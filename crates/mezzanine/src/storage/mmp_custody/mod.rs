@@ -106,7 +106,20 @@ pub(crate) struct MmpCustodyStore {
     limits: CustodyStoreLimits,
     /// Random private allocation identity loaded from the same transaction.
     store_id: Vec<u8>,
+    /// Trusted session owner captured at open and rechecked before every commit.
+    owner: String,
 }
+
+/// Bounded, identity-checked state from one actual SQLite snapshot.
+struct CustodyState {
+    /// Persisted monotonic generation in SQLite's signed integer range.
+    generation: i64,
+    /// Empty only at generation zero; otherwise one exact batch digest.
+    batch: Vec<u8>,
+}
+
+/// Nullable bounded fields read before validating persisted store state.
+type FramedState = (i64, Option<Vec<u8>>, Option<String>, Option<Vec<u8>>);
 
 impl MmpCustodyStore {
     /// Opens a private store for an exact trusted session owner.
@@ -236,32 +249,28 @@ impl MmpCustodyStore {
                 "MMP custody schema changed during open",
             ));
         }
-        let stored_owner: String = transaction
-            .query_row("SELECT owner FROM state WHERE singleton=1", [], |r| {
-                r.get(0)
-            })
+        let stored_owner: Option<String> = transaction
+            .query_row("SELECT CASE WHEN length(CAST(owner AS BLOB))<=256 THEN owner ELSE NULL END FROM state WHERE singleton=1", [], |r| r.get(0))
             .map_err(database_error)?;
-        if stored_owner != owner {
+        if stored_owner.as_deref() != Some(owner) {
             return Err(MezError::conflict("MMP custody session owner mismatch"));
         }
-        let store_id: Vec<u8> = transaction
-            .query_row("SELECT store_id FROM state WHERE singleton=1", [], |r| {
-                r.get(0)
-            })
+        let store_id: Option<Vec<u8>> = transaction
+            .query_row("SELECT CASE WHEN length(store_id)=16 THEN store_id ELSE NULL END FROM state WHERE singleton=1", [], |r| r.get(0))
             .map_err(database_error)?;
-        if store_id.len() != 16 {
-            return Err(MezError::invalid_state(
-                "invalid MMP custody store identity",
-            ));
-        }
+        let store_id = store_id
+            .ok_or_else(|| MezError::invalid_state("invalid MMP custody store identity"))?;
         validate_totals(&transaction, limits)?;
         transaction.commit().map_err(database_error)?;
         super::shared_sqlite::integrity_check(&connection)?;
-        Ok(Self {
+        let store = Self {
             connection,
             limits,
             store_id,
-        })
+            owner: owner.to_owned(),
+        };
+        store.checked_state(&store.connection)?;
+        Ok(store)
     }
 
     /// Commits exact canonical rows before returning a durable receipt.
@@ -273,46 +282,82 @@ impl MmpCustodyStore {
         generation: u64,
         writes: &[CustodyWrite<'_>],
     ) -> Result<CustodyCommit> {
+        let transaction =
+            rusqlite::Transaction::new_unchecked(&self.connection, TransactionBehavior::Immediate)
+                .map_err(database_error)?;
+        let receipt = self.commit_in_transaction(&transaction, generation, writes)?;
+        transaction.commit().map_err(database_error)?;
+        Ok(receipt)
+    }
+
+    /// Validates trusted owner, allocation and batch framing in the caller's
+    /// exact same-store snapshot before any positive fact or mutation.
+    fn checked_state(&self, connection: &Connection) -> Result<CustodyState> {
+        if !std::ptr::eq(&self.connection, connection) {
+            return Err(MezError::invalid_state(
+                "MMP custody snapshot belongs to another store",
+            ));
+        }
+        let (generation, batch, owner, id): FramedState = connection
+            .query_row(
+                "SELECT generation,CASE WHEN length(batch) IN (0,32) THEN batch ELSE NULL END,CASE WHEN length(CAST(owner AS BLOB))<=256 THEN owner ELSE NULL END,CASE WHEN length(store_id)=16 THEN store_id ELSE NULL END FROM state WHERE singleton=1",
+                [], |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?)),
+            )
+            .map_err(database_error)?;
+        let batch =
+            batch.ok_or_else(|| MezError::invalid_state("invalid MMP custody batch framing"))?;
+        if generation < 0
+            || (generation == 0 && !batch.is_empty())
+            || (generation > 0 && batch.len() != 32)
+            || owner.as_deref() != Some(self.owner.as_str())
+            || id.as_deref() != Some(self.store_id.as_slice())
+        {
+            return Err(MezError::invalid_state(
+                "MMP custody store identity or batch changed",
+            ));
+        }
+        Ok(CustodyState { generation, batch })
+    }
+
+    /// Reconciles or applies one bounded batch inside the caller's transaction.
+    /// The caller must commit the transaction before publishing the receipt.
+    fn commit_in_transaction(
+        &self,
+        transaction: &rusqlite::Transaction<'_>,
+        generation: u64,
+        writes: &[CustodyWrite<'_>],
+    ) -> Result<CustodyCommit> {
         let digest = batch_digest(writes)?;
         let expected = i64::try_from(generation)
             .map_err(|_| MezError::invalid_args("MMP custody generation overflow"))?;
-        let transaction = self
-            .connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(database_error)?;
-        let (actual, previous): (i64, Vec<u8>) = transaction
-            .query_row(
-                "SELECT generation,batch FROM state WHERE singleton=1",
-                [],
-                |r| Ok((r.get(0)?, r.get(1)?)),
-            )
-            .map_err(database_error)?;
-        if expected.checked_add(1) == Some(actual) && previous == digest {
+        let state = self.checked_state(transaction)?;
+        if expected.checked_add(1) == Some(state.generation) && state.batch == digest {
             // A historical label alone cannot discharge the caller's pending
             // original. Validate actual bounded postimages under this same
             // transaction; missing/corrupt custody must never be reconstructed.
             for write in writes {
-                if read_record(&transaction, write.key)?.as_deref() != write.value {
+                if read_record(transaction, write.key)?.as_deref() != write.value {
                     return Err(MezError::invalid_state(
                         "MMP custody committed postimage no longer matches",
                     ));
                 }
             }
             return Ok(CustodyCommit {
-                generation: actual as u64,
+                generation: state.generation as u64,
                 digest,
                 store_id: self.store_id.clone(),
             });
         }
-        if actual != expected {
+        if state.generation != expected {
             return Err(MezError::conflict("stale MMP custody generation"));
         }
-        let next = actual
+        let next = state
+            .generation
             .checked_add(1)
             .ok_or_else(|| MezError::invalid_state("MMP custody generation exhausted"))?;
         for write in writes {
             let stored =
-                read_record(&transaction, write.key)?.map(|value| Sha256::digest(&value).to_vec());
+                read_record(transaction, write.key)?.map(|value| Sha256::digest(&value).to_vec());
             if stored.as_deref() != write.previous {
                 return Err(MezError::conflict("MMP custody record preimage mismatch"));
             }
@@ -325,14 +370,28 @@ impl MmpCustodyStore {
                     .map_err(database_error)?;
             }
         }
-        validate_totals(&transaction, self.limits)?;
+        validate_totals(transaction, self.limits)?;
         transaction
             .execute(
                 "UPDATE state SET generation=?1,batch=?2 WHERE singleton=1",
                 params![next, &digest],
             )
             .map_err(database_error)?;
-        transaction.commit().map_err(database_error)?;
+        // Triggers execute inside this same transaction. Recheck both trusted
+        // state and every intended postimage before any receipt can escape.
+        let final_state = self.checked_state(transaction)?;
+        if final_state.generation != next || final_state.batch != digest {
+            return Err(MezError::invalid_state(
+                "MMP custody committed state changed",
+            ));
+        }
+        for write in writes {
+            if read_record(transaction, write.key)?.as_deref() != write.value {
+                return Err(MezError::invalid_state(
+                    "MMP custody committed postimage changed",
+                ));
+            }
+        }
         Ok(CustodyCommit {
             generation: next as u64,
             digest,

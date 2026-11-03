@@ -15511,6 +15511,19 @@ Positive duplicate adoption MUST return the original fact without reinserting
 mail after ordinary replay eviction. These lower contracts do not by themselves
 upgrade the current runtime's in-memory acceptance to crash-durable delivery.
 
+Every private custody store transaction MUST recheck its persisted session
+owner, allocation identity and bounded generation/batch framing inside the
+same transaction before mutating rows or returning a reconciled receipt.
+Final state and intended row postimages MUST be rechecked before commit;
+changed or malformed state MUST fail closed without issuing a receipt.
+An existing acceptance receipt MUST revalidate its original marker, source and
+last marker batch in the same state snapshot. ACK source validation and its
+existing-record reconciliation or new write MUST share one transaction; a new
+ACK MUST revalidate its referenced sources after the write and before commit.
+An existing ACK MUST NOT reconcile against a store generation older than its
+captured plan. A valid exact ACK that predates the plan MAY remain a historical
+duplicate after later unrelated batches, provided its sources still verify.
+
 The private chunked acceptance projection MUST bind an original store allocation,
 occurrence and starting generation before writing. Its version1 stage header and
 final marker MUST bind the complete encoded size, chunk count and SHA256. Each

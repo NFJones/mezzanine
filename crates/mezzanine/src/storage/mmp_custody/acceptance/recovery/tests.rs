@@ -22,6 +22,53 @@ fn state(store: &MmpCustodyStore) -> (i64, i64) {
         .unwrap()
 }
 
+/// Exact row absence is not noncommit evidence when the persisted allocation,
+/// owner or generation/batch framing changed after the original plan. Each
+/// mismatch must remain unknown rather than releasing the pending original.
+#[test]
+fn empty_recovery_rechecks_persisted_store_state_before_refusal() {
+    let mut refused = Vec::new();
+    for fault in ["id", "owner", "batch"] {
+        let fixture = Fixture::new();
+        let (_service, ticket, write) = original("short".into());
+        let mut store = MmpCustodyStore::open(&fixture.0, "session").unwrap();
+        let plan = store.acceptance_plan(ticket.sequence()).unwrap();
+        match fault {
+            "id" => {
+                let mut id = store.store_id.clone();
+                id[0] ^= 1;
+                store
+                    .connection
+                    .execute("UPDATE state SET store_id=?1", [&id])
+                    .unwrap();
+            }
+            "owner" => {
+                store
+                    .connection
+                    .execute("UPDATE state SET owner='foreign'", [])
+                    .unwrap();
+            }
+            "batch" => {
+                store
+                    .connection
+                    .execute("UPDATE state SET batch=zeroblob(32)", [])
+                    .unwrap();
+            }
+            _ => unreachable!(),
+        }
+        if matches!(
+            store.acceptance_recovery_port(&plan).commit(&write),
+            Err(MessageAcceptanceStoreError::NotCommitted(_))
+        ) {
+            refused.push(fault);
+        }
+    }
+    assert!(
+        refused.is_empty(),
+        "changed state qualified refusal: {refused:?}"
+    );
+}
+
 /// An actually failed final marker leaves original private chunks; recovery
 /// proves and cleans them into a bounded non-mail disposition before releasing
 /// lower custody. Genuine later control work then fits without replaying a send.

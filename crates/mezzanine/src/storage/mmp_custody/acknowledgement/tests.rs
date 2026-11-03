@@ -19,6 +19,191 @@ fn decode_limits() -> MessageAcceptanceDecodeLimits {
     }
 }
 
+/// An existing content-addressed ACK and valid original source cannot qualify
+/// a positive receipt after the store's persisted identity, owner or batch
+/// framing changes. The retry must not bypass transaction state validation.
+#[test]
+fn existing_acknowledgement_rechecks_persisted_store_state() {
+    let mut admitted = Vec::new();
+    for fault in ["id", "owner", "batch"] {
+        let fixture = Fixture::new();
+        let mut store = MmpCustodyStore::open(&fixture.0, "session").unwrap();
+        let (_service, _ticket, write) = prepared(&mut store);
+        let plan = store.acknowledgement_plan().unwrap();
+        store.acknowledgement_port(&plan).commit(&write).unwrap();
+        match fault {
+            "id" => {
+                let mut id = store.store_id.clone();
+                id[0] ^= 1;
+                store
+                    .connection
+                    .execute("UPDATE state SET store_id=?1", [&id])
+                    .unwrap();
+            }
+            "owner" => {
+                store
+                    .connection
+                    .execute("UPDATE state SET owner='foreign'", [])
+                    .unwrap();
+            }
+            "batch" => {
+                store
+                    .connection
+                    .execute("UPDATE state SET batch=X''", [])
+                    .unwrap();
+            }
+            _ => unreachable!(),
+        }
+        if store.acknowledgement_port(&plan).commit(&write).is_ok() {
+            admitted.push(fault);
+        }
+    }
+    assert!(
+        admitted.is_empty(),
+        "changed state qualified ACK: {admitted:?}"
+    );
+}
+
+/// A real committed ACK cannot be reconciled if its store generation has
+/// rolled behind the original plan, even when the ACK, sources and batch have
+/// valid framing. Exact retries at the committed generation, later historical
+/// duplicates and an already-present ACK at a fresh plan remain valid.
+#[test]
+fn existing_acknowledgement_rejects_generation_rollback_but_keeps_history() {
+    let fixture = Fixture::new();
+    let mut store = MmpCustodyStore::open(&fixture.0, "session").unwrap();
+    let (_service, _ticket, write) = prepared(&mut store);
+    let plan = store.acknowledgement_plan().unwrap();
+    assert!(plan.generation > 1);
+    store.acknowledgement_port(&plan).commit(&write).unwrap();
+    let committed_generation = plan.generation + 1;
+    store
+        .connection
+        .execute(
+            "UPDATE state SET generation=?1",
+            [i64::try_from(plan.generation - 1).unwrap()],
+        )
+        .unwrap();
+    assert!(store.acknowledgement_port(&plan).commit(&write).is_err());
+    store
+        .connection
+        .execute(
+            "UPDATE state SET generation=?1",
+            [i64::try_from(committed_generation).unwrap()],
+        )
+        .unwrap();
+    store.acknowledgement_port(&plan).commit(&write).unwrap();
+    store
+        .commit(
+            committed_generation,
+            &[CustodyWrite {
+                key: "unrelated",
+                previous: None,
+                value: Some(b"later"),
+            }],
+        )
+        .unwrap();
+    store.acknowledgement_port(&plan).commit(&write).unwrap();
+    let fresh_plan = store.acknowledgement_plan().unwrap();
+    store
+        .acknowledgement_port(&fresh_plan)
+        .commit(&write)
+        .unwrap();
+}
+
+/// An exact ACK can already exist when a later plan is captured. If an
+/// unrelated valid batch then advances the store once, that historical ACK
+/// remains a valid duplicate even though it is not the most recent batch.
+#[test]
+fn existing_acknowledgement_survives_one_later_unrelated_batch() {
+    let fixture = Fixture::new();
+    let mut store = MmpCustodyStore::open(&fixture.0, "session").unwrap();
+    let (_service, _ticket, write) = prepared(&mut store);
+    let original_plan = store.acknowledgement_plan().unwrap();
+    store
+        .acknowledgement_port(&original_plan)
+        .commit(&write)
+        .unwrap();
+    let later_plan = store.acknowledgement_plan().unwrap();
+    store
+        .commit(
+            later_plan.generation,
+            &[CustodyWrite {
+                key: "unrelated",
+                previous: None,
+                value: Some(b"later"),
+            }],
+        )
+        .unwrap();
+    store
+        .acknowledgement_port(&later_plan)
+        .commit(&write)
+        .unwrap();
+}
+
+/// A real competing connection cannot change the accepted source between ACK
+/// source validation and either a new ACK write or an existing-ACK receipt.
+/// The deterministic hook runs inside the production transaction at that exact
+/// boundary; the original source remains intact after the blocked attempt.
+#[test]
+fn acknowledgement_source_and_settlement_share_one_writer_fence() {
+    use std::cell::Cell;
+
+    for existing in [false, true] {
+        let fixture = Fixture::new();
+        let mut store = MmpCustodyStore::open(&fixture.0, "session").unwrap();
+        let (_service, _ticket, write) = prepared(&mut store);
+        let plan = store.acknowledgement_plan().unwrap();
+        if existing {
+            store.acknowledgement_port(&plan).commit(&write).unwrap();
+        }
+        let key = "a1:0000000000000001:chunk:00000000";
+        let original = store.read(key).unwrap().unwrap();
+        let blocked = Cell::new(false);
+        let path = fixture.0.join("custody.sqlite");
+        let probe = || {
+            let writer = rusqlite::Connection::open(&path).unwrap();
+            writer
+                .busy_timeout(std::time::Duration::from_millis(100))
+                .unwrap();
+            blocked.set(matches!(
+                writer.execute("UPDATE records SET value=X'00' WHERE key=?1", [key]),
+                Err(rusqlite::Error::SqliteFailure(error, _))
+                    if matches!(error.code, rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked)
+            ));
+        };
+        store
+            .acknowledgement_port_with_probe(&plan, &probe)
+            .commit(&write)
+            .unwrap();
+        assert!(
+            blocked.get(),
+            "competing writer entered during existing={existing}"
+        );
+        assert_eq!(store.read(key).unwrap().unwrap(), original);
+    }
+}
+
+/// A trigger that corrupts an accepted source while the ACK row is inserted
+/// must not produce a positive ACK receipt. The whole transaction, including
+/// the source mutation and ACK insertion, must roll back together.
+#[test]
+fn acknowledgement_rolls_back_if_its_write_changes_a_source() {
+    let fixture = Fixture::new();
+    let mut store = MmpCustodyStore::open(&fixture.0, "session").unwrap();
+    let (_service, _ticket, write) = prepared(&mut store);
+    let plan = store.acknowledgement_plan().unwrap();
+    let source_key = "a1:0000000000000001:chunk:00000000";
+    let original = store.read(source_key).unwrap().unwrap();
+    let mut encoded = Vec::new();
+    write.write_record(&mut encoded).unwrap();
+    let key = ack_key(&encoded);
+    store.connection.execute_batch("CREATE TRIGGER corrupt_source AFTER INSERT ON records WHEN NEW.key LIKE 'k1:%' BEGIN UPDATE records SET value=X'00' WHERE key='a1:0000000000000001:chunk:00000000'; END;").unwrap();
+    assert!(store.acknowledgement_port(&plan).commit(&write).is_err());
+    assert_eq!(store.read(source_key).unwrap().unwrap(), original);
+    assert!(store.read(&key).unwrap().is_none());
+}
+
 /// Reopening a real committed ACK retains its original recipient interval and
 /// exact source decision. Reading verifies storage only and does not advance the
 /// lower service cursor or establish a recovered native application commit.

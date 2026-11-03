@@ -174,20 +174,11 @@ impl MmpCustodyStore {
         if !std::ptr::eq(&self.connection, &**transaction) {
             return Err(invalid("snapshot belongs to another store"));
         }
-        let (generation, batch, store_id): (i64, Option<Vec<u8>>, Option<Vec<u8>>) = transaction.query_row(
-            "SELECT generation,CASE WHEN length(batch) IN (0,32) THEN batch ELSE NULL END,CASE WHEN length(store_id)=16 THEN store_id ELSE NULL END FROM state WHERE singleton=1", [],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-        ).map_err(database_error)?;
-        let generation = u64::try_from(generation).map_err(|_| invalid("invalid generation"))?;
-        let batch = batch.ok_or_else(|| invalid("invalid batch framing"))?;
-        let store_id = store_id.ok_or_else(|| invalid("invalid store identity"))?;
-        if store_id != self.store_id
-            || (generation == 0 && !batch.is_empty())
-            || (generation > 0 && batch.len() != 32)
-        {
-            return Err(invalid("store identity or generation framing changed"));
-        }
-        pending.batch = batch;
+        let state = self.checked_state(transaction)?;
+        let generation =
+            u64::try_from(state.generation).map_err(|_| invalid("invalid generation"))?;
+        let store_id = self.store_id.clone();
+        pending.batch = state.batch;
         // Even the generic store can add at most MAX_BATCH_RECORDS in one
         // generation. Updates and deletions cannot increase this lower bound.
         let row_count: i64 = transaction

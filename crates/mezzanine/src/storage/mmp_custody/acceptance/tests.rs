@@ -19,6 +19,58 @@ fn decode_limits() -> MessageAcceptanceDecodeLimits {
     }
 }
 
+/// A previously committed marker and exact original bytes cannot qualify a
+/// positive receipt after the persisted owner, allocation or batch framing has
+/// changed on the live connection. This exercises the existing-record path,
+/// which may otherwise return without issuing a new generic store write.
+#[test]
+fn committed_acceptance_reconciliation_rechecks_persisted_store_state() {
+    let mut admitted = Vec::new();
+    for fault in ["id", "owner", "batch", "batch-32"] {
+        let fixture = Fixture::new();
+        let (_service, ticket, write) = original("original".repeat(20_000));
+        let mut store = MmpCustodyStore::open(&fixture.0, "session").unwrap();
+        let plan = store.acceptance_plan(ticket.sequence()).unwrap();
+        store.acceptance_port(&plan).commit(&write).unwrap();
+        match fault {
+            "id" => {
+                let mut id = store.store_id.clone();
+                id[0] ^= 1;
+                store
+                    .connection
+                    .execute("UPDATE state SET store_id=?1", [&id])
+                    .unwrap();
+            }
+            "owner" => {
+                store
+                    .connection
+                    .execute("UPDATE state SET owner='foreign'", [])
+                    .unwrap();
+            }
+            "batch" => {
+                store
+                    .connection
+                    .execute("UPDATE state SET batch=X''", [])
+                    .unwrap();
+            }
+            "batch-32" => {
+                store
+                    .connection
+                    .execute("UPDATE state SET batch=zeroblob(32)", [])
+                    .unwrap();
+            }
+            _ => unreachable!(),
+        }
+        if store.acceptance_port(&plan).commit(&write).is_ok() {
+            admitted.push(fault);
+        }
+    }
+    assert!(
+        admitted.is_empty(),
+        "changed state qualified acceptance: {admitted:?}"
+    );
+}
+
 /// A reopened SQLite store supplies a real, heavily escaped accepted original
 /// directly to the bounded typed decoder. The candidate emerges only after the
 /// full original marker, chunks and digest verify; no delivery is installed.
@@ -641,7 +693,10 @@ fn generation_headroom_is_reserved_before_staging_any_original() {
     let mut store = MmpCustodyStore::open(&fixture.0, "session").unwrap();
     store
         .connection
-        .execute("UPDATE state SET generation=?1", [i64::MAX - 1])
+        .execute(
+            "UPDATE state SET generation=?1,batch=zeroblob(32)",
+            [i64::MAX - 1],
+        )
         .unwrap();
     let plan = store.acceptance_plan(ticket.sequence()).unwrap();
     assert!(store.acceptance_port(&plan).commit(&write).is_err());
