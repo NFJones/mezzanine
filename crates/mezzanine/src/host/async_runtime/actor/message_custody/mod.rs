@@ -274,6 +274,15 @@ impl AsyncRuntimeSessionActor {
                     Ok(())
                 }
             }
+            // Trusted setup has not installed a payload-load continuation yet.
+            // An unsolicited job on a transferred root cannot be adopted as a
+            // send/ACK result or silently release that actor-owned lane.
+            CustodyEvent::Observed(Ok(
+                CustodyWorkerStatus::PayloadLoadAwaitingAdoption
+                | CustodyWorkerStatus::PayloadLoadRetryAt(_),
+            )) => Err(MezError::invalid_state(
+                "MMP payload reload has no matching actor continuation",
+            )),
             CustodyEvent::Observed(Ok(CustodyWorkerStatus::Unavailable)) => {
                 owner.failure =
                     owner.root.failure().ok().flatten().or_else(|| {

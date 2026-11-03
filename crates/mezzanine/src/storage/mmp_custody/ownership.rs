@@ -208,6 +208,34 @@ impl RootOwnership {
     }
 }
 
+/// A payload read retains and revalidates the actual original kernel owner.
+/// Returned bytes remain descriptive until the lower original publishes them.
+impl mez_agent::messaging::MessagePayloadLoadStore for OwnedCustodyStore<'_> {
+    fn load(
+        &mut self,
+        request: &mez_agent::messaging::MessagePayloadLoadWrite,
+    ) -> mez_agent::messaging::Result<mez_agent::messaging::MessageAcceptanceSource> {
+        let read = (|| -> Result<_> {
+            self.revalidate()?;
+            let (source, digest, _) = self
+                .store
+                .read_accepted_source(request.sequence(), request.decode_limits())?;
+            self.revalidate()?;
+            if digest != request.source_digest() {
+                return Err(MezError::invalid_state(
+                    "MMP original stored payload fingerprint changed",
+                ));
+            }
+            Ok(source)
+        })();
+        read.map_err(|error| {
+            mez_agent::messaging::MessageError::invalid_state(format!(
+                "MMP owned source read: {error}"
+            ))
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::CustodyWrite;

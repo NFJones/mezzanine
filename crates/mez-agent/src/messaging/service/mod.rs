@@ -63,8 +63,13 @@ mod discovery;
 pub use acceptance_proof::{MessageAcceptanceProof, MessageAcceptanceReservation};
 mod identity;
 pub use identity::MessageSenderRegistration;
+mod payload_load;
 mod recipient_binding;
 mod sender_provenance;
+pub use payload_load::{
+    MessagePayloadLoadAttempt, MessagePayloadLoadJoin, MessagePayloadLoadResult,
+    MessagePayloadLoadStore, MessagePayloadLoadWrite,
+};
 mod source;
 pub(super) use source::RetainedEnvelope;
 mod snapshot;

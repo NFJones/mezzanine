@@ -323,7 +323,7 @@ fn recipient_snapshot(recipient: &Recipient) -> MessageRecipientSnapshot {
 }
 
 /// Decodes a selector, rejecting missing values and unsupported kinds.
-fn recipient_from_snapshot(snapshot: &MessageRecipientSnapshot) -> Result<Recipient> {
+pub(super) fn recipient_from_snapshot(snapshot: &MessageRecipientSnapshot) -> Result<Recipient> {
     match snapshot.kind.as_str() {
         "agent" => Ok(Recipient::Agent(parse_required_recipient_id(snapshot)?)),
         "pane" => Ok(Recipient::Pane(parse_required_recipient_id(snapshot)?)),

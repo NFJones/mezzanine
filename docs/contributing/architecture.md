@@ -157,8 +157,22 @@ of a later message. Other recipients can continue through fair fanout. Complete
 snapshot capture is fallible: unavailable source bytes fail capture rather than
 silently omit pending mail, erase receipts or replace content. Host checkpoints,
 snapshot control and startup rollback propagate that failure. Production cache
-eviction remains unavailable until qualified reload and recovery are connected;
-the current resident custody limits and snapshot schema remain unchanged.
+eviction remains outside normal actor traffic. Trusted callers may release a
+cache pin only after positive adoption from the original live storage root.
+That adoption retains a fingerprint of the exact immutable source; memory-only
+and snapshot-restored rows cannot acquire it from labels or saved text.
+
+The root's reload operation shares its acceptance/ACK connection and blocking
+worker lane. It verifies complete stored framing, the original fingerprint,
+frozen recipient intervals, audience, sender interval and TTL basis before
+publication. A joined result owns private decoded bytes until the original
+service adopts them; that result cannot be reissued while its allocation is
+still alive. Observer cancellation leaves the actual handle owned. Lost results
+retry only after an exact join and paced backoff; obsolete reads discard bytes
+without reconstructing mail. Active ACK reservations protect hashing sources
+from release. Current logical custody limits and snapshot schema remain
+unchanged. Automatic actor reload, global cache/in-flight accounting and cold
+restart recovery remain separate integration work.
 
 ## Ownership and tests
 

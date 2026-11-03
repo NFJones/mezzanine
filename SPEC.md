@@ -15429,6 +15429,13 @@ unavailable. It MUST NOT omit accepted pending mail, fabricate empty payloads or
 perform implicit storage I/O to satisfy an in-memory projection. Such a failure
 MUST propagate through session snapshot and checkpoint creation without
 publishing a partial snapshot.
+An internal cache reload MUST remain a read of the same accepted occurrence,
+bound to the original storage owner and complete immutable source fingerprint.
+It MUST validate frozen audience and registration intervals, preserve original
+TTL and delivery facts, and refuse authority inferred from snapshot text or
+matching IDs. Private decoded bytes MUST remain owned until their actual worker
+is joined and the original service publishes or discards them. Observer loss or
+a completed join alone MUST NOT permit a duplicate live reload allocation.
 Active registration floors MUST NOT be serialized as
 retired-owner authority. Restored sender provenance MUST NOT supply live
 acceptance proofs, reconnect credentials, old recipient rights or task authority.

@@ -1,6 +1,6 @@
 //! Owned MMP storage attempts independent of provider and socket observers.
 //!
-//! One root serializes one private session store. It opens and writes only on
+//! One root serializes one private session store. It opens, reads and writes on
 //! blocking workers, retaining actual handles and the original plan before any
 //! observer can await them. Cancellation of an observer never takes a handle or
 //! abandons a linear input. Only an observed actual join permits recovery after
@@ -39,6 +39,7 @@ use crate::storage::mmp_custody::ownership::RootOwnership;
 use crate::storage::mmp_custody::{CustodyStoreLimits, MmpCustodyStore};
 
 mod acknowledgement;
+mod payload_load;
 
 /// Retained source chosen by trusted session setup, never by an envelope.
 #[derive(Clone)]
@@ -68,6 +69,10 @@ pub(crate) enum CustodyWorkerStatus {
     AcknowledgementRetryAt(Instant),
     /// Original uncertain/lost attempt can retry after this monotonic deadline.
     RetryAt(Instant),
+    /// Joined original payload bytes await publication into the same source.
+    PayloadLoadAwaitingAdoption,
+    /// A joined original read can retry after this monotonic deadline.
+    PayloadLoadRetryAt(Instant),
     /// Opening failed; no lower write was issued by this root.
     Unavailable,
 }
@@ -133,6 +138,17 @@ enum State {
     Acknowledged {
         admission: acknowledgement::Admission,
         result: Result<Box<acknowledgement::Written>>,
+        retry_at: Instant,
+    },
+    /// Exactly one original source read owns the same serialized connection.
+    Loading {
+        admission: payload_load::Admission,
+        worker: JoinHandle<Result<payload_load::Written>>,
+    },
+    /// Actual joined read and bytes/failure await original lower settlement.
+    Loaded {
+        admission: payload_load::Admission,
+        result: Result<Box<payload_load::Written>>,
         retry_at: Instant,
     },
     /// Bounded failed-open diagnostic; cannot imply any issued write was unsent.
@@ -244,6 +260,11 @@ impl MmpCustodyRoot {
             {
                 return Poll::Pending;
             }
+            if matches!(&*state, State::Loading { .. })
+                && payload_load::poll_join(&mut state, cx).is_pending()
+            {
+                return Poll::Pending;
+            }
             match &mut *state {
                 State::Opening(worker) => match Pin::new(worker).poll(cx) {
                     Poll::Pending => return Poll::Pending,
@@ -313,6 +334,7 @@ impl MmpCustodyRoot {
                 _ => None,
             },
             State::Acknowledged { .. } => acknowledgement::failure(&state),
+            State::Loaded { .. } => payload_load::failure(&state),
             _ => None,
         })
     }
@@ -664,6 +686,12 @@ impl Drop for Inner {
                     let result = worker.await;
                     let _ = runtime.spawn_blocking(move || drop(result)).await;
                 }
+                State::Loading { admission, worker } => {
+                    let result = worker.await;
+                    let _ = runtime
+                        .spawn_blocking(move || drop((result, admission)))
+                        .await;
+                }
                 State::Acknowledging { admission, worker } => {
                     let result = worker.await;
                     let _ = runtime
@@ -731,6 +759,20 @@ fn status(state: &State) -> CustodyWorkerStatus {
                 ..
             }) => CustodyWorkerStatus::AcknowledgementAwaitingAdoption,
             _ => CustodyWorkerStatus::AcknowledgementRetryAt(*retry_at),
+        },
+        State::Loading { .. } => CustodyWorkerStatus::Running,
+        State::Loaded {
+            result, retry_at, ..
+        } => match result.as_deref() {
+            Ok(written)
+                if written
+                    .outcome
+                    .as_ref()
+                    .is_none_or(|outcome| outcome.error().is_none()) =>
+            {
+                CustodyWorkerStatus::PayloadLoadAwaitingAdoption
+            }
+            _ => CustodyWorkerStatus::PayloadLoadRetryAt(*retry_at),
         },
         State::Unavailable(_) => CustodyWorkerStatus::Unavailable,
     }

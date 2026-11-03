@@ -100,20 +100,23 @@ impl Serialize for Bindings<'_> {
 impl Serialize for MessageAcceptanceWrite {
     /// Streams the same immutable canonical view used by source fingerprints.
     fn serialize<S: Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
-        FrozenRecord(&self.row).serialize(serializer)
+        FrozenRecord {
+            row: &self.row,
+            envelope: &self.envelope,
+        }
+        .serialize(serializer)
     }
 }
 
 /// Borrowed canonical fields, independent of mutable ACK/offer/terminal state.
-struct FrozenRecord<'a>(&'a QueuedEnvelope);
+struct FrozenRecord<'a> {
+    row: &'a QueuedEnvelope,
+    envelope: &'a Envelope,
+}
 impl Serialize for FrozenRecord<'_> {
     /// Streams only the original immutable semantic record, never live capabilities.
     fn serialize<S: Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
-        let envelope = self
-            .0
-            .envelope
-            .resident()
-            .map_err(serde::ser::Error::custom)?;
+        let envelope = self.envelope;
         let sender = &envelope.sender;
         let (kind, value) = match &envelope.recipient {
             Recipient::Agent(id) => ("agent", Some(id.as_str())),
@@ -124,7 +127,7 @@ impl Serialize for FrozenRecord<'_> {
             Recipient::Capability(value) => ("capability", Some(value.as_str())),
             Recipient::Group(value) => ("group", Some(value.as_str())),
         };
-        let audience = match &self.0.audience {
+        let audience = match &self.row.audience {
             ResolvedMessageAudience::Session => Audience {
                 kind: "session",
                 project_scope: None,
@@ -136,9 +139,9 @@ impl Serialize for FrozenRecord<'_> {
         };
         Record {
             schema_version: 1,
-            sequence: self.0.sequence,
-            accepted_at_ms: self.0.accepted_at_ms,
-            sender_registered_after_sequence: self.0.sender_registered_after_sequence,
+            sequence: self.row.sequence,
+            accepted_at_ms: self.row.accepted_at_ms,
+            sender_registered_after_sequence: self.row.sender_registered_after_sequence,
             envelope: Input {
                 protocol: envelope.protocol,
                 id: &envelope.id,
@@ -164,7 +167,7 @@ impl Serialize for FrozenRecord<'_> {
                 extension_fields: Extensions(&envelope.extension_fields),
             },
             audience,
-            recipient_bindings: Bindings(&self.0.recipient_bindings),
+            recipient_bindings: Bindings(&self.row.recipient_bindings),
         }
         .serialize(serializer)
     }
@@ -173,6 +176,16 @@ impl Serialize for FrozenRecord<'_> {
 /// Hashes the exact accepted record off actor without an encoded payload copy.
 pub(super) fn source_digest(
     row: &QueuedEnvelope,
+) -> std::result::Result<[u8; 32], serde_json::Error> {
+    let envelope = row.envelope.resident().map_err(serde::ser::Error::custom)?;
+    source_digest_with_envelope(row, &envelope)
+}
+
+/// Hashes supplied immutable bytes against the original frozen occurrence fields.
+/// Reload workers use this before publishing a newly decoded allocation.
+pub(in crate::messaging::service) fn source_digest_with_envelope(
+    row: &QueuedEnvelope,
+    envelope: &Envelope,
 ) -> std::result::Result<[u8; 32], serde_json::Error> {
     use sha2::{Digest, Sha256};
     /// Streaming checksum sink with no retained serialization buffer.
@@ -189,6 +202,6 @@ pub(super) fn source_digest(
         }
     }
     let mut hash = HashWriter(Sha256::new());
-    serde_json::to_writer(&mut hash, &FrozenRecord(row))?;
+    serde_json::to_writer(&mut hash, &FrozenRecord { row, envelope })?;
     Ok(hash.0.finalize().into())
 }

@@ -47,13 +47,7 @@ impl Probe {
     /// Injects actual thread panic only after the production port committed.
     pub(super) fn after_write(&self, outcome: &MessageAcceptanceWriteOutcome) {
         if matches!(outcome, MessageAcceptanceWriteOutcome::Committed(_)) {
-            let relocation = self.relocate_after_commit.lock().unwrap().take();
-            if let Some((original, retained)) = relocation {
-                use std::os::unix::fs::DirBuilderExt;
-                std::fs::rename(&original, &retained).unwrap();
-                let mut builder = std::fs::DirBuilder::new();
-                builder.mode(0o700).create(original).unwrap();
-            }
+            self.relocate_if_requested();
         }
         if matches!(outcome, MessageAcceptanceWriteOutcome::Committed(_))
             && self.panic_after_commit.swap(false, Ordering::SeqCst)
@@ -64,6 +58,22 @@ impl Probe {
             && self.panic_after_refusal.swap(false, Ordering::SeqCst)
         {
             panic!("injected actual loss after durable uncommitted cleanup");
+        }
+    }
+    /// Moves only a generated fixture root to test post-I/O identity fences.
+    fn relocate_if_requested(&self) {
+        if let Some((original, retained)) = self.relocate_after_commit.lock().unwrap().take() {
+            use std::os::unix::fs::DirBuilderExt;
+            std::fs::rename(&original, &retained).unwrap();
+            let mut builder = std::fs::DirBuilder::new();
+            builder.mode(0o700).create(original).unwrap();
+        }
+    }
+    /// Injects actual loss after a complete source read, before root publication.
+    pub(super) fn after_payload_read(&self) {
+        self.relocate_if_requested();
+        if self.panic_after_commit.swap(false, Ordering::SeqCst) {
+            panic!("injected loss after actual custody payload read");
         }
     }
     /// Releases the real original worker, including after an assertion unwind.
@@ -1001,3 +1011,5 @@ mod native_actor;
 mod raw_expiry;
 
 mod native_actions;
+
+mod payload_load;

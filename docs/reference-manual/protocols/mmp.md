@@ -306,6 +306,14 @@ it never omits accepted pending mail or substitutes empty payloads. This error
 propagates through session snapshots and host checkpoints. Current production
 custody remains resident; this failure boundary does not enable disk spill or
 add a restart-delivery guarantee.
+Trusted internal cache release and reload additionally require the exact live
+root's original positive storage adoption. Reload verifies the complete source
+fingerprint and frozen occurrence fields, moves decoded bytes without another
+payload copy, and publishes into that same canonical occurrence. It changes no
+TTL basis, recipient rights, delivery offer, ACK or acceptance receipt. A saved
+snapshot cannot recreate this qualification. These internal APIs are not yet an
+automatic actor spill policy or native restart-recovery path; normal product
+traffic retains the existing resident limits.
 Replay limits and payload validation remain independent; a pending byte budget
 does not enlarge the maximum individually acceptable envelope.
 

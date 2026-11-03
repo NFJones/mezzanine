@@ -39,6 +39,31 @@ pub struct MessageAcceptanceSource {
 }
 
 impl MessageAcceptanceSource {
+    /// Moves validated decoded payload bytes into an envelope without cloning them.
+    /// This grants no registration, acceptance, delivery or storage authority.
+    pub(in crate::messaging) fn into_envelope(self) -> Result<Envelope> {
+        let snapshot = self.envelope;
+        let sender = sender_identity_from_snapshot(&snapshot.sender, 9)?;
+        let recipient = recipient_from_snapshot(&snapshot.recipient)?;
+        Ok(Envelope {
+            protocol: MMP_PROTOCOL,
+            id: snapshot.id,
+            message_type: snapshot.message_type,
+            time: snapshot.time,
+            sender,
+            recipient,
+            correlation_id: snapshot.correlation_id,
+            ttl_ms: snapshot.ttl_ms,
+            content_type: snapshot.content_type,
+            payload: snapshot.payload,
+            extension_fields: snapshot
+                .extension_fields
+                .into_iter()
+                .map(|field| (field.key, field.value_json))
+                .collect(),
+        })
+    }
+
     /// Returns the original occurrence sequence; it is not a receipt.
     pub fn sequence(&self) -> u64 {
         self.sequence

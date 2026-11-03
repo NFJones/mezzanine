@@ -19,6 +19,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use super::*;
 
 mod record;
+pub(super) use record::source_digest_with_envelope;
 mod record_decode;
 mod record_reader;
 pub use record_decode::{
@@ -134,6 +135,8 @@ pub trait MessageAcceptanceJoin {
 
 /// Exact positive result of the trusted store boundary, without payload custody.
 pub struct MessageAcceptanceCommit {
+    /// Fingerprint computed on the worker from the exact original source.
+    source_digest: [u8; 32],
     /// Positive fact remains attributable after ordinary replay/history evicts.
     identity: Arc<AdmissionIdentity>,
     /// Original joined attempt, not another write with matching public IDs.
@@ -279,8 +282,20 @@ impl MessageAcceptanceWrite {
     /// Runs this linear original through the trusted port. Completion drops the
     /// worker's payload reference except on ambiguity, when it remains pinned.
     pub fn persist(self, store: &mut impl MessageAcceptanceStore) -> MessageAcceptanceWriteOutcome {
+        let source_digest = match record::source_digest_with_envelope(&self.row, &self.envelope) {
+            Ok(digest) => digest,
+            Err(error) => {
+                return MessageAcceptanceWriteOutcome::Unknown(MessageAcceptanceUncertain {
+                    write: self,
+                    error: MessageError::invalid_state(format!(
+                        "MMP source fingerprint unavailable: {error}"
+                    )),
+                });
+            }
+        };
         match store.commit(&self) {
             Ok(()) => MessageAcceptanceWriteOutcome::Committed(MessageAcceptanceCommit {
+                source_digest,
                 identity: self.identity,
                 attempt: self.attempt,
             }),
@@ -664,6 +679,13 @@ impl MessageService {
             ));
         }
         self.require_admission_attempt(&commit.identity, &commit.attempt)?;
+        let pending = self.admission.as_ref().ok_or_else(admission_changed)?;
+        if let Some(scope) = &pending.storage_scope {
+            pending
+                .row
+                .envelope
+                .bind_storage(scope, commit.source_digest)?;
+        }
         let pending = self.admission.take().ok_or_else(admission_changed)?;
         let row = pending.row;
         self.install_accepted_row(row.clone());
