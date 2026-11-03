@@ -164,6 +164,14 @@ type FramedState = (
 );
 
 impl MmpCustodyStore {
+    /// Models newly available record capacity in focused root lifecycle tests.
+    /// Production policy is immutable and never calls this fixture operation.
+    #[cfg(test)]
+    pub(crate) fn set_test_record_limit(&mut self, records: usize) {
+        assert!(records > 0 && records <= CustodyStoreLimits::default().records);
+        self.limits.records = records;
+    }
+
     /// Opens a private store for an exact trusted session owner.
     /// Existing different-owner, future-schema, symlink or malformed stores fail
     /// closed. This function never chooses an owner from envelope content.

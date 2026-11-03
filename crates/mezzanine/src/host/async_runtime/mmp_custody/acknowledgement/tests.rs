@@ -16,16 +16,60 @@ pub(in crate::host::async_runtime::mmp_custody) struct Probe {
     attempts: AtomicUsize,
     /// One-shot actual loss after ACK commit before the root receives its fact.
     panic_after_commit: AtomicBool,
+    /// Bounded transient failures while obtaining the guarded ACK's next position.
+    anchor_failures: AtomicUsize,
+    /// One real worker loss during a position-only refresh.
+    panic_anchor_refresh: AtomicBool,
 }
 impl Probe {
     /// Creates a retained physical ACK gate with optional immediate release.
-    fn new(released: bool) -> Arc<Self> {
+    pub(in crate::host::async_runtime::mmp_custody) fn new(released: bool) -> Arc<Self> {
         Arc::new(Self {
             started: tokio::sync::Notify::new(),
             gate: (Mutex::new(released), std::sync::Condvar::new()),
             attempts: AtomicUsize::new(0),
             panic_after_commit: AtomicBool::new(false),
+            anchor_failures: AtomicUsize::new(0),
+            panic_anchor_refresh: AtomicBool::new(false),
         })
+    }
+    /// Loses the next real committed ACK before its owner receives the result.
+    pub(in crate::host::async_runtime::mmp_custody) fn lose_next_commit(&self) {
+        self.panic_after_commit.store(true, Ordering::SeqCst);
+    }
+    /// Injects post-commit position-read failures without losing the ACK.
+    pub(in crate::host::async_runtime::mmp_custody) fn fail_anchors(&self, count: usize) {
+        self.anchor_failures.store(count, Ordering::SeqCst);
+    }
+    /// Consumes one injected position-read failure on the real worker.
+    pub(super) fn take_anchor_failure(&self) -> bool {
+        let mut remaining = self.anchor_failures.load(Ordering::SeqCst);
+        loop {
+            let Some(next) = remaining.checked_sub(1) else {
+                return false;
+            };
+            match self.anchor_failures.compare_exchange_weak(
+                remaining,
+                next,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            ) {
+                Ok(_) => return true,
+                Err(actual) => remaining = actual,
+            }
+        }
+    }
+    /// Reports actual physical ACK writes, excluding position-only checks.
+    pub(in crate::host::async_runtime::mmp_custody) fn physical_attempts(&self) -> usize {
+        self.attempts.load(Ordering::SeqCst)
+    }
+    /// Loses the next actual position-only worker before it returns its input.
+    pub(in crate::host::async_runtime::mmp_custody) fn lose_next_anchor_refresh(&self) {
+        self.panic_anchor_refresh.store(true, Ordering::SeqCst);
+    }
+    /// Consumes one injected position-refresh worker loss.
+    pub(super) fn take_anchor_refresh_panic(&self) -> bool {
+        self.panic_anchor_refresh.swap(false, Ordering::SeqCst)
     }
     /// Blocks only the actual ACK worker, not its abortable observer.
     pub(super) fn before_write(&self) {
@@ -160,6 +204,141 @@ async fn prepared(
         .unwrap()
         .unwrap();
     (service, sender, target, ticket)
+}
+
+/// A historical ACK may reconcile without a write. An unrelated batch after
+/// that reconciliation must not qualify as its post-ACK store position.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn guarded_duplicate_cannot_rebase_across_later_unrelated_batch() {
+    use crate::storage::mmp_custody::CustodyWrite;
+    use mez_agent::messaging::MessageAcknowledgementStore;
+
+    let fixture = Fixture::new(true);
+    let root = fixture.root();
+    let (mut service, _, _, ticket) = prepared(&root).await;
+    let write = service.begin_acknowledgement_write(&ticket).unwrap();
+    let fence = root.0.ownership.lock().unwrap().as_ref().unwrap().clone();
+    let mut state = root.0.state.lock().unwrap();
+    let State::Idle(opened) = &mut *state else {
+        panic!("root not idle")
+    };
+    let original = opened.store.acknowledgement_plan().unwrap();
+    opened
+        .store
+        .acknowledgement_port(&original)
+        .commit(&write)
+        .unwrap();
+    let plan = opened.store.acknowledgement_plan().unwrap();
+    let suspended = opened.store.acceptance_plan(2).unwrap();
+    let settlement = {
+        let mut port = opened.store.acknowledgement_port_guarded(&plan, &suspended);
+        port.commit(&write).unwrap();
+        port.take_guarded_settlement().unwrap()
+    };
+    let connection = fixture.connection();
+    let batch: Vec<u8> = connection
+        .query_row("SELECT batch FROM state WHERE singleton=1", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    connection
+        .execute("UPDATE state SET batch=zeroblob(32) WHERE singleton=1", [])
+        .unwrap();
+    assert!(
+        verified_parked_anchor(&fence, &mut opened.store, &suspended, &settlement).is_err(),
+        "same-generation batch corruption cannot qualify the captured position"
+    );
+    connection
+        .execute("UPDATE state SET batch=?1 WHERE singleton=1", [&batch])
+        .unwrap();
+    drop(connection);
+    let position = opened.store.acceptance_plan(0).unwrap();
+    opened
+        .store
+        .commit(
+            position.generation(),
+            &[CustodyWrite {
+                key: "unrelated",
+                previous: None,
+                value: Some(b"later"),
+            }],
+        )
+        .unwrap();
+    assert!(
+        verified_parked_anchor(&fence, &mut opened.store, &suspended, &settlement).is_err(),
+        "unrelated batch cannot advance the parked original's anchor"
+    );
+}
+
+/// Dropping the final root while a guarded ACK worker is physically blocked
+/// must retain the suspended original until that actual worker has terminated.
+/// The test-only weak witness tracks ownership rather than a status label.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn dropped_root_retains_suspended_original_until_ack_worker_joins() {
+    let fixture = Fixture::new(false);
+    let root = fixture.root();
+    let (mut service, sender, target, ack) = prepared(&root).await;
+    let mut foreign = MessageService::from_snapshot_state(&service.snapshot_state()).unwrap();
+    let foreign_ack = foreign
+        .prepare_acknowledgement(&target.agent_id, 1, 512 * 1024)
+        .unwrap()
+        .unwrap();
+    let records = fixture.disk().1 as usize;
+    {
+        let mut state = root.0.state.lock().unwrap();
+        let State::Idle(opened) = &mut *state else {
+            panic!("root not idle")
+        };
+        opened.store.set_test_record_limit(records + 1);
+    }
+    let second = service
+        .prepare_acceptance(
+            &sender.agent_id,
+            envelope(&sender, &target, "later"),
+            MessageScope::Session,
+            30,
+            4096,
+            None,
+        )
+        .unwrap();
+    root.start(&mut service, &second, None).unwrap();
+    assert!(matches!(
+        root.observe().await.unwrap(),
+        CustodyWorkerStatus::RetryAt(_)
+    ));
+    assert!(root.can_yield_acknowledgement().unwrap());
+    assert!(
+        root.start_acknowledgement(&mut foreign, &foreign_ack)
+            .is_err(),
+        "a different service cannot take the lane holding the original acceptance"
+    );
+    foreign.cancel_acknowledgement(&foreign_ack).unwrap();
+    root.start_acknowledgement(&mut service, &ack).unwrap();
+    fixture.probe.started.notified().await;
+    let witness = Arc::new(());
+    let weak = Arc::downgrade(&witness);
+    {
+        let mut state = root.0.state.lock().unwrap();
+        let State::Acknowledging { admission, .. } = &mut *state else {
+            panic!("ACK not owned")
+        };
+        admission.parked.as_mut().unwrap().drop_witness = Some(witness);
+    }
+    drop(root);
+    drop(service);
+    tokio::task::yield_now().await;
+    assert!(
+        weak.upgrade().is_some(),
+        "suspended original escaped while ACK was running"
+    );
+    fixture.probe.release();
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while weak.upgrade().is_some() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
 }
 
 /// Observer cancellation cannot detach the gated physical ACK or free its charge.

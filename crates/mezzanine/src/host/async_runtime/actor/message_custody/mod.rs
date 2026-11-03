@@ -85,6 +85,10 @@ pub(in crate::host::async_runtime) struct ActorMessageCustody {
     wake: Option<Wake>,
     /// Receiver cancellation cannot remove this issued original continuation.
     pending: Option<Pending>,
+    /// ACK allowed while an exact, never-written acceptance remains retained.
+    parked_ack: Option<AcknowledgementReply>,
+    /// Original acceptance retry deadline, restored after the guarded ACK.
+    parked_retry_at: Option<Instant>,
     /// Shutdown is completed only after actual join and canonical settlement.
     shutdown: Option<oneshot::Sender<Result<RuntimeLifecycleState>>>,
     /// Bounded diagnostic; never a qualification of noncommit or unsent input.
@@ -98,9 +102,35 @@ impl std::fmt::Debug for ActorMessageCustody {
             .debug_struct("ActorMessageCustody")
             .field("wake", &self.wake)
             .field("pending", &self.pending.is_some())
+            .field("parked_ack", &self.parked_ack.is_some())
             .field("shutdown", &self.shutdown.is_some())
             .field("failed", &self.failure.is_some())
             .finish()
+    }
+}
+
+impl ActorMessageCustody {
+    /// Allows one ACK only while the actual joined original remains retained
+    /// and the root has observed an untouched store position.
+    fn can_park_ack(&self) -> bool {
+        matches!(self.wake, Some(Wake::Retry(_)))
+            && matches!(
+                &self.pending,
+                Some(Pending::Action(_) | Pending::Acceptance(_) | Pending::Native { .. })
+            )
+            && self.parked_ack.is_none()
+            && self.failure.is_none()
+            && self.shutdown.is_none()
+            && self.root.can_yield_acknowledgement().unwrap_or(false)
+    }
+
+    /// Retains the original retry deadline while the guarded ACK owns its reply.
+    fn park_ack(&mut self, reply: AcknowledgementReply) {
+        self.parked_retry_at = match self.wake {
+            Some(Wake::Retry(at)) => Some(at),
+            _ => None,
+        };
+        self.parked_ack = Some(reply);
     }
 }
 
@@ -124,6 +154,8 @@ impl AsyncRuntimeSessionActor {
             root,
             wake: Some(Wake::Observe),
             pending: None,
+            parked_ack: None,
+            parked_retry_at: None,
             shutdown: None,
             failure: None,
         }));
@@ -176,7 +208,10 @@ impl AsyncRuntimeSessionActor {
         }
         self.pump_stored_message_actions();
         let ready = self.message_custody.as_ref().is_some_and(|owner| {
-            owner.shutdown.is_some() && owner.pending.is_none() && owner.wake.is_none()
+            owner.shutdown.is_some()
+                && owner.pending.is_none()
+                && owner.parked_ack.is_none()
+                && owner.wake.is_none()
         });
         if ready {
             let reply = self
@@ -343,7 +378,25 @@ impl AsyncRuntimeSessionActor {
                 }
             }
             CustodyEvent::Observed(Ok(CustodyWorkerStatus::AcknowledgementAwaitingAdoption)) => {
-                if matches!(&owner.pending, Some(Pending::Acknowledgement(_))) {
+                if owner.parked_ack.is_some() {
+                    owner
+                        .root
+                        .adopt_acknowledgement(self.service.message_service_mut())
+                        .map(|cursor| {
+                            match owner.parked_ack.take() {
+                                Some(AcknowledgementReply::Fanout(reply)) => {
+                                    let _ = reply.send(Ok(cursor));
+                                }
+                                Some(AcknowledgementReply::Raw(raw)) => {
+                                    completion =
+                                        Some((raw, RawCompletion::Acknowledgement(cursor)));
+                                }
+                                None => (),
+                            }
+                            owner.failure = None;
+                            owner.wake = owner.parked_retry_at.take().map(Wake::Retry);
+                        })
+                } else if matches!(&owner.pending, Some(Pending::Acknowledgement(_))) {
                     owner
                         .root
                         .adopt_acknowledgement(self.service.message_service_mut())
@@ -379,7 +432,8 @@ impl AsyncRuntimeSessionActor {
                 Ok(())
             }
             CustodyEvent::Observed(Ok(CustodyWorkerStatus::AcknowledgementRetryAt(at)))
-                if matches!(&owner.pending, Some(Pending::Acknowledgement(_))) =>
+                if owner.parked_ack.is_some()
+                    || matches!(&owner.pending, Some(Pending::Acknowledgement(_))) =>
             {
                 owner.wake = Some(Wake::Retry(at));
                 Ok(())
@@ -389,6 +443,10 @@ impl AsyncRuntimeSessionActor {
             )) => Err(MezError::invalid_state(
                 "MMP retry has no matching original actor continuation",
             )),
+            CustodyEvent::Retry if owner.parked_ack.is_some() => owner
+                .root
+                .retry_acknowledgement(self.service.message_service_mut(), Instant::now())
+                .map(|_| owner.wake = Some(Wake::Observe)),
             CustodyEvent::Retry => match owner.pending {
                 Some(Pending::Action(ref admission)) => self
                     .service
@@ -479,7 +537,9 @@ impl AsyncRuntimeSessionActor {
             let _ = reply.send(result);
             return;
         };
-        if owner.wake.is_some() || owner.pending.is_some() || owner.failure.is_some() {
+        let yielding = owner.can_park_ack();
+        if !yielding && (owner.wake.is_some() || owner.pending.is_some() || owner.failure.is_some())
+        {
             let _ = reply.send(Err(MezError::conflict(
                 "MMP custody ACK lane busy or unavailable",
             )));
@@ -499,9 +559,13 @@ impl AsyncRuntimeSessionActor {
                 Ok(()) => {
                     // Registered synchronously before any observer can await or
                     // publish the actual worker's result. Reply loss is inert.
-                    owner.pending = Some(Pending::Acknowledgement(AcknowledgementReply::Fanout(
-                        reply,
-                    )));
+                    if yielding {
+                        owner.park_ack(AcknowledgementReply::Fanout(reply));
+                    } else {
+                        owner.pending = Some(Pending::Acknowledgement(
+                            AcknowledgementReply::Fanout(reply),
+                        ));
+                    }
                     owner.wake = Some(Wake::Observe);
                 }
                 Err(error) => {

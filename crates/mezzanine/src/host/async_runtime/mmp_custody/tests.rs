@@ -159,6 +159,34 @@ fn envelope(sender: &SenderIdentity, target: &SenderIdentity, id: &str) -> Envel
     }
 }
 
+/// Models a capacity change only after the original worker has actually joined.
+/// A retry may already be running when an independently awaited ACK returns.
+async fn provide_record_capacity(root: &MmpCustodyRoot, records: usize) {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let changed = {
+                let mut state = root.0.state.lock().unwrap();
+                if let State::Joined {
+                    result: Ok(written),
+                    ..
+                } = &mut *state
+                {
+                    written.store.set_test_record_limit(records);
+                    true
+                } else {
+                    false
+                }
+            };
+            if changed {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+}
+
 /// A second root cannot become a writer while the original root owns the same
 /// store, including after the last root handle is dropped while its actual
 /// blocking write is still running. Once that worker has settled and its
@@ -404,6 +432,10 @@ async fn actual_postcommit_worker_panic_retries_same_plan_without_second_disk_oc
     let CustodyWorkerStatus::RetryAt(due) = root.observe().await.unwrap() else {
         panic!("expected joined failure")
     };
+    assert!(
+        !root.can_yield_acknowledgement().unwrap(),
+        "a lost post-commit worker is not proof of noncommit"
+    );
     let competing = fixture.root();
     assert_eq!(
         competing.observe().await.unwrap(),
@@ -455,6 +487,10 @@ async fn uncertain_storage_failures_back_off_and_foreign_retry_cannot_consume_in
     let CustodyWorkerStatus::RetryAt(first) = root.observe().await.unwrap() else {
         panic!("expected failure")
     };
+    assert!(
+        !root.can_yield_acknowledgement().unwrap(),
+        "a partial original must retain exclusive lane custody"
+    );
     let original_attempt = service.acceptance_write_attempt(&ticket).unwrap();
     let (mut foreign, _, _, _) = fixture_service();
     assert!(root.retry(&mut foreign, first).is_err());

@@ -14,6 +14,8 @@ use std::sync::OnceLock;
 
 use rustix::fs::{FlockOperation, Mode, OFlags, flock, openat};
 
+use super::acceptance::AcceptancePlan;
+use super::acknowledgement::GuardedAckSettlement;
 use super::{
     FileIdentity, MmpCustodyStore, open_private_directory, validate_directory_path,
     validate_private_path,
@@ -50,6 +52,48 @@ pub(crate) struct OwnedCustodyStore<'a> {
 }
 
 impl OwnedCustodyStore<'_> {
+    /// Checks an exact original under this live owner before considering a
+    /// yield. True is only a snapshot observation, not a transferable receipt;
+    /// subsequent work must retain the owner and fence the same store position.
+    pub(crate) fn acceptance_never_written(&mut self, plan: &AcceptancePlan) -> Result<bool> {
+        self.revalidate()?;
+        let result = self.store.acceptance_never_written(plan)?;
+        self.revalidate()?;
+        Ok(result)
+    }
+
+    /// Rechecks the exact committed ACK batch and suspended original in one
+    /// store snapshot under this same live root, then returns its fenced plan.
+    pub(crate) fn verify_guarded_ack_settlement(
+        &mut self,
+        original: &AcceptancePlan,
+        settlement: &GuardedAckSettlement,
+    ) -> Result<AcceptancePlan> {
+        self.revalidate()?;
+        if !settlement.matches(self.store, original) {
+            return Err(MezError::conflict("MMP guarded ACK original changed"));
+        }
+        let transaction = self
+            .store
+            .connection
+            .unchecked_transaction()
+            .map_err(super::database_error)?;
+        let state = self.store.checked_state(&transaction)?;
+        if u64::try_from(state.generation).ok() != Some(settlement.generation())
+            || state.batch != settlement.batch()
+            || !self.store.acceptance_never_written_in_snapshot(
+                &transaction,
+                original,
+                settlement.generation(),
+            )?
+        {
+            return Err(MezError::conflict("MMP guarded ACK settlement changed"));
+        }
+        self.store.finish_transaction(transaction)?;
+        self.revalidate()?;
+        Ok(original.at_generation(settlement.generation()))
+    }
+
     /// Borrows the already-bound store for this synchronous worker phase.
     pub(crate) fn store_mut(&mut self) -> &mut MmpCustodyStore {
         self.store
@@ -166,7 +210,9 @@ impl RootOwnership {
 
 #[cfg(test)]
 mod tests {
+    use super::super::CustodyWrite;
     use super::*;
+    use sha2::Digest;
     use std::io::{BufRead, BufReader, Write};
     use std::path::PathBuf;
     use std::process::{Child, Command, Stdio};
@@ -194,6 +240,119 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
         }
+    }
+
+    /// An absent original qualifies only at its exact bound store position.
+    /// An unrelated committed write makes the original plan stale, and an
+    /// equal owner label on another allocation cannot recreate the observation.
+    #[test]
+    fn untouched_acceptance_requires_the_live_original_store_and_position() {
+        let fixture = Directory::new();
+        let owner = RootOwnership::acquire(&fixture.0).unwrap();
+        let mut store = MmpCustodyStore::open(&fixture.0, "session").unwrap();
+        let original = store.acceptance_plan(1).unwrap();
+        assert!(
+            owner
+                .bind_store(&mut store)
+                .unwrap()
+                .acceptance_never_written(&original)
+                .unwrap()
+        );
+        store
+            .commit(
+                0,
+                &[CustodyWrite {
+                    key: "fixture",
+                    previous: None,
+                    value: Some(b"later"),
+                }],
+            )
+            .unwrap();
+        assert!(
+            !owner
+                .bind_store(&mut store)
+                .unwrap()
+                .acceptance_never_written(&original)
+                .unwrap()
+        );
+        let other_fixture = Directory::new();
+        let other_owner = RootOwnership::acquire(&other_fixture.0).unwrap();
+        let mut other = MmpCustodyStore::open(&other_fixture.0, "session").unwrap();
+        assert!(
+            other_owner
+                .bind_store(&mut other)
+                .unwrap()
+                .acceptance_never_written(&original)
+                .is_err()
+        );
+    }
+
+    /// A removed stage still advances the durable watermark, so an empty
+    /// namespace cannot qualify a reused sequence after intervening history.
+    #[test]
+    fn removed_stage_never_qualifies_an_old_sequence_as_unwritten() {
+        let fixture = Directory::new();
+        let owner = RootOwnership::acquire(&fixture.0).unwrap();
+        let mut store = MmpCustodyStore::open(&fixture.0, "session").unwrap();
+        let key = "a1:0000000000000002:stage";
+        let first = store
+            .commit(
+                0,
+                &[CustodyWrite {
+                    key,
+                    previous: None,
+                    value: Some(b"stage"),
+                }],
+            )
+            .unwrap();
+        let digest = sha2::Sha256::digest(b"stage");
+        store
+            .commit(
+                first.generation(),
+                &[CustodyWrite {
+                    key,
+                    previous: Some(&digest),
+                    value: None,
+                }],
+            )
+            .unwrap();
+        let reused = store.acceptance_plan(1).unwrap();
+        assert!(
+            !owner
+                .bind_store(&mut store)
+                .unwrap()
+                .acceptance_never_written(&reused)
+                .unwrap()
+        );
+        let fresh = store.acceptance_plan(3).unwrap();
+        assert!(
+            owner
+                .bind_store(&mut store)
+                .unwrap()
+                .acceptance_never_written(&fresh)
+                .unwrap()
+        );
+    }
+
+    /// A migrated prototype store has no proof of removed old reservations.
+    /// Even an empty namespace under its real lock cannot authorize a yield.
+    #[test]
+    fn migrated_untrusted_watermark_cannot_qualify_unwritten_acceptance() {
+        let fixture = Directory::new();
+        let owner = RootOwnership::acquire(&fixture.0).unwrap();
+        drop(MmpCustodyStore::open(&fixture.0, "session").unwrap());
+        let connection = rusqlite::Connection::open(fixture.0.join("custody.sqlite")).unwrap();
+        connection.execute_batch("BEGIN IMMEDIATE; ALTER TABLE state RENAME TO state_v2; CREATE TABLE state (singleton INTEGER PRIMARY KEY CHECK(singleton=1), owner TEXT NOT NULL, store_id BLOB NOT NULL CHECK(length(store_id)=16), generation INTEGER NOT NULL CHECK(generation>=0), batch BLOB NOT NULL); INSERT INTO state SELECT singleton,owner,store_id,generation,batch FROM state_v2; DROP TABLE state_v2; PRAGMA user_version=1; COMMIT;").unwrap();
+        drop(connection);
+        let mut migrated = MmpCustodyStore::open(&fixture.0, "session").unwrap();
+        let plan = migrated.acceptance_plan(1).unwrap();
+        assert!(
+            !owner
+                .bind_store(&mut migrated)
+                .unwrap()
+                .acceptance_never_written(&plan)
+                .unwrap()
+        );
     }
 
     /// A live lock binds one directory, database inode and persisted allocation.

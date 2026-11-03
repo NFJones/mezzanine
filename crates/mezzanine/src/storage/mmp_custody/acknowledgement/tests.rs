@@ -19,6 +19,135 @@ fn decode_limits() -> MessageAcceptanceDecodeLimits {
     }
 }
 
+/// A guarded ACK can commit and reconcile its exact lost reply while an
+/// original later acceptance has no stage. It must not advance a stale plan
+/// or recreate the suspended acceptance's source.
+#[test]
+fn guarded_ack_preserves_unwritten_original_and_reconciles_lost_reply() {
+    let fixture = Fixture::new();
+    let mut store = MmpCustodyStore::open(&fixture.0, "session").unwrap();
+    let (_service, _ticket, write) = prepared(&mut store);
+    let ack = store.acknowledgement_plan().unwrap();
+    let suspended = store.acceptance_plan(2).unwrap();
+    store
+        .acknowledgement_port_guarded(&ack, &suspended)
+        .commit(&write)
+        .unwrap();
+    store
+        .acknowledgement_port_guarded(&ack, &suspended)
+        .commit(&write)
+        .unwrap();
+    let replacement = store.acceptance_plan(2).unwrap();
+    assert!(
+        store
+            .acknowledgement_port_guarded(&ack, &replacement)
+            .commit(&write)
+            .is_err(),
+        "a refreshed acceptance plan must not be paired with the old ACK plan"
+    );
+    assert!(store.read("a1:0000000000000002:stage").unwrap().is_none());
+    let generation = store.acknowledgement_plan().unwrap().generation;
+    store
+        .commit(
+            generation,
+            &[CustodyWrite {
+                key: "unrelated",
+                previous: None,
+                value: Some(b"later"),
+            }],
+        )
+        .unwrap();
+    assert!(
+        store
+            .acknowledgement_port_guarded(&ack, &suspended)
+            .commit(&write)
+            .is_err()
+    );
+}
+
+/// An ACK that already existed before the guarded plan cannot make a later
+/// unrelated batch look like the guarded ACK's lost committed reply.
+#[test]
+fn guarded_historical_ack_rejects_one_unrelated_batch() {
+    let fixture = Fixture::new();
+    let mut store = MmpCustodyStore::open(&fixture.0, "session").unwrap();
+    let (_service, _ticket, write) = prepared(&mut store);
+    let first = store.acknowledgement_plan().unwrap();
+    store.acknowledgement_port(&first).commit(&write).unwrap();
+    let guarded = store.acknowledgement_plan().unwrap();
+    let suspended = store.acceptance_plan(2).unwrap();
+    store
+        .commit(
+            guarded.generation,
+            &[CustodyWrite {
+                key: "unrelated",
+                previous: None,
+                value: Some(b"later"),
+            }],
+        )
+        .unwrap();
+    assert!(
+        store
+            .acknowledgement_port_guarded(&guarded, &suspended)
+            .commit(&write)
+            .is_err(),
+        "historical ACK and unrelated batch cannot qualify a lost guarded reply"
+    );
+}
+
+/// A reused port cannot retain a previous successful settlement after a later
+/// guarded retry fails against changed store state.
+#[test]
+fn guarded_port_clears_previous_settlement_before_a_failed_retry() {
+    let fixture = Fixture::new();
+    let mut store = MmpCustodyStore::open(&fixture.0, "session").unwrap();
+    let (_service, _ticket, write) = prepared(&mut store);
+    let ack = store.acknowledgement_plan().unwrap();
+    let suspended = store.acceptance_plan(2).unwrap();
+    let mut port = store.acknowledgement_port_guarded(&ack, &suspended);
+    port.commit(&write).unwrap();
+    port.store
+        .connection
+        .execute("UPDATE state SET batch=zeroblob(32) WHERE singleton=1", [])
+        .unwrap();
+    assert!(port.commit(&write).is_err());
+    assert!(port.take_guarded_settlement().is_none());
+}
+
+/// SQLite effects inside an ACK transaction cannot create a suspended stage or
+/// advance its watermark. Both the forged mutation and ACK roll back together.
+#[test]
+fn guarded_ack_rolls_back_trigger_mutations_to_suspended_original() {
+    for fault in ["stage", "watermark"] {
+        let fixture = Fixture::new();
+        let mut store = MmpCustodyStore::open(&fixture.0, "session").unwrap();
+        let (_service, _ticket, write) = prepared(&mut store);
+        let ack = store.acknowledgement_plan().unwrap();
+        let suspended = store.acceptance_plan(2).unwrap();
+        let trigger = if fault == "stage" {
+            "CREATE TRIGGER attack AFTER INSERT ON records WHEN NEW.key LIKE 'k1:%' BEGIN INSERT INTO records(key,value,digest) VALUES('a1:0000000000000002:stage',X'01',zeroblob(32)); END;"
+        } else {
+            "CREATE TRIGGER attack AFTER UPDATE OF generation ON state BEGIN UPDATE state SET sequence_watermark=X'0200000000000000' WHERE singleton=1; END;"
+        };
+        store.connection.execute_batch(trigger).unwrap();
+        assert!(
+            store
+                .acknowledgement_port_guarded(&ack, &suspended)
+                .commit(&write)
+                .is_err(),
+            "{fault}"
+        );
+        assert_eq!(
+            store.acknowledgement_plan().unwrap().generation,
+            ack.generation
+        );
+        assert!(store.read("a1:0000000000000002:stage").unwrap().is_none());
+        let mut bytes = Vec::new();
+        write.write_record(&mut bytes).unwrap();
+        assert!(store.read(&ack_key(&bytes)).unwrap().is_none());
+    }
+}
+
 /// An existing content-addressed ACK and valid original source cannot qualify
 /// a positive receipt after the store's persisted identity, owner or batch
 /// framing changes. The retry must not bypass transaction state validation.

@@ -70,6 +70,31 @@ pub(crate) struct AcceptancePlan {
 }
 
 impl AcceptancePlan {
+    /// Compares trusted positions without treating an equal sequence as identity.
+    pub(crate) fn same_position(&self, other: &Self) -> bool {
+        self.store_id == other.store_id && self.generation == other.generation
+    }
+
+    /// Returns the original reserved occurrence without granting acceptance.
+    pub(crate) fn sequence(&self) -> u64 {
+        self.sequence
+    }
+
+    /// Constructs a private position only after the owned transaction validates
+    /// an exact guarded ACK settlement; the original occurrence stays unchanged.
+    pub(super) fn at_generation(&self, generation: u64) -> Self {
+        Self {
+            store_id: self.store_id.clone(),
+            generation,
+            sequence: self.sequence,
+        }
+    }
+
+    /// Returns the original private store generation for transactional fencing.
+    pub(crate) fn generation(&self) -> u64 {
+        self.generation
+    }
+
     /// Checks cached allocation identity without I/O; equal labels are insufficient.
     pub(crate) fn matches_store(&self, store: &MmpCustodyStore) -> bool {
         self.store_id == store.store_id
@@ -164,6 +189,53 @@ pub(crate) struct PlannedAcceptanceStore<'a> {
 }
 
 impl MmpCustodyStore {
+    /// Checks an original plan against a single trusted store snapshot. This is
+    /// descriptive only: the caller must hold and revalidate the actual root
+    /// ownership across the check and cannot treat an arbitrary error as proof.
+    pub(super) fn acceptance_never_written(&self, plan: &AcceptancePlan) -> Result<bool> {
+        if plan.store_id != self.store_id || plan.sequence == 0 {
+            return Err(MezError::conflict("MMP original acceptance plan changed"));
+        }
+        let transaction = self
+            .connection
+            .unchecked_transaction()
+            .map_err(database_error)?;
+        let result =
+            self.acceptance_never_written_in_snapshot(&transaction, plan, plan.generation)?;
+        self.finish_transaction(transaction)?;
+        Ok(result)
+    }
+
+    /// Checks the same original against the caller's pinned SQLite transaction.
+    /// The explicit generation fences intervening writes before and after a
+    /// separately authorized ACK; an untrusted migrated watermark is refused.
+    pub(super) fn acceptance_never_written_in_snapshot(
+        &self,
+        transaction: &rusqlite::Transaction<'_>,
+        plan: &AcceptancePlan,
+        generation: u64,
+    ) -> Result<bool> {
+        if plan.store_id != self.store_id
+            || plan.sequence == 0
+            || !std::ptr::eq(&self.connection, &**transaction)
+        {
+            return Err(MezError::conflict("MMP original acceptance plan changed"));
+        }
+        let state = self.checked_state(transaction)?;
+        let prefix = format!("a1:{:016x}:", plan.sequence);
+        let count: i64 = transaction
+            .query_row(
+                "SELECT COUNT(*) FROM records WHERE substr(key,1,length(?1))=?1",
+                [&prefix],
+                |row| row.get(0),
+            )
+            .map_err(database_error)?;
+        Ok(count == 0
+            && u64::try_from(state.generation).ok() == Some(generation)
+            && state.watermark_origin_trusted
+            && state.watermark < plan.sequence)
+    }
+
     /// Decodes one quarantined original only after its complete source verifies.
     ///
     /// The supplied limits must cover the policy under which this store accepted

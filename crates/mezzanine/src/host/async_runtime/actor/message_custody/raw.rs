@@ -115,10 +115,12 @@ impl AsyncRuntimeSessionActor {
             .message_custody
             .as_ref()
             .ok_or_else(|| MezError::invalid_state("MMP raw storage root unavailable"))?;
-        if owner.wake.is_some()
-            || owner.pending.is_some()
-            || owner.failure.is_some()
-            || owner.shutdown.is_some()
+        let yielding = request.is_acknowledgement() && owner.can_park_ack();
+        if !yielding
+            && (owner.wake.is_some()
+                || owner.pending.is_some()
+                || owner.failure.is_some()
+                || owner.shutdown.is_some())
         {
             return Ok(Some((
                 RawPreparation::Reply(mmp_storage_error_response(&MessageError::new(
@@ -153,6 +155,7 @@ impl AsyncRuntimeSessionActor {
             );
             return;
         };
+        let yielding = request.is_acknowledgement() && owner.can_park_ack();
         let service = self.service.message_service_mut();
         let mut completion = None;
         match request.prepare(
@@ -177,8 +180,12 @@ impl AsyncRuntimeSessionActor {
             Ok(MmpStoragePreparation::Acknowledgement(ticket)) => {
                 match owner.root.start_acknowledgement(service, &ticket) {
                     Ok(()) => {
-                        owner.pending =
-                            Some(Pending::Acknowledgement(AcknowledgementReply::Raw(raw)));
+                        if yielding {
+                            owner.park_ack(AcknowledgementReply::Raw(raw));
+                        } else {
+                            owner.pending =
+                                Some(Pending::Acknowledgement(AcknowledgementReply::Raw(raw)));
+                        }
                         owner.wake = Some(Wake::Observe);
                     }
                     Err(error) => {

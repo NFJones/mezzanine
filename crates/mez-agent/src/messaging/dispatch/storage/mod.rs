@@ -57,6 +57,12 @@ impl std::fmt::Debug for MmpStorageRequest {
 }
 
 impl MmpStorageRequest {
+    /// Reports only the parsed operation kind so the actor can select its
+    /// bounded storage lane. This is not an ACK or recipient capability.
+    pub fn is_acknowledgement(&self) -> bool {
+        matches!(&self.kind, RequestKind::Acknowledgement { .. })
+    }
+
     /// Reserves only after the actor selects actual root capacity. Returns no
     /// accepted=true for a fresh occurrence, memory-only receipt or restored fact.
     /// All validation/capacity errors leave fresh acceptance unpublished.

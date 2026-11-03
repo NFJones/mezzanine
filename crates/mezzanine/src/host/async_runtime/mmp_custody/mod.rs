@@ -88,6 +88,9 @@ struct Written {
     outcome: MessageAcceptanceWriteOutcome,
     /// Positive settlement can reuse the actual off-actor-read next position.
     anchor: Result<AcceptancePlan>,
+    /// Actual owned worker observed the original untouched at its plan position.
+    /// This is only a preflight: any yielded ACK transaction must recheck it.
+    unwritten: bool,
 }
 
 /// Immutable original admission plus bounded retry scheduling metadata.
@@ -167,6 +170,17 @@ struct Inner {
 pub(crate) struct MmpCustodyRoot(Arc<Inner>);
 
 impl MmpCustodyRoot {
+    /// Reports whether an actually joined uncertain original may be considered
+    /// for a guarded ACK. This status alone grants neither absence nor rebase.
+    pub fn can_yield_acknowledgement(&self) -> Result<bool> {
+        let state = self.0.state.lock().map_err(|_| ownership_error())?;
+        Ok(matches!(&*state,
+            State::Joined { admission, result: Ok(written), .. }
+                if !admission.recovery && written.unwritten
+                    && matches!(&written.outcome, MessageAcceptanceWriteOutcome::Unknown(_))
+                    && written.anchor.as_ref().is_ok_and(|anchor| anchor.same_position(&admission.plan))))
+    }
+
     /// Borrows original live root authority for qualified duplicate lookup.
     /// Equal owner labels or a newly opened root cannot recreate this allocation.
     pub fn storage_scope(&self) -> &MessageStorageScope {
@@ -578,13 +592,17 @@ impl MmpCustodyRoot {
                     destination.limits,
                 )?,
             };
-            let outcome = {
+            let (outcome, unwritten) = {
                 let mut owned = fence.bind_store(&mut store)?;
-                if recovery {
+                let outcome = if recovery {
                     write.persist(&mut owned.store_mut().acceptance_recovery_port(&plan))
                 } else {
                     write.persist(&mut owned.store_mut().acceptance_port(&plan))
-                }
+                };
+                let unwritten = !recovery
+                    && matches!(&outcome, MessageAcceptanceWriteOutcome::Unknown(_))
+                    && owned.acceptance_never_written(&plan).unwrap_or(false);
+                (outcome, unwritten)
             };
             #[cfg(test)]
             if let Some(probe) = &probe {
@@ -600,6 +618,7 @@ impl MmpCustodyRoot {
                 store,
                 outcome,
                 anchor,
+                unwritten,
             })
         })
     }
@@ -645,9 +664,11 @@ impl Drop for Inner {
                     let result = worker.await;
                     let _ = runtime.spawn_blocking(move || drop(result)).await;
                 }
-                State::Acknowledging { worker, .. } => {
+                State::Acknowledging { admission, worker } => {
                     let result = worker.await;
-                    let _ = runtime.spawn_blocking(move || drop(result)).await;
+                    let _ = runtime
+                        .spawn_blocking(move || drop((result, admission)))
+                        .await;
                 }
                 state => {
                     let _ = runtime.spawn_blocking(move || drop(state)).await;
@@ -693,8 +714,18 @@ fn status(state: &State) -> CustodyWorkerStatus {
         },
         State::Acknowledging { .. } => CustodyWorkerStatus::Running,
         State::Acknowledged {
-            result, retry_at, ..
+            admission,
+            result,
+            retry_at,
+            ..
         } => match result.as_deref() {
+            Ok(acknowledgement::Written {
+                outcome: mez_agent::messaging::MessageAcknowledgementWriteOutcome::Committed(_),
+                anchor: Err(_),
+                ..
+            }) if admission.parked.is_some() => {
+                CustodyWorkerStatus::AcknowledgementRetryAt(*retry_at)
+            }
             Ok(acknowledgement::Written {
                 outcome: mez_agent::messaging::MessageAcknowledgementWriteOutcome::Committed(_),
                 ..

@@ -73,6 +73,286 @@ fn send(connection: &MessageConnection, target: &SenderIdentity, id: &str) -> Ve
     )
 }
 
+/// A full store must still permit the original recipient ACK to use its
+/// reserved metadata headroom while a later original is waiting for capacity.
+/// The raw caller and worker remain owned until orderly shutdown.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn full_store_must_not_block_ack_behind_unaccepted_raw_send() {
+    exercise_capacity_ack(false, false, false, false).await;
+}
+
+/// A real worker lost after the guarded ACK commits must reconcile that same
+/// ACK and retain the original send across the actual join and retry.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn full_store_ack_lost_reply_keeps_original_send_and_reconciles() {
+    exercise_capacity_ack(true, false, false, false).await;
+}
+
+/// An authenticated raw recipient ACK uses the same guarded lane and retains
+/// its original connection while the separate send remains pending.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn full_store_raw_ack_can_pass_an_unaccepted_send() {
+    exercise_capacity_ack(false, true, false, false).await;
+}
+
+/// A raw ACK whose actual worker is lost after commit reconciles the same
+/// original before either the socket response or suspended send is published.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn full_store_raw_ack_lost_reply_keeps_original_send() {
+    exercise_capacity_ack(true, true, false, false).await;
+}
+
+/// Repeated transient post-commit position-read failures must be retried without
+/// discarding either the real ACK commit or the suspended original send.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn full_store_ack_recovers_transient_anchor_failure() {
+    exercise_capacity_ack(false, false, true, false).await;
+}
+
+/// Losing the actual position-refresh worker must reconcile the exact ACK and
+/// retain the original send without writing a second ACK record.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn full_store_ack_recovers_lost_anchor_worker() {
+    exercise_capacity_ack(false, false, false, true).await;
+}
+
+/// Exercises the real actor, storage and original wire input with an optional
+/// physical ACK-worker loss after its committed transaction.
+async fn exercise_capacity_ack(
+    lose_ack: bool,
+    raw_ack: bool,
+    fail_anchor: bool,
+    lose_refresh: bool,
+) {
+    let fixture = Fixture::new(true);
+    let ack_probe = super::super::acknowledgement::tests::Probe::new(true);
+    if lose_ack {
+        ack_probe.lose_next_commit();
+    }
+    if fail_anchor {
+        ack_probe.fail_anchors(2);
+    }
+    if lose_refresh {
+        ack_probe.fail_anchors(1);
+        ack_probe.lose_next_anchor_refresh();
+    }
+    let root = MmpCustodyRoot::construct(
+        Destination {
+            root: fixture.path.clone(),
+            owner: "original-session".into(),
+            limits: CustodyStoreLimits {
+                records: 4,
+                ..CustodyStoreLimits::default()
+            },
+        },
+        Handle::current(),
+        Some(fixture.probe.clone()),
+        Some(ack_probe.clone()),
+    );
+    assert_eq!(root.observe().await.unwrap(), CustodyWorkerStatus::Idle);
+    let mut service = crate::test_support::runtime::RuntimeServiceFixture::new().build();
+    let target = service
+        .message_service_mut()
+        .register_agent(None, None, "target", vec![]);
+    service
+        .message_service_mut()
+        .subscribe(&target.agent_id)
+        .unwrap();
+    let (handle, mut actor) =
+        AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
+    actor.register_message_custody(root.clone()).unwrap();
+    let runner = tokio::spawn(actor.run());
+    let (connection, owner, _identity) = hello(&handle).await;
+    let raw_recipient = if raw_ack {
+        Some(hello(&handle).await)
+    } else {
+        None
+    };
+    let target_id = raw_recipient
+        .as_ref()
+        .and_then(|(connection, _, _)| connection.agent_id.clone())
+        .unwrap_or_else(|| target.agent_id.clone());
+    let small = |id: &str| {
+        encode_mmp_body(&serde_json::json!({
+        "protocol":"mmp/1", "type":"send", "id":id, "time":"original",
+        "scope":"session", "sender":{"agent_id":connection.agent_id.as_ref().unwrap().as_str()},
+        "recipient":{"agent_id":target_id.as_str()}, "ttl_ms":null, "correlation_id":null,
+        "content_type":"text/plain; charset=utf-8", "payload":"small"
+    }).to_string())
+    };
+    let first = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let reply = handle
+                .handle_message_input_with_owner(
+                    small("first"),
+                    4096,
+                    connection.clone(),
+                    20,
+                    Some(owner.clone()),
+                )
+                .await
+                .unwrap();
+            if body(&reply.output)["type"] == "ack" {
+                break reply;
+            }
+            assert_eq!(
+                body(&reply.output)["error"]["code"],
+                "capacity",
+                "unexpected first-send response: {}",
+                body(&reply.output)
+            );
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(body(&first.output)["type"], "ack");
+    let batch = handle
+        .message_fanout_ready_for(target_id.clone(), 30, 10)
+        .await
+        .unwrap()
+        .unwrap()
+        .batch;
+    let second = small("second");
+    let sender = handle.clone();
+    let mut caller = tokio::spawn(async move {
+        sender
+            .handle_message_input_with_owner(second, 4096, connection, 31, Some(owner))
+            .await
+    });
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            if matches!(
+                root.observe().await.unwrap(),
+                CustodyWorkerStatus::RetryAt(_)
+            ) {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(fixture.disk().1, 3);
+    {
+        let mut state = root.0.state.lock().unwrap();
+        let State::Joined { retry_at, .. } = &mut *state else {
+            panic!("capacity failure was not retained")
+        };
+        *retry_at = Instant::now() + Duration::from_secs(2);
+    }
+    let recipient = batch.recipient.clone();
+    let ack = tokio::time::timeout(Duration::from_secs(8), async {
+        loop {
+            if let Some((connection, owner, _lease)) = raw_recipient.as_ref() {
+                let frame = encode_mmp_body(r#"{"protocol":"mmp/1","type":"ack","sequence":1}"#);
+                let response = handle
+                    .handle_message_input_with_owner(
+                        frame,
+                        4096,
+                        connection.clone(),
+                        32,
+                        Some(owner.clone()),
+                    )
+                    .await
+                    .unwrap();
+                if body(&response.output)["type"] == "ack" {
+                    assert_eq!(body(&response.output)["last_sequence"], 1);
+                    break;
+                }
+            } else if handle
+                .acknowledge_message_fanout(batch.clone())
+                .await
+                .is_ok()
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await;
+    if ack.is_ok() && fail_anchor {
+        assert_eq!(
+            ack_probe.physical_attempts(),
+            1,
+            "position retries must not rewrite the committed ACK"
+        );
+        assert_eq!(fixture.disk().1, 4);
+    }
+    if ack.is_ok() && lose_refresh {
+        assert_eq!(
+            ack_probe.physical_attempts(),
+            2,
+            "lost refresh must reconcile the same ACK once"
+        );
+        assert_eq!(fixture.disk().1, 4);
+    }
+    if ack.is_err() && (fail_anchor || lose_refresh) {
+        runner.abort();
+        caller.abort();
+        let _ = runner.await;
+        let _ = caller.await;
+        panic!("a transient position-read failure stranded the committed ACK");
+    }
+    if ack.is_ok() {
+        // The production store policy is immutable. This test-only change
+        // models capacity becoming available without issuing another store
+        // transaction, and verifies the retained original is not regenerated.
+        provide_record_capacity(&root, 7).await;
+        let accepted = tokio::time::timeout(Duration::from_secs(10), &mut caller)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(body(&accepted.output)["type"], "ack");
+        assert_eq!(body(&accepted.output)["message_id"], "second");
+        assert_eq!(fixture.disk().1, 7);
+    }
+    let shutdown = handle.shutdown().await;
+    if ack.is_err() {
+        let _ = caller.await;
+    }
+    let mut exit = runner.await.unwrap();
+    shutdown.unwrap();
+    let messages = exit.service.message_service_mut();
+    if ack.is_ok() {
+        let snapshot = messages.snapshot_state();
+        assert!(
+            snapshot
+                .retained_messages
+                .iter()
+                .chain(snapshot.custody_messages.as_deref().unwrap_or(&[]))
+                .any(|row| row.sequence == 2 && row.envelope.id == "second")
+        );
+    }
+    if ack.is_err() {
+        let ticket = messages
+            .prepare_acknowledgement(&recipient, 1, 512 * 1024)
+            .unwrap()
+            .unwrap();
+        root.start_acknowledgement(messages, &ticket).unwrap();
+        assert_eq!(
+            root.observe().await.unwrap(),
+            CustodyWorkerStatus::AcknowledgementAwaitingAdoption
+        );
+        assert_eq!(
+            root.adopt_acknowledgement(messages).unwrap().last_sequence,
+            1
+        );
+    }
+    if ack.is_err() {
+        assert_eq!(
+            fixture.disk().1,
+            4,
+            "control ACK must actually fit in the reserved row"
+        );
+    }
+    assert!(
+        ack.is_ok(),
+        "accepted first message ACK was blocked despite spare store row: {ack:?}"
+    );
+}
+
 /// Decodes only actual framed actor replies, never a fabricated acceptance label.
 pub(super) fn body(frame: &[u8]) -> serde_json::Value {
     serde_json::from_str(&decode_mmp_frame(frame, 2 * 1024 * 1024).unwrap().0).unwrap()

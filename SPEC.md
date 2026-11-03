@@ -15531,8 +15531,9 @@ chunk transaction MUST stay within existing store batch limits; incomplete stage
 rows MUST NOT qualify acceptance. Full encoded row/key/checksum/framing costs and
 generation headroom MUST fit before the first append. Retry MUST validate the
 actual dense immutable prefix and generation, without reconstructing missing or
-corrupt committed chunks. The original serialized-store plan MUST settle before
-later store work; this storage adapter alone does not enable durable ingress.
+corrupt committed chunks. An original serialized-store plan MUST settle before
+later store work, except for the guarded ACK yield described below; this storage
+adapter alone does not enable durable ingress.
 
 Reading an accepted original for storage validation or future restore MUST use a
 single consistent store snapshot and stream bounded chunks without materializing
@@ -15689,7 +15690,28 @@ ACK headroom, or provide restart folding and allocator-safe journal compaction.
 
 The same owned session storage root MUST serialize acceptance and ACK workers
 through one connection and settled position. A busy root MUST reject before
-lower ACK issuance; an ACK's actual handle, original plan, input/attempt and
+lower ACK issuance, except that an actually joined uncertain acceptance MAY
+yield for one ACK when its live bound owner verifies that its original namespace
+is empty, its starting generation is unchanged, and a trusted watermark is
+strictly below its reserved sequence. The ACK transaction MUST recheck that
+absence, generation, allocation and watermark before and after its mutation;
+an exact committed ACK at the next generation MAY reconcile a lost reply only
+when the retained last-batch digest proves that exact ACK insertion. A guarded
+ACK MUST capture its actual settled generation and batch in the same transaction;
+an unrelated later batch MUST NOT qualify as ACK progress, including when the
+ACK already existed before the guarded plan.
+The root MUST retain the original acceptance input, attempt, sequence, reply and
+retry deadline throughout the ACK. After actual ACK adoption it MAY rebase that
+same never-written original to the verified new store position; partial stages,
+changed ownership, untrusted legacy watermarks and ambiguous evidence MUST NOT
+qualify a yield. ACK failure or observer loss MUST retain both originals. This
+includes a failed post-commit position check: the root MUST retain the committed
+ACK and retry that check on its owned worker with backoff, without writing a
+second ACK or releasing the original. The exact recorded ACK generation and
+batch, parked namespace and trusted watermark MUST still validate in one store
+snapshot before adoption and rebase. This
+exception does not itself reclaim settled storage or enable durable product mode.
+An ACK's actual handle, original plan, input/attempt and
 positive result MUST remain owned through observer cancellation, failure and
 foreign adoption. ACK hashing/storage/position reads MUST run off actor. Lost
 ACK input MUST require its exact observed worker join; uncertain retry MUST keep

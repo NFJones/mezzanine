@@ -431,6 +431,102 @@ async fn hold_root(
     })
 }
 
+/// A full disk lane must not prevent an earlier ACK while an authorized native
+/// action retains its original lower reservation and provider result. Once a
+/// test-only capacity increase is observed, the same original succeeds once.
+async fn native_capacity_ack_control(tracked: bool) {
+    let fixture = Fixture::new(true);
+    let (handle, actor, root, turn, target, _) =
+        actor_fixture(&fixture, mez_agent::ApprovalPolicy::AutoAllow).await;
+    {
+        let mut state = root.0.state.lock().unwrap();
+        let State::Idle(opened) = &mut *state else {
+            panic!("root not idle")
+        };
+        opened.store.set_test_record_limit(4);
+    }
+    let runner = tokio::spawn(actor.run());
+    let holder = hold_root(&handle, &target).await.await.unwrap().unwrap();
+    assert_eq!(super::raw_actor::body(&holder.output)["type"], "ack");
+    let batch = handle
+        .message_fanout_ready_for(target.agent_id.clone(), 20, 10)
+        .await
+        .unwrap()
+        .unwrap()
+        .batch;
+    let dispatch = handle
+        .claim_configured_agent_provider_task(
+            mez_core::ids::AgentId::opaque(turn.agent_id.clone()).unwrap(),
+            turn.turn_id.clone(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    let (provider, dispatch, execution) = plan(dispatch, &target, tracked).await;
+    complete(&handle, &dispatch, execution).await;
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            if matches!(
+                root.observe().await.unwrap(),
+                CustodyWorkerStatus::RetryAt(_)
+            ) {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    {
+        let mut state = root.0.state.lock().unwrap();
+        let State::Joined { retry_at, .. } = &mut *state else {
+            panic!("native original not retained")
+        };
+        *retry_at = Instant::now() + Duration::from_secs(2);
+    }
+    let cursor = tokio::time::timeout(Duration::from_secs(8), async {
+        loop {
+            if let Ok(cursor) = handle.acknowledge_message_fanout(batch.clone()).await {
+                break cursor;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(cursor.last_sequence, 1);
+    provide_record_capacity(&root, 7).await;
+    await_source_delivery(&handle, &target).await;
+    handle.shutdown().await.unwrap();
+    let mut exited = runner.await.unwrap();
+    accepted(&exited, &turn, tracked);
+    let snapshot = exited.service.message_service().snapshot_state();
+    assert!(
+        snapshot
+            .retained_messages
+            .iter()
+            .chain(snapshot.custody_messages.as_deref().unwrap_or(&[]))
+            .any(|row| row.sequence == 2
+                && row.envelope.payload == "original authorized action body")
+    );
+    assert_eq!(provider.calls.load(Ordering::SeqCst), 1);
+    exited.service.terminate_all_pane_processes().unwrap();
+}
+
+/// A tracked native request keeps its original authorization and request owner
+/// while an earlier recipient drains an ACK through a full storage lane.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn full_store_ack_preserves_tracked_native_action() {
+    native_capacity_ack_control(true).await;
+}
+
+/// Untracked native actions receive the same fairness and exactly-once source
+/// retention without manufacturing a tracked-request receipt.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn full_store_ack_preserves_untracked_native_action() {
+    native_capacity_ack_control(false).await;
+}
+
 /// Waits for this source rather than mistaking the older holder for completion.
 async fn await_source_delivery(handle: &AsyncRuntimeSessionHandle, target: &SenderIdentity) {
     assert!(source_delivery_arrived(handle, target).await);
