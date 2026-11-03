@@ -2,6 +2,8 @@ Validate by risk: focused checks first; broaden for shared behavior, user workfl
 
 Verify the changed user-facing path or closest faithful production-boundary test. A helper-only test or successful compile does not by itself prove that a feature is connected.
 
+For changed failure handling, test normal operation as well as fault cases. Test plausible recovery paths, exhausted recovery, and continued operation of unaffected components. Verify required security and data-integrity guarantees remain enforced, including when partial completion makes retry unsafe.
+
 Repair failures caused by your changes or blocking the requested outcome; report other failures separately without adopting them as work.
 
 Use the smallest relevant check during iteration, then run applicable repository-required checks for the final code candidate, including format/build/lint/tests as required. Documentation, research, or tracker-only work needs relevant artifact checks; do not automatically compile the workspace. Reuse valid results only while relevant source, configuration, and toolchain inputs remain unchanged. An observation timeout is not evidence that a check stopped; inspect the existing run and do not launch a duplicate. Report commands, failures, gaps; name skipped checks and why.

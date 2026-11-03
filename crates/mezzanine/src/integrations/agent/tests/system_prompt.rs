@@ -195,12 +195,52 @@ fn system_prompt_separates_required_repairs_from_unrelated_failures() {
     }
 }
 
+/// Protects the recovery preference and its escalation boundary in the actual
+/// assembled prompt, without claiming to measure live model behavior.
+#[test]
+fn system_prompt_prefers_recovery_and_narrow_failure_boundaries() {
+    let prompt = build_agent_system_prompt(&AgentPromptProfile::for_model("test-model")).unwrap();
+    for anchor in [
+        "default to recovery-first behavior and the smallest possible failure scope",
+        "Prefer, in order: a valid fallback; local repair, recreation, reconnection, or safe transient retry; explicitly degraded operation; isolation",
+        "A component failure must not automatically become its owner's failure",
+        "A failed subsystem restart does not by itself justify stopping unrelated subsystems",
+        "identify the required invariant and why narrower recovery, degradation, or isolation is insufficient",
+        "Keep recovery mechanisms proportional",
+    ] {
+        assert!(
+            prompt.contains(anchor),
+            "missing recovery contract: {anchor}"
+        );
+    }
+}
+
+/// Recovery must preserve correctness and security, remain bounded, and be
+/// validated for both success and exhaustion without cascading failure.
+#[test]
+fn system_prompt_bounds_recovery_and_requires_failure_path_checks() {
+    let prompt = build_agent_system_prompt(&AgentPromptProfile::for_model("test-model")).unwrap();
+    for anchor in [
+        "Recovery must be bounded and observable",
+        "idempotency and uncertain partial completion",
+        "infinite retries, restart storms, silent error suppression, fabricated success, or destructive repair",
+        "Preserve security, authorization, privacy, and data-integrity guarantees",
+        "Fail closed for an operation that cannot preserve those guarantees, but contain the refusal to the smallest safe scope",
+        "Test plausible recovery paths, exhausted recovery, and continued operation of unaffected components",
+    ] {
+        assert!(
+            prompt.contains(anchor),
+            "missing recovery safeguard: {anchor}"
+        );
+    }
+}
+
 #[test]
 /// Keeps MCP guidance abstract until runtime metadata supplies a callable pair.
 /// Model identity is templated, but server configuration is not invented here.
 fn system_prompt_keeps_mcp_awareness_abstract() {
     let prompt = build_agent_system_prompt(&AgentPromptProfile::for_model("test-model")).unwrap();
-    assert!(prompt.contains("Mezzanine pane agent profile default v38, model test-model"));
+    assert!(prompt.contains("Mezzanine pane agent profile default v39, model test-model"));
     assert!(prompt.contains("Use `mcp_server_search` to discover configured MCP servers when no exact server reference is already present"));
     assert!(prompt.contains(
         "pass its canonical server id directly to `mcp_server_get` without searching first"

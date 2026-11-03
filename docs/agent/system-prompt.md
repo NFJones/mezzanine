@@ -104,6 +104,31 @@ run, not launch a duplicate. Report required checks that cannot run.
 These are model instructions, not a runtime-enforced scope restriction. State
 owned files and acceptance criteria explicitly when a task needs tighter bounds.
 
+### Recovery and fault containment
+
+For software Mez designs, implements, or repairs, the built-in prompt defaults
+to recovery-first behavior and the smallest safe failure scope. Prefer a valid
+fallback, local recovery, explicit degradation, or isolation and controlled
+recreation of the affected component over shutting down the program. A
+propagated error or failed subsystem restart is not by itself a reason to stop
+unrelated functionality. Broad shutdown requires identifying the invariant
+that narrower recovery or containment cannot preserve.
+
+Recovery must be bounded and observable, account for idempotency and uncertain
+partial completion, and preserve diagnostics. It must not hide failures,
+fabricate success, destroy state, or create infinite retries or restart storms.
+Security, authorization, privacy, and data-integrity guarantees still apply:
+refuse an unsafe operation at the smallest safe scope rather than weakening
+those guarantees. This guidance does not change runtime permissions, approvals,
+or tool restrictions, and does not require elaborate supervision when a local
+failure boundary suffices.
+
+For changed failure handling, test normal operation, plausible recovery,
+exhausted recovery, continued operation of unaffected components, and required
+guarantees, including when partial completion makes retry unsafe. These are
+implementation and validation instructions, not a guarantee that every failure
+is recoverable.
+
 When behavior is unexpected, use `/status`, `/permissions`, and `/approval` to
 inspect runtime state. Use `/show-context` to inspect conversation entries and
 `/copy-context` for the assembled request or idle preview. Review exports before
@@ -151,6 +176,9 @@ Keep those inputs matched except for the guidance under test.
 | Read-only review | Accurate severity-ordered findings with references, without edits or commits. |
 | Dirty worktree | Task-owned changes complete without modifying or staging unrelated work. |
 | Missing platform check | Available required checks run; unavailable coverage is explicitly reported, not claimed. |
+| Recoverable dependency failure | A valid fallback or bounded local recovery restores useful operation without false success or unsafe retries. |
+| Exhausted subsystem recovery | The affected component is isolated with diagnostics while unrelated capabilities remain usable; restart attempts remain bounded. |
+| Unsafe recovery or partial completion | Required security and integrity guarantees hold; an unsafe retry is refused at the smallest safe scope without duplicate effects or destructive repair. |
 
 Also include genuine prerequisites versus incidental findings and caused versus
 unrelated validation failures as described above. For a long task, verify that

@@ -17237,6 +17237,30 @@ progress text.
 The prompt profile MUST include editing constraints that favor focused,
 minimal, reversible changes unless the user asks for broader work.
 
+For software design, implementation, and repair, the prompt MUST default to
+recovery-first behavior and the smallest safe failure scope. It MUST prefer
+valid fallback, local recovery, explicit degradation, and component isolation
+over broader shutdown when correctness, safety, and useful operation can be
+preserved. Propagated errors or exhausted subsystem restarts alone MUST NOT
+justify terminating unrelated functionality. Before introducing or retaining
+process-wide termination or broad shutdown for a runtime error, the agent MUST
+identify the required invariant and why narrower recovery, degradation, or
+isolation is insufficient. Recovery mechanisms SHOULD be proportional to the
+software's complexity.
+
+The prompt MUST require bounded, observable recovery with appropriate retry
+limits, backoff, deadlines, cancellation, cleanup, and diagnostics. It MUST
+account for idempotency and uncertain partial completion, and prohibit infinite
+retries, restart storms, silent error suppression, fabricated success, and
+destructive repair. Security, authorization, privacy, and data-integrity
+guarantees MUST remain enforced. An operation that cannot preserve those
+guarantees MUST fail closed at the smallest safe scope; this MUST NOT imply
+unrelated functionality must stop or authorize bypassing runtime permissions,
+approvals, or tool restrictions. Changed failure handling MUST be validated for
+normal operation, plausible recovery, exhausted recovery, unaffected component
+availability, and preservation of required guarantees, including unsafe retries
+after partial completion.
+
 The prompt profile MUST state that permission, approval, and command-rule
 enforcement is runtime-owned and surfaced through explicit action results. It
 MUST NOT ask the model to infer approval mode, request write access from the
