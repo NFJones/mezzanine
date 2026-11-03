@@ -1,7 +1,7 @@
 //! Storage-qualified ACK reservation on the canonical pending delivery owner.
 //!
-//! Preparation freezes the offered cumulative prefix, exact registration and
-//! original offer clock without committing slots or cursor. Payload remains in
+//! Preparation freezes the offered cumulative prefix, exact registration,
+//! native incarnation and original offer clock without committing slots or cursor. Payload remains in
 //! ordinary pending custody; tickets/facts contain only bounded metadata. The
 //! reservation protects its slots from terminal maintenance and ordinary ACK
 //! bypass. Expiry exclusions prevent new clock-rollback offers while unresolved.
@@ -46,6 +46,9 @@ struct Identity {
     cursor: DeliveryCursor,
     /// Exact original registration interval.
     floor: MessageSequence,
+    /// Original native application owner; late completion cannot move another
+    /// incarnation's cursor even when its public registration/floor is unchanged.
+    native_owner: Option<MessageNativeOwner>,
     /// Actual original cursor before this cumulative ACK.
     after: MessageSequence,
     /// Original endpoint selection clock; later offers do not rebase expiry.
@@ -279,10 +282,22 @@ impl MessageService {
         let observed_at_ms = super::offers::offered_at(endpoint, recipient)?.ok_or_else(changed)?;
         let mut entries = Vec::new();
         let budget = metadata_budget.min(MAX_METADATA);
+        let native_owner = self.current_native_owner(recipient);
+        let native_bytes = native_owner.map_or(0, |owner| {
+            128usize.saturating_add(
+                4usize.saturating_mul(
+                    owner
+                        .conversation_id()
+                        .len()
+                        .saturating_add(owner.incarnation().len()),
+                ),
+            )
+        });
         let fixed = std::mem::size_of::<Identity>()
             + 256
             + 2 * std::mem::size_of::<usize>()
-            + recipient.as_str().len();
+            + recipient.as_str().len()
+            + native_bytes;
         if fixed > budget {
             return Err(capacity());
         }
@@ -354,6 +369,7 @@ impl MessageService {
                 last_sequence: sequence,
             },
             floor,
+            native_owner: native_owner.cloned(),
             after: cursor.last_sequence,
             observed_at_ms,
             entries,
@@ -513,6 +529,8 @@ impl MessageService {
             }));
         }
         if self.registration_floors.get(&identity.cursor.recipient) == Some(&identity.floor)
+            && identity.native_owner.as_ref()
+                == self.current_native_owner(&identity.cursor.recipient)
             && let Some(cursor) = self.subscriptions.get_mut(&identity.cursor.recipient)
         {
             cursor.last_sequence = cursor.last_sequence.max(identity.cursor.last_sequence);

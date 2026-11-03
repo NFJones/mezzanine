@@ -444,3 +444,193 @@ async fn actual_native_checkpoint_captures_shell_namespace_without_restore_autho
     assert_eq!(fixture.disk(), disk);
     assert_eq!(service.message_service().storage_usage().unwrap(), before);
 }
+
+/// Actual runtime/native binding and SQLite receipt qualification must agree on
+/// sender ownership. An independent same-conversation resume keeps public fields
+/// unchanged but cannot claim the old stored receipt; exact transactional shell
+/// rollback regains only its own original receipt without another disk write.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn actual_native_sender_rebind_cannot_claim_prior_stored_duplicate() {
+    let fixture = Fixture::new(true);
+    let (root, mut service, raw, native) = native_runtime(&fixture).await;
+    let shell = service.agent_shell_store().get("%1").unwrap().clone();
+    let original = envelope(&native, &raw, "original-native-sender");
+    let ticket = service
+        .message_service_mut()
+        .prepare_acceptance(
+            &native.agent_id,
+            original.clone(),
+            MessageScope::Session,
+            100,
+            4096,
+            None,
+        )
+        .unwrap();
+    root.start(service.message_service_mut(), &ticket, None)
+        .unwrap();
+    assert_eq!(
+        root.observe().await.unwrap(),
+        CustodyWorkerStatus::AwaitingAdoption
+    );
+    let accepted = root.adopt(service.message_service_mut(), None).unwrap();
+    let disk = fixture.disk();
+    assert_eq!(
+        service
+            .message_service_mut()
+            .storage_qualified_duplicate(
+                &native.agent_id,
+                &original,
+                root.storage_scope(),
+                MessageScope::Session,
+                101
+            )
+            .unwrap()
+            .unwrap(),
+        accepted
+    );
+    service
+        .agent_shell_store_mut()
+        .bind_conversation("%1", &shell.session_id, 0)
+        .unwrap();
+    service.refresh_native_message_bindings().unwrap();
+    assert!(
+        service
+            .message_service_mut()
+            .storage_qualified_duplicate(
+                &native.agent_id,
+                &original,
+                root.storage_scope(),
+                MessageScope::Session,
+                102
+            )
+            .is_err()
+    );
+    service
+        .agent_shell_store_mut()
+        .restore_session("%1", shell)
+        .unwrap();
+    service.refresh_native_message_bindings().unwrap();
+    assert_eq!(
+        service
+            .message_service_mut()
+            .storage_qualified_duplicate(
+                &native.agent_id,
+                &original,
+                root.storage_scope(),
+                MessageScope::Session,
+                103
+            )
+            .unwrap()
+            .unwrap(),
+        accepted
+    );
+    assert_eq!(fixture.disk(), disk);
+    assert_eq!(service.message_service().next_message_sequence(), 2);
+}
+
+/// A genuine SQLite ACK for one native incarnation may publish before or after
+/// exact rollback to another incarnation with the SAME conversation label. Its
+/// committed slots remain settled, but cannot hide the restored shell's earlier
+/// unread own mail by advancing its cursor. This tests transport settlement;
+/// canonical native application commit qualification remains a separate owner.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn actual_native_rollback_preserves_unread_custody_across_foreign_ack_progress() {
+    for publish_before_rollback in [false, true] {
+        let fixture = Fixture::new(true);
+        let (root, mut service, sender, target) = native_runtime(&fixture).await;
+        let original = service.agent_shell_store().get("%1").unwrap().clone();
+        let first = service
+            .message_service_mut()
+            .prepare_acceptance(
+                &sender.agent_id,
+                envelope(&sender, &target, "original-shell-unread"),
+                MessageScope::Session,
+                100,
+                4096,
+                None,
+            )
+            .unwrap();
+        root.start(service.message_service_mut(), &first, None)
+            .unwrap();
+        root.observe().await.unwrap();
+        root.adopt(service.message_service_mut(), None).unwrap();
+        service
+            .agent_shell_store_mut()
+            .bind_conversation("%1", &original.session_id, 0)
+            .unwrap();
+        service.refresh_native_message_bindings().unwrap();
+        let other = service.agent_shell_store().get("%1").unwrap().clone();
+        let second = service
+            .message_service_mut()
+            .prepare_acceptance(
+                &sender.agent_id,
+                envelope(&sender, &target, "other-shell-committed"),
+                MessageScope::Session,
+                101,
+                4096,
+                None,
+            )
+            .unwrap();
+        root.start(service.message_service_mut(), &second, None)
+            .unwrap();
+        root.observe().await.unwrap();
+        root.adopt(service.message_service_mut(), None).unwrap();
+        let selected = service
+            .message_service()
+            .receive_subscribed(&target.agent_id, 102, 8)
+            .unwrap();
+        assert_eq!(selected.messages.len(), 1);
+        assert_eq!(selected.messages[0].sequence, 2);
+        drop(selected);
+        let ticket = service
+            .message_service_mut()
+            .prepare_acknowledgement(&target.agent_id, 2, 512 * 1024)
+            .unwrap()
+            .unwrap();
+        root.start_acknowledgement(service.message_service_mut(), &ticket)
+            .unwrap();
+        assert_eq!(
+            root.observe().await.unwrap(),
+            CustodyWorkerStatus::AcknowledgementAwaitingAdoption
+        );
+        let disk = fixture.disk();
+        if publish_before_rollback {
+            root.adopt_acknowledgement(service.message_service_mut())
+                .unwrap();
+        }
+        service
+            .agent_shell_store_mut()
+            .restore_session("%1", original)
+            .unwrap();
+        service.refresh_native_message_bindings().unwrap();
+        if !publish_before_rollback {
+            root.adopt_acknowledgement(service.message_service_mut())
+                .unwrap();
+        }
+        let selected = service
+            .message_service()
+            .receive_subscribed(&target.agent_id, 103, 8)
+            .unwrap();
+        assert_eq!(
+            selected.messages.len(),
+            1,
+            "publish-before={publish_before_rollback}"
+        );
+        assert_eq!(selected.messages[0].sequence, 1);
+        drop(selected);
+        service
+            .agent_shell_store_mut()
+            .restore_session("%1", other)
+            .unwrap();
+        service.refresh_native_message_bindings().unwrap();
+        assert!(
+            service
+                .message_service()
+                .receive_subscribed(&target.agent_id, 104, 8)
+                .unwrap()
+                .messages
+                .is_empty()
+        );
+        assert_eq!(fixture.disk(), disk);
+    }
+}

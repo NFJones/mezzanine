@@ -15933,7 +15933,18 @@ MAY continue accepting pending mail. An ephemeral observation without an already
 qualified same-incarnation parent MUST remain unavailable for new mail. Neither
 a stale cached parent, a transcript seed nor later refresh of an unqualified
 temporary binding may establish that missing parent authority. Current application ownership
-MUST fence live selection and original-sender outcome access across replacements.
+MUST fence live selection, original-sender outcome access and storage-qualified
+duplicate receipt claims across replacements. An independent binding of the same
+conversation MUST NOT claim the prior incarnation's stored acceptance receipt;
+exact rollback MAY regain its own original receipt without reaccepting mail.
+
+Native binding changes MUST keep positive per-occurrence commits independent of
+the current cursor hint. Exact rollback to an original binding MUST rebase a
+cursor that would conceal its earlier unread own custody. An ordinary refresh
+MUST preserve progress, and rebase MUST NOT redeliver already committed slots.
+An ACK reservation MUST freeze its original native owner within its metadata
+budget; late positive completion MAY settle its original slots after replacement
+but MUST advance the current cursor only for that same native owner.
 
 Native metadata MUST be reserved before copying an audience's strings and MUST
 be covered by original source integrity, cache reload and orphan accounting.

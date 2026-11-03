@@ -376,6 +376,15 @@ impl MessageService {
             ));
         }
         let audience = resolve_message_audience(identity, scope)?;
+        if self
+            .accepted_messages
+            .get(&envelope.id)
+            .is_some_and(|accepted| !self.native_sender_is_current(&accepted.source))
+        {
+            return Err(MessageError::forbidden(
+                "MMP receipt native sender binding changed",
+            ));
+        }
         let Some(accepted) = self.accepted_messages.get_mut(&envelope.id) else {
             return Ok(None);
         };

@@ -725,3 +725,149 @@ fn native_audience_metadata_refuses_before_sequence_or_cache_allocation() {
     );
     assert!(service.storage_usage().unwrap().unwrap().metadata_bytes <= 1024 * 1024);
 }
+
+/// Stored idempotency belongs to the original native application incarnation,
+/// just like sender outcome access. An independent binding of the SAME public
+/// conversation cannot claim an earlier accepted receipt merely by resubmitting
+/// byte-identical input under an unchanged MMP registration and sequence floor.
+#[test]
+fn native_sender_rebinding_cannot_claim_original_storage_duplicate_receipt() {
+    let mut s = Scene::new();
+    let sender = s
+        .service
+        .capture_sender_registration(&s.sender.agent_id)
+        .unwrap();
+    let original = MessageNativeIncarnation::default();
+    s.service
+        .bind_native_conversation(&sender, "sender-conversation", &original)
+        .unwrap();
+    let envelope = s.mail("native-original-receipt", 32);
+    let write = s.write("native-original-receipt", 32);
+    let accepted = s.publish(write);
+    assert_eq!(
+        s.service
+            .storage_qualified_duplicate(
+                &s.sender.agent_id,
+                &envelope,
+                &s.scope,
+                MessageScope::Session,
+                11
+            )
+            .unwrap()
+            .unwrap(),
+        accepted
+    );
+    s.service
+        .bind_native_conversation(
+            &sender,
+            "sender-conversation",
+            &MessageNativeIncarnation::default(),
+        )
+        .unwrap();
+    let result = s.service.storage_qualified_duplicate(
+        &s.sender.agent_id,
+        &envelope,
+        &s.scope,
+        MessageScope::Session,
+        12,
+    );
+    assert!(
+        result.is_err(),
+        "an independently rebound native sender cannot inherit its predecessor's accepted receipt: {result:?}"
+    );
+    s.service
+        .bind_native_conversation(&sender, "sender-conversation", &original)
+        .unwrap();
+    assert_eq!(
+        s.service
+            .storage_qualified_duplicate(
+                &s.sender.agent_id,
+                &envelope,
+                &s.scope,
+                MessageScope::Session,
+                13
+            )
+            .unwrap()
+            .unwrap(),
+        accepted
+    );
+}
+
+/// The test port completes the already-prepared transport decision. Actual
+/// canonical application commit remains the caller's prerequisite; this fixture
+/// exercises only how its frozen ACK interacts with later native bindings.
+impl MessageAcknowledgementStore for Store {
+    fn commit(&mut self, _: &MessageAcknowledgementWrite) -> Result<()> {
+        Ok(())
+    }
+}
+
+/// ACK progress from a different native incarnation must never conceal earlier
+/// unread work when the actual original shell is restored. Test both an already
+/// published ACK and its late publication after exact rollback; positive slots
+/// for the other binding stay committed and cannot be delivered again.
+#[test]
+fn native_binding_rollback_preserves_unread_mail_across_foreign_cursor_progress() {
+    for publish_before_rollback in [false, true] {
+        let mut s = Scene::new();
+        let original = s.incarnation.clone();
+        let first = s.write("original-binding-unread", 32);
+        s.publish(first);
+        let other = MessageNativeIncarnation::default();
+        s.service
+            .bind_native_conversation(&s.registration, "original-conversation", &other)
+            .unwrap();
+        let second = s.write("other-binding-committed", 32);
+        s.publish(second);
+        let selected = s
+            .service
+            .receive_subscribed(&s.target.agent_id, 11, 8)
+            .unwrap();
+        assert_eq!(selected.messages.len(), 1);
+        assert_eq!(selected.messages[0].sequence, 2);
+        drop(selected);
+        let ticket = s
+            .service
+            .prepare_acknowledgement(&s.target.agent_id, 2, 512 * 1024)
+            .unwrap()
+            .unwrap();
+        let write = s
+            .service
+            .begin_storage_acknowledgement_write(&ticket, &s.scope)
+            .unwrap();
+        let MessageAcknowledgementWriteOutcome::Committed(commit) = write.persist(&mut s.store)
+        else {
+            panic!("test transport commit must succeed")
+        };
+        if publish_before_rollback {
+            s.service.publish_acknowledgement(&commit).unwrap();
+        }
+        s.service
+            .bind_native_conversation(&s.registration, "original-conversation", &original)
+            .unwrap();
+        if !publish_before_rollback {
+            s.service.publish_acknowledgement(&commit).unwrap();
+        }
+        let own = s
+            .service
+            .receive_subscribed(&s.target.agent_id, 12, 8)
+            .unwrap();
+        assert_eq!(
+            own.messages.len(),
+            1,
+            "foreign cursor progress cannot hide the restored original binding's unread work, publish-before={publish_before_rollback}"
+        );
+        assert_eq!(own.messages[0].sequence, 1);
+        drop(own);
+        s.service
+            .bind_native_conversation(&s.registration, "original-conversation", &other)
+            .unwrap();
+        assert!(
+            s.service
+                .receive_subscribed(&s.target.agent_id, 13, 8)
+                .unwrap()
+                .messages
+                .is_empty()
+        );
+    }
+}

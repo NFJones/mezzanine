@@ -163,6 +163,7 @@ impl MessageService {
                 owner: owner.clone(),
             },
         );
+        self.rebase_native_cursor(registration.agent_id());
         Ok(owner)
     }
 
@@ -259,7 +260,7 @@ impl MessageService {
     }
 
     /// Borrows only a still-current native owner; stale facade state grants none.
-    fn current_native_owner(&self, id: &AgentId) -> Option<&MessageNativeOwner> {
+    pub(super) fn current_native_owner(&self, id: &AgentId) -> Option<&MessageNativeOwner> {
         self.native_bindings
             .get(id)
             .filter(|binding| self.sender_registration_is_current(&binding.registration))
@@ -307,6 +308,31 @@ impl MessageService {
                 .map(|(id, _)| self.current_native_owner(id).cloned())
                 .collect(),
         }))
+    }
+
+    /// Prevents progress from another incarnation concealing earlier unread own
+    /// custody on exact rollback. Positive per-occurrence ACKs remain authoritative;
+    /// an ordinary refresh never rewinds the cursor, and a fresh binding without
+    /// earlier own work retains its useful existing scan hint.
+    fn rebase_native_cursor(&mut self, recipient: &AgentId) {
+        let floor = self.registration_floors.get(recipient).copied();
+        let unread = self
+            .pending
+            .values()
+            .find(|row| {
+                row.recipient_bindings
+                    .iter()
+                    .any(|(id, registered)| id == recipient && Some(*registered) == floor)
+                    && self.native_recipient_is_current(row, recipient)
+                    && !self.recipient_has_committed(row, recipient)
+                    && !self.recipient_is_terminal(row, recipient)
+            })
+            .map(|row| row.sequence);
+        if let Some(sequence) = unread
+            && let Some(cursor) = self.subscriptions.get_mut(recipient)
+        {
+            cursor.last_sequence = cursor.last_sequence.min(sequence.saturating_sub(1));
+        }
     }
 
     /// Requires the same live native application incarnation for a frozen slot.
