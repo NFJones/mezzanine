@@ -68,6 +68,35 @@ pub(in crate::messaging) struct RetainedEnvelope {
 }
 
 impl RetainedEnvelope {
+    /// Moves a completely verified original into cold metadata. The one decoded
+    /// body is dropped here; no empty envelope or second body allocation is made.
+    /// Only the trusted recovery port may supply this original scope and digest.
+    pub(super) fn cold(envelope: Envelope, scope: &MessageStorageScope, digest: [u8; 32]) -> Self {
+        let metadata = EnvelopeMetadata {
+            protocol: envelope.protocol,
+            id: envelope.id,
+            message_type: envelope.message_type,
+            time: envelope.time,
+            sender: envelope.sender,
+            recipient: envelope.recipient,
+            correlation_id: envelope.correlation_id,
+            ttl_ms: envelope.ttl_ms,
+            content_type: envelope.content_type,
+            extension_fields: envelope.extension_fields,
+            payload_bytes: envelope.payload.len(),
+        };
+        Self {
+            metadata,
+            backing: OnceLock::from((scope.clone(), digest)),
+            residency: Mutex::new(PayloadResidency {
+                cached: None,
+                allocation: Weak::new(),
+                loading: None,
+                loaded: Weak::new(),
+            }),
+        }
+    }
+
     /// Records immutable metadata without making a second payload allocation.
     pub(in crate::messaging) fn new(envelope: Arc<Envelope>) -> Self {
         Self {

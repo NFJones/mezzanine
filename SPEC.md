@@ -16014,6 +16014,35 @@ Until terminal journals exist, snapshot terminal bits alone MUST refuse recovery
 qualification rather than authorize discarded custody. Actual root/session
 installation and canonical commit qualification remain required.
 
+The trusted cold reconstruction port MUST rebuild the existing canonical message
+owner from this same original-store snapshot, including later accepted originals
+and explicit source-bound positive slots. Source bodies MUST be decoded under a
+single reserved payload quantum and moved into cold metadata without copying or
+substituting empty envelopes. Pending custody, immutable native attribution,
+acceptance clocks, TTLs, receipt identity, and the persistent allocator floor
+MUST survive. Decoder reservations and retained input/history/index metadata
+MUST remain charged until the actual operation finishes or fails. A refused row
+MUST poison the whole candidate even if its caller mishandles the immediate
+error; partial recovery MUST NOT become a live service.
+Genuine offer clocks MAY predate acceptance after endpoint clock rollback.
+Recovery MUST preserve such original clocks, including an explicitly offered
+zero distinct from an absent offer, and MUST NOT impose an acceptance-time lower
+bound. The original TTL upper boundary and exact durable ACK provenance remain
+required.
+
+Recovered transport custody MUST NOT revive raw connections, reconnect bearers,
+native registrations or native shell epochs. Explicit original ACK slots remain
+independent of current cursors; uncommitted transient offers MUST remain unknown
+until genuine selection. The current fenced storage-only reconstruction does
+not install a recovered root/session or qualify canonical native input; those
+remain required before publication and normal durable product activation.
+
+Every recovery source decode, including initial inventory and ACK validation
+before row reconstruction, MUST use the destination's actually reserved payload
+quantum. A narrowed cache MUST refuse a larger original before decoding its
+oversized body; using the default payload ceiling during an earlier scan and
+only refusing during later row construction violates the same reservation.
+
 Immutable envelope auxiliary metadata MUST additionally fit a 16 MiB logical
 budget over the deduplicated replay/custody union after normal replay eviction.
 Charge 1,024 bytes per occurrence plus 64 bytes and four times UTF-8 length for

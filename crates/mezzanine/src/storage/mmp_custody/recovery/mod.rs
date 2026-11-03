@@ -15,9 +15,11 @@ use mez_agent::messaging::{MessageAcceptanceDecodeLimits, MessageServiceSnapshot
 
 use super::{history::CustodyHistory, inventory::charge, ownership::OwnedCustodyStore, *};
 
+mod reconstruction;
+
 /// Metadata reserved for one bounded source decode, ACK decisions and reader.
 /// Payload scratch has its own one-allocation, at-most-1-MiB ceiling below.
-const SCRATCH_METADATA: usize = 2 * 1024 * 1024;
+const SCRATCH_METADATA: usize = mez_agent::messaging::MESSAGE_STORAGE_RECOVERY_SCRATCH_METADATA;
 
 /// Verified, unpublished observations tied to the retained original checkpoint.
 /// Deliberately has no serialization or conversion into a live message service.
@@ -60,10 +62,30 @@ impl MmpCustodyStore {
         checkpoint: Arc<MessageServiceSnapshot>,
         limits: MessageAcceptanceDecodeLimits,
     ) -> Result<CustodyRecoveryEvidence> {
+        let transaction = self
+            .connection
+            .unchecked_transaction()
+            .map_err(database_error)?;
+        let evidence = self.qualify_recovery_in_snapshot(checkpoint, limits, &transaction, 0)?;
+        self.finish_transaction(transaction)?;
+        Ok(evidence)
+    }
+
+    /// Keeps qualification and cold reconstruction under the same SQL snapshot.
+    /// Additional retained candidate state and narrowed-policy headroom are
+    /// charged before structural indexes or any source decoder allocates.
+    fn qualify_recovery_in_snapshot(
+        &self,
+        checkpoint: Arc<MessageServiceSnapshot>,
+        limits: MessageAcceptanceDecodeLimits,
+        transaction: &rusqlite::Transaction<'_>,
+        metadata_base: usize,
+    ) -> Result<CustodyRecoveryEvidence> {
         let mut count = ByteCount(0);
         serde_json::to_writer(&mut count, checkpoint.as_ref())
             .map_err(|_| invalid("checkpoint metadata size"))?;
         let mut metadata = SCRATCH_METADATA;
+        charge(&mut metadata, metadata_base)?;
         charge(
             &mut metadata,
             count
@@ -100,11 +122,7 @@ impl MmpCustodyStore {
         {
             return Err(invalid("original allocation changed"));
         }
-        let transaction = self
-            .connection
-            .unchecked_transaction()
-            .map_err(database_error)?;
-        let history = self.fold_custody_history_in_snapshot(&transaction, limits, metadata)?;
+        let history = self.fold_custody_history_in_snapshot(transaction, limits, metadata)?;
         if !history.inventory.watermark_origin_trusted
             || history.inventory.sequence_watermark < binding.sequence_watermark
             || history.inventory.generation < binding.generation
@@ -113,7 +131,7 @@ impl MmpCustodyStore {
         }
         for row in &data.sources {
             let (source, digest, _) =
-                self.read_accepted_source_in_snapshot(&transaction, row.sequence, limits)?;
+                self.read_accepted_source_in_snapshot(transaction, row.sequence, limits)?;
             if digest != row.source_sha256
                 || source.envelope().id != row.delivery.message_id
                 || source.envelope().payload.len() != row.payload_bytes
@@ -155,7 +173,6 @@ impl MmpCustodyStore {
             .checked_add(1)
             .ok_or_else(|| invalid("original allocator exhausted"))?
             .max(checkpoint.next_sequence);
-        self.finish_transaction(transaction)?;
         Ok(CustodyRecoveryEvidence {
             checkpoint,
             history,

@@ -124,6 +124,9 @@ pub(crate) struct MmpCustodyStore {
     /// Whether the watermark began with this empty v2 allocation. A migrated
     /// v1 store remains unqualified until a separate trusted restore protocol.
     watermark_origin_trusted: bool,
+    /// Test-only observations of actual source decoder limits and payloads.
+    #[cfg(test)]
+    source_decode_probe: acceptance::SourceDecodeProbe,
 }
 
 /// Local filesystem object identity, used only alongside the live owner lock.
@@ -351,6 +354,8 @@ impl MmpCustodyStore {
             database_identity,
             committed_watermark: Cell::new(watermark),
             watermark_origin_trusted,
+            #[cfg(test)]
+            source_decode_probe: Default::default(),
         };
         validate_directory_path(root, &store.directory)?;
         validate_private_path(&path, false)?;

@@ -115,6 +115,17 @@ impl Scene {
         store: &mut MmpCustodyStore,
         fence: &RootOwnership,
     ) -> MessageAcknowledgementCommit {
+        self.commit_first_ack_at(store, fence, 20)
+    }
+
+    /// Uses the actual selected endpoint clock, including legitimate rollback
+    /// before the original acceptance clock and an explicitly offered zero.
+    fn commit_first_ack_at(
+        &mut self,
+        store: &mut MmpCustodyStore,
+        fence: &RootOwnership,
+        offered_at_ms: u64,
+    ) -> MessageAcknowledgementCommit {
         // Hydrate through the actual original port before selecting a real offer.
         let load = self
             .service
@@ -124,7 +135,7 @@ impl Scene {
         let mut loaded = load.load(&mut fence.bind_store(store).unwrap());
         self.service.publish_payload_load(&mut loaded).unwrap();
         self.service
-            .receive_subscribed(&self.target.agent_id, 20, 1)
+            .receive_subscribed(&self.target.agent_id, offered_at_ms, 1)
             .unwrap();
         let ticket = self
             .service
@@ -541,4 +552,275 @@ fn snapshot_terminal_bits_without_a_durable_journal_are_refused() {
             .to_string()
             .contains("terminal outcome needs durable recovery evidence")
     );
+}
+
+/// Cold reconstruction must consume the complete qualified history after a real
+/// close/reopen, including an ACK whose positive result was never published and
+/// an original accepted after capture. No raw or native endpoint is revived.
+#[test]
+fn reopened_store_reconstructs_cold_pending_and_lost_ack_without_endpoint_authority() {
+    let fixture = Fixture::new();
+    let fence = RootOwnership::acquire(&fixture.0).unwrap();
+    let mut store = MmpCustodyStore::open(&fixture.0, "original-session").unwrap();
+    let mut scene = Scene::new();
+    scene.accept(&mut store, "first");
+    let checkpoint = scene.capture(&mut store, &fence);
+    scene.accept(&mut store, "later");
+    let _lost_commit = scene.commit_first_ack(&mut store, &fence);
+    let original_scope = scene.scope.clone();
+    let original_target = scene.target.agent_id.clone();
+    let original_sender = scene.sender.agent_id.clone();
+    drop(scene);
+    drop(store);
+    drop(fence);
+    let fence = RootOwnership::acquire(&fixture.0).unwrap();
+    let mut store = MmpCustodyStore::open(&fixture.0, "original-session").unwrap();
+    let scope = MessageStorageScope::default();
+    let mut service = fence
+        .bind_store(&mut store)
+        .unwrap()
+        .reconstruct_cold_service(checkpoint, &scope, Default::default(), 1000, 1024 * 1024)
+        .unwrap();
+    let usage = service.storage_usage().unwrap().unwrap();
+    assert_eq!(usage.pending_messages, 1);
+    assert_eq!(usage.pending_payload_bytes, 80_000);
+    assert_eq!(
+        usage.cache,
+        mez_agent::messaging::MessagePayloadUsage::default()
+    );
+    assert!(service.discover_agents().is_empty());
+    assert!(
+        service
+            .receive_subscribed(&original_target, 30, 10)
+            .is_err()
+    );
+    assert!(service.begin_payload_load(2, &original_scope).is_err());
+    let capture = service.prepare_storage_snapshot(&scope).unwrap();
+    let verified = capture
+        .write()
+        .verify(&mut fence.bind_store(&mut store).unwrap())
+        .unwrap();
+    let (captured, _lease) = capture.finish(verified).unwrap();
+    let rows = &captured.storage_snapshot.as_ref().unwrap().sources;
+    assert_eq!(captured.next_sequence, 3);
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0].acknowledged, vec![true]);
+    assert_eq!(rows[0].offered_at_ms, vec![Some(20)]);
+    assert!(!rows[0].pending);
+    assert_eq!(rows[1].delivery.message_id, "later");
+    assert_eq!(rows[1].offered_at_ms, vec![None]);
+    assert!(rows[1].pending);
+    let write = service.begin_payload_load(2, &scope).unwrap().unwrap();
+    let mut loaded = write.load(&mut fence.bind_store(&mut store).unwrap());
+    assert!(loaded.error().is_none());
+    assert!(service.publish_payload_load(&mut loaded).unwrap());
+    assert_eq!(
+        service
+            .storage_usage()
+            .unwrap()
+            .unwrap()
+            .cache
+            .live_payload_bytes,
+        80_000
+    );
+    service.release_stored_payload(2, &scope).unwrap();
+    let sender = service.register_agent(None, None, "fresh sender", vec![]);
+    let target = service.register_agent(None, None, "fresh recipient", vec![]);
+    assert_ne!(sender.agent_id, original_sender);
+    assert_ne!(target.agent_id, original_target);
+    service.subscribe(&target.agent_id).unwrap();
+    assert!(
+        service
+            .receive_subscribed(&target.agent_id, 30, 10)
+            .unwrap()
+            .messages
+            .is_empty()
+    );
+    let envelope = Envelope {
+        protocol: "mmp/1",
+        id: "fresh".into(),
+        message_type: "send".into(),
+        time: "fresh".into(),
+        sender: sender.clone(),
+        recipient: Recipient::Agent(target.agent_id.clone()),
+        correlation_id: None,
+        ttl_ms: None,
+        content_type: "text/plain".into(),
+        payload: "fresh".into(),
+        extension_fields: vec![],
+    };
+    let ticket = service
+        .prepare_acceptance(
+            &sender.agent_id,
+            envelope,
+            MessageScope::Session,
+            30,
+            4096,
+            None,
+        )
+        .unwrap();
+    assert_eq!(ticket.sequence(), 3);
+    service.cancel_acceptance(&ticket).unwrap();
+}
+
+/// A verified disk original still cannot enlarge a narrowed destination's
+/// custody policy. The whole reconstruction is withheld and the store remains
+/// unchanged, so retry under a sufficient policy recovers both originals.
+#[test]
+fn cold_reconstruction_capacity_refusal_preserves_original_store_for_retry() {
+    let fixture = Fixture::new();
+    let fence = RootOwnership::acquire(&fixture.0).unwrap();
+    let mut store = MmpCustodyStore::open(&fixture.0, "original-session").unwrap();
+    let mut scene = Scene::new();
+    scene.accept(&mut store, "first");
+    let checkpoint = scene.capture(&mut store, &fence);
+    scene.accept(&mut store, "later");
+    drop(scene);
+    let before = store.acceptance_plan(0).unwrap();
+    let scope = MessageStorageScope::default();
+    let limits = mez_agent::messaging::MessageStorageLimits {
+        messages: 1,
+        ..Default::default()
+    };
+    assert!(
+        fence
+            .bind_store(&mut store)
+            .unwrap()
+            .reconstruct_cold_service(checkpoint.clone(), &scope, limits, 1000, 1024 * 1024)
+            .is_err()
+    );
+    assert!(before.same_position(&store.acceptance_plan(0).unwrap()));
+    let recovered = fence
+        .bind_store(&mut store)
+        .unwrap()
+        .reconstruct_cold_service(checkpoint, &scope, Default::default(), 1000, 1024 * 1024)
+        .unwrap();
+    assert_eq!(
+        recovered.storage_usage().unwrap().unwrap().pending_messages,
+        2
+    );
+    assert!(before.same_position(&store.acceptance_plan(0).unwrap()));
+}
+
+/// A narrow metadata policy must constrain the storage inventory's first
+/// allocation, not just reject an already over-budget lower service afterward.
+#[test]
+fn cold_reconstruction_metadata_preflight_honors_narrowed_destination() {
+    let fixture = Fixture::new();
+    let fence = RootOwnership::acquire(&fixture.0).unwrap();
+    let mut store = MmpCustodyStore::open(&fixture.0, "original-session").unwrap();
+    let mut scene = Scene::new();
+    scene.accept(&mut store, "first");
+    let checkpoint = scene.capture(&mut store, &fence);
+    drop(scene);
+    let limits = mez_agent::messaging::MessageStorageLimits {
+        metadata_bytes: 3 * 1024 * 1024,
+        ..Default::default()
+    };
+    let service = fence
+        .bind_store(&mut store)
+        .unwrap()
+        .reconstruct_cold_service(
+            checkpoint,
+            &MessageStorageScope::default(),
+            limits,
+            1000,
+            1024 * 1024,
+        )
+        .unwrap();
+    assert!(service.storage_usage().unwrap().unwrap().metadata_bytes <= limits.metadata_bytes);
+}
+
+/// A genuine offer may predate acceptance on a rolled-back endpoint clock.
+/// Persist real ACKs at times9 and0 for an original accepted at10, actually drop
+/// and reacquire its kernel/store owner, and reconstruct without inventing a new
+/// offer time or rejecting legitimate original durable evidence.
+#[test]
+fn cold_reconstruction_preserves_genuine_ack_offer_clocks_across_rollback() {
+    for offered_at_ms in [9, 0] {
+        let fixture = Fixture::new();
+        let fence = RootOwnership::acquire(&fixture.0).unwrap();
+        let mut store = MmpCustodyStore::open(&fixture.0, "original-session").unwrap();
+        let mut scene = Scene::new();
+        scene.accept(&mut store, "first");
+        let checkpoint = scene.capture(&mut store, &fence);
+        let _lost_commit = scene.commit_first_ack_at(&mut store, &fence, offered_at_ms);
+        drop(scene);
+        drop(store);
+        drop(fence);
+        let fence = RootOwnership::acquire(&fixture.0).unwrap();
+        let mut store = MmpCustodyStore::open(&fixture.0, "original-session").unwrap();
+        let scope = MessageStorageScope::default();
+        let service = fence
+            .bind_store(&mut store)
+            .unwrap()
+            .reconstruct_cold_service(checkpoint, &scope, Default::default(), 1000, 1024 * 1024)
+            .unwrap();
+        assert_eq!(
+            service.storage_usage().unwrap().unwrap().pending_messages,
+            0
+        );
+        let request = service.prepare_storage_snapshot(&scope).unwrap();
+        let verified = request
+            .write()
+            .verify(&mut fence.bind_store(&mut store).unwrap())
+            .unwrap();
+        let (snapshot, _lease) = request.finish(verified).unwrap();
+        let row = &snapshot.storage_snapshot.as_ref().unwrap().sources[0];
+        assert_eq!(row.accepted_at_ms, 10);
+        assert_eq!(row.offered_at_ms, vec![Some(offered_at_ms)]);
+        assert_eq!(row.acknowledged, vec![true]);
+    }
+}
+
+/// Every original inventory/ACK-source decode must use the destination's actual
+/// reserved payload quantum. Observe actual decoder inputs and completed bodies:
+/// a narrow-cache refusal cannot first allocate an oversized original, and retry
+/// under a sufficient policy must still recover the unchanged original store.
+#[test]
+fn cold_reconstruction_narrow_cache_refuses_before_oversized_inventory_decode() {
+    let fixture = Fixture::new();
+    let fence = RootOwnership::acquire(&fixture.0).unwrap();
+    let mut store = MmpCustodyStore::open(&fixture.0, "original-session").unwrap();
+    let mut scene = Scene::new();
+    scene.accept(&mut store, "first");
+    let checkpoint = scene.capture(&mut store, &fence);
+    let _committed = scene.commit_first_ack(&mut store, &fence);
+    drop(scene);
+    store.source_decode_probe.maximum_limit.set(0);
+    store.source_decode_probe.maximum_payload.set(0);
+    let before = store.acceptance_plan(0).unwrap();
+    let scope = MessageStorageScope::default();
+    let limits = mez_agent::messaging::MessageStorageLimits {
+        cache_payload_bytes: 32 * 1024,
+        ..Default::default()
+    };
+    assert!(
+        fence
+            .bind_store(&mut store)
+            .unwrap()
+            .reconstruct_cold_service(checkpoint.clone(), &scope, limits, 1000, 1024 * 1024,)
+            .is_err()
+    );
+    assert_eq!(
+        store.source_decode_probe.maximum_payload.get(),
+        0,
+        "an oversized original must not complete decoding before refusal"
+    );
+    assert_eq!(
+        store.source_decode_probe.maximum_limit.get(),
+        limits.cache_payload_bytes
+    );
+    assert!(before.same_position(&store.acceptance_plan(0).unwrap()));
+    let service = fence
+        .bind_store(&mut store)
+        .unwrap()
+        .reconstruct_cold_service(checkpoint, &scope, Default::default(), 1000, 1024 * 1024)
+        .unwrap();
+    assert_eq!(store.source_decode_probe.maximum_payload.get(), 80_000);
+    assert_eq!(
+        service.storage_usage().unwrap().unwrap().cache,
+        mez_agent::messaging::MessagePayloadUsage::default()
+    );
+    assert!(before.same_position(&store.acceptance_plan(0).unwrap()));
 }

@@ -89,7 +89,12 @@ pub use checkpoint::{
     MessageStorageSnapshotLease, MessageStorageSnapshotRequest, MessageStorageSnapshotStore,
     MessageStorageSnapshotVerified, MessageStorageSnapshotWrite, MessageStorageSourceSnapshot,
 };
+mod recovery;
 mod snapshot;
+pub use recovery::{
+    MESSAGE_STORAGE_RECOVERY_SCRATCH_METADATA, MessageStorageRecoveredRecord,
+    MessageStorageRecovery, MessageStorageRecoveryStore,
+};
 mod snapshot_codec;
 mod snapshot_validation;
 use recipient_binding::validate_recipient_bindings;

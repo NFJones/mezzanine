@@ -389,6 +389,21 @@ and decoder scratch share the metadata budget; bodies are decoded one at a time.
 Snapshot terminal bits without durable journals refuse qualification. This reader
 does not yet install a recovered root/session or restore native authority.
 
+The trusted storage-only reconstruction path now moves those originals into the
+canonical message owner as cold metadata, preserving pending obligations,
+source-bound ACK slots, native attribution, receipts, TTLs and allocator floor.
+One reserved payload quantum covers inventory and source decoding; no body is
+retained until an explicit original-root hydration. Input/history and incremental
+recipient counters share the metadata budget, and any refused row withholds the
+whole candidate. Endpoint registrations remain unavailable: actual root-worker
+and session/native continuity installation are still required before publication.
+Genuine ACK offer clocks survive endpoint clock rollback, including an offered
+zero before acceptance; recovery retains the original TTL upper boundary without
+inventing an acceptance-time minimum offer clock.
+Narrowed cache limits apply to initial inventory and ACK-source decoding as well
+as row reconstruction. Oversized originals are refused before their bodies are
+decoded, preserving the original store for a retry with sufficient capacity.
+
 The opt-in requires an actually empty original store. It is not enabled by
 normal product construction: trusted cold recovery, native restart deduplication
 and all ingress remain separate integration gates. Existing stores and saved

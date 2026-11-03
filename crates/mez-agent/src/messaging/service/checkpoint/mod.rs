@@ -556,7 +556,7 @@ impl Drop for MessageStorageSnapshotLease {
 
 /// Atomically reserves capture/encoding headroom before cloning any source facts.
 /// Concurrent captures share this one finite budget, independent of root clones.
-fn reserve_checkpoint(
+pub(super) fn reserve_checkpoint(
     budget: Arc<std::sync::atomic::AtomicUsize>,
     bytes: usize,
     base: usize,

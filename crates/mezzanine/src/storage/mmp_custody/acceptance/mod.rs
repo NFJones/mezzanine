@@ -19,6 +19,17 @@ use serde::{Deserialize, Serialize};
 
 use super::*;
 
+/// Observes actual completed source allocations and the limits supplied before
+/// decoding. This test-only seam owns no bytes and changes no storage behavior.
+#[cfg(test)]
+#[derive(Default)]
+pub(super) struct SourceDecodeProbe {
+    /// Largest payload limit passed to the real decoder before reading bytes.
+    pub(super) maximum_limit: std::cell::Cell<usize>,
+    /// Largest completed decoded body, even if later whole-recovery checks fail.
+    pub(super) maximum_payload: std::cell::Cell<usize>,
+}
+
 mod recovery;
 mod restart;
 
@@ -274,10 +285,24 @@ impl MmpCustodyStore {
         sequence: u64,
         limits: MessageAcceptanceDecodeLimits,
     ) -> Result<(MessageAcceptanceSource, [u8; 32], usize)> {
+        #[cfg(test)]
+        self.source_decode_probe.maximum_limit.set(
+            self.source_decode_probe
+                .maximum_limit
+                .get()
+                .max(limits.payload_bytes),
+        );
         self.verified_accepted_in_snapshot(transaction, sequence, |reader| {
             let source = decode_message_acceptance(reader, limits).map_err(|error| {
                 MezError::invalid_state(format!("MMP acceptance decode failed: {error}"))
             })?;
+            #[cfg(test)]
+            self.source_decode_probe.maximum_payload.set(
+                self.source_decode_probe
+                    .maximum_payload
+                    .get()
+                    .max(source.envelope().payload.len()),
+            );
             if source.sequence() != sequence {
                 return Err(MezError::invalid_state(
                     "MMP acceptance record sequence disagrees with its committed marker",

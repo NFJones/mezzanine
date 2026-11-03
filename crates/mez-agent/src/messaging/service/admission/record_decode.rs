@@ -43,25 +43,43 @@ impl MessageAcceptanceSource {
     /// Moves validated decoded payload bytes into an envelope without cloning them.
     /// This grants no registration, acceptance, delivery or storage authority.
     pub(in crate::messaging) fn into_envelope(self) -> Result<Envelope> {
-        let snapshot = self.envelope;
-        let sender = sender_identity_from_snapshot(&snapshot.sender, 9)?;
-        let recipient = recipient_from_snapshot(&snapshot.recipient)?;
-        Ok(Envelope {
-            protocol: MMP_PROTOCOL,
-            id: snapshot.id,
-            message_type: snapshot.message_type,
-            time: snapshot.time,
-            sender,
-            recipient,
-            correlation_id: snapshot.correlation_id,
-            ttl_ms: snapshot.ttl_ms,
-            content_type: snapshot.content_type,
-            payload: snapshot.payload,
-            extension_fields: snapshot
-                .extension_fields
-                .into_iter()
-                .map(|field| (field.key, field.value_json))
-                .collect(),
+        owned_envelope(self.envelope)
+    }
+
+    /// Moves a fully verified original into the same canonical cold occurrence
+    /// used by normal custody. No registration or transient offer is revived.
+    pub(in crate::messaging) fn into_cold_occurrence(
+        self,
+        scope: &MessageStorageScope,
+        digest: [u8; 32],
+        offered_at_ms: Vec<Option<u64>>,
+        acknowledged: Vec<bool>,
+        expiry_observed_at_ms: Option<u64>,
+    ) -> Result<QueuedEnvelope> {
+        let count = self.recipient_bindings.len();
+        let audience = audience_from_snapshot(Some(&self.audience))?;
+        let recipient_bindings = self
+            .recipient_bindings
+            .into_iter()
+            .map(|binding| {
+                Ok((
+                    parse_opaque_id(&binding.recipient, "MMP recovered recipient")?,
+                    binding.registered_after_sequence,
+                ))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(QueuedEnvelope {
+            sequence: self.sequence,
+            envelope: RetainedEnvelope::cold(owned_envelope(self.envelope)?, scope, digest),
+            audience,
+            recipient_bindings,
+            native_bindings: self.native_bindings,
+            accepted_at_ms: self.accepted_at_ms,
+            sender_registered_after_sequence: Some(self.sender_registered_after_sequence),
+            offered_at_ms: std::sync::Mutex::new(offered_at_ms),
+            acknowledged: std::sync::Mutex::new(acknowledged),
+            terminal: std::sync::Mutex::new(vec![None; count]),
+            ack_expiry_observed_at_ms: std::sync::Mutex::new(expiry_observed_at_ms),
         })
     }
 
@@ -114,6 +132,29 @@ impl MessageAcceptanceSource {
     pub fn recipient_bindings(&self) -> &[MessageRecipientBindingSnapshot] {
         &self.recipient_bindings
     }
+}
+
+/// Moves owned validated source fields, preserving the original body allocation.
+fn owned_envelope(snapshot: MessageEnvelopeSnapshot) -> Result<Envelope> {
+    let sender = sender_identity_from_snapshot(&snapshot.sender, 9)?;
+    let recipient = recipient_from_snapshot(&snapshot.recipient)?;
+    Ok(Envelope {
+        protocol: MMP_PROTOCOL,
+        id: snapshot.id,
+        message_type: snapshot.message_type,
+        time: snapshot.time,
+        sender,
+        recipient,
+        correlation_id: snapshot.correlation_id,
+        ttl_ms: snapshot.ttl_ms,
+        content_type: snapshot.content_type,
+        payload: snapshot.payload,
+        extension_fields: snapshot
+            .extension_fields
+            .into_iter()
+            .map(|field| (field.key, field.value_json))
+            .collect(),
+    })
 }
 
 /// Charges immutable metadata with the same policy used by admission.
