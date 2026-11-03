@@ -20,6 +20,8 @@ const MAX_METADATA: usize = 512 * 1024;
 const MAX_RECORD: usize = 240 * 1024;
 /// Existing aggregate accepted-binding ceiling also bounds a cumulative prefix.
 const MAX_ENTRIES: usize = 4096;
+/// Version2 per-entry framing, including the exact original offer clock.
+const RECORD_ENTRY_BYTES: usize = 53;
 
 /// One exact pending occurrence decision, not application-commit authority.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -30,6 +32,9 @@ pub struct MessageAcknowledgementEntry {
     pub binding_index: u32,
     /// True means offered recipient commit; false preserves an expiry exclusion.
     pub acknowledged: bool,
+    /// Exact original selection clock for a positive decision; expiry
+    /// exclusions have no offer and must not invent one.
+    pub offered_at_ms: Option<u64>,
 }
 
 /// Payload-free original shared by tickets, writes and positive completion.
@@ -173,15 +178,15 @@ impl MessageAcknowledgementWrite {
     pub fn entries(&self) -> impl Iterator<Item = MessageAcknowledgementEntry> + '_ {
         self.identity.entries.iter().copied()
     }
-    /// Returns exact version1 encoded size within the reserved worker budget.
+    /// Returns exact version2 encoded size within the reserved worker budget.
     pub fn encoded_bytes(&self) -> usize {
-        48 + self.recipient().as_str().len() + 45 * self.identity.entries.len()
+        48 + self.recipient().as_str().len() + RECORD_ENTRY_BYTES * self.identity.entries.len()
     }
-    /// Streams fixed version1 framing with source fingerprints on the owned
+    /// Streams fixed version2 framing with source fingerprints on the owned
     /// blocking worker; hashing must not run on the actor. No full-copy
     /// allocation. Serialization carries no live capability or native authority.
     pub fn write_record(&self, writer: &mut impl Write) -> io::Result<()> {
-        writer.write_all(b"MMPACK01")?;
+        writer.write_all(b"MMPACK02")?;
         for value in [
             self.identity.after,
             self.identity.cursor.last_sequence,
@@ -197,6 +202,7 @@ impl MessageAcknowledgementWrite {
             writer.write_all(&entry.sequence.to_le_bytes())?;
             writer.write_all(&entry.binding_index.to_le_bytes())?;
             writer.write_all(&[u8::from(entry.acknowledged)])?;
+            writer.write_all(&entry.offered_at_ms.unwrap_or_default().to_le_bytes())?;
             writer.write_all(
                 &super::admission::acknowledgement_source_digest(source)
                     .map_err(io::Error::other)?,
@@ -294,8 +300,8 @@ impl MessageService {
                 continue;
             }
             drop(acknowledged);
-            let offered = super::offers::offered_at(row, recipient)?.is_some();
-            if !offered && !expired(row, observed_at_ms) {
+            let offered_at_ms = super::offers::offered_at(row, recipient)?;
+            if offered_at_ms.is_none() && !expired(row, observed_at_ms) {
                 return Err(changed());
             }
             if entries.len() == MAX_ENTRIES {
@@ -304,9 +310,10 @@ impl MessageService {
             entries.push(MessageAcknowledgementEntry {
                 sequence: row.sequence,
                 binding_index: u32::try_from(index).map_err(|_| capacity())?,
-                acknowledged: offered,
+                acknowledged: offered_at_ms.is_some(),
+                offered_at_ms,
             });
-            let encoded = 48 + recipient.as_str().len() + 45 * entries.len();
+            let encoded = 48 + recipient.as_str().len() + RECORD_ENTRY_BYTES * entries.len();
             if encoded > MAX_RECORD
                 || fixed
                     + encoded
@@ -317,7 +324,7 @@ impl MessageService {
                 return Err(capacity());
             }
         }
-        let encoded = 48 + recipient.as_str().len() + 45 * entries.len();
+        let encoded = 48 + recipient.as_str().len() + RECORD_ENTRY_BYTES * entries.len();
         let metadata_bytes = fixed
             + encoded
             + entries.capacity() * std::mem::size_of::<MessageAcknowledgementEntry>()

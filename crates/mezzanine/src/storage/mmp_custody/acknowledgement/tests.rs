@@ -373,8 +373,10 @@ fn stored_acknowledgement_preserves_expiry_exclusion_and_later_ack() {
     assert_eq!(decoded.decisions.len(), 2);
     assert_eq!(decoded.decisions[0].sequence, 1);
     assert!(!decoded.decisions[0].acknowledged);
+    assert_eq!(decoded.decisions[0].offered_at_ms, None);
     assert_eq!(decoded.decisions[1].sequence, 2);
     assert!(decoded.decisions[1].acknowledged);
+    assert_eq!(decoded.decisions[1].offered_at_ms, Some(20));
     let history = store.fold_custody_history(decode_limits()).unwrap();
     assert_eq!(history.inventory.occurrences.len(), 2);
     assert_eq!(history.observed_next_sequence, Some(3));
@@ -382,7 +384,8 @@ fn stored_acknowledgement_preserves_expiry_exclusion_and_later_ack() {
         history.acknowledgements,
         vec![super::super::history::FoldedAcknowledgement {
             sequence: 2,
-            binding_index: 0
+            binding_index: 0,
+            offered_at_ms: 20,
         }]
     );
     assert_eq!(
@@ -414,6 +417,296 @@ fn stored_acknowledgement_preserves_expiry_exclusion_and_later_ack() {
         .unwrap();
     assert!(error.to_string().contains("expiry exclusion"), "{error}");
     assert!(store.fold_custody_history(decode_limits()).is_err());
+    bytes[32..40].copy_from_slice(&20u64.to_le_bytes());
+    let start = 48 + recipient.agent_id.as_str().len();
+    bytes[start + 13..start + 21].copy_from_slice(&1u64.to_le_bytes());
+    let forged_key = ack_key(&bytes);
+    let generation = store.acknowledgement_plan().unwrap().generation;
+    store
+        .commit(
+            generation,
+            &[CustodyWrite {
+                key: &forged_key,
+                previous: None,
+                value: Some(&bytes),
+            }],
+        )
+        .unwrap();
+    let error = store
+        .read_stored_acknowledgement(&forged_key, decode_limits())
+        .err()
+        .unwrap();
+    assert!(
+        error
+            .to_string()
+            .contains("expiry decision has an offer clock"),
+        "{error}"
+    );
+}
+
+/// A cumulative committed ACK can include an earlier valid offer that expired
+/// before a later endpoint was selected. Reopening must retain the individual
+/// clocks, and a checksum-valid invented post-expiry clock must be rejected.
+#[test]
+fn stored_acknowledgement_retains_distinct_original_offer_clocks() {
+    let fixture = Fixture::new();
+    let mut store = MmpCustodyStore::open(&fixture.0, "session").unwrap();
+    let mut service = MessageService::default();
+    let sender = service.register_agent(None, None, "sender", vec![]);
+    let recipient = service.register_agent(None, None, "target", vec![]);
+    service.subscribe(&recipient.agent_id).unwrap();
+    for (id, ttl_ms) in [("first", Some(10)), ("second", None)] {
+        let envelope = Envelope {
+            protocol: "mmp/1",
+            id: id.into(),
+            message_type: "send".into(),
+            time: "fixture".into(),
+            sender: sender.clone(),
+            recipient: Recipient::Agent(recipient.agent_id.clone()),
+            correlation_id: None,
+            ttl_ms,
+            content_type: "text/plain".into(),
+            payload: id.into(),
+            extension_fields: vec![],
+        };
+        let ticket = service
+            .prepare_acceptance(
+                &sender.agent_id,
+                envelope,
+                MessageScope::Session,
+                1,
+                4096,
+                None,
+            )
+            .unwrap();
+        let plan = store.acceptance_plan(ticket.sequence()).unwrap();
+        let write = service.begin_acceptance_write(&ticket).unwrap();
+        let MessageAcceptanceWriteOutcome::Committed(commit) =
+            write.persist(&mut store.acceptance_port(&plan))
+        else {
+            panic!("acceptance must commit")
+        };
+        service.publish_acceptance(&commit).unwrap();
+        if id == "first" {
+            assert_eq!(
+                service
+                    .receive_subscribed(&recipient.agent_id, 10, 8)
+                    .unwrap()
+                    .messages
+                    .len(),
+                1
+            );
+        }
+    }
+    let selected = service
+        .receive_subscribed(&recipient.agent_id, 20, 8)
+        .unwrap();
+    assert_eq!(selected.messages.len(), 1);
+    assert_eq!(selected.messages[0].sequence, 2);
+    let ticket = service
+        .prepare_acknowledgement(&recipient.agent_id, 2, 512 * 1024)
+        .unwrap()
+        .unwrap();
+    let write = service.begin_acknowledgement_write(&ticket).unwrap();
+    let mut bytes = Vec::new();
+    write.write_record(&mut bytes).unwrap();
+    let key = ack_key(&bytes);
+    let plan = store.acknowledgement_plan().unwrap();
+    assert!(matches!(
+        write.persist(&mut store.acknowledgement_port(&plan)),
+        MessageAcknowledgementWriteOutcome::Committed(_)
+    ));
+    drop(store);
+    let mut store = MmpCustodyStore::open(&fixture.0, "session").unwrap();
+    let decoded = store
+        .read_stored_acknowledgement(&key, decode_limits())
+        .unwrap();
+    assert_eq!(
+        decoded
+            .decisions
+            .iter()
+            .map(|entry| entry.offered_at_ms)
+            .collect::<Vec<_>>(),
+        vec![Some(10), Some(20)]
+    );
+    let folded = store.fold_custody_history(decode_limits()).unwrap();
+    assert_eq!(
+        folded
+            .acknowledgements
+            .iter()
+            .map(|entry| (entry.sequence, entry.offered_at_ms))
+            .collect::<Vec<_>>(),
+        vec![(1, 10), (2, 20)]
+    );
+    assert!(folded.expiries.is_empty());
+    let start = 48 + recipient.agent_id.as_str().len();
+    bytes[start + 13..start + 21].copy_from_slice(&12u64.to_le_bytes());
+    let forged_key = ack_key(&bytes);
+    let generation = store.acknowledgement_plan().unwrap().generation;
+    store
+        .commit(
+            generation,
+            &[CustodyWrite {
+                key: &forged_key,
+                previous: None,
+                value: Some(&bytes),
+            }],
+        )
+        .unwrap();
+    let error = store
+        .read_stored_acknowledgement(&forged_key, decode_limits())
+        .err()
+        .unwrap();
+    assert!(
+        error.to_string().contains("offer occurred after expiry"),
+        "{error}"
+    );
+    assert!(store.fold_custody_history(decode_limits()).is_err());
+}
+
+/// The endpoint clock is the actual selection clock of the final positive
+/// entry. A content-addressed record with a different header clock must not
+/// silently manufacture a new observation during restart validation.
+#[test]
+fn stored_acknowledgement_rejects_mismatched_endpoint_offer_clock() {
+    let fixture = Fixture::new();
+    let mut store = MmpCustodyStore::open(&fixture.0, "session").unwrap();
+    let (_service, _ticket, write) = prepared(&mut store);
+    let mut bytes = Vec::new();
+    write.write_record(&mut bytes).unwrap();
+    bytes[32..40].copy_from_slice(&21u64.to_le_bytes());
+    let key = ack_key(&bytes);
+    let generation = store.acknowledgement_plan().unwrap().generation;
+    store
+        .commit(
+            generation,
+            &[CustodyWrite {
+                key: &key,
+                previous: None,
+                value: Some(&bytes),
+            }],
+        )
+        .unwrap();
+    let error = store
+        .read_stored_acknowledgement(&key, decode_limits())
+        .err()
+        .unwrap();
+    assert!(
+        error.to_string().contains("acknowledged endpoint"),
+        "{error}"
+    );
+}
+
+/// A real offer at clock zero is distinct from an absent offer. Version2 uses
+/// the decision flag to preserve that distinction through storage and folding.
+#[test]
+fn stored_acknowledgement_preserves_a_zero_offer_clock() {
+    let fixture = Fixture::new();
+    let mut store = MmpCustodyStore::open(&fixture.0, "session").unwrap();
+    let mut service = MessageService::default();
+    let sender = service.register_agent(None, None, "sender", vec![]);
+    let recipient = service.register_agent(None, None, "target", vec![]);
+    service.subscribe(&recipient.agent_id).unwrap();
+    let envelope = Envelope {
+        protocol: "mmp/1",
+        id: "zero".into(),
+        message_type: "send".into(),
+        time: "fixture".into(),
+        sender: sender.clone(),
+        recipient: Recipient::Agent(recipient.agent_id.clone()),
+        correlation_id: None,
+        ttl_ms: None,
+        content_type: "text/plain".into(),
+        payload: "zero".into(),
+        extension_fields: vec![],
+    };
+    let ticket = service
+        .prepare_acceptance(
+            &sender.agent_id,
+            envelope,
+            MessageScope::Session,
+            0,
+            4096,
+            None,
+        )
+        .unwrap();
+    let plan = store.acceptance_plan(ticket.sequence()).unwrap();
+    let write = service.begin_acceptance_write(&ticket).unwrap();
+    let MessageAcceptanceWriteOutcome::Committed(commit) =
+        write.persist(&mut store.acceptance_port(&plan))
+    else {
+        panic!("acceptance must commit")
+    };
+    service.publish_acceptance(&commit).unwrap();
+    assert_eq!(
+        service
+            .receive_subscribed(&recipient.agent_id, 0, 8)
+            .unwrap()
+            .messages
+            .len(),
+        1
+    );
+    let ticket = service
+        .prepare_acknowledgement(&recipient.agent_id, 1, 512 * 1024)
+        .unwrap()
+        .unwrap();
+    let write = service.begin_acknowledgement_write(&ticket).unwrap();
+    let mut bytes = Vec::new();
+    write.write_record(&mut bytes).unwrap();
+    let key = ack_key(&bytes);
+    let plan = store.acknowledgement_plan().unwrap();
+    assert!(matches!(
+        write.persist(&mut store.acknowledgement_port(&plan)),
+        MessageAcknowledgementWriteOutcome::Committed(_)
+    ));
+    let decoded = store
+        .read_stored_acknowledgement(&key, decode_limits())
+        .unwrap();
+    assert_eq!(decoded.decisions[0].offered_at_ms, Some(0));
+    let history = store.fold_custody_history(decode_limits()).unwrap();
+    assert_eq!(history.acknowledgements[0].offered_at_ms, 0);
+}
+
+/// The inactive v1 prototype omitted individual offer clocks and cannot supply
+/// them during restoration. Both v1 and unknown future framing must fail closed
+/// instead of manufacturing offer evidence from the endpoint clock.
+#[test]
+fn stored_acknowledgement_rejects_legacy_and_future_record_versions() {
+    for version in *b"13" {
+        let fixture = Fixture::new();
+        let mut store = MmpCustodyStore::open(&fixture.0, "session").unwrap();
+        let (_service, _ticket, write) = prepared(&mut store);
+        let mut current = Vec::new();
+        write.write_record(&mut current).unwrap();
+        current[7] = version;
+        if version == b'1' {
+            let start = 48 + write.recipient().as_str().len();
+            let mut legacy = current[..start].to_vec();
+            for entry in current[start..].as_chunks::<53>().0 {
+                legacy.extend_from_slice(&entry[..13]);
+                legacy.extend_from_slice(&entry[21..]);
+            }
+            current = legacy;
+        }
+        let key = ack_key(&current);
+        let generation = store.acknowledgement_plan().unwrap().generation;
+        store
+            .commit(
+                generation,
+                &[CustodyWrite {
+                    key: &key,
+                    previous: None,
+                    value: Some(&current),
+                }],
+            )
+            .unwrap();
+        assert!(
+            store
+                .read_stored_acknowledgement(&key, decode_limits())
+                .is_err()
+        );
+        assert!(store.fold_custody_history(decode_limits()).is_err());
+    }
 }
 
 /// Two actual recipient ACKs carry the same expired prefix at different
@@ -482,17 +775,20 @@ fn history_folds_multiple_recipient_acks_and_maximum_expiry_clock() {
         service.publish_acknowledgement(&commit).unwrap();
     }
     let (source, _, _) = store.read_accepted_source(2, decode_limits()).unwrap();
-    let mut slots = [&first.agent_id, &second.agent_id]
+    let mut slots = [(&first.agent_id, 20), (&second.agent_id, 30)]
         .into_iter()
-        .map(|id| {
-            u32::try_from(
-                source
-                    .recipient_bindings()
-                    .iter()
-                    .position(|binding| binding.recipient == id.as_str())
-                    .unwrap(),
+        .map(|(id, clock)| {
+            (
+                u32::try_from(
+                    source
+                        .recipient_bindings()
+                        .iter()
+                        .position(|binding| binding.recipient == id.as_str())
+                        .unwrap(),
+                )
+                .unwrap(),
+                clock,
             )
-            .unwrap()
         })
         .collect::<Vec<_>>();
     slots.sort_unstable();
@@ -506,9 +802,12 @@ fn history_folds_multiple_recipient_acks_and_maximum_expiry_clock() {
         history
             .acknowledgements
             .iter()
-            .map(|entry| (entry.sequence, entry.binding_index))
+            .map(|entry| (entry.sequence, entry.binding_index, entry.offered_at_ms))
             .collect::<Vec<_>>(),
-        slots.into_iter().map(|slot| (2, slot)).collect::<Vec<_>>()
+        slots
+            .into_iter()
+            .map(|(slot, clock)| (2, slot, clock))
+            .collect::<Vec<_>>()
     );
     assert_eq!(
         history.expiries,
@@ -530,7 +829,7 @@ fn stored_acknowledgement_rejects_forged_source_digest() {
     let mut bytes = Vec::new();
     write.write_record(&mut bytes).unwrap();
     let offset = 48 + write.recipient().as_str().len();
-    bytes[offset + 13] ^= 0x80;
+    bytes[offset + 21] ^= 0x80;
     let key = ack_key(&bytes);
     let generation = store.acknowledgement_plan().unwrap().generation;
     store
@@ -726,7 +1025,7 @@ fn acknowledgement_commits_one_bounded_record_before_original_cursor_adoption() 
     write.write_record(&mut bytes).unwrap();
     assert_eq!(bytes.len(), write.encoded_bytes());
     assert!(bytes.len() < MAX_BATCH_BYTES);
-    assert!(bytes.starts_with(b"MMPACK01"));
+    assert!(bytes.starts_with(b"MMPACK02"));
     assert!(!bytes.windows(8).any(|bytes| bytes == b"original"));
     let plan = store.acknowledgement_plan().unwrap();
     let before = state(&store);

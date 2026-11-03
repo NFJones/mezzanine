@@ -8,7 +8,7 @@
 //! A separate persistent watermark and trusted restoration boundary are still
 //! required before compaction or delivery may discard or consume evidence.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use mez_agent::messaging::MessageAcceptanceDecodeLimits;
 
@@ -22,12 +22,14 @@ use super::{
 const FOLDED_ENTRY_CHARGE: usize = 256;
 
 /// One source-bound positive ACK, not a current registration or native commit.
-#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct FoldedAcknowledgement {
     /// Original occurrence sequence from verified stored evidence.
     pub sequence: u64,
     /// Exact original frozen recipient slot, not a newly resolved audience.
     pub binding_index: u32,
+    /// Maximum recorded actual selection clock for this exact original slot.
+    pub offered_at_ms: u64,
 }
 
 /// Occurrence-wide maximum clock of original observed expiry exclusions.
@@ -73,20 +75,22 @@ impl MmpCustodyStore {
             .max()
             .unwrap_or(0);
         let mut metadata = inventory.retained_metadata;
-        let mut acknowledgements = HashSet::new();
+        let mut acknowledgements: HashMap<(u64, u32), u64> = HashMap::new();
         let mut expiries: HashMap<u64, u64> = HashMap::new();
         for key in &inventory.acknowledgement_keys {
             let ack = self.read_stored_acknowledgement_in_snapshot(&transaction, key, limits)?;
             for decision in ack.decisions {
                 if decision.acknowledged {
-                    let entry = FoldedAcknowledgement {
-                        sequence: decision.sequence,
-                        binding_index: decision.binding_index,
-                    };
-                    if !acknowledgements.contains(&entry) {
+                    let entry = (decision.sequence, decision.binding_index);
+                    let offered_at_ms = decision.offered_at_ms.ok_or_else(|| {
+                        MezError::invalid_state("MMP custody ACK offer evidence is unavailable")
+                    })?;
+                    if let Some(prior) = acknowledgements.get_mut(&entry) {
+                        *prior = (*prior).max(offered_at_ms);
+                    } else {
                         charge(&mut metadata, FOLDED_ENTRY_CHARGE)?;
                         acknowledgements.try_reserve(1).map_err(|_| capacity())?;
-                        acknowledgements.insert(entry);
+                        acknowledgements.insert(entry, offered_at_ms);
                     }
                 } else if let Some(prior) = expiries.get_mut(&decision.sequence) {
                     *prior = (*prior).max(ack.observed_at_ms);
@@ -101,7 +105,13 @@ impl MmpCustodyStore {
         folded_acknowledgements
             .try_reserve_exact(acknowledgements.len())
             .map_err(|_| capacity())?;
-        folded_acknowledgements.extend(acknowledgements);
+        folded_acknowledgements.extend(acknowledgements.into_iter().map(
+            |((sequence, binding_index), offered_at_ms)| FoldedAcknowledgement {
+                sequence,
+                binding_index,
+                offered_at_ms,
+            },
+        ));
         folded_acknowledgements.sort_unstable();
         let mut folded_expiries = Vec::new();
         folded_expiries

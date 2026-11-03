@@ -15,7 +15,7 @@ use super::*;
 const MAX_RECORD_BYTES: usize = 240 * 1024;
 const MAX_ENTRIES: usize = 4096;
 const HEADER_BYTES: usize = 48;
-const ENTRY_BYTES: usize = 45;
+const ENTRY_BYTES: usize = 53;
 
 /// One immutable ACK decision, without live delivery or input authority.
 pub(crate) struct StoredAcknowledgementDecision {
@@ -25,6 +25,8 @@ pub(crate) struct StoredAcknowledgementDecision {
     pub binding_index: u32,
     /// True is an offered commit; false is an original expiry exclusion.
     pub acknowledged: bool,
+    /// Exact original offer clock for a positive decision; absent for expiry.
+    pub offered_at_ms: Option<u64>,
 }
 
 /// Bounded, descriptive ACK evidence held until a complete restore fold.
@@ -78,7 +80,7 @@ impl MmpCustodyStore {
             .ok_or_else(|| invalid("record is unavailable"))?;
         if bytes.len() < HEADER_BYTES
             || bytes.len() > MAX_RECORD_BYTES
-            || &bytes[..8] != b"MMPACK01"
+            || &bytes[..8] != b"MMPACK02"
             || ack_key(&bytes) != key
         {
             return Err(invalid("record framing or key changed"));
@@ -126,6 +128,14 @@ impl MmpCustodyStore {
                 1 => true,
                 _ => return Err(invalid("decision flag is invalid")),
             };
+            let encoded_offer = integer64(entry, 13)?;
+            let offered_at_ms = if acknowledged {
+                Some(encoded_offer)
+            } else if encoded_offer == 0 {
+                None
+            } else {
+                return Err(invalid("expiry decision has an offer clock"));
+            };
             if sequence <= previous
                 || sequence <= registered_after_sequence
                 || sequence > endpoint_sequence
@@ -134,7 +144,7 @@ impl MmpCustodyStore {
             }
             let (source, digest, _) =
                 self.read_accepted_source_in_snapshot(transaction, sequence, limits)?;
-            if digest.as_slice() != &entry[13..] {
+            if digest.as_slice() != &entry[21..] {
                 return Err(invalid("decision source digest changed"));
             }
             let binding = source
@@ -154,17 +164,27 @@ impl MmpCustodyStore {
             {
                 return Err(invalid("expiry exclusion is inconsistent"));
             }
+            if offered_at_ms.is_some_and(|offered| {
+                source
+                    .envelope()
+                    .ttl_ms
+                    .is_some_and(|ttl| source.accepted_at_ms().saturating_add(ttl) < offered)
+            }) {
+                return Err(invalid("offer occurred after expiry"));
+            }
             previous = sequence;
             decisions.push(StoredAcknowledgementDecision {
                 sequence,
                 binding_index,
                 acknowledged,
+                offered_at_ms,
             });
         }
-        if decisions
-            .last()
-            .is_none_or(|decision| decision.sequence != endpoint_sequence || !decision.acknowledged)
-        {
+        if decisions.last().is_none_or(|decision| {
+            decision.sequence != endpoint_sequence
+                || !decision.acknowledged
+                || decision.offered_at_ms != Some(observed_at_ms)
+        }) {
             return Err(invalid("acknowledged endpoint is missing"));
         }
         let mut recipient_owned = String::new();

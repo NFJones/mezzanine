@@ -63,6 +63,106 @@ fn offer(
     sequence
 }
 
+/// A cumulative ACK may cover an earlier offer made before its TTL expired and
+/// a later endpoint offered at a different clock. Durable framing must retain
+/// both exact clocks; the endpoint clock alone cannot reconstruct the earlier
+/// offer after a crash without inventing selection evidence.
+#[test]
+fn durable_ack_record_preserves_each_original_offer_clock() {
+    let mut service = MessageService::with_limits(8, 4096);
+    let sender = service.register_agent(None, None, "sender", vec![]);
+    let target = service.register_agent(None, None, "target", vec![]);
+    service.subscribe(&target.agent_id).unwrap();
+    let mut first = mail(&sender, &target, "first");
+    first.ttl_ms = Some(10);
+    assert_eq!(
+        service
+            .accept_at_with_scope(&sender.agent_id, first, MessageScope::Session, 1)
+            .unwrap()
+            .sequence,
+        1
+    );
+    assert_eq!(
+        service
+            .receive_subscribed(&target.agent_id, 10, 8)
+            .unwrap()
+            .messages
+            .len(),
+        1
+    );
+    assert_eq!(
+        service
+            .accept_at_with_scope(
+                &sender.agent_id,
+                mail(&sender, &target, "second"),
+                MessageScope::Session,
+                1
+            )
+            .unwrap()
+            .sequence,
+        2
+    );
+    let selected = service.receive_subscribed(&target.agent_id, 20, 8).unwrap();
+    assert_eq!(selected.messages.len(), 1);
+    assert_eq!(selected.messages[0].sequence, 2);
+    let ticket = service
+        .prepare_acknowledgement(&target.agent_id, 2, MAX_METADATA)
+        .unwrap()
+        .unwrap();
+    let write = service.begin_acknowledgement_write(&ticket).unwrap();
+    let mut encoded = Vec::new();
+    write.write_record(&mut encoded).unwrap();
+    assert_eq!(
+        &encoded[..8],
+        b"MMPACK02",
+        "durable ACK must retain every selected offer clock"
+    );
+    let start = 48 + target.agent_id.as_str().len();
+    assert_eq!(encoded.len(), start + 2 * 53);
+    assert_eq!(
+        u64::from_le_bytes(encoded[start + 13..start + 21].try_into().unwrap()),
+        10
+    );
+    assert_eq!(
+        u64::from_le_bytes(
+            encoded[start + 53 + 13..start + 53 + 21]
+                .try_into()
+                .unwrap()
+        ),
+        20
+    );
+}
+
+/// A subsequent delivery selection may update live offer evidence while an
+/// acknowledgement is reserved. Its durable record must use the original
+/// reservation's clock, including when the worker starts after the reoffer.
+#[test]
+fn durable_ack_record_freezes_offer_clock_at_reservation() {
+    let (mut service, sender, target) = fixture();
+    let sequence = offer(&mut service, &sender, &target, "original");
+    let ticket = service
+        .prepare_acknowledgement(&target.agent_id, sequence, MAX_METADATA)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        service
+            .receive_subscribed(&target.agent_id, 20, 100)
+            .unwrap()
+            .messages
+            .len(),
+        1
+    );
+    let write = service.begin_acknowledgement_write(&ticket).unwrap();
+    let mut encoded = Vec::new();
+    write.write_record(&mut encoded).unwrap();
+    let start = 48 + target.agent_id.as_str().len();
+    assert_eq!(u64::from_le_bytes(encoded[32..40].try_into().unwrap()), 2);
+    assert_eq!(
+        u64::from_le_bytes(encoded[start + 13..start + 21].try_into().unwrap()),
+        2
+    );
+}
+
 /// Reserving and physically committing an ACK do not free custody until actor
 /// adoption. Direct same-recipient ACKs cannot bypass it, and terminal retirement
 /// cannot steal its slots while a real independently gated worker is running.

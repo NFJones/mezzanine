@@ -15582,7 +15582,8 @@ descriptive only and MUST NOT authorize cleanup, nonacceptance or delivery.
 A read-only custody-history fold MAY combine fully verified acknowledgment
 records after complete settled inventory in the same store snapshot. Positive
 decisions MUST remain tied to their original occurrence and frozen recipient
-slot; expiry exclusions MUST retain the maximum observed clock per occurrence,
+slot and retain the maximum verified offer clock for that slot; expiry
+exclusions MUST retain the maximum observed clock per occurrence,
 applying across its recipients. The fold MUST share the inventory metadata
 budget and withhold all results on invalid or unresolved evidence. Its highest
 surviving sequence is only an observation, not a persistent allocator
@@ -15668,9 +15669,14 @@ ACK bypass or conflicting terminal maintenance until settlement. Tickets and
 positive facts MUST remain payload-free; the linear worker MAY share canonical
 source references while those sources remain fully charged in pending custody,
 and MUST drop them before returning a positive fact. Source fingerprinting MUST
-run off actor over the original immutable acceptance encoding. A version1
-`MMPACK01` record MUST bind recipient, original/endpoint sequences, registration,
-offer clock and each occurrence/binding/decision plus complete source SHA256.
+run off actor over the original immutable acceptance encoding. A version2
+`MMPACK02` record MUST bind recipient, original/endpoint sequences, registration,
+endpoint clock and each occurrence/binding/decision plus complete source SHA256.
+Every positive decision MUST retain its exact original offer clock; expiry
+exclusions MUST NOT invent an offer. The endpoint clock MUST equal the endpoint
+entry's offer clock, and a claimed offer after original TTL expiry MUST fail.
+The inactive version1 `MMPACK01` prototype lacks per-entry clocks and MUST NOT
+be treated as though it supplied them; unknown versions MUST fail closed.
 Storage MUST verify actual accepted source framing/chunks and complete SHA256,
 then commit the bounded ACK record before any cursor/slot publication. Lost reply
 reconciliation MUST check actual identical postimages; memory-only or differing

@@ -114,7 +114,7 @@ impl PlannedAcknowledgementStore<'_> {
         }
 
         let offset = 48 + record.recipient().as_str().len();
-        let (encoded_entries, remainder) = bytes[offset..].as_chunks::<45>();
+        let (encoded_entries, remainder) = bytes[offset..].as_chunks::<53>();
         if !remainder.is_empty() || encoded_entries.len() != record.entries().count() {
             return Err(MezError::invalid_state("MMP ACK entry framing changed"));
         }
@@ -144,7 +144,7 @@ impl PlannedAcknowledgementStore<'_> {
             let original = self
                 .store
                 .validate_accepted_occurrence_in_snapshot(&transaction, entry.sequence)?;
-            if encoded[13..] != original {
+            if encoded[21..] != original {
                 return Err(MezError::conflict(
                     "MMP ACK original source content changed",
                 ));
@@ -183,7 +183,7 @@ impl PlannedAcknowledgementStore<'_> {
             let original = self
                 .store
                 .validate_accepted_occurrence_in_snapshot(&transaction, entry.sequence)?;
-            if encoded[13..] != original {
+            if encoded[21..] != original {
                 return Err(MezError::conflict(
                     "MMP ACK original source content changed",
                 ));
@@ -195,6 +195,8 @@ impl PlannedAcknowledgementStore<'_> {
 }
 
 /// Domain-separated content identity over the full immutable versioned record.
+/// The key's v1 namespace versions the hash scheme, independently of the
+/// record format included in the hashed bytes.
 fn ack_key(bytes: &[u8]) -> String {
     let mut hash = Sha256::new();
     hash.update(b"mezzanine-mmp-ack-record-v1\0");
