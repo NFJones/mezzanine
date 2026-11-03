@@ -78,11 +78,28 @@ material, briefly reported at handoff. Follow-up issues should be created only
 when requested or required by the active workflow, and should not become
 prerequisites without concrete evidence.
 
+Mez should identify the observable behavior, material constraints, and a check
+demonstrating completion, then implement the smallest complete vertical slice
+once the owning path and contracts are known. Straightforward tasks need no
+visible checklist; complex tasks should retain a short acceptance checklist,
+not automatically create a plan or tracking file. Before finishing, reconcile
+the original criteria and report anything unfinished. A component checkpoint,
+helper-only test, or successful compile is not proof of a connected feature:
+exercise the changed user-facing path or closest faithful production-boundary
+test.
+
 Repository-required validation still applies. Failures caused by the change or
 directly preventing the requested outcome should be repaired, even if
 pre-existing. Other failures should be reported separately rather than
 automatically adopted as more implementation work. Once the requested outcome
 is implemented and proportionately validated, Mez should stop.
+
+Use focused checks during iteration and applicable required gates for the final
+code candidate. Documentation, research, and tracker-only work use relevant
+artifact checks rather than automatic workspace compilation. Reuse results only
+while relevant source, configuration, and toolchain inputs remain unchanged.
+An observation timeout is not proof of process termination: inspect the existing
+run, not launch a duplicate. Report required checks that cannot run.
 
 These are model instructions, not a runtime-enforced scope restriction. State
 owned files and acceptance criteria explicitly when a task needs tighter bounds.
@@ -111,6 +128,43 @@ agent stops after the requested outcome is implemented and validated.
 Model behavior is nondeterministic and provider-dependent. Successful local
 tests or one successful conversation do not establish identical behavior across
 models. Do not use secrets in evaluation prompts or fixtures.
+
+### Compare guidance revisions
+
+Content-contract tests protect section assembly, narrow policy anchors, and
+known contradictions. They do not measure task success, latency, or inference
+cost. Evaluate built-in prompt changes and repository workflow changes together
+in a fresh turn/effective context; editing `AGENTS.md` does not rewrite an
+accepted request chain. Rebuild the binary to evaluate changed embedded assets.
+
+Use disposable worktrees with fixed task fixtures and independent acceptance
+checks. Record the baseline/candidate prompt version and guidance, model,
+reasoning effort, tool surface, platform/toolchain, and initial dirty-tree state.
+Keep those inputs matched except for the guidance under test.
+
+| Scenario | Independent acceptance evidence |
+| --- | --- |
+| Small bug | Regression fails before the fix and passes afterward; relevant existing behavior still passes. |
+| Cross-surface feature | Requested behavior works across the production boundary, not only through a new helper. |
+| Configuration migration | Existing state migrates and invalid state fails safely under the SPEC contract. |
+| Docs-only change | Affected artifacts and links are correct; no unnecessary workspace compilation. |
+| Read-only review | Accurate severity-ordered findings with references, without edits or commits. |
+| Dirty worktree | Task-owned changes complete without modifying or staging unrelated work. |
+| Missing platform check | Available required checks run; unavailable coverage is explicitly reported, not claimed. |
+
+Also include genuine prerequisites versus incidental findings and caused versus
+unrelated validation failures as described above. For a long task, verify that
+coherent checkpoints do not become false completion or trigger empty commits.
+
+Repeat matched runs per task/model. Judge acceptance-pass rate and false
+completion first, then time to verified completion, inference cost/tokens,
+redundant reads, repeated unchanged checks, and unnecessary clarification.
+Separate compilation, lock wait, and network time from model latency. Reject
+speed gains that skip criteria, weaken safety/tests, expand scope, or omit
+required checks. Report run counts and limitations; do not infer a universal
+improvement from passing text tests or a single successful run. Live-provider
+evaluation may incur charges and requires explicit authorization; this protocol
+does not itself authorize provider requests.
 
 ## Related pages
 

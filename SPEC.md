@@ -17195,12 +17195,31 @@ the active workflow, or treat follow-up issues as prerequisites without concrete
 evidence. Continuation MUST be limited to remaining in-scope work, related
 failures, or changed user input; once the requested outcome is implemented and
 proportionately validated, the agent MUST stop.
+The autonomy section SHOULD make completion observable: identify the requested
+behavior, material constraints, and a check demonstrating completion. This
+SHOULD remain implicit for straightforward tasks; complex work SHOULD retain a
+short acceptance checklist without mandatory planning ceremonies or tracking
+files. Once the owning path, relevant contracts, and check are known, the agent
+SHOULD implement the smallest complete vertical slice rather than disconnected
+components. Before finishing, it MUST reconcile the original acceptance criteria
+and report unfinished criteria; a component checkpoint is not feature completion.
+Validation guidance MUST require checking the changed user-facing path or the
+closest faithful production-boundary test. A helper-only test or successful
+compile alone MUST NOT be treated as proof that a feature is connected.
 Validation guidance MUST distinguish failures caused by the agent's changes or
 directly preventing the requested outcome from other failures, including
 unrelated pre-existing failures. It MUST require repair of the former and
 separate reporting of the latter without automatically adopting them as
 implementation work. This scope boundary MUST NOT weaken repository-required
 validation or evidence-backed handoff requirements.
+Validation guidance SHOULD distinguish the smallest relevant iterative checks
+from applicable repository-required final code gates. Documentation, research,
+and tracker-only work SHOULD use relevant artifact checks without automatic
+workspace compilation. Valid results MAY be reused only while their relevant
+source, configuration, and toolchain inputs remain unchanged. An observation
+timeout MUST NOT be treated as proof that the underlying check stopped or as a
+reason to launch a duplicate; the existing run SHOULD be inspected. Unavailable
+required checks MUST be reported rather than represented as passing.
 
 When the user explicitly asks the agent to form a plan from repository state,
 such as an issue backlog, bug report, failing test, design note, or named

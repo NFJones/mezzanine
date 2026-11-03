@@ -200,7 +200,7 @@ fn system_prompt_separates_required_repairs_from_unrelated_failures() {
 /// Model identity is templated, but server configuration is not invented here.
 fn system_prompt_keeps_mcp_awareness_abstract() {
     let prompt = build_agent_system_prompt(&AgentPromptProfile::for_model("test-model")).unwrap();
-    assert!(prompt.contains("Mezzanine pane agent profile default v37, model test-model"));
+    assert!(prompt.contains("Mezzanine pane agent profile default v38, model test-model"));
     assert!(prompt.contains("Use `mcp_server_search` to discover configured MCP servers when no exact server reference is already present"));
     assert!(prompt.contains(
         "pass its canonical server id directly to `mcp_server_get` without searching first"
@@ -213,5 +213,94 @@ fn system_prompt_keeps_mcp_awareness_abstract() {
         "MCP server gitlab is configured",
     ] {
         assert!(!prompt.contains(absent));
+    }
+}
+
+/// Protects observable completion and integration checks without requiring a
+/// visible planning ceremony or treating a component test as feature delivery.
+#[test]
+fn system_prompt_requires_connected_observable_completion() {
+    let autonomy = super::prompt::system_prompt_fragment("autonomy.md").unwrap();
+    for anchor in [
+        "observable behavior, material constraints",
+        "keep this implicit for straightforward tasks",
+        "short acceptance checklist for complex work",
+        "smallest complete vertical slice",
+        "reconcile the original acceptance criteria",
+        "component checkpoint is not completion",
+    ] {
+        assert!(
+            autonomy.contains(anchor),
+            "missing completion contract: {anchor}"
+        );
+    }
+    let validation = super::prompt::system_prompt_fragment("validation.md").unwrap();
+    for anchor in [
+        "closest faithful production-boundary test",
+        "helper-only test or successful compile",
+    ] {
+        assert!(
+            validation.contains(anchor),
+            "missing integration check: {anchor}"
+        );
+    }
+}
+
+/// Keeps iterative checks, final required gates, and non-code artifact checks
+/// distinct. Reuse must depend on unchanged inputs, not elapsed time alone.
+#[test]
+fn system_prompt_scales_validation_to_task_and_phase() {
+    let validation = super::prompt::system_prompt_fragment("validation.md").unwrap();
+    for anchor in [
+        "smallest relevant check during iteration",
+        "applicable repository-required checks for the final code candidate",
+        "Documentation, research, or tracker-only work",
+        "do not automatically compile the workspace",
+        "relevant source, configuration, and toolchain inputs remain unchanged",
+        "observation timeout is not evidence that a check stopped",
+        "do not launch a duplicate",
+    ] {
+        assert!(
+            validation.contains(anchor),
+            "missing validation distinction: {anchor}"
+        );
+    }
+}
+
+/// Prevents the project workflow from restoring unconditional commits, blanket
+/// long-form documentation, or automatic storage of task research in memory.
+/// These are guidance contracts, not live-agent behavioral measurements.
+#[test]
+fn repository_guidance_keeps_task_sensitive_workflow() {
+    let guidance = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../AGENTS.md"))
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    for anchor in [
+        "task-owned, validated, coherent changes",
+        "Never create empty commits",
+        "Read-only tasks and local research notes require no commit",
+        "task-specific research or plans in `docs/reference/`",
+        "allowed by the active memory contract",
+        "non-obvious or safety-sensitive private behavior",
+        "configuration/data migrations",
+        "Documentation/research/tracker-only work",
+    ] {
+        assert!(
+            guidance.contains(anchor),
+            "missing repository contract: {anchor}"
+        );
+    }
+    for obsolete in [
+        "Always commit your changes at the end of a turn",
+        "Use `just check` for fast type-checking",
+        "All tests should have a long form docstring",
+        "Public and private Rust items",
+        "document your results as research memories",
+    ] {
+        assert!(
+            !guidance.contains(obsolete),
+            "obsolete repository rule: {obsolete}"
+        );
     }
 }

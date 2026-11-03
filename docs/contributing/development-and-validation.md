@@ -76,23 +76,46 @@ Cargo's `--` separator. For example, `just run config validate` runs
 
 ## Validate changes
 
-Use the narrowest check while developing, then run the complete required set
-before handoff. The commands below are repository recipes; run them from the
-workspace root:
+Choose checks by task type and phase:
+
+| Phase/type | Checks |
+| --- | --- |
+| Rust implementation iteration | Smallest relevant package/target check and focused bounded quiet regression tests. Broaden when shared contracts change. |
+| Final code candidate | Applicable required CI gates: formatting, all-target/all-feature check and build, strict Clippy, workspace tests, documentation tests, and required platform/subsystem acceptance. Report unavailable checks. |
+| Documentation/research/tracker-only work | Relevant artifact checks, without automatic workspace compilation. Embedded prompt changes are code inputs and need assembly/content tests. |
+
+For example, `cargo check -p mez-agent --lib` answers a narrower iterative
+question than `just check`, which checks the entire workspace and all targets
+and features. A test filter narrows execution, not compilation of its test crate.
+Do not run the full suite after every intermediate edit. For feature closeout,
+exercise the changed user-facing path or closest faithful production-boundary
+test; helper-only tests or a successful compile do not prove integration.
+
+Reuse valid results while relevant source, configuration, and toolchain inputs
+remain unchanged. An observation timeout is not proof that a build or test
+stopped: inspect the existing run rather than start a duplicate. Report actual
+failures and unavailable required checks separately.
+
+Run the final code gates from the workspace root; the locked commands match
+the [CI definitions](../../.github/workflows/ci.yml):
 
 ```sh
-just fmt
-just check
-just clippy
-timeout 120s just test
+cargo fmt --all --check
+cargo check --workspace --all-targets --all-features --locked
+cargo build --workspace --all-targets --all-features --locked
+cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+canonical_tmp="$(cd /tmp && pwd -P)"
+TMPDIR="$canonical_tmp" timeout 1200s cargo test --workspace --all-targets --all-features --no-fail-fast --locked --quiet
+timeout 1200s cargo test --workspace --all-features --doc --locked --quiet
 ```
 
-`just fmt` applies Rust formatting. `just check` type-checks all targets and
-features. `just clippy` denies warnings across the workspace. `just test`
-runs all targets and features with Cargo's quiet output; the timeout makes a
-hang visible. Use a timeout of at least 120 seconds for every direct test
-command as well. `just test` already supplies Cargo's `--quiet` option; retain
-that option when running a direct `cargo test` command.
+Use `just fmt` to apply formatting when needed. The corresponding `just check`,
+`just build`, `just clippy`, and bounded `just test` recipes are convenient local
+entrypoints. `just test` already supplies quiet output; retain `--quiet` for
+direct Cargo test commands and a timeout of at least 120 seconds for all tests.
+Run the platform/toolchain matrix when available and report gaps; a single
+local compiler/OS does not qualify the entire matrix. Required acceptance lanes
+are defined in CI; affected-backend optional checks are described below.
 
 For direct test commands, use the short physical temporary directory that the
 `just test` recipe selects. On macOS, inherited `TMPDIR` values can exceed
@@ -228,13 +251,18 @@ and release-load compilation plus execution to 30 minutes.
 Keep a change in its subsystem owner, add focused happy-path and relevant
 failure or edge coverage, and update user documentation or configuration
 examples when behavior changes. Do not add compatibility shims unless the task
-requires them. Treat `SPEC.md` as the normative contract and update it when a
-behavioral contract changes.
+requires them; preserve explicit persistence/protocol contracts and required
+configuration/data migrations. Treat `SPEC.md` as the normative contract and
+update it when a behavioral contract changes. Document public contracts and
+non-obvious or safety-sensitive private behavior with specific explanations,
+not mandatory long-form boilerplate for every item or test.
 
 Before handoff, review the diff and report commands actually run, their
-outcomes, and any skipped validation. Commit coherent sequence points with an
-informative imperative message; do not stage or commit material in
-`docs/reference/`.
+outcomes, and any skipped validation. Follow the task-owned checkpoint and
+completion commit rules in `AGENTS.md`; read-only work and local research notes
+need no commit. Task-specific research/plans may go in `docs/reference/` when
+useful, but never stage or commit that directory. Durable memory is only for
+stable reusable knowledge allowed by its active contract, not task state.
 
 ## Related pages
 

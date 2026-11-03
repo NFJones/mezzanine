@@ -1,105 +1,104 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-Mezzanine is a five-package Rust 2024 workspace with a virtual repository root;
-the `crates/mezzanine` product package builds the `mez` binary. Keep
-user-visible behavior aligned with `SPEC.md`, and keep implementation logic in
-subsystem modules rather than expanding `crates/mezzanine/src/main.rs`.
+Mezzanine is a five-package Rust 2024 workspace with a virtual root. `SPEC.md`
+is normative for user-visible behavior, configuration, protocols, and security.
 
-- `SPEC.md`: normative behavior for the multiplexer, agent harness,
-  configuration, protocol, and security posture.
-- `AGENTS.md`: repository workflow and implementation guidance for agents.
-- `Cargo.toml` and `Cargo.lock`: virtual-workspace metadata and the shared
-  dependency lockfile.
-- `crates/mezzanine/`: product package, `mez` binary, application composition,
-  concrete adapters, and product tests.
-- `crates/mez-core/`: stable low-dependency contracts shared by lower crates.
-- `crates/mez-terminal/`: one-terminal parsing, state, history, width, and
-  protocol engine.
-- `crates/mez-mux/`: multiplexer domain, PTY, layout, input, and presentation
-  behavior.
-- `crates/mez-agent/`: provider-independent agent harness, protocols, and
-  deterministic policy.
-- `Justfile`: local development command entry points.
-- `crates/mezzanine/src/main.rs`: thin binary entry point for `mez`.
-- `crates/mezzanine/src/lib.rs`: deliberately narrow product library root.
-- `crates/mezzanine/src/*.rs`: crate roots plus single-file product modules.
-- `crates/mezzanine/src/<subsystem>/mod.rs`: roots for product subsystem
-  modules, including CLI, config, control, host, integrations, protocol,
-  runtime, security, storage, and UI.
-- `crates/mezzanine/src/<subsystem>/*.rs`: focused components that implement
-  decomposed subsystem behavior behind the subsystem `mod.rs` facade.
-- Product subsystem modules are adapters and application composition. Import
-  lower-crate contracts directly rather than forwarding them through product
-  compatibility exports.
-- `crates/mezzanine/src/<subsystem>/tests/`: purpose-named test modules grouped
-  by production behavior or domain and connected with true Rust `mod`
-  declarations. Do not flatten test files with `include!` or use numbered
-  chunk names such as `part_01.rs`.
-- Shared test fixture modules should contain only helpers used by at least two
-  test owners and should use the narrowest practical visibility. Keep
-  one-consumer setup beside its owning tests, preserve test function names
-  during structural moves, and generally keep leaf test modules around
-  300–1,500 lines. Split files over roughly 2,000 lines at a meaningful
-  behavioral boundary instead of adding sequence suffixes.
-- `docs/examples/config.toml`: minimal example configuration aligned with the
-  generated defaults.
-- `target/`: generated Cargo build output; do not edit or commit files from it.
+| Package | Responsibility |
+| --- | --- |
+| `crates/mezzanine` | Product composition, concrete adapters, product tests, and the `mez` binary. |
+| `crates/mez-core` | Stable, low-dependency shared contracts. |
+| `crates/mez-terminal` | One-terminal parsing, state, history, width, and protocol engine. |
+| `crates/mez-mux` | Multiplexer domain, PTY, layout, input, and presentation. |
+| `crates/mez-agent` | Provider-independent agent harness, protocols, and deterministic policy. |
+
+Keep `main.rs` thin and the product `lib.rs` deliberately narrow. Product
+subsystems are adapters and composition: import lower-crate contracts directly,
+not through product compatibility exports. See
+[workspace architecture](docs/contributing/architecture.md) for boundaries.
+
+- Decompose subsystem behavior behind its `mod.rs` facade. When splitting a
+  module, create a directory with `mod.rs`, not a parent `<mod_name>.rs`.
+- Connect purpose-named test modules with Rust `mod` declarations, never
+  `include!` or numbered chunks such as `part_01.rs`. Preserve test function
+  names during structural moves. Small cohesive leaves are fine; split files
+  over roughly 2,000 lines at a meaningful behavioral boundary.
+- Share test fixtures only when at least two owners use them, with the narrowest
+  practical visibility. Keep one-consumer setup beside its tests.
+- Keep `docs/examples/config.toml` minimal and aligned with generated defaults.
+  Never edit or commit generated `target/` output.
 
 ## Build, Test, and Development Commands
-- Always wrap tests in a 120 second `timeout` or greater to check for hangs.
-- Always run `cargo test` qith the `--quiet` opt to reduce output volume.
-- `just`: build all targets and features in release mode.
-- `just build`: build all targets and features in debug mode.
-- `just build-release`: build all targets and features in release mode.
-- `just run -- <args>`: run the release `mez` binary with arguments.
-- `just check`: run `cargo check --all-targets --all-features`.
-- `just fmt`: apply Rust formatting with `cargo fmt --all`.
-- `just clippy`: run clippy for all targets/features with warnings denied.
-- `just test`: run `cargo test --all-targets --all-features`.
-- `just clean`: remove Cargo build artifacts.
-- `just help`: list available recipes.
+- Wrap every test invocation in `timeout` with a budget of at least 120 seconds;
+  increase it for compilation or larger suites. Use `cargo test --quiet`.
+- `just` / `just build-release`: release build, all workspace targets/features.
+- `just build`: debug build, all workspace targets/features.
+- `just run <args>`: run the release `mez` binary (the recipe inserts `--`).
+- `just check`: whole-workspace check, all targets/features; not a narrow check.
+- `just fmt`: apply Rust formatting across the workspace.
+- `just clippy`: lint all workspace targets/features with warnings denied.
+- `just test`: test all workspace targets/features with quiet output.
+- `just clean`: remove build artifacts. `just help`: list recipes.
 
-## Coding Style & Naming Convention Requirements
-- Rust edition is 2024; follow standard `rustfmt` defaults (4-space indentation, line-wrapping via rustfmt).
-- Module and file names are `snake_case` (for example,
-  `crates/mezzanine/src/modules/raw.rs`); config module types are lowercase
-  (for example, `raw`, `mez`).
+## Coding Style & Maintainability
+- Use Rust 2024, standard `rustfmt` defaults, and `snake_case` modules/files.
+  Configuration module types are lowercase (for example, `raw`, `mez`).
+- Preserve both Linux and macOS compatibility.
+- Prefer small, composable functions and explicit dependencies; separate parsing,
+  business rules, and I/O rather than hiding global coupling.
+- Do not use production `unwrap`/`expect` unless the invariant is documented and
+  intentional. Add diagnostic context to propagated errors.
+- Document public contracts and non-obvious or safety-sensitive private behavior:
+  relevant inputs, outputs, errors, ownership, and invariants. New or substantially
+  changed modules should explain purpose and boundaries. Keep long-form
+  architectural explanations where they clarify important relationships or
+  safety reasoning; prefer specific explanations over boilerplate or length.
+- Explain regression intent and non-obvious test setup, invariants, or failure
+  cases. Do not require long-form comments for every self-explanatory test/item.
+- New behavior needs happy-path and edge/failure coverage. Bug fixes need a
+  regression that fails before the fix and passes afterward.
+- Update affected docs/examples in the same change: `SPEC.md` for changed behavior
+  contracts, configuration examples for changed configuration, relevant manual
+  pages for workflows, and `README.md` only for high-level overview changes.
+- Do not add legacy APIs, aliases, or compatibility shims solely for prior
+  versions unless required. Remove deprecated code, but preserve explicit SPEC
+  persistence/protocol contracts and required configuration/data migrations;
+  compatibility cleanup must not delete user state or weaken integrity checks.
+- Version the config schema and migrate added, renamed/moved, or deleted config
+  items using the conventions in `SPEC.md`.
+- Save task-specific research or plans in `docs/reference/` when a local handoff
+  is useful; small tasks need no new artifact. Never stage or commit that
+  directory. Use durable memory only for stable reusable knowledge allowed by
+  the active memory contract, never task-specific research state or progress.
+- Keep plans and progress notes current during very large multi-phase refactors.
 
-## Maintainability & Documentation Standards
-- mezzanine is compatible with both Linux ad MacOS. Compatibility MUST never be broken with either OS.
-- New or substantially changed modules should include a full module-level comment describing purpose, boundaries, and key invariants.
-- Major architectural components should have long form comments explaining their purpose and how they relate to other architectural components.
-- Public and private Rust items (`pub` structs/enums/traits/functions/methods) should have rustdoc comments describing behavior, inputs/outputs, and error conditions.
-- Prefer small, composable functions; split logic that combines parsing, business rules, and I/O into clearer units.
-- Avoid hidden global coupling; pass dependencies explicitly where practical.
-- Do not use `unwrap`/`expect` in production paths unless the invariant is documented and intentional.
-- Add context to propagated errors so failures are diagnosable in logs and tests.
-- New behavior should include tests for the happy path and at least one edge or failure case.
-- Bug fixes should include a regression test that fails before the fix and passes after.
-- Behavior/config changes must update related documentation and examples (`README.md` (only very high level changes are required here), `SPEC.md`, `docs/examples/config.toml`, manual documentatio in `docs/`) in the same change.
-- All tests should have a long form docstring to explain what is being tested and why.
-- Unless specifically instructed, do not maintain backwards compatibility with prior versions of this software. Deprecated code and modules should be removed.
-- The config schema must be versioned and you must provide a migration for config items which are added, renamed/moved or deleted from the schema using conventions established in `SPEC.md`.
-- Commit changes at major sequence points with long form commit messages to describe what has changed.
-- When working on a research or planning task, document your results as research memories using thee appropriate action. If such an action does not exist, save results to a doc in `docs/reference/`.
-- When working on very large multi-phase refactors, keep plans up to date with progress notes throughout the refactor.
-- Never stage or commit documents contained in `docs/reference/`. They are for local use only.
-- When decomposing a module into multiple compilation units, prefer to create a `mod.rs` in the module directory rather than leaving a `<mod_name>.rs` source in the parent directory.
+## Validation Requirements
+| Task phase/type | Expected validation |
+| --- | --- |
+| Rust implementation iteration | Smallest relevant package/target check and focused regression tests, e.g. `cargo check -p mez-agent --lib` and bounded quiet tests. Broaden for shared contracts. |
+| Final code candidate | All applicable required CI gates runnable on the current machine before merge or issue closure; report unavailable checks. Do not run the full suite for every intermediate edit. |
+| Documentation/research/tracker-only work | Relevant artifact checks; no automatic workspace compilation. |
 
-## Testing Requirements
-- Use `just check` for fast type-checking while developing.
-- Run tests against the smallest relevant code subset while implementing changes.
-- All changes must pass all CI checks capable of running on the current machine before merge into main or before issue closure.
-- Prefer end-to-end coverage for feature changes whenever possible.
-- Do not run the full test suite for every implementation change. Save that for the final gate before merge or closure.
+For feature changes, exercise the user-facing path or closest faithful
+production-boundary test; helper tests or compilation alone do not establish
+connected behavior. Reuse valid results while relevant source/config/toolchain
+inputs remain unchanged. An observation timeout does not establish process
+termination: inspect the existing run rather than launch a duplicate build.
+
+See [development and validation](docs/contributing/development-and-validation.md)
+and [CI](.github/workflows/ci.yml) for full gates, platform/toolchain coverage,
+physical temporary-directory requirements, and affected-subsystem acceptance
+recipes. Missing platform checks must be reported, not silently treated as passed.
 
 ## Commit & Pull Request Requirements
-- Commit messages in history are short, imperative, sentence case, and often end with a period (e.g., “Update pyo3 to latest release and fix compilation issues.”). Keep new commits consistent.
-- PRs should include a clear summary, test commands/results, and any config changes. Add docs updates in `README.md` or `SPEC.md` when behavior changes.
-- When adding new behaviors, ensure that they do not violate the requirements in `SPEC.md`.
-- Always commit your changes at the end of a turn with a long-form informative message. Never skip this.
+- Commit task-owned, validated, coherent changes at meaningful checkpoints and
+  implementation completion. Use a short imperative, sentence-case subject and
+  an explanatory body. Never create empty commits or include unrelated user/peer
+  changes. Read-only tasks and local research notes require no commit. If work
+  stops before a safe checkpoint, report the exact remaining state.
+- PRs should summarize changes, actual validation results/gaps, and config changes.
+  Keep new behavior aligned with `SPEC.md`.
 
 ## Security & Configuration Tips
-- Do not commit secrets in config files. Use `docs/examples/config.toml` as the baseline and override locally.
-- Review network bind addresses and TLS settings before running in shared environments.
+- Never commit secrets. Use `docs/examples/config.toml` as a baseline and override
+  locally. Review network bind addresses and TLS before running in shared environments.

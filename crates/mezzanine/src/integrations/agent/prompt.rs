@@ -1,8 +1,7 @@
-//! Agent Prompt implementation.
+//! Product-owned prompt assets for provider-neutral assembly in `mez-agent`.
 //!
-//! This module owns the agent prompt boundary for Mezzanine. It keeps related
-//! state transitions and helper routines localized so neighboring modules
-//! interact through typed APIs instead of duplicating subsystem details.
+//! Required Markdown fragments are embedded at build time. Missing or non-UTF-8
+//! assets fail explicitly rather than silently omitting policy sections.
 
 use include_dir::{Dir, include_dir};
 
@@ -33,11 +32,8 @@ impl AgentPromptAssetSource for EmbeddedPromptAssets {
     }
 }
 
-/// Runs the build agent system prompt operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
+/// Assembles the built-in prompt without repository guidance for content tests.
+/// Missing or invalid embedded assets propagate as prompt errors.
 #[cfg(test)]
 pub fn build_agent_system_prompt(profile: &AgentPromptProfile) -> AgentPromptResult<String> {
     build_agent_system_prompt_with_repository_instructions(profile, &[])
@@ -46,8 +42,7 @@ pub fn build_agent_system_prompt(profile: &AgentPromptProfile) -> AgentPromptRes
 /// Builds the provider-facing system prompt with active repository guidance.
 ///
 /// # Parameters
-/// - `profile`: The agent prompt profile that supplies pane, permission, and MCP
-///   context.
+/// - `profile`: The selected model identity for the invariant prompt prefix.
 /// - `repository_instruction_blocks`: The already discovered repository
 ///   instruction contents to embed directly into the system prompt.
 #[cfg(test)]
