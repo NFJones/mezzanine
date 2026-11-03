@@ -147,7 +147,7 @@ struct Inner {
     destination: Destination,
     /// The opening worker installs the actual fence before touching SQLite.
     /// Workers and fallback retirement retain this cell beyond root drop.
-    ownership: Arc<Mutex<Option<RootOwnership>>>,
+    ownership: Arc<Mutex<Option<Arc<RootOwnership>>>>,
     /// Runtime used to install blocking workers and fallback retirement custody.
     runtime: Handle,
     /// Live identity shared only with receipts issued by this exact root.
@@ -558,11 +558,17 @@ impl MmpCustodyRoot {
         #[cfg(test)]
         let probe = self.0.probe.clone();
         self.0.runtime.spawn_blocking(move || {
-            let _ownership = ownership;
             #[cfg(test)]
             if let Some(probe) = &probe {
                 probe.before_write();
             }
+            let fence = ownership
+                .lock()
+                .map_err(|_| ownership_error())?
+                .as_ref()
+                .cloned()
+                .ok_or_else(ownership_error)?;
+            fence.validate_root()?;
             let store = store.filter(|store| plan.matches_store(store));
             let mut store = match store {
                 Some(store) => store,
@@ -572,14 +578,22 @@ impl MmpCustodyRoot {
                     destination.limits,
                 )?,
             };
-            let outcome = if recovery {
-                write.persist(&mut store.acceptance_recovery_port(&plan))
-            } else {
-                write.persist(&mut store.acceptance_port(&plan))
+            let outcome = {
+                let mut owned = fence.bind_store(&mut store)?;
+                if recovery {
+                    write.persist(&mut owned.store_mut().acceptance_recovery_port(&plan))
+                } else {
+                    write.persist(&mut owned.store_mut().acceptance_port(&plan))
+                }
             };
             #[cfg(test)]
             if let Some(probe) = &probe {
                 probe.after_write(&outcome);
+            }
+            // A changed path after physical I/O cannot publish a result under
+            // this root; an observed worker error retains reconciliation duty.
+            {
+                let _bound = fence.bind_store(&mut store)?;
             }
             let anchor = store.acceptance_plan(0);
             Ok(Written {
@@ -646,11 +660,15 @@ impl Drop for Inner {
 /// Opens and captures the actual settled position exclusively off the actor.
 fn open_destination(
     source: &Destination,
-    ownership: &Mutex<Option<RootOwnership>>,
+    ownership: &Mutex<Option<Arc<RootOwnership>>>,
 ) -> Result<Opened> {
-    let fence = RootOwnership::acquire(&source.root)?;
+    let fence = Arc::new(RootOwnership::acquire(&source.root)?);
+    fence.validate_root()?;
+    let mut store = MmpCustodyStore::open_with_limits(&source.root, &source.owner, source.limits)?;
+    {
+        let _bound = fence.bind_store(&mut store)?;
+    }
     *ownership.lock().map_err(|_| ownership_error())? = Some(fence);
-    let store = MmpCustodyStore::open_with_limits(&source.root, &source.owner, source.limits)?;
     let anchor = store.acceptance_plan(0)?;
     Ok(Opened { store, anchor })
 }

@@ -196,11 +196,17 @@ impl MmpCustodyRoot {
         #[cfg(test)]
         let probe = self.0.ack_probe.clone();
         self.0.runtime.spawn_blocking(move || {
-            let _ownership = ownership;
             #[cfg(test)]
             if let Some(probe) = &probe {
                 probe.before_write();
             }
+            let fence = ownership
+                .lock()
+                .map_err(|_| ownership_error())?
+                .as_ref()
+                .cloned()
+                .ok_or_else(ownership_error)?;
+            fence.validate_root()?;
             // Discard only a connection already proven foreign by its private
             // allocation. Reopen the trusted path under the ORIGINAL plan; a
             // same-label replacement still cannot gain authority from retry.
@@ -213,7 +219,15 @@ impl MmpCustodyRoot {
                     destination.limits,
                 )?,
             };
-            let outcome = write.persist(&mut store.acknowledgement_port(&plan));
+            let outcome = {
+                let mut owned = fence.bind_store(&mut store)?;
+                write.persist(&mut owned.store_mut().acknowledgement_port(&plan))
+            };
+            // Do not publish an ACK result if its bound path changed while the
+            // worker was active; the root retains the original for settlement.
+            {
+                let _bound = fence.bind_store(&mut store)?;
+            }
             #[cfg(test)]
             if let Some(probe) = &probe {
                 probe.after_write(&outcome);

@@ -20,6 +20,8 @@ pub(super) struct Probe {
     panic_after_commit: AtomicBool,
     /// One-shot actual loss after durable uncommitted cleanup but before receipt.
     panic_after_refusal: AtomicBool,
+    /// Optional generated-directory relocation after actual commit.
+    relocate_after_commit: Mutex<Option<(PathBuf, PathBuf)>>,
 }
 impl Probe {
     /// Constructs a retained real worker gate with optional immediate release.
@@ -30,6 +32,7 @@ impl Probe {
             attempts: AtomicUsize::new(0),
             panic_after_commit: AtomicBool::new(false),
             panic_after_refusal: AtomicBool::new(false),
+            relocate_after_commit: Mutex::new(None),
         })
     }
     /// Blocks the physical worker without occupying any async executor thread.
@@ -43,6 +46,15 @@ impl Probe {
     }
     /// Injects actual thread panic only after the production port committed.
     pub(super) fn after_write(&self, outcome: &MessageAcceptanceWriteOutcome) {
+        if matches!(outcome, MessageAcceptanceWriteOutcome::Committed(_)) {
+            let relocation = self.relocate_after_commit.lock().unwrap().take();
+            if let Some((original, retained)) = relocation {
+                use std::os::unix::fs::DirBuilderExt;
+                std::fs::rename(&original, &retained).unwrap();
+                let mut builder = std::fs::DirBuilder::new();
+                builder.mode(0o700).create(original).unwrap();
+            }
+        }
         if matches!(outcome, MessageAcceptanceWriteOutcome::Committed(_))
             && self.panic_after_commit.swap(false, Ordering::SeqCst)
         {
@@ -694,6 +706,112 @@ async fn replacement_store_after_actual_worker_loss_cannot_adopt_original_plan()
     );
     assert_eq!(fixture.disk(), original);
     assert_eq!(replaced.disk(), (0, 0));
+    assert!(root.adopt(&mut service, None).unwrap().accepted);
+}
+
+/// Copying the original allocation ID into a replacement directory cannot
+/// transfer the original root's live lock. After a real postcommit worker
+/// loss, retry must leave the replacement empty and retain the original until
+/// its locked directory is restored, then reconcile without another write.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn copied_store_identity_cannot_transfer_locked_directory_ownership() {
+    let fixture = Fixture::new(true);
+    let retained = Fixture::new(true);
+    let replaced = Fixture::new(true);
+    fixture
+        .probe
+        .panic_after_commit
+        .store(true, Ordering::SeqCst);
+    let root = fixture.root();
+    root.observe().await.unwrap();
+    let (mut service, sender, target, _) = fixture_service();
+    let ticket = service
+        .prepare_acceptance(
+            &sender.agent_id,
+            envelope(&sender, &target, "original"),
+            MessageScope::Session,
+            100,
+            4096,
+            None,
+        )
+        .unwrap();
+    root.start(&mut service, &ticket, None).unwrap();
+    let CustodyWorkerStatus::RetryAt(due) = root.observe().await.unwrap() else {
+        panic!("expected actual failed join")
+    };
+    let original = fixture.disk();
+    let connection = rusqlite::Connection::open(fixture.path.join("custody.sqlite")).unwrap();
+    let store_id: Vec<u8> = connection
+        .query_row("SELECT store_id FROM state", [], |row| row.get(0))
+        .unwrap();
+    drop(connection);
+    std::fs::rename(&fixture.path, &retained.path).unwrap();
+    drop(MmpCustodyStore::open(&fixture.path, "original-session").unwrap());
+    let connection = rusqlite::Connection::open(fixture.path.join("custody.sqlite")).unwrap();
+    connection
+        .execute("UPDATE state SET store_id=?1", [&store_id])
+        .unwrap();
+    drop(connection);
+    assert_eq!(fixture.disk(), (0, 0));
+    assert!(root.retry(&mut service, due).unwrap());
+    let CustodyWorkerStatus::RetryAt(due) = root.observe().await.unwrap() else {
+        panic!("copied store identity must not transfer directory ownership")
+    };
+    assert_eq!(fixture.disk(), (0, 0));
+    assert_eq!(retained.disk(), original);
+    std::fs::rename(&fixture.path, &replaced.path).unwrap();
+    std::fs::rename(&retained.path, &fixture.path).unwrap();
+    assert!(root.retry(&mut service, due).unwrap());
+    assert_eq!(
+        root.observe().await.unwrap(),
+        CustodyWorkerStatus::AwaitingAdoption
+    );
+    assert_eq!(fixture.disk(), original);
+    assert_eq!(replaced.disk(), (0, 0));
+    assert!(root.adopt(&mut service, None).unwrap().accepted);
+}
+
+/// Moving the original directory immediately after the real marker commit must
+/// prevent the worker from publishing that result through the replaced path.
+/// Once the locked directory returns, the retained original reconciles without
+/// a second write and may be adopted by its original lower owner.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn directory_replacement_after_commit_withholds_result_until_restored() {
+    let fixture = Fixture::new(true);
+    let retained = Fixture::new(true);
+    let replaced = Fixture::new(true);
+    *fixture.probe.relocate_after_commit.lock().unwrap() =
+        Some((fixture.path.clone(), retained.path.clone()));
+    let root = fixture.root();
+    root.observe().await.unwrap();
+    let (mut service, sender, target, _) = fixture_service();
+    let ticket = service
+        .prepare_acceptance(
+            &sender.agent_id,
+            envelope(&sender, &target, "original"),
+            MessageScope::Session,
+            100,
+            4096,
+            None,
+        )
+        .unwrap();
+    root.start(&mut service, &ticket, None).unwrap();
+    let CustodyWorkerStatus::RetryAt(due) = root.observe().await.unwrap() else {
+        panic!("changed directory must withhold the committed result")
+    };
+    assert!(service.has_unpublished_acceptance());
+    assert!(root.adopt(&mut service, None).is_err());
+    let original = retained.disk();
+    assert!(original.0 > 0);
+    assert!(!fixture.path.join("custody.sqlite").exists());
+    std::fs::rename(&fixture.path, &replaced.path).unwrap();
+    std::fs::rename(&retained.path, &fixture.path).unwrap();
+    assert!(root.retry(&mut service, due).unwrap());
+    assert_eq!(
+        root.observe().await.unwrap(),
+        CustodyWorkerStatus::AwaitingAdoption
+    );
+    assert_eq!(fixture.disk(), original);
     assert!(root.adopt(&mut service, None).unwrap().accepted);
 }
 

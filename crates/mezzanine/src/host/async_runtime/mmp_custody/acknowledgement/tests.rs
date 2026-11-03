@@ -518,4 +518,63 @@ async fn original_ack_plan_rejects_replacement_then_recovers_returned_original_s
     assert_eq!(fixture.probe.attempts.load(Ordering::SeqCst), 3);
 }
 
+/// A copied database includes the exact ACK, source bytes and allocation ID,
+/// but it does not include the original root's live lock. After a real lost
+/// ACK worker result, only restoring the original directory may qualify the
+/// retained ACK and advance its original recipient cursor.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn copied_database_cannot_transfer_original_ack_ownership() {
+    let fixture = Fixture::new(true);
+    let retained = Fixture::new(true);
+    let replaced = Fixture::new(true);
+    let root = fixture.root();
+    let (mut service, _sender, target, ticket) = prepared(&root).await;
+    fixture
+        .probe
+        .panic_after_commit
+        .store(true, Ordering::SeqCst);
+    root.start_acknowledgement(&mut service, &ticket).unwrap();
+    let CustodyWorkerStatus::AcknowledgementRetryAt(due) = root.observe().await.unwrap() else {
+        panic!("expected actual failed join")
+    };
+    let original = fixture.disk();
+    std::fs::rename(&fixture.path, &retained.path).unwrap();
+    drop(MmpCustodyStore::open(&fixture.path, "session").unwrap());
+    std::fs::copy(
+        retained.path.join("custody.sqlite"),
+        fixture.path.join("custody.sqlite"),
+    )
+    .unwrap();
+    assert_eq!(fixture.disk(), original);
+    assert!(root.retry_acknowledgement(&mut service, due).unwrap());
+    let CustodyWorkerStatus::AcknowledgementRetryAt(due) = root.observe().await.unwrap() else {
+        panic!("copied database must not transfer original lock ownership")
+    };
+    assert_eq!(
+        service
+            .subscription(&target.agent_id)
+            .unwrap()
+            .last_sequence,
+        0
+    );
+    assert!(root.adopt_acknowledgement(&mut service).is_err());
+    std::fs::rename(&fixture.path, &replaced.path).unwrap();
+    std::fs::rename(&retained.path, &fixture.path).unwrap();
+    assert!(root.retry_acknowledgement(&mut service, due).unwrap());
+    assert_eq!(
+        root.observe().await.unwrap(),
+        CustodyWorkerStatus::AcknowledgementAwaitingAdoption
+    );
+    root.adopt_acknowledgement(&mut service).unwrap();
+    assert_eq!(
+        service
+            .subscription(&target.agent_id)
+            .unwrap()
+            .last_sequence,
+        1
+    );
+    assert_eq!(fixture.disk(), original);
+    assert_eq!(replaced.disk(), original);
+}
+
 mod actor;

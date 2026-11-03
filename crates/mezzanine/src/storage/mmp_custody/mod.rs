@@ -108,6 +108,27 @@ pub(crate) struct MmpCustodyStore {
     store_id: Vec<u8>,
     /// Trusted session owner captured at open and rechecked before every commit.
     owner: String,
+    /// Retained private directory inode for matching an actual root owner.
+    directory: fs::File,
+    /// SQLite file identity captured around opening, not a receipt or secret.
+    database_identity: FileIdentity,
+}
+
+/// Local filesystem object identity, used only alongside the live owner lock.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct FileIdentity {
+    device: u64,
+    inode: u64,
+}
+
+impl FileIdentity {
+    /// Captures the kernel identity of one already-validated filesystem object.
+    fn from_metadata(metadata: &fs::Metadata) -> Self {
+        Self {
+            device: metadata.dev(),
+            inode: metadata.ino(),
+        }
+    }
 }
 
 /// Bounded, identity-checked state from one actual SQLite snapshot.
@@ -149,7 +170,7 @@ impl MmpCustodyStore {
             builder.recursive(true).mode(0o700);
             builder.create(root).map_err(MezError::from)?;
         }
-        validate_private_path(root, true)?;
+        let directory = open_private_directory(root)?;
         let path = root.join("custody.sqlite");
         match OpenOptions::new()
             .write(true)
@@ -162,6 +183,7 @@ impl MmpCustodyStore {
             Err(error) => return Err(error.into()),
         }
         validate_private_path(&path, false)?;
+        let database_identity = FileIdentity::from_metadata(&fs::symlink_metadata(&path)?);
         for suffix in ["-journal", "-wal", "-shm"] {
             let candidate = root.join(format!("custody.sqlite{suffix}"));
             match fs::symlink_metadata(&candidate) {
@@ -182,6 +204,13 @@ impl MmpCustodyStore {
             OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NOFOLLOW,
         )
         .map_err(database_error)?;
+        validate_directory_path(root, &directory)?;
+        validate_private_path(&path, false)?;
+        if FileIdentity::from_metadata(&fs::symlink_metadata(&path)?) != database_identity {
+            return Err(MezError::conflict(
+                "MMP custody database path changed during open",
+            ));
+        }
         connection
             .busy_timeout(Duration::from_secs(1))
             .map_err(database_error)?;
@@ -268,7 +297,16 @@ impl MmpCustodyStore {
             limits,
             store_id,
             owner: owner.to_owned(),
+            directory,
+            database_identity,
         };
+        validate_directory_path(root, &store.directory)?;
+        validate_private_path(&path, false)?;
+        if FileIdentity::from_metadata(&fs::symlink_metadata(&path)?) != store.database_identity {
+            return Err(MezError::conflict(
+                "MMP custody database path changed during open",
+            ));
+        }
         store.checked_state(&store.connection)?;
         Ok(store)
     }
@@ -438,6 +476,38 @@ fn read_record(connection: &Connection, key: &str) -> Result<Option<Vec<u8>>> {
 fn validate_identifier(value: &str) -> Result<()> {
     if value.is_empty() || value.len() > 256 || !value.bytes().all(|b| b.is_ascii_graphic()) {
         return Err(MezError::invalid_args("invalid MMP custody identifier"));
+    }
+    Ok(())
+}
+
+/// Opens and retains a private directory without following its final component.
+fn open_private_directory(path: &Path) -> Result<fs::File> {
+    validate_private_path(path, true)?;
+    let descriptor = rustix::fs::open(
+        path,
+        rustix::fs::OFlags::RDONLY
+            | rustix::fs::OFlags::DIRECTORY
+            | rustix::fs::OFlags::NOFOLLOW
+            | rustix::fs::OFlags::CLOEXEC,
+        rustix::fs::Mode::empty(),
+    )
+    .map_err(std::io::Error::from)?;
+    let directory = fs::File::from(descriptor);
+    validate_directory_path(path, &directory)?;
+    Ok(directory)
+}
+
+/// Requires the current private pathname to name the retained directory inode.
+fn validate_directory_path(path: &Path, directory: &fs::File) -> Result<()> {
+    validate_private_path(path, true)?;
+    let held = directory.metadata()?;
+    let current = fs::symlink_metadata(path)?;
+    if !held.is_dir()
+        || held.uid() != rustix::process::geteuid().as_raw()
+        || held.permissions().mode() & 0o077 != 0
+        || FileIdentity::from_metadata(&held) != FileIdentity::from_metadata(&current)
+    {
+        return Err(MezError::conflict("MMP custody directory path changed"));
     }
     Ok(())
 }

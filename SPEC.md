@@ -15593,9 +15593,12 @@ Stop MUST close fresh issuance while preserving issued reconciliation/publicatio
 Cooperating runtime roots for the same private store MUST acquire exclusive
 nonblocking ownership before opening it. That ownership MUST survive root-handle
 loss until every issued physical worker has retired, including panic and fallback
-drain paths. The ownership fence alone does not establish that a staged record
-is recoverable, and lower-level multi-connection store access does not itself
-acquire this runtime fence.
+drain paths. A root MUST bind that live lock to its original private directory,
+database file identity and store allocation before each worker uses the store;
+a matching owner label or copied allocation ID MUST NOT transfer that binding.
+The ownership fence alone does not establish that a staged record is recoverable,
+and lower-level multi-connection store access does not itself acquire this runtime
+fence. The private directory remains trusted against same-user path replacement.
 Orderly supervision MUST retain the root through settlement; last-root cleanup
 MUST NOT claim canonical acknowledgement. This worker component does not itself
 wire durable ingress, later control-drain scheduling or restart recovery.
