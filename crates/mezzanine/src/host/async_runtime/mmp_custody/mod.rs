@@ -35,6 +35,7 @@ use tokio::time::Instant;
 
 use crate::error::{MezError, Result};
 use crate::storage::mmp_custody::acceptance::AcceptancePlan;
+use crate::storage::mmp_custody::ownership::RootOwnership;
 use crate::storage::mmp_custody::{CustodyStoreLimits, MmpCustodyStore};
 
 mod acknowledgement;
@@ -144,6 +145,9 @@ struct Inner {
     observer: tokio::sync::Mutex<()>,
     /// Trusted immutable store destination for actual lost-worker reopening.
     destination: Destination,
+    /// The opening worker installs the actual fence before touching SQLite.
+    /// Workers and fallback retirement retain this cell beyond root drop.
+    ownership: Arc<Mutex<Option<RootOwnership>>>,
     /// Runtime used to install blocking workers and fallback retirement custody.
     runtime: Handle,
     /// Live identity shared only with receipts issued by this exact root.
@@ -194,11 +198,14 @@ impl MmpCustodyRoot {
         #[cfg(test)] ack_probe: Option<Arc<acknowledgement::tests::Probe>>,
     ) -> Self {
         let source = destination.clone();
-        let worker = runtime.spawn_blocking(move || open_destination(&source));
+        let ownership = Arc::new(Mutex::new(None));
+        let opening_ownership = ownership.clone();
+        let worker = runtime.spawn_blocking(move || open_destination(&source, &opening_ownership));
         Self(Arc::new(Inner {
             state: Mutex::new(State::Opening(worker)),
             observer: tokio::sync::Mutex::new(()),
             destination,
+            ownership,
             runtime,
             storage_scope: MessageStorageScope::default(),
             stopping: AtomicBool::new(false),
@@ -547,9 +554,11 @@ impl MmpCustodyRoot {
         recovery: bool,
     ) -> JoinHandle<Result<Written>> {
         let destination = self.0.destination.clone();
+        let ownership = self.0.ownership.clone();
         #[cfg(test)]
         let probe = self.0.probe.clone();
         self.0.runtime.spawn_blocking(move || {
+            let _ownership = ownership;
             #[cfg(test)]
             if let Some(probe) = &probe {
                 probe.before_write();
@@ -610,7 +619,9 @@ impl Drop for Inner {
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         let state = std::mem::replace(state, State::Unavailable(ownership_error()));
         let runtime = self.runtime.clone();
+        let ownership = self.ownership.clone();
         self.runtime.spawn(async move {
+            let _ownership = ownership;
             match state {
                 State::Opening(worker) => {
                     let result = worker.await;
@@ -633,7 +644,12 @@ impl Drop for Inner {
 }
 
 /// Opens and captures the actual settled position exclusively off the actor.
-fn open_destination(source: &Destination) -> Result<Opened> {
+fn open_destination(
+    source: &Destination,
+    ownership: &Mutex<Option<RootOwnership>>,
+) -> Result<Opened> {
+    let fence = RootOwnership::acquire(&source.root)?;
+    *ownership.lock().map_err(|_| ownership_error())? = Some(fence);
     let store = MmpCustodyStore::open_with_limits(&source.root, &source.owner, source.limits)?;
     let anchor = store.acceptance_plan(0)?;
     Ok(Opened { store, anchor })

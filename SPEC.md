@@ -15566,6 +15566,12 @@ consuming an uncertain input for retry, and lost input MUST require the actual
 observed original worker join. Retry spacing MUST be monotonic1s,2s,4s up to30s
 from observed failures, with one physical worker per root and no provider permit.
 Stop MUST close fresh issuance while preserving issued reconciliation/publication.
+Cooperating runtime roots for the same private store MUST acquire exclusive
+nonblocking ownership before opening it. That ownership MUST survive root-handle
+loss until every issued physical worker has retired, including panic and fallback
+drain paths. The ownership fence alone does not establish that a staged record
+is recoverable, and lower-level multi-connection store access does not itself
+acquire this runtime fence.
 Orderly supervision MUST retain the root through settlement; last-root cleanup
 MUST NOT claim canonical acknowledgement. This worker component does not itself
 wire durable ingress, later control-drain scheduling or restart recovery.

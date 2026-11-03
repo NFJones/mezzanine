@@ -28,6 +28,7 @@ use crate::error::{MezError, Result};
 pub(crate) mod acceptance;
 pub(crate) mod acknowledgement;
 mod inventory;
+pub(crate) mod ownership;
 
 /// Version of this private row/receipt store, independent of message snapshots.
 const SCHEMA_VERSION: i64 = 1;

@@ -147,6 +147,82 @@ fn envelope(sender: &SenderIdentity, target: &SenderIdentity, id: &str) -> Envel
     }
 }
 
+/// A second root cannot become a writer while the original root owns the same
+/// store, including after the last root handle is dropped while its actual
+/// blocking write is still running. Once that worker has settled and its
+/// fallback drain has retired, a fresh root can acquire the same store.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn store_owner_outlives_root_until_actual_worker_has_retired() {
+    let fixture = Fixture::new(false);
+    let root = fixture.root();
+    assert_eq!(root.observe().await.unwrap(), CustodyWorkerStatus::Idle);
+    let competing = fixture.root();
+    assert_eq!(
+        competing.observe().await.unwrap(),
+        CustodyWorkerStatus::Unavailable
+    );
+    drop(competing);
+
+    let (mut service, sender, target, _) = fixture_service();
+    let ticket = service
+        .prepare_acceptance(
+            &sender.agent_id,
+            envelope(&sender, &target, "owned-worker"),
+            MessageScope::Session,
+            100,
+            4096,
+            None,
+        )
+        .unwrap();
+    root.start(&mut service, &ticket, None).unwrap();
+    fixture.probe.started.notified().await;
+    drop(root);
+
+    let competing = fixture.root();
+    assert_eq!(
+        competing.observe().await.unwrap(),
+        CustodyWorkerStatus::Unavailable
+    );
+    drop(competing);
+    fixture.probe.release();
+
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let next = fixture.root();
+            if next.observe().await.unwrap() == CustodyWorkerStatus::Idle {
+                break;
+            }
+            drop(next);
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(fixture.disk().0 > 0);
+}
+
+/// A symlink at the owner-lock pathname cannot redirect the lifetime fence to
+/// another inode. Opening fails before SQLite is created and leaves the target
+/// unchanged, so an unsafe preexisting path never yields a usable root.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn owner_lock_symlink_fails_before_store_creation() {
+    use std::os::unix::fs::{PermissionsExt, symlink};
+
+    let fixture = Fixture::new(true);
+    std::fs::create_dir(&fixture.path).unwrap();
+    std::fs::set_permissions(&fixture.path, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let target = fixture.path.join("target");
+    std::fs::write(&target, b"unchanged").unwrap();
+    symlink(&target, fixture.path.join("owner.lock")).unwrap();
+    let root = fixture.root();
+    assert_eq!(
+        root.observe().await.unwrap(),
+        CustodyWorkerStatus::Unavailable
+    );
+    assert!(!fixture.path.join("custody.sqlite").exists());
+    assert_eq!(std::fs::read(target).unwrap(), b"unchanged");
+}
+
 /// Cancelling a pending observer cannot detach the actual gated blocking worker
 /// or fabricate acceptance. A second observer remains able to join the original;
 /// Stop closes new admission but preserves exact original publication afterward.
@@ -316,6 +392,12 @@ async fn actual_postcommit_worker_panic_retries_same_plan_without_second_disk_oc
     let CustodyWorkerStatus::RetryAt(due) = root.observe().await.unwrap() else {
         panic!("expected joined failure")
     };
+    let competing = fixture.root();
+    assert_eq!(
+        competing.observe().await.unwrap(),
+        CustodyWorkerStatus::Unavailable
+    );
+    drop(competing);
     assert!(due >= before_observe + Duration::from_secs(1));
     let disk = fixture.disk();
     assert!(disk.0 > 2);

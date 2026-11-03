@@ -192,9 +192,11 @@ impl MmpCustodyRoot {
         write: MessageAcknowledgementWrite,
     ) -> JoinHandle<Result<Written>> {
         let destination = self.0.destination.clone();
+        let ownership = self.0.ownership.clone();
         #[cfg(test)]
         let probe = self.0.ack_probe.clone();
         self.0.runtime.spawn_blocking(move || {
+            let _ownership = ownership;
             #[cfg(test)]
             if let Some(probe) = &probe {
                 probe.before_write();
