@@ -46,7 +46,7 @@ impl OwnedCustodyStore<'_> {
             let generation = inventory.inventory.generation;
             let stage_key = format!("a1:{sequence:016x}:stage");
             let stage = read_record(&transaction, &stage_key)?.ok_or_else(changed)?;
-            let unaffected = unaffected_rows_digest(&transaction, &stage_key)?;
+            let unaffected = unaffected_rows_digest(&transaction, &[&stage_key])?;
             let initial_generation = generation
                 .checked_sub(u64::try_from(present_chunks).map_err(|_| changed())?)
                 .and_then(|value| value.checked_sub(1))
@@ -91,7 +91,7 @@ impl OwnedCustodyStore<'_> {
             if !expected || after.inventory.generation != declared_generation {
                 return Err(changed());
             }
-            if unaffected_rows_digest(&transaction, &stage_key)? != unaffected {
+            if unaffected_rows_digest(&transaction, &[&stage_key])? != unaffected {
                 return Err(changed());
             }
             verify_abort_batch(
@@ -106,14 +106,107 @@ impl OwnedCustodyStore<'_> {
         self.revalidate()?;
         Ok(result)
     }
+
+    /// Removes one verified tail chunk from a declared restart abort.
+    ///
+    /// Full preflight, exact stage and chunk preimages, the two-row update,
+    /// unchanged other rows and the resulting abort all share one immediate
+    /// transaction. The live owner is checked before and after that work.
+    /// Returns the original sequence and number of chunks still present, or
+    /// `None` if no unfinished cleanup remains. A returned value grants no
+    /// noncommit, allocator, sender, recipient or delivery authority; an error
+    /// after commit remains uncertain and must be reconciled from the store.
+    pub(crate) fn cleanup_restart_step(
+        &mut self,
+        limits: MessageAcceptanceDecodeLimits,
+    ) -> Result<Option<(u64, usize)>> {
+        self.revalidate()?;
+        let result = {
+            let store = self.store_mut();
+            let transaction = rusqlite::Transaction::new_unchecked(
+                &store.connection,
+                rusqlite::TransactionBehavior::Immediate,
+            )
+            .map_err(database_error)?;
+            let before = store.restart_inventory_in_snapshot(&transaction, limits)?;
+            let (sequence, present_chunks) = match before.pending {
+                Some(PendingCustodyRef::Aborting {
+                    sequence,
+                    present_chunks,
+                    ..
+                }) => (sequence, present_chunks),
+                Some(PendingCustodyRef::Unfinished { .. }) => return Err(changed()),
+                None => {
+                    transaction.commit().map_err(database_error)?;
+                    self.revalidate()?;
+                    return Ok(None);
+                }
+            };
+            let index = present_chunks.checked_sub(1).ok_or_else(changed)?;
+            let prefix = format!("a1:{sequence:016x}:");
+            let stage_key = format!("{prefix}stage");
+            let chunk_key = chunk_key(&prefix, index);
+            let stage = read_record(&transaction, &stage_key)?.ok_or_else(changed)?;
+            let chunk = read_record(&transaction, &chunk_key)?.ok_or_else(changed)?;
+            let unaffected = unaffected_rows_digest(&transaction, &[&stage_key, &chunk_key])?;
+            let mut abort = Abort::decode(&stage)?;
+            if usize::from(abort.remaining) != present_chunks {
+                return Err(changed());
+            }
+            abort.remaining = u16::try_from(index).map_err(|_| changed())?;
+            abort.previous_stage_digest = Sha256::digest(&stage).into();
+            abort.last_deleted_digest = Sha256::digest(&chunk).into();
+            let replacement = abort.padded(stage.len());
+            let receipt = store.commit_in_transaction(
+                &transaction,
+                before.inventory.generation,
+                &[
+                    CustodyWrite {
+                        key: &stage_key,
+                        previous: Some(&abort.previous_stage_digest),
+                        value: Some(&replacement),
+                    },
+                    CustodyWrite {
+                        key: &chunk_key,
+                        previous: Some(&abort.last_deleted_digest),
+                        value: None,
+                    },
+                ],
+            )?;
+            let after = store.restart_inventory_in_snapshot(&transaction, limits)?;
+            let expected = if index == 0 {
+                after.pending.is_none() && after.inventory.aborted_sequences.contains(&sequence)
+            } else {
+                matches!(after.pending, Some(PendingCustodyRef::Aborting {
+                    sequence: current, present_chunks: count, ..
+                }) if current == sequence && count == index)
+            };
+            if !expected
+                || after.inventory.generation != receipt.generation()
+                || unaffected_rows_digest(&transaction, &[&stage_key, &chunk_key])? != unaffected
+            {
+                return Err(changed());
+            }
+            verify_abort_batch(
+                &prefix,
+                &replacement,
+                &abort,
+                &store.checked_state(&transaction)?.batch,
+            )?;
+            transaction.commit().map_err(database_error)?;
+            Some((sequence, index))
+        };
+        self.revalidate()?;
+        Ok(result)
+    }
 }
 
-/// Hashes every checksum-validated row except the exact stage being replaced.
+/// Hashes every checksum-validated row except the exact rows being replaced.
 /// Length framing makes key/value boundaries unambiguous, and one bounded row
 /// is read at a time. Both passes execute inside the same write transaction.
 fn unaffected_rows_digest(
     transaction: &rusqlite::Transaction<'_>,
-    excluded_key: &str,
+    excluded_keys: &[&str],
 ) -> Result<[u8; 32]> {
     let mut hash = Sha256::new();
     let mut statement = transaction
@@ -123,7 +216,7 @@ fn unaffected_rows_digest(
     while let Some(row) = rows.next().map_err(database_error)? {
         let key: Option<String> = row.get(0).map_err(database_error)?;
         let key = key.ok_or_else(changed)?;
-        if key == excluded_key {
+        if excluded_keys.contains(&key.as_str()) {
             continue;
         }
         let value = read_record(transaction, &key)?.ok_or_else(changed)?;
@@ -237,6 +330,11 @@ mod tests {
         ownership::RootOwnership,
     };
     use mez_agent::messaging::MessageAcceptanceWriteOutcome;
+    use std::io::{BufRead, BufReader, Write};
+    use std::process::{Child, Command, Stdio};
+
+    const CHILD_ROOT: &str = "MEZ_TEST_MMP_RESTART_CLEANUP_ROOT";
+    const CHILD_READY: &str = "MMP_RESTART_CLEANUP_COMMITTED";
 
     /// Uses the destination's existing finite decode policy for the fixture.
     fn limits() -> MessageAcceptanceDecodeLimits {
@@ -448,5 +546,234 @@ mod tests {
             before
         );
         assert_eq!(owned.declare_restart_cleanup(limits()).unwrap(), Some(1));
+    }
+
+    /// Reopening without the original write after every bounded tail deletion
+    /// preserves the dense prefix and final tombstone. Discarding each result
+    /// simulates a lost response: the next owner derives progress from disk.
+    #[test]
+    fn restart_cleanup_reopens_after_every_bounded_tail_deletion() {
+        let fixture = Fixture::new();
+        interrupt(&fixture, false);
+        let prefix = "a1:0000000000000001:";
+        let (chunks, original) = {
+            let owner = RootOwnership::acquire(&fixture.0).unwrap();
+            let mut store = MmpCustodyStore::open(&fixture.0, "session").unwrap();
+            let initial = store.inspect_restart_inventory(limits()).unwrap();
+            let chunks = match initial.pending.unwrap() {
+                PendingCustodyRef::Unfinished { present_chunks, .. } => present_chunks,
+                _ => panic!("expected interrupted stage"),
+            };
+            assert!(chunks > 1);
+            let original = (0..chunks)
+                .map(|index| store.read(&chunk_key(prefix, index)).unwrap().unwrap())
+                .collect::<Vec<_>>();
+            let mut owned = owner.bind_store(&mut store).unwrap();
+            assert!(owned.cleanup_restart_step(limits()).is_err());
+            assert_eq!(
+                owned
+                    .store_mut()
+                    .inspect_restart_inventory(limits())
+                    .unwrap()
+                    .inventory
+                    .generation,
+                initial.inventory.generation
+            );
+            assert_eq!(owned.declare_restart_cleanup(limits()).unwrap(), Some(1));
+            (chunks, original)
+        };
+
+        for remaining in (0..chunks).rev() {
+            let owner = RootOwnership::acquire(&fixture.0).unwrap();
+            let mut store = MmpCustodyStore::open(&fixture.0, "session").unwrap();
+            let before = store.inspect_restart_inventory(limits()).unwrap();
+            let mut owned = owner.bind_store(&mut store).unwrap();
+            assert_eq!(
+                owned.cleanup_restart_step(limits()).unwrap(),
+                Some((1, remaining))
+            );
+            let after = owned
+                .store_mut()
+                .inspect_restart_inventory(limits())
+                .unwrap();
+            assert_eq!(after.inventory.generation, before.inventory.generation + 1);
+            for (index, chunk) in original.iter().enumerate().take(remaining) {
+                assert_eq!(
+                    owned
+                        .store_mut()
+                        .read(&chunk_key(prefix, index))
+                        .unwrap()
+                        .as_ref(),
+                    Some(chunk)
+                );
+            }
+            assert!(
+                owned
+                    .store_mut()
+                    .read(&chunk_key(prefix, remaining))
+                    .unwrap()
+                    .is_none()
+            );
+        }
+        let owner = RootOwnership::acquire(&fixture.0).unwrap();
+        let mut store = MmpCustodyStore::open(&fixture.0, "session").unwrap();
+        let mut owned = owner.bind_store(&mut store).unwrap();
+        assert_eq!(owned.cleanup_restart_step(limits()).unwrap(), None);
+        let inventory = owned.store_mut().inventory_custody(limits()).unwrap();
+        assert_eq!(inventory.aborted_sequences, vec![1]);
+        assert!(inventory.occurrences.is_empty());
+    }
+
+    /// A checksum-valid trigger mutation of a surviving chunk during deletion is
+    /// not a permissible cleanup effect. The entire update, including the tail
+    /// removal, must roll back while preserving the original abort progress.
+    #[test]
+    fn restart_tail_deletion_rolls_back_changed_surviving_chunk() {
+        let fixture = Fixture::new();
+        interrupt(&fixture, false);
+        let owner = RootOwnership::acquire(&fixture.0).unwrap();
+        let mut store = MmpCustodyStore::open(&fixture.0, "session").unwrap();
+        let mut owned = owner.bind_store(&mut store).unwrap();
+        assert_eq!(owned.declare_restart_cleanup(limits()).unwrap(), Some(1));
+        let before = owned
+            .store_mut()
+            .inspect_restart_inventory(limits())
+            .unwrap();
+        let chunks = match before.pending.unwrap() {
+            PendingCustodyRef::Aborting { present_chunks, .. } => present_chunks,
+            _ => panic!("expected declared abort"),
+        };
+        assert!(chunks > 2);
+        let prefix = "a1:0000000000000001:";
+        let first = owned
+            .store_mut()
+            .read(&chunk_key(prefix, 0))
+            .unwrap()
+            .unwrap();
+        let second = owned
+            .store_mut()
+            .read(&chunk_key(prefix, 1))
+            .unwrap()
+            .unwrap();
+        assert_ne!(first, second, "trigger must change the surviving chunk");
+        owned.store_mut().connection.execute_batch("CREATE TRIGGER change_survivor AFTER DELETE ON records WHEN OLD.key LIKE '%:chunk:%' BEGIN UPDATE records SET value=(SELECT value FROM records WHERE key='a1:0000000000000001:chunk:00000001'),digest=(SELECT digest FROM records WHERE key='a1:0000000000000001:chunk:00000001') WHERE key='a1:0000000000000001:chunk:00000000'; END;").unwrap();
+        assert!(owned.cleanup_restart_step(limits()).is_err());
+        assert_eq!(
+            owned.store_mut().read(&chunk_key(prefix, 0)).unwrap(),
+            Some(first)
+        );
+        assert!(
+            owned
+                .store_mut()
+                .read(&chunk_key(prefix, chunks - 1))
+                .unwrap()
+                .is_some()
+        );
+        let after = owned
+            .store_mut()
+            .inspect_restart_inventory(limits())
+            .unwrap();
+        assert_eq!(after.inventory.generation, before.inventory.generation);
+        assert!(
+            matches!(after.pending, Some(PendingCustodyRef::Aborting { present_chunks, .. }) if present_chunks == chunks)
+        );
+    }
+
+    /// Explicit subprocess entry point: commit one tail deletion and keep the
+    /// actual owner alive until the parent forcibly terminates the process.
+    #[test]
+    fn cleanup_child() {
+        let Some(root) = std::env::var_os(CHILD_ROOT) else {
+            return;
+        };
+        let root = std::path::Path::new(&root);
+        let owner = RootOwnership::acquire(root).unwrap();
+        let mut store = MmpCustodyStore::open(root, "session").unwrap();
+        let mut owned = owner.bind_store(&mut store).unwrap();
+        assert!(owned.cleanup_restart_step(limits()).unwrap().is_some());
+        println!("{CHILD_READY}");
+        std::io::stdout().flush().unwrap();
+        loop {
+            std::thread::park();
+        }
+    }
+
+    /// Always terminates the generated test child, including assertion unwind.
+    struct CleanupChild(Child);
+
+    impl Drop for CleanupChild {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+
+    /// A killed process cannot run Rust cleanup after committing its deletion.
+    /// A fresh owner must see the persisted progress and resume exactly once.
+    #[test]
+    fn killed_cleanup_worker_recovers_committed_progress() {
+        let fixture = Fixture::new();
+        interrupt(&fixture, false);
+        let chunks = {
+            let owner = RootOwnership::acquire(&fixture.0).unwrap();
+            let mut store = MmpCustodyStore::open(&fixture.0, "session").unwrap();
+            let initial = store.inspect_restart_inventory(limits()).unwrap();
+            let chunks = match initial.pending.unwrap() {
+                PendingCustodyRef::Unfinished { present_chunks, .. } => present_chunks,
+                _ => panic!("expected interrupted stage"),
+            };
+            assert!(chunks > 1);
+            let mut owned = owner.bind_store(&mut store).unwrap();
+            assert_eq!(owned.declare_restart_cleanup(limits()).unwrap(), Some(1));
+            chunks
+        };
+        let mut child = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "storage::mmp_custody::acceptance::recovery::restart::tests::cleanup_child",
+                "--nocapture",
+            ])
+            .env(CHILD_ROOT, &fixture.0)
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let output = child.stdout.take().unwrap();
+        let mut child = CleanupChild(child);
+        let (send, receive) = std::sync::mpsc::channel();
+        let reader = std::thread::spawn(move || {
+            for line in BufReader::new(output).lines() {
+                match line {
+                    Ok(line) if line.contains(CHILD_READY) => {
+                        let _ = send.send(());
+                        return;
+                    }
+                    Ok(_) => (),
+                    Err(_) => break,
+                }
+            }
+        });
+        assert!(
+            receive
+                .recv_timeout(std::time::Duration::from_secs(15))
+                .is_ok()
+        );
+        assert!(RootOwnership::acquire(&fixture.0).is_err());
+        child.0.kill().unwrap();
+        child.0.wait().unwrap();
+        reader.join().unwrap();
+        let owner = RootOwnership::acquire(&fixture.0).unwrap();
+        let mut store = MmpCustodyStore::open(&fixture.0, "session").unwrap();
+        let mut owned = owner.bind_store(&mut store).unwrap();
+        let resumed = owned
+            .store_mut()
+            .inspect_restart_inventory(limits())
+            .unwrap();
+        assert!(
+            matches!(resumed.pending, Some(PendingCustodyRef::Aborting { present_chunks, .. }) if present_chunks == chunks - 1)
+        );
+        assert_eq!(
+            owned.cleanup_restart_step(limits()).unwrap(),
+            Some((1, chunks - 2))
+        );
     }
 }

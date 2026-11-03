@@ -15590,6 +15590,13 @@ not delete chunks or confer sender, recipient, nonacceptance or delivery
 authority; later cleanup and allocator
 recovery remain separate requirements. An error after commit is uncertain and
 MUST be reconciled from the actual store.
+An owned restart cleanup step MAY remove one verified tail chunk from a
+declared abort. Its complete preflight, exact stage and chunk preimages,
+descriptor update and chunk deletion MUST share one immediate transaction.
+The step MUST verify the resulting inventory and all other unchanged rows
+before committing, then revalidate the root binding before reporting progress.
+The resulting sequence and remaining count are descriptive, not allocator,
+nonacceptance or delivery authority; lost results MUST be reconciled from disk.
 
 An MMP storage worker root MUST retain the actual opening/write handle, original
 store plan and exact lower attempt before any observer awaits completion. Dropped

@@ -999,11 +999,44 @@ fn restart_declaration_preserves_committed_source_and_acknowledgement() {
     assert_eq!(after.inventory.occurrences.len(), 1);
     assert_eq!(after.inventory.occurrences[0].digest, source_digest);
     assert_eq!(after.inventory.acknowledgement_keys, vec![ack_key.clone()]);
-    assert_eq!(owned.store_mut().read(&ack_key).unwrap(), Some(ack));
+    assert_eq!(
+        owned.store_mut().read(&ack_key).unwrap().as_ref(),
+        Some(&ack)
+    );
     assert!(matches!(
         after.pending,
         Some(PendingCustodyRef::Aborting { sequence: 2, .. })
     ));
+    owned.store_mut().connection.execute_batch("CREATE TRIGGER delete_ack_after_tail AFTER DELETE ON records WHEN OLD.key LIKE '%:chunk:%' BEGIN DELETE FROM records WHERE key LIKE 'k1:%'; END;").unwrap();
+    assert!(owned.cleanup_restart_step(limits()).is_err());
+    assert_eq!(
+        owned.store_mut().read(&ack_key).unwrap().as_ref(),
+        Some(&ack)
+    );
+    assert_eq!(
+        owned
+            .store_mut()
+            .inspect_restart_inventory(limits())
+            .unwrap()
+            .inventory
+            .generation,
+        after.inventory.generation
+    );
+    owned
+        .store_mut()
+        .connection
+        .execute_batch("DROP TRIGGER delete_ack_after_tail")
+        .unwrap();
+    assert!(matches!(
+        owned.cleanup_restart_step(limits()).unwrap(),
+        Some((2, _))
+    ));
+    let after_cleanup = owned
+        .store_mut()
+        .inspect_restart_inventory(limits())
+        .unwrap();
+    assert_eq!(after_cleanup.inventory.occurrences[0].digest, source_digest);
+    assert_eq!(owned.store_mut().read(&ack_key).unwrap(), Some(ack));
 }
 
 /// Deleting a complete unrelated committed namespace from an update trigger
