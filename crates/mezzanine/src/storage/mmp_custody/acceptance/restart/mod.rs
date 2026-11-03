@@ -50,7 +50,7 @@ impl MmpCustodyStore {
     }
 
     /// Validates the candidate and last-batch state from the same transaction.
-    fn inspect_unfinished_in_snapshot(
+    pub(in crate::storage::mmp_custody) fn inspect_unfinished_in_snapshot(
         &self,
         transaction: &rusqlite::Transaction<'_>,
         sequence: u64,

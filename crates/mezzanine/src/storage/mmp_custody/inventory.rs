@@ -2,10 +2,10 @@
 //!
 //! A single SQLite snapshot covers the entire key scan and every acceptance or
 //! ACK source read. Results contain only verified storage references, not live
-//! registrations, native commits, cursors or a restored mailbox. Unknown rows,
-//! corrupt originals and unfinished stages fail closed; a caller must still
-//! reconcile unfinished work, fold all decisions, prove original native ownership
-//! and enforce runtime/physical budgets before publishing recovered state.
+//! registrations, native commits, cursors or a restored mailbox. Strict inventory
+//! rejects unfinished stages. A separate restart inspection can quarantine one
+//! bounded unfinished stage while validating every other row in that snapshot;
+//! neither result authorizes cleanup, identity restoration or delivery.
 
 use mez_agent::messaging::MessageAcceptanceDecodeLimits;
 
@@ -42,6 +42,50 @@ pub(crate) struct CustodyInventory {
     pub acknowledgement_keys: Vec<String>,
     /// Fully cleaned abort sequences, never accepted messages.
     pub aborted_sequences: Vec<u64>,
+}
+
+/// A quarantined, unresolved occurrence, never an acceptance or cleanup right.
+pub(crate) enum PendingCustodyRef {
+    /// Private original stage with a verified dense source prefix.
+    Unfinished {
+        /// Original namespace sequence, without a live allocator right.
+        sequence: u64,
+        /// Declared encoded source size, not a materialized payload.
+        encoded_bytes: usize,
+        /// Checksum-validated consecutive source chunks currently present.
+        present_chunks: usize,
+        /// Chunks needed for the complete declared source.
+        total_chunks: usize,
+    },
+    /// Partially cleaned v2 abort with verified remaining prefix and last batch.
+    Aborting {
+        /// Original namespace sequence, without a live allocator right.
+        sequence: u64,
+        /// Encoded source size retained by the abort descriptor.
+        encoded_bytes: usize,
+        /// Checksum-validated consecutive source chunks currently present.
+        present_chunks: usize,
+        /// Chunks present when the abort was declared.
+        total_chunks: usize,
+    },
+}
+
+/// Complete descriptive snapshot with one optional quarantined occurrence.
+pub(crate) struct RestartInventory {
+    /// All fully verified accepted, acknowledged and finalized-abort references.
+    pub inventory: CustodyInventory,
+    /// At most one validated unresolved projection, never a live right.
+    pub pending: Option<PendingCustodyRef>,
+}
+
+/// Internal scan mode and quarantine, retained until the transaction commits.
+struct PendingScan {
+    /// Whether the caller requested a quarantined unresolved occurrence.
+    enabled: bool,
+    /// Sole unresolved projection found so far, if any.
+    found: Option<PendingCustodyRef>,
+    /// Bounded last-batch digest from the same store snapshot.
+    batch: Vec<u8>,
 }
 
 /// One canonical occurrence namespace under the ordered store-key scan.
@@ -82,12 +126,50 @@ impl MmpCustodyStore {
         Ok(inventory)
     }
 
+    /// Inspects the complete store and quarantines at most one unresolved
+    /// occurrence in the same snapshot. Returns no live or cleanup authority.
+    pub(crate) fn inspect_restart_inventory(
+        &self,
+        limits: MessageAcceptanceDecodeLimits,
+    ) -> Result<RestartInventory> {
+        let transaction = self
+            .connection
+            .unchecked_transaction()
+            .map_err(database_error)?;
+        let mut pending = PendingScan {
+            enabled: true,
+            found: None,
+            batch: Vec::new(),
+        };
+        let inventory = self.scan_inventory(&transaction, limits, &mut pending)?;
+        transaction.commit().map_err(database_error)?;
+        Ok(RestartInventory {
+            inventory,
+            pending: pending.found,
+        })
+    }
+
     /// Scans and verifies the caller's exact same-store transaction snapshot.
     /// Its private result must not escape before that transaction commits.
     fn inventory_in_snapshot(
         &self,
         transaction: &rusqlite::Transaction<'_>,
         limits: MessageAcceptanceDecodeLimits,
+    ) -> Result<CustodyInventory> {
+        let mut pending = PendingScan {
+            enabled: false,
+            found: None,
+            batch: Vec::new(),
+        };
+        self.scan_inventory(transaction, limits, &mut pending)
+    }
+
+    /// Performs the shared bounded scan under the caller's exact transaction.
+    fn scan_inventory(
+        &self,
+        transaction: &rusqlite::Transaction<'_>,
+        limits: MessageAcceptanceDecodeLimits,
+        pending: &mut PendingScan,
     ) -> Result<CustodyInventory> {
         if !std::ptr::eq(&self.connection, &**transaction) {
             return Err(invalid("snapshot belongs to another store"));
@@ -105,6 +187,7 @@ impl MmpCustodyStore {
         {
             return Err(invalid("store identity or generation framing changed"));
         }
+        pending.batch = batch;
         // Even the generic store can add at most MAX_BATCH_RECORDS in one
         // generation. Updates and deletions cannot increase this lower bound.
         let row_count: i64 = transaction
@@ -149,6 +232,7 @@ impl MmpCustodyStore {
                                 limits,
                                 &mut metadata,
                                 &mut inventory,
+                                pending,
                             )?;
                         }
                         // Validate every ACK and all exact source/binding evidence
@@ -189,6 +273,7 @@ impl MmpCustodyStore {
                                 limits,
                                 &mut metadata,
                                 &mut inventory,
+                                pending,
                             )?;
                         }
                         let current = group.get_or_insert(Group {
@@ -226,6 +311,7 @@ impl MmpCustodyStore {
                 limits,
                 &mut metadata,
                 &mut inventory,
+                pending,
             )?;
         }
         Ok(inventory)
@@ -239,6 +325,7 @@ impl MmpCustodyStore {
         limits: MessageAcceptanceDecodeLimits,
         metadata: &mut usize,
         inventory: &mut CustodyInventory,
+        pending: &mut PendingScan,
     ) -> Result<()> {
         if !group.stage {
             return Err(invalid("occurrence stage is missing"));
@@ -262,24 +349,60 @@ impl MmpCustodyStore {
             });
         } else {
             let stage_key = format!("a1:{:016x}:stage", group.sequence);
-            let stage = self
-                .read(&stage_key)?
+            let stage = read_record(transaction, &stage_key)?
                 .ok_or_else(|| invalid("occurrence stage is missing"))?;
-            if group.chunks != 0 || !stage.starts_with(b"MMPABT02") {
-                return Err(invalid("uncommitted occurrence requires reconciliation"));
+            if group.chunks == 0 && stage.starts_with(b"MMPABT02") {
+                super::acceptance::validate_finalized_abort(
+                    &stage,
+                    group.sequence,
+                    inventory.generation,
+                    self.limits.logical_bytes,
+                )?;
+                charge(metadata, ABORT_CHARGE)?;
+                inventory
+                    .aborted_sequences
+                    .try_reserve(1)
+                    .map_err(|_| invalid("inventory allocation failed"))?;
+                inventory.aborted_sequences.push(group.sequence);
+            } else {
+                if !pending.enabled || pending.found.is_some() {
+                    return Err(invalid("uncommitted occurrence requires reconciliation"));
+                }
+                let unresolved = if stage.starts_with(b"MMPABT02") {
+                    let (encoded_bytes, total_chunks) = super::acceptance::inspect_partial_abort(
+                        self,
+                        transaction,
+                        group.sequence,
+                        inventory.generation,
+                        &pending.batch,
+                        group.chunks,
+                        &stage,
+                    )?;
+                    PendingCustodyRef::Aborting {
+                        sequence: group.sequence,
+                        encoded_bytes,
+                        present_chunks: group.chunks,
+                        total_chunks,
+                    }
+                } else {
+                    let source =
+                        self.inspect_unfinished_in_snapshot(transaction, group.sequence)?;
+                    if source.store_id != inventory.store_id
+                        || source.generation != inventory.generation
+                        || source.present_chunks != group.chunks
+                    {
+                        return Err(invalid("unfinished occurrence changed inside snapshot"));
+                    }
+                    PendingCustodyRef::Unfinished {
+                        sequence: source.sequence,
+                        encoded_bytes: source.encoded_bytes,
+                        present_chunks: source.present_chunks,
+                        total_chunks: source.total_chunks,
+                    }
+                };
+                charge(metadata, OCCURRENCE_CHARGE)?;
+                pending.found = Some(unresolved);
             }
-            super::acceptance::validate_finalized_abort(
-                &stage,
-                group.sequence,
-                inventory.generation,
-                self.limits.logical_bytes,
-            )?;
-            charge(metadata, ABORT_CHARGE)?;
-            inventory
-                .aborted_sequences
-                .try_reserve(1)
-                .map_err(|_| invalid("inventory allocation failed"))?;
-            inventory.aborted_sequences.push(group.sequence);
         }
         Ok(())
     }

@@ -10,6 +10,29 @@
 
 use super::*;
 
+mod restart;
+
+/// Inspects partial abort progress without creating recovery authority.
+pub(super) fn inspect_partial_abort(
+    store: &MmpCustodyStore,
+    transaction: &rusqlite::Transaction<'_>,
+    sequence: u64,
+    generation: u64,
+    batch: &[u8],
+    present_chunks: usize,
+    stage: &[u8],
+) -> Result<(usize, usize)> {
+    restart::inspect_partial_abort(
+        store,
+        transaction,
+        sequence,
+        generation,
+        batch,
+        present_chunks,
+        stage,
+    )
+}
+
 /// Fixed version2 prefix, padded to the preallocated original header cell.
 pub(super) const ABORT_BYTES: usize = 136;
 /// Distinct versioned tag; future or malformed dispositions fail closed.

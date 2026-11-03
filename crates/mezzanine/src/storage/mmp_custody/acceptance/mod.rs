@@ -22,6 +22,27 @@ use super::*;
 mod recovery;
 mod restart;
 
+/// Examines a partial abort in an existing verified store snapshot.
+pub(super) fn inspect_partial_abort(
+    store: &MmpCustodyStore,
+    transaction: &rusqlite::Transaction<'_>,
+    sequence: u64,
+    generation: u64,
+    batch: &[u8],
+    present_chunks: usize,
+    stage: &[u8],
+) -> Result<(usize, usize)> {
+    recovery::inspect_partial_abort(
+        store,
+        transaction,
+        sequence,
+        generation,
+        batch,
+        present_chunks,
+        stage,
+    )
+}
+
 /// Recognizes and checks only a fully cleaned abort disposition.
 pub(super) fn validate_finalized_abort(
     bytes: &[u8],

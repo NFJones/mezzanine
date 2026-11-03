@@ -15561,6 +15561,11 @@ MUST verify that the last committed batch matches the final stage or chunk
 append; a missing marker with surviving marker-batch evidence MUST NOT be
 classified as an unfinished append. Such local evidence MUST NOT authorize
 cleanup, nonacceptance, delivery, or omission of the remaining store inventory.
+A separate read-only restart preflight MAY quarantine at most one unfinished
+stage or partially cleaned version2 abort while validating every other row,
+source and acknowledgment in the same complete store snapshot. It MUST reject
+unknown, corrupt, inconsistent or additional unresolved rows. Its result is
+descriptive only and MUST NOT authorize cleanup, nonacceptance or delivery.
 
 An MMP storage worker root MUST retain the actual opening/write handle, original
 store plan and exact lower attempt before any observer awaits completion. Dropped
