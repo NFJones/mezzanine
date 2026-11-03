@@ -169,10 +169,22 @@ publication. A joined result owns private decoded bytes until the original
 service adopts them; that result cannot be reissued while its allocation is
 still alive. Observer cancellation leaves the actual handle owned. Lost results
 retry only after an exact join and paced backoff; obsolete reads discard bytes
-without reconstructing mail. Active ACK reservations protect hashing sources
-from release. Current logical custody limits and snapshot schema remain
-unchanged. Automatic actor reload, global cache/in-flight accounting and cold
-restart recovery remain separate integration work.
+without reconstructing mail. Resident-only ACKs protect their hashing sources;
+storage-scoped ACKs use original adoption-bound fingerprints for cold prefixes.
+
+A fresh original store can explicitly enable the internal storage policy before
+any admission. Its weak allocation ledger charges external delivery pins and
+unpublished output independently of canonical indexes; unbound decoder escrow
+survives lost workers until actual joined recovery. Logical custody uses separate
+storage-scale ceilings while all live/reserved canonical payloads retain the
+1 MiB/1,000-entry cache ceiling. Metadata includes worker/cache/reader headroom.
+The actor retains at most 64 demand continuations/64 KiB, with exact registration
+tokens, original clock plus elapsed time, and replies. Publication constructs the
+requesting batch before other consumers run, so a competing load cannot evict
+it first. Cancelled queued reads issue no I/O; active cancellation still joins.
+No greedy prefetch scan runs. Cold restart recovery and normal product activation
+remain separate gates; neither existing stores nor snapshots can enable this
+fresh-store policy by supplying public identity labels.
 
 ## Ownership and tests
 

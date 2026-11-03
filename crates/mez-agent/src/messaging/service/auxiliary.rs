@@ -171,7 +171,7 @@ impl MessageService {
                 bytes = bytes.saturating_add(retained_envelope_bytes(&row.envelope));
             }
         }
-        if bytes > self.pending_limits.auxiliary_bytes
+        if bytes > self.custody_limits().auxiliary_bytes
             || bindings
                 .iter()
                 .any(|(id, _)| outcome_bytes(&envelope.id, id.as_str()) > OUTCOME_BYTES)

@@ -21,7 +21,7 @@ impl MessageService {
         recipient: &AgentId,
         committed: &[MessageSequence],
     ) -> Result<bool> {
-        if committed.len() > self.pending_limits.per_recipient {
+        if committed.len() > self.custody_limits().per_recipient {
             return Err(MessageError::invalid_args(
                 "native retirement commit batch exceeds recipient bound",
             ));

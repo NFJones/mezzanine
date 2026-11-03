@@ -30,8 +30,30 @@ pub(super) struct Written {
 }
 
 impl MmpCustodyRoot {
+    /// Configures bounded fresh-session spill only from an actually observed
+    /// empty original store. Existing/legacy history cannot bypass restoration.
+    pub fn configure_payload_spill(
+        &self,
+        service: &mut MessageService,
+        limits: mez_agent::messaging::MessageStorageLimits,
+    ) -> Result<()> {
+        let state = self.0.state.lock().map_err(|_| ownership_error())?;
+        let State::Idle(opened) = &*state else {
+            return Err(ownership_error());
+        };
+        if !opened.anchor.is_empty_original() {
+            return Err(MezError::invalid_state(
+                "MMP spill setup requires an empty original store; trusted recovery is required",
+            ));
+        }
+        service
+            .enable_storage_custody(&self.0.storage_scope, limits)
+            .map_err(lower_error)
+    }
+
     /// Issues an original-root reload after securing this root's idle lane.
-    /// False means an existing allocation already supplies the bytes. Busy or
+    /// False means bytes are already available or cache capacity must be retried.
+    /// Busy or
     /// foreign-root errors leave lower issuance unchanged. Stop permits reads
     /// needed to drain already accepted input; no new send is authorized.
     pub fn start_payload_load(&self, service: &mut MessageService, sequence: u64) -> Result<bool> {
@@ -42,11 +64,13 @@ impl MmpCustodyRoot {
             ));
         };
         let plan = opened.anchor.clone();
-        let Some(write) = service
-            .begin_payload_load(sequence, &self.0.storage_scope)
-            .map_err(lower_error)?
-        else {
-            return Ok(false);
+        let write = match service.begin_payload_load(sequence, &self.0.storage_scope) {
+            Ok(Some(write)) => write,
+            Ok(None) => return Ok(false),
+            Err(error) if error.kind() == mez_agent::messaging::MessageErrorKind::Capacity => {
+                return Ok(false);
+            }
+            Err(error) => return Err(lower_error(error)),
         };
         let attempt = write.attempt();
         let previous = std::mem::replace(&mut *state, State::Unavailable(ownership_error()));

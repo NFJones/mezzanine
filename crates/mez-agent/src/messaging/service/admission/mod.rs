@@ -90,6 +90,16 @@ pub(in crate::messaging) struct PendingMessageAdmission {
 }
 
 impl PendingMessageAdmission {
+    /// Borrows the canonical unpublished source for internal resource accounting.
+    pub(super) fn source(&self) -> &QueuedEnvelope {
+        &self.row
+    }
+
+    /// Returns the original payload reservation without exposing source bytes.
+    pub(super) fn payload_bytes(&self) -> usize {
+        self.row.envelope.payload_bytes
+    }
+
     /// Supplies the reserved high-water without exposing a future acceptance.
     pub(super) fn sequence(&self) -> MessageSequence {
         self.row.sequence
@@ -420,7 +430,7 @@ impl MessageService {
             ));
         }
         validate_sender_identity(&envelope.sender)?;
-        if super::auxiliary::envelope_bytes(&envelope) > self.pending_limits.auxiliary_bytes {
+        if super::auxiliary::envelope_bytes(&envelope) > self.custody_limits().auxiliary_bytes {
             return Err(admission_capacity());
         }
         if envelope.id.is_empty()
@@ -469,13 +479,14 @@ impl MessageService {
         }
         self.reserve_pending_delivery(&bindings, envelope.payload.len())?;
         self.reserve_pending_recipient_bindings(&bindings)?;
+        self.reserve_storage_metadata(&envelope, &bindings)?;
         let metadata = self.pending.values().fold(
             super::auxiliary::envelope_bytes(&envelope),
             |bytes, row| {
                 bytes.saturating_add(super::auxiliary::retained_envelope_bytes(&row.envelope))
             },
         );
-        if metadata > self.pending_limits.auxiliary_bytes
+        if metadata > self.custody_limits().auxiliary_bytes
             || bindings.iter().any(|(id, _)| {
                 super::auxiliary::outcome_bytes(&envelope.id, id.as_str())
                     > super::auxiliary::OUTCOME_BYTES
@@ -519,9 +530,22 @@ impl MessageService {
             proof,
             published: AtomicBool::new(false),
         });
+        let reservation = self.reserve_storage_payload(
+            self.next_sequence,
+            envelope.payload.len(),
+            super::storage_policy::message_metadata_bytes(
+                super::auxiliary::envelope_bytes(&envelope),
+                &bindings,
+            ),
+            None,
+        )?;
+        let envelope = Arc::new(envelope);
+        if let Some(reservation) = &reservation {
+            reservation.bind(&envelope)?;
+        }
         let row = Arc::new(QueuedEnvelope {
             sequence: self.next_sequence,
-            envelope: RetainedEnvelope::new(Arc::new(envelope)),
+            envelope: RetainedEnvelope::new(envelope),
             audience,
             offered_at_ms: std::sync::Mutex::new(vec![None; bindings.len()]),
             acknowledged: std::sync::Mutex::new(vec![false; bindings.len()]),
@@ -571,6 +595,7 @@ impl MessageService {
         ticket: &MessageAcceptanceTicket,
         storage_scope: Option<&MessageStorageScope>,
     ) -> Result<MessageAcceptanceWrite> {
+        self.require_storage_scope(storage_scope)?;
         self.require_admission_owner(&ticket.identity)?;
         let pending = self.admission.as_mut().ok_or_else(admission_changed)?;
         if !Arc::ptr_eq(&pending.identity, &ticket.identity) || pending.attempt.is_some() {

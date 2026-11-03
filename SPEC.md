@@ -15882,7 +15882,7 @@ acknowledgements. New or repeated subscriptions MUST NOT skip accepted unread
 mail or rewind committed delivery. Reconstruction may explicitly inspect
 committed retained evidence without creating a new delivery obligation.
 
-Custody MUST reserve before sequence allocation or success: at most 1000 pending
+Resident-only custody MUST reserve before sequence allocation or success: at most 1000 pending
 occurrences, 1 MiB unique pending payload, 4096 frozen recipient slots and 256
 slots per exact recipient interval. Shared payload bytes are charged once.
 Conservatively, committed fanout slots remain charged until the occurrence's
@@ -15894,6 +15894,32 @@ provably-unaccepted `capacity` without partial fanout or prior-source mutation. 
 null message ID, rather than reporting an ambiguous transport failure.
 These internal ceilings are independent of the replay window; there is no new
 configuration key or acceptance-atomic disk backing in this increment.
+
+A trusted original storage root MAY opt an empty runtime into a separate
+storage-backed custody policy only after observing an actually empty original
+store. Its positive, independently narrowable ceilings MUST be 10,000 accepted
+plus reserved occurrences, 64 MiB unique pending payload, 40,000 frozen recipient
+obligations, 1,024 obligations and 8 MiB pending payload per exact recipient
+interval, and 8 MiB combined logical metadata. These are independent admission
+ceilings, not a guarantee that every combination fits physical store limits.
+Canonical payload allocations and decoder reservations MUST still share at most
+1,000 entries and 1 MiB. External delivery references and unpublished worker
+results MUST remain charged even after cache release or canonical row removal;
+only actual joined recovery may retire an uncertain read reservation. Metadata
+MUST reserve worker, allocation-index and bounded reader-continuation headroom.
+
+Cold actor reads MUST retain their actual original registration and reply in a
+bounded queue of at most 64 continuations and 64 KiB logical metadata. Reload
+MUST use the original serialized root lane; after qualified publication the
+requesting batch MUST be constructed before another consumer can evict it.
+Cancelled queued observers MUST NOT issue reads or create offers. Deferred reads
+MUST NOT expose a replacement registration's mail or renew the original TTL.
+Cache pressure MAY defer a reader while allowing another fitting reader to
+progress. A stored ACK MUST qualify the original adoption-bound source digest
+without requiring every cold source in its cumulative prefix to be resident.
+This internal opt-in MUST NOT activate for existing stores without trusted
+recovery, and MUST NOT imply default product activation or native restart
+recovery. No wire or configuration option selects this policy.
 
 Immutable envelope auxiliary metadata MUST additionally fit a 16 MiB logical
 budget over the deduplicated replay/custody union after normal replay eviction.

@@ -63,6 +63,14 @@ mod discovery;
 pub use acceptance_proof::{MessageAcceptanceProof, MessageAcceptanceReservation};
 mod identity;
 pub use identity::MessageSenderRegistration;
+mod payload_budget;
+pub use payload_budget::{MessagePayloadObserver, MessagePayloadUsage};
+mod storage_policy;
+pub(super) use storage_policy::StorageCustody;
+pub use storage_policy::{
+    MESSAGE_PAYLOAD_DEMAND_BYTES, MESSAGE_PAYLOAD_DEMAND_RECIPIENTS, MessageStorageLimits,
+    MessageStorageUsage,
+};
 mod payload_load;
 mod recipient_binding;
 mod sender_provenance;
@@ -134,6 +142,7 @@ impl MessageService {
             queue: VecDeque::new(),
             pending: Default::default(),
             pending_limits: PendingDeliveryLimits::default(),
+            storage_custody: None,
             queued_by_sequence: Default::default(),
             queued_by_recipient: HashMap::new(),
             subscription_order: Default::default(),
@@ -211,6 +220,7 @@ impl MessageService {
         now_ms: u64,
         proof_budget: Option<MessageAcceptanceReservation>,
     ) -> Result<(Delivery, Option<MessageAcceptanceProof>)> {
+        self.require_storage_scope(None)?;
         validate_protocol(envelope.protocol)?;
         validate_message_type(&envelope.message_type)?;
 
@@ -434,6 +444,7 @@ impl MessageService {
                 "MMP acknowledgement already reserved",
             ));
         }
+        self.require_storage_scope(None)?;
         let after = cursor.last_sequence;
         self.validate_delivery_ack(recipient, after, sequence)?;
         self.commit_pending_ack(recipient, after, sequence)?;

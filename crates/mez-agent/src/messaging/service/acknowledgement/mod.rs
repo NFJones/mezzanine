@@ -65,6 +65,8 @@ pub(in crate::messaging) struct PendingAcknowledgement {
     identity: Arc<Identity>,
     /// At most one actual issued worker attempt.
     attempt: Option<Arc<()>>,
+    /// Original root chosen at issuance, preserved by every retry.
+    storage_scope: Option<MessageStorageScope>,
 }
 impl PendingAcknowledgement {
     /// Returns original caller address for synchronous ACK bypass fencing.
@@ -85,6 +87,8 @@ pub struct MessageAcknowledgementWrite {
     /// Shared canonical sources stay charged in pending custody until commit.
     /// Success drops these references before returning a payload-free fact.
     sources: Vec<Arc<QueuedEnvelope>>,
+    /// Original root qualifies cached immutable digests for cold sources.
+    storage_scope: Option<MessageStorageScope>,
 }
 impl std::fmt::Debug for MessageAcknowledgementWrite {
     /// Redacts shared source payload and frozen identity details from diagnostics.
@@ -203,10 +207,15 @@ impl MessageAcknowledgementWrite {
             writer.write_all(&entry.binding_index.to_le_bytes())?;
             writer.write_all(&[u8::from(entry.acknowledged)])?;
             writer.write_all(&entry.offered_at_ms.unwrap_or_default().to_le_bytes())?;
-            writer.write_all(
-                &super::admission::acknowledgement_source_digest(source)
+            let digest = match &self.storage_scope {
+                Some(scope) => source
+                    .envelope
+                    .storage_digest(scope)
                     .map_err(io::Error::other)?,
-            )?;
+                None => super::admission::acknowledgement_source_digest(source)
+                    .map_err(io::Error::other)?,
+            };
+            writer.write_all(&digest)?;
         }
         Ok(())
     }
@@ -354,6 +363,7 @@ impl MessageService {
         self.acknowledgement = Some(PendingAcknowledgement {
             identity: identity.clone(),
             attempt: None,
+            storage_scope: None,
         });
         Ok(Some(MessageAcknowledgementTicket { identity }))
     }
@@ -363,6 +373,26 @@ impl MessageService {
         &mut self,
         ticket: &MessageAcknowledgementTicket,
     ) -> Result<MessageAcknowledgementWrite> {
+        self.issue_acknowledgement_write(ticket, None)
+    }
+
+    /// Issues under the original root; immutable fingerprints allow cold ACK
+    /// prefixes without loading payloads or granting a foreign root authority.
+    pub fn begin_storage_acknowledgement_write(
+        &mut self,
+        ticket: &MessageAcknowledgementTicket,
+        scope: &MessageStorageScope,
+    ) -> Result<MessageAcknowledgementWrite> {
+        self.issue_acknowledgement_write(ticket, Some(scope))
+    }
+
+    /// Validates source/root qualification before changing the actual attempt.
+    fn issue_acknowledgement_write(
+        &mut self,
+        ticket: &MessageAcknowledgementTicket,
+        scope: Option<&MessageStorageScope>,
+    ) -> Result<MessageAcknowledgementWrite> {
+        self.require_storage_scope(scope)?;
         if !Arc::ptr_eq(&ticket.identity.owner, &self.acceptance_runtime) {
             return Err(changed());
         }
@@ -370,8 +400,8 @@ impl MessageService {
         if !Arc::ptr_eq(&pending.identity, &ticket.identity) || pending.attempt.is_some() {
             return Err(changed());
         }
-        let sources = self.acknowledgement_sources(&ticket.identity)?;
-        self.replace_acknowledgement_attempt(sources)
+        let sources = self.acknowledgement_sources(&ticket.identity, scope)?;
+        self.replace_acknowledgement_attempt(sources, scope.cloned())
     }
     /// Validates the original current attempt before consuming uncertain input.
     pub fn validate_acknowledgement_attempt(
@@ -386,7 +416,7 @@ impl MessageService {
         unknown: MessageAcknowledgementUncertain,
     ) -> Result<MessageAcknowledgementWrite> {
         self.require_acknowledgement(&unknown.write.identity, &unknown.write.attempt)?;
-        self.replace_acknowledgement_attempt(unknown.write.sources)
+        self.replace_acknowledgement_attempt(unknown.write.sources, unknown.write.storage_scope)
     }
     /// Reissues lost input only after the exact actual worker join was observed.
     pub fn recover_joined_acknowledgement_write(
@@ -402,8 +432,14 @@ impl MessageService {
             .ok_or_else(changed)?
             .identity
             .clone();
-        let sources = self.acknowledgement_sources(&identity)?;
-        self.replace_acknowledgement_attempt(sources)
+        let scope = self
+            .acknowledgement
+            .as_ref()
+            .ok_or_else(changed)?
+            .storage_scope
+            .clone();
+        let sources = self.acknowledgement_sources(&identity, scope.as_ref())?;
+        self.replace_acknowledgement_attempt(sources, scope)
     }
     /// Cancels only a never-issued original; issued uncertainty stays charged.
     pub fn cancel_acknowledgement(&mut self, ticket: &MessageAcknowledgementTicket) -> Result<()> {
@@ -520,24 +556,34 @@ impl MessageService {
     fn replace_acknowledgement_attempt(
         &mut self,
         sources: Vec<Arc<QueuedEnvelope>>,
+        storage_scope: Option<MessageStorageScope>,
     ) -> Result<MessageAcknowledgementWrite> {
         let pending = self.acknowledgement.as_mut().ok_or_else(changed)?;
         let attempt = Arc::new(());
         pending.attempt = Some(attempt.clone());
+        pending.storage_scope = storage_scope.clone();
         Ok(MessageAcknowledgementWrite {
             identity: pending.identity.clone(),
             attempt,
             sources,
+            storage_scope,
         })
     }
     /// Recovers only exact canonical references already protected by this ACK.
     /// No selectors/current registrations are resolved and no payload is copied.
-    fn acknowledgement_sources(&self, identity: &Identity) -> Result<Vec<Arc<QueuedEnvelope>>> {
+    fn acknowledgement_sources(
+        &self,
+        identity: &Identity,
+        scope: Option<&MessageStorageScope>,
+    ) -> Result<Vec<Arc<QueuedEnvelope>>> {
         identity
             .entries
             .iter()
             .map(|entry| {
                 let row = self.pending.get(&entry.sequence).ok_or_else(changed)?;
+                if let Some(scope) = scope {
+                    row.envelope.storage_digest(scope)?;
+                }
                 if row
                     .recipient_bindings
                     .get(entry.binding_index as usize)

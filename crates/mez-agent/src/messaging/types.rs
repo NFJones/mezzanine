@@ -753,6 +753,8 @@ pub struct MessageService {
     pub(super) pending: BTreeMap<MessageSequence, Arc<QueuedEnvelope>>,
     /// Destination-owned custody policy, never supplied by message snapshots.
     pub(super) pending_limits: PendingDeliveryLimits,
+    /// Trusted original-root policy and allocation accounting, never serialized.
+    pub(super) storage_custody: Option<super::service::StorageCustody>,
     /// Retained messages keyed by sequence for indexed delivery lookup.
     pub(super) queued_by_sequence: BTreeMap<MessageSequence, Arc<QueuedEnvelope>>,
     /// Retained sequence numbers grouped by normalized recipient selector.

@@ -238,9 +238,9 @@ async fn actor_drains_original_ack_after_storage_failure_and_shutdown_observer_l
 }
 
 /// An offered memory-only occurrence has no immutable source in the store, so
-/// the real actor must retain the failed ACK instead of falling back to memory
-/// success. Restore of the original source is deliberately not fabricated here;
-/// after proving refusal, this fixture aborts the actor (not graceful shutdown).
+/// actor rejects before physical issuance instead of falling back to memory
+/// success. The never-issued reservation is cancelled, ordinary shutdown remains
+/// possible, and the original pending source/cursor remain unchanged.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn actor_never_reports_durable_ack_success_for_memory_only_source() {
     let fixture = Fixture::new(true);
@@ -268,38 +268,37 @@ async fn actor_never_reports_durable_ack_success_for_memory_only_source() {
     actor.register_message_custody(root.clone()).unwrap();
     let runner = tokio::spawn(actor.run());
     handle.lifecycle_state().await.unwrap();
-    let sender = handle.clone();
-    let mut caller = tokio::spawn(async move { sender.acknowledge_message_fanout(batch).await });
-    tokio::time::timeout(std::time::Duration::from_secs(10), async {
-        loop {
-            if matches!(
-                root.observe().await.unwrap(),
-                CustodyWorkerStatus::AcknowledgementRetryAt(_)
-            ) {
-                break;
-            }
-            if caller.is_finished() {
-                panic!(
-                    "ACK returned before physical refusal: {:?}",
-                    (&mut caller).await
-                );
-            }
-            tokio::task::yield_now().await;
-        }
-    })
+    let recipient = batch.recipient.clone();
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        handle.acknowledge_message_fanout(batch),
+    )
     .await
-    .expect("memory-only ACK did not reach its joined physical refusal");
-    assert!(!caller.is_finished());
+    .unwrap();
+    let error = result.expect_err("memory-only source cannot gain durable ACK success");
+    assert!(
+        error
+            .to_string()
+            .contains("source lacks original storage qualification")
+    );
+    assert_eq!(fixture.probe.physical_attempts(), 0);
     assert_eq!(fixture.disk(), (0, 0));
-    caller.abort();
-    assert!(caller.await.unwrap_err().is_cancelled());
-    runner.abort();
-    assert!(runner.await.unwrap_err().is_cancelled());
-    // No actual worker is live here: the original physical failure was joined.
-    assert!(matches!(
-        root.observe().await.unwrap(),
-        CustodyWorkerStatus::AcknowledgementRetryAt(_)
-    ));
+    assert_eq!(root.observe().await.unwrap(), CustodyWorkerStatus::Idle);
+    handle.shutdown().await.unwrap();
+    let exited = runner.await.unwrap();
+    let messaging = exited.service.message_service();
+    assert!(!messaging.has_unpublished_acknowledgement());
+    assert_eq!(messaging.subscription(&recipient).unwrap().last_sequence, 0);
+    assert_eq!(
+        messaging
+            .receive_subscribed(&recipient, 20, 10)
+            .unwrap()
+            .messages
+            .len(),
+        1
+    );
+    assert_eq!(fixture.probe.physical_attempts(), 0);
+    assert_eq!(fixture.disk(), (0, 0));
 }
 
 /// An explicit raw ACK frame shares the same physical gate as transport fanout

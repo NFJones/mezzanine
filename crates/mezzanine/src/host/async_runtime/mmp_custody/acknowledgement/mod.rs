@@ -92,7 +92,7 @@ impl MmpCustodyRoot {
         };
         let plan = anchor.for_acknowledgement();
         let write = service
-            .begin_acknowledgement_write(ticket)
+            .begin_storage_acknowledgement_write(ticket, &self.0.storage_scope)
             .map_err(lower_error)?;
         let previous = std::mem::replace(&mut *state, State::Unavailable(ownership_error()));
         let (store, parked) = match previous {

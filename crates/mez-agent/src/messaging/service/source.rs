@@ -9,8 +9,9 @@
 //!
 //! Trusted callers may release only an original storage-qualified cache pin.
 //! Reloads reserve one exact nonce and preserve every delivery fact. Automatic
-//! product eviction, global cache accounting and cold recovery are separate
-//! integration work; current logical custody limits still charge absent bytes.
+//! product activation and trusted cold recovery remain separate integration
+//! gates. Storage policy accounts live allocations and reservations globally,
+//! while logical custody continues to charge absent bytes.
 //! Consumers cannot fabricate an empty envelope, skip an unread prefix or
 //! silently produce an incomplete snapshot.
 
@@ -125,6 +126,41 @@ impl RetainedEnvelope {
             ));
         }
         state.cached = None;
+        Ok(())
+    }
+
+    /// Reports a cache miss while preserving private not-yet-published output.
+    pub(super) fn awaiting_payload(&self) -> Result<bool> {
+        let state = self.residency.lock().map_err(|_| unavailable())?;
+        Ok(state.cached.is_none() && state.allocation.strong_count() == 0)
+    }
+
+    /// Checks for a genuinely missing allocation without changing issuance.
+    pub(super) fn needs_reload(&self) -> Result<bool> {
+        let state = self.residency.lock().map_err(|_| unavailable())?;
+        if state.loading.is_some() {
+            return Err(MessageError::conflict(
+                "MMP source reload is already issued",
+            ));
+        }
+        Ok(state.cached.is_none() && state.allocation.strong_count() == 0)
+    }
+
+    /// Validates actual joined reissue before retiring its cache reservation.
+    pub(super) fn check_reload_reissue(&self, previous: &Arc<()>) -> Result<()> {
+        let state = self.residency.lock().map_err(|_| unavailable())?;
+        if !state
+            .loading
+            .as_ref()
+            .is_some_and(|current| Arc::ptr_eq(current, previous))
+        {
+            return Err(unavailable());
+        }
+        if state.loaded.strong_count() > 0 {
+            return Err(MessageError::conflict(
+                "MMP original payload read still owns bytes",
+            ));
+        }
         Ok(())
     }
 

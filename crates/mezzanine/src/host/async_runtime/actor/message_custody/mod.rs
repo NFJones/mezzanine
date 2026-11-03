@@ -20,6 +20,8 @@ use mez_agent::messaging::{DeliveryCursor, FanoutBatch, MessageError};
 
 mod actions;
 mod native;
+mod payload_reads;
+use payload_reads::PayloadRead;
 mod raw;
 use crate::runtime::{RuntimeMessageActionAdmission, RuntimePreparedTrackedMessage};
 use raw::RawCompletion;
@@ -48,6 +50,8 @@ enum Wake {
 pub(super) enum CustodyEvent {
     /// Bounded source-admission wake; no physical or canonical completion proof.
     AdmissionReady,
+    /// A cache-capacity poll expired; no physical input has been issued yet.
+    PayloadCapacityReady,
     /// Actual joined disposition, still requiring canonical lower adoption.
     Observed(Result<CustodyWorkerStatus>),
     /// Original job's backoff expired; no new admission may replace it.
@@ -65,6 +69,8 @@ enum Pending {
         ticket: RuntimePreparedTrackedMessage,
         reply: oneshot::Sender<Result<mez_agent::messaging::Delivery>>,
     },
+    /// Original accepted source whose payload needs an owned reload.
+    PayloadLoad(PayloadRead),
     /// Actual application/transport commit preceded this original ACK request.
     Acknowledgement(AcknowledgementReply),
 }
@@ -83,6 +89,10 @@ pub(in crate::host::async_runtime) struct ActorMessageCustody {
     root: MmpCustodyRoot,
     /// None disables polling an idle/failed root and prevents a busy loop.
     wake: Option<Wake>,
+    /// Independent capacity poll; it never blocks unrelated fresh admission.
+    payload_retry_at: Option<Instant>,
+    /// Bounded payload-free requests, each fenced to its original registration.
+    payload_reads: std::collections::VecDeque<PayloadRead>,
     /// Receiver cancellation cannot remove this issued original continuation.
     pending: Option<Pending>,
     /// ACK allowed while an exact, never-written acceptance remains retained.
@@ -153,6 +163,8 @@ impl AsyncRuntimeSessionActor {
         self.message_custody = Some(Box::new(ActorMessageCustody {
             root,
             wake: Some(Wake::Observe),
+            payload_retry_at: None,
+            payload_reads: std::collections::VecDeque::new(),
             pending: None,
             parked_ack: None,
             parked_retry_at: None,
@@ -160,6 +172,30 @@ impl AsyncRuntimeSessionActor {
             failure: None,
         }));
         Ok(())
+    }
+
+    /// Enables bounded fresh-store spill after the registered root opened.
+    /// Existing/migrated stores require trusted recovery, never a guessed reset.
+    #[allow(
+        dead_code,
+        reason = "fresh-store spill setup remains internal until native recovery and all ingress are qualified"
+    )]
+    pub(in crate::host::async_runtime) fn enable_message_payload_spill(
+        &mut self,
+        limits: mez_agent::messaging::MessageStorageLimits,
+    ) -> Result<()> {
+        let owner = self
+            .message_custody
+            .as_ref()
+            .ok_or_else(|| MezError::invalid_state("MMP storage root is not registered"))?;
+        if owner.pending.is_some() || owner.shutdown.is_some() {
+            return Err(MezError::invalid_state(
+                "MMP storage root is already active",
+            ));
+        }
+        owner
+            .root
+            .configure_payload_spill(self.service.message_service_mut(), limits)
     }
 
     /// True after graceful shutdown took ownership of its original reply.
@@ -176,6 +212,18 @@ impl AsyncRuntimeSessionActor {
             .message_custody
             .as_ref()
             .and_then(|owner| owner.wake.map(|wake| (owner.root.clone(), wake)));
+        let payload_retry = self
+            .message_custody
+            .as_ref()
+            .and_then(|owner| owner.payload_retry_at);
+        let reads_ready = self.message_custody.as_ref().is_some_and(|owner| {
+            owner.pending.is_none()
+                && owner.wake.is_none()
+                && owner.failure.is_none()
+                && owner.shutdown.is_none()
+                && !owner.payload_reads.is_empty()
+                && owner.payload_retry_at.is_none_or(|at| at <= Instant::now())
+        });
         let sources_ready = self.message_custody.as_ref().is_some_and(|owner| {
             owner.pending.is_none()
                 && owner.wake.is_none()
@@ -189,6 +237,11 @@ impl AsyncRuntimeSessionActor {
                 Some((_, Wake::Retry(at))) => {
                     tokio::time::sleep_until(at).await;
                     CustodyEvent::Retry
+                }
+                None if reads_ready => CustodyEvent::AdmissionReady,
+                None if payload_retry.is_some() => {
+                    tokio::time::sleep_until(payload_retry.unwrap_or_else(Instant::now)).await;
+                    CustodyEvent::PayloadCapacityReady
                 }
                 None if sources_ready => CustodyEvent::AdmissionReady,
                 None if continuation_wait => {
@@ -206,6 +259,7 @@ impl AsyncRuntimeSessionActor {
         if let Some(event) = self.message_custody_wakeup().now_or_never() {
             self.apply_message_custody_event(event);
         }
+        self.pump_message_payload_reads();
         self.pump_stored_message_actions();
         let ready = self.message_custody.as_ref().is_some_and(|owner| {
             owner.shutdown.is_some()
@@ -235,9 +289,17 @@ impl AsyncRuntimeSessionActor {
         };
         let mut completion = None;
         let mut native_adopted = false;
+        let mut payload_read = None;
+        let mut capacity_ready = false;
         let result = match event {
             CustodyEvent::AdmissionReady => Ok(()),
+            CustodyEvent::PayloadCapacityReady => {
+                owner.payload_retry_at = None;
+                capacity_ready = true;
+                Ok(())
+            }
             CustodyEvent::Observed(Ok(CustodyWorkerStatus::Idle)) => {
+                owner.payload_retry_at = None;
                 if let Some(Pending::Action(admission)) = &owner.pending {
                     let source = admission.source().clone();
                     self.service
@@ -274,9 +336,27 @@ impl AsyncRuntimeSessionActor {
                     Ok(())
                 }
             }
-            // Trusted setup has not installed a payload-load continuation yet.
-            // An unsolicited job on a transferred root cannot be adopted as a
-            // send/ACK result or silently release that actor-owned lane.
+            CustodyEvent::Observed(Ok(CustodyWorkerStatus::PayloadLoadAwaitingAdoption))
+                if matches!(owner.pending, Some(Pending::PayloadLoad(_))) =>
+            {
+                owner
+                    .root
+                    .publish_payload_load(self.service.message_service_mut())
+                    .map(|_| {
+                        if let Some(Pending::PayloadLoad(read)) = owner.pending.take() {
+                            payload_read = Some(read);
+                        }
+                        owner.failure = None;
+                        owner.wake = None;
+                        capacity_ready = true;
+                    })
+            }
+            CustodyEvent::Observed(Ok(CustodyWorkerStatus::PayloadLoadRetryAt(at)))
+                if matches!(owner.pending, Some(Pending::PayloadLoad(_))) =>
+            {
+                owner.wake = Some(Wake::Retry(at));
+                Ok(())
+            }
             CustodyEvent::Observed(Ok(
                 CustodyWorkerStatus::PayloadLoadAwaitingAdoption
                 | CustodyWorkerStatus::PayloadLoadRetryAt(_),
@@ -457,6 +537,10 @@ impl AsyncRuntimeSessionActor {
                 .retry_acknowledgement(self.service.message_service_mut(), Instant::now())
                 .map(|_| owner.wake = Some(Wake::Observe)),
             CustodyEvent::Retry => match owner.pending {
+                Some(Pending::PayloadLoad(_)) => owner
+                    .root
+                    .retry_payload_load(self.service.message_service_mut(), Instant::now())
+                    .map(|_| owner.wake = Some(Wake::Observe)),
                 Some(Pending::Action(ref admission)) => self
                     .service
                     .retry_stored_message_action(admission, |messages| {
@@ -518,6 +602,12 @@ impl AsyncRuntimeSessionActor {
                     Instant::now() + std::time::Duration::from_secs(1),
                 ));
             }
+        }
+        if let Some(read) = payload_read {
+            self.complete_payload_read(read);
+        }
+        if capacity_ready {
+            self.notify_message_delivery();
         }
         if native_adopted {
             self.deliver_stored_message_action_input();

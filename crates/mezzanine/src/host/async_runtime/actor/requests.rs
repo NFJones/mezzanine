@@ -9,12 +9,11 @@ use super::TranscriptReceiptReply;
 use super::claim_admission::WorkerClaimLease;
 use super::construction::execute_snapshot_control_async_work;
 use super::{
-    AsyncControlInputResult, AsyncIrohRenderSnapshot, AsyncMessageFanout, AsyncMessageInputResult,
+    AsyncControlInputResult, AsyncIrohRenderSnapshot, AsyncMessageInputResult,
     AsyncRenderedClientFrame, AsyncRuntimeRequest, AsyncRuntimeRequestEnvelope,
     AsyncRuntimeSessionActor, AsyncTerminalClientConfigInput, AsyncTerminalClientConfigSnapshot,
     DEFAULT_PROVIDER_CLAIM_TIMEOUT_MS, MezError, RuntimeSessionService, RuntimeSideEffect,
-    RuntimeTimerKey, RuntimeTimerKind, decode_control_frame, delivery_batch_json,
-    encode_control_body, encode_mmp_body,
+    RuntimeTimerKey, RuntimeTimerKind, decode_control_frame, encode_control_body,
 };
 use crate::host::async_runtime::actor_types::AsyncClientRenderToken;
 use crate::host::terminal::AttachedTerminalClientStepPlan;
@@ -959,25 +958,7 @@ impl AsyncRuntimeSessionActor {
                 limit,
                 reply,
             } => {
-                let result = self
-                    .service
-                    .message_service()
-                    .fanout_ready_for(&recipient, now_ms, limit)
-                    .map(|fanout| {
-                        fanout.map(|batch| {
-                            let body = delivery_batch_json(&batch.batch);
-                            let frame = encode_mmp_body(&body);
-                            let messages = batch.batch.messages.len();
-                            AsyncMessageFanout {
-                                recipient,
-                                frame,
-                                messages,
-                                batch,
-                            }
-                        })
-                    })
-                    .map_err(Into::into);
-                let _ = reply.send(result);
+                self.message_fanout_request(recipient, now_ms, limit, reply);
                 false
             }
             AsyncRuntimeRequest::AcknowledgeMessageFanout { batch, reply } => {

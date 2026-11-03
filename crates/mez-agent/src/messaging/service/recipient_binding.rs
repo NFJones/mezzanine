@@ -24,6 +24,20 @@ fn binding_bytes<'a>(ids: impl Iterator<Item = &'a str>) -> usize {
 }
 
 impl MessageService {
+    /// Uses larger retained-slot ceilings only under an original-root policy;
+    /// combined metadata reservations still bound header and binding totals.
+    fn recipient_binding_limits(&self) -> (usize, usize) {
+        self.storage_custody.as_ref().map_or(
+            (MAX_RECIPIENT_BINDINGS, MAX_RECIPIENT_BINDING_BYTES),
+            |policy| {
+                (
+                    policy.limits.recipient_obligations,
+                    policy.limits.metadata_bytes,
+                )
+            },
+        )
+    }
+
     /// Resolves eligible registrations once, rejecting oversized fanout before
     /// cloning beyond the finite count/byte reservation. Sorting keeps captured
     /// snapshot bytes stable independently of registration hash-map order.
@@ -41,7 +55,9 @@ impl MessageService {
         }) {
             bytes =
                 bytes.saturating_add(binding_bytes(std::iter::once(identity.agent_id.as_str())));
-            if bindings.len() == MAX_RECIPIENT_BINDINGS || bytes > MAX_RECIPIENT_BINDING_BYTES {
+            if bindings.len() == self.recipient_binding_limits().0
+                || bytes > self.recipient_binding_limits().1
+            {
                 return Err(MessageError::new(
                     MessageErrorKind::Capacity,
                     "MMP recipient metadata capacity; message not accepted",
@@ -72,7 +88,7 @@ impl MessageService {
                 row.recipient_bindings.iter().map(|(id, _)| id.as_str()),
             ));
         }
-        if count > MAX_RECIPIENT_BINDINGS || bytes > MAX_RECIPIENT_BINDING_BYTES {
+        if count > self.recipient_binding_limits().0 || bytes > self.recipient_binding_limits().1 {
             return Err(MessageError::new(
                 MessageErrorKind::Capacity,
                 "MMP recipient metadata capacity; message not accepted",
@@ -111,7 +127,7 @@ impl MessageService {
                 queued.recipient_bindings.iter().map(|(id, _)| id.as_str()),
             ));
         }
-        if count > MAX_RECIPIENT_BINDINGS || bytes > MAX_RECIPIENT_BINDING_BYTES {
+        if count > self.recipient_binding_limits().0 || bytes > self.recipient_binding_limits().1 {
             return Err(MessageError::new(
                 MessageErrorKind::Capacity,
                 "MMP recipient metadata capacity; message not accepted",

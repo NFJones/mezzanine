@@ -358,6 +358,175 @@ pub(super) fn body(frame: &[u8]) -> serde_json::Value {
     serde_json::from_str(&decode_mmp_frame(frame, 2 * 1024 * 1024).unwrap().0).unwrap()
 }
 
+/// The durable disk ledger must accept more unread payload than its resident
+/// cache can hold, without acknowledging either recipient or raising the
+/// memory limit. This drives actual spill through the raw actor and real root;
+/// disk availability alone is insufficient while lower custody pins every
+/// payload. Cache accounting includes live allocations and read reservations;
+/// trusted restart delivery remains a separate integration requirement.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn durable_actor_spills_unread_payload_beyond_resident_cache() {
+    let fixture = Fixture::new(true);
+    let (handle, mut actor, _, target) = actor_fixture(&fixture).await;
+    actor
+        .enable_message_payload_spill(mez_agent::messaging::MessageStorageLimits::default())
+        .unwrap();
+    let payload_usage = actor.service.message_service().payload_observer().unwrap();
+    let runner = tokio::spawn(actor.run());
+    let (connection, owner, _lease) = hello(&handle).await;
+    let replies = send_unread_pair(&handle, &connection, &owner, &target, &payload_usage).await;
+    handle.shutdown().await.unwrap();
+    let exited = runner.await.unwrap();
+    assert_eq!(
+        replies[0]["type"], "ack",
+        "first source must fit: {}",
+        replies[0]
+    );
+    assert_eq!(
+        replies[1]["type"], "ack",
+        "disk-backed custody must spill rather than retain every payload: {}",
+        replies[1]
+    );
+    let usage = exited
+        .service
+        .message_service()
+        .storage_usage()
+        .unwrap()
+        .unwrap();
+    assert_eq!(usage.pending_messages, 2);
+    assert_eq!(usage.pending_payload_bytes, 2 * 768 * 1024);
+    assert_eq!(usage.reserved_messages, 0);
+    assert_eq!(usage.cache.reserved_allocations, 0);
+    assert!(usage.cache.live_payload_bytes <= 1024 * 1024);
+    assert!(usage.metadata_bytes <= 8 * 1024 * 1024);
+    let commits: i64 = rusqlite::Connection::open(fixture.path.join("custody.sqlite"))
+        .unwrap()
+        .query_row(
+            "SELECT COUNT(*) FROM records WHERE key LIKE '%:commit'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(commits, 2);
+}
+
+/// Sends two actual authenticated wire originals while measuring the shared
+/// canonical cache. The connection lease stays with its caller through shutdown.
+async fn send_unread_pair(
+    handle: &AsyncRuntimeSessionHandle,
+    connection: &MessageConnection,
+    owner: &watch::Sender<Option<mez_core::ids::AgentId>>,
+    target: &SenderIdentity,
+    payload_usage: &mez_agent::messaging::MessagePayloadObserver,
+) -> Vec<serde_json::Value> {
+    let mut replies = Vec::new();
+    for id in ["first-spilled", "second-spilled"] {
+        let input = encode_mmp_body(&serde_json::json!({
+            "protocol":"mmp/1", "type":"send", "id":id, "time":"original",
+            "scope":"session", "sender":{"agent_id":connection.agent_id.as_ref().unwrap().as_str()},
+            "recipient":{"agent_id":target.agent_id.as_str()}, "ttl_ms":null, "correlation_id":null,
+            "content_type":"text/plain; charset=utf-8", "payload":"x".repeat(768 * 1024)
+        }).to_string());
+        let response = tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                let reply = handle
+                    .handle_message_input_with_owner(
+                        input.clone(),
+                        2 * 1024 * 1024,
+                        connection.clone(),
+                        20,
+                        Some(owner.clone()),
+                    )
+                    .await
+                    .unwrap();
+                let decoded = body(&reply.output);
+                if decoded["error"]["message"]
+                    != "MMP storage lane busy or unavailable; message not accepted"
+                {
+                    break decoded;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        let cache = payload_usage.snapshot().unwrap();
+        assert!(cache.live_payload_bytes + cache.reserved_payload_bytes <= 1024 * 1024);
+        assert!(cache.live_allocations + cache.reserved_allocations <= 1000);
+        replies.push(response);
+    }
+    replies
+}
+
+/// Actual cold delivery must return each original body and sequence through
+/// the public actor handle, persist both recipient ACKs, and release logical
+/// pending custody without ever retaining both 768 KiB canonical allocations.
+/// This is same-runtime paging; trusted restart binding is a separate gate.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn durable_actor_reloads_spilled_originals_and_persists_delivery_acks() {
+    let fixture = Fixture::new(true);
+    let (handle, mut actor, _, target) = actor_fixture(&fixture).await;
+    actor
+        .enable_message_payload_spill(mez_agent::messaging::MessageStorageLimits::default())
+        .unwrap();
+    let usage = actor.service.message_service().payload_observer().unwrap();
+    let runner = tokio::spawn(actor.run());
+    let (connection, owner, _lease) = hello(&handle).await;
+    let replies = send_unread_pair(&handle, &connection, &owner, &target, &usage).await;
+    assert!(replies.iter().all(|reply| reply["type"] == "ack"));
+    for (index, id) in ["first-spilled", "second-spilled"].into_iter().enumerate() {
+        let fanout = tokio::time::timeout(
+            Duration::from_secs(10),
+            handle.message_fanout_ready_for(target.agent_id.clone(), 30, 64),
+        )
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+        assert_eq!(fanout.messages, 1);
+        let delivered = &fanout.batch.batch.messages[0];
+        assert_eq!(delivered.envelope.id, id);
+        assert_eq!(delivered.sequence, index as u64 + 1);
+        assert_eq!(delivered.envelope.payload.len(), 768 * 1024);
+        assert!(delivered.envelope.payload.bytes().all(|byte| byte == b'x'));
+        let measured = usage.snapshot().unwrap();
+        assert_eq!(measured.live_allocations, 1);
+        assert_eq!(measured.live_payload_bytes, 768 * 1024);
+        assert_eq!(measured.reserved_payload_bytes, 0);
+        let ack = tokio::time::timeout(
+            Duration::from_secs(10),
+            handle.acknowledge_message_fanout(fanout.batch),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(ack.last_sequence, index as u64 + 1);
+    }
+    handle.shutdown().await.unwrap();
+    let exited = runner.await.unwrap();
+    let measured = exited
+        .service
+        .message_service()
+        .storage_usage()
+        .unwrap()
+        .unwrap();
+    assert_eq!(measured.pending_messages, 0);
+    assert_eq!(measured.pending_payload_bytes, 0);
+    assert!(measured.cache.live_payload_bytes <= 1024 * 1024);
+    assert_eq!(measured.cache.reserved_payload_bytes, 0);
+    let sql = rusqlite::Connection::open(fixture.path.join("custody.sqlite")).unwrap();
+    for (pattern, count) in [("a1:%:commit", 2), ("k1:%", 2)] {
+        let actual: i64 = sql
+            .query_row(
+                "SELECT COUNT(*) FROM records WHERE key LIKE ?1",
+                [pattern],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(actual, count, "physical committed records for {pattern}");
+    }
+}
+
 /// Observes the retained actual join failure; does not retry or mutate root work.
 async fn failed(root: &MmpCustodyRoot) {
     tokio::time::timeout(Duration::from_secs(10), async {

@@ -14,6 +14,8 @@ pub(super) struct IndexedReceiveSelection {
     pub(super) payload_bytes: usize,
     /// First eligible occurrence whose existing bytes cannot be acquired.
     pub(super) unavailable: Option<MessageError>,
+    /// Exact first missing occurrence, without a delivery/acceptance capability.
+    pub(super) missing_sequence: Option<MessageSequence>,
 }
 
 /// Selection-only filters; native exclusions borrow already-validated proof
@@ -53,12 +55,69 @@ impl MessageService {
             usize::MAX,
             ReceiveSelectionFilter::default(),
         );
-        if let Some(error) = selection.unavailable {
-            return Err(error);
+        if selection.batch.messages.is_empty()
+            && let Some(error) = selection.unavailable
+        {
+            let waiting = match (self.storage_custody.as_ref(), selection.missing_sequence) {
+                (Some(policy), Some(sequence)) => {
+                    let row = self
+                        .queued_by_sequence
+                        .get(&sequence)
+                        .ok_or_else(|| error.clone())?;
+                    row.envelope.storage_digest(&policy.scope)?;
+                    row.envelope.awaiting_payload()?
+                }
+                _ => false,
+            };
+            if !waiting {
+                return Err(error);
+            }
         }
         let batch = selection.batch;
         self.record_delivery_offers(&batch, now_ms)?;
         Ok(batch)
+    }
+
+    /// Observes whether this exact recipient's first eligible occurrence needs
+    /// bytes. It never offers mail or crosses a resident uncommitted prefix.
+    pub fn payload_needed_for(
+        &self,
+        recipient: &AgentId,
+        now_ms: u64,
+    ) -> Result<Option<MessageSequence>> {
+        let Some(policy) = &self.storage_custody else {
+            return Ok(None);
+        };
+        let cursor = self
+            .subscriptions
+            .get(recipient)
+            .ok_or_else(|| MessageError::forbidden("agent has no delivery subscription"))?;
+        let identity = self
+            .registered
+            .get(recipient)
+            .ok_or_else(|| MessageError::forbidden("delivery recipient is not registered"))?;
+        if !self.recipient_is_available(recipient) {
+            return Ok(None);
+        }
+        let selection = self.receive_after_indexed(
+            cursor,
+            identity,
+            now_ms,
+            1,
+            policy.limits.cache_payload_bytes,
+            ReceiveSelectionFilter::default(),
+        );
+        if let Some(sequence) = selection.missing_sequence {
+            let row = self
+                .queued_by_sequence
+                .get(&sequence)
+                .ok_or_else(|| MessageError::invalid_state("MMP cold source is unavailable"))?;
+            row.envelope.storage_digest(&policy.scope)?;
+            if row.envelope.awaiting_payload()? {
+                return Ok(Some(sequence));
+            }
+        }
+        Ok(None)
     }
 
     /// Merges selector indexes in occurrence order under message and byte limits.
@@ -95,6 +154,7 @@ impl MessageService {
         let mut sequence_lookups = 0u64;
         let mut payload_bytes = 0usize;
         let mut unavailable = None;
+        let mut missing_sequence = None;
         while messages.len() < limit {
             let Some(std::cmp::Reverse((sequence, selector_index))) = next_by_selector.pop() else {
                 break;
@@ -128,6 +188,7 @@ impl MessageService {
                     Ok(envelope) => envelope,
                     Err(error) => {
                         unavailable = Some(error);
+                        missing_sequence = Some(sequence);
                         break;
                     }
                 };
@@ -159,6 +220,7 @@ impl MessageService {
             sequence_lookups,
             payload_bytes,
             unavailable,
+            missing_sequence,
         }
     }
 }

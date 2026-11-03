@@ -169,7 +169,7 @@ impl MessageService {
         &self,
         native_commits: &[(AgentId, MessageSequence)],
     ) -> Result<HashSet<(AgentId, MessageSequence)>> {
-        if native_commits.len() > self.pending_limits.recipient_obligations {
+        if native_commits.len() > self.custody_limits().recipient_obligations {
             return Err(MessageError::invalid_args(
                 "native commit protection exceeds obligation bound",
             ));

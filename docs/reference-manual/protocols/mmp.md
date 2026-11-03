@@ -311,9 +311,28 @@ root's original positive storage adoption. Reload verifies the complete source
 fingerprint and frozen occurrence fields, moves decoded bytes without another
 payload copy, and publishes into that same canonical occurrence. It changes no
 TTL basis, recipient rights, delivery offer, ACK or acceptance receipt. A saved
-snapshot cannot recreate this qualification. These internal APIs are not yet an
-automatic actor spill policy or native restart-recovery path; normal product
-traffic retains the existing resident limits.
+snapshot cannot recreate this qualification.
+
+An internal fresh-store opt-in now connects these APIs to bounded actor paging.
+It separates logical mail (10,000 occurrences, 64 MiB payload, 40,000 obligations)
+from the unchanged 1,000-allocation/1 MiB canonical cache. Per recipient interval,
+1,024 obligations and 8 MiB payload apply; combined logical metadata has an 8 MiB
+ceiling including worker, cache-index and reader headroom. Every limit can be
+narrowed by trusted construction, independently of physical store capacity.
+Live delivery references, unpublished worker allocations and decoder reservations
+remain charged after cache release. At most 64 deferred readers and 64 KiB of
+reader descriptors wait on the existing root lane; cancellation before issuance
+allocates no payload. Each reader retains its exact registration, and receives
+its batch immediately after qualified publication, before another reader can
+evict it. A batch waiting in a response channel still pins charged bytes.
+Stored cumulative ACKs use the original adoption-bound source digest, so an ACK
+can settle cold sources without loading an entire prefix.
+
+The opt-in requires an actually empty original store. It is not enabled by
+normal product construction: trusted cold recovery, native restart deduplication
+and all ingress remain separate integration gates. Existing stores and saved
+snapshots cannot select this policy. No configuration schema or wire field changes.
+Normal product traffic retains the existing resident limits.
 Replay limits and payload validation remain independent; a pending byte budget
 does not enlarge the maximum individually acceptable envelope.
 

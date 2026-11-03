@@ -38,7 +38,6 @@ use crate::integrations::agent::actions::AgentTurnRunner;
 use crate::protocol::event::EventAudience;
 use crate::protocol::event::encode_event_notification;
 use crate::protocol::framing::{ProtocolFrameCodec, encode_frame};
-use crate::protocol::message::encode_mmp_body;
 #[cfg(test)]
 use crate::runtime::authorize_unix_peer_raw_fd;
 use crate::runtime::{
@@ -51,7 +50,7 @@ use crate::runtime::{
     RuntimeSnapshotControlAsyncWorkKind, authenticated_unix_peer_uid, current_effective_uid,
 };
 use mez_agent::AgentTurnLedger;
-use mez_agent::messaging::{DeliveryCursor, FanoutBatch, MessageConnection, delivery_batch_json};
+use mez_agent::messaging::{DeliveryCursor, FanoutBatch, MessageConnection};
 use mez_core::ids::{AgentId, ClientId};
 use mez_mux::layout::Size;
 use mez_mux::presentation::compose_client_presentation_with_styles;

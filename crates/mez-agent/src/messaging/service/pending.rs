@@ -42,21 +42,29 @@ impl MessageService {
         let mut obligations = incoming.len();
         let mut per_recipient = HashMap::new();
         for binding in incoming {
-            *per_recipient.entry(binding).or_insert(0usize) += 1;
+            let entry = per_recipient.entry(binding).or_insert((0usize, 0usize));
+            entry.0 += 1;
+            entry.1 = entry.1.saturating_add(payload_bytes);
         }
         for queued in self.pending.values() {
             bytes = bytes.saturating_add(queued.envelope.payload_bytes);
             obligations = obligations.saturating_add(queued.recipient_bindings.len());
             for binding in &queued.recipient_bindings {
-                *per_recipient.entry(binding).or_insert(0usize) += 1;
+                let entry = per_recipient.entry(binding).or_insert((0usize, 0usize));
+                entry.0 += 1;
+                entry.1 = entry.1.saturating_add(queued.envelope.payload_bytes);
             }
         }
-        if self.pending.len() >= self.pending_limits.messages
-            || bytes > self.pending_limits.payload_bytes
-            || obligations > self.pending_limits.recipient_obligations
-            || per_recipient
-                .values()
-                .any(|count| *count > self.pending_limits.per_recipient)
+        if self.pending.len() >= self.custody_limits().messages
+            || bytes > self.custody_limits().payload_bytes
+            || obligations > self.custody_limits().recipient_obligations
+            || per_recipient.values().any(|(count, bytes)| {
+                *count > self.custody_limits().per_recipient
+                    || self
+                        .storage_custody
+                        .as_ref()
+                        .is_some_and(|policy| *bytes > policy.limits.per_recipient_payload_bytes)
+            })
         {
             return Err(MessageError::new(
                 MessageErrorKind::Capacity,

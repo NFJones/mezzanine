@@ -388,6 +388,7 @@ impl MessageService {
             queue,
             pending,
             pending_limits,
+            storage_custody: None,
             queued_by_sequence: Default::default(),
             queued_by_recipient: HashMap::new(),
             subscription_order,

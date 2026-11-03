@@ -13,6 +13,14 @@ pub struct MessageSenderRegistration {
     agent_id: AgentId,
     identity: Arc<()>,
 }
+impl MessageSenderRegistration {
+    /// Borrows public attribution for this opaque registration observation.
+    /// The identifier does not grant sender, recipient or reconnect authority.
+    pub fn agent_id(&self) -> &AgentId {
+        &self.agent_id
+    }
+}
+
 impl std::fmt::Debug for MessageSenderRegistration {
     /// Reveals only public attribution, never allocation pointers or credentials.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

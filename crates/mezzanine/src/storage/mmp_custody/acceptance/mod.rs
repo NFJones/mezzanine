@@ -67,12 +67,20 @@ pub(crate) struct AcceptancePlan {
     generation: u64,
     /// Original reserved canonical occurrence, never a regenerated message ID.
     sequence: u64,
+    /// Actual empty original v2 allocation observed in the same SQLite snapshot.
+    empty_original: bool,
 }
 
 impl AcceptancePlan {
     /// Compares trusted positions without treating an equal sequence as identity.
     pub(crate) fn same_position(&self, other: &Self) -> bool {
         self.store_id == other.store_id && self.generation == other.generation
+    }
+
+    /// Qualifies only an originally empty allocation for fresh spill setup.
+    /// Existing/migrated history requires the separate trusted restore protocol.
+    pub(crate) fn is_empty_original(&self) -> bool {
+        self.generation == 0 && self.empty_original
     }
 
     /// Returns the original reserved occurrence without granting acceptance.
@@ -87,6 +95,7 @@ impl AcceptancePlan {
             store_id: self.store_id.clone(),
             generation,
             sequence: self.sequence,
+            empty_original: false,
         }
     }
 
@@ -116,6 +125,7 @@ impl AcceptancePlan {
             store_id: self.store_id.clone(),
             generation: self.generation,
             sequence,
+            empty_original: self.empty_original,
         }
     }
 }
@@ -400,12 +410,26 @@ impl MmpCustodyStore {
     /// Captures a plan before issuance, on the owned I/O worker. The runtime root
     /// must retain it before handing out an attempt and reuse it after worker loss.
     pub fn acceptance_plan(&self, sequence: u64) -> Result<AcceptancePlan> {
-        let generation = self.current_state()?.generation;
+        let transaction = self
+            .connection
+            .unchecked_transaction()
+            .map_err(database_error)?;
+        let state = self.checked_state(&transaction)?;
+        let empty_original = state.generation == 0
+            && state.watermark == 0
+            && state.watermark_origin_trusted
+            && !transaction
+                .query_row("SELECT EXISTS(SELECT 1 FROM records)", [], |row| {
+                    row.get::<_, bool>(0)
+                })
+                .map_err(database_error)?;
+        self.finish_transaction(transaction)?;
         Ok(AcceptancePlan {
             store_id: self.store_id.clone(),
-            generation: u64::try_from(generation)
+            generation: u64::try_from(state.generation)
                 .map_err(|_| MezError::invalid_state("invalid MMP acceptance generation"))?,
             sequence,
+            empty_original,
         })
     }
 

@@ -7,8 +7,9 @@
 //! private allocation. Publication preserves every offer, recipient commit,
 //! TTL basis and receipt. Only an actual joined attempt can be reissued.
 //!
-//! Normal product eviction and larger disk admission remain separate integration
-//! work. Existing logical custody limits continue to charge absent bytes; these
+//! Original-root storage policy counts logical custody independently of cache
+//! residency. Reads reserve the shared cache before decoding. Normal product
+//! activation and trusted cold recovery remain separate integration gates; these
 //! APIs do not enlarge the cache or permit unqualified snapshot restoration.
 
 use std::sync::Weak;
@@ -24,6 +25,8 @@ struct Identity {
     digest: [u8; 32],
     nonce: Arc<()>,
     limits: MessageAcceptanceDecodeLimits,
+    /// Shared payload-free escrow keeps unbound decoding charged through join.
+    reservation: Option<super::payload_budget::PayloadReservation>,
 }
 
 /// Payload-free escrow identifying the exact actual worker that must be joined.
@@ -95,6 +98,9 @@ impl MessagePayloadLoadWrite {
             .and_then(|source| self.validate(source))
             .and_then(|envelope| {
                 let envelope = Arc::new(envelope);
+                if let Some(reservation) = &self.identity.reservation {
+                    reservation.bind(&envelope)?;
+                }
                 self.source
                     .envelope
                     .register_loaded(&self.identity.nonce, &envelope)?;
@@ -169,7 +175,7 @@ impl MessageService {
         sequence: MessageSequence,
         scope: &MessageStorageScope,
     ) -> Result<()> {
-        if self.acknowledgement.is_some() {
+        if self.acknowledgement.is_some() && self.storage_custody.is_none() {
             return Err(MessageError::conflict(
                 "MMP active ACK retains source payloads",
             ));
@@ -191,6 +197,19 @@ impl MessageService {
     ) -> Result<Option<MessagePayloadLoadWrite>> {
         let row = self.queued_by_sequence.get(&sequence).ok_or_else(changed)?;
         let digest = row.envelope.storage_digest(scope)?;
+        self.require_storage_scope(Some(scope))?;
+        if !row.envelope.needs_reload()? {
+            return Ok(None);
+        }
+        let reservation = self.reserve_storage_payload(
+            sequence,
+            row.envelope.payload_bytes,
+            super::storage_policy::message_metadata_bytes(
+                auxiliary::retained_envelope_bytes(&row.envelope),
+                &row.recipient_bindings,
+            ),
+            Some(sequence),
+        )?;
         let nonce = Arc::new(());
         let identity = Arc::new(Identity {
             owner: self.acceptance_runtime.clone(),
@@ -199,6 +218,7 @@ impl MessageService {
             sequence,
             digest,
             nonce,
+            reservation,
             limits: MessageAcceptanceDecodeLimits {
                 payload_bytes: row.envelope.payload_bytes,
                 auxiliary_bytes: auxiliary::retained_envelope_bytes(&row.envelope),
@@ -242,6 +262,9 @@ impl MessageService {
         }
         joined.qualify_joined(attempt)?;
         let Some(row) = attempt.0.source.upgrade() else {
+            if let Some(reservation) = &attempt.0.reservation {
+                reservation.retire_joined()?;
+            }
             return Ok(None);
         };
         if !self
@@ -249,12 +272,29 @@ impl MessageService {
             .get(&attempt.0.sequence)
             .is_some_and(|live| Arc::ptr_eq(live, &row))
         {
+            row.envelope.check_reload_reissue(&attempt.0.nonce)?;
+            if let Some(reservation) = &attempt.0.reservation {
+                reservation.retire_joined()?;
+            }
             row.envelope.finish_reload(&attempt.0.nonce, &mut None)?;
             return Ok(None);
         }
         if row.envelope.storage_digest(&attempt.0.scope)? != attempt.0.digest {
             return Err(changed());
         }
+        row.envelope.check_reload_reissue(&attempt.0.nonce)?;
+        if let Some(reservation) = &attempt.0.reservation {
+            reservation.retire_joined()?;
+        }
+        let reservation = self.reserve_storage_payload(
+            row.sequence,
+            row.envelope.payload_bytes,
+            super::storage_policy::message_metadata_bytes(
+                auxiliary::retained_envelope_bytes(&row.envelope),
+                &row.recipient_bindings,
+            ),
+            Some(row.sequence),
+        )?;
         let nonce = Arc::new(());
         let identity = Arc::new(Identity {
             owner: attempt.0.owner.clone(),
@@ -264,6 +304,7 @@ impl MessageService {
             digest: attempt.0.digest,
             nonce,
             limits: attempt.0.limits,
+            reservation,
         });
         row.envelope
             .replace_reload(&attempt.0.nonce, &identity.nonce)?;

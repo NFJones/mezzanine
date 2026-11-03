@@ -21,8 +21,7 @@ use super::{
     RuntimeSessionService, RuntimeSideEffect, RuntimeSnapshotControlAsyncOutcome,
     RuntimeSnapshotControlAsyncWork, RuntimeSnapshotControlAsyncWorkKind, RuntimeTimerKey,
     RuntimeTimerKind, RuntimeTransition, ShutdownEvent, Size, TerminalClientLoopConfig, TimerEvent,
-    VecDeque, compose_client_presentation_with_styles, delivery_batch_json, encode_mmp_body, mpsc,
-    oneshot, watch,
+    VecDeque, compose_client_presentation_with_styles, mpsc, oneshot, watch,
 };
 #[cfg(test)]
 use super::{RenderedClientView, RuntimeAgentProviderTask};

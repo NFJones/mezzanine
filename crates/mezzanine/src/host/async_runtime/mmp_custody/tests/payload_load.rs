@@ -6,6 +6,25 @@
 
 use super::*;
 
+/// A nonempty actual store cannot enable fresh-session budgets for an unrelated
+/// empty service. Public session labels and an empty lower ledger do not prove
+/// that persisted originals were recovered; refusal preserves the original
+/// connection, bytes and the candidate's unconfigured policy.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn existing_original_store_cannot_enable_fresh_spill_policy() {
+    let fixture = Fixture::new(true);
+    let (root, _original, _, _, _) = accepted(&fixture).await;
+    let before = fixture.disk();
+    let mut unrelated = MessageService::default();
+    assert!(
+        root.configure_payload_spill(&mut unrelated, Default::default())
+            .is_err()
+    );
+    assert!(unrelated.storage_usage().unwrap().is_none());
+    assert_eq!(root.observe().await.unwrap(), CustodyWorkerStatus::Idle);
+    assert_eq!(fixture.disk(), before);
+}
+
 /// Commits one actual original and consumes the physical-start notification so
 /// subsequent gates identify the read worker, rather than the earlier writer.
 async fn accepted(
