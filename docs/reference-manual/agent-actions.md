@@ -57,7 +57,7 @@ action waiting in the approval interface.
 | `list_agents` | Discovers peers and their current-work objectives. | Discovery defaults to the trusted project; explicit session scope widens the audience. |
 | `send_message` | Sends a message to a peer or group. | Recipient, audience, and payload. Accepted delivery does not establish recipient agreement or task completion. |
 | `spawn_agent`, `close_agent` | Starts delegated work or retires a caller-owned persistent child. | Task, model, scope, and resource use; see [Subagents and messaging](../agent/subagents-and-messaging.md). |
-| `wait` | Parks an agent turn until a peer replies. | It is for inter-agent coordination, not a general delay or approval wait. |
+| `wait` | Parks an agent turn for an explicitly arranged MMP peer reply. | The peer must have been explicitly instructed to communicate or reply over MMP. Never use it for ordinary ephemeral subagent results, delays, or approval waits. |
 | `config_change` | Changes a supported live configuration setting. | The value, persistence, and effect on other work; execution-boundary settings require direct user control. |
 | `mcp_server_search`, `mcp_server_get` | Finds configured integrations and reads their available tool contracts. | Metadata inspection does not invoke an external tool. |
 | `mcp_call` | Invokes a configured MCP tool. | Tool arguments, external effects, credentials, and approval; see [MCP integration](../agent/mcp-integration.md). |

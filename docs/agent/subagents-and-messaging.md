@@ -67,12 +67,18 @@ parent can continue after creation and receives later status and output through
 local messaging. Do not assume detached work finished merely because the parent
 continued.
 
-A joined child can ask its parent for clarification over MMP, then emit `wait`
-in a separate batch. Once that question commits, Mez can fairly admit the same
-parent to answer before the child finishes, including with one provider slot.
-The parent can first discover peers, read files, run permissioned tools, or ask
-another agent and issue a separate `wait`; successful results reach its next
-inference while the original question remains unanswered. A newly joined helper
+Do not use the `wait` action to collect ordinary ephemeral or task-lifetime
+subagent results; rely on the spawn/join lifecycle. Spawning a child alone does
+not establish an MMP exchange or mean that it will send an MMP reply.
+
+Only for an explicitly arranged MMP clarification exchange can a joined child
+ask its parent a question and emit `wait` for the MMP reply in a separate batch,
+not for child completion. Once that question commits, Mez can fairly admit the
+same parent to answer before the child finishes, including with one provider slot.
+The parent can first discover peers, read files, run permissioned tools, or
+explicitly arrange an MMP reply from another agent and issue a separate `wait`;
+successful results reach its next inference while the original question remains
+unanswered. A newly joined helper
 must deliver its actual result before the parent can use it for that answer.
 If the helper also asks a question, answering it returns to that helper's await.
 An accepted reply to the exact question child ends that question's coordination;
@@ -289,9 +295,12 @@ show supported plain text and Markdown. Other message types can remain durable
 and model-visible without a normal log row; `agents.peer_message_log_mode =
 "verbose"` enables bounded raw-payload logging for them.
 
-When progress genuinely depends on a peer answer, the agent sends the request
-in one batch and uses `wait` in the next. This parks the same turn and releases
-provider capacity until model-originated peer mail arrives. It is **not** a
+Use `wait` only when another agent has been explicitly instructed to communicate
+or reply over MMP and progress genuinely depends on that peer's answer. The
+agent sends the request in one batch and uses `wait` in the next. Ordinary
+ephemeral subagent results are not MMP replies; use the spawn/join lifecycle
+instead. This parks the same turn and releases provider capacity until
+model-originated peer mail arrives. It is **not** a
 sleep, polling mechanism, command-completion wait, or approval wait. Runtime
 task-status and task-result bridge messages alone do not wake it.
 

@@ -17654,8 +17654,16 @@ necessary, and must prohibit repeated URL fetches as no-op progress.
 The prompt MUST explain that `send_message` and `spawn_agent` are for local
 agent coordination when delegation materially helps. It MUST explain that
 `wait` is exclusively for active MMP inter-agent coordination after any needed
-message has been sent in an earlier batch, and MUST explicitly forbid using it
-for delays, retries, polling, approvals, user input, subprocesses, network
+message has been sent in an earlier batch. The prompt and provider-facing action
+description MUST require that another agent has been explicitly instructed to
+communicate or reply over MMP; spawning a subagent alone MUST NOT qualify.
+They MUST explicitly forbid using `wait` to collect ordinary ephemeral or
+task-lifetime subagent results and direct the model to the spawn/join lifecycle
+instead. An explicitly arranged MMP clarification exchange with a task-lifetime
+child MAY use `wait` for the peer reply, not for child completion. These are
+model guidance requirements, not new runtime admission checks. The prompt MUST
+explicitly forbid using it for delays, retries, polling, approvals, user input,
+subprocesses, network
 activity, or any other non-MMP circumstance. It MUST explain that
 `config_change` is for explicit Mezzanine configuration mutations and
 that config changes follow the active approval policy like other privileged

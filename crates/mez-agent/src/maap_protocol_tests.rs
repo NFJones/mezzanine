@@ -1274,6 +1274,39 @@ fn wait_round_trips_with_strict_mmp_only_batch_contract() {
 }
 
 #[test]
+/// Protects the distinction between arranged peer replies and runtime-delivered
+/// task results in the actual provider-facing action descriptions.
+fn wait_guidance_requires_explicit_mmp_and_excludes_ephemeral_results() {
+    let schema = maap_action_batch_schema(&AllowedActionSet::all_enabled(), &[]);
+    let actions = schema["properties"]["actions"]["items"]["anyOf"]
+        .as_array()
+        .expect("action variants");
+    let wait = actions
+        .iter()
+        .find(|action| action["properties"]["type"]["enum"] == serde_json::json!(["wait"]))
+        .expect("wait schema");
+    let guidance = wait["description"].as_str().expect("wait guidance");
+    for anchor in [
+        "explicitly instructed to communicate or reply over MMP",
+        "Never use wait to collect ordinary ephemeral or task-lifetime subagent results",
+        "delivered by the spawn/join lifecycle, not by MMP peer mail",
+        "Spawning a subagent alone does not establish an MMP exchange",
+    ] {
+        assert!(guidance.contains(anchor), "missing wait guidance: {anchor}");
+    }
+    let spawn = actions
+        .iter()
+        .find(|action| action["properties"]["type"]["enum"] == serde_json::json!(["spawn_agent"]))
+        .expect("spawn schema");
+    assert!(
+        spawn["properties"]["task_prompt"]["description"]
+            .as_str()
+            .expect("spawn guidance")
+            .contains("Do not use wait to collect ordinary task-lifetime results")
+    );
+}
+
+#[test]
 /// Verifies the turn envelope can carry a bounded objective: the provider schema
 /// exposes the optional field, the parse path reads it from a parsed batch, and a
 /// malformed objective never fails the turn.

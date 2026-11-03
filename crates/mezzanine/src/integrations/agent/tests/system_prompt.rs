@@ -236,11 +236,28 @@ fn system_prompt_bounds_recovery_and_requires_failure_path_checks() {
 }
 
 #[test]
+/// Checks the assembled prompt distinguishes explicitly arranged MMP replies
+/// from ordinary subagent results, including the clarification exception.
+fn system_prompt_limits_wait_to_explicit_mmp_exchanges() {
+    let prompt = build_agent_system_prompt(&AgentPromptProfile::for_model("test-model")).unwrap();
+    for anchor in [
+        "explicitly instructed to communicate or reply over MMP",
+        "Never use `wait` to collect ordinary ephemeral or task-lifetime subagent results",
+        "delivered by the spawn/join lifecycle, not by MMP peer mail",
+        "Spawning a subagent alone does not establish an MMP exchange",
+        "Only for an explicitly arranged MMP clarification exchange",
+        "Do not use `wait` to collect ordinary task-lifetime results",
+    ] {
+        assert!(prompt.contains(anchor), "missing wait contract: {anchor}");
+    }
+}
+
+#[test]
 /// Keeps MCP guidance abstract until runtime metadata supplies a callable pair.
 /// Model identity is templated, but server configuration is not invented here.
 fn system_prompt_keeps_mcp_awareness_abstract() {
     let prompt = build_agent_system_prompt(&AgentPromptProfile::for_model("test-model")).unwrap();
-    assert!(prompt.contains("Mezzanine pane agent profile default v39, model test-model"));
+    assert!(prompt.contains("Mezzanine pane agent profile default v40, model test-model"));
     assert!(prompt.contains("Use `mcp_server_search` to discover configured MCP servers when no exact server reference is already present"));
     assert!(prompt.contains(
         "pass its canonical server id directly to `mcp_server_get` without searching first"
