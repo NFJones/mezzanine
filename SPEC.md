@@ -15579,6 +15579,15 @@ stage or partially cleaned version2 abort while validating every other row,
 source and acknowledgment in the same complete store snapshot. It MUST reject
 unknown, corrupt, inconsistent or additional unresolved rows. Its result is
 descriptive only and MUST NOT authorize cleanup, nonacceptance or delivery.
+A read-only custody-history fold MAY combine fully verified acknowledgment
+records after complete settled inventory in the same store snapshot. Positive
+decisions MUST remain tied to their original occurrence and frozen recipient
+slot; expiry exclusions MUST retain the maximum observed clock per occurrence,
+applying across its recipients. The fold MUST share the inventory metadata
+budget and withhold all results on invalid or unresolved evidence. Its highest
+surviving sequence is only an observation, not a persistent allocator
+watermark, and its decisions do not establish restored native input, current
+registration, cursor, sender, or delivery authority.
 An owned restart worker MAY declare cleanup of one unfinished stage without the
 original in-memory write only while holding the matching live root fence. It
 MUST validate the complete restart inventory and the exact marker-free stage,

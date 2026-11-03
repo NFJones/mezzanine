@@ -103,6 +103,9 @@ fn inventory_preserves_committed_originals_ack_and_cancelled_gap() {
             && empty.acknowledgement_keys.is_empty()
             && empty.aborted_sequences.is_empty()
     );
+    let empty_history = store.fold_custody_history(limits()).unwrap();
+    assert_eq!(empty_history.observed_next_sequence, Some(1));
+    assert!(empty_history.acknowledgements.is_empty() && empty_history.expiries.is_empty());
     let restart_empty = store.inspect_restart_inventory(limits()).unwrap();
     assert!(restart_empty.pending.is_none());
     assert!(restart_empty.inventory.occurrences.is_empty());
@@ -174,6 +177,13 @@ fn inventory_preserves_committed_originals_ack_and_cancelled_gap() {
     assert_eq!(inventory.acknowledgement_keys.len(), 1);
     assert!(inventory.aborted_sequences.is_empty());
     assert_eq!(
+        store
+            .fold_custody_history(limits())
+            .unwrap()
+            .observed_next_sequence,
+        Some(4)
+    );
+    assert_eq!(
         service
             .subscription(&target.agent_id)
             .unwrap()
@@ -215,6 +225,7 @@ fn inventory_refuses_unsettled_stage_then_records_real_finalized_abort() {
         error.to_string().contains("requires reconciliation"),
         "{error}"
     );
+    assert!(store.fold_custody_history(limits()).is_err());
     let restart = store.inspect_restart_inventory(limits()).unwrap();
     assert!(restart.inventory.occurrences.is_empty());
     assert!(restart.inventory.acknowledgement_keys.is_empty());
@@ -240,6 +251,13 @@ fn inventory_refuses_unsettled_stage_then_records_real_finalized_abort() {
     );
     let inventory = store.inventory_custody(limits()).unwrap();
     assert_eq!(inventory.aborted_sequences, vec![1]);
+    assert_eq!(
+        store
+            .fold_custody_history(limits())
+            .unwrap()
+            .observed_next_sequence,
+        Some(3)
+    );
     assert_eq!(
         inventory
             .occurrences

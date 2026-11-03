@@ -42,6 +42,8 @@ pub(crate) struct CustodyInventory {
     pub acknowledgement_keys: Vec<String>,
     /// Fully cleaned abort sequences, never accepted messages.
     pub aborted_sequences: Vec<u64>,
+    /// Logical charge already retained by this inventory, shared with its fold.
+    pub(super) retained_metadata: usize,
 }
 
 /// A quarantined, unresolved occurrence, never an acceptance or cleanup right.
@@ -162,7 +164,7 @@ impl MmpCustodyStore {
 
     /// Scans and verifies the caller's exact same-store transaction snapshot.
     /// Its private result must not escape before that transaction commits.
-    fn inventory_in_snapshot(
+    pub(in crate::storage::mmp_custody) fn inventory_in_snapshot(
         &self,
         transaction: &rusqlite::Transaction<'_>,
         limits: MessageAcceptanceDecodeLimits,
@@ -207,6 +209,7 @@ impl MmpCustodyStore {
             occurrences: Vec::new(),
             acknowledgement_keys: Vec::new(),
             aborted_sequences: Vec::new(),
+            retained_metadata: 0,
         };
         let mut metadata = 0usize;
         let mut group: Option<Group> = None;
@@ -316,6 +319,7 @@ impl MmpCustodyStore {
                 pending,
             )?;
         }
+        inventory.retained_metadata = metadata;
         Ok(inventory)
     }
 
@@ -457,7 +461,7 @@ fn hexadecimal(value: &str, length: usize) -> Result<u64> {
 }
 
 /// Charges retained references before growing any inventory container.
-fn charge(total: &mut usize, amount: usize) -> Result<()> {
+pub(super) fn charge(total: &mut usize, amount: usize) -> Result<()> {
     *total = total
         .checked_add(amount)
         .filter(|total| *total <= MAX_INVENTORY_METADATA)

@@ -375,6 +375,23 @@ fn stored_acknowledgement_preserves_expiry_exclusion_and_later_ack() {
     assert!(!decoded.decisions[0].acknowledged);
     assert_eq!(decoded.decisions[1].sequence, 2);
     assert!(decoded.decisions[1].acknowledged);
+    let history = store.fold_custody_history(decode_limits()).unwrap();
+    assert_eq!(history.inventory.occurrences.len(), 2);
+    assert_eq!(history.observed_next_sequence, Some(3));
+    assert_eq!(
+        history.acknowledgements,
+        vec![super::super::history::FoldedAcknowledgement {
+            sequence: 2,
+            binding_index: 0
+        }]
+    );
+    assert_eq!(
+        history.expiries,
+        vec![super::super::history::FoldedExpiry {
+            sequence: 1,
+            observed_at_ms: 20
+        }]
+    );
 
     // Recompute both row checksum and content key for a forged earlier offer
     // clock; the original first message was not yet expired at that instant.
@@ -396,6 +413,110 @@ fn stored_acknowledgement_preserves_expiry_exclusion_and_later_ack() {
         .err()
         .unwrap();
     assert!(error.to_string().contains("expiry exclusion"), "{error}");
+    assert!(store.fold_custody_history(decode_limits()).is_err());
+}
+
+/// Two actual recipient ACKs carry the same expired prefix at different
+/// endpoint clocks. Folding must keep separate exact acknowledged slots while
+/// taking the occurrence-wide maximum expiry clock, independent of key order.
+#[test]
+fn history_folds_multiple_recipient_acks_and_maximum_expiry_clock() {
+    let fixture = Fixture::new();
+    let mut store = MmpCustodyStore::open(&fixture.0, "session").unwrap();
+    let mut service = MessageService::default();
+    let sender = service.register_agent(None, None, "sender", vec![]);
+    let first = service.register_agent(None, None, "first", vec![]);
+    let second = service.register_agent(None, None, "second", vec![]);
+    service.subscribe(&first.agent_id).unwrap();
+    service.subscribe(&second.agent_id).unwrap();
+    for (id, ttl_ms) in [("expired", Some(5)), ("live", None)] {
+        let envelope = Envelope {
+            protocol: "mmp/1",
+            id: id.into(),
+            message_type: "send".into(),
+            time: "fixture".into(),
+            sender: sender.clone(),
+            recipient: Recipient::Session,
+            correlation_id: None,
+            ttl_ms,
+            content_type: "text/plain".into(),
+            payload: id.into(),
+            extension_fields: vec![],
+        };
+        let ticket = service
+            .prepare_acceptance(
+                &sender.agent_id,
+                envelope,
+                MessageScope::Session,
+                10,
+                4096,
+                None,
+            )
+            .unwrap();
+        let plan = store.acceptance_plan(ticket.sequence()).unwrap();
+        let write = service.begin_acceptance_write(&ticket).unwrap();
+        let MessageAcceptanceWriteOutcome::Committed(commit) =
+            write.persist(&mut store.acceptance_port(&plan))
+        else {
+            panic!("acceptance must commit")
+        };
+        service.publish_acceptance(&commit).unwrap();
+    }
+    for (recipient, now) in [(&first.agent_id, 20), (&second.agent_id, 30)] {
+        let offered = service.receive_subscribed(recipient, now, 10).unwrap();
+        assert_eq!(offered.messages.len(), 1);
+        assert_eq!(offered.messages[0].sequence, 2);
+    }
+    for recipient in [&first.agent_id, &second.agent_id] {
+        let ticket = service
+            .prepare_acknowledgement(recipient, 2, 512 * 1024)
+            .unwrap()
+            .unwrap();
+        let write = service.begin_acknowledgement_write(&ticket).unwrap();
+        let plan = store.acknowledgement_plan().unwrap();
+        let MessageAcknowledgementWriteOutcome::Committed(commit) =
+            write.persist(&mut store.acknowledgement_port(&plan))
+        else {
+            panic!("acknowledgement must commit")
+        };
+        service.publish_acknowledgement(&commit).unwrap();
+    }
+    let (source, _, _) = store.read_accepted_source(2, decode_limits()).unwrap();
+    let mut slots = [&first.agent_id, &second.agent_id]
+        .into_iter()
+        .map(|id| {
+            u32::try_from(
+                source
+                    .recipient_bindings()
+                    .iter()
+                    .position(|binding| binding.recipient == id.as_str())
+                    .unwrap(),
+            )
+            .unwrap()
+        })
+        .collect::<Vec<_>>();
+    slots.sort_unstable();
+    drop(service);
+    drop(store);
+    let store = MmpCustodyStore::open(&fixture.0, "session").unwrap();
+    let history = store.fold_custody_history(decode_limits()).unwrap();
+    assert_eq!(history.inventory.acknowledgement_keys.len(), 2);
+    assert_eq!(history.observed_next_sequence, Some(3));
+    assert_eq!(
+        history
+            .acknowledgements
+            .iter()
+            .map(|entry| (entry.sequence, entry.binding_index))
+            .collect::<Vec<_>>(),
+        slots.into_iter().map(|slot| (2, slot)).collect::<Vec<_>>()
+    );
+    assert_eq!(
+        history.expiries,
+        vec![super::super::history::FoldedExpiry {
+            sequence: 1,
+            observed_at_ms: 30
+        }]
+    );
 }
 
 /// A row whose content address and row checksum have both been recomputed must

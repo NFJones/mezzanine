@@ -27,6 +27,7 @@ use crate::error::{MezError, Result};
 
 pub(crate) mod acceptance;
 pub(crate) mod acknowledgement;
+mod history;
 mod inventory;
 pub(crate) mod ownership;
 
