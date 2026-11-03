@@ -206,6 +206,10 @@ pub struct AgentShellSession {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub session_id: String,
+    /// Actual native application binding, independent of reusable pane and
+    /// conversation labels. Exact rollback clones preserve it; independent
+    /// bindings create a new value. Generic checkpoint restore cannot revive it.
+    pub native_message_incarnation: crate::messaging::MessageNativeIncarnation,
     /// Stores the pane id value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
@@ -346,6 +350,7 @@ impl AgentShellStore {
                 pane_id.clone(),
                 AgentShellSession {
                     session_id: new_agent_session_uuid(),
+                    native_message_incarnation: Default::default(),
                     pane_id: pane_id.clone(),
                     native_working_directory: None,
                     project_scope: None,
@@ -794,6 +799,9 @@ impl AgentShellStore {
                 source_conversation_id,
             )?;
         }
+        if let Some(lineage) = prompt_cache_lineage_id.as_deref() {
+            validate_agent_shell_required("prompt cache lineage id", lineage)?;
+        }
         let session = self.session_mut(pane_id)?;
         if session.running_turn_id.is_some() {
             return Err(AgentShellSessionError::conflict(
@@ -801,6 +809,9 @@ impl AgentShellStore {
             ));
         }
         session.session_id = conversation_id;
+        if !persistence.ephemeral {
+            session.native_message_incarnation = Default::default();
+        }
         session.allowed_actions = None;
         session.display_name = None;
         if let Some(lineage_id) = prompt_cache_lineage_id {
@@ -892,6 +903,7 @@ impl AgentShellStore {
             pane_id.to_string(),
             AgentShellSession {
                 session_id: new_agent_session_uuid(),
+                native_message_incarnation: Default::default(),
                 pane_id: pane_id.to_string(),
                 native_working_directory: None,
                 project_scope: None,

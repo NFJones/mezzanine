@@ -653,6 +653,8 @@ pub(super) struct QueuedEnvelope {
     pub(super) audience: ResolvedMessageAudience,
     /// Exact eligible registrations captured at acceptance, not live selectors.
     pub(super) recipient_bindings: Vec<(AgentId, MessageSequence)>,
+    /// Acceptance-time native owners; absent only for legacy/resident records.
+    pub(super) native_bindings: Option<super::service::native_binding::NativeBindings>,
     /// Successful live selection clock high-water per accepted recipient. Slots
     /// are preallocated in immutable binding order within its metadata charge.
     /// The mutex
@@ -709,7 +711,9 @@ pub struct MessageService {
     /// cannot authenticate against another service or snapshot restoration.
     pub(super) acceptance_runtime: Arc<()>,
     /// One nonserializable identity per currently live registration allocation.
-    pub(super) registration_tokens: HashMap<AgentId, Arc<()>>,
+    pub(super) registration_tokens: HashMap<AgentId, Arc<super::service::RegistrationIdentity>>,
+    /// Trusted live native application owner, never restored from source labels.
+    pub(super) native_bindings: HashMap<AgentId, super::service::native_binding::LiveNativeBinding>,
     /// Restored history is not a live acceptance event in this runtime.
     pub(super) acceptance_history_through: MessageSequence,
     /// Stores the ids value for this data structure.

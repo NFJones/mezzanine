@@ -61,8 +61,11 @@ pub use admission::{
 };
 mod discovery;
 pub use acceptance_proof::{MessageAcceptanceProof, MessageAcceptanceReservation};
+pub(super) mod native_binding;
+pub use native_binding::{MessageNativeIncarnation, MessageNativeOwner, MessageNativeRegistration};
 mod identity;
 pub use identity::MessageSenderRegistration;
+pub(super) use identity::RegistrationIdentity;
 mod payload_budget;
 pub use payload_budget::{MessagePayloadObserver, MessagePayloadUsage};
 mod storage_policy;
@@ -131,6 +134,7 @@ impl MessageService {
             acknowledgement: None,
             acceptance_runtime: Arc::new(()),
             registration_tokens: HashMap::new(),
+            native_bindings: HashMap::new(),
             acceptance_history_through: 0,
             ids: IdFactory::default(),
             registered: HashMap::new(),
@@ -368,6 +372,7 @@ impl MessageService {
         self.mark_admission_sender_retired(agent_id, false, original_floor);
         let identity = self.registered.remove(agent_id);
         self.registration_tokens.remove(agent_id);
+        self.native_bindings.remove(agent_id);
         self.registration_floors.remove(agent_id);
         self.presence.remove(agent_id);
         self.subscriptions.remove(agent_id);
@@ -507,15 +512,17 @@ impl MessageService {
     /// Checks exact acceptance membership and the still-live registration
     /// interval. Mutable selector metadata never grants old delivery rights.
     fn accepted_recipient(&self, queued: &QueuedEnvelope, recipient: &AgentId) -> bool {
-        self.registration_floors
-            .get(recipient)
-            .is_some_and(|floor| {
-                queued.sequence > *floor
-                    && queued
-                        .recipient_bindings
-                        .iter()
-                        .any(|(id, accepted_floor)| id == recipient && accepted_floor == floor)
-            })
+        self.native_recipient_is_current(queued, recipient)
+            && self
+                .registration_floors
+                .get(recipient)
+                .is_some_and(|floor| {
+                    queued.sequence > *floor
+                        && queued
+                            .recipient_bindings
+                            .iter()
+                            .any(|(id, accepted_floor)| id == recipient && accepted_floor == floor)
+                })
     }
 
     /// Runs the recipient is available operation for this subsystem.
@@ -524,9 +531,11 @@ impl MessageService {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     fn recipient_is_available(&self, agent_id: &AgentId) -> bool {
-        self.presence
-            .get(agent_id)
-            .is_some_and(|presence| presence.status != AgentPresenceStatus::Offline)
+        self.native_admission_is_available(agent_id)
+            && self
+                .presence
+                .get(agent_id)
+                .is_some_and(|presence| presence.status != AgentPresenceStatus::Offline)
     }
 
     /// Returns the settled allocation high-water, excluding the current

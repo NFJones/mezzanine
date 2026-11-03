@@ -1,8 +1,10 @@
-//! Borrowed version1 admission record encoding for trusted off-actor storage.
+//! Borrowed versioned admission encoding for trusted off-actor storage.
 //!
 //! Encoding visits frozen fields directly, without copying identity or payload
 //! strings. The adapter must bound its output/streaming buffers and commit the
-//! complete record before success. No runtime ticket or authority is serialized.
+//! complete record before success. Schema2 freezes native application attribution;
+//! schema1 remains exact legacy unknown. No runtime ticket, live registration,
+//! native shell token or resume credential is serialized.
 
 use super::*;
 use serde::{Serialize, Serializer, ser::SerializeSeq};
@@ -59,6 +61,8 @@ struct Record<'a> {
     envelope: Input<'a>,
     audience: Audience<'a>,
     recipient_bindings: Bindings<'a>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    native_bindings: Option<&'a super::super::native_binding::NativeBindings>,
 }
 
 impl Serialize for Extensions<'_> {
@@ -138,7 +142,11 @@ impl Serialize for FrozenRecord<'_> {
             },
         };
         Record {
-            schema_version: 1,
+            schema_version: if self.row.native_bindings.is_some() {
+                2
+            } else {
+                1
+            },
             sequence: self.row.sequence,
             accepted_at_ms: self.row.accepted_at_ms,
             sender_registered_after_sequence: self.row.sender_registered_after_sequence,
@@ -168,6 +176,7 @@ impl Serialize for FrozenRecord<'_> {
             },
             audience,
             recipient_bindings: Bindings(&self.row.recipient_bindings),
+            native_bindings: self.row.native_bindings.as_ref(),
         }
         .serialize(serializer)
     }

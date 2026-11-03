@@ -15921,6 +15921,33 @@ This internal opt-in MUST NOT activate for existing stores without trusted
 recovery, and MUST NOT imply default product activation or native restart
 recovery. No wire or configuration option selects this policy.
 
+Storage-policy acceptance records MUST use immutable source schema2 to capture
+native sender and recipient conversation/incarnation attribution in the frozen
+recipient order. Native ownership MUST derive from the actual current runtime
+shell binding and exact MMP registration, not public pane/agent IDs or sequence
+floors. Independent durable bindings, including resume of the same conversation,
+MUST have distinct shell incarnations; exact same-runtime rollback MAY preserve
+the original. Temporary ephemeral work MUST suspend its parent's delivery
+without retiring that parent's pending obligation; a qualified suspended parent
+MAY continue accepting pending mail. An ephemeral observation without an already
+qualified same-incarnation parent MUST remain unavailable for new mail. Neither
+a stale cached parent, a transcript seed nor later refresh of an unqualified
+temporary binding may establish that missing parent authority. Current application ownership
+MUST fence live selection and original-sender outcome access across replacements.
+
+Native metadata MUST be reserved before copying an audience's strings and MUST
+be covered by original source integrity, cache reload and orphan accounting.
+Conversation attribution is limited to 256 UTF-8 bytes; the opaque incarnation
+is a full 64-character lowercase hexadecimal SHA256 identity. The decoder MUST
+bound and validate every slot and field without creating registration, native
+receive proof, provider admission, reconnect or restore authority. Schema1
+records retain explicit legacy-unknown native ownership, never guessed from
+labels. Generic schema9 snapshots MUST refuse storage-policy source state they
+cannot represent rather than discard native attribution. Trusted cold/session
+checkpoint binding, native canonical-commit recovery and durable transport
+settlement remain separate activation requirements; source attribution alone
+MUST NOT claim that restart delivery or native deduplication is complete.
+
 Immutable envelope auxiliary metadata MUST additionally fit a 16 MiB logical
 budget over the deduplicated replay/custody union after normal replay eviction.
 Charge 1,024 bytes per occurrence plus 64 bytes and four times UTF-8 length for

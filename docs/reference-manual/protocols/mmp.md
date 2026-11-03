@@ -328,6 +328,29 @@ evict it. A batch waiting in a response channel still pins charged bytes.
 Stored cumulative ACKs use the original adoption-bound source digest, so an ACK
 can settle cold sources without loading an entire prefix.
 
+Storage-policy sources now use immutable schema2. Each source records the
+original native sender/recipient conversation and opaque incarnation (or explicit
+raw/unbound absence) in the original recipient order. The actual native shell,
+layout and exact registration supply these facts; matching pane IDs and sequence
+floors do not. Independent resume creates a fresh shell incarnation even for the
+same conversation; exact transaction rollback preserves the original. Temporary
+ephemeral work suspends delivery to its qualified durable parent without retiring
+its mail or stopping new pending-mail acceptance. A first-observed ephemeral
+binding without a qualified parent remains unavailable until its actual parent
+returns; stale association data, transcript seeds and repeated refresh cannot
+supply that qualification.
+Metadata is reserved before audience copies, included in the source checksum,
+and checked on reload. Native conversation attribution is bounded to 256 UTF-8
+bytes, and its incarnation uses a complete 64-character SHA256 identity.
+
+Decoded attribution is quarantined evidence. It cannot recreate a live native
+binding or authenticate reconnect, canonical context commit or provider work.
+Schema1 sources keep legacy-unknown ownership; no missing evidence is inferred
+from current discovery. Generic schema9 capture refuses source state containing
+schema2 ownership/classification until the store/session-bound snapshot path can
+represent it. Trusted cold checkpoint mapping, context-commit-before-ACK dedup
+and native transport/disposition integration remain unfinished activation gates.
+
 The opt-in requires an actually empty original store. It is not enabled by
 normal product construction: trusted cold recovery, native restart deduplication
 and all ingress remain separate integration gates. Existing stores and saved

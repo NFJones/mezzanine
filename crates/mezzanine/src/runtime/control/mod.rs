@@ -294,6 +294,7 @@ impl RuntimeSessionService {
                     .message_service_mut()
                     .subscribe_from_retained_start(&identity.agent_id)?;
             }
+            self.refresh_native_message_bindings()?;
             let pending_messages = self.control.message_service().receive_subscribed(
                 &identity.agent_id,
                 now_ms,
@@ -559,6 +560,7 @@ impl RuntimeSessionService {
                 .message_service_mut()
                 .subscribe_from_retained_start(&identity.agent_id)?;
         }
+        self.refresh_native_message_bindings()?;
         let pending_messages = self.control.message_service().receive_subscribed(
             &identity.agent_id,
             now_ms,

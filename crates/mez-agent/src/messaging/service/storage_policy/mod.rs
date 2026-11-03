@@ -137,6 +137,19 @@ pub(super) fn message_metadata_bytes(
     })
 }
 
+/// Counts the complete frozen source, including native application metadata.
+pub(super) fn source_metadata_bytes(row: &QueuedEnvelope) -> usize {
+    message_metadata_bytes(
+        auxiliary::retained_envelope_bytes(&row.envelope),
+        &row.recipient_bindings,
+    )
+    .saturating_add(
+        row.native_bindings
+            .as_ref()
+            .map_or(0, |owners| owners.metadata_bytes()),
+    )
+}
+
 impl MessageService {
     /// Resolves the trusted destination policy without constructing an invalid
     /// enlarged PendingDeliveryLimits or permitting a snapshot to select it.
@@ -231,10 +244,7 @@ impl MessageService {
             .map(AsRef::as_ref)
             .chain(self.admission.iter().map(|pending| pending.source()))
         {
-            bytes = bytes.saturating_add(message_metadata_bytes(
-                auxiliary::retained_envelope_bytes(&row.envelope),
-                &row.recipient_bindings,
-            ));
+            bytes = bytes.saturating_add(source_metadata_bytes(row));
         }
         bytes = bytes.saturating_add(policy.cache.orphan_metadata(|sequence| {
             self.queued_by_sequence.contains_key(&sequence)
@@ -288,6 +298,7 @@ impl MessageService {
         &self,
         envelope: &Envelope,
         incoming: &[(AgentId, MessageSequence)],
+        native_bytes: usize,
     ) -> Result<()> {
         let Some(policy) = &self.storage_custody else {
             return Ok(());
@@ -300,12 +311,9 @@ impl MessageService {
                     .saturating_mul(CACHE_SLOT_METADATA),
             )
             .saturating_add(auxiliary::envelope_bytes(envelope));
-        bytes = message_metadata_bytes(bytes, incoming);
+        bytes = message_metadata_bytes(bytes, incoming).saturating_add(native_bytes);
         for row in self.pending.values() {
-            bytes = bytes.saturating_add(message_metadata_bytes(
-                auxiliary::retained_envelope_bytes(&row.envelope),
-                &row.recipient_bindings,
-            ));
+            bytes = bytes.saturating_add(source_metadata_bytes(row));
         }
         let fits = || -> Result<bool> {
             let orphan = policy.cache.orphan_metadata(|sequence| {

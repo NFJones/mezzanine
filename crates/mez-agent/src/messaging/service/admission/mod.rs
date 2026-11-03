@@ -479,7 +479,7 @@ impl MessageService {
         }
         self.reserve_pending_delivery(&bindings, envelope.payload.len())?;
         self.reserve_pending_recipient_bindings(&bindings)?;
-        self.reserve_storage_metadata(&envelope, &bindings)?;
+        let native_bindings = self.capture_native_bindings(&envelope, &bindings)?;
         let metadata = self.pending.values().fold(
             super::auxiliary::envelope_bytes(&envelope),
             |bytes, row| {
@@ -536,6 +536,11 @@ impl MessageService {
             super::storage_policy::message_metadata_bytes(
                 super::auxiliary::envelope_bytes(&envelope),
                 &bindings,
+            )
+            .saturating_add(
+                native_bindings
+                    .as_ref()
+                    .map_or(0, |owners| owners.metadata_bytes()),
             ),
             None,
         )?;
@@ -544,6 +549,7 @@ impl MessageService {
             reservation.bind(&envelope)?;
         }
         let row = Arc::new(QueuedEnvelope {
+            native_bindings,
             sequence: self.next_sequence,
             envelope: RetainedEnvelope::new(envelope),
             audience,

@@ -108,6 +108,7 @@ impl RuntimeSessionService {
         if self.agent.request_waits.pending.is_some() {
             return Err(changed());
         }
+        self.refresh_native_message_bindings()?;
         self.prune_request_wait_owners_at(now_ms);
         let origin = Self::request_origin(turn)?;
         let metadata = self.capture_tracked_request_metadata(

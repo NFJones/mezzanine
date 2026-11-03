@@ -148,6 +148,10 @@ impl AsyncRuntimeSessionActor {
             }
             return;
         };
+        if let Err(error) = self.service.refresh_native_message_bindings() {
+            self.finish_raw_message_input(raw, Err(error));
+            return;
+        }
         let Some(owner) = self.message_custody.as_mut() else {
             self.finish_raw_message_input(
                 raw,

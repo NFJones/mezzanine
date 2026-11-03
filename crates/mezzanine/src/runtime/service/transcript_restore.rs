@@ -335,6 +335,7 @@ impl RuntimeSessionService {
             )?;
             let target_session = AgentShellSession {
                 session_id: conversation_id.clone(),
+                native_message_incarnation: Default::default(),
                 pane_id: pane_id.clone(),
                 native_working_directory: None,
                 project_scope: target_project_scope.clone(),

@@ -17,6 +17,8 @@ mod receipts;
 
 use mez_agent::SchedulerErrorKind;
 
+mod native_binding;
+
 use super::{
     ActionResult, ActionStatus, AgentAction, AgentActionPayload, AgentId, AgentTurnExecution,
     AgentTurnRecord, AgentTurnState, Envelope, EventKind, MezError, PaneId, Result,
@@ -85,6 +87,7 @@ impl RuntimeSessionService {
     /// for the exact canonical plaintext media type; other committed payloads
     /// remain durable and model-visible without pane presentation.
     pub(crate) fn deliver_pending_runtime_agent_messages(&mut self, now_ms: u64) -> Result<usize> {
+        self.refresh_native_message_bindings()?;
         self.recover_received_peer_message_turn_scheduling(now_ms)?;
         self.recover_joined_coordination_wakes()?;
         self.recover_owned_child_failures(now_ms)?;
@@ -801,6 +804,9 @@ impl RuntimeSessionService {
     /// Receive admission checks only
     /// its exact conversation fence, never retries the failed archive read.
     pub(crate) fn has_pending_peer_messages(&mut self, now_ms: u64) -> bool {
+        if self.refresh_native_message_bindings().is_err() {
+            return true;
+        }
         // Custody expiry/retirement is independent of live fanout and loop
         // admission. Retry unavailable evidence conservatively rather than
         // silently abandoning an accepted obligation.

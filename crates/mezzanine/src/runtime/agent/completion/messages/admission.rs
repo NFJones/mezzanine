@@ -82,6 +82,7 @@ impl RuntimeSessionService {
             ));
         };
         let sender = self.runtime_message_sender_identity(&turn)?;
+        self.refresh_native_message_bindings()?;
         let envelope = Envelope {
             protocol: "mmp/1",
             id: format!("{}:{}", turn.turn_id, action.id),

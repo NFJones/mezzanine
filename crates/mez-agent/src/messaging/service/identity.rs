@@ -5,13 +5,27 @@
 
 use super::*;
 
+/// Actual live registration allocation with a private native hash namespace.
+/// Generic restoration creates a fresh namespace and never restores the Arc.
+#[derive(Debug)]
+pub(in crate::messaging) struct RegistrationIdentity {
+    pub(super) native_namespace: uuid::Uuid,
+}
+impl Default for RegistrationIdentity {
+    fn default() -> Self {
+        Self {
+            native_namespace: uuid::Uuid::new_v4(),
+        }
+    }
+}
+
 /// Same-runtime observation of one actual sender registration allocation.
 /// This opaque token supplies no acceptance, permission or reconnect authority;
 /// objective/presence telemetry preserve it, authority changes and restore do not.
 #[derive(Clone)]
 pub struct MessageSenderRegistration {
     agent_id: AgentId,
-    identity: Arc<()>,
+    pub(super) identity: Arc<RegistrationIdentity>,
 }
 impl MessageSenderRegistration {
     /// Borrows public attribution for this opaque registration observation.
@@ -135,8 +149,10 @@ impl MessageService {
         identity: SenderIdentity,
         updated_at_ms: u64,
     ) -> SenderIdentity {
-        self.registration_tokens
-            .insert(identity.agent_id.clone(), Arc::new(()));
+        self.registration_tokens.insert(
+            identity.agent_id.clone(),
+            Arc::new(RegistrationIdentity::default()),
+        );
         self.registration_floors.insert(
             identity.agent_id.clone(),
             self.next_sequence.saturating_sub(1),
@@ -186,8 +202,10 @@ impl MessageService {
             reconcile_capabilities(&mut reconciled.capabilities, &identity.capabilities)?;
 
             if !same_immutable_sender(existing, &reconciled) {
-                self.registration_tokens
-                    .insert(identity.agent_id.clone(), Arc::new(()));
+                self.registration_tokens.insert(
+                    identity.agent_id.clone(),
+                    Arc::new(RegistrationIdentity::default()),
+                );
             }
             self.registered
                 .insert(identity.agent_id.clone(), reconciled.clone());
@@ -210,7 +228,7 @@ impl MessageService {
         })?;
         if identity.project_scope != project_scope {
             self.registration_tokens
-                .insert(agent_id.clone(), Arc::new(()));
+                .insert(agent_id.clone(), Arc::new(RegistrationIdentity::default()));
         }
         identity.project_scope = project_scope.clone();
         if let Some(presence) = self.presence.get_mut(agent_id) {

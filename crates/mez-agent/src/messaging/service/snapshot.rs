@@ -28,6 +28,15 @@ impl MessageService {
     /// Returns `InvalidState` when any retained payload is unavailable; no
     /// partial snapshot or substitute empty payload escapes on failure.
     pub fn snapshot_state(&self) -> Result<MessageServiceSnapshot> {
+        if self
+            .queued_by_sequence
+            .values()
+            .any(|row| row.native_bindings.is_some())
+        {
+            return Err(MessageError::invalid_state(
+                "MMP native custody requires the versioned store-bound snapshot recovery path",
+            ));
+        }
         let mut registered_agents = self
             .registered
             .values()
@@ -274,6 +283,7 @@ impl MessageService {
                     .map(|(_, floor)| *floor)
             };
             let queued = Arc::new(QueuedEnvelope {
+                native_bindings: None,
                 sequence: retained.sequence,
                 envelope: RetainedEnvelope::new(envelope),
                 audience: audience_from_snapshot(retained.audience.as_ref())?,
@@ -360,7 +370,7 @@ impl MessageService {
         );
         let registration_tokens = registered
             .keys()
-            .map(|id| (id.clone(), Arc::new(())))
+            .map(|id| (id.clone(), Arc::new(RegistrationIdentity::default())))
             .collect();
         let mut service = Self {
             admission: None,
@@ -396,6 +406,7 @@ impl MessageService {
             fanout_diagnostics: MessageFanoutDiagnostics::default(),
             acceptance_runtime: Arc::new(()),
             registration_tokens,
+            native_bindings: Default::default(),
             acceptance_history_through: snapshot.next_sequence - 1,
             next_sequence: snapshot.next_sequence,
             retention_messages: snapshot.retention_messages,

@@ -136,6 +136,7 @@ impl MessagePayloadLoadWrite {
             || Some(source.sender_registered_after_sequence())
                 != row.sender_registered_after_sequence
             || source.envelope().payload.len() != row.envelope.payload_bytes
+            || source.native_bindings() != row.native_bindings.as_ref()
             || !audience_matches
             || source.recipient_bindings().len() != row.recipient_bindings.len()
             || !source
@@ -204,10 +205,7 @@ impl MessageService {
         let reservation = self.reserve_storage_payload(
             sequence,
             row.envelope.payload_bytes,
-            super::storage_policy::message_metadata_bytes(
-                auxiliary::retained_envelope_bytes(&row.envelope),
-                &row.recipient_bindings,
-            ),
+            super::storage_policy::source_metadata_bytes(row.as_ref()),
             Some(sequence),
         )?;
         let nonce = Arc::new(());
@@ -221,7 +219,11 @@ impl MessageService {
             reservation,
             limits: MessageAcceptanceDecodeLimits {
                 payload_bytes: row.envelope.payload_bytes,
-                auxiliary_bytes: auxiliary::retained_envelope_bytes(&row.envelope),
+                auxiliary_bytes: auxiliary::retained_envelope_bytes(&row.envelope).saturating_add(
+                    row.native_bindings
+                        .as_ref()
+                        .map_or(0, |owners| owners.metadata_bytes()),
+                ),
                 recipient_count: row.recipient_bindings.len(),
                 recipient_bytes: row
                     .recipient_bindings
@@ -289,10 +291,7 @@ impl MessageService {
         let reservation = self.reserve_storage_payload(
             row.sequence,
             row.envelope.payload_bytes,
-            super::storage_policy::message_metadata_bytes(
-                auxiliary::retained_envelope_bytes(&row.envelope),
-                &row.recipient_bindings,
-            ),
+            super::storage_policy::source_metadata_bytes(row.as_ref()),
             Some(row.sequence),
         )?;
         let nonce = Arc::new(());

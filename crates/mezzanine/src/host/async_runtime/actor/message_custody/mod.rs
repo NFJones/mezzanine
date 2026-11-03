@@ -195,7 +195,8 @@ impl AsyncRuntimeSessionActor {
         }
         owner
             .root
-            .configure_payload_spill(self.service.message_service_mut(), limits)
+            .configure_payload_spill(self.service.message_service_mut(), limits)?;
+        self.service.refresh_native_message_bindings()
     }
 
     /// True after graceful shutdown took ownership of its original reply.

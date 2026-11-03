@@ -1274,7 +1274,7 @@ impl RuntimeSessionService {
                 incoming_capabilities = existing.capabilities.clone();
             }
         }
-        Ok(self.control.message_service_mut().ensure_agent_identity(
+        let identity = self.control.message_service_mut().ensure_agent_identity(
             SenderIdentity {
                 agent_id,
                 project_scope,
@@ -1285,7 +1285,9 @@ impl RuntimeSessionService {
                 objective: None,
             },
             now_ms,
-        )?)
+        )?;
+        self.refresh_native_message_bindings()?;
+        Ok(identity)
     }
 
     /// Returns the stable trusted project membership for one runtime agent pane.

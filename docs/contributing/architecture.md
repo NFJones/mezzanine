@@ -186,6 +186,19 @@ No greedy prefetch scan runs. Cold restart recovery and normal product activatio
 remain separate gates; neither existing stores nor snapshots can enable this
 fresh-store policy by supplying public identity labels.
 
+Native source schema2 freezes application attribution alongside the canonical
+lower source before storage. The runtime derives it from actual shell/layout
+ownership and an exact MMP registration; an opaque shell incarnation distinguishes
+independent bindings while clone-based rollback preserves the original. A full
+SHA256 over the registration's private namespace, shell incarnation and original
+conversation makes exact rollback reproducible without a growing history map.
+Only descriptive conversation/incarnation fields enter storage; runtime tokens
+and reconnect credentials do not. Generic source decoding grants no live binding.
+Native refresh runs before source freeze and context selection; ephemeral children
+suspend their original parent's delivery. Generic schema9 snapshots refuse the
+new source metadata rather than silently lose it. Trusted native checkpoint and
+canonical commit/transport recovery remain required before product activation.
+
 ## Ownership and tests
 
 Follow the closest owner rather than forwarding contracts through

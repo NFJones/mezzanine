@@ -55,7 +55,7 @@ pub(super) fn validate_finalized_abort(
 
 /// Keeps encoded buffers and individual transactions below the generic batch cap.
 const CHUNK_BYTES: usize = 64 * 1024;
-/// Row format version independent of SQLite schema2 and admission input version1.
+/// Row framing version independent of SQLite schema2 and admission input schemas1/2.
 const RECORD_VERSION: u32 = 1;
 
 /// Payload-free original destination and serial position retained by the owner.

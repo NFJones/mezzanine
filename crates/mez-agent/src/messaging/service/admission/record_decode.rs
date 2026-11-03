@@ -1,4 +1,4 @@
-//! Quarantined decoding of version-one immutable acceptance source records.
+//! Quarantined decoding of immutable acceptance source schemas1/2.
 //!
 //! Admission serializes compact JSON in a fixed, versioned order. This decoder
 //! recognizes only that original representation, charges strings and entries
@@ -36,6 +36,7 @@ pub struct MessageAcceptanceSource {
     envelope: MessageEnvelopeSnapshot,
     audience: MessageAudienceSnapshot,
     recipient_bindings: Vec<MessageRecipientBindingSnapshot>,
+    native_bindings: Option<super::super::native_binding::NativeBindings>,
 }
 
 impl MessageAcceptanceSource {
@@ -84,6 +85,31 @@ impl MessageAcceptanceSource {
     pub fn audience(&self) -> &MessageAudienceSnapshot {
         &self.audience
     }
+    /// Borrows quarantined original native attribution; this recreates no owner.
+    pub(in crate::messaging) fn native_bindings(
+        &self,
+    ) -> Option<&super::super::native_binding::NativeBindings> {
+        self.native_bindings.as_ref()
+    }
+    /// Borrows the original sender's native attribution, if durably recorded.
+    /// Neither these bytes nor a matching label supply live application authority.
+    pub fn native_sender(&self) -> Option<&MessageNativeOwner> {
+        self.native_bindings
+            .as_ref()
+            .and_then(|owners| owners.sender.as_ref())
+    }
+    /// Borrows an original recipient's native attribution in frozen binding order.
+    pub fn native_recipient(&self, index: usize) -> Option<&MessageNativeOwner> {
+        self.native_bindings
+            .as_ref()
+            .and_then(|owners| owners.recipients.get(index))
+            .and_then(Option::as_ref)
+    }
+    /// Distinguishes original explicit endpoint classification from legacy unknown.
+    pub fn has_native_binding_record(&self) -> bool {
+        self.native_bindings.is_some()
+    }
+
     /// Borrows the originally captured recipients and their interval floors.
     pub fn recipient_bindings(&self) -> &[MessageRecipientBindingSnapshot] {
         &self.recipient_bindings
@@ -153,7 +179,8 @@ pub fn decode_message_acceptance<R: Read>(
     let mut reader = RecordReader::new(input);
     let mut metadata = MetadataBudget::new(limits.auxiliary_bytes)?;
     reader.literal(b"{\"schema_version\":")?;
-    if reader.unsigned()? != 1 {
+    let version = reader.unsigned()?;
+    if !matches!(version, 1 | 2) {
         return Err(MessageError::invalid_args(
             "unsupported MMP acceptance schema",
         ));
@@ -249,7 +276,17 @@ pub fn decode_message_acceptance<R: Read>(
             registered_after_sequence: floor,
         });
     }
-    reader.literal(b"]}")?;
+    reader.literal(b"]")?;
+    let native_bindings = if version == 2 {
+        Some(decode_native_bindings(
+            &mut reader,
+            &mut metadata,
+            bindings.len(),
+        )?)
+    } else {
+        None
+    };
+    reader.literal(b"}")?;
     reader.finish()?;
     let candidate = MessageAcceptanceSource {
         sequence,
@@ -281,9 +318,71 @@ pub fn decode_message_acceptance<R: Read>(
             project_scope: audience_scope,
         },
         recipient_bindings: bindings,
+        native_bindings,
     };
     validate(&candidate)?;
     Ok(candidate)
+}
+
+/// Reads bounded original application attribution only for explicit schema2.
+/// Slot count must exactly match the immutable recipient array before adoption.
+fn decode_native_bindings<R: Read>(
+    reader: &mut RecordReader<R>,
+    metadata: &mut MetadataBudget,
+    recipients: usize,
+) -> Result<super::super::native_binding::NativeBindings> {
+    metadata.charge(0)?;
+    metadata.charge(0)?;
+    reader.literal(b",\"native_bindings\":{\"sender\":")?;
+    let sender = decode_native_owner(reader, metadata)?;
+    reader.literal(b",\"recipients\":[")?;
+    let mut owners = Vec::new();
+    while reader.peek()? != Some(b']') {
+        if owners.len() >= recipients {
+            return Err(capacity());
+        }
+        if !owners.is_empty() {
+            reader.literal(b",")?;
+        }
+        let owner = decode_native_owner(reader, metadata)?;
+        owners.try_reserve(1).map_err(|_| capacity())?;
+        owners.push(owner);
+    }
+    reader.literal(b"]}")?;
+    if owners.len() != recipients {
+        return Err(MessageError::invalid_args(
+            "MMP native binding count disagrees with original recipients",
+        ));
+    }
+    Ok(super::super::native_binding::NativeBindings {
+        sender,
+        recipients: owners,
+    })
+}
+
+/// Charges a complete slot before strings and validates its bounded incarnation.
+fn decode_native_owner<R: Read>(
+    reader: &mut RecordReader<R>,
+    metadata: &mut MetadataBudget,
+) -> Result<Option<MessageNativeOwner>> {
+    metadata.charge(0)?;
+    if reader.peek()? == Some(b'n') {
+        reader.literal(b"null")?;
+        return Ok(None);
+    }
+    reader.literal(b"{\"conversation_id\":")?;
+    let conversation_id = reader.string(metadata.string_limit()?.min(256))?;
+    metadata.charge(conversation_id.len())?;
+    reader.literal(b",\"incarnation\":")?;
+    let incarnation = reader.string(metadata.string_limit()?.min(64))?;
+    metadata.charge(incarnation.len())?;
+    reader.literal(b"}")?;
+    let owner = MessageNativeOwner {
+        conversation_id,
+        incarnation,
+    };
+    owner.validate()?;
+    Ok(Some(owner))
 }
 
 /// Checks original semantic constraints without publishing any live authority.

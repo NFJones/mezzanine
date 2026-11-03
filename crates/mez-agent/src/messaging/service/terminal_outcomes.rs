@@ -82,6 +82,7 @@ impl MessageService {
                     }
                 } else if queued.envelope.ttl_ms.is_some()
                     || self.registration_floors.get(recipient) != Some(floor)
+                    || !self.native_recipient_is_current(queued, recipient)
                 {
                     return Ok(true);
                 }
@@ -144,7 +145,9 @@ impl MessageService {
                 }
                 let reason = if expired(queued, now_ms) {
                     Some(DeliveryTerminalReason::Expired)
-                } else if self.registration_floors.get(recipient) != Some(floor) {
+                } else if self.registration_floors.get(recipient) != Some(floor)
+                    || !self.native_recipient_is_current(queued, recipient)
+                {
                     Some(DeliveryTerminalReason::RecipientRetired)
                 } else {
                     None
@@ -364,7 +367,8 @@ impl MessageService {
     /// Original sender authentication is separate from mutable objective or
     /// presence telemetry. Exact registration floor prevents reused-ID claims.
     fn owns_outcomes(&self, queued: &QueuedEnvelope, sender: &AgentId) -> bool {
-        queued.envelope.sender.agent_id == *sender
+        self.native_sender_is_current(queued)
+            && queued.envelope.sender.agent_id == *sender
             && queued
                 .sender_registered_after_sequence
                 .is_some_and(|floor| self.registration_floors.get(sender) == Some(&floor))

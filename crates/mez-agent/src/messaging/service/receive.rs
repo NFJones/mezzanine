@@ -130,6 +130,18 @@ impl MessageService {
         max_payload_bytes: usize,
         filter: ReceiveSelectionFilter<'_>,
     ) -> IndexedReceiveSelection {
+        if !self.native_delivery_is_available(&identity.agent_id) {
+            return IndexedReceiveSelection {
+                batch: DeliveryBatch {
+                    cursor: cursor.clone(),
+                    messages: Vec::new(),
+                },
+                sequence_lookups: 0,
+                payload_bytes: 0,
+                unavailable: None,
+                missing_sequence: None,
+            };
+        }
         let selectors = recipient_selectors(identity);
         let mut next_by_selector = std::collections::BinaryHeap::new();
         for (index, selector) in selectors.iter().enumerate() {
