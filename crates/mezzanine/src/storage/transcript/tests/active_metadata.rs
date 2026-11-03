@@ -6,6 +6,7 @@
 use super::*;
 use std::io::{Read, Seek, SeekFrom};
 
+mod native_binding;
 mod ownership;
 
 /// Namespace creation and an AlreadyExists retry both require the parent sync

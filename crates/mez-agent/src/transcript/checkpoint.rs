@@ -1,4 +1,8 @@
 //! Durable agent-session checkpoint contracts and validation.
+//!
+//! Native shell incarnation bytes describe a captured binding. Validation never
+//! turns those bytes into a live shell or MMP registration; generic restoration
+//! must still create a fresh identity until trusted original-store qualification.
 
 use std::collections::BTreeMap;
 
@@ -19,6 +23,9 @@ pub struct AgentSessionMetadata {
     pub pane_id: String,
     /// Durable conversation identity bound to the pane.
     pub conversation_id: String,
+    /// Original actual shell epoch, retained as inert bytes for trusted recovery.
+    /// Legacy absence stays unknown; generic restore cannot adopt these bytes.
+    pub native_message_incarnation: Option<[u8; 16]>,
     /// Nonauthorizing qualification captured from an actual current persistent
     /// relationship. False/legacy metadata restores history structurally only;
     /// true still requires the same restore's exact parent pair and native proof.
@@ -113,6 +120,14 @@ impl AgentSessionMetadata {
         validate_required("pane id", &self.pane_id)?;
         validate_conversation_id(&self.conversation_id)?;
         super::validate_steering_recovery(&self.steering_recovery)?;
+        if self.native_message_incarnation.is_some_and(|bytes| {
+            let id = uuid::Uuid::from_bytes(bytes);
+            id.get_version_num() != 4 || id.get_variant() != uuid::Variant::RFC4122
+        }) {
+            return Err(TranscriptContractError::new(
+                "invalid native message incarnation checkpoint",
+            ));
+        }
         if let Some(name) = &self.primary_display_name
             && (name.is_empty()
                 || name.len() > 128

@@ -12,6 +12,7 @@ mod fork_inheritance;
 mod fork_source;
 mod lifecycle;
 mod metadata;
+mod native_binding;
 mod positions;
 mod resume_cleanup;
 mod resume_prompt;

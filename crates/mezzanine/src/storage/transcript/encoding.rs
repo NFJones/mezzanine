@@ -2,7 +2,9 @@
 //!
 //! The format is append-only and line-oriented so saved conversations remain
 //! inspectable without a database. Fields are escaped for tabs, newlines,
-//! carriage returns, and backslashes.
+//! carriage returns, and backslashes. Native epoch metadata is descriptive:
+//! row8 retains validated UUID bytes; older rows keep unknown identity, and no
+//! decoder constructs a live native shell/registration or restart authority.
 
 use crate::error::{MezError, Result};
 use crate::host::terminal::{agent_log_wrap_width, wrap_agent_log_lines};
@@ -34,7 +36,9 @@ const LEGACY_PROMPT_HISTORY_VERSION: &str = "mez-agent-prompt-history/1";
 ///
 /// Keeping this value documented makes the contract explicit at the module
 /// boundary and avoids relying on call-site inference.
-const AGENT_SESSION_METADATA_VERSION: &str = "mez-agent-session-metadata/7";
+const AGENT_SESSION_METADATA_VERSION: &str = "mez-agent-session-metadata/8";
+/// Qualified persistent ownership before original native shell epochs.
+const UNBOUND_AGENT_SESSION_METADATA_VERSION: &str = "mez-agent-session-metadata/7";
 /// Acceptance-stamped receipts before explicit persistent ownership qualification.
 const UNQUALIFIED_AGENT_SESSION_METADATA_VERSION: &str = "mez-agent-session-metadata/6";
 /// Ordered steering receipts before immutable acceptance-time provenance.
@@ -511,6 +515,8 @@ pub(super) fn encode_agent_session_metadata(metadata: &AgentSessionMetadata) -> 
         serde_json::to_string(&metadata.steering_recovery)
             .map_err(|_| MezError::invalid_state("steering recovery metadata encoding failed"))?,
         metadata.persistent_subagent_owned.to_string(),
+        serde_json::to_string(&metadata.native_message_incarnation)
+            .map_err(|_| MezError::invalid_state("native epoch metadata encoding failed"))?,
     ]
     .into_iter()
     .map(|field| escape_field(&field))
@@ -526,12 +532,17 @@ pub(super) fn decode_agent_session_metadata(line: &str) -> Result<AgentSessionMe
         .is_some_and(|version| version == LEGACY_AGENT_SESSION_METADATA_VERSION);
     let current = fields.first().is_some_and(|version| {
         version == AGENT_SESSION_METADATA_VERSION
+            || version == UNBOUND_AGENT_SESSION_METADATA_VERSION
             || version == UNQUALIFIED_AGENT_SESSION_METADATA_VERSION
             || version == UNSTAMPED_AGENT_SESSION_METADATA_VERSION
     });
-    let qualified_version = fields
+    let native_version = fields
         .first()
         .is_some_and(|version| version == AGENT_SESSION_METADATA_VERSION);
+    let qualified_version = fields.first().is_some_and(|version| {
+        version == AGENT_SESSION_METADATA_VERSION
+            || version == UNBOUND_AGENT_SESSION_METADATA_VERSION
+    });
     let project_version = fields
         .first()
         .is_some_and(|version| version == PROJECT_AGENT_SESSION_METADATA_VERSION);
@@ -541,7 +552,8 @@ pub(super) fn decode_agent_session_metadata(line: &str) -> Result<AgentSessionMe
     let unordered_version = fields
         .first()
         .is_some_and(|version| version == UNORDERED_AGENT_SESSION_METADATA_VERSION);
-    if !((qualified_version && fields.len() == 36)
+    if !((native_version && fields.len() == 37)
+        || (!native_version && qualified_version && fields.len() == 36)
         || (current && !qualified_version && fields.len() == 35)
         || (unordered_version && fields.len() == 35)
         || (identity_version && fields.len() == 34)
@@ -686,6 +698,12 @@ pub(super) fn decode_agent_session_metadata(line: &str) -> Result<AgentSessionMe
         mezzanine_session_id: fields[1].clone(),
         pane_id: fields[2].clone(),
         conversation_id: fields[3].clone(),
+        native_message_incarnation: if native_version {
+            serde_json::from_str(&fields[36])
+                .map_err(|_| MezError::invalid_args("invalid native epoch metadata"))?
+        } else {
+            None
+        },
         persistent_subagent_owned: if qualified_version {
             parse_bool(
                 &fields[35],

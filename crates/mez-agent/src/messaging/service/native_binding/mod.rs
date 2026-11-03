@@ -21,6 +21,14 @@ impl Default for MessageNativeIncarnation {
     }
 }
 
+impl MessageNativeIncarnation {
+    /// Describes this actual shell epoch for its private session checkpoint.
+    /// The bytes carry no construction, registration or live restore capability.
+    pub fn snapshot_identity(&self) -> [u8; 16] {
+        *self.0.as_bytes()
+    }
+}
+
 /// Complete trusted product observation for one actual native shell binding.
 /// Product code derives this from the current shell, not wire identity labels.
 pub struct MessageNativeRegistration {

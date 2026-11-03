@@ -21,6 +21,7 @@ fn valid_checkpoint() -> AgentSessionMetadata {
         mezzanine_session_id: "$1".to_string(),
         pane_id: "%1".to_string(),
         conversation_id: "conversation-1".to_string(),
+        native_message_incarnation: None,
         persistent_subagent_owned: false,
         primary_display_name: None,
         steering_recovery: Vec::new(),
@@ -168,4 +169,29 @@ fn agent_session_checkpoint_allows_shared_sizing_profile_names() {
     );
 
     checkpoint.validate().unwrap();
+}
+
+/// Native epoch bytes round-trip only as descriptive data. Actual runtime tokens
+/// supply UUIDv4 values; absent legacy identity stays unknown and malformed
+/// version/variant bytes fail before persistence without constructing a shell.
+#[test]
+fn agent_session_checkpoint_validates_native_epoch_without_restoring_authority() {
+    let mut record = valid_checkpoint();
+    record.validate().unwrap();
+    let live = crate::messaging::MessageNativeIncarnation::default();
+    record.native_message_incarnation = Some(live.snapshot_identity());
+    record.validate().unwrap();
+    assert_eq!(live.snapshot_identity(), live.clone().snapshot_identity());
+    assert_ne!(
+        live.snapshot_identity(),
+        crate::messaging::MessageNativeIncarnation::default().snapshot_identity()
+    );
+    record.native_message_incarnation = Some([0; 16]);
+    assert!(record.validate().is_err());
+    let mut malformed = live.snapshot_identity();
+    malformed[8] = 0;
+    record.native_message_incarnation = Some(malformed);
+    assert!(record.validate().is_err());
+    record.native_message_incarnation = None;
+    record.validate().unwrap();
 }

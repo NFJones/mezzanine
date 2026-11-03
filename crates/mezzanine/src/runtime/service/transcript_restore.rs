@@ -335,6 +335,8 @@ impl RuntimeSessionService {
             )?;
             let target_session = AgentShellSession {
                 session_id: conversation_id.clone(),
+                // Saved epoch bytes remain inert on generic transcript restore;
+                // continuity requires the original-store whole-session path.
                 native_message_incarnation: Default::default(),
                 pane_id: pane_id.clone(),
                 native_working_directory: None,
@@ -849,6 +851,9 @@ impl RuntimeSessionService {
                     mezzanine_session_id: mezzanine_session_id.clone(),
                     pane_id: session.pane_id.clone(),
                     conversation_id: conversation_id.clone(),
+                    native_message_incarnation: Some(
+                        session.native_message_incarnation.snapshot_identity(),
+                    ),
                     persistent_subagent_owned: {
                         let agent_id = format!("agent-{}", session.pane_id);
                         self.persistent_subagent_checkpoint_is_owned(&agent_id, &conversation_id)

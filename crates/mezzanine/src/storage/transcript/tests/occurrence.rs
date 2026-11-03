@@ -25,6 +25,7 @@ fn presentation_occurrence_legacy_v5_missing_steering_stamp_stays_unknown() {
         status: SteeringRecoveryStatus::Admitted(7),
     });
     let encoded = encode_agent_session_metadata(&metadata).unwrap();
+    let encoded = pre_native_epoch_metadata(&encoded);
     let (pre_ownership, ownership) = encoded.rsplit_once('\t').unwrap();
     assert_eq!(ownership, "false");
     let (prefix, _) = pre_ownership.rsplit_once('\t').unwrap();

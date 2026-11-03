@@ -1506,6 +1506,7 @@ fn agent_session_metadata(
         mezzanine_session_id: mezzanine_session_id.to_string(),
         pane_id: "%1".to_string(),
         conversation_id: conversation_id.to_string(),
+        native_message_incarnation: None,
         persistent_subagent_owned: false,
         primary_display_name: None,
         steering_recovery: Vec::new(),
@@ -4879,6 +4880,7 @@ fn transcript_store_exports_prompt_history_without_creating_the_store() {
 fn agent_session_metadata_decoder_accepts_pre_pane_identity_rows() {
     let metadata = agent_session_metadata("$legacy", "legacy-conversation");
     let encoded = encode_agent_session_metadata(&metadata).unwrap();
+    let encoded = pre_native_epoch_metadata(&encoded);
     let (pre_ownership_row, ownership) = encoded.rsplit_once('\t').unwrap();
     assert_eq!(ownership, "false");
     let (pre_recovery_row, recovery) = pre_ownership_row.rsplit_once('\t').unwrap();
@@ -4924,7 +4926,7 @@ fn agent_session_metadata_round_trips_project_partitions() {
         usage,
     }];
     let encoded = encode_agent_session_metadata(&metadata).unwrap();
-    assert!(encoded.starts_with("mez-agent-session-metadata/7\t"));
+    assert!(encoded.starts_with("mez-agent-session-metadata/8\t"));
     assert_eq!(decode_agent_session_metadata(&encoded).unwrap(), metadata);
     metadata.project_token_usage[0].usage.input_tokens += 1;
     assert!(encode_agent_session_metadata(&metadata).is_err());
@@ -4948,6 +4950,7 @@ fn agent_session_metadata_steering_recovery_round_trip_and_v3_migration() {
     }];
     let encoded = encode_agent_session_metadata(&metadata).unwrap();
     assert_eq!(decode_agent_session_metadata(&encoded).unwrap(), metadata);
+    let encoded = pre_native_epoch_metadata(&encoded);
     let (pre_ownership, ownership) = encoded.rsplit_once('\t').unwrap();
     assert_eq!(ownership, "false");
     let (legacy, _) = pre_ownership.rsplit_once('\t').unwrap();
@@ -4966,6 +4969,7 @@ fn agent_session_metadata_steering_recovery_round_trip_and_v3_migration() {
     second.acceptance_order = 3;
     unordered.steering_recovery.push(second);
     let encoded = encode_agent_session_metadata(&unordered).unwrap();
+    let encoded = pre_native_epoch_metadata(&encoded);
     let (pre_ownership, ownership) = encoded.rsplit_once('\t').unwrap();
     assert_eq!(ownership, "false");
     let (prefix, _) = pre_ownership.rsplit_once('\t').unwrap();
@@ -9146,4 +9150,17 @@ fn transcript_sequence_allocation_reports_an_unterminated_tail() {
         error.message()
     );
     let _ = fs::remove_dir_all(root);
+}
+
+/// Produces an exact version7 fixture for independent legacy migration owners.
+/// These callers supply unknown native epochs; removing the row8 tail must not
+/// fabricate an original binding or shift any older ownership/steering fields.
+fn pre_native_epoch_metadata(encoded: &str) -> String {
+    let (prefix, epoch) = encoded.rsplit_once('\t').unwrap();
+    assert_eq!(epoch, "null");
+    prefix.replacen(
+        "mez-agent-session-metadata/8",
+        "mez-agent-session-metadata/7",
+        1,
+    )
 }

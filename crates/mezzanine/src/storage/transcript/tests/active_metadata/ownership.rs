@@ -1,4 +1,4 @@
-//! Nonauthorizing persistent-pair qualification in active checkpoint version 7.
+//! Nonauthorizing persistent-pair qualification introduced in row version7.
 //!
 //! Qualification preserves provenance from runtime capture; it does not replace
 //! restored pair membership, immutable contracts or exact native owner checks.
@@ -13,7 +13,7 @@ fn active_metadata_ownership_qualification_round_trips() {
         let mut metadata = agent_session_metadata("$ownership", "persistent-child");
         metadata.persistent_subagent_owned = owned;
         let encoded = encode_agent_session_metadata(&metadata).unwrap();
-        assert!(encoded.starts_with("mez-agent-session-metadata/7\t"));
+        assert!(encoded.starts_with("mez-agent-session-metadata/8\t"));
         assert_eq!(decode_agent_session_metadata(&encoded).unwrap(), metadata);
     }
 }
@@ -25,6 +25,7 @@ fn active_metadata_legacy_missing_ownership_is_false() {
     let mut metadata = agent_session_metadata("$ownership", "persistent-child");
     metadata.persistent_subagent_owned = true;
     let encoded = encode_agent_session_metadata(&metadata).unwrap();
+    let encoded = pre_native_epoch_metadata(&encoded);
     let (without_marker, marker) = encoded.rsplit_once('\t').unwrap();
     assert_eq!(marker, "true");
     let legacy = without_marker.replacen(
@@ -43,6 +44,7 @@ fn active_metadata_legacy_missing_ownership_is_false() {
 fn active_metadata_ownership_rejects_ambiguous_wire_layouts() {
     let encoded =
         encode_agent_session_metadata(&agent_session_metadata("$ownership", "child")).unwrap();
+    let encoded = pre_native_epoch_metadata(&encoded);
     let (prefix, _) = encoded.rsplit_once('\t').unwrap();
     assert!(decode_agent_session_metadata(prefix).is_err());
     assert!(decode_agent_session_metadata(&format!("{prefix}\tyes")).is_err());

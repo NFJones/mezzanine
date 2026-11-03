@@ -11735,7 +11735,7 @@ The baseline action types are:
   survive owned native handoff and MUST NOT be a capability when false.
   Revoked relationships MUST NOT be checkpointed as active restore-owned pairs;
   their saved history remains independently resumable without parent authority.
-  Active checkpoint metadata version 7 MUST capture a nonauthorizing persistent
+  Active checkpoint metadata versions7 and8 MUST capture a nonauthorizing persistent
   ownership qualifier only from the exact current nonrevoked runtime relationship
   or the same sealed fresh setup/qualified restore operation. Successful fresh
   spawn MUST capture or enqueue qualification before its final infallible proof
@@ -18995,6 +18995,23 @@ published from an exclusive private staging inode with file and directory sync.
 Sorted conversation locks MUST precede the session checkpoint lock; a shared
 legacy recovery backup lock follows it. An empty published checkpoint MUST
 remain authoritative and MUST NOT resurrect legacy bindings on restart.
+
+Within that envelope, active metadata row8 MUST append the original actual
+native shell incarnation as an optional fixed16-byte UUIDv4/RFC4122 value.
+Runtime capture MUST record the actual shell token; independent durable binding
+of the same conversation changes it, while exact shell rollback preserves it.
+Validated row versions1 through7 MUST migrate with unknown (`None`) native
+incarnation, preserving all existing fields/qualifications. Re-encoding legacy
+rows MUST NOT invent a native identity. Unsupported versions, missing/extra
+columns or malformed UUID version/variant/length MUST reject.
+
+These bytes are descriptive checkpoint facts. Ordinary transcript/conversation
+restoration MUST continue creating a fresh live incarnation even when the saved
+epoch is valid. Decoding MUST NOT construct a live token, registration or reconnect
+credential. Trusted whole-session original-store qualification remains required
+before original native custody can be restored; epoch persistence alone MUST NOT
+activate durable delivery or claim restart deduplication. This row extension
+changes no public configuration schema or wire field.
 
 The legacy shared `active-agent-sessions.tsv` and its fixed `.tmp` pathname
 MUST NOT be rewritten or removed by new checkpoint writers. An older daemon

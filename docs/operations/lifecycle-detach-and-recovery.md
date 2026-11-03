@@ -209,6 +209,18 @@ Private locks wait at most two seconds; publication uses exclusive staging and
 file/directory synchronization. A checkpoint stores validated binding rows, not
 a duplicate transcript. An empty checkpoint deliberately means no bindings.
 
+Active binding rows now use version8 within that version1 checkpoint envelope.
+They preserve the actual shell's native message incarnation as descriptive UUID
+bytes. Independently binding the same conversation produces a different value;
+exact rollback preserves the original. Older supported rows retain an unknown
+incarnation during migration. Invalid epochs, unknown versions and ambiguous
+columns are refused.
+
+Generic transcript and conversation restore still create a fresh live identity.
+Saved bytes cannot establish original message ownership or reconnect authority;
+trusted whole-session custody recovery remains a separate unfinished path. An
+older writer cannot safely downgrade a checkpoint containing these newer rows.
+
 The older shared `active-agent-sessions.tsv` is a read-only migration source for
 new versions. New writers never touch it or `active-agent-sessions.tmp`, so an
 older running daemon need not be stopped merely to protect new checkpoints from

@@ -355,6 +355,12 @@ raw discovery and connection credentials are excluded. A genuine duplicate looku
 after TTL expiry may retain an `expired` receipt; checkpoints preserve that status
 and its original finite TTL rather than reject the retained original.
 
+Active pane/conversation metadata rows also preserve the actual shell incarnation
+in version8. Versions1 through7 retain unknown native identity during migration;
+no default value is invented. The saved UUID bytes are descriptive, and generic
+transcript restore keeps creating a fresh live incarnation. This persistence
+prerequisite does not enable original-store recovery or native delivery dedup.
+
 An actual root-owned blocking read verifies every original source in one SQLite
 snapshot and binds the checkpoint to the original store allocation, owner,
 generation/watermark and directory/database identities. Verification and encoding
