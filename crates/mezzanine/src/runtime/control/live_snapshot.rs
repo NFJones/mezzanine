@@ -29,22 +29,56 @@ impl RuntimeSessionService {
         mez_mux::session::Session,
         crate::runtime::RuntimeSnapshotOwnedCreationContext,
     )> {
-        Ok((
-            (*self.session).clone(),
+        self.host_checkpoint_snapshot_with_message_state(self.live_snapshot_message_state()?)
+    }
+
+    /// Captures message-independent session facts at the same actor point.
+    /// The deferred constructor accepts qualified message facts without creating
+    /// a serializable placeholder, and retains no borrow of the live runtime.
+    pub(crate) fn host_checkpoint_capture(
+        &self,
+    ) -> (
+        mez_mux::session::Session,
+        impl FnOnce(MessageServiceSnapshot) -> crate::runtime::RuntimeSnapshotOwnedCreationContext
+        + Send
+        + use<>,
+    ) {
+        let session = (*self.session).clone();
+        let pane_captures = self.live_snapshot_pane_captures();
+        let active_config_layers = self.live_snapshot_config_layers();
+        let frame_state = self.live_snapshot_frame_state();
+        let agent_sessions = self.live_snapshot_agent_sessions();
+        let approval_grants = self.live_snapshot_approval_grants();
+        let approval_requests = self.live_snapshot_approval_requests();
+        let unsettled_peer_presentations =
+            self.snapshot_unsettled_received_peer_message_presentations();
+        let mcp_servers = self.live_snapshot_mcp_servers();
+        (session, move |message_state| {
             crate::runtime::RuntimeSnapshotOwnedCreationContext {
-                pane_captures: self.live_snapshot_pane_captures(),
+                pane_captures,
                 navigation_source_client_id: None,
-                active_config_layers: self.live_snapshot_config_layers(),
-                frame_state: self.live_snapshot_frame_state(),
-                agent_sessions: self.live_snapshot_agent_sessions(),
-                approval_grants: self.live_snapshot_approval_grants(),
-                approval_requests: self.live_snapshot_approval_requests(),
-                message_state: self.live_snapshot_message_state()?,
-                unsettled_peer_presentations: self
-                    .snapshot_unsettled_received_peer_message_presentations(),
-                mcp_servers: self.live_snapshot_mcp_servers(),
-            },
-        ))
+                active_config_layers,
+                frame_state,
+                agent_sessions,
+                approval_grants,
+                approval_requests,
+                message_state,
+                unsettled_peer_presentations,
+                mcp_servers,
+            }
+        })
+    }
+
+    /// Combines one captured actor point with its already qualified message state.
+    pub(crate) fn host_checkpoint_snapshot_with_message_state(
+        &self,
+        message_state: MessageServiceSnapshot,
+    ) -> Result<(
+        mez_mux::session::Session,
+        crate::runtime::RuntimeSnapshotOwnedCreationContext,
+    )> {
+        let (session, build) = self.host_checkpoint_capture();
+        Ok((session, build(message_state)))
     }
 
     /// Captures live pane terminal state and process metadata for snapshots.

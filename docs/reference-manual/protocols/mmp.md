@@ -347,9 +347,23 @@ Decoded attribution is quarantined evidence. It cannot recreate a live native
 binding or authenticate reconnect, canonical context commit or provider work.
 Schema1 sources keep legacy-unknown ownership; no missing evidence is inferred
 from current discovery. Generic schema9 capture refuses source state containing
-schema2 ownership/classification until the store/session-bound snapshot path can
-represent it. Trusted cold checkpoint mapping, context-commit-before-ACK dedup
-and native transport/disposition integration remain unfinished activation gates.
+schema2 ownership/classification. The host checkpoint path now captures this
+state as schema10 cold-reference format1: original sequence/SHA256 references,
+receipt and original TTL basis, recipient delivery slots, allocator floor, and native registration
+namespace/shell incarnation tuples. Bodies remain in the original store. Current
+raw discovery and connection credentials are excluded. A genuine duplicate lookup
+after TTL expiry may retain an `expired` receipt; checkpoints preserve that status
+and its original finite TTL rather than reject the retained original.
+
+An actual root-owned blocking read verifies every original source in one SQLite
+snapshot and binds the checkpoint to the original store allocation, owner,
+generation/watermark and directory/database identities. Verification and encoding
+copies share the finite metadata budget through publication; capacity refusal
+preserves accepted mail. Cancelled observers do not suppress requested writes,
+and actual worker loss retains the exact capture for joined, backed-off retry.
+Generic restore rejects schema10. These descriptive facts do not yet provide
+trusted whole-session cold reconstruction, context-commit-before-ACK dedup or
+native transport/disposition settlement; those remain activation gates.
 
 The opt-in requires an actually empty original store. It is not enabled by
 normal product construction: trusted cold recovery, native restart deduplication

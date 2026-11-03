@@ -616,7 +616,10 @@ impl SnapshotRepository {
                 name,
                 created_at: self.creation_created_at()?,
                 kind: SnapshotKind::Manual,
-                restorable: true,
+                restorable: payload
+                    .message_state
+                    .as_ref()
+                    .is_none_or(|s| s.schema_version != 10),
                 window_count: plan.window_count,
                 pane_count: plan.pane_count,
                 limitations: plan.limitations,
@@ -683,7 +686,10 @@ impl SnapshotRepository {
                 name,
                 created_at: self.creation_created_at_async().await?,
                 kind: SnapshotKind::Manual,
-                restorable: true,
+                restorable: payload
+                    .message_state
+                    .as_ref()
+                    .is_none_or(|s| s.schema_version != 10),
                 window_count: plan.window_count,
                 pane_count: plan.pane_count,
                 limitations: plan.limitations,

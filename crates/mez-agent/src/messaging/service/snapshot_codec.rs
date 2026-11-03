@@ -391,7 +391,7 @@ pub(super) fn parse_presence_status(value: &str) -> Result<AgentPresenceStatus> 
 }
 
 /// Encodes accepted delivery status without recomputing acceptance.
-fn delivery_status_name(status: DeliveryStatus) -> &'static str {
+pub(super) fn delivery_status_name(status: DeliveryStatus) -> &'static str {
     match status {
         DeliveryStatus::Accepted => "accepted",
         DeliveryStatus::Undeliverable => "undeliverable",

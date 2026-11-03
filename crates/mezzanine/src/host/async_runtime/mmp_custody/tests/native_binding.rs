@@ -395,3 +395,52 @@ async fn ephemeral_first_observation_cannot_inherit_stale_parent_or_transcript_s
         );
     }
 }
+
+/// The actual shell-derived native tuple survives a verified cold checkpoint
+/// while raw registration metadata is excluded. Saved namespace bytes are inert:
+/// ordinary snapshot restore still cannot create the original shell/registration.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn actual_native_checkpoint_captures_shell_namespace_without_restore_authority() {
+    let fixture = Fixture::new(true);
+    let (root, mut service, sender, target) = native_runtime(&fixture).await;
+    let owner = native_owner(&service, &target);
+    let ticket = service
+        .message_service_mut()
+        .prepare_acceptance(
+            &sender.agent_id,
+            envelope(&sender, &target, "native-checkpoint"),
+            MessageScope::Session,
+            100,
+            4096,
+            None,
+        )
+        .unwrap();
+    root.start(service.message_service_mut(), &ticket, None)
+        .unwrap();
+    assert_eq!(
+        root.observe().await.unwrap(),
+        CustodyWorkerStatus::AwaitingAdoption
+    );
+    root.adopt(service.message_service_mut(), None).unwrap();
+    service
+        .message_service_mut()
+        .release_stored_payload(ticket.sequence(), root.storage_scope())
+        .unwrap();
+    let before = service.message_service().storage_usage().unwrap();
+    let disk = fixture.disk();
+    root.start_checkpoint(service.message_service()).unwrap();
+    assert_eq!(
+        root.observe().await.unwrap(),
+        CustodyWorkerStatus::SnapshotAwaitingAdoption
+    );
+    let (snapshot, lease) = root.adopt_checkpoint().unwrap();
+    let data = snapshot.storage_snapshot.as_ref().unwrap();
+    assert_eq!(data.native.len(), 1);
+    assert_eq!(data.native[0].owner, owner);
+    assert_eq!(data.native[0].agent_id, target.agent_id.as_str());
+    assert_eq!(snapshot.registered_agents.len(), 1);
+    assert!(MessageService::from_snapshot_state(&snapshot).is_err());
+    drop(lease);
+    assert_eq!(fixture.disk(), disk);
+    assert_eq!(service.message_service().storage_usage().unwrap(), before);
+}

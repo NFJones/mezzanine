@@ -527,6 +527,103 @@ async fn durable_actor_reloads_spilled_originals_and_persists_delivery_acks() {
     }
 }
 
+/// Host checkpointing must represent actual accepted cold originals by verified
+/// store references, without loading bodies, exceeding the canonical cache, or
+/// inventing empty envelopes. The saved schema10 data remains nonauthorizing:
+/// generic snapshot restoration cannot create a live storage/native owner.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn durable_actor_host_checkpoint_keeps_cold_originals_as_store_references() {
+    let fixture = Fixture::new(true);
+    let (handle, mut actor, _, target) = actor_fixture(&fixture).await;
+    actor
+        .service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let native = actor
+        .service
+        .ensure_runtime_message_identity(
+            "agent-%1",
+            mez_core::ids::PaneId::opaque("%1"),
+            "agent",
+            &["agent-harness"],
+            10,
+        )
+        .unwrap();
+    actor
+        .enable_message_payload_spill(Default::default())
+        .unwrap();
+    let usage = actor.service.message_service().payload_observer().unwrap();
+    let shell = actor.service.agent_shell_store().get("%1").unwrap();
+    let native_registration = actor
+        .service
+        .message_service()
+        .capture_sender_registration(&native.agent_id)
+        .unwrap();
+    let native_owner = actor
+        .service
+        .message_service()
+        .native_owner_for_registration(&native_registration, &shell.native_message_incarnation)
+        .unwrap()
+        .clone();
+    let runner = tokio::spawn(actor.run());
+    let (connection, owner, _lease) = hello(&handle).await;
+    let replies = send_unread_pair(&handle, &connection, &owner, &target, &usage).await;
+    assert!(replies.iter().all(|reply| reply["type"] == "ack"));
+    let before = usage.snapshot().unwrap();
+    let disk_before = fixture.disk();
+    let snapshots =
+        crate::storage::snapshot::SnapshotRepository::new(fixture.path.join("session-snapshots"));
+    let result = tokio::time::timeout(
+        Duration::from_secs(10),
+        handle.create_host_checkpoint(snapshots.clone(), "cold-mmp".into(), None),
+    )
+    .await
+    .unwrap();
+    let after = usage.snapshot().unwrap();
+    handle.shutdown().await.unwrap();
+    runner.await.unwrap();
+    assert!(
+        result.is_ok(),
+        "accepted cold originals must be checkpointable through the real actor: {result:?}"
+    );
+    let checkpoint = result.unwrap();
+    assert!(!checkpoint.restorable);
+    assert!(
+        checkpoint
+            .limitations
+            .iter()
+            .any(|line| line.contains("original-store session recovery"))
+    );
+    let saved = snapshots.inspect_payload_async("cold-mmp").await.unwrap();
+    let state = saved.message_state.unwrap();
+    assert_eq!(state.schema_version, 10);
+    let data = state.storage_snapshot.as_ref().unwrap();
+    assert_eq!(data.native.len(), 1);
+    assert_eq!(data.native[0].owner, native_owner);
+    assert_eq!(data.native[0].agent_id, native.agent_id.as_str());
+    assert_eq!(state.registered_agents.len(), 1);
+    assert!(state.retained_messages.is_empty());
+    assert!(state.custody_messages.as_deref().unwrap_or(&[]).is_empty());
+    assert!(state.accepted_messages.is_empty());
+    let encoded = serde_json::to_value(&state).unwrap();
+    let sources = encoded["storage_snapshot"]["sources"].as_array().unwrap();
+    assert_eq!(sources.len(), 2);
+    assert!(
+        sources
+            .iter()
+            .all(|source| source["payload_bytes"] == 768 * 1024)
+    );
+    assert!(serde_json::to_vec(&state).unwrap().len() < 64 * 1024);
+    assert!(mez_agent::messaging::MessageService::from_snapshot_state(&state).is_err());
+    assert_eq!(after, before);
+    assert_eq!(
+        fixture.disk(),
+        disk_before,
+        "checkpoint qualification is read-only"
+    );
+}
+
 /// Observes the retained actual join failure; does not retry or mutate root work.
 async fn failed(root: &MmpCustodyRoot) {
     tokio::time::timeout(Duration::from_secs(10), async {
@@ -949,6 +1046,69 @@ async fn raw_actor_foreign_root_cannot_upgrade_cached_original_acceptance() {
     assert_eq!(foreign.disk(), (0, 0));
     assert_eq!(original.disk(), committed);
     assert_eq!(foreign.probe.attempts.load(Ordering::SeqCst), 0);
+    handle.shutdown().await.unwrap();
+    runner.await.unwrap();
+}
+
+/// A cancelled administrative observer cannot detach the actual checkpoint read
+/// or suppress its requested snapshot write. Unrelated actor metrics remain
+/// responsive while the root's blocking worker is gated; the final file contains
+/// both original references after release, with no canonical body reload.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn durable_actor_host_checkpoint_observer_cancellation_still_persists_original_capture() {
+    let fixture = Fixture::new(true);
+    let (handle, mut actor, _, target) = actor_fixture(&fixture).await;
+    actor
+        .enable_message_payload_spill(Default::default())
+        .unwrap();
+    let usage = actor.service.message_service().payload_observer().unwrap();
+    let runner = tokio::spawn(actor.run());
+    let (connection, owner, _lease) = hello(&handle).await;
+    let replies = send_unread_pair(&handle, &connection, &owner, &target, &usage).await;
+    assert!(replies.iter().all(|reply| reply["type"] == "ack"));
+    // Consume both acceptance worker notifications before gating the actual read.
+    fixture.probe.started.notified().await;
+    *fixture.probe.gate.0.lock().unwrap() = false;
+    let snapshots =
+        crate::storage::snapshot::SnapshotRepository::new(fixture.path.join("session-snapshots"));
+    let observing = handle.clone();
+    let destination = snapshots.clone();
+    let observer = tokio::spawn(async move {
+        observing
+            .create_host_checkpoint(destination, "cancelled-cold-mmp".into(), None)
+            .await
+    });
+    tokio::time::timeout(Duration::from_secs(10), fixture.probe.started.notified())
+        .await
+        .unwrap();
+    observer.abort();
+    assert!(observer.await.unwrap_err().is_cancelled());
+    tokio::time::timeout(Duration::from_secs(10), handle.metrics())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(fixture.probe.attempts.load(Ordering::SeqCst), 3);
+    fixture.probe.release();
+    let saved = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            if let Ok(saved) = snapshots.inspect_payload_async("cancelled-cold-mmp").await {
+                break saved;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        saved
+            .message_state
+            .unwrap()
+            .storage_snapshot
+            .unwrap()
+            .sources
+            .len(),
+        2
+    );
     handle.shutdown().await.unwrap();
     runner.await.unwrap();
 }

@@ -8,7 +8,7 @@
 //! endpoints carry explicit absence, never persisted reconnect credentials.
 
 use super::*;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// Runtime-owned shell binding identity. Clone preserves an exact rollback;
 /// new/independently resumed bindings create fresh values. This is not a bearer
@@ -37,7 +37,8 @@ pub struct MessageNativeRegistration {
 }
 
 /// Bounded descriptive native destination, never a resume bearer or live proof.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct MessageNativeOwner {
     pub(super) conversation_id: String,
     pub(super) incarnation: String,
@@ -75,6 +76,13 @@ pub(in crate::messaging) struct LiveNativeBinding {
     admission_available: bool,
     delivery_available: bool,
     owner: MessageNativeOwner,
+}
+
+impl LiveNativeBinding {
+    /// Borrows the actual allocation for checkpoint preflight, without copying it.
+    pub(super) fn registration(&self) -> &MessageSenderRegistration {
+        &self.registration
+    }
 }
 
 /// Frozen sender and recipient owners in immutable recipient binding order.
@@ -132,23 +140,11 @@ impl MessageService {
         // Derivation makes exact rollback reproducible without a growing
         // history map. A fresh actual registration namespace or independent
         // shell binding cannot alias the original, even at an equal MMP floor.
-        use sha2::{Digest, Sha256};
-        let mut hash = Sha256::new();
-        hash.update(b"mezzanine-mmp-native-owner-v1\0");
-        hash.update(registration.identity.native_namespace.as_bytes());
-        hash.update(incarnation.0.as_bytes());
-        hash.update((conversation.len() as u64).to_le_bytes());
-        hash.update(conversation.as_bytes());
-        let digest = hash.finalize();
-        let mut identity = String::with_capacity(64);
-        for byte in digest {
-            use std::fmt::Write;
-            let _ = write!(identity, "{byte:02x}");
-        }
-        let owner = MessageNativeOwner {
-            conversation_id: conversation.into(),
-            incarnation: identity,
-        };
+        let owner = derived_owner(
+            registration.identity.native_namespace.as_bytes(),
+            incarnation.0.as_bytes(),
+            conversation,
+        );
         self.native_bindings.insert(
             registration.agent_id().clone(),
             LiveNativeBinding {
@@ -343,3 +339,76 @@ fn validate_conversation(value: &str) -> Result<()> {
 
 #[cfg(test)]
 mod tests;
+
+impl MessageService {
+    /// Captures only current native allocations, never raw reconnect registrations.
+    pub(super) fn capture_native_checkpoint(&self) -> Vec<MessageNativeCheckpoint> {
+        let mut result: Vec<_> = self
+            .native_bindings
+            .iter()
+            .filter(|(_, b)| self.sender_registration_is_current(&b.registration))
+            .map(|(id, b)| MessageNativeCheckpoint {
+                agent_id: id.to_string(),
+                registration_namespace: *b.registration.identity.native_namespace.as_bytes(),
+                shell_incarnation: *b.incarnation.0.as_bytes(),
+                owner: b.owner.clone(),
+                admission_available: b.admission_available,
+                delivery_available: b.delivery_available,
+            })
+            .collect();
+        result.sort_by(|a, b| a.agent_id.cmp(&b.agent_id));
+        result
+    }
+}
+
+/// Checks descriptive tuples without creating either a registration or shell token.
+pub(super) fn validate_native_checkpoint(rows: &[MessageNativeCheckpoint]) -> Result<()> {
+    let mut previous = None;
+    for row in rows {
+        parse_opaque_id(&row.agent_id, "MMP native checkpoint agent")?;
+        row.owner.validate()?;
+        if previous.is_some_and(|p: &str| p >= row.agent_id.as_str())
+            || uuid::Uuid::from_bytes(row.registration_namespace).get_version_num() != 4
+            || uuid::Uuid::from_bytes(row.shell_incarnation).get_version_num() != 4
+            || uuid::Uuid::from_bytes(row.shell_incarnation).get_variant() != uuid::Variant::RFC4122
+            || uuid::Uuid::from_bytes(row.registration_namespace).get_variant()
+                != uuid::Variant::RFC4122
+            || (row.delivery_available && !row.admission_available)
+            || derived_owner(
+                &row.registration_namespace,
+                &row.shell_incarnation,
+                &row.owner.conversation_id,
+            ) != row.owner
+        {
+            return Err(MessageError::invalid_args(
+                "MMP native checkpoint tuple is inconsistent",
+            ));
+        }
+        previous = Some(row.agent_id.as_str());
+    }
+    Ok(())
+}
+
+/// Domain-separated derivation shared by actual live binding and inert validation.
+fn derived_owner(
+    registration: &[u8; 16],
+    shell: &[u8; 16],
+    conversation: &str,
+) -> MessageNativeOwner {
+    use sha2::{Digest, Sha256};
+    let mut hash = Sha256::new();
+    hash.update(b"mezzanine-mmp-native-owner-v1\0");
+    hash.update(registration);
+    hash.update(shell);
+    hash.update((conversation.len() as u64).to_le_bytes());
+    hash.update(conversation.as_bytes());
+    let mut incarnation = String::with_capacity(64);
+    for byte in hash.finalize() {
+        use std::fmt::Write;
+        let _ = write!(incarnation, "{byte:02x}");
+    }
+    MessageNativeOwner {
+        conversation_id: conversation.into(),
+        incarnation,
+    }
+}

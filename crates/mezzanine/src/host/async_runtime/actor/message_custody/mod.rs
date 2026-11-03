@@ -19,6 +19,7 @@ use futures_util::FutureExt;
 use mez_agent::messaging::{DeliveryCursor, FanoutBatch, MessageError};
 
 mod actions;
+mod checkpoint;
 mod native;
 mod payload_reads;
 use payload_reads::PayloadRead;
@@ -69,6 +70,8 @@ enum Pending {
         ticket: RuntimePreparedTrackedMessage,
         reply: oneshot::Sender<Result<mez_agent::messaging::Delivery>>,
     },
+    /// Same-point session capture awaiting actual original-store verification.
+    Checkpoint(Box<checkpoint::Checkpoint>),
     /// Original accepted source whose payload needs an owned reload.
     PayloadLoad(PayloadRead),
     /// Actual application/transport commit preceded this original ACK request.
@@ -337,6 +340,29 @@ impl AsyncRuntimeSessionActor {
                     Ok(())
                 }
             }
+            CustodyEvent::Observed(Ok(CustodyWorkerStatus::SnapshotAwaitingAdoption))
+                if matches!(owner.pending, Some(Pending::Checkpoint(_))) =>
+            {
+                owner.root.adopt_checkpoint().map(|(snapshot, lease)| {
+                    if let Some(Pending::Checkpoint(checkpoint)) = owner.pending.take() {
+                        checkpoint.persist(snapshot, lease);
+                    }
+                    owner.failure = None;
+                    owner.wake = None;
+                })
+            }
+            CustodyEvent::Observed(Ok(CustodyWorkerStatus::SnapshotRetryAt(at)))
+                if matches!(owner.pending, Some(Pending::Checkpoint(_))) =>
+            {
+                owner.wake = Some(Wake::Retry(at));
+                Ok(())
+            }
+            CustodyEvent::Observed(Ok(
+                CustodyWorkerStatus::SnapshotAwaitingAdoption
+                | CustodyWorkerStatus::SnapshotRetryAt(_),
+            )) => Err(MezError::invalid_state(
+                "MMP checkpoint has no matching actor capture",
+            )),
             CustodyEvent::Observed(Ok(CustodyWorkerStatus::PayloadLoadAwaitingAdoption))
                 if matches!(owner.pending, Some(Pending::PayloadLoad(_))) =>
             {
@@ -538,6 +564,10 @@ impl AsyncRuntimeSessionActor {
                 .retry_acknowledgement(self.service.message_service_mut(), Instant::now())
                 .map(|_| owner.wake = Some(Wake::Observe)),
             CustodyEvent::Retry => match owner.pending {
+                Some(Pending::Checkpoint(_)) => owner
+                    .root
+                    .retry_checkpoint(Instant::now())
+                    .map(|_| owner.wake = Some(Wake::Observe)),
                 Some(Pending::PayloadLoad(_)) => owner
                     .root
                     .retry_payload_load(self.service.message_service_mut(), Instant::now())

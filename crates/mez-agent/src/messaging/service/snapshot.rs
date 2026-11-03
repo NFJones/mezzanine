@@ -82,6 +82,7 @@ impl MessageService {
         accepted_messages.sort_by(|left, right| left.envelope.id.cmp(&right.envelope.id));
 
         Ok(MessageServiceSnapshot {
+            storage_snapshot: None,
             protocol: MMP_PROTOCOL.to_string(),
             schema_version: 9,
             sender_provenance: Some(super::sender_provenance::capture(self)),

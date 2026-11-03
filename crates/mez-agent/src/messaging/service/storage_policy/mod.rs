@@ -106,6 +106,9 @@ pub(in crate::messaging) struct StorageCustody {
     pub(super) scope: MessageStorageScope,
     pub(super) limits: MessageStorageLimits,
     pub(super) cache: Arc<PayloadBudget>,
+    /// Captured checkpoint metadata and its serialization copies stay charged
+    /// through actual snapshot publication, even after the root lane is released.
+    pub(super) checkpoint_bytes: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 /// Content-free logical usage, independent of allocator-specific RSS or wire buffers.
@@ -192,6 +195,7 @@ impl MessageService {
             ));
         }
         self.storage_custody = Some(StorageCustody {
+            checkpoint_bytes: Arc::default(),
             scope: scope.clone(),
             limits,
             cache: PayloadBudget::new(limits.cache_messages, limits.cache_payload_bytes),
@@ -228,7 +232,7 @@ impl MessageService {
     }
 
     /// Computes currently retained message metadata, including orphan allocations.
-    fn storage_metadata_usage(&self) -> Result<usize> {
+    pub(super) fn storage_metadata_base_usage(&self) -> Result<usize> {
         let Some(policy) = &self.storage_custody else {
             return Ok(0);
         };
@@ -254,6 +258,15 @@ impl MessageService {
                     .is_some_and(|pending| pending.sequence() == sequence)
         })?);
         Ok(bytes)
+    }
+
+    /// Includes live checkpoint/encoding reservations independently of source cache.
+    fn storage_metadata_usage(&self) -> Result<usize> {
+        let captured = self.storage_custody.as_ref().map_or(0, |p| {
+            p.checkpoint_bytes
+                .load(std::sync::atomic::Ordering::Acquire)
+        });
+        Ok(self.storage_metadata_base_usage()?.saturating_add(captured))
     }
 
     /// Reserves a canonical allocation, evicting only original-root backed
@@ -319,7 +332,11 @@ impl MessageService {
             let orphan = policy.cache.orphan_metadata(|sequence| {
                 self.pending.contains_key(&sequence) || sequence == self.next_sequence
             })?;
-            Ok(bytes.saturating_add(orphan) <= policy.limits.metadata_bytes)
+            Ok(bytes.saturating_add(orphan).saturating_add(
+                policy
+                    .checkpoint_bytes
+                    .load(std::sync::atomic::Ordering::Acquire),
+            ) <= policy.limits.metadata_bytes)
         };
         if fits()? {
             return Ok(());

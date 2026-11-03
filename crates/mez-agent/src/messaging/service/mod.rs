@@ -83,6 +83,12 @@ pub use payload_load::{
 };
 mod source;
 pub(super) use source::RetainedEnvelope;
+mod checkpoint;
+pub use checkpoint::{
+    MessageNativeCheckpoint, MessageStorageBinding, MessageStorageSnapshot,
+    MessageStorageSnapshotLease, MessageStorageSnapshotRequest, MessageStorageSnapshotStore,
+    MessageStorageSnapshotVerified, MessageStorageSnapshotWrite, MessageStorageSourceSnapshot,
+};
 mod snapshot;
 mod snapshot_codec;
 mod snapshot_validation;

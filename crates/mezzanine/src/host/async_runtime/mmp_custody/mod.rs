@@ -39,6 +39,7 @@ use crate::storage::mmp_custody::ownership::RootOwnership;
 use crate::storage::mmp_custody::{CustodyStoreLimits, MmpCustodyStore};
 
 mod acknowledgement;
+mod checkpoint;
 mod payload_load;
 
 /// Retained source chosen by trusted session setup, never by an envelope.
@@ -73,6 +74,10 @@ pub(crate) enum CustodyWorkerStatus {
     PayloadLoadAwaitingAdoption,
     /// A joined original read can retry after this monotonic deadline.
     PayloadLoadRetryAt(Instant),
+    /// Original checkpoint verification joined and awaits metadata adoption.
+    SnapshotAwaitingAdoption,
+    /// Original read-only capture can retry after this monotonic deadline.
+    SnapshotRetryAt(Instant),
     /// Opening failed; no lower write was issued by this root.
     Unavailable,
 }
@@ -149,6 +154,17 @@ enum State {
     Loaded {
         admission: payload_load::Admission,
         result: Result<Box<payload_load::Written>>,
+        retry_at: Instant,
+    },
+    /// One read-only checkpoint owns the serialized connection lane.
+    Snapshotting {
+        admission: checkpoint::Admission,
+        worker: JoinHandle<Result<checkpoint::Written>>,
+    },
+    /// Actual joined checkpoint remains retained for adoption or exact retry.
+    Snapshotted {
+        admission: checkpoint::Admission,
+        result: Result<Box<checkpoint::Written>>,
         retry_at: Instant,
     },
     /// Bounded failed-open diagnostic; cannot imply any issued write was unsent.
@@ -265,6 +281,11 @@ impl MmpCustodyRoot {
             {
                 return Poll::Pending;
             }
+            if matches!(&*state, State::Snapshotting { .. })
+                && checkpoint::poll_join(&mut state, cx).is_pending()
+            {
+                return Poll::Pending;
+            }
             match &mut *state {
                 State::Opening(worker) => match Pin::new(worker).poll(cx) {
                     Poll::Pending => return Poll::Pending,
@@ -335,6 +356,9 @@ impl MmpCustodyRoot {
             },
             State::Acknowledged { .. } => acknowledgement::failure(&state),
             State::Loaded { .. } => payload_load::failure(&state),
+            State::Snapshotted {
+                result: Err(error), ..
+            } => Some(error.clone()),
             _ => None,
         })
     }
@@ -692,6 +716,12 @@ impl Drop for Inner {
                         .spawn_blocking(move || drop((result, admission)))
                         .await;
                 }
+                State::Snapshotting { admission, worker } => {
+                    let result = worker.await;
+                    let _ = runtime
+                        .spawn_blocking(move || drop((result, admission)))
+                        .await;
+                }
                 State::Acknowledging { admission, worker } => {
                     let result = worker.await;
                     let _ = runtime
@@ -774,6 +804,16 @@ fn status(state: &State) -> CustodyWorkerStatus {
             }
             _ => CustodyWorkerStatus::PayloadLoadRetryAt(*retry_at),
         },
+        State::Snapshotting { .. } => CustodyWorkerStatus::Running,
+        State::Snapshotted {
+            result, retry_at, ..
+        } => {
+            if result.is_ok() {
+                CustodyWorkerStatus::SnapshotAwaitingAdoption
+            } else {
+                CustodyWorkerStatus::SnapshotRetryAt(*retry_at)
+            }
+        }
         State::Unavailable(_) => CustodyWorkerStatus::Unavailable,
     }
 }

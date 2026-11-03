@@ -179,6 +179,21 @@ A never-issued reservation can be explicitly cancelled, while issued work needs
 its original actual commit or qualified noncommit reconciliation. This internal
 boundary does not enable general crash-durable native workflow restart.
 
+The internal storage-backed MMP mode can now create host checkpoints containing
+verified references to cold originals, with native ownership metadata, without
+loading message bodies. These use nested message schema10 and keep payloads in
+the original private store. Checkpoint creation can refuse at its finite metadata
+limit while retaining all accepted mail. Cancelling its administrative observer
+does not suppress the requested checkpoint write.
+
+Schema10 is currently capture-only: metadata marks these checkpoints unrestorable
+and explains the missing original-store recovery path. Generic message/session
+restore rejects them.
+Trusted original-store whole-session reconstruction and native commit deduplication
+remain unfinished, so this mode is still unavailable in normal product setup.
+A saved store identifier or matching pane/conversation label grants no recovery
+or reconnect authority.
+
 ## Recover an agent conversation
 
 Agent transcripts, presentation logs, and pane session metadata are persisted

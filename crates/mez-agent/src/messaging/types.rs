@@ -812,6 +812,9 @@ pub struct MessageConnection {
 /// Serializable local message protocol state captured in session snapshots.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MessageServiceSnapshot {
+    /// Schema10 cold references; validated data alone never restores live authority.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub storage_snapshot: Option<super::service::MessageStorageSnapshot>,
     /// Stores the protocol value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module

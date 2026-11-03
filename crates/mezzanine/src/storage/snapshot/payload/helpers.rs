@@ -218,6 +218,9 @@ pub(super) fn validate_approval_decision_name(value: &str) -> Result<()> {
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 pub(super) fn validate_message_snapshot_state(state: &MessageServiceSnapshot) -> Result<()> {
+    if state.schema_version == 10 {
+        return state.validate_storage_snapshot().map_err(Into::into);
+    }
     MessageService::from_snapshot_state(state)
         .map(|_| ())
         .map_err(Into::into)

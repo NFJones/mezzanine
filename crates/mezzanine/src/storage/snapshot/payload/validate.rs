@@ -246,6 +246,13 @@ impl SessionSnapshotPayload {
                     .to_string(),
             ]
         };
+        if self
+            .message_state
+            .as_ref()
+            .is_some_and(|state| state.schema_version == 10)
+        {
+            limitations.push("message delivery requires original-store session recovery, which is not yet available".to_string());
+        }
         if !running_agent_sessions.is_empty() {
             limitations.push(
                 "running agent turns are restored as interrupted and require explicit user confirmation before retrying non-idempotent actions"

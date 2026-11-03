@@ -17,7 +17,10 @@ pub(super) fn validate_message_service_snapshot(
     snapshot: &MessageServiceSnapshot,
     pending_limits: PendingDeliveryLimits,
 ) -> Result<()> {
-    if snapshot.protocol != MMP_PROTOCOL || !matches!(snapshot.schema_version, 1..=9) {
+    if snapshot.protocol != MMP_PROTOCOL
+        || !matches!(snapshot.schema_version, 1..=9)
+        || snapshot.storage_snapshot.is_some()
+    {
         return Err(MessageError::invalid_args(
             "snapshot MMP state has unsupported protocol or schema version",
         ));

@@ -1000,25 +1000,7 @@ impl AsyncRuntimeSessionActor {
                 name,
                 reply,
             } => {
-                let (session, context) = match self.service.host_checkpoint_snapshot() {
-                    Ok(snapshot) => snapshot,
-                    Err(error) => {
-                        let _ = reply.send(Err(error));
-                        return false;
-                    }
-                };
-                let task = tokio::spawn(async move {
-                    let result = snapshots
-                        .create_from_session_with_context_async(
-                            &snapshot_id,
-                            name,
-                            &session,
-                            context.as_creation_context(),
-                        )
-                        .await;
-                    let _ = reply.send(result);
-                });
-                std::mem::drop(task);
+                self.create_host_checkpoint(snapshots, snapshot_id, name, reply);
                 false
             }
             AsyncRuntimeRequest::Metrics { reply } => {

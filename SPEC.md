@@ -15948,6 +15948,42 @@ checkpoint binding, native canonical-commit recovery and durable transport
 settlement remain separate activation requirements; source attribution alone
 MUST NOT claim that restart delivery or native deduplication is complete.
 
+Trusted host checkpoints under the internal storage policy MUST use message
+snapshot schema10, cold-reference format1. Capture MUST freeze one actor point:
+allocator/receipt state and original TTL basis, replay and pending membership,
+exact recipient intervals,
+offer/ACK/terminal slots, current native registration namespace and actual shell
+incarnation. Canonical payloads MUST remain in the original store; neither a
+copied body nor an empty substitute envelope may appear in this message state.
+Only current native discovery/presence/subscription facts are included; raw
+connection registrations and reconnect credentials MUST NOT be captured.
+
+The original root MUST verify every referenced committed source SHA256 in one
+read-only SQLite snapshot on its serialized, owned blocking lane before snapshot
+publication. Qualification MUST bind the actual original store allocation,
+trusted owner, generation, sequence watermark and held directory/database kernel
+identities. Capture and encoding metadata copies MUST be preflighted against the
+same 8 MiB logical metadata total and remain reserved through actual snapshot
+publication, independently of observer cancellation. Conservative headroom MAY
+refuse a checkpoint with `capacity` before cloning metadata, preserving accepted
+mail. Actual worker loss MUST retain the exact capture and retry only after join
+and monotonic backoff; neither retry nor capture may advance message state.
+
+A genuine post-TTL duplicate lookup may leave an `expired` acceptance receipt
+while its original remains retained. Capture MUST preserve that receipt and its
+original TTL basis; it MUST NOT reject valid expired history or reset its status
+to `accepted`. An expired receipt requires a finite, nonzero original TTL whose
+deadline can elapse; arbitrary receipt statuses MUST reject.
+
+Schema10 structural validation MUST reject unsupported versions, contradictory
+registry/namespace/slot facts, missing store binding and over-budget references.
+Generic message restore MUST reject schema10 rather than create live native or
+storage authority from saved descriptive bytes. Until trusted recovery exists,
+checkpoint metadata MUST mark schema10 captures unrestorable and explain that
+limitation. Current schema10 host checkpoint creation does not yet implement trusted whole-session cold reconstruction,
+canonical-context deduplication or crash-safe transport/disposition settlement;
+these remain required before durable product activation.
+
 Immutable envelope auxiliary metadata MUST additionally fit a 16 MiB logical
 budget over the deduplicated replay/custody union after normal replay eviction.
 Charge 1,024 bytes per occurrence plus 64 bytes and four times UTF-8 length for
