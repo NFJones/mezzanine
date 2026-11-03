@@ -1406,7 +1406,7 @@ fn lookalike_memory_source_with_changed_payload_cannot_ack_different_durable_ori
     let fixture = Fixture::new();
     let mut store = MmpCustodyStore::open(&fixture.0, "session").unwrap();
     let (service, _ticket, _original) = prepared(&mut store);
-    let mut snapshot = service.snapshot_state();
+    let mut snapshot = service.snapshot_state().unwrap();
     snapshot.retained_messages[0].envelope.payload =
         "different content with identical public identity".into();
     snapshot.accepted_messages[0].envelope.payload =

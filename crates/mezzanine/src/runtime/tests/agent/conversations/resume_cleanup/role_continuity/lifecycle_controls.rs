@@ -148,7 +148,7 @@ async fn runtime_native_role_failed_resume_restores_current_identity_and_admissi
         .message_service_mut()
         .subscribe_from_retained_start(&id)
         .unwrap();
-    let before = fixture.service.message_service().snapshot_state();
+    let before = fixture.service.message_service().snapshot_state().unwrap();
     let identity = fixture
         .service
         .message_service()
@@ -200,7 +200,7 @@ async fn runtime_native_role_failed_resume_restores_current_identity_and_admissi
         fixture.service.message_service().registered_identity(&id),
         Some(&identity)
     );
-    let after = fixture.service.message_service().snapshot_state();
+    let after = fixture.service.message_service().snapshot_state().unwrap();
     assert_eq!(after.subscriptions, before.subscriptions);
     assert_eq!(after.retained_messages, before.retained_messages);
     assert_eq!(after.accepted_messages, before.accepted_messages);
@@ -272,7 +272,7 @@ async fn runtime_native_role_stale_history_cannot_adopt_rebound_root() {
         // Invoke the real cancellation owner; do not overwrite a claim/ledger.
         fixture.service.agent.cancel_agent_command(&pane);
         fixture.resume(&child, "c433-stale-root-c2");
-        let after_resume = fixture.service.message_service().snapshot_state();
+        let after_resume = fixture.service.message_service().snapshot_state().unwrap();
         if let Some(outcome) = outcome {
             assert!(
                 !fixture
@@ -291,7 +291,7 @@ async fn runtime_native_role_stale_history_cannot_adopt_rebound_root() {
         assert!(fixture.service.agent_turn_ledger().turns().is_empty());
         assert!(fixture.service.pending_agent_provider_tasks().is_empty());
         assert_eq!(
-            fixture.service.message_service().snapshot_state(),
+            fixture.service.message_service().snapshot_state().unwrap(),
             after_resume
         );
         assert!(!fixture.service.has_subagent_authority_state(&child));

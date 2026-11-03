@@ -116,7 +116,7 @@ fn acceptance_proof_rejects_reuse_and_snapshot_reconstruction() {
         .update_presence(&child.agent_id, AgentPresenceStatus::Offline, 2)
         .unwrap();
     assert!(service.acceptance_recipient_is_current(&proof, &child.agent_id));
-    let restored = MessageService::from_snapshot_state(&service.snapshot_state()).unwrap();
+    let restored = MessageService::from_snapshot_state(&service.snapshot_state().unwrap()).unwrap();
     assert!(!restored.acceptance_recipient_is_current(&proof, &child.agent_id));
     assert!(
         restored
@@ -166,12 +166,12 @@ fn acceptance_proof_fanout_and_pre_retirement_reply_are_exact() {
     let sent = service
         .accept_at_with_scope(&parent.agent_id, envelope, MessageScope::Session, 1)
         .unwrap();
-    let before = service.snapshot_state();
+    let before = service.snapshot_state().unwrap();
     let proof = service
         .acceptance_proof(&parent.agent_id, sent.sequence)
         .unwrap();
     assert_eq!(proof.recipients().count(), 2);
-    assert_eq!(service.snapshot_state(), before);
+    assert_eq!(service.snapshot_state().unwrap(), before);
     let late = service.register_agent(None, None, "worker", vec![]);
     assert!(!service.acceptance_recipient_is_current(&proof, &late.agent_id));
     let reply = service
@@ -217,7 +217,7 @@ fn acceptance_proof_rejects_reused_requester_and_allows_fresh_restored_sends() {
     let proof = service
         .acceptance_proof(&parent.agent_id, sent.sequence)
         .unwrap();
-    let snapshot = service.snapshot_state();
+    let snapshot = service.snapshot_state().unwrap();
     service.retire_observational_identity(&parent.agent_id);
     service.ensure_agent_identity(parent.clone(), 2).unwrap();
     let reply = service
@@ -260,7 +260,7 @@ fn acceptance_proof_budget_is_reserved_before_acceptance() {
     let parent = service.register_agent(None, None, "parent", vec![]);
     let child = service.register_agent(None, None, "child", vec![]);
     let envelope = mail(&parent, &child.agent_id, "request", None);
-    let before = service.snapshot_state();
+    let before = service.snapshot_state().unwrap();
     let error = service
         .accept_at_with_scope_and_proof(
             &parent.agent_id,
@@ -272,17 +272,17 @@ fn acceptance_proof_budget_is_reserved_before_acceptance() {
         .unwrap_err();
     assert_eq!(error.kind(), MessageErrorKind::Capacity);
     assert!(error.message().len() < 100);
-    assert_eq!(service.snapshot_state(), before);
+    assert_eq!(service.snapshot_state().unwrap(), before);
     let ordinary = service
         .accept_at_with_scope(&parent.agent_id, envelope.clone(), MessageScope::Session, 2)
         .unwrap();
     assert_eq!(ordinary.sequence, 1);
-    let before = service.snapshot_state();
+    let before = service.snapshot_state().unwrap();
     let error = service
         .accept_at_with_scope_and_proof(&parent.agent_id, envelope, MessageScope::Session, 3, 4096)
         .unwrap_err();
     assert_eq!(error.kind(), MessageErrorKind::Conflict);
-    assert_eq!(service.snapshot_state(), before);
+    assert_eq!(service.snapshot_state().unwrap(), before);
     let envelope = mail(&parent, &child.agent_id, "tracked", None);
     let bindings = vec![(child.agent_id.clone(), 0)];
     let charge = service
@@ -297,7 +297,7 @@ fn acceptance_proof_budget_is_reserved_before_acceptance() {
         )
         .unwrap()
         .metadata_bytes();
-    let before = service.snapshot_state();
+    let before = service.snapshot_state().unwrap();
     let error = service
         .accept_at_with_scope_and_proof(
             &parent.agent_id,
@@ -308,7 +308,7 @@ fn acceptance_proof_budget_is_reserved_before_acceptance() {
         )
         .unwrap_err();
     assert_eq!(error.kind(), MessageErrorKind::Capacity);
-    assert_eq!(service.snapshot_state(), before);
+    assert_eq!(service.snapshot_state().unwrap(), before);
     let (delivery, proof) = service
         .accept_at_with_scope_and_proof(
             &parent.agent_id,
@@ -340,7 +340,7 @@ fn acceptance_proof_transaction_preserves_authentication_and_payload_limits() {
     let child = service.register_agent(None, None, "child", vec![]);
     let mut forged = mail(&parent, &child.agent_id, "forged", None);
     forged.sender = child.clone();
-    let before = service.snapshot_state();
+    let before = service.snapshot_state().unwrap();
     assert_eq!(
         service
             .accept_at_with_scope_and_proof(
@@ -369,7 +369,7 @@ fn acceptance_proof_transaction_preserves_authentication_and_payload_limits() {
             .kind(),
         MessageErrorKind::InvalidArgs
     );
-    assert_eq!(service.snapshot_state(), before);
+    assert_eq!(service.snapshot_state().unwrap(), before);
     assert!(service.acceptance_proof(&parent.agent_id, 1).is_none());
     let (delivery, _) = service
         .accept_at_with_scope_and_proof(
@@ -493,7 +493,7 @@ fn acceptance_pending_reply_rejects_foreign_reused_expired_and_restored_sources(
         !service.has_pending_acceptance_reply(&proof, &peer.agent_id, 4, |_| true),
         "clock rollback cannot revive a terminal reply as pending precedence"
     );
-    let restored = MessageService::from_snapshot_state(&service.snapshot_state()).unwrap();
+    let restored = MessageService::from_snapshot_state(&service.snapshot_state().unwrap()).unwrap();
     assert!(!restored.has_pending_acceptance_reply(&proof, &peer.agent_id, 4, |_| true));
     service.retire_observational_identity(&peer.agent_id);
     service.ensure_agent_identity(peer.clone(), 6).unwrap();

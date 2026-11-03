@@ -335,7 +335,7 @@ async fn raw_message_shutdown_reports_integrity_and_cleans_other_leases() {
         .message_service_mut()
         .ensure_agent_identity(foreign.clone(), 11)
         .unwrap();
-    let before = actor.service.message_service().snapshot_state();
+    let before = actor.service.message_service().snapshot_state().unwrap();
     let (reply, response) = oneshot::channel();
     let _ = actor.dispatch_message_request(AsyncRuntimeRequest::RetireMessageConnection {
         agent_id: ids[0].clone(),
@@ -349,7 +349,10 @@ async fn raw_message_shutdown_reports_integrity_and_cleans_other_leases() {
             .message()
             .contains("ownership changed")
     );
-    assert_eq!(actor.service.message_service().snapshot_state(), before);
+    assert_eq!(
+        actor.service.message_service().snapshot_state().unwrap(),
+        before
+    );
     let (reply, response) = oneshot::channel();
     assert!(actor.dispatch_message_request(AsyncRuntimeRequest::Shutdown { reply }));
     assert!(

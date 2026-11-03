@@ -283,7 +283,7 @@ fn runtime_terminal_timer_hands_off_original_action_without_wake_and_releases_ca
         },
     };
     // Capacity is provably unaccepted, not an ambiguous transport failure.
-    let before_rejection = service.message_service().snapshot_state();
+    let before_rejection = service.message_service().snapshot_state().unwrap();
     let rejected = terminal_probe_send(&mut service, &turn, &action);
     assert_eq!(rejected.status, mez_agent::ActionStatus::Failed);
     assert_eq!(rejected.error.as_ref().unwrap().code, "capacity");
@@ -293,7 +293,10 @@ fn runtime_terminal_timer_hands_off_original_action_without_wake_and_releases_ca
     assert_eq!(rejected_json["accepted"], false);
     assert_eq!(rejected_json["delivery_applied"], false);
     assert!(rejected_json["message_id"].is_null());
-    assert_eq!(service.message_service().snapshot_state(), before_rejection);
+    assert_eq!(
+        service.message_service().snapshot_state().unwrap(),
+        before_rejection
+    );
     service
         .control
         .message_service_mut()
@@ -922,7 +925,7 @@ fn runtime_native_commit_survives_pane_retirement_before_timer() {
             .registered_identity(&recipient)
             .is_none()
     );
-    let snapshot = service.control.message_service().snapshot_state();
+    let snapshot = service.control.message_service().snapshot_state().unwrap();
     assert!(
         snapshot
             .retained_messages
@@ -1335,7 +1338,7 @@ fn runtime_message_restore_cannot_reuse_old_native_commit_authority() {
     } = native_receive_fault(false, true);
     let mut payload =
         crate::storage::snapshot::SessionSnapshotPayload::from_session(service.session());
-    payload.message_state = Some(service.control.message_service().snapshot_state());
+    payload.message_state = Some(service.control.message_service().snapshot_state().unwrap());
     service
         .restore_message_state_for_restored_snapshot(&payload)
         .unwrap();
@@ -1385,7 +1388,7 @@ fn runtime_message_restore_cannot_reuse_old_outbound_action_owner() {
     let (mut service, turn, target) = parked_terminal_sender();
     let mut payload =
         crate::storage::snapshot::SessionSnapshotPayload::from_session(service.session());
-    payload.message_state = Some(service.control.message_service().snapshot_state());
+    payload.message_state = Some(service.control.message_service().snapshot_state().unwrap());
     service
         .restore_message_state_for_restored_snapshot(&payload)
         .unwrap();

@@ -50,9 +50,9 @@ fn reused_sender_with_pending_authored_source_and_new_reply_roundtrips() {
             4,
         )
         .unwrap();
-    let snapshot = service.snapshot_state();
+    let snapshot = service.snapshot_state().unwrap();
     let mut restored = MessageService::from_snapshot_state(&snapshot).unwrap();
-    assert_eq!(restored.snapshot_state(), snapshot);
+    assert_eq!(restored.snapshot_state().unwrap(), snapshot);
     assert_eq!(&restored.receive_for(&target.agent_id, 5)[0], &original);
     restored
         .subscribe_from_retained_start(&sender.agent_id)
@@ -116,7 +116,7 @@ fn changed_sender_metadata_and_multiple_reuse_keep_custody_only_sources() {
             )
             .unwrap();
         originals.push(outgoing);
-        let snapshot = service.snapshot_state();
+        let snapshot = service.snapshot_state().unwrap();
         assert!(!snapshot.custody_messages.as_ref().unwrap().is_empty());
         service = MessageService::from_snapshot_state(&snapshot).unwrap();
         assert_eq!(
@@ -167,7 +167,7 @@ fn sender_provenance_corruption_future_schema_and_legacy_smuggling_fail_closed()
             1,
         )
         .unwrap();
-    let before = service.snapshot_state();
+    let before = service.snapshot_state().unwrap();
     let mut cases = Vec::new();
     let mut bad = before.clone();
     bad.sender_provenance = None;
@@ -210,7 +210,7 @@ fn sender_provenance_corruption_future_schema_and_legacy_smuggling_fail_closed()
     for bad in cases {
         assert!(MessageService::from_snapshot_state(&bad).is_err());
     }
-    assert_eq!(service.snapshot_state(), before);
+    assert_eq!(service.snapshot_state().unwrap(), before);
 }
 
 /// A legacy snapshot with an exact current identity and a redundant older
@@ -238,16 +238,16 @@ fn legacy_exact_reused_floor_migrates_but_ambiguous_history_does_not() {
         )
         .unwrap();
     service.retire_agent_identity(&sender.agent_id);
-    let retired = service.snapshot_state().retired_delivery_floors;
+    let retired = service.snapshot_state().unwrap().retired_delivery_floors;
     service.ensure_agent_identity(sender.clone(), 3).unwrap();
-    let mut legacy = service.snapshot_state();
+    let mut legacy = service.snapshot_state().unwrap();
     legacy.schema_version = 8;
     legacy.sender_provenance = None;
     legacy.retired_delivery_floors = retired;
     let original = legacy.clone();
     let mut restored = MessageService::from_snapshot_state(&legacy).unwrap();
     assert_eq!(legacy, original);
-    assert_eq!(restored.snapshot_state().schema_version, 9);
+    assert_eq!(restored.snapshot_state().unwrap().schema_version, 9);
     restored
         .subscribe_from_retained_start(&sender.agent_id)
         .unwrap();
@@ -307,13 +307,13 @@ fn fresh_and_reusable_re_registration_snapshots_are_stable_before_subscribe() {
         }
         service.ensure_agent_identity(sender.clone(), 2).unwrap();
         assert!(!service.acceptance_sender_is_current(&proof));
-        let snapshot = service.snapshot_state();
+        let snapshot = service.snapshot_state().unwrap();
         let mut restored = MessageService::from_snapshot_state(&snapshot).unwrap();
-        assert_eq!(restored.snapshot_state(), snapshot);
+        assert_eq!(restored.snapshot_state().unwrap(), snapshot);
         restored
             .subscribe_from_retained_start(&sender.agent_id)
             .unwrap();
-        MessageService::from_snapshot_state(&restored.snapshot_state()).unwrap();
+        MessageService::from_snapshot_state(&restored.snapshot_state().unwrap()).unwrap();
         assert!(
             restored
                 .acceptance_proof(&sender.agent_id, accepted.sequence)
@@ -337,7 +337,7 @@ fn current_objective_refresh_cannot_rewrite_retained_sender_provenance() {
     service
         .update_agent_objective(&sender.agent_id, Some("new task"), 2)
         .unwrap();
-    let snapshot = service.snapshot_state();
+    let snapshot = service.snapshot_state().unwrap();
     let restored = MessageService::from_snapshot_state(&snapshot).unwrap();
     assert_eq!(restored.receive_for(&target.agent_id, 3), [original]);
     assert_eq!(
@@ -371,9 +371,10 @@ fn historical_sender_scope_does_not_authorize_current_cross_project_send() {
     let current = service
         .rebind_agent_project_scope(&sender.agent_id, Some(new))
         .unwrap();
-    let mut restored = MessageService::from_snapshot_state(&service.snapshot_state()).unwrap();
+    let mut restored =
+        MessageService::from_snapshot_state(&service.snapshot_state().unwrap()).unwrap();
     assert_eq!(restored.receive_for(&target.agent_id, 2), [original]);
-    let before = restored.snapshot_state();
+    let before = restored.snapshot_state().unwrap();
     assert!(
         restored
             .accept_at_with_scope(
@@ -384,7 +385,7 @@ fn historical_sender_scope_does_not_authorize_current_cross_project_send() {
             )
             .is_err()
     );
-    assert_eq!(restored.snapshot_state(), before);
+    assert_eq!(restored.snapshot_state().unwrap(), before);
 }
 
 /// The schema9 identity codec is a stable, allocation-free field encoding.

@@ -15424,6 +15424,11 @@ reuse. Provenance MUST agree with the original envelope and captured sender
 interval, contain no payload copy, and remain bounded by canonical count and
 metadata reservations. A fixed-size, versioned identity digest MUST check the
 full original identity in the canonical envelope without another string copy.
+Snapshot capture MUST fail explicitly when complete retained source content is
+unavailable. It MUST NOT omit accepted pending mail, fabricate empty payloads or
+perform implicit storage I/O to satisfy an in-memory projection. Such a failure
+MUST propagate through session snapshot and checkpoint creation without
+publishing a partial snapshot.
 Active registration floors MUST NOT be serialized as
 retired-owner authority. Restored sender provenance MUST NOT supply live
 acceptance proofs, reconnect credentials, old recipient rights or task authority.

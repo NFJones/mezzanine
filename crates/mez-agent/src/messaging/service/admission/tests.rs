@@ -2,6 +2,80 @@
 
 use super::*;
 
+/// Payload acquisition precedes the issuance mutation. Even an unavailable
+/// unpublished source must not install a worker attempt or bind a storage root
+/// when no write input can be returned to the actual worker owner.
+#[test]
+fn absent_original_does_not_partially_issue_an_acceptance_write() {
+    let mut service = MessageService::default();
+    let sender = service.register_agent(None, None, "sender", vec![]);
+    let target = service.register_agent(None, None, "target", vec![]);
+    let ticket = service
+        .prepare_acceptance(
+            &sender.agent_id,
+            mail(&sender, &target.agent_id, "absent-original"),
+            MessageScope::Session,
+            1,
+            4096,
+            None,
+        )
+        .unwrap();
+    service
+        .admission
+        .as_ref()
+        .unwrap()
+        .row
+        .envelope
+        .release_cache_for_test();
+    let scope = MessageStorageScope::default();
+    assert_eq!(
+        service
+            .begin_storage_acceptance_write(&ticket, &scope)
+            .unwrap_err()
+            .kind(),
+        MessageErrorKind::InvalidState
+    );
+    let pending = service.admission.as_ref().unwrap();
+    assert!(pending.attempt.is_none());
+    assert!(pending.storage_scope.is_none());
+    assert_eq!(pending.row.sequence, ticket.sequence());
+}
+
+/// A linear issued worker input explicitly pins its original allocation. Cache
+/// release cannot invalidate its borrowed envelope or record serialization; no
+/// second payload is reconstructed merely to keep the port API usable.
+#[test]
+fn original_write_pins_borrowed_bytes_across_cache_release() {
+    let mut service = MessageService::default();
+    let sender = service.register_agent(None, None, "sender", vec![]);
+    let target = service.register_agent(None, None, "target", vec![]);
+    let ticket = service
+        .prepare_acceptance(
+            &sender.agent_id,
+            mail(&sender, &target.agent_id, "pinned-original"),
+            MessageScope::Session,
+            1,
+            4096,
+            None,
+        )
+        .unwrap();
+    let write = service.begin_acceptance_write(&ticket).unwrap();
+    let row = &service.admission.as_ref().unwrap().row;
+    row.envelope.release_cache_for_test();
+    assert!(Arc::ptr_eq(
+        &write.envelope,
+        &row.envelope.resident().unwrap()
+    ));
+    assert_eq!(write.envelope().id, "pinned-original");
+    assert!(serde_json::to_vec(&write).is_ok());
+    drop(write);
+    assert_eq!(row.envelope.resident_bytes(), 0);
+    assert_eq!(
+        row.envelope.resident().unwrap_err().kind(),
+        MessageErrorKind::InvalidState
+    );
+}
+
 /// Makes one immutable direct occurrence under an authenticated registered source.
 fn mail(sender: &SenderIdentity, target: &AgentId, id: &str) -> Envelope {
     Envelope {
@@ -61,7 +135,13 @@ fn original_is_invisible_until_qualified_storage_commit_is_adopted_once() {
             None,
         )
         .unwrap();
-    assert!(service.snapshot_state().accepted_messages.is_empty());
+    assert!(
+        service
+            .snapshot_state()
+            .unwrap()
+            .accepted_messages
+            .is_empty()
+    );
     assert!(
         service
             .receive_subscribed(&target.agent_id, 2, 10)
@@ -96,7 +176,14 @@ fn original_is_invisible_until_qualified_storage_commit_is_adopted_once() {
         1
     );
     assert_eq!(service.publish_acceptance(&committed).unwrap().0, delivery);
-    assert_eq!(service.snapshot_state().accepted_messages.len(), 1);
+    assert_eq!(service.snapshot_state().unwrap().accepted_messages.len(), 1);
+    assert!(
+        Arc::ptr_eq(
+            &service.accepted_messages.get("original").unwrap().source,
+            service.pending.get(&delivery.sequence).unwrap()
+        ),
+        "storage adoption must install one canonical source for custody and dedup"
+    );
 }
 /// A slow storage operation cannot monopolize recipient progress. An existing
 /// original remains receivable/acknowledgeable, and a tail subscription created
@@ -217,7 +304,7 @@ fn ambiguous_write_is_not_unaccepted_and_reconciles_original_once() {
         panic!("reconcile")
     };
     service.publish_acceptance(&committed).unwrap();
-    assert_eq!(service.snapshot_state().accepted_messages.len(), 1);
+    assert_eq!(service.snapshot_state().unwrap().accepted_messages.len(), 1);
     assert_eq!(store.calls, 2);
 }
 
@@ -251,7 +338,8 @@ fn foreign_and_stale_capabilities_cannot_publish_or_release_another_original() {
             None,
         )
         .unwrap();
-    let mut foreign = MessageService::from_snapshot_state(&service.snapshot_state()).unwrap();
+    let mut foreign =
+        MessageService::from_snapshot_state(&service.snapshot_state().unwrap()).unwrap();
     assert!(foreign.begin_acceptance_write(&first).is_err());
     assert!(foreign.cancel_acceptance(&first).is_err());
     let MessageAcceptanceWriteOutcome::NotCommitted(refused) = service
@@ -291,7 +379,7 @@ fn budget_and_invalid_input_refusal_leave_source_unchanged_and_charge_inflight()
     let mut service = MessageService::with_pending_limits(1, 4096, limits).unwrap();
     let sender = service.register_agent(None, None, "sender", vec![]);
     let target = service.register_agent(None, None, "target", vec![]);
-    let before = service.snapshot_state();
+    let before = service.snapshot_state().unwrap();
     assert!(
         service
             .prepare_acceptance(
@@ -318,7 +406,7 @@ fn budget_and_invalid_input_refusal_leave_source_unchanged_and_charge_inflight()
             )
             .is_err()
     );
-    assert_eq!(service.snapshot_state(), before);
+    assert_eq!(service.snapshot_state().unwrap(), before);
     let ticket = service
         .prepare_acceptance(
             &sender.agent_id,
@@ -329,7 +417,7 @@ fn budget_and_invalid_input_refusal_leave_source_unchanged_and_charge_inflight()
             None,
         )
         .unwrap();
-    let reserved = service.snapshot_state();
+    let reserved = service.snapshot_state().unwrap();
     assert!(
         service
             .prepare_acceptance(
@@ -352,7 +440,7 @@ fn budget_and_invalid_input_refusal_leave_source_unchanged_and_charge_inflight()
             )
             .is_err()
     );
-    assert_eq!(service.snapshot_state(), reserved);
+    assert_eq!(service.snapshot_state().unwrap(), reserved);
     let mut store = Store {
         calls: 0,
         uncertain: false,
@@ -399,6 +487,7 @@ fn budget_and_invalid_input_refusal_leave_source_unchanged_and_charge_inflight()
     assert!(
         !service
             .snapshot_state()
+            .unwrap()
             .accepted_messages
             .iter()
             .any(|row| row.envelope.id == "original")
@@ -435,7 +524,7 @@ fn retired_source_and_reused_target_keep_original_facts_without_rebinding() {
         }
         service.retire_agent_identity(&target.agent_id);
         service.ensure_agent_identity(target.clone(), 2).unwrap();
-        MessageService::from_snapshot_state(&service.snapshot_state()).unwrap();
+        MessageService::from_snapshot_state(&service.snapshot_state().unwrap()).unwrap();
         let mut store = Store {
             calls: 0,
             uncertain: false,
@@ -455,7 +544,7 @@ fn retired_source_and_reused_target_keep_original_facts_without_rebinding() {
                 .messages
                 .is_empty()
         );
-        let snapshot = service.snapshot_state();
+        let snapshot = service.snapshot_state().unwrap();
         assert_eq!(snapshot.accepted_messages.len(), 1);
         assert_eq!(
             snapshot.accepted_messages[0].envelope.sender.agent_id,
@@ -543,7 +632,7 @@ fn off_actor_record_encoding_preserves_original_input_and_optional_proof() {
     assert_eq!(delivery.sequence, ticket.sequence());
     assert_eq!(proof.unwrap().sequence(), delivery.sequence);
     assert_eq!(service.receive_for(&target.agent_id, 19)[0], input);
-    MessageService::from_snapshot_state(&service.snapshot_state()).unwrap();
+    MessageService::from_snapshot_state(&service.snapshot_state().unwrap()).unwrap();
 }
 
 /// Eligible fanout is frozen before storage and cannot widen when another
@@ -681,7 +770,11 @@ fn borrowed_record_streams_escaped_payload_through_bounded_write_chunks() {
     assert!(store.0.bytes > payload_bytes);
     assert!(store.0.max <= 8192);
     assert!(
-        service.snapshot_state().accepted_messages.is_empty(),
+        service
+            .snapshot_state()
+            .unwrap()
+            .accepted_messages
+            .is_empty(),
         "storage completion alone is not actor adoption"
     );
 }
@@ -767,5 +860,5 @@ fn joined_worker_loss_recovers_original_without_assuming_noncommit() {
         service.publish_acceptance(&commit).unwrap().0.sequence,
         ticket.sequence()
     );
-    assert_eq!(service.snapshot_state().accepted_messages.len(), 1);
+    assert_eq!(service.snapshot_state().unwrap().accepted_messages.len(), 1);
 }

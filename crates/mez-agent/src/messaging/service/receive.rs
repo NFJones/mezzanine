@@ -12,12 +12,16 @@ pub(super) struct IndexedReceiveSelection {
     pub(super) batch: DeliveryBatch,
     pub(super) sequence_lookups: u64,
     pub(super) payload_bytes: usize,
+    /// First eligible occurrence whose existing bytes cannot be acquired.
+    pub(super) unavailable: Option<MessageError>,
 }
 
 /// Selection-only filters; native exclusions borrow already-validated proof
 /// and never change delivery authority or the aggregate work budget.
 #[derive(Default, Clone, Copy)]
 pub(super) struct ReceiveSelectionFilter<'a> {
+    /// Recovery projection must not acquire sources beyond its requested end.
+    pub(super) through_sequence: Option<MessageSequence>,
     /// Historical reconstruction may inspect already acknowledged rows.
     pub(super) include_committed: bool,
     /// Live native fanout skips canonically committed input awaiting its cursor.
@@ -41,16 +45,18 @@ impl MessageService {
                 messages: Vec::new(),
             });
         }
-        let batch = self
-            .receive_after_indexed(
-                cursor,
-                identity,
-                now_ms,
-                limit,
-                usize::MAX,
-                ReceiveSelectionFilter::default(),
-            )
-            .batch;
+        let selection = self.receive_after_indexed(
+            cursor,
+            identity,
+            now_ms,
+            limit,
+            usize::MAX,
+            ReceiveSelectionFilter::default(),
+        );
+        if let Some(error) = selection.unavailable {
+            return Err(error);
+        }
+        let batch = selection.batch;
         self.record_delivery_offers(&batch, now_ms)?;
         Ok(batch)
     }
@@ -88,15 +94,22 @@ impl MessageService {
         let mut messages = Vec::new();
         let mut sequence_lookups = 0u64;
         let mut payload_bytes = 0usize;
+        let mut unavailable = None;
         while messages.len() < limit {
             let Some(std::cmp::Reverse((sequence, selector_index))) = next_by_selector.pop() else {
                 break;
             };
+            if filter
+                .through_sequence
+                .is_some_and(|through| sequence > through)
+            {
+                break;
+            }
             sequence_lookups = sequence_lookups.saturating_add(1);
             let Some(queued) = self.queued_by_sequence.get(&sequence) else {
                 continue;
             };
-            let message_bytes = queued.envelope.payload.len();
+            let message_bytes = queued.envelope.payload_bytes;
             if !expired(queued, now_ms)
                 && !self.acknowledgement_excludes(queued.sequence)
                 && !self.recipient_is_terminal(queued, &identity.agent_id)
@@ -111,11 +124,15 @@ impl MessageService {
                 if payload_bytes.saturating_add(message_bytes) > max_payload_bytes {
                     break;
                 }
+                let envelope = match queued.envelope.resident() {
+                    Ok(envelope) => envelope,
+                    Err(error) => {
+                        unavailable = Some(error);
+                        break;
+                    }
+                };
                 payload_bytes = payload_bytes.saturating_add(message_bytes);
-                messages.push(SequencedEnvelope {
-                    sequence,
-                    envelope: queued.envelope.clone(),
-                });
+                messages.push(SequencedEnvelope { sequence, envelope });
             }
             if let Some(next_sequence) = self
                 .queued_by_recipient
@@ -141,6 +158,7 @@ impl MessageService {
             },
             sequence_lookups,
             payload_bytes,
+            unavailable,
         }
     }
 }

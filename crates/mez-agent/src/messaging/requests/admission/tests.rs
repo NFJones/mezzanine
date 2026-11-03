@@ -250,7 +250,7 @@ fn exact_noncommit_releases_both_owners_without_reusing_generation() {
 #[test]
 fn preflight_failure_and_second_admission_leave_original_owners_intact() {
     let (mut service, mut requests, origin, envelope) = fixture();
-    let before = service.snapshot_state();
+    let before = service.snapshot_state().unwrap();
     let mut invalid = origin.clone();
     invalid.turn_id.clear();
     assert!(
@@ -281,7 +281,7 @@ fn preflight_failure_and_second_admission_leave_original_owners_intact() {
             .is_err()
     );
     assert_eq!(small.usage(), (0, 0, 0));
-    assert_eq!(service.snapshot_state(), before);
+    assert_eq!(service.snapshot_state().unwrap(), before);
     let ticket = requests
         .prepare_acceptance(
             &mut service,
@@ -412,7 +412,7 @@ fn stale_cancellation_cannot_release_replacement_reservation() {
 fn published_receipt_lookup_requires_original_admission_and_ends_on_consumption() {
     let (mut service, mut requests, origin, envelope) = fixture();
     let mut foreign_service =
-        MessageService::from_snapshot_state(&service.snapshot_state()).unwrap();
+        MessageService::from_snapshot_state(&service.snapshot_state().unwrap()).unwrap();
     let mut foreign_requests = MessageRequests::default();
     let foreign = foreign_requests
         .prepare_acceptance(

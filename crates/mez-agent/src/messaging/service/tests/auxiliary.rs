@@ -50,7 +50,7 @@ fn auxiliary_capacity_is_atomic_shared_and_released_after_final_ack() {
         .unwrap();
     assert_eq!(accepted.queued_recipients, 2);
     for (index, recipient) in recipients.iter().enumerate() {
-        let before = service.snapshot_state();
+        let before = service.snapshot_state().unwrap();
         assert_eq!(
             service
                 .accept_at_with_scope(&sender.agent_id, second.clone(), MessageScope::Session, 0)
@@ -58,11 +58,12 @@ fn auxiliary_capacity_is_atomic_shared_and_released_after_final_ack() {
                 .kind(),
             MessageErrorKind::Capacity
         );
-        assert_eq!(service.snapshot_state(), before);
+        assert_eq!(service.snapshot_state().unwrap(), before);
         assert_eq!(
             MessageService::from_snapshot_state_with_pending_limits(&before, policy)
                 .unwrap()
-                .snapshot_state(),
+                .snapshot_state()
+                .unwrap(),
             before
         );
         service
@@ -77,11 +78,12 @@ fn auxiliary_capacity_is_atomic_shared_and_released_after_final_ack() {
         .accept_at_with_scope(&sender.agent_id, second, MessageScope::Session, 0)
         .unwrap();
     assert_eq!(replacement.sequence, accepted.sequence + 1);
-    let snapshot = service.snapshot_state();
+    let snapshot = service.snapshot_state().unwrap();
     assert_eq!(
         MessageService::from_snapshot_state_with_pending_limits(&snapshot, policy)
             .unwrap()
-            .snapshot_state(),
+            .snapshot_state()
+            .unwrap(),
         snapshot
     );
     assert_eq!(
@@ -121,7 +123,7 @@ fn auxiliary_capacity_charges_custody_only_occurrences() {
     }
     assert_eq!(service.queue.len(), 1);
     assert_eq!(service.pending.len(), 2);
-    let before = service.snapshot_state();
+    let before = service.snapshot_state().unwrap();
     assert_eq!(
         service
             .accept_at_with_scope(
@@ -134,7 +136,7 @@ fn auxiliary_capacity_charges_custody_only_occurrences() {
             .kind(),
         MessageErrorKind::Capacity
     );
-    assert_eq!(service.snapshot_state(), before);
+    assert_eq!(service.snapshot_state().unwrap(), before);
     let offered = service.receive_subscribed(&target.agent_id, 0, 1).unwrap();
     assert_eq!(offered.messages[0].sequence, 1);
     service.advance_subscription(&target.agent_id, 1).unwrap();
@@ -165,7 +167,7 @@ fn auxiliary_capacity_counts_empty_entries_and_validates_snapshot_projections() 
     source.extension_fields = vec![(String::new(), String::new()); 10];
     assert_eq!(envelope_bytes(&source), charge + 10 * 128);
     service.pending_limits.auxiliary_bytes = charge;
-    let before = service.snapshot_state();
+    let before = service.snapshot_state().unwrap();
     assert_eq!(
         service
             .accept_at_with_scope(&sender.agent_id, source, MessageScope::Session, 0)
@@ -173,7 +175,7 @@ fn auxiliary_capacity_counts_empty_entries_and_validates_snapshot_projections() 
             .kind(),
         MessageErrorKind::Capacity
     );
-    assert_eq!(service.snapshot_state(), before);
+    assert_eq!(service.snapshot_state().unwrap(), before);
     service
         .accept_at_with_scope(
             &sender.agent_id,
@@ -182,7 +184,7 @@ fn auxiliary_capacity_counts_empty_entries_and_validates_snapshot_projections() 
             0,
         )
         .unwrap();
-    let snapshot = service.snapshot_state();
+    let snapshot = service.snapshot_state().unwrap();
     for accepted_projection in [false, true] {
         let mut hostile = snapshot.clone();
         let envelope = if accepted_projection {
@@ -273,7 +275,7 @@ fn terminal_outcome_single_record_fit_is_reserved_at_acceptance() {
             "x".repeat(OUTCOME_BYTES)
         };
         let source = envelope(&sender, &message_id);
-        let before = service.snapshot_state();
+        let before = service.snapshot_state().unwrap();
         assert_eq!(
             service
                 .accept_at_with_scope(&sender.agent_id, source, MessageScope::Session, 0)
@@ -281,7 +283,7 @@ fn terminal_outcome_single_record_fit_is_reserved_at_acceptance() {
                 .kind(),
             MessageErrorKind::Capacity
         );
-        assert_eq!(service.snapshot_state(), before);
+        assert_eq!(service.snapshot_state().unwrap(), before);
     }
 }
 
@@ -314,11 +316,12 @@ fn auxiliary_exact_fit_roundtrips_optional_utf8_metadata() {
     service
         .accept_at_with_scope(&sender.agent_id, source, MessageScope::Session, 0)
         .unwrap();
-    let snapshot = service.snapshot_state();
+    let snapshot = service.snapshot_state().unwrap();
     assert_eq!(
         MessageService::from_snapshot_state_with_pending_limits(&snapshot, policy)
             .unwrap()
-            .snapshot_state(),
+            .snapshot_state()
+            .unwrap(),
         snapshot
     );
 }

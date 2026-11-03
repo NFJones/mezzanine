@@ -46,7 +46,7 @@ fn framed_fanout_survives_generic_recipient_retirement() {
     let accepted: serde_json::Value = serde_json::from_str(&reply).unwrap();
     assert_eq!(accepted["status"], "accepted");
     assert_eq!(accepted["queued_recipients"], 2);
-    let sequence = service.snapshot_state().accepted_messages[0]
+    let sequence = service.snapshot_state().unwrap().accepted_messages[0]
         .delivery
         .sequence;
     let mut sink = CollectingFanoutSink::default();
@@ -72,7 +72,7 @@ fn framed_fanout_survives_generic_recipient_retirement() {
         serde_json::from_str::<serde_json::Value>(&reply).unwrap()["status"],
         "accepted"
     );
-    let snapshot = service.snapshot_state();
+    let snapshot = service.snapshot_state().unwrap();
     assert_eq!(snapshot.retained_messages.len(), 1);
     assert_eq!(snapshot.retained_messages[0].envelope.id, "framed-pressure");
     assert_eq!(
@@ -116,7 +116,7 @@ fn framed_fanout_survives_generic_recipient_retirement() {
         0
     );
     assert_eq!(
-        service.snapshot_state().accepted_messages,
+        service.snapshot_state().unwrap().accepted_messages,
         snapshot
             .accepted_messages
             .into_iter()
@@ -126,6 +126,7 @@ fn framed_fanout_survives_generic_recipient_retirement() {
     assert!(
         service
             .snapshot_state()
+            .unwrap()
             .custody_messages
             .unwrap()
             .is_empty()

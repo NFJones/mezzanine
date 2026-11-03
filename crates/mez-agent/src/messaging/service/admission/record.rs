@@ -109,7 +109,11 @@ struct FrozenRecord<'a>(&'a QueuedEnvelope);
 impl Serialize for FrozenRecord<'_> {
     /// Streams only the original immutable semantic record, never live capabilities.
     fn serialize<S: Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
-        let envelope = &self.0.envelope;
+        let envelope = self
+            .0
+            .envelope
+            .resident()
+            .map_err(serde::ser::Error::custom)?;
         let sender = &envelope.sender;
         let (kind, value) = match &envelope.recipient {
             Recipient::Agent(id) => ("agent", Some(id.as_str())),

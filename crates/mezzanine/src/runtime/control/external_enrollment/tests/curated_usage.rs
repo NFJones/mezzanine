@@ -834,7 +834,7 @@ async fn external_curated_snapshot_message_restore_retires_proof_not_expense() {
     assert_eq!(fixture.service.external_agent_rows().len(), 1);
     let mut payload =
         crate::storage::snapshot::SessionSnapshotPayload::from_session(fixture.service.session());
-    payload.message_state = Some(fixture.service.message_service().snapshot_state());
+    payload.message_state = Some(fixture.service.message_service().snapshot_state().unwrap());
     fixture
         .service
         .restore_message_state_for_restored_snapshot(&payload)

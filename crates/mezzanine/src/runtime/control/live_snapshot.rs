@@ -6,13 +6,13 @@
 //! keeps the main control adapter focused on protocol method routing.
 
 use super::super::{
-    BlockedApprovalState, ConfigScope, MessageServiceSnapshot, RuntimeSessionService,
+    BlockedApprovalState, ConfigScope, MessageServiceSnapshot, Result, RuntimeSessionService,
     SnapshotAgentSession, SnapshotApprovalGrantMetadata, SnapshotApprovalRequestMetadata,
     SnapshotConfigDiagnostic, SnapshotConfigLayerMetadata, SnapshotFrameSettings,
     SnapshotFrameState, SnapshotMcpServerState, SnapshotPaneCapture, validate_config_text,
 };
 #[cfg(test)]
-use super::super::{Result, SnapshotCreationContext, SnapshotRepository, SnapshotState};
+use super::super::{SnapshotCreationContext, SnapshotRepository, SnapshotState};
 use super::snapshot::{
     runtime_snapshot_agent_visibility_name, runtime_snapshot_approval_grant,
     runtime_snapshot_approval_request, runtime_snapshot_config_scope_name,
@@ -25,11 +25,11 @@ impl RuntimeSessionService {
     /// trusted host checkpoint administration.
     pub(crate) fn host_checkpoint_snapshot(
         &self,
-    ) -> (
+    ) -> Result<(
         mez_mux::session::Session,
         crate::runtime::RuntimeSnapshotOwnedCreationContext,
-    ) {
-        (
+    )> {
+        Ok((
             (*self.session).clone(),
             crate::runtime::RuntimeSnapshotOwnedCreationContext {
                 pane_captures: self.live_snapshot_pane_captures(),
@@ -39,12 +39,12 @@ impl RuntimeSessionService {
                 agent_sessions: self.live_snapshot_agent_sessions(),
                 approval_grants: self.live_snapshot_approval_grants(),
                 approval_requests: self.live_snapshot_approval_requests(),
-                message_state: self.live_snapshot_message_state(),
+                message_state: self.live_snapshot_message_state()?,
                 unsettled_peer_presentations: self
                     .snapshot_unsettled_received_peer_message_presentations(),
                 mcp_servers: self.live_snapshot_mcp_servers(),
             },
-        )
+        ))
     }
 
     /// Captures live pane terminal state and process metadata for snapshots.
@@ -148,7 +148,7 @@ impl RuntimeSessionService {
         let agent_sessions = self.live_snapshot_agent_sessions();
         let approval_grants = self.live_snapshot_approval_grants();
         let approval_requests = self.live_snapshot_approval_requests();
-        let message_state = self.live_snapshot_message_state();
+        let message_state = self.live_snapshot_message_state()?;
         let mcp_servers = self.live_snapshot_mcp_servers();
         snapshots.create_from_session_with_context(
             snapshot_id,
@@ -198,8 +198,11 @@ impl RuntimeSessionService {
     }
 
     /// Captures runtime message-service state for a live snapshot.
-    pub(super) fn live_snapshot_message_state(&self) -> MessageServiceSnapshot {
-        self.control.message_service().snapshot_state()
+    pub(super) fn live_snapshot_message_state(&self) -> Result<MessageServiceSnapshot> {
+        self.control
+            .message_service()
+            .snapshot_state()
+            .map_err(Into::into)
     }
 
     /// Captures MCP server state for a live snapshot.

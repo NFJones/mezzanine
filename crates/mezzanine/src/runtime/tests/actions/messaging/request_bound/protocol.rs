@@ -68,7 +68,14 @@ fn request_bound_reused_peer_address_cannot_reply_for_original_registration() {
                 .all(|block| !block.content.contains("peer_terminal")
                     && !block.content.contains("peer answer"))
         );
-        assert!(service.message_service().snapshot_state().next_sequence > sequence);
+        assert!(
+            service
+                .message_service()
+                .snapshot_state()
+                .unwrap()
+                .next_sequence
+                > sequence
+        );
         let next = send(&mut service, &parent, peer.agent_id.as_str(), true);
         assert_ne!(message, next);
         wait(&mut service, &parent, &next, None);

@@ -71,7 +71,7 @@ fn terminal_retirement_is_exact_reserved_and_consumable_after_restore() {
     for restore in [false, true] {
         let mut service = if restore {
             MessageService::from_snapshot_state_with_pending_limits(
-                &source.snapshot_state(),
+                &source.snapshot_state().unwrap(),
                 source.pending_limits,
             )
             .unwrap()
@@ -108,7 +108,7 @@ fn terminal_retirement_is_exact_reserved_and_consumable_after_restore() {
                 .unwrap()
                 .is_empty()
         );
-        let before = service.snapshot_state();
+        let before = service.snapshot_state().unwrap();
         let mut next = original.clone();
         next.id = "next".into();
         assert_eq!(
@@ -118,14 +118,15 @@ fn terminal_retirement_is_exact_reserved_and_consumable_after_restore() {
                 .kind(),
             MessageErrorKind::Capacity
         );
-        assert_eq!(service.snapshot_state(), before);
+        assert_eq!(service.snapshot_state().unwrap(), before);
         assert_eq!(
             MessageService::from_snapshot_state_with_pending_limits(
                 &before,
                 service.pending_limits
             )
             .unwrap()
-            .snapshot_state(),
+            .snapshot_state()
+            .unwrap(),
             before
         );
         assert!(
@@ -133,7 +134,7 @@ fn terminal_retirement_is_exact_reserved_and_consumable_after_restore() {
                 .acknowledge_delivery_outcome(&recipients[0].agent_id, &outcomes[0])
                 .is_err()
         );
-        assert_eq!(service.snapshot_state(), before);
+        assert_eq!(service.snapshot_state().unwrap(), before);
         assert!(
             service
                 .acknowledge_delivery_outcome(&sender.agent_id, &outcomes[0])
@@ -195,7 +196,7 @@ fn terminal_expiry_is_bounded_without_fabricating_ack() {
     assert_eq!(outcomes.len(), 1);
     assert_eq!(outcomes[0].reason, DeliveryTerminalReason::Expired);
     assert!(
-        service.snapshot_state().retained_messages[0]
+        service.snapshot_state().unwrap().retained_messages[0]
             .acknowledged_recipients
             .as_ref()
             .unwrap()
@@ -219,10 +220,11 @@ fn terminal_expiry_is_bounded_without_fabricating_ack() {
             .is_empty()
     );
     assert_eq!(
-        MessageService::from_snapshot_state(&service.snapshot_state())
+        MessageService::from_snapshot_state(&service.snapshot_state().unwrap())
             .unwrap()
-            .snapshot_state(),
-        service.snapshot_state()
+            .snapshot_state()
+            .unwrap(),
+        service.snapshot_state().unwrap()
     );
 }
 
@@ -252,13 +254,13 @@ fn terminal_outcomes_reject_reused_sender_and_recipient() {
     );
     let mut forged = outcome.clone();
     forged.observed_at_ms += 1;
-    let before = service.snapshot_state();
+    let before = service.snapshot_state().unwrap();
     assert!(
         service
             .acknowledge_delivery_outcome(&sender.agent_id, &forged)
             .is_err()
     );
-    assert_eq!(service.snapshot_state(), before);
+    assert_eq!(service.snapshot_state().unwrap(), before);
     service.retire_agent_identity(&sender.agent_id);
     service.ensure_agent_identity(sender.clone(), 13).unwrap();
     service
@@ -270,17 +272,18 @@ fn terminal_outcomes_reject_reused_sender_and_recipient() {
             .unwrap()
             .is_empty()
     );
-    let before = service.snapshot_state();
+    let before = service.snapshot_state().unwrap();
     assert!(
         service
             .acknowledge_delivery_outcome(&sender.agent_id, &outcome)
             .is_err()
     );
-    assert_eq!(service.snapshot_state(), before);
+    assert_eq!(service.snapshot_state().unwrap(), before);
     assert_eq!(
         MessageService::from_snapshot_state(&before)
             .unwrap()
-            .snapshot_state(),
+            .snapshot_state()
+            .unwrap(),
         before
     );
 }
@@ -296,7 +299,7 @@ fn terminal_snapshot_rejects_contradictions_and_preserves_legacy_unknown_owner()
         .receive_subscribed(&recipients[0].agent_id, 11, 10)
         .unwrap();
     service.settle_delivery_outcomes_at(16).unwrap();
-    let before = service.snapshot_state();
+    let before = service.snapshot_state().unwrap();
     let mut corruptions = Vec::new();
     let mut bad = before.clone();
     bad.retained_messages[0].terminal_recipients = None;
@@ -344,11 +347,11 @@ fn terminal_snapshot_rejects_contradictions_and_preserves_legacy_unknown_owner()
         let decoded: MessageServiceSnapshot =
             serde_json::from_slice(&serde_json::to_vec(&bad).unwrap()).unwrap();
         assert!(MessageService::from_snapshot_state(&decoded).is_err());
-        assert_eq!(service.snapshot_state(), before);
+        assert_eq!(service.snapshot_state().unwrap(), before);
     }
     let (mut legacy_source, _, _, _) = fixture(None);
     legacy_source.retire_agent_identity(&sender.agent_id);
-    let mut legacy = legacy_source.snapshot_state();
+    let mut legacy = legacy_source.snapshot_state().unwrap();
     legacy.schema_version = 7;
     legacy.sender_provenance = None;
     for row in &mut legacy.retained_messages {
@@ -369,14 +372,15 @@ fn terminal_snapshot_rejects_contradictions_and_preserves_legacy_unknown_owner()
             .is_empty()
     );
     assert_eq!(
-        upgraded.snapshot_state().retained_messages[0].sender_registered_after_sequence,
+        upgraded.snapshot_state().unwrap().retained_messages[0].sender_registered_after_sequence,
         None
     );
     assert_eq!(
-        MessageService::from_snapshot_state(&upgraded.snapshot_state())
+        MessageService::from_snapshot_state(&upgraded.snapshot_state().unwrap())
             .unwrap()
-            .snapshot_state(),
-        upgraded.snapshot_state()
+            .snapshot_state()
+            .unwrap(),
+        upgraded.snapshot_state().unwrap()
     );
 }
 
@@ -412,7 +416,7 @@ fn terminal_prefix_does_not_block_later_real_commit() {
         .unwrap();
     assert_eq!(service.settle_delivery_outcomes_at(16).unwrap(), 1);
     service.advance_subscription(&target.agent_id, 2).unwrap();
-    let snapshot = service.snapshot_state();
+    let snapshot = service.snapshot_state().unwrap();
     assert_eq!(snapshot.custody_messages.as_ref().unwrap().len(), 1);
     assert!(
         snapshot.custody_messages.as_ref().unwrap()[0]
@@ -422,7 +426,7 @@ fn terminal_prefix_does_not_block_later_real_commit() {
             .is_empty()
     );
     let mut restored = MessageService::from_snapshot_state(&snapshot).unwrap();
-    assert_eq!(restored.snapshot_state(), snapshot);
+    assert_eq!(restored.snapshot_state().unwrap(), snapshot);
     let outcome = restored
         .delivery_outcomes_for(&sender.agent_id, 10)
         .unwrap()
@@ -434,6 +438,7 @@ fn terminal_prefix_does_not_block_later_real_commit() {
     assert!(
         restored
             .snapshot_state()
+            .unwrap()
             .custody_messages
             .as_ref()
             .unwrap()
@@ -457,9 +462,9 @@ fn terminal_maintenance_eligibility_is_finite_and_read_only() {
             .owned_pending_delivery_id(&recipients[0].agent_id, 1)
             .is_none()
     );
-    let before = service.snapshot_state();
+    let before = service.snapshot_state().unwrap();
     assert!(!service.needs_delivery_outcome_maintenance().unwrap());
-    assert_eq!(before, service.snapshot_state());
+    assert_eq!(before, service.snapshot_state().unwrap());
     service.retire_agent_identity(&recipients[0].agent_id);
     assert!(service.needs_delivery_outcome_maintenance().unwrap());
     service.settle_delivery_outcomes_at(12).unwrap();
@@ -492,7 +497,7 @@ fn terminal_exact_occurrence_query_preserves_owner_limit_and_custody() {
     let (mut service, sender, _, _) = fixture(Some(10));
     service.settle_delivery_outcomes_at(21).unwrap();
     let outsider = service.register_agent(None, None, "outsider", Vec::new());
-    let before = service.snapshot_state();
+    let before = service.snapshot_state().unwrap();
     assert_eq!(
         service
             .delivery_outcomes_for_occurrence(&sender.agent_id, 1, 100)
@@ -525,7 +530,7 @@ fn terminal_exact_occurrence_query_preserves_owner_limit_and_custody() {
             .unwrap()
             .is_empty()
     );
-    assert_eq!(before, service.snapshot_state());
+    assert_eq!(before, service.snapshot_state().unwrap());
     service.retire_agent_identity(&sender.agent_id);
     assert_eq!(
         service
@@ -551,7 +556,7 @@ fn terminal_native_retirement_commits_exact_offers_without_claiming_prefix() {
     service
         .receive_subscribed(&recipients[0].agent_id, 11, 10)
         .unwrap();
-    let before = service.snapshot_state();
+    let before = service.snapshot_state().unwrap();
     for (recipient, sequences) in [
         (&recipients[0].agent_id, vec![2, 2]),
         (&recipients[0].agent_id, vec![3]),
@@ -563,14 +568,14 @@ fn terminal_native_retirement_commits_exact_offers_without_claiming_prefix() {
                 .retire_agent_identity_with_committed_occurrences(recipient, &sequences)
                 .is_err()
         );
-        assert_eq!(before, service.snapshot_state());
+        assert_eq!(before, service.snapshot_state().unwrap());
     }
     assert!(
         service
             .retire_agent_identity_with_committed_occurrences(&recipients[0].agent_id, &[2])
             .unwrap()
     );
-    let snapshot = service.snapshot_state();
+    let snapshot = service.snapshot_state().unwrap();
     let mut restored =
         MessageService::from_snapshot_state_with_pending_limits(&snapshot, service.pending_limits)
             .unwrap();
@@ -613,7 +618,7 @@ fn terminal_native_commit_protection_is_exact_atomic_and_ttl_independent() {
     service
         .receive_subscribed(&recipients[0].agent_id, 11, 10)
         .unwrap();
-    let before = service.snapshot_state();
+    let before = service.snapshot_state().unwrap();
     for claims in [
         vec![(sender.agent_id.clone(), 1)],
         vec![(recipients[0].agent_id.clone(), 2)],
@@ -627,7 +632,7 @@ fn terminal_native_commit_protection_is_exact_atomic_and_ttl_independent() {
                 .settle_delivery_outcomes_with_native_commits_at(21, &claims)
                 .is_err()
         );
-        assert_eq!(before, service.snapshot_state());
+        assert_eq!(before, service.snapshot_state().unwrap());
     }
     assert_eq!(
         service
@@ -738,7 +743,7 @@ fn terminal_native_proof_does_not_keep_expiry_timer_alive() {
 #[test]
 fn pending_audience_inspection_is_read_only_and_registration_bound() {
     let (mut service, sender, recipients, _) = fixture(None);
-    let before = service.snapshot_state();
+    let before = service.snapshot_state().unwrap();
     assert!(service.owned_pending_delivery_targets(&sender.agent_id, 1, &recipients[0].agent_id));
     assert!(service.owned_pending_delivery_targets(&sender.agent_id, 1, &recipients[1].agent_id));
     assert!(!service.owned_pending_delivery_targets(
@@ -748,7 +753,7 @@ fn pending_audience_inspection_is_read_only_and_registration_bound() {
     ));
     assert!(!service.owned_pending_delivery_targets(&sender.agent_id, 2, &recipients[0].agent_id));
     assert!(!service.owned_pending_delivery_targets(&sender.agent_id, 1, &sender.agent_id));
-    assert_eq!(service.snapshot_state(), before);
+    assert_eq!(service.snapshot_state().unwrap(), before);
     service.retire_agent_identity(&recipients[0].agent_id);
     service
         .ensure_agent_identity(recipients[0].clone(), 11)

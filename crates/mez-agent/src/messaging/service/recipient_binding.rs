@@ -97,7 +97,7 @@ impl MessageService {
                 break;
             };
             retained_count -= 1;
-            retained_bytes = retained_bytes.saturating_sub(evicted.envelope.payload.len());
+            retained_bytes = retained_bytes.saturating_sub(evicted.envelope.payload_bytes);
         }
         let mut count = incoming.len();
         let mut bytes = binding_bytes(incoming.iter().map(|(id, _)| id.as_str()));

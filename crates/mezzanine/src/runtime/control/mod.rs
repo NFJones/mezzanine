@@ -1398,7 +1398,12 @@ impl RuntimeSessionService {
         let agent_sessions = self.live_snapshot_agent_sessions();
         let approval_grants = self.live_snapshot_approval_grants();
         let approval_requests = self.live_snapshot_approval_requests();
-        let message_state = self.live_snapshot_message_state();
+        let message_state = match self.live_snapshot_message_state() {
+            Ok(state) => state,
+            Err(error) => {
+                return runtime_json_rpc_error(&request.id, error.kind(), error.message());
+            }
+        };
         let mcp_servers = self.live_snapshot_mcp_servers();
         let context = SnapshotCreationContext::new(
             &captures,
@@ -1690,7 +1695,12 @@ impl RuntimeSessionService {
             let agent_sessions = self.live_snapshot_agent_sessions();
             let approval_grants = self.live_snapshot_approval_grants();
             let approval_requests = self.live_snapshot_approval_requests();
-            let message_state = self.live_snapshot_message_state();
+            let message_state = match self.live_snapshot_message_state() {
+                Ok(state) => state,
+                Err(error) => {
+                    return runtime_json_rpc_error(&request.id, error.kind(), error.message());
+                }
+            };
             let mcp_servers = self.live_snapshot_mcp_servers();
             let response = dispatch_control_request_for_client_with_snapshot_context(
                 body,

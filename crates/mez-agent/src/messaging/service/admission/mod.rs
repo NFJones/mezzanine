@@ -110,6 +110,8 @@ pub struct MessageAcceptanceWrite {
     attempt: Arc<()>,
     /// Shared immutable bytes; serialization borrows them without payload copies.
     row: Arc<QueuedEnvelope>,
+    /// Original allocation pinned for the complete owned write attempt.
+    envelope: Arc<Envelope>,
 }
 
 /// Payload-free actor escrow for one issued attempt and its actual join owner.
@@ -301,7 +303,7 @@ impl MessageAcceptanceWrite {
     /// Returns original borrowed input for trusted streaming/storage adapters.
     /// This data grants no publication or reconnect capability.
     pub fn envelope(&self) -> &Envelope {
-        &self.row.envelope
+        &self.envelope
     }
 
     /// Returns the originally reserved occurrence sequence.
@@ -352,7 +354,9 @@ impl MessageService {
         let Some(accepted) = self.accepted_messages.get_mut(&envelope.id) else {
             return Ok(None);
         };
-        if accepted.envelope.as_ref() != envelope || accepted.audience != audience {
+        if accepted.source.envelope.resident()?.as_ref() != envelope
+            || accepted.source.audience != audience
+        {
             return Err(MessageError::conflict(MMP_DUPLICATE_MESSAGE_ID_MESSAGE));
         }
         if accepted.storage_scope.as_ref() != Some(storage_scope) {
@@ -360,7 +364,7 @@ impl MessageService {
                 "MMP receipt lacks live storage qualification",
             ));
         }
-        if envelope_expired_at(&accepted.envelope, accepted.accepted_at_ms, now_ms) {
+        if expired(&accepted.source, now_ms) {
             accepted.delivery.status = DeliveryStatus::Expired;
         }
         Ok(Some(accepted.delivery.clone()))
@@ -450,12 +454,12 @@ impl MessageService {
         }
         self.reserve_pending_delivery(&bindings, envelope.payload.len())?;
         self.reserve_pending_recipient_bindings(&bindings)?;
-        let metadata = self
-            .pending
-            .values()
-            .fold(super::auxiliary::envelope_bytes(&envelope), |bytes, row| {
-                bytes.saturating_add(super::auxiliary::envelope_bytes(&row.envelope))
-            });
+        let metadata = self.pending.values().fold(
+            super::auxiliary::envelope_bytes(&envelope),
+            |bytes, row| {
+                bytes.saturating_add(super::auxiliary::retained_envelope_bytes(&row.envelope))
+            },
+        );
         if metadata > self.pending_limits.auxiliary_bytes
             || bindings.iter().any(|(id, _)| {
                 super::auxiliary::outcome_bytes(&envelope.id, id.as_str())
@@ -502,7 +506,7 @@ impl MessageService {
         });
         let row = Arc::new(QueuedEnvelope {
             sequence: self.next_sequence,
-            envelope: Arc::new(envelope),
+            envelope: RetainedEnvelope::new(Arc::new(envelope)),
             audience,
             offered_at_ms: std::sync::Mutex::new(vec![None; bindings.len()]),
             acknowledged: std::sync::Mutex::new(vec![false; bindings.len()]),
@@ -557,6 +561,9 @@ impl MessageService {
         if !Arc::ptr_eq(&pending.identity, &ticket.identity) || pending.attempt.is_some() {
             return Err(admission_changed());
         }
+        // Pin bytes before changing issuance state: an unavailable source must
+        // leave the original reservation/attempt available for recovery.
+        let envelope = pending.row.envelope.resident()?;
         let attempt = Arc::new(());
         pending.attempt = Some(attempt.clone());
         pending.storage_scope = storage_scope.cloned();
@@ -564,6 +571,7 @@ impl MessageService {
             identity: pending.identity.clone(),
             attempt,
             row: pending.row.clone(),
+            envelope,
         })
     }
 
@@ -602,12 +610,16 @@ impl MessageService {
     ) -> Result<MessageAcceptanceWrite> {
         self.require_admission_attempt(&unknown.write.identity, &unknown.write.attempt)?;
         let pending = self.admission.as_mut().ok_or_else(admission_changed)?;
+        // Pin bytes before changing issuance state: an unavailable source must
+        // leave the original reservation/attempt available for recovery.
+        let envelope = pending.row.envelope.resident()?;
         let attempt = Arc::new(());
         pending.attempt = Some(attempt.clone());
         Ok(MessageAcceptanceWrite {
             identity: pending.identity.clone(),
             attempt,
             row: pending.row.clone(),
+            envelope,
         })
     }
 
@@ -622,12 +634,16 @@ impl MessageService {
         self.require_admission_attempt(&previous.identity, &previous.attempt)?;
         joined.qualify_joined(previous)?;
         let pending = self.admission.as_mut().ok_or_else(admission_changed)?;
+        // Pin bytes before changing issuance state: an unavailable source must
+        // leave the original reservation/attempt available for recovery.
+        let envelope = pending.row.envelope.resident()?;
         let attempt = Arc::new(());
         pending.attempt = Some(attempt.clone());
         Ok(MessageAcceptanceWrite {
             identity: pending.identity.clone(),
             attempt,
             row: pending.row.clone(),
+            envelope,
         })
     }
 
@@ -656,10 +672,8 @@ impl MessageService {
             row.envelope.id.clone(),
             AcceptedMessage {
                 storage_scope: pending.storage_scope,
-                envelope: row.envelope.clone(),
-                audience: row.audience.clone(),
+                source: row.clone(),
                 delivery: commit.identity.delivery.clone(),
-                accepted_at_ms: row.accepted_at_ms,
             },
         );
         self.prune_accepted_messages_to_retained_queue();
@@ -739,7 +753,7 @@ impl MessageService {
         self.queued_bytes = self
             .queue
             .iter()
-            .map(|row| row.envelope.payload.len())
+            .map(|row| row.envelope.payload_bytes)
             .sum();
         self.prune_accepted_messages_to_retained_queue();
         self.prune_retired_delivery_floors();

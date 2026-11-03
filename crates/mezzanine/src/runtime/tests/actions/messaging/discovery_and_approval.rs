@@ -621,7 +621,7 @@ fn runtime_approved_send_retires_preview_before_resumption_settlement() {
             .is_none(),
         "approval resumption cannot reproject the retired layout"
     );
-    let messages = service.message_service().snapshot_state();
+    let messages = service.message_service().snapshot_state().unwrap();
     assert_eq!(messages.accepted_messages.len(), 1);
     let retained = service.agent_turn_executions().get(&turn.turn_id).unwrap();
     assert_eq!(retained.action_results[0].status, ActionStatus::Succeeded);
@@ -647,7 +647,10 @@ fn runtime_approved_send_retires_preview_before_resumption_settlement() {
         None,
         "consumed approval cannot resend an accepted message"
     );
-    assert_eq!(service.message_service().snapshot_state(), messages);
+    assert_eq!(
+        service.message_service().snapshot_state().unwrap(),
+        messages
+    );
 }
 
 /// Verifies an approved send is re-validated against the recipient and payload

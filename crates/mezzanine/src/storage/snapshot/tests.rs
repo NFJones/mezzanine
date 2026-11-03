@@ -1153,7 +1153,7 @@ fn session_snapshot_payload_round_trips_and_builds_resume_plan() {
     message_service
         .retire_fresh_observational_identity(&raw.agent_id)
         .unwrap();
-    let message_state = message_service.snapshot_state();
+    let message_state = message_service.snapshot_state().unwrap();
     assert_eq!(message_state.schema_version, 9);
     assert_eq!(
         message_state.retired_delivery_floors[0]
@@ -1902,7 +1902,7 @@ fn snapshot_v6_peer_presentation_outbox_enforces_boundary_without_loss() {
         )
         .unwrap();
     messages.subscribe(&recipient.agent_id).unwrap();
-    let mut message_state = messages.snapshot_state();
+    let mut message_state = messages.snapshot_state().unwrap();
     message_state.subscriptions[0].last_sequence = 1_024;
     message_state.next_sequence = 1_025;
     payload.message_state = Some(message_state);
@@ -1994,7 +1994,7 @@ fn snapshot_v6_peer_presentation_payload_round_trips_utf8_at_byte_bound() {
         )
         .unwrap();
     messages.subscribe(&recipient.agent_id).unwrap();
-    let mut message_state = messages.snapshot_state();
+    let mut message_state = messages.snapshot_state().unwrap();
     message_state.subscriptions[0].last_sequence = 1;
     message_state.next_sequence = 2;
     payload.message_state = Some(message_state);
@@ -2074,7 +2074,7 @@ fn snapshot_v6_peer_presentation_rejects_missing_cursor_or_owner() {
         )
         .unwrap();
     messages.subscribe(&recipient.agent_id).unwrap();
-    let mut message_state = messages.snapshot_state();
+    let mut message_state = messages.snapshot_state().unwrap();
     message_state.next_sequence = 2;
     payload.message_state = Some(message_state.clone());
     assert!(payload.validate().is_err());
@@ -2121,7 +2121,7 @@ fn snapshot_v6_peer_presentation_rejects_invalid_recipient_pane_ownership() {
         )
         .unwrap();
     messages.subscribe(&recipient.agent_id).unwrap();
-    let mut message_state = messages.snapshot_state();
+    let mut message_state = messages.snapshot_state().unwrap();
     message_state.subscriptions[0].last_sequence = 1;
     message_state.next_sequence = 2;
     payload.message_state = Some(message_state);

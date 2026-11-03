@@ -62,7 +62,7 @@ fn request_conversation_limit_precedes_send_and_does_not_block_ordinary_mail() {
             .unwrap();
         assert_eq!(receipt.generation(), index + 1);
     }
-    let before = service.snapshot_state();
+    let before = service.snapshot_state().unwrap();
     let usage = requests.usage();
     let error = requests
         .accept(
@@ -75,7 +75,7 @@ fn request_conversation_limit_precedes_send_and_does_not_block_ordinary_mail() {
         .unwrap_err();
     assert_eq!(error.kind(), MessageErrorKind::Capacity);
     assert!(error.message().len() < 100);
-    assert_eq!(service.snapshot_state(), before);
+    assert_eq!(service.snapshot_state().unwrap(), before);
     assert_eq!(requests.usage(), usage);
     let mut other = origin.clone();
     other.conversation_id = "other".into();
@@ -113,7 +113,7 @@ fn request_global_units_include_fanout_and_future_terminal_slots() {
     .unwrap();
     let mut fanout = mail(&sender, &child, "fanout");
     fanout.recipient = Recipient::Role("worker".into());
-    let before = service.snapshot_state();
+    let before = service.snapshot_state().unwrap();
     assert_eq!(
         requests
             .accept(
@@ -127,7 +127,7 @@ fn request_global_units_include_fanout_and_future_terminal_slots() {
             .kind(),
         MessageErrorKind::Capacity
     );
-    assert_eq!(service.snapshot_state(), before);
+    assert_eq!(service.snapshot_state().unwrap(), before);
     assert_eq!(requests.usage(), (0, 0, 0));
     let receipt = requests
         .accept(
@@ -144,7 +144,7 @@ fn request_global_units_include_fanout_and_future_terminal_slots() {
         MESSAGE_REQUEST_HANDOFF_BYTES
     );
     assert_eq!(requests.usage().1, 4);
-    let before = service.snapshot_state();
+    let before = service.snapshot_state().unwrap();
     assert_eq!(
         requests
             .accept(
@@ -158,7 +158,7 @@ fn request_global_units_include_fanout_and_future_terminal_slots() {
             .kind(),
         MessageErrorKind::Capacity
     );
-    assert_eq!(service.snapshot_state(), before);
+    assert_eq!(service.snapshot_state().unwrap(), before);
     let mut exact = MessageRequests::with_limits(MessageRequestLimits {
         units: 6,
         ..MessageRequestLimits::default()
@@ -217,7 +217,7 @@ fn request_production_global_ceiling_is_inclusive_and_reusable() {
     assert_eq!(requests.usage().0, 1024);
     assert_eq!(requests.usage().1, 4096);
     assert!(requests.usage().2 < MessageRequestLimits::default().metadata_bytes);
-    let before = service.snapshot_state();
+    let before = service.snapshot_state().unwrap();
     let usage = requests.usage();
     assert_eq!(
         requests
@@ -232,7 +232,7 @@ fn request_production_global_ceiling_is_inclusive_and_reusable() {
             .kind(),
         MessageErrorKind::Capacity
     );
-    assert_eq!(service.snapshot_state(), before);
+    assert_eq!(service.snapshot_state().unwrap(), before);
     assert_eq!(requests.usage(), usage);
     service
         .accept_at_with_scope(
@@ -247,10 +247,10 @@ fn request_production_global_ceiling_is_inclusive_and_reusable() {
     foreign.started_at_unix_seconds += 1;
     assert!(!requests.consume(generation, &foreign));
     assert_eq!(requests.usage(), usage);
-    let transport = service.snapshot_state();
+    let transport = service.snapshot_state().unwrap();
     assert!(requests.consume(generation, &caller));
     assert_eq!(requests.usage().1, 4092);
-    assert_eq!(service.snapshot_state(), transport);
+    assert_eq!(service.snapshot_state().unwrap(), transport);
     let receipt = requests
         .accept(
             &mut service,
@@ -262,12 +262,12 @@ fn request_production_global_ceiling_is_inclusive_and_reusable() {
         .unwrap();
     assert_eq!(receipt.generation(), 1025);
     assert_eq!(requests.usage().1, 4096);
-    let transport = service.snapshot_state();
+    let transport = service.snapshot_state().unwrap();
     for index in 0..16 {
         requests.retire_conversation(&sender.agent_id, &format!("conversation-{index:02}"));
     }
     assert_eq!(requests.usage(), (0, 0, 0));
-    assert_eq!(service.snapshot_state(), transport);
+    assert_eq!(service.snapshot_state().unwrap(), transport);
 }
 
 /// The default 8 MiB metadata bound is independent of the count ceiling.
@@ -300,7 +300,7 @@ fn request_production_metadata_ceiling_is_inclusive_and_independent() {
         .into_boxed_str()
         .into_string();
     assert_eq!(too_large.conversation_id.capacity(), exact_capacity + 1);
-    let before = service.snapshot_state();
+    let before = service.snapshot_state().unwrap();
     assert_eq!(
         requests
             .accept(
@@ -315,7 +315,7 @@ fn request_production_metadata_ceiling_is_inclusive_and_independent() {
         MessageErrorKind::Capacity
     );
     assert_eq!(requests.usage(), (0, 0, 0));
-    assert_eq!(service.snapshot_state(), before);
+    assert_eq!(service.snapshot_state().unwrap(), before);
     let mut exact = origin.clone();
     exact.conversation_id = "c".repeat(exact_capacity).into_boxed_str().into_string();
     assert_eq!(exact.conversation_id.capacity(), exact_capacity);
@@ -331,7 +331,7 @@ fn request_production_metadata_ceiling_is_inclusive_and_independent() {
     let generation = receipt.generation();
     assert_eq!(generation, 2);
     assert_eq!(requests.usage(), (1, 4, limit));
-    let before = service.snapshot_state();
+    let before = service.snapshot_state().unwrap();
     assert_eq!(
         requests
             .accept(
@@ -346,7 +346,7 @@ fn request_production_metadata_ceiling_is_inclusive_and_independent() {
         MessageErrorKind::Capacity
     );
     assert_eq!(requests.usage(), (1, 4, limit));
-    assert_eq!(service.snapshot_state(), before);
+    assert_eq!(service.snapshot_state().unwrap(), before);
     service
         .accept_at_with_scope(
             &sender.agent_id,
@@ -355,10 +355,10 @@ fn request_production_metadata_ceiling_is_inclusive_and_independent() {
             5,
         )
         .unwrap();
-    let before = service.snapshot_state();
+    let before = service.snapshot_state().unwrap();
     assert!(requests.consume(generation, &exact));
     assert_eq!(requests.usage(), (0, 0, 0));
-    assert_eq!(service.snapshot_state(), before);
+    assert_eq!(service.snapshot_state().unwrap(), before);
 }
 
 /// Byte admission independently reserves future handoff metadata, including
@@ -372,7 +372,7 @@ fn request_metadata_budget_is_independent_and_accounts_owned_capacity() {
         ..MessageRequestLimits::default()
     })
     .unwrap();
-    let before = service.snapshot_state();
+    let before = service.snapshot_state().unwrap();
     assert_eq!(
         requests
             .accept(
@@ -386,7 +386,7 @@ fn request_metadata_budget_is_independent_and_accounts_owned_capacity() {
             .kind(),
         MessageErrorKind::Capacity
     );
-    assert_eq!(service.snapshot_state(), before);
+    assert_eq!(service.snapshot_state().unwrap(), before);
     assert_eq!(requests.usage(), (0, 0, 0));
     let mut requests = MessageRequests::with_limits(MessageRequestLimits {
         metadata_bytes: 20_000,
@@ -407,7 +407,7 @@ fn request_metadata_budget_is_independent_and_accounts_owned_capacity() {
             .kind(),
         MessageErrorKind::Capacity
     );
-    assert_eq!(service.snapshot_state(), before);
+    assert_eq!(service.snapshot_state().unwrap(), before);
     assert_eq!(requests.usage(), (0, 0, 0));
 }
 
@@ -456,7 +456,7 @@ fn request_survives_delivery_release_and_rejects_ambiguous_outstanding_id() {
         .find(&sender.agent_id, &origin.conversation_id, "request")
         .unwrap();
     assert_eq!(receipt.proof().sequence(), sequence);
-    let before = service.snapshot_state();
+    let before = service.snapshot_state().unwrap();
     assert_eq!(
         requests
             .accept(
@@ -470,7 +470,7 @@ fn request_survives_delivery_release_and_rejects_ambiguous_outstanding_id() {
             .kind(),
         MessageErrorKind::Conflict
     );
-    assert_eq!(service.snapshot_state(), before);
+    assert_eq!(service.snapshot_state().unwrap(), before);
     let mut wrong = origin.clone();
     wrong.started_at_unix_seconds += 1;
     assert!(!requests.consume(generation, &wrong));
@@ -500,7 +500,7 @@ fn request_survives_delivery_release_and_rejects_ambiguous_outstanding_id() {
 fn request_retirement_and_failed_acceptance_preserve_exact_ownership() {
     let (mut service, sender, child, origin) = fixture();
     let mut requests = MessageRequests::default();
-    let before = service.snapshot_state();
+    let before = service.snapshot_state().unwrap();
     let mut foreign = origin.clone();
     foreign.agent_id = child.agent_id.clone();
     assert_eq!(
@@ -529,7 +529,7 @@ fn request_retirement_and_failed_acceptance_preserve_exact_ownership() {
             )
             .is_err()
     );
-    assert_eq!(service.snapshot_state(), before);
+    assert_eq!(service.snapshot_state().unwrap(), before);
     assert_eq!(requests.usage(), (0, 0, 0));
     requests
         .accept(
@@ -593,7 +593,7 @@ fn request_limits_and_generation_exhaustion_fail_before_send() {
         next_generation: u64::MAX,
         ..MessageRequests::default()
     };
-    let before = service.snapshot_state();
+    let before = service.snapshot_state().unwrap();
     assert_eq!(
         requests
             .accept(
@@ -607,7 +607,7 @@ fn request_limits_and_generation_exhaustion_fail_before_send() {
             .kind(),
         MessageErrorKind::InvalidState
     );
-    assert_eq!(service.snapshot_state(), before);
+    assert_eq!(service.snapshot_state().unwrap(), before);
     assert_eq!(requests.usage(), (0, 0, 0));
 }
 
@@ -653,7 +653,7 @@ fn request_expiry_releases_only_unprotected_finite_receipts_after_handoff() {
         .unwrap()
         .generation();
     let original = requests.usage();
-    let transport = service.snapshot_state();
+    let transport = service.snapshot_state().unwrap();
     assert!(requests.needs_expiry_maintenance(|_| false));
     assert!(requests.retire_expired_at(11, |_| false).is_empty());
     assert!(
@@ -688,7 +688,7 @@ fn request_expiry_releases_only_unprotected_finite_receipts_after_handoff() {
     assert!(requests.retire_expired_at(u64::MAX, |_| false).is_empty());
     assert_eq!(requests.usage().0, 1);
     assert_eq!(
-        service.snapshot_state(),
+        service.snapshot_state().unwrap(),
         transport,
         "tracking expiry cannot invent transport offers or ACKs"
     );

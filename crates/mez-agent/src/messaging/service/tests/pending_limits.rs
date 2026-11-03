@@ -31,7 +31,7 @@ fn pending_limits_reject_invalid_policy() {
                     .kind(),
                 MessageErrorKind::InvalidArgs
             );
-            let empty = MessageService::default().snapshot_state();
+            let empty = MessageService::default().snapshot_state().unwrap();
             assert_eq!(
                 MessageService::from_snapshot_state_with_pending_limits(&empty, policy)
                     .unwrap_err()
@@ -119,7 +119,7 @@ fn pending_limits_independent_budgets_are_atomic_and_ack_reusable() {
         let accepted = service
             .accept_at_with_scope(&sender.agent_id, original.clone(), MessageScope::Session, 1)
             .unwrap();
-        let snapshot = service.snapshot_state();
+        let snapshot = service.snapshot_state().unwrap();
         let mut restored =
             MessageService::from_snapshot_state_with_pending_limits(&snapshot, policy).unwrap();
         let next = envelope(&sender, "next", next_bytes);
@@ -144,7 +144,7 @@ fn pending_limits_independent_budgets_are_atomic_and_ack_reusable() {
                 MessageErrorKind::Capacity
             );
             assert_eq!(
-                owner.snapshot_state(),
+                owner.snapshot_state().unwrap(),
                 snapshot,
                 "refusal must not change sequence, receipts, source, offers or cursors"
             );
@@ -156,7 +156,7 @@ fn pending_limits_independent_budgets_are_atomic_and_ack_reusable() {
                     .advance_subscription(&target.agent_id, accepted.sequence)
                     .unwrap();
                 if index + 1 < targets.len() {
-                    let before = owner.snapshot_state();
+                    let before = owner.snapshot_state().unwrap();
                     assert_eq!(
                         owner
                             .accept_at_with_scope(
@@ -169,7 +169,7 @@ fn pending_limits_independent_budgets_are_atomic_and_ack_reusable() {
                             .kind(),
                         MessageErrorKind::Capacity
                     );
-                    assert_eq!(owner.snapshot_state(), before);
+                    assert_eq!(owner.snapshot_state().unwrap(), before);
                 }
             }
             assert!(owner.pending.is_empty());
@@ -179,7 +179,7 @@ fn pending_limits_independent_budgets_are_atomic_and_ack_reusable() {
                 .unwrap();
             assert_eq!(admitted.sequence, accepted.sequence + 1);
             assert_eq!(admitted.queued_recipients, recipients);
-            let before = owner.snapshot_state();
+            let before = owner.snapshot_state().unwrap();
             assert_eq!(
                 owner
                     .accept_at_with_scope(
@@ -192,7 +192,7 @@ fn pending_limits_independent_budgets_are_atomic_and_ack_reusable() {
                     .kind(),
                 MessageErrorKind::Capacity
             );
-            assert_eq!(owner.snapshot_state(), before);
+            assert_eq!(owner.snapshot_state().unwrap(), before);
         }
     }
 }
@@ -217,7 +217,7 @@ fn pending_limits_restore_refuses_each_over_cap_dimension() {
             )
             .unwrap();
     }
-    let snapshot = source.snapshot_state();
+    let snapshot = source.snapshot_state().unwrap();
     assert_eq!(snapshot.custody_messages.as_ref().unwrap().len(), 1);
     // Legacy6 has replay-only source and no explicit commits. Its exact
     // bindings plus unadvanced cursors still prove these unread obligations.
@@ -269,12 +269,13 @@ fn pending_limits_restore_refuses_each_over_cap_dimension() {
                 MessageErrorKind::InvalidArgs
             );
         }
-        assert_eq!(source.snapshot_state(), snapshot);
+        assert_eq!(source.snapshot_state().unwrap(), snapshot);
     }
     assert_eq!(
         MessageService::from_snapshot_state(&snapshot)
             .unwrap()
-            .snapshot_state(),
+            .snapshot_state()
+            .unwrap(),
         snapshot
     );
     let exact = PendingDeliveryLimits {
@@ -287,7 +288,8 @@ fn pending_limits_restore_refuses_each_over_cap_dimension() {
     assert_eq!(
         MessageService::from_snapshot_state_with_pending_limits(&snapshot, exact)
             .unwrap()
-            .snapshot_state(),
+            .snapshot_state()
+            .unwrap(),
         snapshot
     );
     let restored = MessageService::from_snapshot_state_with_pending_limits(&legacy, exact).unwrap();
@@ -312,7 +314,7 @@ fn pending_limits_do_not_retarget_replay_or_payload_validation() {
         let mut service = MessageService::with_pending_limits(1, replay_bytes, policy).unwrap();
         let sender = service.register_agent(None, None, "sender", Vec::new());
         service.register_agent(None, None, "target", Vec::new());
-        let before = service.snapshot_state();
+        let before = service.snapshot_state().unwrap();
         assert_eq!(
             service
                 .accept_at_with_scope(
@@ -325,7 +327,7 @@ fn pending_limits_do_not_retarget_replay_or_payload_validation() {
                 .kind(),
             expected
         );
-        assert_eq!(service.snapshot_state(), before);
+        assert_eq!(service.snapshot_state().unwrap(), before);
         assert_eq!(
             service
                 .accept_at_with_scope(
@@ -370,13 +372,13 @@ fn pending_offered_reconciliation_survives_replay_eviction_and_expiry() {
         )
         .unwrap();
     assert_eq!(service.queue.len(), 1);
-    let before = service.snapshot_state();
+    let before = service.snapshot_state().unwrap();
     let offered = service
         .offered_uncommitted_deliveries(&target.agent_id)
         .unwrap();
     assert_eq!(offered.len(), 1);
     assert_eq!(offered[0].sequence, accepted.sequence);
-    assert_eq!(service.snapshot_state(), before);
+    assert_eq!(service.snapshot_state().unwrap(), before);
     assert!(
         service
             .receive_subscribed(&target.agent_id, 111, 10)

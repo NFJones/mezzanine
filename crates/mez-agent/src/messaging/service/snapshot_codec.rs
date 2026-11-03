@@ -87,11 +87,13 @@ pub(super) fn cursor_snapshot(cursor: &DeliveryCursor) -> MessageDeliveryCursorS
 }
 
 /// Preserves retained envelope occurrence and acceptance-time audience.
-pub(super) fn queued_envelope_snapshot(queued: &QueuedEnvelope) -> MessageQueuedEnvelopeSnapshot {
-    MessageQueuedEnvelopeSnapshot {
+pub(super) fn queued_envelope_snapshot(
+    queued: &QueuedEnvelope,
+) -> Result<MessageQueuedEnvelopeSnapshot> {
+    Ok(MessageQueuedEnvelopeSnapshot {
         sequence: queued.sequence,
         accepted_at_ms: queued.accepted_at_ms,
-        envelope: envelope_snapshot(&queued.envelope),
+        envelope: envelope_snapshot(queued.envelope.resident()?.as_ref()),
         audience: Some(audience_snapshot(&queued.audience)),
         // Poisoned offer metadata is discarded fail-closed, never fabricated.
         // Retained source survives and must be offered again after restoration.
@@ -157,14 +159,16 @@ pub(super) fn queued_envelope_snapshot(queued: &QueuedEnvelope) -> MessageQueued
                 .unwrap_or_default(),
         ),
         sender_registered_after_sequence: queued.sender_registered_after_sequence,
-    }
+    })
 }
 
 /// Preserves acceptance idempotency metadata without recomputing delivery.
-pub(super) fn accepted_message_snapshot(accepted: &AcceptedMessage) -> MessageAcceptedSnapshot {
-    MessageAcceptedSnapshot {
-        accepted_at_ms: accepted.accepted_at_ms,
-        envelope: envelope_snapshot(&accepted.envelope),
+pub(super) fn accepted_message_snapshot(
+    accepted: &AcceptedMessage,
+) -> Result<MessageAcceptedSnapshot> {
+    Ok(MessageAcceptedSnapshot {
+        accepted_at_ms: accepted.source.accepted_at_ms,
+        envelope: envelope_snapshot(accepted.source.envelope.resident()?.as_ref()),
         delivery: MessageDeliverySnapshot {
             accepted: accepted.delivery.accepted,
             message_id: accepted.delivery.message_id.clone(),
@@ -172,8 +176,8 @@ pub(super) fn accepted_message_snapshot(accepted: &AcceptedMessage) -> MessageAc
             queued_recipients: accepted.delivery.queued_recipients,
             status: delivery_status_name(accepted.delivery.status).to_string(),
         },
-        audience: Some(audience_snapshot(&accepted.audience)),
-    }
+        audience: Some(audience_snapshot(&accepted.source.audience)),
+    })
 }
 
 /// Converts a resolved audience into private snapshot metadata.

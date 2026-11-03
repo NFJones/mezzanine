@@ -65,6 +65,8 @@ mod identity;
 pub use identity::MessageSenderRegistration;
 mod recipient_binding;
 mod sender_provenance;
+mod source;
+pub(super) use source::RetainedEnvelope;
 mod snapshot;
 mod snapshot_codec;
 mod snapshot_validation;
@@ -224,8 +226,10 @@ impl MessageService {
                     "tracked acceptance requires a fresh message occurrence",
                 ));
             }
-            if accepted.envelope.as_ref() == &envelope && accepted.audience == audience {
-                if envelope_expired_at(&accepted.envelope, accepted.accepted_at_ms, now_ms) {
+            if accepted.source.envelope.resident()?.as_ref() == &envelope
+                && accepted.source.audience == audience
+            {
+                if expired(&accepted.source, now_ms) {
                     accepted.delivery.status = DeliveryStatus::Expired;
                 }
                 return Ok((accepted.delivery.clone(), None));
@@ -253,15 +257,10 @@ impl MessageService {
         let proof = proof_budget
             .map(|budget| self.reserve_acceptance_proof(&envelope, &recipient_bindings, budget))
             .transpose()?;
-        let accepted_envelope = Arc::new(envelope);
-        let sequence = self.enqueue(
-            accepted_envelope.clone(),
-            audience.clone(),
-            recipient_bindings,
-            now_ms,
-        )?;
+        let source = self.enqueue(Arc::new(envelope), audience, recipient_bindings, now_ms)?;
 
-        let message_id = accepted_envelope.id.clone();
+        let sequence = source.sequence;
+        let message_id = source.envelope.id.clone();
         let delivery = Delivery {
             accepted: true,
             message_id: message_id.clone(),
@@ -273,10 +272,8 @@ impl MessageService {
             message_id,
             AcceptedMessage {
                 storage_scope: None,
-                envelope: accepted_envelope,
-                audience,
+                source,
                 delivery: delivery.clone(),
-                accepted_at_ms: now_ms,
             },
         );
         self.prune_accepted_messages_to_retained_queue();
@@ -446,7 +443,9 @@ impl MessageService {
     }
 
     /// Returns optional unsequenced replay history, not the pending inbox.
-    /// Use sequenced receive/fanout for delivery and its exact offer evidence.
+    /// Cache misses are omitted from this optional replay view. Use sequenced
+    /// receive/fanout for delivery and its exact offer evidence; those paths
+    /// stop at an unavailable unread payload instead of skipping it.
     pub fn receive_for(&self, recipient: &AgentId, now_ms: u64) -> Vec<Envelope> {
         self.queue
             .iter()
@@ -462,7 +461,13 @@ impl MessageService {
                         && audience_matches(identity, &queued.audience)
                 })
             })
-            .map(|queued| queued.envelope.as_ref().clone())
+            .filter_map(|queued| {
+                queued
+                    .envelope
+                    .resident()
+                    .ok()
+                    .map(|value| value.as_ref().clone())
+            })
             .collect()
     }
 
@@ -627,18 +632,10 @@ fn push_recipient_selector(
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 fn expired(queued: &QueuedEnvelope, now_ms: u64) -> bool {
-    envelope_expired_at(&queued.envelope, queued.accepted_at_ms, now_ms)
-}
-
-/// Runs the envelope expired at operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn envelope_expired_at(envelope: &Envelope, accepted_at_ms: u64, now_ms: u64) -> bool {
-    envelope
+    queued
+        .envelope
         .ttl_ms
-        .is_some_and(|ttl| accepted_at_ms.saturating_add(ttl) < now_ms)
+        .is_some_and(|ttl| queued.accepted_at_ms.saturating_add(ttl) < now_ms)
 }
 
 /// Returns true when an envelope cannot remain live long enough to be delivered.
@@ -655,6 +652,7 @@ mod tests {
     mod auxiliary;
     mod fresh_retirement;
     mod objectives;
+    mod payload_residency;
     mod pending;
     mod pending_limits;
     mod recipient_binding;
@@ -755,7 +753,7 @@ mod tests {
                 .unwrap();
             assert!(service.retire_agent_identity(&retired.agent_id));
 
-            let snapshot = service.snapshot_state();
+            let snapshot = service.snapshot_state().unwrap();
             assert!(snapshot.accepted_messages.iter().any(|message| {
                 message.envelope.id == "retired-outbound-message"
                     && message.envelope.sender.agent_id == retired.agent_id.as_str()
@@ -980,7 +978,7 @@ mod tests {
                 )
                 .unwrap();
 
-            let snapshot = service.snapshot_state();
+            let snapshot = service.snapshot_state().unwrap();
             assert_eq!(snapshot.schema_version, 9);
             assert!(
                 snapshot
@@ -1002,7 +1000,7 @@ mod tests {
             );
 
             let restored = MessageService::from_snapshot_state(&snapshot).unwrap();
-            assert_eq!(restored.snapshot_state(), snapshot);
+            assert_eq!(restored.snapshot_state().unwrap(), snapshot);
             assert_eq!(restored.receive_for(&target.agent_id, 0).len(), 2);
         }
 
@@ -1055,7 +1053,7 @@ mod tests {
                 )
                 .unwrap();
 
-            let snapshot = service.snapshot_state();
+            let snapshot = service.snapshot_state().unwrap();
             let mut missing = snapshot.clone();
             missing.retained_messages[0].audience = None;
             assert!(MessageService::from_snapshot_state(&missing).is_err());
@@ -1067,7 +1065,7 @@ mod tests {
             });
             assert!(MessageService::from_snapshot_state(&inconsistent).is_err());
 
-            let mut duplicate = service.snapshot_state();
+            let mut duplicate = service.snapshot_state().unwrap();
             let mut duplicate_record = duplicate.accepted_messages[0].clone();
             duplicate_record.audience = Some(MessageAudienceSnapshot {
                 kind: "session".to_string(),
@@ -1076,11 +1074,11 @@ mod tests {
             duplicate.accepted_messages.push(duplicate_record);
             assert!(MessageService::from_snapshot_state(&duplicate).is_err());
 
-            let mut malformed_scope = service.snapshot_state();
+            let mut malformed_scope = service.snapshot_state().unwrap();
             malformed_scope.registered_agents[0].project_scope = Some("not-a-scope-id".to_string());
             assert!(MessageService::from_snapshot_state(&malformed_scope).is_err());
 
-            let valid = service.snapshot_state();
+            let valid = service.snapshot_state().unwrap();
             let mut retargeted = valid.clone();
             let replacement_scope = ProjectScopeId::from_canonical_root_bytes(b"/workspace/other")
                 .snapshot_value()
@@ -1212,7 +1210,7 @@ mod tests {
                 )
                 .unwrap();
 
-            let mut legacy = service.snapshot_state();
+            let mut legacy = service.snapshot_state().unwrap();
             legacy.schema_version = 1;
             legacy.sender_provenance = None;
             legacy.custody_messages = None;
@@ -1241,8 +1239,20 @@ mod tests {
 
             let restored = MessageService::from_snapshot_state(&legacy).unwrap();
             assert!(restored.receive_for(&target.agent_id, 0).is_empty());
-            assert!(restored.snapshot_state().retained_messages.is_empty());
-            assert!(restored.snapshot_state().accepted_messages.is_empty());
+            assert!(
+                restored
+                    .snapshot_state()
+                    .unwrap()
+                    .retained_messages
+                    .is_empty()
+            );
+            assert!(
+                restored
+                    .snapshot_state()
+                    .unwrap()
+                    .accepted_messages
+                    .is_empty()
+            );
             assert!(
                 restored
                     .registered_identity(&target.agent_id)

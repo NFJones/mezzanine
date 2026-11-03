@@ -7,14 +7,15 @@
 use super::*;
 
 impl MessageService {
-    /// Assigns an occurrence sequence and retains the envelope within queue budgets.
+    /// Assigns and installs a budgeted canonical occurrence, returning the same
+    /// shared source used by indexes, pending custody and its idempotency receipt.
     pub(super) fn enqueue(
         &mut self,
         envelope: Arc<Envelope>,
         audience: ResolvedMessageAudience,
         recipient_bindings: Vec<(AgentId, MessageSequence)>,
         now_ms: u64,
-    ) -> Result<MessageSequence> {
+    ) -> Result<Arc<QueuedEnvelope>> {
         let size = envelope.payload.len();
         if size > self.retention_bytes {
             return Err(MessageError::invalid_args(MMP_PAYLOAD_TOO_LARGE_MESSAGE));
@@ -33,7 +34,7 @@ impl MessageService {
             .copied();
         let queued = Arc::new(QueuedEnvelope {
             sequence,
-            envelope,
+            envelope: RetainedEnvelope::new(envelope),
             audience,
             offered_at_ms: std::sync::Mutex::new(vec![None; recipient_bindings.len()]),
             acknowledged: std::sync::Mutex::new(vec![false; recipient_bindings.len()]),
@@ -43,14 +44,14 @@ impl MessageService {
             recipient_bindings,
             accepted_at_ms: now_ms,
         });
-        self.install_accepted_row(queued);
-        Ok(sequence)
+        self.install_accepted_row(queued.clone());
+        Ok(queued)
     }
 
     /// Installs an already-budgeted exact canonical original. Pending storage
     /// adoption uses the same indexes, replay and custody owner as ordinary send.
     pub(super) fn install_accepted_row(&mut self, queued: Arc<QueuedEnvelope>) {
-        self.queued_bytes += queued.envelope.payload.len();
+        self.queued_bytes += queued.envelope.payload_bytes;
         let sequence = queued.sequence;
         self.insert_queue_indexes(&queued);
         self.pending.insert(sequence, queued.clone());
@@ -63,7 +64,7 @@ impl MessageService {
                 }
                 self.queued_bytes = self
                     .queued_bytes
-                    .saturating_sub(removed.envelope.payload.len());
+                    .saturating_sub(removed.envelope.payload_bytes);
             }
         }
         self.prune_retired_delivery_floors();

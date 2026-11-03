@@ -45,7 +45,7 @@ impl MessageService {
             *per_recipient.entry(binding).or_insert(0usize) += 1;
         }
         for queued in self.pending.values() {
-            bytes = bytes.saturating_add(queued.envelope.payload.len());
+            bytes = bytes.saturating_add(queued.envelope.payload_bytes);
             obligations = obligations.saturating_add(queued.recipient_bindings.len());
             for binding in &queued.recipient_bindings {
                 *per_recipient.entry(binding).or_insert(0usize) += 1;

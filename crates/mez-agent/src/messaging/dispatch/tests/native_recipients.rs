@@ -91,7 +91,7 @@ fn raw_discovery_native_recipient_round_trip() {
         "content_type": "text/plain; charset=utf-8", "payload": "isolated raw native evidence",
     })
     .to_string();
-    let before = service.snapshot_state();
+    let before = service.snapshot_state().unwrap();
     let response: serde_json::Value = serde_json::from_str(&dispatch_mmp_body(
         &request,
         &mut service,
@@ -106,7 +106,7 @@ fn raw_discovery_native_recipient_round_trip() {
     assert_eq!(response["status"], "accepted");
     assert_eq!(response["message_id"], "raw-native-discovered");
     assert_eq!(response["queued_recipients"], 1);
-    let after = service.snapshot_state();
+    let after = service.snapshot_state().unwrap();
     assert_eq!(after.next_sequence, before.next_sequence + 1);
     assert_eq!(after.registered_agents, before.registered_agents);
     assert_eq!(after.subscriptions, before.subscriptions);
@@ -143,7 +143,10 @@ fn raw_discovery_native_recipient_round_trip() {
         duplicate["queued_recipients"],
         response["queued_recipients"]
     );
-    assert_eq!(service.snapshot_state().next_sequence, after.next_sequence);
+    assert_eq!(
+        service.snapshot_state().unwrap().next_sequence,
+        after.next_sequence
+    );
     assert_eq!(
         service
             .receive_subscribed(&native.agent_id, 24, 10)

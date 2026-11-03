@@ -173,7 +173,7 @@ fn assert_peer_receipt_capacity(content_type: &str) {
     );
     let mut snapshot =
         crate::storage::snapshot::SessionSnapshotPayload::from_session(service.session());
-    snapshot.message_state = Some(service.message_service().snapshot_state());
+    snapshot.message_state = Some(service.message_service().snapshot_state().unwrap());
     snapshot.unsettled_peer_presentations =
         service.snapshot_unsettled_received_peer_message_presentations();
     snapshot.agent_sessions = vec![crate::storage::snapshot::SnapshotAgentSession {
@@ -341,7 +341,7 @@ fn runtime_peer_receipt_bytes_backpressure_before_count_limit() {
         );
         let mut snapshot =
             crate::storage::snapshot::SessionSnapshotPayload::from_session(service.session());
-        snapshot.message_state = Some(service.message_service().snapshot_state());
+        snapshot.message_state = Some(service.message_service().snapshot_state().unwrap());
         snapshot.unsettled_peer_presentations = retained;
         snapshot.agent_sessions = vec![crate::storage::snapshot::SnapshotAgentSession {
             pane_id: "%1".into(),

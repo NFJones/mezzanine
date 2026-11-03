@@ -82,6 +82,7 @@ impl MessageService {
                 limit_per_recipient.min(remaining_messages),
                 remaining_payload_bytes,
                 super::receive::ReceiveSelectionFilter {
+                    through_sequence: None,
                     include_committed: false,
                     native_commits: Some(excluded_native_commits),
                 },

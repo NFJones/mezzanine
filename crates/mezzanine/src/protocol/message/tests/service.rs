@@ -53,7 +53,7 @@ fn message_service_snapshot_round_trips_delivery_state() {
     let delivery = service
         .accept_at_with_scope(&sender.agent_id, message.clone(), MessageScope::Session, 10)
         .unwrap();
-    let snapshot = service.snapshot_state();
+    let snapshot = service.snapshot_state().unwrap();
     let mut restored = MessageService::from_snapshot_state(&snapshot).unwrap();
 
     assert_eq!(snapshot.protocol, "mmp/1");

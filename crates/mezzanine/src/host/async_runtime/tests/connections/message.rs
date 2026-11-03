@@ -421,6 +421,7 @@ async fn async_message_listener_reaps_failed_connection_tasks_during_accept() {
         exit.service
             .message_service()
             .snapshot_state()
+            .unwrap()
             .subscriptions
             .is_empty()
     );
@@ -539,6 +540,7 @@ async fn async_message_listener_contains_response_failure_and_final_drain() {
         exit.service
             .message_service()
             .snapshot_state()
+            .unwrap()
             .subscriptions
             .len(),
         1
@@ -719,7 +721,7 @@ async fn async_message_listener_preserves_sent_objective_versions_on_retirement(
             handle.shutdown().await.unwrap();
         };
         let ((), (), exit) = tokio::join!(clients, server, actor.run());
-        let after = exit.service.message_service().snapshot_state();
+        let after = exit.service.message_service().snapshot_state().unwrap();
         assert_eq!(
             exit.service.pane_processes().primary_pid("%1"),
             Some(original_pid)
@@ -754,7 +756,8 @@ async fn async_message_listener_preserves_sent_objective_versions_on_retirement(
         assert_eq!(
             mez_agent::messaging::MessageService::from_snapshot_state(&after)
                 .unwrap()
-                .snapshot_state(),
+                .snapshot_state()
+                .unwrap(),
             after
         );
         let _ = std::fs::remove_file(&path);
@@ -773,7 +776,7 @@ async fn async_message_listener_does_not_scan_past_invalid_framing() {
     let listener = UnixListener::bind(&path).unwrap();
     let service = test_service();
     let mut pristine = mez_agent::messaging::MessageService::from_snapshot_state(
-        &service.message_service().snapshot_state(),
+        &service.message_service().snapshot_state().unwrap(),
     )
     .unwrap();
     let expected = pristine
@@ -835,6 +838,7 @@ async fn async_message_listener_does_not_scan_past_invalid_framing() {
         exit.service
             .message_service()
             .snapshot_state()
+            .unwrap()
             .subscriptions
             .is_empty()
     );
@@ -1001,6 +1005,7 @@ async fn async_message_listener_fanout_failure_reuses_exact_capacity() {
         exit.service
             .message_service()
             .snapshot_state()
+            .unwrap()
             .accepted_messages
             .len(),
         1
@@ -1104,6 +1109,7 @@ async fn async_message_listener_cancellation_retires_exact_raw_lease() {
         exit.service
             .message_service()
             .snapshot_state()
+            .unwrap()
             .subscriptions
             .len(),
         1
@@ -1144,7 +1150,7 @@ async fn async_message_raw_lease_churn_bounds_retained_provenance() {
             10,
         )
         .unwrap();
-    let before = service.message_service().snapshot_state();
+    let before = service.message_service().snapshot_state().unwrap();
     let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
         .build()
         .unwrap();
@@ -1164,7 +1170,7 @@ async fn async_message_raw_lease_churn_bounds_retained_provenance() {
         handle.shutdown().await.unwrap();
     };
     let ((), exit) = tokio::join!(work, actor.run());
-    let after = exit.service.message_service().snapshot_state();
+    let after = exit.service.message_service().snapshot_state().unwrap();
     assert_eq!(after.retained_messages, before.retained_messages);
     assert_eq!(after.accepted_messages, before.accepted_messages);
     assert_eq!(after.registered_agents, before.registered_agents);
@@ -1228,6 +1234,7 @@ async fn async_message_actor_shutdown_fences_live_raw_lease() {
         exit.service
             .message_service()
             .snapshot_state()
+            .unwrap()
             .subscriptions
             .len(),
         1

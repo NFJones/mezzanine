@@ -289,7 +289,8 @@ mod registration_tests {
             .update_agent_objective(&sender.agent_id, Some("changed objective"), 1)
             .unwrap();
         assert!(service.sender_registration_is_current(&token));
-        let restored = MessageService::from_snapshot_state(&service.snapshot_state()).unwrap();
+        let restored =
+            MessageService::from_snapshot_state(&service.snapshot_state().unwrap()).unwrap();
         assert!(!restored.sender_registration_is_current(&token));
         assert!(!MessageService::default().sender_registration_is_current(&token));
         assert!(

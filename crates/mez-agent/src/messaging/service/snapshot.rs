@@ -24,8 +24,10 @@ use super::snapshot_validation::validate_message_service_snapshot;
 use super::*;
 
 impl MessageService {
-    /// Returns a serializable snapshot of durable local message protocol state.
-    pub fn snapshot_state(&self) -> MessageServiceSnapshot {
+    /// Captures complete local message protocol state without storage I/O.
+    /// Returns `InvalidState` when any retained payload is unavailable; no
+    /// partial snapshot or substitute empty payload escapes on failure.
+    pub fn snapshot_state(&self) -> Result<MessageServiceSnapshot> {
         let mut registered_agents = self
             .registered
             .values()
@@ -62,15 +64,15 @@ impl MessageService {
             .queue
             .iter()
             .map(|queued| queued_envelope_snapshot(queued))
-            .collect::<Vec<_>>();
+            .collect::<Result<Vec<_>>>()?;
         let mut accepted_messages = self
             .accepted_messages
             .values()
             .map(accepted_message_snapshot)
-            .collect::<Vec<_>>();
+            .collect::<Result<Vec<_>>>()?;
         accepted_messages.sort_by(|left, right| left.envelope.id.cmp(&right.envelope.id));
 
-        MessageServiceSnapshot {
+        Ok(MessageServiceSnapshot {
             protocol: MMP_PROTOCOL.to_string(),
             schema_version: 9,
             sender_provenance: Some(super::sender_provenance::capture(self)),
@@ -104,10 +106,10 @@ impl MessageService {
                     .values()
                     .filter(|row| !replay.contains(&row.sequence))
                     .map(|row| queued_envelope_snapshot(row))
-                    .collect()
+                    .collect::<Result<Vec<_>>>()?
             }),
             accepted_messages,
-        }
+        })
     }
 
     /// Rebuilds validated local message state under production custody ceilings.
@@ -201,7 +203,7 @@ impl MessageService {
         }
         let mut queue = VecDeque::new();
         let mut pending = std::collections::BTreeMap::new();
-        let mut retained_envelopes = HashMap::new();
+        let mut retained_sources = HashMap::new();
         let mut queued_bytes = 0usize;
         let replay_sequences = snapshot
             .retained_messages
@@ -219,7 +221,6 @@ impl MessageService {
             if replay_sequences.contains(&retained.sequence) {
                 queued_bytes = queued_bytes.saturating_add(envelope.payload.len());
             }
-            retained_envelopes.insert(envelope.id.clone(), envelope.clone());
             let acknowledged = retained
                 .recipient_bindings
                 .as_deref()
@@ -274,7 +275,7 @@ impl MessageService {
             };
             let queued = Arc::new(QueuedEnvelope {
                 sequence: retained.sequence,
-                envelope,
+                envelope: RetainedEnvelope::new(envelope),
                 audience: audience_from_snapshot(retained.audience.as_ref())?,
                 recipient_bindings: retained
                     .recipient_bindings
@@ -297,6 +298,7 @@ impl MessageService {
                     retained.ack_expiry_observed_at_ms,
                 ),
             });
+            retained_sources.insert(queued.envelope.id.clone(), queued.clone());
             if is_pending {
                 pending.insert(queued.sequence, queued.clone());
             }
@@ -309,11 +311,14 @@ impl MessageService {
             if snapshot.schema_version == 1 {
                 continue;
             }
-            let envelope = envelope_from_snapshot(&accepted.envelope, snapshot.schema_version)?;
-            let envelope = retained_envelopes
-                .get(&envelope.id)
+            // Cross-record validation above proves a unique exact source.
+            // Never reconstruct an independent receipt payload as a fallback.
+            let source = retained_sources
+                .get(&accepted.envelope.id)
                 .cloned()
-                .unwrap_or_else(|| Arc::new(envelope));
+                .ok_or_else(|| {
+                    MessageError::invalid_args("snapshot MMP accepted source is unavailable")
+                })?;
             let delivery = Delivery {
                 accepted: accepted.delivery.accepted,
                 message_id: accepted.delivery.message_id.clone(),
@@ -322,13 +327,11 @@ impl MessageService {
                 status: parse_delivery_status(&accepted.delivery.status)?,
             };
             accepted_messages.insert(
-                envelope.id.clone(),
+                source.envelope.id.clone(),
                 AcceptedMessage {
                     storage_scope: None,
-                    envelope,
-                    audience: audience_from_snapshot(accepted.audience.as_ref())?,
+                    source,
                     delivery,
-                    accepted_at_ms: accepted.accepted_at_ms,
                 },
             );
         }
@@ -404,7 +407,7 @@ impl MessageService {
         if snapshot.schema_version < 7 {
             // Legacy snapshots cannot bypass new custody bounds. Reconstruct
             // only provable retained source; pre-upgrade evicted mail is unknown.
-            let reconstructed = service.snapshot_state();
+            let reconstructed = service.snapshot_state()?;
             super::pending::validate_pending_snapshot(&reconstructed, pending_limits)?;
             super::auxiliary::validate_auxiliary_snapshot(&reconstructed, pending_limits)?;
         }

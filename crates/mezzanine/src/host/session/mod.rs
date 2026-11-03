@@ -781,7 +781,7 @@ fn start_session(
             payload,
             restart_command,
         } => {
-            let prior_message_state = service.message_service().snapshot_state();
+            let prior_message_state = service.message_service().snapshot_state()?;
             let restored = (|| -> Result<()> {
                 service.restore_message_state_for_restored_snapshot(&payload)?;
                 service.seed_terminal_screens_from_snapshot_payload(&payload)?;

@@ -82,13 +82,13 @@ fn native_storage_metadata_is_unpublished_until_paired_adoption_and_duplicate_is
     assert_eq!(usage.0.0, 0);
     assert!(usage.0.1 > 0);
     assert_eq!(usage.1, 0);
-    let before = service.message_service().snapshot_state();
+    let before = service.message_service().snapshot_state().unwrap();
     assert!(
         service
             .retire_runtime_message_transfers_for_restore()
             .is_err()
     );
-    assert_eq!(service.message_service().snapshot_state(), before);
+    assert_eq!(service.message_service().snapshot_state().unwrap(), before);
     let fact = commit(&mut service, &ticket);
     assert!(
         service
@@ -155,14 +155,17 @@ fn native_storage_recovers_actual_paired_publication_before_lost_callback_result
             .retire_runtime_message_transfers_for_restore()
             .is_err()
     );
-    let accepted = service.message_service().snapshot_state();
+    let accepted = service.message_service().snapshot_state().unwrap();
     let delivery = service
         .adopt_prepared_tracked_runtime_message(&ticket, |_, _| {
             panic!("must reconcile actual published receipt")
         })
         .unwrap();
     assert!(delivery.accepted);
-    assert_eq!(service.message_service().snapshot_state(), accepted);
+    assert_eq!(
+        service.message_service().snapshot_state().unwrap(),
+        accepted
+    );
     assert_eq!(service.tracked_message_request_usage().0.0, 1);
     service
         .retire_runtime_message_transfers_for_restore()
@@ -378,13 +381,13 @@ fn native_restore_guard_also_preserves_unpublished_raw_acceptance_and_ack() {
             None,
         )
         .unwrap();
-    let before = service.message_service().snapshot_state();
+    let before = service.message_service().snapshot_state().unwrap();
     assert!(
         service
             .retire_runtime_message_transfers_for_restore()
             .is_err()
     );
-    assert_eq!(service.message_service().snapshot_state(), before);
+    assert_eq!(service.message_service().snapshot_state().unwrap(), before);
     assert!(
         service
             .message_service()
@@ -419,13 +422,13 @@ fn native_restore_guard_also_preserves_unpublished_raw_acceptance_and_ack() {
         .prepare_acknowledgement(&peer.agent_id, delivery.sequence, 512 * 1024)
         .unwrap()
         .unwrap();
-    let before = service.message_service().snapshot_state();
+    let before = service.message_service().snapshot_state().unwrap();
     assert!(
         service
             .retire_runtime_message_transfers_for_restore()
             .is_err()
     );
-    assert_eq!(service.message_service().snapshot_state(), before);
+    assert_eq!(service.message_service().snapshot_state().unwrap(), before);
     assert!(
         service
             .message_service()
@@ -496,14 +499,17 @@ fn native_storage_lost_callback_survives_conversation_pruning_of_other_receipts(
         1,
         "only exact pending native receipt must remain"
     );
-    let accepted = service.message_service().snapshot_state();
+    let accepted = service.message_service().snapshot_state().unwrap();
     let delivery = service
         .adopt_prepared_tracked_runtime_message(&ticket, |_, _| {
             panic!("retired caller must reconcile original receipt without republishing")
         })
         .unwrap();
     assert_ne!(delivery.message_id, older);
-    assert_eq!(service.message_service().snapshot_state(), accepted);
+    assert_eq!(
+        service.message_service().snapshot_state().unwrap(),
+        accepted
+    );
     service
         .deliver_pending_runtime_agent_messages(current_unix_millis())
         .unwrap();
@@ -576,7 +582,7 @@ fn native_storage_lost_callback_survives_finite_expiry_until_metadata_installs()
             .retire_runtime_message_transfers_for_restore()
             .is_err()
     );
-    let accepted = service.message_service().snapshot_state();
+    let accepted = service.message_service().snapshot_state().unwrap();
     assert!(
         service
             .adopt_prepared_tracked_runtime_message(&ticket, |_, _| panic!(
@@ -585,7 +591,10 @@ fn native_storage_lost_callback_survives_finite_expiry_until_metadata_installs()
             .unwrap()
             .accepted
     );
-    assert_eq!(service.message_service().snapshot_state(), accepted);
+    assert_eq!(
+        service.message_service().snapshot_state().unwrap(),
+        accepted
+    );
     service
         .deliver_pending_runtime_agent_messages(now + 620_001)
         .unwrap();

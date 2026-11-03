@@ -50,6 +50,15 @@ fn pending_direct_mail_survives_replay_pressure_and_restore() {
         originals.push((envelope, receipt));
     }
     assert_eq!(service.queue.len(), 2);
+    for receipt in service.accepted_messages.values() {
+        assert!(
+            Arc::ptr_eq(
+                &receipt.source,
+                service.pending.get(&receipt.delivery.sequence).unwrap()
+            ),
+            "an idempotency receipt must share its canonical custody source"
+        );
+    }
     let batch = service
         .receive_subscribed(&target.agent_id, 10, 10)
         .unwrap();
@@ -61,7 +70,17 @@ fn pending_direct_mail_survives_replay_pressure_and_restore() {
             .collect::<Vec<_>>(),
         vec![1, 2, 3]
     );
-    let mut restored = MessageService::from_snapshot_state(&service.snapshot_state()).unwrap();
+    let mut restored =
+        MessageService::from_snapshot_state(&service.snapshot_state().unwrap()).unwrap();
+    for receipt in restored.accepted_messages.values() {
+        assert!(
+            Arc::ptr_eq(
+                &receipt.source,
+                restored.pending.get(&receipt.delivery.sequence).unwrap()
+            ),
+            "restore must not create an independent receipt payload owner"
+        );
+    }
     assert_eq!(
         restored
             .accept_at_with_scope(
@@ -193,7 +212,7 @@ fn pending_recipient_capacity_is_atomic_and_ack_releases_one() {
         "cap-next",
         Recipient::Agent(target.agent_id.clone()),
     );
-    let before = service.snapshot_state();
+    let before = service.snapshot_state().unwrap();
     assert_eq!(
         service
             .accept_at_with_scope(
@@ -206,7 +225,7 @@ fn pending_recipient_capacity_is_atomic_and_ack_releases_one() {
             .kind(),
         MessageErrorKind::Capacity
     );
-    assert_eq!(service.snapshot_state(), before);
+    assert_eq!(service.snapshot_state().unwrap(), before);
     MessageService::from_snapshot_state(&before).unwrap();
     let batch = service.receive_subscribed(&target.agent_id, 2, 1).unwrap();
     service
@@ -243,7 +262,7 @@ fn pending_envelope_count_is_independent_and_snapshot_bounded() {
             )
             .unwrap();
     }
-    let before = service.snapshot_state();
+    let before = service.snapshot_state().unwrap();
     assert_eq!(service.pending.len(), 1000);
     assert_eq!(
         service
@@ -261,7 +280,7 @@ fn pending_envelope_count_is_independent_and_snapshot_bounded() {
             .kind(),
         MessageErrorKind::Capacity
     );
-    assert_eq!(service.snapshot_state(), before);
+    assert_eq!(service.snapshot_state().unwrap(), before);
     MessageService::from_snapshot_state(&before).unwrap();
     let mut excessive = before.clone();
     let mut row = excessive.retained_messages.last().unwrap().clone();
@@ -311,7 +330,7 @@ fn pending_payload_bytes_are_independent_and_reusable() {
         Recipient::Agent(target.agent_id.clone()),
     );
     second.payload = "y".repeat(500_000);
-    let before = service.snapshot_state();
+    let before = service.snapshot_state().unwrap();
     assert_eq!(
         service
             .accept_at_with_scope(&sender.agent_id, second.clone(), MessageScope::Session, 1)
@@ -319,14 +338,14 @@ fn pending_payload_bytes_are_independent_and_reusable() {
             .kind(),
         MessageErrorKind::Capacity
     );
-    assert_eq!(service.snapshot_state(), before);
+    assert_eq!(service.snapshot_state().unwrap(), before);
     service.receive_subscribed(&target.agent_id, 2, 1).unwrap();
     service.advance_subscription(&target.agent_id, 1).unwrap();
     service
         .accept_at_with_scope(&sender.agent_id, second, MessageScope::Session, 3)
         .unwrap();
     assert_eq!(service.pending.len(), 1);
-    MessageService::from_snapshot_state(&service.snapshot_state()).unwrap();
+    MessageService::from_snapshot_state(&service.snapshot_state().unwrap()).unwrap();
 }
 
 /// A committed fanout slot survives recipient retirement and snapshot restore.
@@ -364,7 +383,8 @@ fn pending_fast_commit_survives_retirement_until_slow_commit() {
             3,
         )
         .unwrap();
-    let mut restored = MessageService::from_snapshot_state(&service.snapshot_state()).unwrap();
+    let mut restored =
+        MessageService::from_snapshot_state(&service.snapshot_state().unwrap()).unwrap();
     restored.ensure_agent_identity(fast.clone(), 4).unwrap();
     restored
         .subscribe_from_retained_start(&fast.agent_id)
@@ -383,6 +403,7 @@ fn pending_fast_commit_survives_retirement_until_slow_commit() {
     assert!(
         restored
             .snapshot_state()
+            .unwrap()
             .custody_messages
             .unwrap()
             .is_empty()
@@ -415,7 +436,7 @@ fn pending_snapshot_rejects_forged_sources_and_commits() {
     service.subscribe(&target.agent_id).unwrap();
     let selected = service.receive_subscribed(&target.agent_id, 2, 10).unwrap();
     assert_eq!(selected.messages.len(), 2);
-    let before = service.snapshot_state();
+    let before = service.snapshot_state().unwrap();
     let mut candidates = Vec::new();
     let mut bad = before.clone();
     bad.custody_messages = None;
@@ -442,7 +463,7 @@ fn pending_snapshot_rejects_forged_sources_and_commits() {
     candidates.push(bad);
     for candidate in candidates {
         assert!(MessageService::from_snapshot_state(&candidate).is_err());
-        assert_eq!(service.snapshot_state(), before);
+        assert_eq!(service.snapshot_state().unwrap(), before);
     }
     service.advance_subscription(&target.agent_id, 2).unwrap();
     assert!(service.pending.is_empty());
@@ -485,11 +506,11 @@ fn pending_restore_rejects_cursor_hiding_live_uncommitted_mail() {
             )
             .unwrap();
     }
-    let before = service.snapshot_state();
+    let before = service.snapshot_state().unwrap();
     let mut forged = before.clone();
     forged.subscriptions[0].last_sequence = 256;
     assert!(MessageService::from_snapshot_state(&forged).is_err());
-    assert_eq!(service.snapshot_state(), before);
+    assert_eq!(service.snapshot_state().unwrap(), before);
 }
 
 /// Actual schema5 has no offer evidence even for genuinely committed mail.
@@ -520,7 +541,7 @@ fn pending_restore_refuses_unprovable_legacy_advanced_cursors() {
         .receive_subscribed(&target.agent_id, 2, 256)
         .unwrap();
     service.advance_subscription(&target.agent_id, 256).unwrap();
-    let committed = service.snapshot_state();
+    let committed = service.snapshot_state().unwrap();
     let mut proven = committed.clone();
     proven.schema_version = 6;
     proven.sender_provenance = None;
@@ -560,7 +581,7 @@ fn pending_restore_refuses_unprovable_legacy_advanced_cursors() {
             "schema {schema}"
         );
     }
-    assert_eq!(service.snapshot_state(), committed);
+    assert_eq!(service.snapshot_state().unwrap(), committed);
 }
 
 /// A genuine unoffered expired prefix may remain below an advanced cursor.
@@ -610,14 +631,14 @@ fn pending_restore_preserves_expired_prefix_after_ack_endpoint_eviction() {
             8,
         )
         .unwrap();
-    let snapshot = service.snapshot_state();
+    let snapshot = service.snapshot_state().unwrap();
     assert!(!snapshot.canonical_messages().any(|row| row.sequence == 2));
     let expired = &snapshot.custody_messages.as_ref().unwrap()[0];
     assert_eq!(expired.ack_expiry_observed_at_ms, Some(7));
     assert!(expired.acknowledged_recipients.as_ref().unwrap().is_empty());
     assert!(expired.offered_recipients.as_ref().unwrap().is_empty());
     let restored = MessageService::from_snapshot_state(&snapshot).unwrap();
-    assert_eq!(restored.snapshot_state(), snapshot);
+    assert_eq!(restored.snapshot_state().unwrap(), snapshot);
     assert!(
         restored
             .receive_subscribed(&target.agent_id, 9, 10)
@@ -672,11 +693,12 @@ fn pending_ack_preserves_prior_expiry_exclusion_with_preoffered_endpoint() {
     let earlier = service.receive_subscribed(&target.agent_id, 7, 1).unwrap();
     assert_eq!(earlier.messages[0].sequence, 2);
     service.advance_subscription(&target.agent_id, 2).unwrap();
-    let excluded = service.snapshot_state().custody_messages.unwrap()[0].clone();
+    let excluded = service.snapshot_state().unwrap().custody_messages.unwrap()[0].clone();
     assert_eq!(excluded.ack_expiry_observed_at_ms, Some(7));
     // Verify both live and restored owners can consume the already offered
     // endpoint without reselection or replacement of the original exclusion.
-    let mut restored = MessageService::from_snapshot_state(&service.snapshot_state()).unwrap();
+    let mut restored =
+        MessageService::from_snapshot_state(&service.snapshot_state().unwrap()).unwrap();
     for owner in [&mut service, &mut restored] {
         owner.advance_subscription(&target.agent_id, 3).unwrap();
         assert_eq!(
@@ -684,7 +706,7 @@ fn pending_ack_preserves_prior_expiry_exclusion_with_preoffered_endpoint() {
             3
         );
         assert_eq!(
-            owner.snapshot_state().custody_messages.unwrap(),
+            owner.snapshot_state().unwrap().custody_messages.unwrap(),
             vec![excluded.clone()]
         );
         assert!(
@@ -694,6 +716,6 @@ fn pending_ack_preserves_prior_expiry_exclusion_with_preoffered_endpoint() {
                 .messages
                 .is_empty()
         );
-        MessageService::from_snapshot_state(&owner.snapshot_state()).unwrap();
+        MessageService::from_snapshot_state(&owner.snapshot_state().unwrap()).unwrap();
     }
 }

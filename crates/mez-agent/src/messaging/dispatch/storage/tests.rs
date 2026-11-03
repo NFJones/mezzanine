@@ -51,11 +51,11 @@ fn fixture() -> (MessageService, MessageConnection, AgentId, String) {
 fn raw_preparation_publishes_only_after_qualified_adoption_and_restore_cannot_upgrade() {
     let (mut service, connection, target, body) = fixture();
     let storage_scope = MessageStorageScope::default();
-    let before = service.snapshot_state();
+    let before = service.snapshot_state().unwrap();
     let request = parse_mmp_storage_request(&body, &service, &connection)
         .unwrap()
         .unwrap();
-    assert_eq!(service.snapshot_state(), before);
+    assert_eq!(service.snapshot_state().unwrap(), before);
     assert!(!format!("{request:?}").contains("original payload"));
     let MmpStoragePreparation::Acceptance(ticket) = request
         .prepare(&mut service, &storage_scope, 20, 4096, 512 * 1024)
@@ -100,7 +100,7 @@ fn raw_preparation_publishes_only_after_qualified_adoption_and_restore_cannot_up
             .is_err()
     );
     assert_eq!(port.0, 1);
-    let snapshot = service.snapshot_state();
+    let snapshot = service.snapshot_state().unwrap();
     let mut restored = MessageService::from_snapshot_state(&snapshot).unwrap();
     let error = parse_mmp_storage_request(&body, &restored, &connection)
         .unwrap()
@@ -108,7 +108,7 @@ fn raw_preparation_publishes_only_after_qualified_adoption_and_restore_cannot_up
         .prepare(&mut restored, &storage_scope, 30, 4096, 512 * 1024)
         .unwrap_err();
     assert!(error.message().contains("qualification"));
-    assert_eq!(restored.snapshot_state(), snapshot);
+    assert_eq!(restored.snapshot_state().unwrap(), snapshot);
 }
 
 /// A matching memory-only receipt cannot acquire storage success by entering the
@@ -123,7 +123,7 @@ fn raw_storage_replay_rejects_memory_receipts_changed_bodies_and_foreign_senders
         serde_json::from_str::<serde_json::Value>(&response).unwrap()["type"],
         "ack"
     );
-    let before = service.snapshot_state();
+    let before = service.snapshot_state().unwrap();
     let error = parse_mmp_storage_request(&body, &service, &connection)
         .unwrap()
         .unwrap()
@@ -140,7 +140,7 @@ fn raw_storage_replay_rejects_memory_receipts_changed_bodies_and_foreign_senders
     );
     let foreign = body.replace(connection.agent_id.as_ref().unwrap().as_str(), "foreign");
     assert!(parse_mmp_storage_request(&foreign, &service, &connection).is_err());
-    assert_eq!(service.snapshot_state(), before);
+    assert_eq!(service.snapshot_state().unwrap(), before);
     assert!(!service.has_unpublished_acceptance());
 }
 
@@ -194,7 +194,7 @@ fn raw_explicit_ack_prepares_original_offer_and_duplicate_is_inert() {
 #[test]
 fn raw_storage_parser_preserves_nonstorage_dispatch_and_header_rejection() {
     let (service, connection, _, _) = fixture();
-    let before = service.snapshot_state();
+    let before = service.snapshot_state().unwrap();
     for kind in [
         "hello",
         "presence",
@@ -212,7 +212,7 @@ fn raw_storage_parser_preserves_nonstorage_dispatch_and_header_rejection() {
     for bad in ["{}", "not-json", r#"{"protocol":"mmp/99","type":"send"}"#] {
         assert!(parse_mmp_storage_request(bad, &service, &connection).is_err());
     }
-    assert_eq!(service.snapshot_state(), before);
+    assert_eq!(service.snapshot_state().unwrap(), before);
 }
 
 /// Raw task lifecycle frames must enter the same unpublished reservation path

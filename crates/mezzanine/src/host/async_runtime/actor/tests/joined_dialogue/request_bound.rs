@@ -156,6 +156,7 @@ async fn request_bound_actor_owned_outcome_preserves_running_native_result_gate(
             .service
             .message_service()
             .snapshot_state()
+            .unwrap()
             .accepted_messages
             .iter()
             .filter(|row| row.envelope.id == message)
@@ -265,7 +266,7 @@ async fn request_bound_actor_approved_send_retains_result_after_late_publication
             .service
             .agent_provider_task_is_pending(&parent.turn_id)
     );
-    let state = actor.service.message_service().snapshot_state();
+    let state = actor.service.message_service().snapshot_state().unwrap();
     let accepted = state
         .accepted_messages
         .iter()
@@ -309,7 +310,10 @@ async fn request_bound_actor_approved_send_retains_result_after_late_publication
             .unwrap(),
         None
     );
-    assert_eq!(actor.service.message_service().snapshot_state(), state);
+    assert_eq!(
+        actor.service.message_service().snapshot_state().unwrap(),
+        state
+    );
     assert_eq!(generations, (1..=3).collect());
 }
 
@@ -1524,6 +1528,7 @@ async fn request_bound_actor_accepted_send_survives_receiver_commit_fault() {
             .service
             .message_service()
             .snapshot_state()
+            .unwrap()
             .accepted_messages
             .iter()
             .filter(|row| row.envelope.id == message)

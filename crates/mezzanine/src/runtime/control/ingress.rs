@@ -337,7 +337,16 @@ impl RuntimeSessionService {
                     agent_sessions: self.live_snapshot_agent_sessions(),
                     approval_grants: self.live_snapshot_approval_grants(),
                     approval_requests: self.live_snapshot_approval_requests(),
-                    message_state: self.live_snapshot_message_state(),
+                    message_state: match self.live_snapshot_message_state() {
+                        Ok(state) => state,
+                        Err(error) => {
+                            return Some(Err(runtime_json_rpc_error(
+                                &request.id,
+                                error.kind(),
+                                error.message(),
+                            )));
+                        }
+                    },
                     unsettled_peer_presentations: self
                         .snapshot_unsettled_received_peer_message_presentations(),
                     mcp_servers: self.live_snapshot_mcp_servers(),

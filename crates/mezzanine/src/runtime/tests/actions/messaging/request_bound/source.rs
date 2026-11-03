@@ -125,13 +125,13 @@ fn native_message_source_restore_fence_precedes_reservation_and_stop_cancels_pre
                 .prepare_stored_message_action(&source, current_unix_millis())
                 .unwrap()
         });
-        let before = service.message_service().snapshot_state();
+        let before = service.message_service().snapshot_state().unwrap();
         assert!(
             service
                 .retire_runtime_message_transfers_for_restore()
                 .is_err()
         );
-        assert_eq!(service.message_service().snapshot_state(), before);
+        assert_eq!(service.message_service().snapshot_state().unwrap(), before);
         service
             .execute_agent_shell_command(&primary, "/stop")
             .unwrap();
@@ -223,6 +223,7 @@ fn native_message_source_keeps_original_continuation_when_ready_queue_is_full() 
     let accepted = service
         .message_service()
         .snapshot_state()
+        .unwrap()
         .accepted_messages
         .len();
     service
@@ -243,6 +244,7 @@ fn native_message_source_keeps_original_continuation_when_ready_queue_is_full() 
         service
             .message_service()
             .snapshot_state()
+            .unwrap()
             .accepted_messages
             .len(),
         accepted

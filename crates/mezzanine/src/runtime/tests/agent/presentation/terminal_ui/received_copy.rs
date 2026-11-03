@@ -390,7 +390,7 @@ fn runtime_received_colon_carrier_flush_copy_replay_is_once_only() {
                 .count()
         };
         assert_eq!(count_context(&service), 1);
-        let committed_messages = service.message_service().snapshot_state();
+        let committed_messages = service.message_service().snapshot_state().unwrap();
         assert_eq!(
             committed_messages
                 .accepted_messages
@@ -467,7 +467,7 @@ fn runtime_received_colon_carrier_flush_copy_replay_is_once_only() {
         }
         assert_eq!(count_context(&service), 1);
         assert_eq!(
-            service.message_service().snapshot_state(),
+            service.message_service().snapshot_state().unwrap(),
             committed_messages
         );
         assert_eq!(

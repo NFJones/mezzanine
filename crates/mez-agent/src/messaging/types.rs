@@ -449,28 +449,20 @@ pub struct Delivery {
     pub status: DeliveryStatus,
 }
 
-/// Accepted message metadata retained for idempotent resend handling.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Idempotency metadata referencing the same canonical occurrence as custody.
+/// The receipt cannot independently pin a resident envelope when its source
+/// later moves between memory and storage.
+#[derive(Debug, Clone)]
 pub(super) struct AcceptedMessage {
     /// Live storage adoption fact; snapshots cannot recreate this authority.
     pub(super) storage_scope: Option<super::service::MessageStorageScope>,
-    /// Stores the envelope value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(super) envelope: Arc<Envelope>,
-    /// Audience resolved when the envelope was accepted.
-    pub(super) audience: ResolvedMessageAudience,
+    /// Original immutable envelope, audience, clock and recipient obligations.
+    pub(super) source: Arc<QueuedEnvelope>,
     /// Stores the delivery value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(super) delivery: Delivery,
-    /// Stores the accepted at ms value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(super) accepted_at_ms: u64,
 }
 
 /// Carries Delivery Status state for this subsystem.
@@ -656,7 +648,7 @@ pub(super) struct QueuedEnvelope {
     ///
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    pub(super) envelope: Arc<Envelope>,
+    pub(super) envelope: super::service::RetainedEnvelope,
     /// Audience resolved from the authenticated sender at acceptance time.
     pub(super) audience: ResolvedMessageAudience,
     /// Exact eligible registrations captured at acceptance, not live selectors.

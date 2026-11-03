@@ -48,7 +48,7 @@ fn acknowledgement_rejects_unoffered_and_foreign_occurrences_without_mutation() 
             2,
         )
         .unwrap();
-    let before = service.snapshot_state();
+    let before = service.snapshot_state().unwrap();
     for sequence in [own.sequence, foreign.sequence, foreign.sequence + 1] {
         assert!(
             service
@@ -56,7 +56,7 @@ fn acknowledgement_rejects_unoffered_and_foreign_occurrences_without_mutation() 
                 .is_err(),
             "unoffered sequence {sequence} was acknowledged"
         );
-        assert_eq!(service.snapshot_state(), before);
+        assert_eq!(service.snapshot_state().unwrap(), before);
     }
     let batch = service.receive_subscribed(&target.agent_id, 3, 10).unwrap();
     assert_eq!(batch.messages.len(), 1);
@@ -108,13 +108,13 @@ fn acknowledgement_cannot_skip_unoffered_own_prefix() {
         )
         .unwrap();
     assert_eq!(selected.messages[0].sequence, second.sequence);
-    let before = service.snapshot_state();
+    let before = service.snapshot_state().unwrap();
     assert!(
         service
             .advance_subscription(&target.agent_id, second.sequence)
             .is_err()
     );
-    assert_eq!(service.snapshot_state(), before);
+    assert_eq!(service.snapshot_state().unwrap(), before);
     assert_eq!(
         service
             .receive_subscribed(&target.agent_id, 4, 10)
@@ -163,9 +163,9 @@ fn acknowledgement_fanout_offers_are_recipient_local_and_snapshot_stable() {
         .unwrap()
         .unwrap();
     service.acknowledge_fanout_batch(&batch).unwrap();
-    let snapshot = service.snapshot_state();
+    let snapshot = service.snapshot_state().unwrap();
     let mut restored = MessageService::from_snapshot_state(&snapshot).unwrap();
-    assert_eq!(restored.snapshot_state(), snapshot);
+    assert_eq!(restored.snapshot_state().unwrap(), snapshot);
     assert!(
         restored
             .advance_subscription(&second.agent_id, delivery.sequence)
@@ -232,7 +232,8 @@ fn acknowledgement_expired_prefix_and_ttl_boundary_use_actual_offer_clock() {
     let batch = service.receive_subscribed(&target.agent_id, 7, 10).unwrap();
     assert_eq!(batch.messages.len(), 1);
     service.receive_after(&skip, 3, 1).unwrap();
-    let mut restored = MessageService::from_snapshot_state(&service.snapshot_state()).unwrap();
+    let mut restored =
+        MessageService::from_snapshot_state(&service.snapshot_state().unwrap()).unwrap();
     restored
         .advance_subscription(&target.agent_id, second.sequence)
         .unwrap();
@@ -245,7 +246,8 @@ fn acknowledgement_expired_prefix_and_ttl_boundary_use_actual_offer_clock() {
     service
         .receive_subscribed(&target.agent_id, 15, 10)
         .unwrap();
-    let mut restored = MessageService::from_snapshot_state(&service.snapshot_state()).unwrap();
+    let mut restored =
+        MessageService::from_snapshot_state(&service.snapshot_state().unwrap()).unwrap();
     restored
         .advance_subscription(&target.agent_id, boundary.sequence)
         .unwrap();
@@ -267,7 +269,7 @@ fn acknowledgement_snapshot_validates_offers_and_upgrades_schema5_fail_closed() 
         .accept_at_with_scope(&sender.agent_id, message, MessageScope::Session, 1)
         .unwrap();
     service.receive_subscribed(&target.agent_id, 2, 10).unwrap();
-    let before = service.snapshot_state();
+    let before = service.snapshot_state().unwrap();
     let mut corruptions = Vec::new();
     let mut bad = before.clone();
     bad.retained_messages[0].offered_recipients = None;
@@ -310,7 +312,7 @@ fn acknowledgement_snapshot_validates_offers_and_upgrades_schema5_fail_closed() 
             serde_json::from_str::<MessageServiceSnapshot>(&serde_json::to_string(&bad).unwrap())
                 .unwrap();
         assert!(MessageService::from_snapshot_state(&decoded).is_err());
-        assert_eq!(service.snapshot_state(), before);
+        assert_eq!(service.snapshot_state().unwrap(), before);
     }
     let mut legacy = before.clone();
     legacy.schema_version = 5;
@@ -373,7 +375,8 @@ fn acknowledgement_offer_does_not_transfer_to_reused_registration() {
             4,
         )
         .unwrap();
-    let mut restored = MessageService::from_snapshot_state(&service.snapshot_state()).unwrap();
+    let mut restored =
+        MessageService::from_snapshot_state(&service.snapshot_state().unwrap()).unwrap();
     assert!(
         restored
             .advance_subscription(&target.agent_id, new.sequence)

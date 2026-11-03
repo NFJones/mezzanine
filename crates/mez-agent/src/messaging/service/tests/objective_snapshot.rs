@@ -10,7 +10,7 @@ fn snapshot_round_trip_carries_objective_and_legacy_payload_defaults_none() {
     let identity = service
         .register_agent_with_objective(None, None, "agent", Vec::new(), Some("Inspect the backlog"))
         .unwrap();
-    let snapshot = service.snapshot_state();
+    let snapshot = service.snapshot_state().unwrap();
     assert_eq!(
         snapshot.registered_agents[0].objective.as_deref(),
         Some("Inspect the backlog")

@@ -500,7 +500,7 @@ async fn native_capacity_ack_control(tracked: bool) {
     handle.shutdown().await.unwrap();
     let mut exited = runner.await.unwrap();
     accepted(&exited, &turn, tracked);
-    let snapshot = exited.service.message_service().snapshot_state();
+    let snapshot = exited.service.message_service().snapshot_state().unwrap();
     assert!(
         snapshot
             .retained_messages

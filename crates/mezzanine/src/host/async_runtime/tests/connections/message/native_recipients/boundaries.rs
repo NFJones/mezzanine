@@ -113,7 +113,7 @@ async fn async_raw_native_unavailable_addresses_keep_framed_authority() {
         .message_service_mut()
         .ensure_agent_identity(foreign, 10)
         .unwrap();
-    let before = service.message_service().snapshot_state();
+    let before = service.message_service().snapshot_state().unwrap();
     let targets = [
         "agent-missing".to_string(),
         "agent-retired".to_string(),
@@ -157,7 +157,10 @@ async fn async_raw_native_unavailable_addresses_keep_framed_authority() {
         assert_eq!(response["error"]["code"], "undeliverable");
         assert_eq!(response, &responses[0]);
     }
-    assert_eq!(exit.service.message_service().snapshot_state(), before);
+    assert_eq!(
+        exit.service.message_service().snapshot_state().unwrap(),
+        before
+    );
     assert!(exit.service.agent_turn_ledger().turns().is_empty());
     assert!(exit.service.pending_agent_provider_tasks().is_empty());
     assert_eq!(
@@ -174,7 +177,7 @@ async fn async_raw_native_unavailable_addresses_keep_framed_authority() {
 #[tokio::test(flavor = "current_thread")]
 async fn async_raw_native_recipient_preserves_frame_size_limit() {
     let (service, mut connection, sender, native) = framed_boundary_fixture(false);
-    let before = service.message_service().snapshot_state();
+    let before = service.message_service().snapshot_state().unwrap();
     let mut body = framed_send(&sender, "oversized-frame", native.agent_id.as_str());
     body["payload"] = serde_json::json!("x".repeat(4097));
     assert!(body.to_string().len() > 4096);
@@ -208,7 +211,10 @@ async fn async_raw_native_recipient_preserves_frame_size_limit() {
         error.message().contains("exceeds configured limit"),
         "{error}"
     );
-    assert_eq!(exit.service.message_service().snapshot_state(), before);
+    assert_eq!(
+        exit.service.message_service().snapshot_state().unwrap(),
+        before
+    );
     assert!(exit.service.agent_turn_ledger().turns().is_empty());
     assert!(exit.service.pending_agent_provider_tasks().is_empty());
 }

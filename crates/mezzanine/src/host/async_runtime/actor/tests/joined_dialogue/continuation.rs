@@ -264,6 +264,7 @@ async fn joined_dialogue_actor_tracked_followup_does_not_answer_original_questio
             .service
             .message_service()
             .snapshot_state()
+            .unwrap()
             .accepted_messages
             .iter()
             .filter(|row| row.envelope.id == message)

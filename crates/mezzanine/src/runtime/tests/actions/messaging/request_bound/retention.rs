@@ -161,7 +161,7 @@ fn request_bound_restored_handoff_history_does_not_alias_new_outcome() {
         })
         .unwrap()
         .clone();
-    let snapshot = service.message_service().snapshot_state();
+    let snapshot = service.message_service().snapshot_state().unwrap();
     service
         .retire_runtime_message_transfers_for_restore()
         .unwrap();

@@ -371,7 +371,7 @@ async fn run_actions(
             "{execution:#?}"
         );
     }
-    let snapshot = fixture.service.message_service().snapshot_state();
+    let snapshot = fixture.service.message_service().snapshot_state().unwrap();
     for action in &sends {
         let mez_agent::AgentActionPayload::SendMessage { payload, .. } = &action.payload else {
             unreachable!()
@@ -783,7 +783,7 @@ fn runtime_saved_root_role_keeps_frozen_mail_and_cursor_across_project_resume() 
         .message_service_mut()
         .accept_at_with_scope(&parent, envelope, MessageScope::Project, 1)
         .unwrap();
-    let before = fixture.service.message_service().snapshot_state();
+    let before = fixture.service.message_service().snapshot_state().unwrap();
     assert_eq!(before.accepted_messages.len(), 1);
     assert_eq!(before.retained_messages.len(), 1);
     let cursor = fixture
@@ -824,7 +824,7 @@ fn runtime_saved_root_role_keeps_frozen_mail_and_cursor_across_project_resume() 
             .iter()
             .any(|block| block.content.contains("C433_OLD_PROJECT_A_MAIL"))
     );
-    let after = fixture.service.message_service().snapshot_state();
+    let after = fixture.service.message_service().snapshot_state().unwrap();
     assert_eq!(after.retained_messages, before.retained_messages);
     assert_eq!(after.accepted_messages, before.accepted_messages);
     assert_eq!(after.next_sequence, before.next_sequence);

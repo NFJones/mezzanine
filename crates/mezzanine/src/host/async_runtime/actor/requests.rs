@@ -1019,7 +1019,13 @@ impl AsyncRuntimeSessionActor {
                 name,
                 reply,
             } => {
-                let (session, context) = self.service.host_checkpoint_snapshot();
+                let (session, context) = match self.service.host_checkpoint_snapshot() {
+                    Ok(snapshot) => snapshot,
+                    Err(error) => {
+                        let _ = reply.send(Err(error));
+                        return false;
+                    }
+                };
                 let task = tokio::spawn(async move {
                     let result = snapshots
                         .create_from_session_with_context_async(

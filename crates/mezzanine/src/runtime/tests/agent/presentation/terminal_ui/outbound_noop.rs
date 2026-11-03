@@ -339,7 +339,7 @@ fn streamed_outbound_noop_case(
             expected_facts.as_ref(),
             "preserve supplied facts exactly; do not invent absent facts"
         );
-        let messages = service.message_service().snapshot_state();
+        let messages = service.message_service().snapshot_state().unwrap();
         assert_eq!(
             messages.accepted_messages.len(),
             1,
@@ -393,6 +393,7 @@ fn streamed_outbound_noop_case(
         service
             .message_service()
             .snapshot_state()
+            .unwrap()
             .accepted_messages
             .iter()
             .filter(|entry| entry.envelope.id == message_id)
@@ -451,7 +452,7 @@ fn streamed_outbound_noop_case(
     // Exercise a real captured display result after production send settlement.
     // This is deliberately after the unchanged no-op metric assertions above:
     // a genuine stale result must increment rejection, never replay transport.
-    let settled_messages = service.message_service().snapshot_state();
+    let settled_messages = service.message_service().snapshot_state().unwrap();
     let settled_results = execution.action_results.clone();
     let settled_screen = service.agent_pane_screen("%1").unwrap().clone();
     if let Some(stale) = rejection_candidate {
@@ -471,9 +472,12 @@ fn streamed_outbound_noop_case(
         assert!(!error.message().contains(payload));
     }
     assert_eq!(execution.action_results, settled_results);
-    assert_eq!(service.message_service().snapshot_state(), settled_messages);
+    assert_eq!(
+        service.message_service().snapshot_state().unwrap(),
+        settled_messages
+    );
     assert_eq!(service.agent_pane_screen("%1").unwrap(), &settled_screen);
-    let messages = service.message_service().snapshot_state();
+    let messages = service.message_service().snapshot_state().unwrap();
     assert_eq!(messages.next_sequence, sequence + 1);
     let receiver_cursor = messages
         .subscriptions
@@ -592,7 +596,7 @@ fn streamed_outbound_noop_case(
             .unwrap();
     }
     assert_eq!(
-        service.message_service().snapshot_state(),
+        service.message_service().snapshot_state().unwrap(),
         messages,
         "presentation finalization cannot alter messages or cursors"
     );

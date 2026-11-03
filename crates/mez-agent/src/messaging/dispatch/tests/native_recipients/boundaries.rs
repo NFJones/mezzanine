@@ -130,7 +130,7 @@ fn raw_opaque_lookup_is_exact_unavailable_and_side_effect_free() {
     service
         .subscribe_from_retained_start(&sibling.agent_id)
         .unwrap();
-    let before = service.snapshot_state();
+    let before = service.snapshot_state().unwrap();
     let long = format!("agent-{}", "x".repeat(1024));
     let mut public = None;
     for (index, id) in [
@@ -162,7 +162,7 @@ fn raw_opaque_lookup_is_exact_unavailable_and_side_effect_free() {
         } else {
             public = Some(response);
         }
-        assert_eq!(service.snapshot_state(), before);
+        assert_eq!(service.snapshot_state().unwrap(), before);
     }
     let body = raw_envelope(
         &connection,
@@ -188,12 +188,12 @@ fn raw_opaque_lookup_is_exact_unavailable_and_side_effect_free() {
     );
     let mut changed = native.clone();
     changed.role = Some("forged-role".into());
-    let snapshot = service.snapshot_state();
+    let snapshot = service.snapshot_state().unwrap();
     assert!(service.ensure_agent_identity(changed, 32).is_err());
     let mut changed = native.clone();
     changed.capabilities.push("forged-capability".into());
     assert!(service.ensure_agent_identity(changed, 32).is_err());
-    assert_eq!(service.snapshot_state(), snapshot);
+    assert_eq!(service.snapshot_state().unwrap(), snapshot);
 }
 
 /// Raw fields retain their existing type, nonblank, control-character and
@@ -213,7 +213,7 @@ fn raw_native_ids_do_not_weaken_selector_validation() {
     service
         .subscribe_from_retained_start(&foreign.agent_id)
         .unwrap();
-    let before = service.snapshot_state();
+    let before = service.snapshot_state().unwrap();
     let invalid = vec![
         serde_json::json!(null),
         serde_json::json!(42),
@@ -238,7 +238,7 @@ fn raw_native_ids_do_not_weaken_selector_validation() {
         let response = dispatch_value(&mut service, &mut connection, &body);
         assert_eq!(response["type"], "error");
         assert_eq!(response["error"]["code"], "invalid_envelope", "{response}");
-        assert_eq!(service.snapshot_state(), before);
+        assert_eq!(service.snapshot_state().unwrap(), before);
     }
     let body = raw_envelope(
         &connection,
@@ -252,7 +252,7 @@ fn raw_native_ids_do_not_weaken_selector_validation() {
     // A false selector must not widen the default project audience: the same
     // exact foreign-project ID stays unavailable without an explicit session
     // scope, while the explicit widening control below delivers once.
-    let before_foreign = service.snapshot_state();
+    let before_foreign = service.snapshot_state().unwrap();
     let body = raw_envelope(
         &connection,
         "false-session-foreign",
@@ -261,7 +261,7 @@ fn raw_native_ids_do_not_weaken_selector_validation() {
     let response = dispatch_value(&mut service, &mut connection, &body);
     assert_eq!(response["type"], "error");
     assert_eq!(response["error"]["code"], "undeliverable", "{response}");
-    assert_eq!(service.snapshot_state(), before_foreign);
+    assert_eq!(service.snapshot_state().unwrap(), before_foreign);
     let mut body = raw_envelope(
         &connection,
         "explicit-session-foreign",
@@ -287,7 +287,7 @@ fn raw_native_ids_do_not_weaken_selector_validation() {
 #[test]
 fn raw_native_ids_preserve_sender_and_project_authority() {
     let (mut service, mut connection, native) = native_raw_fixture();
-    let before = service.snapshot_state();
+    let before = service.snapshot_state().unwrap();
     for (field, value) in [
         ("agent_id", serde_json::json!(native.agent_id.as_str())),
         ("pane_id", serde_json::json!("%1")),
@@ -306,7 +306,7 @@ fn raw_native_ids_preserve_sender_and_project_authority() {
             response["error"]["message"],
             "message sender does not match authenticated agent connection"
         );
-        assert_eq!(service.snapshot_state(), before);
+        assert_eq!(service.snapshot_state().unwrap(), before);
     }
     let body = raw_envelope(
         &connection,
@@ -318,7 +318,7 @@ fn raw_native_ids_preserve_sender_and_project_authority() {
         dispatch_value(&mut service, &mut unregistered, &body)["type"],
         "error"
     );
-    assert_eq!(service.snapshot_state(), before);
+    assert_eq!(service.snapshot_state().unwrap(), before);
     service
         .rebind_agent_project_scope(connection.agent_id.as_ref().unwrap(), None)
         .unwrap();
@@ -337,12 +337,12 @@ fn raw_native_ids_preserve_sender_and_project_authority() {
     // caller claim must not grant membership, and this test must not expose a
     // trusted snapshot-only scope value in sender JSON to model that claim.
     body["sender"]["project_scope"] = serde_json::json!("untrusted-project-claim");
-    let unbound = service.snapshot_state();
+    let unbound = service.snapshot_state().unwrap();
     assert_eq!(
         dispatch_value(&mut service, &mut connection, &body)["error"]["code"],
         "undeliverable"
     );
-    assert_eq!(service.snapshot_state(), unbound);
+    assert_eq!(service.snapshot_state().unwrap(), unbound);
     let discovery = dispatch_value(
         &mut service,
         &mut connection,
@@ -374,7 +374,7 @@ fn raw_native_ids_preserve_restored_receipts_and_cursors() {
     );
     let accepted = dispatch_value(&mut service, &mut connection, &body);
     assert_eq!(accepted["status"], "accepted");
-    let before = service.snapshot_state();
+    let before = service.snapshot_state().unwrap();
     let mut restored = MessageService::from_snapshot_state(&before).unwrap();
     assert_eq!(
         restored.registered_identity(&native.agent_id),
@@ -391,7 +391,7 @@ fn raw_native_ids_preserve_restored_receipts_and_cursors() {
         accepted
     );
     assert_eq!(
-        restored.snapshot_state().next_sequence,
+        restored.snapshot_state().unwrap().next_sequence,
         before.next_sequence
     );
     let batch = restored
@@ -448,13 +448,13 @@ fn raw_native_id_support_does_not_reuse_retired_generated_targets() {
         dispatch_value(&mut service, &mut connection, &body)["status"],
         "accepted"
     );
-    let before = service.snapshot_state();
+    let before = service.snapshot_state().unwrap();
     assert!(
         service
             .retire_fresh_observational_identity(&old.agent_id)
             .unwrap()
     );
-    let retired = service.snapshot_state();
+    let retired = service.snapshot_state().unwrap();
     assert_eq!(retired.retained_messages, before.retained_messages);
     assert_eq!(retired.accepted_messages, before.accepted_messages);
     assert!(service.registered_identity(&old.agent_id).is_none());
@@ -505,12 +505,12 @@ fn raw_native_ids_preserve_capacity_and_retention_bounds() {
         serde_json::json!({"agent_id": native.agent_id.as_str()}),
     );
     body["payload"] = serde_json::json!("x".repeat(65));
-    let before = service.snapshot_state();
+    let before = service.snapshot_state().unwrap();
     assert_eq!(
         dispatch_value(&mut service, &mut connection, &body)["error"]["code"],
         "payload_too_large"
     );
-    assert_eq!(service.snapshot_state(), before);
+    assert_eq!(service.snapshot_state().unwrap(), before);
     for index in 0..3 {
         let body = raw_envelope(
             &connection,
@@ -522,7 +522,7 @@ fn raw_native_ids_preserve_capacity_and_retention_bounds() {
             1
         );
     }
-    let retained = service.snapshot_state();
+    let retained = service.snapshot_state().unwrap();
     assert_eq!(retained.retained_messages.len(), 2);
     let batch = service
         .receive_subscribed(&native.agent_id, 31, 10)

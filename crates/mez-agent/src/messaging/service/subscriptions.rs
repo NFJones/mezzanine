@@ -34,9 +34,9 @@ impl MessageService {
                     && !self.recipient_is_terminal(row, recipient)
             })
             .filter_map(|(_, row)| match super::offers::offered_at(row, recipient) {
-                Ok(Some(_)) => Some(Ok(SequencedEnvelope {
+                Ok(Some(_)) => Some(row.envelope.resident().map(|envelope| SequencedEnvelope {
                     sequence: row.sequence,
-                    envelope: row.envelope.clone(),
+                    envelope,
                 })),
                 Ok(None) => None,
                 Err(error) => Some(Err(error)),
@@ -157,18 +157,22 @@ impl MessageService {
             recipient: cursor.recipient.clone(),
             last_sequence: 0,
         };
-        Ok(self
-            .receive_after_indexed(
-                &start,
-                identity,
-                now_ms,
-                usize::MAX,
-                usize::MAX,
-                super::receive::ReceiveSelectionFilter {
-                    include_committed: true,
-                    native_commits: None,
-                },
-            )
+        let selection = self.receive_after_indexed(
+            &start,
+            identity,
+            now_ms,
+            usize::MAX,
+            usize::MAX,
+            super::receive::ReceiveSelectionFilter {
+                through_sequence: Some(sequence),
+                include_committed: true,
+                native_commits: None,
+            },
+        );
+        if let Some(error) = selection.unavailable {
+            return Err(error);
+        }
+        Ok(selection
             .batch
             .messages
             .into_iter()
@@ -192,8 +196,7 @@ impl MessageService {
             MessageError::forbidden("delivery cursor recipient is not registered")
         })?;
         let mut sequences = std::collections::BTreeSet::new();
-        Ok(self
-            .queue
+        self.queue
             .iter()
             .filter(|queued| queued.sequence <= sequence)
             .filter(|queued| self.accepted_recipient(queued, recipient))
@@ -201,10 +204,15 @@ impl MessageService {
             .filter(|queued| recipient_matches(identity, &queued.envelope.recipient))
             .filter(|queued| audience_matches(identity, &queued.audience))
             .filter(|queued| sequences.insert(queued.sequence))
-            .map(|queued| SequencedEnvelope {
-                sequence: queued.sequence,
-                envelope: queued.envelope.clone(),
+            .map(|queued| {
+                queued
+                    .envelope
+                    .resident()
+                    .map(|envelope| SequencedEnvelope {
+                        sequence: queued.sequence,
+                        envelope,
+                    })
             })
-            .collect())
+            .collect()
     }
 }

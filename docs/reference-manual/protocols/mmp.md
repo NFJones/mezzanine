@@ -301,6 +301,11 @@ introduced. Policy is destination-owned, not saved in schema9 message state:
 `from_snapshot_state` explicitly uses production defaults, while a narrowed
 destination must use `from_snapshot_state_with_pending_limits` with its policy.
 Over-cap current or reconstructed legacy custody is refused, never truncated.
+Complete snapshot capture also fails if retained source content is unavailable;
+it never omits accepted pending mail or substitutes empty payloads. This error
+propagates through session snapshots and host checkpoints. Current production
+custody remains resident; this failure boundary does not enable disk spill or
+add a restart-delivery guarantee.
 Replay limits and payload validation remain independent; a pending byte budget
 does not enlarge the maximum individually acceptable envelope.
 

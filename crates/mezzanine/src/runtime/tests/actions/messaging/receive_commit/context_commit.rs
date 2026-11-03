@@ -404,7 +404,7 @@ fn runtime_receive_commit_fault_windows_recover_one_context_cursor_and_row() {
         if !fault_after_cursor && !presentation_failure && !post_admission_failure {
             let mut snapshot =
                 crate::storage::snapshot::SessionSnapshotPayload::from_session(service.session());
-            snapshot.message_state = Some(service.message_service().snapshot_state());
+            snapshot.message_state = Some(service.message_service().snapshot_state().unwrap());
             snapshot.unsettled_peer_presentations =
                 service.snapshot_unsettled_received_peer_message_presentations();
             assert!(snapshot.unsettled_peer_presentations.is_empty());
@@ -602,7 +602,7 @@ fn runtime_post_context_pre_cursor_expiry_does_not_admit_provider_work() {
     );
     let mut snapshot =
         crate::storage::snapshot::SessionSnapshotPayload::from_session(service.session());
-    snapshot.message_state = Some(service.message_service().snapshot_state());
+    snapshot.message_state = Some(service.message_service().snapshot_state().unwrap());
     snapshot.validate().unwrap();
     assert_eq!(
         service

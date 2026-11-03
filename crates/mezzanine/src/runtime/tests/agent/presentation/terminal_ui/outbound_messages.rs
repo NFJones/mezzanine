@@ -232,7 +232,7 @@ fn runtime_outbound_plaintext_crlf_growth_keeps_frozen_source() {
                 correlation_id: None,
             },
         };
-        let messages = service.message_service().snapshot_state();
+        let messages = service.message_service().snapshot_state().unwrap();
         service
             .settle_accepted_outbound_message_preview("%1", &turn.turn_id, 0, &action)
             .unwrap();
@@ -241,7 +241,10 @@ fn runtime_outbound_plaintext_crlf_growth_keeps_frozen_source() {
             .settle_accepted_outbound_message_preview("%1", &turn.turn_id, 0, &action)
             .unwrap();
         assert_eq!(service.agent_pane_screen("%1").unwrap(), &settled);
-        assert_eq!(service.message_service().snapshot_state(), messages);
+        assert_eq!(
+            service.message_service().snapshot_state().unwrap(),
+            messages
+        );
         let mut current = CopyMode::from_screen(&settled, 12).unwrap();
         current.set_agent_surface(true);
         let last = current

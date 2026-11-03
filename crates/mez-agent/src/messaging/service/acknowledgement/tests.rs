@@ -176,7 +176,7 @@ fn original_ack_stays_pending_until_actual_worker_completion_and_actor_adoption(
         .unwrap();
     assert!(ticket.metadata_bytes() > 48);
     let weak_source = Arc::downgrade(service.pending.get(&sequence).unwrap());
-    let before = service.snapshot_state();
+    let before = service.snapshot_state().unwrap();
     let write = service.begin_acknowledgement_write(&ticket).unwrap();
     let gate = Arc::new(std::sync::Barrier::new(2));
     let worker_gate = gate.clone();
@@ -184,7 +184,7 @@ fn original_ack_stays_pending_until_actual_worker_completion_and_actor_adoption(
         worker_gate.wait();
         write.persist(&mut Store(true))
     });
-    assert_eq!(service.snapshot_state(), before);
+    assert_eq!(service.snapshot_state().unwrap(), before);
     assert!(
         service
             .advance_subscription(&target.agent_id, sequence)
@@ -234,7 +234,8 @@ fn committed_original_never_advances_replacement_recipient_or_replays_evicted_ma
     else {
         panic!("expected commit")
     };
-    let mut foreign = MessageService::from_snapshot_state(&service.snapshot_state()).unwrap();
+    let mut foreign =
+        MessageService::from_snapshot_state(&service.snapshot_state().unwrap()).unwrap();
     assert!(foreign.publish_acknowledgement(&commit).is_err());
     service.retire_agent_identity(&target.agent_id);
     service.ensure_agent_identity(target.clone(), 3).unwrap();
@@ -334,21 +335,21 @@ fn invalid_budget_and_stale_cancel_preserve_both_ledger_and_original_reservation
         )
         .unwrap()
         .sequence;
-    let before = service.snapshot_state();
+    let before = service.snapshot_state().unwrap();
     assert!(
         service
             .prepare_acknowledgement(&target.agent_id, sequence, MAX_METADATA)
             .is_err()
     );
-    assert_eq!(service.snapshot_state(), before);
+    assert_eq!(service.snapshot_state().unwrap(), before);
     service.receive_subscribed(&target.agent_id, 2, 1).unwrap();
-    let before = service.snapshot_state();
+    let before = service.snapshot_state().unwrap();
     assert!(
         service
             .prepare_acknowledgement(&target.agent_id, sequence, 1)
             .is_err()
     );
-    assert_eq!(service.snapshot_state(), before);
+    assert_eq!(service.snapshot_state().unwrap(), before);
     let first = service
         .prepare_acknowledgement(&target.agent_id, sequence, MAX_METADATA)
         .unwrap()
@@ -427,7 +428,7 @@ fn frozen_expiry_exclusion_cannot_be_reoffered_on_clock_rollback_or_become_ack()
     let first = service.pending.get(&first).unwrap();
     assert!(!first.acknowledged.lock().unwrap()[0]);
     assert_eq!(*first.ack_expiry_observed_at_ms.lock().unwrap(), Some(20));
-    MessageService::from_snapshot_state(&service.snapshot_state()).unwrap();
+    MessageService::from_snapshot_state(&service.snapshot_state().unwrap()).unwrap();
 }
 
 /// An ACK reservation protects only its own target slots while another accepted

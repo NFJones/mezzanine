@@ -65,7 +65,7 @@ fn generic_retirement_keeps_existing_replay_bounds() {
             .unwrap();
         assert!(service.queue.len() <= 2);
         assert!(service.queued_bytes <= 32);
-        MessageService::from_snapshot_state(&service.snapshot_state()).unwrap();
+        MessageService::from_snapshot_state(&service.snapshot_state().unwrap()).unwrap();
     }
     assert_eq!(service.queue.len(), 2);
     assert_eq!(service.queued_bytes, 32);
@@ -124,7 +124,7 @@ fn assert_shared_retirement(ack_first: bool) {
                 10,
             )
             .unwrap();
-        let original = service.queue[0].envelope.clone();
+        let original = service.queue[0].envelope.resident().unwrap();
         if ack_first {
             let offered = service
                 .fanout_ready_for(&first.agent_id, 11, 1)
@@ -132,17 +132,17 @@ fn assert_shared_retirement(ack_first: bool) {
                 .unwrap();
             service.acknowledge_fanout_batch(&offered).unwrap();
         }
-        let before = service.snapshot_state();
+        let before = service.snapshot_state().unwrap();
         let slow_cursor = service.subscription(&second.agent_id).unwrap().clone();
         assert!(service.retire_agent_identity(&first.agent_id));
-        let retired = service.snapshot_state();
+        let retired = service.snapshot_state().unwrap();
         assert_eq!(retired.retained_messages, before.retained_messages);
         assert_eq!(retired.accepted_messages, before.accepted_messages);
         assert_eq!(service.subscription(&second.agent_id), Some(&slow_cursor));
         assert!(service.registered_identity(&first.agent_id).is_none());
         assert!(service.subscription(&first.agent_id).is_none());
         assert!(!service.retire_agent_identity(&first.agent_id));
-        assert_eq!(service.snapshot_state(), retired);
+        assert_eq!(service.snapshot_state().unwrap(), retired);
         let slow = service
             .fanout_ready_for(&second.agent_id, 12, 1)
             .unwrap()
@@ -150,7 +150,8 @@ fn assert_shared_retirement(ack_first: bool) {
         assert_eq!(slow.batch.messages[0].sequence, accepted.sequence);
         assert!(Arc::ptr_eq(&slow.batch.messages[0].envelope, &original));
         assert_eq!(service.queued_bytes, original.payload.len());
-        let mut restored = MessageService::from_snapshot_state(&service.snapshot_state()).unwrap();
+        let mut restored =
+            MessageService::from_snapshot_state(&service.snapshot_state().unwrap()).unwrap();
         restored.ensure_agent_identity(first.clone(), 13).unwrap();
         restored
             .subscribe_from_retained_start(&first.agent_id)
@@ -179,7 +180,7 @@ fn assert_shared_retirement(ack_first: bool) {
                     .is_empty()
             );
         }
-        let before_retry = restored.snapshot_state();
+        let before_retry = restored.snapshot_state().unwrap();
         assert_eq!(
             restored
                 .accept_at_with_scope(
@@ -191,7 +192,7 @@ fn assert_shared_retirement(ack_first: bool) {
                 .unwrap(),
             accepted
         );
-        assert_eq!(restored.snapshot_state(), before_retry);
+        assert_eq!(restored.snapshot_state().unwrap(), before_retry);
         let mut conflicting = envelope;
         conflicting.payload.push_str(" changed");
         assert_eq!(
@@ -201,7 +202,7 @@ fn assert_shared_retirement(ack_first: bool) {
                 .kind(),
             MessageErrorKind::Conflict
         );
-        assert_eq!(restored.snapshot_state(), before_retry);
+        assert_eq!(restored.snapshot_state().unwrap(), before_retry);
         let ready = restored.fanout_ready(15, 10);
         assert_eq!(ready.len(), 1);
         assert_eq!(ready[0].recipient, second.agent_id);
@@ -211,7 +212,10 @@ fn assert_shared_retirement(ack_first: bool) {
         );
         restored.acknowledge_fanout_batch(&ready[0]).unwrap();
         assert!(restored.fanout_ready(16, 10).is_empty());
-        assert_eq!(restored.snapshot_state().retained_messages.len(), 1);
-        MessageService::from_snapshot_state(&restored.snapshot_state()).unwrap();
+        assert_eq!(
+            restored.snapshot_state().unwrap().retained_messages.len(),
+            1
+        );
+        MessageService::from_snapshot_state(&restored.snapshot_state().unwrap()).unwrap();
     }
 }

@@ -25,7 +25,7 @@ fn framed_recipient_ack_requires_its_own_offer_before_cursor_mutation() {
         r#"{{"protocol":"mmp/1","type":"ack","last_sequence":{}}}"#,
         accepted.sequence
     ));
-    let before = service.snapshot_state();
+    let before = service.snapshot_state().unwrap();
     let before_connection = connection.clone();
     let (response, _) = handle_mmp_frame(&ack, 4096, &mut service, &mut connection, 2).unwrap();
     let (body, _) = decode_mmp_frame(&response, 4096).unwrap();
@@ -33,7 +33,7 @@ fn framed_recipient_ack_requires_its_own_offer_before_cursor_mutation() {
         serde_json::from_str::<serde_json::Value>(&body).unwrap()["error"]["code"],
         "invalid_envelope"
     );
-    assert_eq!(service.snapshot_state(), before);
+    assert_eq!(service.snapshot_state().unwrap(), before);
     assert_eq!(connection, before_connection);
     let receive = encode_mmp_body(r#"{"protocol":"mmp/1","type":"transport/receive","limit":1}"#);
     let (response, _) = handle_mmp_frame(&receive, 4096, &mut service, &mut connection, 3).unwrap();

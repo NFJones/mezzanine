@@ -141,6 +141,25 @@ no recovery queue, capacity inflation or input replay is introduced. Real drain
 progress retries retained sources without replacing the mandatory drained batch
 with an optional refill failure.
 
+### Canonical message sources and payload access
+
+MMP replay, pending delivery and acceptance receipts share one canonical
+occurrence. The receipt owns its mutable delivery status, not another payload
+reference. Restoring schema9 reconstructs the same sharing relationship.
+Payload-free immutable metadata supports routing, original TTL, recipient
+indexes, sender provenance and logical byte accounting. Access to complete
+envelopes explicitly acquires an existing resident allocation and never reads
+storage. Weak tracking lets that acquisition reuse an external delivery or
+worker pin after the cache releases its own pin.
+
+Missing bytes stop an eligible recipient prefix; they do not authorize delivery
+of a later message. Other recipients can continue through fair fanout. Complete
+snapshot capture is fallible: unavailable source bytes fail capture rather than
+silently omit pending mail, erase receipts or replace content. Host checkpoints,
+snapshot control and startup rollback propagate that failure. Production cache
+eviction remains unavailable until qualified reload and recovery are connected;
+the current resident custody limits and snapshot schema remain unchanged.
+
 ## Ownership and tests
 
 Follow the closest owner rather than forwarding contracts through

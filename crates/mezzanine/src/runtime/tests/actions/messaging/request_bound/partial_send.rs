@@ -100,7 +100,7 @@ fn request_bound_accepted_send_retains_success_across_receiver_commit_failure() 
         } else {
             "after context storage"
         }));
-        let state = service.message_service().snapshot_state();
+        let state = service.message_service().snapshot_state().unwrap();
         let accepted: Vec<_> = state
             .accepted_messages
             .iter()
@@ -145,6 +145,7 @@ fn request_bound_accepted_send_retains_success_across_receiver_commit_failure() 
             service
                 .message_service()
                 .snapshot_state()
+                .unwrap()
                 .accepted_messages
                 .iter()
                 .filter(|row| row.envelope.payload == "PARTIALLY_ACCEPTED_TRACKED_REQUEST")
@@ -280,7 +281,7 @@ fn request_bound_approved_partial_send_consumes_decision_and_freezes_intent() {
                 .state,
             AgentTurnState::Running
         );
-        let transport = service.message_service().snapshot_state();
+        let transport = service.message_service().snapshot_state().unwrap();
         assert_eq!(
             service
                 .resume_approved_blocked_agent_action(&approval.id, &decided, &primary)
@@ -303,7 +304,10 @@ fn request_bound_approved_partial_send_consumes_decision_and_freezes_intent() {
                 .unwrap(),
             None
         );
-        assert_eq!(service.message_service().snapshot_state(), transport);
+        assert_eq!(
+            service.message_service().snapshot_state().unwrap(),
+            transport
+        );
         assert_eq!(
             service.tracked_message_request_usage().0.0,
             usize::from(tracked)

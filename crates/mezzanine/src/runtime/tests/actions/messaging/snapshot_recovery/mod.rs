@@ -22,7 +22,7 @@ mod legacy_reconstruction {
     #[test]
     fn runtime_v5_restore_rejects_oversized_peer_receipt_reconstruction_atomically() {
         let mut service = test_runtime_service();
-        let mut message_state = service.message_service().snapshot_state();
+        let mut message_state = service.message_service().snapshot_state().unwrap();
         message_state.retention_messages = 1_025;
         *service.message_service_mut() =
             MessageService::from_snapshot_state(&message_state).unwrap();
@@ -87,7 +87,7 @@ mod legacy_reconstruction {
         let mut snapshot =
             crate::storage::snapshot::SessionSnapshotPayload::from_session(service.session());
         snapshot.payload_version = 5;
-        snapshot.message_state = Some(service.message_service().snapshot_state());
+        snapshot.message_state = Some(service.message_service().snapshot_state().unwrap());
         assert!(snapshot.unsettled_peer_presentations.is_empty());
 
         service
@@ -186,7 +186,7 @@ mod legacy_reconstruction {
             let mut snapshot =
                 crate::storage::snapshot::SessionSnapshotPayload::from_session(service.session());
             snapshot.payload_version = 5;
-            snapshot.message_state = Some(service.message_service().snapshot_state());
+            snapshot.message_state = Some(service.message_service().snapshot_state().unwrap());
             service
                 .restore_message_state_for_restored_snapshot(&snapshot)
                 .unwrap();

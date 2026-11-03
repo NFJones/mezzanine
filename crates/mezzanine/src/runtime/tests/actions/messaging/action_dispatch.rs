@@ -59,7 +59,11 @@ fn runtime_local_message_cursor_restores_exactly_once_in_arrival_order() {
             .unwrap();
     }
     let restored_messages = mez_agent::messaging::MessageService::from_snapshot_state(
-        &before_restart.control.message_service().snapshot_state(),
+        &before_restart
+            .control
+            .message_service()
+            .snapshot_state()
+            .unwrap(),
     )
     .unwrap();
     let mut after_restart = RuntimeSessionService::from_parts(
@@ -112,7 +116,11 @@ fn runtime_local_message_cursor_restores_exactly_once_in_arrival_order() {
     );
 
     let restored_again = mez_agent::messaging::MessageService::from_snapshot_state(
-        &after_restart.control.message_service().snapshot_state(),
+        &after_restart
+            .control
+            .message_service()
+            .snapshot_state()
+            .unwrap(),
     )
     .unwrap();
     let mut second_restart = RuntimeSessionService::from_parts(

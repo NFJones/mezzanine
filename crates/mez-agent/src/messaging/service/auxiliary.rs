@@ -86,6 +86,38 @@ pub(super) fn envelope_bytes(envelope: &Envelope) -> usize {
     )
 }
 
+/// Charges retained metadata without acquiring its payload allocation.
+pub(super) fn retained_envelope_bytes(envelope: &super::source::EnvelopeMetadata) -> usize {
+    let sender = &envelope.sender;
+    let (kind, value) = recipient_parts(&envelope.recipient);
+    parts_bytes(
+        [
+            envelope.protocol,
+            &envelope.id,
+            &envelope.message_type,
+            &envelope.time,
+            &envelope.content_type,
+            envelope.correlation_id.as_deref().unwrap_or(""),
+            sender.agent_id.as_str(),
+            sender.pane_id.as_ref().map_or("", PaneId::as_str),
+            sender.window_id.as_ref().map_or("", WindowId::as_str),
+            sender.role.as_deref().unwrap_or(""),
+            sender.objective.as_deref().unwrap_or(""),
+            sender
+                .project_scope
+                .as_ref()
+                .map_or("", ProjectScopeId::snapshot_value),
+            kind,
+            value,
+        ],
+        &sender.capabilities,
+        envelope
+            .extension_fields
+            .iter()
+            .map(|(key, value)| (key.as_str(), value.as_str())),
+    )
+}
+
 /// Applies exactly the same logical charge to borrowed snapshot fields.
 fn snapshot_envelope_bytes(envelope: &MessageEnvelopeSnapshot) -> usize {
     let sender = &envelope.sender;
@@ -130,13 +162,13 @@ impl MessageService {
                 break;
             };
             retained_count -= 1;
-            payload_bytes = payload_bytes.saturating_sub(evicted.envelope.payload.len());
+            payload_bytes = payload_bytes.saturating_sub(evicted.envelope.payload_bytes);
         }
         let mut bytes = envelope_bytes(envelope);
         let mut seen = HashSet::new();
         for row in retained.chain(self.pending.values()) {
             if seen.insert(row.sequence) {
-                bytes = bytes.saturating_add(envelope_bytes(&row.envelope));
+                bytes = bytes.saturating_add(retained_envelope_bytes(&row.envelope));
             }
         }
         if bytes > self.pending_limits.auxiliary_bytes

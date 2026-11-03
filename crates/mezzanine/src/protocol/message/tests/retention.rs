@@ -89,7 +89,7 @@ fn accepted_message_retention_tracks_retained_queue() {
     service
         .accept_at_with_scope(&sender.agent_id, second, MessageScope::Session, 0)
         .unwrap();
-    let snapshot = service.snapshot_state();
+    let snapshot = service.snapshot_state().unwrap();
 
     assert_eq!(snapshot.retained_messages.len(), 1);
     assert_eq!(snapshot.accepted_messages.len(), 2);
@@ -106,7 +106,7 @@ fn accepted_message_retention_tracks_retained_queue() {
     service
         .advance_subscription(&sender.agent_id, selected.messages[0].sequence)
         .unwrap();
-    let committed = service.snapshot_state();
+    let committed = service.snapshot_state().unwrap();
     assert!(committed.custody_messages.as_ref().unwrap().is_empty());
     assert_eq!(committed.accepted_messages.len(), 1);
     assert_eq!(committed.accepted_messages[0].envelope.id, "m2");

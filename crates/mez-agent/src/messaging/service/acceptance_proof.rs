@@ -322,7 +322,10 @@ impl MessageService {
                         &row.recipient_bindings,
                         row.envelope.correlation_id.as_deref(),
                     )
-                    && qualifies(&row.envelope)
+                    && row
+                        .envelope
+                        .resident()
+                        .is_ok_and(|envelope| qualifies(&envelope))
             })
     }
 

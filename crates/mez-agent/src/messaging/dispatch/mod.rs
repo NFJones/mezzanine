@@ -810,7 +810,7 @@ mod tests {
             "{session}"
         );
 
-        let service_snapshot = service.snapshot_state();
+        let service_snapshot = service.snapshot_state().unwrap();
         let invalid_scope = dispatch_mmp_body(
             r#"{"protocol":"mmp/1","type":"discover","scope":"workspace"}"#,
             &mut service,
@@ -821,7 +821,7 @@ mod tests {
             invalid_scope.contains("MMP envelope scope must be project or session"),
             "{invalid_scope}"
         );
-        assert_eq!(service.snapshot_state(), service_snapshot);
+        assert_eq!(service.snapshot_state().unwrap(), service_snapshot);
         for invalid_scope in ["true", "1", "[]", "{}"] {
             let response = dispatch_mmp_body(
                 &format!(r#"{{"protocol":"mmp/1","type":"discover","scope":{invalid_scope}}}"#),
@@ -842,7 +842,7 @@ mod tests {
                 !response.contains(other_project.agent_id.as_str()),
                 "{response}"
             );
-            assert_eq!(service.snapshot_state(), service_snapshot);
+            assert_eq!(service.snapshot_state().unwrap(), service_snapshot);
         }
         for malformed_body in [
             r#"{"protocol":"mmp/1","type":"discover""#,
@@ -859,7 +859,7 @@ mod tests {
                 !response.contains(other_project.agent_id.as_str()),
                 "{response}"
             );
-            assert_eq!(service.snapshot_state(), service_snapshot);
+            assert_eq!(service.snapshot_state().unwrap(), service_snapshot);
         }
     }
 

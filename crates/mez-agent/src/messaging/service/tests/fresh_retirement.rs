@@ -47,7 +47,7 @@ fn fresh_retirement_preserves_receipts_and_restored_id_allocation() {
     let delivery = service
         .accept_at_with_scope(&raw.agent_id, envelope.clone(), MessageScope::Session, 10)
         .unwrap();
-    let before = service.snapshot_state();
+    let before = service.snapshot_state().unwrap();
     assert!(
         service
             .retire_fresh_observational_identity(&raw.agent_id)
@@ -58,7 +58,7 @@ fn fresh_retirement_preserves_receipts_and_restored_id_allocation() {
             .retire_fresh_observational_identity(&raw.agent_id)
             .unwrap()
     );
-    let after = service.snapshot_state();
+    let after = service.snapshot_state().unwrap();
     assert_eq!(after.retained_messages, before.retained_messages);
     assert_eq!(after.accepted_messages, before.accepted_messages);
     assert_eq!(service.subscription(&target.agent_id), Some(&cursor));
@@ -77,7 +77,7 @@ fn fresh_retirement_preserves_receipts_and_restored_id_allocation() {
         next.agent_id, raw.agent_id,
         "restore reused retained sender provenance"
     );
-    MessageService::from_snapshot_state(&restored.snapshot_state()).unwrap();
+    MessageService::from_snapshot_state(&restored.snapshot_state().unwrap()).unwrap();
     // Explicit service-level rebind is only a receipt control, not a raw socket
     // reconnect operation. Its reusable floor is consumed by subscription.
     restored.ensure_agent_identity(raw.clone(), 11).unwrap();
@@ -91,7 +91,7 @@ fn fresh_retirement_preserves_receipts_and_restored_id_allocation() {
         delivery
     );
     assert_eq!(
-        restored.snapshot_state().accepted_messages,
+        restored.snapshot_state().unwrap().accepted_messages,
         before.accepted_messages
     );
 }
@@ -150,7 +150,7 @@ fn fresh_authored_floor_evicts_without_weakening_reusable_pane_floor() {
         service.retired_delivery_floors[&pane.agent_id].last_sequence,
         second.sequence
     );
-    let after = service.snapshot_state();
+    let after = service.snapshot_state().unwrap();
     assert_eq!(after.retained_messages.len(), 2);
     assert!(
         after
@@ -217,20 +217,20 @@ fn assert_fresh_objective_versions(send_changed: bool) {
     service
         .update_agent_objective(&raw.agent_id, Some("objective C unsent"), 13)
         .unwrap();
-    let before = service.snapshot_state();
+    let before = service.snapshot_state().unwrap();
     assert!(
         service
             .retire_fresh_observational_identity(&raw.agent_id)
             .unwrap(),
         "valid objective drift must not become a critical disconnect"
     );
-    let after = service.snapshot_state();
+    let after = service.snapshot_state().unwrap();
     assert_eq!(after.retained_messages, before.retained_messages);
     assert_eq!(after.accepted_messages, before.accepted_messages);
     assert!(service.registered_identity(&raw.agent_id).is_none());
     assert!(service.subscription(&raw.agent_id).is_none());
     let restored = MessageService::from_snapshot_state(&after).unwrap();
-    assert_eq!(restored.snapshot_state(), after);
+    assert_eq!(restored.snapshot_state().unwrap(), after);
 }
 
 /// A caller claiming fresh ownership of pane state or changed immutable sender metadata
@@ -241,13 +241,13 @@ fn fresh_retirement_rejects_changed_ownership_and_sender_evidence() {
     let mut service = MessageService::default();
     let pane = service.register_agent(Some(PaneId::new('%', 1)), None, "pane", Vec::new());
     service.subscribe(&pane.agent_id).unwrap();
-    let before = service.snapshot_state();
+    let before = service.snapshot_state().unwrap();
     assert!(
         service
             .retire_fresh_observational_identity(&pane.agent_id)
             .is_err()
     );
-    assert_eq!(service.snapshot_state(), before);
+    assert_eq!(service.snapshot_state().unwrap(), before);
     let raw = service.register_agent(None, None, "raw", Vec::new());
     service
         .accept_at_with_scope(
@@ -259,13 +259,13 @@ fn fresh_retirement_rejects_changed_ownership_and_sender_evidence() {
         .unwrap();
     // Test-local shared-state corruption, not a supported objective update.
     service.registered.get_mut(&raw.agent_id).unwrap().role = Some("foreign role".to_string());
-    let before = service.snapshot_state();
+    let before = service.snapshot_state().unwrap();
     assert!(
         service
             .retire_fresh_observational_identity(&raw.agent_id)
             .is_err()
     );
-    assert_eq!(service.snapshot_state(), before);
+    assert_eq!(service.snapshot_state().unwrap(), before);
 }
 
 /// Builds two genuine objective versions followed by unrelated retained mail.
@@ -326,7 +326,7 @@ fn objective_history_fixture() -> (MessageService, SenderIdentity) {
 #[test]
 fn fresh_objective_versions_prune_monotonically_with_authored_fifo() {
     let (mut service, target) = objective_history_fixture();
-    let before = service.snapshot_state();
+    let before = service.snapshot_state().unwrap();
     let floor = &before.retired_delivery_floors[0];
     let versions = floor.fresh_sender_versions.as_ref().unwrap();
     assert_eq!(versions.len(), 2);
@@ -341,7 +341,7 @@ fn fresh_objective_versions_prune_monotonically_with_authored_fifo() {
             15,
         )
         .unwrap();
-    let after_a = service.snapshot_state();
+    let after_a = service.snapshot_state().unwrap();
     assert_eq!(
         after_a.retired_delivery_floors[0].fresh_sender_versions,
         Some(vec![versions[1].clone()])
@@ -351,7 +351,8 @@ fn fresh_objective_versions_prune_monotonically_with_authored_fifo() {
     assert_eq!(
         MessageService::from_snapshot_state(&after_a)
             .unwrap()
-            .snapshot_state(),
+            .snapshot_state()
+            .unwrap(),
         after_a
     );
     service
@@ -362,14 +363,15 @@ fn fresh_objective_versions_prune_monotonically_with_authored_fifo() {
             16,
         )
         .unwrap();
-    let after_b = service.snapshot_state();
+    let after_b = service.snapshot_state().unwrap();
     assert!(after_b.retired_delivery_floors.is_empty());
     assert_eq!(after_b.retained_messages.len(), 3);
     assert_eq!(after_b.accepted_messages.len(), 3);
     assert_eq!(
         MessageService::from_snapshot_state(&after_b)
             .unwrap()
-            .snapshot_state(),
+            .snapshot_state()
+            .unwrap(),
         after_b
     );
 }
@@ -404,7 +406,7 @@ fn fresh_recurring_objective_reorders_after_prefix_eviction() {
     service
         .retire_fresh_observational_identity(&raw.agent_id)
         .unwrap();
-    let before = service.snapshot_state();
+    let before = service.snapshot_state().unwrap();
     MessageService::from_snapshot_state(&before).unwrap();
     service
         .accept_at_with_scope(
@@ -414,7 +416,7 @@ fn fresh_recurring_objective_reorders_after_prefix_eviction() {
             13,
         )
         .unwrap();
-    let after = service.snapshot_state();
+    let after = service.snapshot_state().unwrap();
     assert_eq!(after.retained_messages[..2], before.retained_messages[1..]);
     for accepted in before
         .accepted_messages
@@ -440,7 +442,8 @@ fn fresh_recurring_objective_reorders_after_prefix_eviction() {
     assert_eq!(
         MessageService::from_snapshot_state(&after)
             .unwrap()
-            .snapshot_state(),
+            .snapshot_state()
+            .unwrap(),
         after
     );
 }
@@ -462,7 +465,7 @@ fn legacy_schema3_generic_floor_roundtrip_is_unchanged() {
         )
         .unwrap();
     service.retire_agent_identity(&pane.agent_id);
-    let mut legacy = service.snapshot_state();
+    let mut legacy = service.snapshot_state().unwrap();
     legacy.schema_version = 3;
     legacy.sender_provenance = None;
     legacy.custody_messages = None;
@@ -502,7 +505,7 @@ fn legacy_schema3_generic_floor_roundtrip_is_unchanged() {
 #[test]
 fn fresh_snapshot_rejects_forged_or_unreferenced_versions() {
     let (service, _) = objective_history_fixture();
-    let before = service.snapshot_state();
+    let before = service.snapshot_state().unwrap();
     assert_eq!(before.schema_version, 9);
     let mut corruptions = Vec::new();
     let mut empty = before.clone();
@@ -624,7 +627,7 @@ fn fresh_snapshot_rejects_forged_or_unreferenced_versions() {
             "forgery {index} was accepted"
         );
         assert_eq!(
-            service.snapshot_state(),
+            service.snapshot_state().unwrap(),
             before,
             "forgery mutated live state"
         );
@@ -636,7 +639,7 @@ fn fresh_snapshot_rejects_forged_or_unreferenced_versions() {
 /// allocation, while preserving exact envelopes/receipts and avoiding a raw
 /// non-sender floor that could otherwise grow with disconnect churn.
 fn assert_retained_recipient_reserved_after_restore(service: &MessageService, retired: &AgentId) {
-    let snapshot = service.snapshot_state();
+    let snapshot = service.snapshot_state().unwrap();
     assert!(
         snapshot
             .registered_agents
@@ -668,7 +671,7 @@ fn assert_retained_recipient_reserved_after_restore(service: &MessageService, re
             .messages
             .is_empty()
     );
-    let after = restored.snapshot_state();
+    let after = restored.snapshot_state().unwrap();
     assert_eq!(after.retained_messages, snapshot.retained_messages);
     assert_eq!(after.accepted_messages, snapshot.accepted_messages);
     assert_eq!(
@@ -730,7 +733,14 @@ fn fresh_recipient_is_reserved_after_authored_floor_evicts() {
     service
         .retire_fresh_observational_identity(&raw.agent_id)
         .unwrap();
-    assert_eq!(service.snapshot_state().retired_delivery_floors.len(), 1);
+    assert_eq!(
+        service
+            .snapshot_state()
+            .unwrap()
+            .retired_delivery_floors
+            .len(),
+        1
+    );
     service
         .accept_at_with_scope(
             &sender.agent_id,

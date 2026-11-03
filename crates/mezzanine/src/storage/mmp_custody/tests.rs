@@ -880,7 +880,8 @@ fn admission_worker_loss_after_real_commit_reconciles_same_disk_occurrence_once(
             None,
         )
         .unwrap();
-    let mut foreign = MessageService::from_snapshot_state(&service.snapshot_state()).unwrap();
+    let mut foreign =
+        MessageService::from_snapshot_state(&service.snapshot_state().unwrap()).unwrap();
     let write = service.begin_acceptance_write(&ticket).unwrap();
     let attempt = service.acceptance_write_attempt(&ticket).unwrap();
     let root = fixture.0.clone();
@@ -907,7 +908,13 @@ fn admission_worker_loss_after_real_commit_reconciles_same_disk_occurrence_once(
         .unwrap()
         .unwrap();
     drop(store);
-    assert!(service.snapshot_state().accepted_messages.is_empty());
+    assert!(
+        service
+            .snapshot_state()
+            .unwrap()
+            .accepted_messages
+            .is_empty()
+    );
     assert!(
         service
             .receive_subscribed(&target.agent_id, 18, 10)
@@ -968,5 +975,5 @@ fn admission_worker_loss_after_real_commit_reconciles_same_disk_occurrence_once(
             .unwrap(),
         1
     );
-    MessageService::from_snapshot_state(&service.snapshot_state()).unwrap();
+    MessageService::from_snapshot_state(&service.snapshot_state().unwrap()).unwrap();
 }

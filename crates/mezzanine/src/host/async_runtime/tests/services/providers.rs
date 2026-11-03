@@ -2317,7 +2317,7 @@ executable = "{bubblewrap_executable}"
         1,
         "{trace}"
     );
-    let message_state = exit.service.message_service().snapshot_state();
+    let message_state = exit.service.message_service().snapshot_state().unwrap();
     let terminal_result = message_state
         .accepted_messages
         .iter()

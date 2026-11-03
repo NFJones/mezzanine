@@ -316,7 +316,7 @@ async fn exercise_capacity_ack(
     shutdown.unwrap();
     let messages = exit.service.message_service_mut();
     if ack.is_ok() {
-        let snapshot = messages.snapshot_state();
+        let snapshot = messages.snapshot_state().unwrap();
         assert!(
             snapshot
                 .retained_messages
@@ -582,6 +582,7 @@ async fn raw_actor_reconciles_actual_postcommit_worker_loss_and_exact_duplicate(
             .service
             .message_service()
             .snapshot_state()
+            .unwrap()
             .next_sequence,
         2
     );
@@ -624,6 +625,7 @@ async fn raw_actor_storage_recovery_commits_original_without_caller_resend() {
             .service
             .message_service()
             .snapshot_state()
+            .unwrap()
             .next_sequence,
         2
     );

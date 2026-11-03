@@ -69,7 +69,7 @@ fn accepted_fanout_does_not_acquire_late_or_previously_offline_recipients() {
                 .is_empty()
         );
     }
-    let restored = MessageService::from_snapshot_state(&service.snapshot_state()).unwrap();
+    let restored = MessageService::from_snapshot_state(&service.snapshot_state().unwrap()).unwrap();
     assert_eq!(
         restored
             .receive_subscribed(&original.agent_id, 4, 10)
@@ -120,7 +120,7 @@ fn accepted_fanout_does_not_transfer_to_reused_recipient_identity() {
             .unwrap()
             .is_empty()
     );
-    let restored = MessageService::from_snapshot_state(&service.snapshot_state()).unwrap();
+    let restored = MessageService::from_snapshot_state(&service.snapshot_state().unwrap()).unwrap();
     assert!(restored.receive_for(&old.agent_id, 3).is_empty());
 }
 
@@ -179,7 +179,7 @@ fn recipient_binding_snapshot_rejects_incomplete_or_conflicting_evidence() {
             1,
         )
         .unwrap();
-    let before = service.snapshot_state();
+    let before = service.snapshot_state().unwrap();
     let mut candidates = Vec::new();
     let mut candidate = before.clone();
     candidate.registration_floors = None;
@@ -241,12 +241,13 @@ fn recipient_binding_snapshot_rejects_incomplete_or_conflicting_evidence() {
         )
         .unwrap();
         assert!(MessageService::from_snapshot_state(&decoded).is_err());
-        assert_eq!(service.snapshot_state(), before);
+        assert_eq!(service.snapshot_state().unwrap(), before);
     }
     assert_eq!(
         MessageService::from_snapshot_state(&before)
             .unwrap()
-            .snapshot_state(),
+            .snapshot_state()
+            .unwrap(),
         before
     );
 }
@@ -276,7 +277,7 @@ fn recipient_binding_capacity_is_atomic_and_reuses_evicted_metadata() {
             .queued_recipients,
         4096
     );
-    let before = service.snapshot_state();
+    let before = service.snapshot_state().unwrap();
     assert_eq!(
         service
             .accept_at_with_scope(
@@ -289,7 +290,7 @@ fn recipient_binding_capacity_is_atomic_and_reuses_evicted_metadata() {
             .kind(),
         MessageErrorKind::Capacity
     );
-    assert_eq!(service.snapshot_state(), before);
+    assert_eq!(service.snapshot_state().unwrap(), before);
     for worker in &workers {
         service.receive_subscribed(&worker.agent_id, 2, 1).unwrap();
         service.advance_subscription(&worker.agent_id, 1).unwrap();
@@ -303,7 +304,7 @@ fn recipient_binding_capacity_is_atomic_and_reuses_evicted_metadata() {
         )
         .unwrap();
     service.register_agent(None, None, "worker", Vec::new());
-    let before = service.snapshot_state();
+    let before = service.snapshot_state().unwrap();
     let error = service
         .accept_at_with_scope(
             &sender.agent_id,
@@ -314,7 +315,7 @@ fn recipient_binding_capacity_is_atomic_and_reuses_evicted_metadata() {
         .unwrap_err();
     assert_eq!(error.kind(), MessageErrorKind::Capacity);
     assert_eq!(crate::messaging::mmp_error_code(&error), "capacity");
-    assert_eq!(service.snapshot_state(), before);
+    assert_eq!(service.snapshot_state().unwrap(), before);
     MessageService::from_snapshot_state(&before).unwrap();
 }
 
@@ -337,7 +338,8 @@ fn recipient_binding_snapshot_reserves_retired_fanout_recipient_ids() {
     service
         .retire_fresh_observational_identity(&target.agent_id)
         .unwrap();
-    let mut restored = MessageService::from_snapshot_state(&service.snapshot_state()).unwrap();
+    let mut restored =
+        MessageService::from_snapshot_state(&service.snapshot_state().unwrap()).unwrap();
     let fresh = restored.register_agent(None, None, "worker", Vec::new());
     assert_ne!(fresh.agent_id, target.agent_id);
     assert!(restored.receive_for(&fresh.agent_id, 2).is_empty());
@@ -413,7 +415,7 @@ fn recipient_binding_byte_capacity_is_independent_of_payload_size() {
     target.agent_id = AgentId::opaque("r".repeat(1024 * 1024)).unwrap();
     target.role = Some("worker".into());
     service.ensure_agent_identity(target, 0).unwrap();
-    let before = service.snapshot_state();
+    let before = service.snapshot_state().unwrap();
     let error = service
         .accept_at_with_scope(
             &sender.agent_id,
@@ -424,7 +426,7 @@ fn recipient_binding_byte_capacity_is_independent_of_payload_size() {
         .unwrap_err();
     assert_eq!(error.kind(), MessageErrorKind::Capacity);
     assert!(error.message().len() < 100);
-    assert_eq!(service.snapshot_state(), before);
+    assert_eq!(service.snapshot_state().unwrap(), before);
 
     let mut bounded = MessageService::default();
     let sender = bounded.register_agent(None, None, "sender", Vec::new());
@@ -437,7 +439,7 @@ fn recipient_binding_byte_capacity_is_independent_of_payload_size() {
             1,
         )
         .unwrap();
-    let mut snapshot = bounded.snapshot_state();
+    let mut snapshot = bounded.snapshot_state().unwrap();
     snapshot.retained_messages[0]
         .recipient_bindings
         .as_mut()

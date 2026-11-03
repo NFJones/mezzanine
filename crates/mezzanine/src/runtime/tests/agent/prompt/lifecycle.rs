@@ -560,7 +560,7 @@ fn runtime_subagent_spawn_avoids_restored_legacy_lifecycle_message_id() {
             now_ms,
         )
         .unwrap();
-    let restored_message_state = service.message_service().snapshot_state();
+    let restored_message_state = service.message_service().snapshot_state().unwrap();
     *service.control.message_service_mut() =
         mez_agent::messaging::MessageService::from_snapshot_state(&restored_message_state).unwrap();
 
@@ -592,7 +592,11 @@ fn runtime_subagent_spawn_avoids_restored_legacy_lifecycle_message_id() {
         .unwrap();
     let spawned = serde_json::from_str::<serde_json::Value>(&spawned).unwrap();
     assert_eq!(spawned["turn"]["id"], "turn-2");
-    let accepted = service.message_service().snapshot_state().accepted_messages;
+    let accepted = service
+        .message_service()
+        .snapshot_state()
+        .unwrap()
+        .accepted_messages;
     assert!(
         accepted
             .iter()
@@ -674,6 +678,7 @@ fn runtime_subagent_repeated_task_state_updates_use_distinct_message_ids() {
     let blocked_ids = service
         .message_service()
         .snapshot_state()
+        .unwrap()
         .accepted_messages
         .into_iter()
         .filter(|message| {

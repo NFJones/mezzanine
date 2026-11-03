@@ -278,7 +278,8 @@ async fn dropped_root_retains_suspended_original_until_ack_worker_joins() {
     let fixture = Fixture::new(false);
     let root = fixture.root();
     let (mut service, sender, target, ack) = prepared(&root).await;
-    let mut foreign = MessageService::from_snapshot_state(&service.snapshot_state()).unwrap();
+    let mut foreign =
+        MessageService::from_snapshot_state(&service.snapshot_state().unwrap()).unwrap();
     let foreign_ack = foreign
         .prepare_acknowledgement(&target.agent_id, 1, 512 * 1024)
         .unwrap()

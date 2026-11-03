@@ -12,7 +12,7 @@ use mez_core::ids::{PaneId, WindowId};
 /// Snapshots only the canonical message owner; failed reconciliation must not
 /// mutate registration, presence, mail, acceptance receipts or subscriptions.
 fn message_snapshot(service: &RuntimeSessionService) -> serde_json::Value {
-    serde_json::to_value(service.message_service().snapshot_state()).unwrap()
+    serde_json::to_value(service.message_service().snapshot_state().unwrap()).unwrap()
 }
 
 /// Generic defaults retain an actual live worker's complete routing identity,

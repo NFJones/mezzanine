@@ -831,7 +831,7 @@ fn qualify_peer_presentation_restart_timing(
         .unwrap();
     let mut snapshot =
         crate::storage::snapshot::SessionSnapshotPayload::from_session(service.session());
-    snapshot.message_state = Some(service.message_service().snapshot_state());
+    snapshot.message_state = Some(service.message_service().snapshot_state().unwrap());
     snapshot.unsettled_peer_presentations =
         service.snapshot_unsettled_received_peer_message_presentations();
     for receipt in &mut snapshot.unsettled_peer_presentations {
@@ -877,7 +877,7 @@ fn qualify_peer_presentation_restart_timing(
             now_ms.saturating_add(1),
         )
         .unwrap();
-    snapshot.message_state = Some(evicting_messages.snapshot_state());
+    snapshot.message_state = Some(evicting_messages.snapshot_state().unwrap());
     assert!(
         snapshot
             .message_state

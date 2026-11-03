@@ -337,7 +337,7 @@ fn runtime_external_retirement_preserves_shared_message_traffic() {
                 )
                 .unwrap();
         }
-        let before = service.message_service().snapshot_state();
+        let before = service.message_service().snapshot_state().unwrap();
         match operation {
             "deregister" => {
                 assert!(external_request(&mut service, &mut hook, "agent/external/deregister", serde_json::json!({"launch_token":params["launch_token"],"generation":params["generation"],"external_session_id":"shared-run"})).get("result").is_some());
@@ -356,7 +356,7 @@ fn runtime_external_retirement_preserves_shared_message_traffic() {
                     .unwrap();
             }
         }
-        let after = service.message_service().snapshot_state();
+        let after = service.message_service().snapshot_state().unwrap();
         assert_eq!(
             after.retained_messages, before.retained_messages,
             "operation={operation}"
@@ -989,7 +989,7 @@ fn runtime_external_registration_snapshot_restore_invalidates_credentials() {
     assert!(registered.get("result").is_some(), "{registered}");
     let mut snapshot =
         crate::storage::snapshot::SessionSnapshotPayload::from_session(service.session());
-    snapshot.message_state = Some(service.message_service().snapshot_state());
+    snapshot.message_state = Some(service.message_service().snapshot_state().unwrap());
     service
         .restore_message_state_for_restored_snapshot(&snapshot)
         .unwrap();
