@@ -109,7 +109,10 @@ impl RecoveryAcceptanceStore<'_> {
         let prefix = format!("a1:{:016x}:", self.plan.sequence);
         let stage_key = format!("{prefix}stage");
         let commit_key = format!("{prefix}commit");
-        let (generation, count, batch) = position(self.store, &prefix)?;
+        let (generation, count, batch, watermark) = position(self.store, &prefix)?;
+        if count > 0 && self.plan.sequence > watermark {
+            return Err(changed());
+        }
         // Exact absence at the untouched starting generation is positive
         // noncommit evidence, including capacity refusal before any encoding.
         if count == 0 && generation == self.plan.generation {
@@ -354,25 +357,27 @@ fn integer(bytes: &[u8], offset: usize) -> Result<u64> {
     Ok(u64::from_le_bytes(value))
 }
 
-/// Bounded persisted position fields read by one SQLite statement.
-type FramedPosition = (i64, i64, Option<Vec<u8>>, Option<Vec<u8>>, Option<String>);
-
-/// Reads generation, prefix row count and bounded last-batch framing together.
-fn position(store: &MmpCustodyStore, prefix: &str) -> Result<(u64, usize, Vec<u8>)> {
-    let (generation,count,batch,store_id,owner): FramedPosition = store.connection.query_row(
-        "SELECT generation,(SELECT COUNT(*) FROM records WHERE substr(key,1,length(?1))=?1),CASE WHEN length(batch) IN (0,32) THEN batch ELSE NULL END,CASE WHEN length(store_id)=16 THEN store_id ELSE NULL END,CASE WHEN length(CAST(owner AS BLOB))<=256 THEN owner ELSE NULL END FROM state WHERE singleton=1",
-        [prefix],|row|Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?)),
-    ).map_err(database_error)?;
-    let generation = u64::try_from(generation).map_err(|_| changed())?;
-    let batch = batch.ok_or_else(changed)?;
-    if store_id.as_deref() != Some(store.store_id.as_slice())
-        || owner.as_deref() != Some(store.owner.as_str())
-        || (generation == 0 && !batch.is_empty())
-        || (generation > 0 && batch.len() != 32)
-    {
-        return Err(changed());
-    }
-    Ok((generation, checked_count(count)?, batch))
+/// Reads trusted state and the occurrence count in one pinned snapshot.
+fn position(store: &MmpCustodyStore, prefix: &str) -> Result<(u64, usize, Vec<u8>, u64)> {
+    let transaction = store
+        .connection
+        .unchecked_transaction()
+        .map_err(database_error)?;
+    let state = store.checked_state(&transaction)?;
+    let count: i64 = transaction
+        .query_row(
+            "SELECT COUNT(*) FROM records WHERE substr(key,1,length(?1))=?1",
+            [prefix],
+            |row| row.get(0),
+        )
+        .map_err(database_error)?;
+    store.finish_transaction(transaction)?;
+    Ok((
+        u64::try_from(state.generation).map_err(|_| changed())?,
+        checked_count(count)?,
+        state.batch,
+        state.watermark,
+    ))
 }
 
 /// Validates the completed tombstone and trusted store state in one snapshot
@@ -397,7 +402,8 @@ fn verify_completed_abort(
         )
         .map_err(database_error)?;
     let stage = abort.padded(stage_length);
-    if state.generation as u64 != generation
+    if abort.sequence > state.watermark
+        || state.generation as u64 != generation
         || rows != 1
         || read_record(&transaction, &format!("{prefix}stage"))?.as_deref()
             != Some(stage.as_slice())
@@ -405,7 +411,7 @@ fn verify_completed_abort(
         return Err(changed());
     }
     verify_abort_batch(prefix, &stage, abort, &state.batch)?;
-    transaction.commit().map_err(database_error)?;
+    store.finish_transaction(transaction)?;
     Ok(())
 }
 

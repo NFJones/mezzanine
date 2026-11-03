@@ -14,6 +14,7 @@
 //! runtime must additionally reserve all inflight/recipient/cache resources and
 //! qualify total physical footprint. No hardware power-loss guarantee is made.
 
+use std::cell::Cell;
 use std::collections::HashSet;
 use std::fs::{self, OpenOptions};
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
@@ -32,7 +33,7 @@ mod inventory;
 pub(crate) mod ownership;
 
 /// Version of this private row/receipt store, independent of message snapshots.
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 2;
 /// Maximum records in one off-actor transaction.
 const MAX_BATCH_RECORDS: usize = 64;
 /// Maximum measured key/preimage/value bytes plus framing in one batch.
@@ -82,6 +83,8 @@ pub(crate) struct CustodyCommit {
     digest: Vec<u8>,
     /// Persisted random allocation identity; equal session text is insufficient.
     store_id: Vec<u8>,
+    /// Exact watermark committed with this batch; no live allocator right.
+    watermark: u64,
 }
 
 impl CustodyCommit {
@@ -113,6 +116,12 @@ pub(crate) struct MmpCustodyStore {
     directory: fs::File,
     /// SQLite file identity captured around opening, not a receipt or secret.
     database_identity: FileIdentity,
+    /// Highest watermark this connection has actually committed or opened.
+    /// Failed transactions never advance this cache.
+    committed_watermark: Cell<u64>,
+    /// Whether the watermark began with this empty v2 allocation. A migrated
+    /// v1 store remains unqualified until a separate trusted restore protocol.
+    watermark_origin_trusted: bool,
 }
 
 /// Local filesystem object identity, used only alongside the live owner lock.
@@ -138,10 +147,21 @@ struct CustodyState {
     generation: i64,
     /// Empty only at generation zero; otherwise one exact batch digest.
     batch: Vec<u8>,
+    /// Highest sequence reserved by a committed first-stage transaction.
+    watermark: u64,
+    /// Whether this watermark covers the store since its original allocation.
+    watermark_origin_trusted: bool,
 }
 
 /// Nullable bounded fields read before validating persisted store state.
-type FramedState = (i64, Option<Vec<u8>>, Option<String>, Option<Vec<u8>>);
+type FramedState = (
+    i64,
+    Option<Vec<u8>>,
+    Option<String>,
+    Option<Vec<u8>>,
+    Option<Vec<u8>>,
+    i64,
+);
 
 impl MmpCustodyStore {
     /// Opens a private store for an exact trusted session owner.
@@ -218,7 +238,7 @@ impl MmpCustodyStore {
         let version: i64 = connection
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .map_err(database_error)?;
-        if version != 0 && version != SCHEMA_VERSION {
+        if !matches!(version, 0 | 1 | SCHEMA_VERSION) {
             return Err(MezError::invalid_state(
                 "unsupported MMP custody store schema",
             ));
@@ -267,13 +287,21 @@ impl MmpCustodyStore {
                     "unversioned nonempty MMP custody store",
                 ));
             }
-            transaction.execute_batch("CREATE TABLE state (singleton INTEGER PRIMARY KEY CHECK(singleton=1), owner TEXT NOT NULL, store_id BLOB NOT NULL CHECK(length(store_id)=16), generation INTEGER NOT NULL CHECK(generation>=0), batch BLOB NOT NULL); CREATE TABLE records (key TEXT PRIMARY KEY, value BLOB NOT NULL, digest BLOB NOT NULL CHECK(length(digest)=32)); PRAGMA user_version=1;").map_err(database_error)?;
+            transaction.execute_batch("CREATE TABLE state (singleton INTEGER PRIMARY KEY CHECK(singleton=1), owner TEXT NOT NULL, store_id BLOB NOT NULL CHECK(length(store_id)=16), generation INTEGER NOT NULL CHECK(generation>=0), batch BLOB NOT NULL, sequence_watermark BLOB NOT NULL CHECK(length(sequence_watermark)=8), watermark_origin_trusted INTEGER NOT NULL CHECK(watermark_origin_trusted IN (0,1))); CREATE TABLE records (key TEXT PRIMARY KEY, value BLOB NOT NULL, digest BLOB NOT NULL CHECK(length(digest)=32)); PRAGMA user_version=2;").map_err(database_error)?;
             transaction
                 .execute(
-                    "INSERT INTO state VALUES(1,?1,?2,0,X'')",
+                    "INSERT INTO state VALUES(1,?1,?2,0,X'',zeroblob(8),1)",
                     params![owner, rand::random::<[u8; 16]>().as_slice()],
                 )
                 .map_err(database_error)?;
+        } else if current_version == 1 {
+            // Version 1 was an inactive private prototype without an allocator
+            // watermark. Preserve all rows and conservatively record the highest
+            // surviving namespace, but never assert this recovers lost history.
+            validate_totals(&transaction, limits)?;
+            let highest = highest_occurrence_namespace(&transaction)?;
+            transaction.execute_batch("ALTER TABLE state ADD COLUMN sequence_watermark BLOB NOT NULL DEFAULT X'0000000000000000'; ALTER TABLE state ADD COLUMN watermark_origin_trusted INTEGER NOT NULL DEFAULT 0; PRAGMA user_version=2;").map_err(database_error)?;
+            transaction.execute("UPDATE state SET sequence_watermark=?1,watermark_origin_trusted=0 WHERE singleton=1", [highest.to_le_bytes().as_slice()]).map_err(database_error)?;
         } else if current_version != SCHEMA_VERSION {
             return Err(MezError::invalid_state(
                 "MMP custody schema changed during open",
@@ -290,7 +318,18 @@ impl MmpCustodyStore {
             .map_err(database_error)?;
         let store_id = store_id
             .ok_or_else(|| MezError::invalid_state("invalid MMP custody store identity"))?;
+        let (watermark, origin): (Option<Vec<u8>>, i64) = transaction.query_row(
+            "SELECT CASE WHEN length(sequence_watermark)=8 THEN sequence_watermark ELSE NULL END,watermark_origin_trusted FROM state WHERE singleton=1",
+            [], |row| Ok((row.get(0)?, row.get(1)?)),
+        ).map_err(database_error)?;
+        let watermark = decode_watermark(watermark.as_deref())?;
+        let watermark_origin_trusted = decode_watermark_origin(origin)?;
         validate_totals(&transaction, limits)?;
+        if highest_occurrence_namespace(&transaction)? > watermark {
+            return Err(MezError::invalid_state(
+                "MMP occurrence exceeds sequence watermark",
+            ));
+        }
         transaction.commit().map_err(database_error)?;
         super::shared_sqlite::integrity_check(&connection)?;
         let store = Self {
@@ -300,6 +339,8 @@ impl MmpCustodyStore {
             owner: owner.to_owned(),
             directory,
             database_identity,
+            committed_watermark: Cell::new(watermark),
+            watermark_origin_trusted,
         };
         validate_directory_path(root, &store.directory)?;
         validate_private_path(&path, false)?;
@@ -325,8 +366,30 @@ impl MmpCustodyStore {
             rusqlite::Transaction::new_unchecked(&self.connection, TransactionBehavior::Immediate)
                 .map_err(database_error)?;
         let receipt = self.commit_in_transaction(&transaction, generation, writes)?;
-        transaction.commit().map_err(database_error)?;
+        self.finish_transaction(transaction)?;
         Ok(receipt)
+    }
+
+    /// Commits one actual same-store transaction before retaining its observed
+    /// watermark. A failed or rolled-back transaction must not advance the cache.
+    fn finish_transaction(&self, transaction: rusqlite::Transaction<'_>) -> Result<()> {
+        let watermark = self.checked_state(&transaction)?.watermark;
+        transaction.commit().map_err(database_error)?;
+        self.committed_watermark
+            .set(self.committed_watermark.get().max(watermark));
+        Ok(())
+    }
+
+    /// Captures trusted state in a committed read snapshot, retaining its
+    /// watermark only after the snapshot has ended successfully.
+    fn current_state(&self) -> Result<CustodyState> {
+        let transaction = self
+            .connection
+            .unchecked_transaction()
+            .map_err(database_error)?;
+        let state = self.checked_state(&transaction)?;
+        self.finish_transaction(transaction)?;
+        Ok(state)
     }
 
     /// Validates trusted owner, allocation and batch framing in the caller's
@@ -337,25 +400,35 @@ impl MmpCustodyStore {
                 "MMP custody snapshot belongs to another store",
             ));
         }
-        let (generation, batch, owner, id): FramedState = connection
+        let (generation, batch, owner, id, watermark, origin): FramedState = connection
             .query_row(
-                "SELECT generation,CASE WHEN length(batch) IN (0,32) THEN batch ELSE NULL END,CASE WHEN length(CAST(owner AS BLOB))<=256 THEN owner ELSE NULL END,CASE WHEN length(store_id)=16 THEN store_id ELSE NULL END FROM state WHERE singleton=1",
-                [], |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?)),
+                "SELECT generation,CASE WHEN length(batch) IN (0,32) THEN batch ELSE NULL END,CASE WHEN length(CAST(owner AS BLOB))<=256 THEN owner ELSE NULL END,CASE WHEN length(store_id)=16 THEN store_id ELSE NULL END,CASE WHEN length(sequence_watermark)=8 THEN sequence_watermark ELSE NULL END,watermark_origin_trusted FROM state WHERE singleton=1",
+                [], |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?,row.get(5)?)),
             )
             .map_err(database_error)?;
         let batch =
             batch.ok_or_else(|| MezError::invalid_state("invalid MMP custody batch framing"))?;
+        let watermark = decode_watermark(watermark.as_deref())?;
+        let watermark_origin_trusted = decode_watermark_origin(origin)?;
         if generation < 0
             || (generation == 0 && !batch.is_empty())
             || (generation > 0 && batch.len() != 32)
+            || (generation == 0 && watermark != 0)
             || owner.as_deref() != Some(self.owner.as_str())
             || id.as_deref() != Some(self.store_id.as_slice())
+            || watermark < self.committed_watermark.get()
+            || watermark_origin_trusted != self.watermark_origin_trusted
         {
             return Err(MezError::invalid_state(
                 "MMP custody store identity or batch changed",
             ));
         }
-        Ok(CustodyState { generation, batch })
+        Ok(CustodyState {
+            generation,
+            batch,
+            watermark,
+            watermark_origin_trusted,
+        })
     }
 
     /// Reconciles or applies one bounded batch inside the caller's transaction.
@@ -370,6 +443,22 @@ impl MmpCustodyStore {
         let expected = i64::try_from(generation)
             .map_err(|_| MezError::invalid_args("MMP custody generation overflow"))?;
         let state = self.checked_state(transaction)?;
+        let mut stage_created = None;
+        let mut highest_referenced = 0;
+        for write in writes {
+            if let Some((sequence, suffix)) = occurrence_sequence(write.key)? {
+                highest_referenced = highest_referenced.max(sequence);
+                if suffix == "stage"
+                    && write.previous.is_none()
+                    && write.value.is_some()
+                    && stage_created.replace(sequence).is_some()
+                {
+                    return Err(MezError::invalid_args(
+                        "multiple MMP acceptance stages in one batch",
+                    ));
+                }
+            }
+        }
         if expected.checked_add(1) == Some(state.generation) && state.batch == digest {
             // A historical label alone cannot discharge the caller's pending
             // original. Validate actual bounded postimages under this same
@@ -381,14 +470,37 @@ impl MmpCustodyStore {
                     ));
                 }
             }
+            if highest_referenced > state.watermark
+                || stage_created.is_some_and(|sequence| sequence != state.watermark)
+            {
+                return Err(MezError::invalid_state(
+                    "MMP custody committed watermark changed",
+                ));
+            }
             return Ok(CustodyCommit {
                 generation: state.generation as u64,
                 digest,
                 store_id: self.store_id.clone(),
+                watermark: state.watermark,
             });
         }
         if state.generation != expected {
             return Err(MezError::conflict("stale MMP custody generation"));
+        }
+        let watermark = if let Some(sequence) = stage_created {
+            if sequence <= state.watermark {
+                return Err(MezError::conflict(
+                    "MMP acceptance sequence was already reserved",
+                ));
+            }
+            sequence
+        } else {
+            state.watermark
+        };
+        if highest_referenced > watermark {
+            return Err(MezError::invalid_state(
+                "MMP occurrence exceeds sequence watermark",
+            ));
         }
         let next = state
             .generation
@@ -412,14 +524,18 @@ impl MmpCustodyStore {
         validate_totals(transaction, self.limits)?;
         transaction
             .execute(
-                "UPDATE state SET generation=?1,batch=?2 WHERE singleton=1",
-                params![next, &digest],
+                "UPDATE state SET generation=?1,batch=?2,sequence_watermark=?3 WHERE singleton=1",
+                params![next, &digest, watermark.to_le_bytes().as_slice()],
             )
             .map_err(database_error)?;
         // Triggers execute inside this same transaction. Recheck both trusted
         // state and every intended postimage before any receipt can escape.
         let final_state = self.checked_state(transaction)?;
-        if final_state.generation != next || final_state.batch != digest {
+        if final_state.generation != next
+            || final_state.batch != digest
+            || final_state.watermark != watermark
+            || final_state.watermark_origin_trusted != state.watermark_origin_trusted
+        {
             return Err(MezError::invalid_state(
                 "MMP custody committed state changed",
             ));
@@ -435,6 +551,7 @@ impl MmpCustodyStore {
             generation: next as u64,
             digest,
             store_id: self.store_id.clone(),
+            watermark,
         })
     }
 
@@ -479,6 +596,65 @@ fn validate_identifier(value: &str) -> Result<()> {
         return Err(MezError::invalid_args("invalid MMP custody identifier"));
     }
     Ok(())
+}
+
+/// Reads one fixed-width persisted sequence without accepting NULL or truncation.
+fn decode_watermark(bytes: Option<&[u8]>) -> Result<u64> {
+    let bytes: [u8; 8] = bytes
+        .and_then(|bytes| bytes.try_into().ok())
+        .ok_or_else(|| MezError::invalid_state("invalid MMP sequence watermark framing"))?;
+    Ok(u64::from_le_bytes(bytes))
+}
+
+/// Rejects unknown provenance rather than treating it as a trusted allocation.
+fn decode_watermark_origin(value: i64) -> Result<bool> {
+    match value {
+        0 => Ok(false),
+        1 => Ok(true),
+        _ => Err(MezError::invalid_state(
+            "invalid MMP sequence watermark origin",
+        )),
+    }
+}
+
+/// Parses only the fixed canonical occurrence prefix; unrelated keys are not
+/// allocation evidence. This helper does not validate the remaining row kind.
+fn occurrence_sequence(key: &str) -> Result<Option<(u64, &str)>> {
+    let Some(rest) = key.strip_prefix("a1:") else {
+        return Ok(None);
+    };
+    let (number, suffix) = rest
+        .split_once(':')
+        .ok_or_else(|| MezError::invalid_state("invalid MMP occurrence key"))?;
+    if number.len() != 16
+        || !number
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(MezError::invalid_state("invalid MMP occurrence key"));
+    }
+    let sequence = u64::from_str_radix(number, 16)
+        .map_err(|_| MezError::invalid_state("invalid MMP occurrence sequence"))?;
+    if sequence == 0 || suffix.is_empty() {
+        return Err(MezError::invalid_state("invalid MMP occurrence sequence"));
+    }
+    Ok(Some((sequence, suffix)))
+}
+
+/// Bounds the v1 migration observation to canonical surviving namespaces.
+/// The result is deliberately marked untrusted: deleted history is unknowable.
+fn highest_occurrence_namespace(connection: &Connection) -> Result<u64> {
+    let mut statement = connection.prepare("SELECT CASE WHEN length(CAST(key AS BLOB))<=256 THEN key ELSE NULL END FROM records ORDER BY key COLLATE BINARY").map_err(database_error)?;
+    let mut rows = statement.query([]).map_err(database_error)?;
+    let mut highest = 0;
+    while let Some(row) = rows.next().map_err(database_error)? {
+        let key: Option<String> = row.get(0).map_err(database_error)?;
+        let key = key.ok_or_else(|| MezError::invalid_state("MMP custody key exceeds policy"))?;
+        if let Some((sequence, _)) = occurrence_sequence(&key)? {
+            highest = highest.max(sequence);
+        }
+    }
+    Ok(highest)
 }
 
 /// Opens and retains a private directory without following its final component.

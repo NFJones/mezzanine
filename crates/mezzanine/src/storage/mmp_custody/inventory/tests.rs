@@ -98,6 +98,8 @@ fn inventory_preserves_committed_originals_ack_and_cancelled_gap() {
     let mut store = MmpCustodyStore::open(&fixture.0, "session").unwrap();
     let empty = store.inventory_custody(limits()).unwrap();
     assert_eq!(empty.generation, 0);
+    assert_eq!(empty.sequence_watermark, 0);
+    assert!(empty.watermark_origin_trusted);
     assert!(
         empty.occurrences.is_empty()
             && empty.acknowledgement_keys.is_empty()
@@ -158,6 +160,8 @@ fn inventory_preserves_committed_originals_ack_and_cancelled_gap() {
     let inventory = store.inventory_custody(limits()).unwrap();
     assert_eq!(inventory.store_id, store.store_id);
     assert!(inventory.generation > 0);
+    assert_eq!(inventory.sequence_watermark, 3);
+    assert!(inventory.watermark_origin_trusted);
     assert_eq!(
         inventory
             .occurrences
@@ -189,6 +193,287 @@ fn inventory_preserves_committed_originals_ack_and_cancelled_gap() {
             .unwrap()
             .last_sequence,
         0
+    );
+}
+
+/// Even if settled rows are later removed, their sequence watermark remains.
+/// A fresh lower service starting at an already-used number must not create a
+/// second original in the same persistent allocation after an actual reopen.
+#[test]
+fn persisted_watermark_prevents_reusing_a_compacted_sequence() {
+    let fixture = Fixture::new();
+    let mut store = MmpCustodyStore::open(&fixture.0, "session").unwrap();
+    let mut service = MessageService::default();
+    let sender = service.register_agent(None, None, "sender", vec![]);
+    let target = service.register_agent(None, None, "target", vec![]);
+    let cancelled = service
+        .prepare_acceptance(
+            &sender.agent_id,
+            envelope(&sender, &target.agent_id, "cancelled"),
+            MessageScope::Session,
+            10,
+            4096,
+            None,
+        )
+        .unwrap();
+    service.cancel_acceptance(&cancelled).unwrap();
+    assert_eq!(
+        accept(
+            &mut store,
+            &mut service,
+            &sender,
+            &target.agent_id,
+            "original"
+        ),
+        2
+    );
+    let generation = store.inventory_custody(limits()).unwrap().generation;
+    let keys = {
+        let mut statement = store
+            .connection
+            .prepare("SELECT key FROM records ORDER BY key")
+            .unwrap();
+        let rows = statement
+            .query_map([], |row| row.get::<_, String>(0))
+            .unwrap();
+        rows.collect::<std::result::Result<Vec<_>, _>>().unwrap()
+    };
+    let records = keys
+        .into_iter()
+        .map(|key| {
+            let value = store.read(&key).unwrap().unwrap();
+            (key, <[u8; 32]>::from(Sha256::digest(value)))
+        })
+        .collect::<Vec<_>>();
+    let writes = records
+        .iter()
+        .map(|(key, digest)| CustodyWrite {
+            key,
+            previous: Some(digest),
+            value: None,
+        })
+        .collect::<Vec<_>>();
+    store.commit(generation, &writes).unwrap();
+    drop(store);
+    let mut store = MmpCustodyStore::open(&fixture.0, "session").unwrap();
+    let inventory = store.inventory_custody(limits()).unwrap();
+    assert!(inventory.occurrences.is_empty());
+    assert_eq!(inventory.sequence_watermark, 2);
+    assert!(inventory.watermark_origin_trusted);
+    let history = store.fold_custody_history(limits()).unwrap();
+    assert_eq!(history.observed_next_sequence, Some(1));
+    assert_eq!(history.inventory.sequence_watermark, 2);
+    let mut fresh = MessageService::default();
+    let new_sender = fresh.register_agent(None, None, "sender", vec![]);
+    let new_target = fresh.register_agent(None, None, "target", vec![]);
+    let ticket = fresh
+        .prepare_acceptance(
+            &new_sender.agent_id,
+            envelope(&new_sender, &new_target.agent_id, "replacement"),
+            MessageScope::Session,
+            20,
+            4096,
+            None,
+        )
+        .unwrap();
+    assert_eq!(ticket.sequence(), 1);
+    let plan = store.acceptance_plan(ticket.sequence()).unwrap();
+    let write = fresh.begin_acceptance_write(&ticket).unwrap();
+    assert!(matches!(
+        write.persist(&mut store.acceptance_port(&plan)),
+        MessageAcceptanceWriteOutcome::Unknown(_)
+    ));
+    let after = store.inventory_custody(limits()).unwrap();
+    assert_eq!(after.generation, inventory.generation);
+    assert_eq!(after.sequence_watermark, 2);
+    assert!(after.occurrences.is_empty());
+}
+
+/// Version-one prototype stores have no evidence of already-deleted history.
+/// Migration preserves actual rows and records their maximum but marks the
+/// resulting watermark untrusted, including across subsequent reopen.
+#[test]
+fn v1_migration_preserves_rows_without_claiming_allocator_provenance() {
+    let fixture = Fixture::new();
+    let mut store = MmpCustodyStore::open(&fixture.0, "session").unwrap();
+    let mut service = MessageService::default();
+    let sender = service.register_agent(None, None, "sender", vec![]);
+    let target = service.register_agent(None, None, "target", vec![]);
+    let cancelled = service
+        .prepare_acceptance(
+            &sender.agent_id,
+            envelope(&sender, &target.agent_id, "cancelled"),
+            MessageScope::Session,
+            10,
+            4096,
+            None,
+        )
+        .unwrap();
+    service.cancel_acceptance(&cancelled).unwrap();
+    assert_eq!(
+        accept(
+            &mut store,
+            &mut service,
+            &sender,
+            &target.agent_id,
+            "original"
+        ),
+        2
+    );
+    let source = store.read_accepted_source(2, limits()).unwrap().1;
+    drop(store);
+    let raw = rusqlite::Connection::open(fixture.0.join("custody.sqlite")).unwrap();
+    raw.execute_batch("BEGIN IMMEDIATE; ALTER TABLE state RENAME TO state_v2; CREATE TABLE state (singleton INTEGER PRIMARY KEY CHECK(singleton=1), owner TEXT NOT NULL, store_id BLOB NOT NULL CHECK(length(store_id)=16), generation INTEGER NOT NULL CHECK(generation>=0), batch BLOB NOT NULL); INSERT INTO state SELECT singleton,owner,store_id,generation,batch FROM state_v2; DROP TABLE state_v2; PRAGMA user_version=1; COMMIT;").unwrap();
+    drop(raw);
+    assert!(MmpCustodyStore::open(&fixture.0, "foreign-session").is_err());
+    let raw = rusqlite::Connection::open(fixture.0.join("custody.sqlite")).unwrap();
+    assert_eq!(
+        raw.query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+    drop(raw);
+    let store = MmpCustodyStore::open(&fixture.0, "session").unwrap();
+    let inventory = store.inventory_custody(limits()).unwrap();
+    assert_eq!(inventory.sequence_watermark, 2);
+    assert!(!inventory.watermark_origin_trusted);
+    assert_eq!(inventory.occurrences[0].digest, source);
+    assert_eq!(
+        store
+            .connection
+            .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
+            .unwrap(),
+        2
+    );
+    store
+        .connection
+        .execute("UPDATE state SET watermark_origin_trusted=1", [])
+        .unwrap();
+    assert!(store.inventory_custody(limits()).is_err());
+    store
+        .connection
+        .execute("UPDATE state SET watermark_origin_trusted=0", [])
+        .unwrap();
+    drop(store);
+    let store = MmpCustodyStore::open(&fixture.0, "session").unwrap();
+    let inventory = store.inventory_custody(limits()).unwrap();
+    assert_eq!(inventory.sequence_watermark, 2);
+    assert!(!inventory.watermark_origin_trusted);
+    assert_eq!(inventory.occurrences[0].digest, source);
+}
+
+/// A trigger that corrupts the watermark after the stage transaction's state
+/// update must roll back both the original stage and its allocation high-water.
+/// A later retry can proceed from the unchanged original transaction position.
+#[test]
+fn stage_and_watermark_commit_atomically_under_trigger_failure() {
+    let fixture = Fixture::new();
+    let mut store = MmpCustodyStore::open(&fixture.0, "session").unwrap();
+    let mut service = MessageService::default();
+    let sender = service.register_agent(None, None, "sender", vec![]);
+    let target = service.register_agent(None, None, "target", vec![]);
+    let ticket = service
+        .prepare_acceptance(
+            &sender.agent_id,
+            envelope(&sender, &target.agent_id, "original"),
+            MessageScope::Session,
+            10,
+            4096,
+            None,
+        )
+        .unwrap();
+    let plan = store.acceptance_plan(ticket.sequence()).unwrap();
+    store.connection.execute_batch("CREATE TRIGGER corrupt_watermark AFTER UPDATE OF sequence_watermark ON state WHEN NEW.generation=1 BEGIN UPDATE state SET sequence_watermark=zeroblob(8); END;").unwrap();
+    let write = service.begin_acceptance_write(&ticket).unwrap();
+    let MessageAcceptanceWriteOutcome::Unknown(unknown) =
+        write.persist(&mut store.acceptance_port(&plan))
+    else {
+        panic!("expected watermark corruption to fail")
+    };
+    let inventory = store.inventory_custody(limits()).unwrap();
+    assert_eq!(inventory.generation, 0);
+    assert_eq!(inventory.sequence_watermark, 0);
+    assert!(inventory.occurrences.is_empty());
+    assert!(store.read("a1:0000000000000001:stage").unwrap().is_none());
+    store
+        .connection
+        .execute_batch("DROP TRIGGER corrupt_watermark")
+        .unwrap();
+    let retry = service.retry_acceptance_write(unknown).unwrap();
+    let MessageAcceptanceWriteOutcome::Committed(_) =
+        retry.persist(&mut store.acceptance_port(&plan))
+    else {
+        panic!("expected original retry to commit")
+    };
+    let inventory = store.inventory_custody(limits()).unwrap();
+    assert_eq!(inventory.sequence_watermark, 1);
+    assert!(inventory.watermark_origin_trusted);
+    assert_eq!(inventory.occurrences.len(), 1);
+}
+
+/// A live connection remembers its last committed watermark and origin.
+/// Validly framed rollback or provenance changes cannot qualify inventory or
+/// an accepted source merely because the owner and allocation still match.
+#[test]
+fn live_store_rejects_watermark_rollback_and_origin_changes() {
+    let fixture = Fixture::new();
+    let mut store = MmpCustodyStore::open(&fixture.0, "session").unwrap();
+    let mut service = MessageService::default();
+    let sender = service.register_agent(None, None, "sender", vec![]);
+    let target = service.register_agent(None, None, "target", vec![]);
+    assert_eq!(
+        accept(
+            &mut store,
+            &mut service,
+            &sender,
+            &target.agent_id,
+            "original"
+        ),
+        1
+    );
+    store
+        .connection
+        .execute("UPDATE state SET sequence_watermark=zeroblob(8)", [])
+        .unwrap();
+    assert!(store.inventory_custody(limits()).is_err());
+    assert!(store.read_accepted_source(1, limits()).is_err());
+    store
+        .connection
+        .execute(
+            "UPDATE state SET sequence_watermark=?1",
+            [1u64.to_le_bytes().as_slice()],
+        )
+        .unwrap();
+    assert!(store.inventory_custody(limits()).is_ok());
+    store
+        .connection
+        .execute("UPDATE state SET watermark_origin_trusted=0", [])
+        .unwrap();
+    assert!(store.inventory_custody(limits()).is_err());
+    assert!(store.read_accepted_source(1, limits()).is_err());
+    store
+        .connection
+        .execute("UPDATE state SET watermark_origin_trusted=1", [])
+        .unwrap();
+    assert!(store.inventory_custody(limits()).is_ok());
+    drop(store);
+    let raw = rusqlite::Connection::open(fixture.0.join("custody.sqlite")).unwrap();
+    raw.execute("UPDATE state SET sequence_watermark=zeroblob(8)", [])
+        .unwrap();
+    drop(raw);
+    assert!(MmpCustodyStore::open(&fixture.0, "session").is_err());
+    let raw = rusqlite::Connection::open(fixture.0.join("custody.sqlite")).unwrap();
+    raw.execute(
+        "UPDATE state SET sequence_watermark=?1",
+        [1u64.to_le_bytes().as_slice()],
+    )
+    .unwrap();
+    drop(raw);
+    assert!(
+        MmpCustodyStore::open(&fixture.0, "session")
+            .unwrap()
+            .inventory_custody(limits())
+            .is_ok()
     );
 }
 
@@ -873,6 +1158,8 @@ fn restart_preflight_quarantines_a_stage_with_no_chunks() {
     ));
     assert!(store.inventory_custody(limits()).is_err());
     let result = store.inspect_restart_inventory(limits()).unwrap();
+    assert_eq!(result.inventory.sequence_watermark, 1);
+    assert!(result.inventory.watermark_origin_trusted);
     assert!(result.inventory.occurrences.is_empty());
     assert!(result.inventory.aborted_sequences.is_empty());
     assert!(matches!(

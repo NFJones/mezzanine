@@ -225,7 +225,7 @@ fn interrupted_cleanup_retains_a_reconstructable_last_deletion_batch() {
         abort.last_deleted_digest,
         <[u8; 32]>::from(Sha256::digest(&encoded[start..end]))
     );
-    let (_, _, batch) = position(&store, &prefix).unwrap();
+    let (_, _, batch, _) = position(&store, &prefix).unwrap();
     verify_abort_batch(&prefix, &stage, &abort, &batch).unwrap();
 }
 
@@ -391,7 +391,7 @@ fn failed_tail_delete_rolls_back_the_paired_descriptor_update() {
     let abort = Abort::decode(&stage).unwrap();
     assert!(abort.chunks > 0);
     assert_eq!(abort.remaining, abort.chunks);
-    let (generation, count, batch) = position(&store, &prefix).unwrap();
+    let (generation, count, batch, _) = position(&store, &prefix).unwrap();
     assert_eq!(generation, abort.declared_generation);
     assert_eq!(count, usize::from(abort.chunks) + 1);
     verify_abort_batch(&prefix, &stage, &abort, &batch).unwrap();

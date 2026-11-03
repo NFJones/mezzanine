@@ -36,6 +36,10 @@ pub(crate) struct CustodyInventory {
     pub store_id: Vec<u8>,
     /// Store generation observed with all inventoried records.
     pub generation: u64,
+    /// Highest stage sequence reserved in this store's transactional state.
+    pub sequence_watermark: u64,
+    /// False for v1 migration, whose earlier removed history cannot be proven.
+    pub watermark_origin_trusted: bool,
     /// Fully verified original acceptance references in sequence order.
     pub occurrences: Vec<StoredOccurrenceRef>,
     /// Content-addressed ACK keys verified against their exact sources.
@@ -124,7 +128,7 @@ impl MmpCustodyStore {
             .unchecked_transaction()
             .map_err(database_error)?;
         let inventory = self.inventory_in_snapshot(&transaction, limits)?;
-        transaction.commit().map_err(database_error)?;
+        self.finish_transaction(transaction)?;
         Ok(inventory)
     }
 
@@ -139,7 +143,7 @@ impl MmpCustodyStore {
             .unchecked_transaction()
             .map_err(database_error)?;
         let result = self.restart_inventory_in_snapshot(&transaction, limits)?;
-        transaction.commit().map_err(database_error)?;
+        self.finish_transaction(transaction)?;
         Ok(result)
     }
 
@@ -206,6 +210,8 @@ impl MmpCustodyStore {
         let mut inventory = CustodyInventory {
             store_id,
             generation,
+            sequence_watermark: state.watermark,
+            watermark_origin_trusted: state.watermark_origin_trusted,
             occurrences: Vec::new(),
             acknowledgement_keys: Vec::new(),
             aborted_sequences: Vec::new(),
@@ -333,6 +339,9 @@ impl MmpCustodyStore {
         inventory: &mut CustodyInventory,
         pending: &mut PendingScan,
     ) -> Result<()> {
+        if group.sequence > inventory.sequence_watermark {
+            return Err(invalid("occurrence exceeds sequence watermark"));
+        }
         if !group.stage {
             return Err(invalid("occurrence stage is missing"));
         }

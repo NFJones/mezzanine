@@ -677,6 +677,30 @@ fn prepared(
     (service, ticket, write)
 }
 
+/// A connection opened before another writer's accepted original must remember
+/// the watermark when its own ACK transaction succeeds. After later raw state
+/// rollback, it must reject reuse even if all occurrence rows are gone.
+#[test]
+fn ack_commit_updates_preexisting_connection_watermark_cache() {
+    let fixture = Fixture::new();
+    let mut original_connection = MmpCustodyStore::open(&fixture.0, "session").unwrap();
+    let mut writer = MmpCustodyStore::open(&fixture.0, "session").unwrap();
+    let (_service, _ticket, write) = prepared(&mut writer);
+    let plan = writer.acknowledgement_plan().unwrap();
+    assert!(matches!(
+        write.persist(&mut original_connection.acknowledgement_port(&plan)),
+        MessageAcknowledgementWriteOutcome::Committed(_)
+    ));
+    original_connection
+        .connection
+        .execute_batch("DELETE FROM records; UPDATE state SET sequence_watermark=zeroblob(8);")
+        .unwrap();
+    assert!(
+        original_connection.acceptance_plan(0).is_err(),
+        "a committed ACK must retain its observed watermark"
+    );
+}
+
 /// Reads actual SQLite generation/record count as an independent commit oracle.
 fn state(store: &MmpCustodyStore) -> (i64, i64) {
     store

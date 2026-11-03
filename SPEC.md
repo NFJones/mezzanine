@@ -15588,6 +15588,16 @@ budget and withhold all results on invalid or unresolved evidence. Its highest
 surviving sequence is only an observation, not a persistent allocator
 watermark, and its decisions do not establish restored native input, current
 registration, cursor, sender, or delivery authority.
+The private version2 store MUST persist a nondecreasing occurrence sequence
+watermark in the same transaction that creates each new acceptance stage. A
+new stage MUST use a sequence greater than that watermark, and deleting settled
+rows MUST NOT lower it. Store reads and receipts MUST reject malformed state,
+watermark regression seen by the live connection, changed origin provenance,
+or an occurrence beyond the watermark. Migrating an inactive version1 store
+MUST preserve its rows and record the highest surviving occurrence namespace,
+but MUST mark that value untrusted because earlier removed history is unknown.
+The persisted watermark alone does not restore an allocator or grant delivery
+authority; trusted owner and snapshot reconciliation remain required.
 An owned restart worker MAY declare cleanup of one unfinished stage without the
 original in-memory write only while holding the matching live root fence. It
 MUST validate the complete restart inventory and the exact marker-free stage,

@@ -58,6 +58,88 @@ fn committed_original_survives_restart_and_lost_reply_without_second_write() {
     assert!(MmpCustodyStore::open(&fixture.0, "new-pane-same-address").is_err());
 }
 
+/// The full u64 sequence range is stored without signed conversion. Reserving
+/// the maximum value exhausts the monotonic watermark, while an exact lost-reply
+/// retry remains idempotent and a lower new stage cannot reuse an old sequence.
+#[test]
+fn maximum_sequence_watermark_exhausts_new_stage_space() {
+    let fixture = Fixture::new();
+    let mut store = MmpCustodyStore::open(&fixture.0, "session").unwrap();
+    let stage = [CustodyWrite {
+        key: "a1:ffffffffffffffff:stage",
+        previous: None,
+        value: Some(b"opaque stage"),
+    }];
+    let receipt = store.commit(0, &stage).unwrap();
+    assert_eq!(receipt.watermark, u64::MAX);
+    assert_eq!(store.commit(0, &stage).unwrap(), receipt);
+    assert!(
+        store
+            .commit(
+                1,
+                &[CustodyWrite {
+                    key: "a1:0000000000000001:stage",
+                    previous: None,
+                    value: Some(b"replacement"),
+                }]
+            )
+            .is_err()
+    );
+    drop(store);
+    let store = MmpCustodyStore::open(&fixture.0, "session").unwrap();
+    assert_eq!(
+        store.checked_state(&store.connection).unwrap().watermark,
+        u64::MAX
+    );
+}
+
+/// Removing an old opaque stage must not make a smaller sequence available
+/// again. This directly exercises the transaction boundary independent of
+/// any lower service allocator or retained in-memory message owner.
+#[test]
+fn stage_sequence_cannot_be_reused_after_row_is_removed() {
+    let fixture = Fixture::new();
+    let mut store = MmpCustodyStore::open(&fixture.0, "session").unwrap();
+    let key = "a1:0000000000000002:stage";
+    let original = b"original stage";
+    store
+        .commit(
+            0,
+            &[CustodyWrite {
+                key,
+                previous: None,
+                value: Some(original),
+            }],
+        )
+        .unwrap();
+    let digest = Sha256::digest(original);
+    store
+        .commit(
+            1,
+            &[CustodyWrite {
+                key,
+                previous: Some(&digest),
+                value: None,
+            }],
+        )
+        .unwrap();
+    drop(store);
+    let mut store = MmpCustodyStore::open(&fixture.0, "session").unwrap();
+    assert!(
+        store
+            .commit(
+                2,
+                &[CustodyWrite {
+                    key: "a1:0000000000000001:stage",
+                    previous: None,
+                    value: Some(b"replacement"),
+                }]
+            )
+            .is_err(),
+        "a removed stage must not release its sequence watermark"
+    );
+}
+
 /// A connection's cached allocation and owner do not replace the persisted
 /// state observed inside its transaction. Changing either after open, or
 /// corrupting generation/batch framing, must reject both fresh writes and

@@ -57,7 +57,7 @@ impl MmpCustodyStore {
             .unchecked_transaction()
             .map_err(database_error)?;
         let result = self.read_stored_acknowledgement_in_snapshot(&transaction, key, limits)?;
-        transaction.commit().map_err(database_error)?;
+        self.finish_transaction(transaction)?;
         Ok(result)
     }
 

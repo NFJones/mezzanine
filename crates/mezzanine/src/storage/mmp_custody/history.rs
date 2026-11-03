@@ -114,7 +114,7 @@ impl MmpCustodyStore {
             }
         }));
         folded_expiries.sort_unstable();
-        transaction.commit().map_err(database_error)?;
+        self.finish_transaction(transaction)?;
         Ok(CustodyHistory {
             inventory,
             acknowledgements: folded_acknowledgements,

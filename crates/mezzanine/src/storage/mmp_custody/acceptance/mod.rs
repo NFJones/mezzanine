@@ -55,7 +55,7 @@ pub(super) fn validate_finalized_abort(
 
 /// Keeps encoded buffers and individual transactions below the generic batch cap.
 const CHUNK_BYTES: usize = 64 * 1024;
-/// Row format version independent of SQLite schema1 and admission input version1.
+/// Row format version independent of SQLite schema2 and admission input version1.
 const RECORD_VERSION: u32 = 1;
 
 /// Payload-free original destination and serial position retained by the owner.
@@ -179,7 +179,7 @@ impl MmpCustodyStore {
             .unchecked_transaction()
             .map_err(database_error)?;
         let result = self.read_accepted_source_in_snapshot(&transaction, sequence, limits)?;
-        transaction.commit().map_err(database_error)?;
+        self.finish_transaction(transaction)?;
         Ok(result)
     }
 
@@ -262,7 +262,7 @@ impl MmpCustodyStore {
             .unchecked_transaction()
             .map_err(database_error)?;
         let result = self.verified_accepted_in_snapshot(&transaction, sequence, decode)?;
-        transaction.commit().map_err(database_error)?;
+        self.finish_transaction(transaction)?;
         Ok(result)
     }
 
@@ -279,7 +279,12 @@ impl MmpCustodyStore {
                 "MMP acceptance snapshot belongs to another store",
             ));
         }
-        self.checked_state(transaction)?;
+        let state = self.checked_state(transaction)?;
+        if sequence == 0 || sequence > state.watermark {
+            return Err(MezError::invalid_state(
+                "MMP acceptance exceeds sequence watermark",
+            ));
+        }
         let prefix = format!("a1:{sequence:016x}:");
         let marker = self
             .read(&format!("{prefix}commit"))?
@@ -323,7 +328,7 @@ impl MmpCustodyStore {
     /// Captures a plan before issuance, on the owned I/O worker. The runtime root
     /// must retain it before handing out an attempt and reuse it after worker loss.
     pub fn acceptance_plan(&self, sequence: u64) -> Result<AcceptancePlan> {
-        let generation = self.checked_state(&self.connection)?.generation;
+        let generation = self.current_state()?.generation;
         Ok(AcceptancePlan {
             store_id: self.store_id.clone(),
             generation: u64::try_from(generation)
@@ -345,6 +350,15 @@ impl MmpCustodyStore {
             .unchecked_transaction()
             .map_err(database_error)?;
         let state = self.checked_state(&transaction)?;
+        validate_totals(&transaction, self.limits)?;
+        if plan.sequence == 0
+            || plan.sequence > state.watermark
+            || highest_occurrence_namespace(&transaction)? > state.watermark
+        {
+            return Err(MezError::invalid_state(
+                "MMP acceptance exceeds sequence watermark",
+            ));
+        }
         let prefix = format!("a1:{:016x}:", plan.sequence);
         let stage_key = format!("{prefix}stage");
         let marker_key = format!("{prefix}commit");
@@ -375,7 +389,7 @@ impl MmpCustodyStore {
         {
             return Err(MezError::invalid_state("MMP committed acceptance changed"));
         }
-        transaction.commit().map_err(database_error)?;
+        self.finish_transaction(transaction)?;
         Ok(())
     }
 

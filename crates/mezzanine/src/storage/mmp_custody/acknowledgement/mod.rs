@@ -54,7 +54,7 @@ pub(crate) struct PlannedAcknowledgementStore<'a> {
 impl MmpCustodyStore {
     /// Captures physical position off actor before issuing one original ACK.
     pub fn acknowledgement_plan(&self) -> Result<AcknowledgementPlan> {
-        let generation = self.checked_state(&self.connection)?.generation;
+        let generation = self.current_state()?.generation;
         Ok(AcknowledgementPlan {
             store_id: self.store_id.clone(),
             generation: u64::try_from(generation)
@@ -165,7 +165,7 @@ impl PlannedAcknowledgementStore<'_> {
             }
             // The ACK may predate this plan; a later valid batch need not be
             // this ACK's batch. Exact content and source checks are decisive.
-            transaction.commit().map_err(database_error)?;
+            self.store.finish_transaction(transaction)?;
             return Ok(());
         }
         self.store.commit_in_transaction(
@@ -189,7 +189,7 @@ impl PlannedAcknowledgementStore<'_> {
                 ));
             }
         }
-        transaction.commit().map_err(database_error)?;
+        self.store.finish_transaction(transaction)?;
         Ok(())
     }
 }

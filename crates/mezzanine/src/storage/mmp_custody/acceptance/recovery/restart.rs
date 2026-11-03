@@ -39,7 +39,7 @@ impl OwnedCustodyStore<'_> {
                 ..
             }) = inventory.pending
             else {
-                transaction.commit().map_err(database_error)?;
+                store.finish_transaction(transaction)?;
                 self.revalidate()?;
                 return Ok(None);
             };
@@ -100,7 +100,7 @@ impl OwnedCustodyStore<'_> {
                 &abort,
                 &store.checked_state(&transaction)?.batch,
             )?;
-            transaction.commit().map_err(database_error)?;
+            store.finish_transaction(transaction)?;
             Some(sequence)
         };
         self.revalidate()?;
@@ -137,7 +137,7 @@ impl OwnedCustodyStore<'_> {
                 }) => (sequence, present_chunks),
                 Some(PendingCustodyRef::Unfinished { .. }) => return Err(changed()),
                 None => {
-                    transaction.commit().map_err(database_error)?;
+                    store.finish_transaction(transaction)?;
                     self.revalidate()?;
                     return Ok(None);
                 }
@@ -193,7 +193,7 @@ impl OwnedCustodyStore<'_> {
                 &abort,
                 &store.checked_state(&transaction)?.batch,
             )?;
-            transaction.commit().map_err(database_error)?;
+            store.finish_transaction(transaction)?;
             Some((sequence, index))
         };
         self.revalidate()?;
@@ -251,7 +251,9 @@ pub(super) fn inspect_partial_abort(
         return Err(changed());
     }
     let state = store.checked_state(transaction)?;
-    if u64::try_from(state.generation).map_err(|_| changed())? != generation || state.batch != batch
+    if sequence > state.watermark
+        || u64::try_from(state.generation).map_err(|_| changed())? != generation
+        || state.batch != batch
     {
         return Err(changed());
     }
@@ -546,6 +548,58 @@ mod tests {
             before
         );
         assert_eq!(owned.declare_restart_cleanup(limits()).unwrap(), Some(1));
+    }
+
+    /// Direct restart transactions must record a watermark committed by a
+    /// separate connection. A subsequent valid-framed rollback cannot make a
+    /// smaller sequence appear available to the older live connection.
+    #[test]
+    fn restart_commits_update_preexisting_connection_watermark_cache() {
+        for tail_step in [false, true] {
+            let fixture = Fixture::new();
+            let mut original = MmpCustodyStore::open(&fixture.0, "session").unwrap();
+            interrupt(&fixture, false);
+            if tail_step {
+                let other_owner = RootOwnership::acquire(&fixture.0).unwrap();
+                let mut other = MmpCustodyStore::open(&fixture.0, "session").unwrap();
+                let mut bound = other_owner.bind_store(&mut other).unwrap();
+                assert_eq!(bound.declare_restart_cleanup(limits()).unwrap(), Some(1));
+            }
+            let owner = RootOwnership::acquire(&fixture.0).unwrap();
+            let mut owned = owner.bind_store(&mut original).unwrap();
+            if tail_step {
+                assert!(owned.cleanup_restart_step(limits()).unwrap().is_some());
+            } else {
+                assert_eq!(owned.declare_restart_cleanup(limits()).unwrap(), Some(1));
+            }
+            owned
+                .store_mut()
+                .connection
+                .execute_batch(
+                    "DELETE FROM records; UPDATE state SET sequence_watermark=zeroblob(8);",
+                )
+                .unwrap();
+            assert!(
+                owned.store_mut().acceptance_plan(0).is_err(),
+                "successful restart transaction must retain its watermark"
+            );
+        }
+    }
+
+    /// A failed declaration must not publish a watermark observed only inside
+    /// its rolled-back transaction. The cache changes only at a successful
+    /// committed boundary, not because a tentative write reached SQLite.
+    #[test]
+    fn rolled_back_restart_transaction_does_not_advance_cache() {
+        let fixture = Fixture::new();
+        let owner = RootOwnership::acquire(&fixture.0).unwrap();
+        let mut original = MmpCustodyStore::open(&fixture.0, "session").unwrap();
+        let mut owned = owner.bind_store(&mut original).unwrap();
+        interrupt(&fixture, false);
+        owned.store_mut().connection.execute_batch("CREATE TRIGGER reject_abort BEFORE UPDATE OF value ON records WHEN NEW.key='a1:0000000000000001:stage' BEGIN SELECT RAISE(ABORT,'reject abort'); END;").unwrap();
+        assert!(owned.declare_restart_cleanup(limits()).is_err());
+        owned.store_mut().connection.execute_batch("DROP TRIGGER reject_abort; DELETE FROM records; UPDATE state SET sequence_watermark=zeroblob(8);").unwrap();
+        assert!(owned.store_mut().acceptance_plan(0).is_ok());
     }
 
     /// Reopening without the original write after every bounded tail deletion

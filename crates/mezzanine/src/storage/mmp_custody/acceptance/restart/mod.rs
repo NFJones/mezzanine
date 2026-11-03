@@ -45,7 +45,7 @@ impl MmpCustodyStore {
             .unchecked_transaction()
             .map_err(database_error)?;
         let result = self.inspect_unfinished_in_snapshot(&transaction, sequence)?;
-        transaction.commit().map_err(database_error)?;
+        self.finish_transaction(transaction)?;
         Ok(result)
     }
 
@@ -59,6 +59,9 @@ impl MmpCustodyStore {
             return Err(changed());
         }
         let state = self.checked_state(transaction)?;
+        if sequence > state.watermark {
+            return Err(changed());
+        }
         let generation = u64::try_from(state.generation).map_err(|_| changed())?;
         let batch = state.batch;
         let store_id = self.store_id.clone();
