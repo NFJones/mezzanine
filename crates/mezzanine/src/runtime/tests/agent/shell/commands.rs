@@ -254,7 +254,11 @@ fn runtime_agent_shell_status_reports_live_runtime_state() {
         "{response}"
     );
     assert!(
-        response.contains("| Prompt profile | default v37 |"),
+        response.contains(&format!(
+            "| Prompt profile | {} v{} |",
+            mez_agent::AGENT_PROMPT_PROFILE_NAME,
+            mez_agent::AGENT_PROMPT_PROFILE_VERSION
+        )),
         "{response}"
     );
     assert!(

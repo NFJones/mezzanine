@@ -4,6 +4,10 @@ use super::*;
 use crate::runtime::{current_unix_seconds, execute_runtime_agent_prompt_history_work};
 use mez_agent::messaging::{Envelope, MessageScope};
 
+/// Leaves room for the current system prompt and both summaries while still
+/// requiring the two large historical groups to be compacted separately.
+const STAGED_COMPACTION_INPUT_LIMIT: &str = "18000";
+
 mod preparation;
 mod summary_correction;
 mod terminal_handoff;
@@ -37,9 +41,10 @@ fn staged_compaction_legacy_fallback_case(prior_epoch: bool) {
         .session_id
         .clone();
     let mut profile = service.agent_turn_model_profile(&turn_id).unwrap().clone();
-    profile
-        .provider_options
-        .insert("max_input_tokens".to_string(), "17000".to_string());
+    profile.provider_options.insert(
+        "max_input_tokens".to_string(),
+        STAGED_COMPACTION_INPUT_LIMIT.to_string(),
+    );
     service.set_agent_turn_model_profile(turn_id.clone(), profile);
     let task = service.take_pending_agent_compaction_task("%1").unwrap();
     if prior_epoch {
@@ -2197,9 +2202,10 @@ fn runtime_observed_compaction_stages_second_range_before_publication() {
         .session_id
         .clone();
     let mut profile = service.agent_turn_model_profile(&turn_id).unwrap().clone();
-    profile
-        .provider_options
-        .insert("max_input_tokens".to_string(), "17000".to_string());
+    profile.provider_options.insert(
+        "max_input_tokens".to_string(),
+        STAGED_COMPACTION_INPUT_LIMIT.to_string(),
+    );
     service.set_agent_turn_model_profile(turn_id.clone(), profile);
     complete_runtime_test_compaction(&mut service, "%1", "first summary");
     assert!(store.compaction_epoch(&conversation_id).unwrap().is_none());
@@ -2275,9 +2281,10 @@ fn runtime_staged_compaction_preserves_late_peer_occurrences() {
         .session_id
         .clone();
     let mut profile = service.agent_turn_model_profile(&turn_id).unwrap().clone();
-    profile
-        .provider_options
-        .insert("max_input_tokens".to_string(), "18000".to_string());
+    profile.provider_options.insert(
+        "max_input_tokens".to_string(),
+        STAGED_COMPACTION_INPUT_LIMIT.to_string(),
+    );
     service.set_agent_turn_model_profile(turn_id.clone(), profile);
     complete_runtime_test_compaction(&mut service, "%1", "first summary");
     assert!(store.compaction_epoch(&conversation_id).unwrap().is_none());
@@ -2448,7 +2455,7 @@ fn runtime_observed_compaction_stages_repeated_content_by_group_identity() {
     let mut profile = service.agent_turn_model_profile(&turn_id).unwrap().clone();
     profile
         .provider_options
-        .insert("max_input_tokens".to_string(), "17000".to_string());
+        .insert("max_input_tokens".to_string(), "18000".to_string());
     service.set_agent_turn_model_profile(turn_id.clone(), profile);
     complete_runtime_test_compaction(&mut service, "%1", "first summary");
     assert!(store.compaction_epoch(&conversation_id).unwrap().is_none());
