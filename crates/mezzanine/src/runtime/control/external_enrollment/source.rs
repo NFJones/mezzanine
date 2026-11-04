@@ -8,6 +8,7 @@
 //! independently qualified; finding a namespace alone never enables reporting.
 
 use super::*;
+use crate::host::native_clock::{NativeBootClock, native_boot_uuid};
 use crate::storage::token_usage::{ExternalSourceKey, NativeSourceKind, NativeSourceWitness};
 
 /// Frozen initial/recovered activation and original native/acceptance outcomes.
@@ -18,6 +19,8 @@ use crate::storage::token_usage::{ExternalSourceKey, NativeSourceKind, NativeSou
 #[derive(Debug)]
 pub(super) struct NativeSourcePreparation {
     key: ExternalSourceKey,
+    /// Original actual native boot/namespace; shared by every phase and actor check.
+    clock: Arc<NativeBootClock>,
     /// Original repository snapshot; retirement never retargets a new store.
     store: crate::storage::token_usage::TokenUsageStore,
     activation: crate::storage::token_usage::ExternalSourceActivation,
@@ -58,15 +61,30 @@ impl NativeSourcePreparation {
         work: &ExternalEnrollmentWork,
         producer: &ProducerEvidence,
         key: ExternalSourceKey,
+        boot: &str,
     ) -> Option<Self> {
-        let before = super::source_clock::native_boot_millis()?;
+        let clock = Arc::new(NativeBootClock::capture()?);
+        if clock.boot_uuid() != boot {
+            return None;
+        }
+        Self::capture_with_clock(work, producer, key, clock)
+    }
+
+    /// Brackets native producer evidence in the same retained clock domain.
+    fn capture_with_clock(
+        work: &ExternalEnrollmentWork,
+        producer: &ProducerEvidence,
+        key: ExternalSourceKey,
+        clock: Arc<NativeBootClock>,
+    ) -> Option<Self> {
+        let before = clock.millis()?;
         let original = producer.reobserve().ok()?;
         let ancestry = work.ancestry.get()?;
         let digest = ancestry.continuity_digest(producer.uid(), original).ok()?;
         if producer.reobserve().ok()? != original || Instant::now() >= work.deadline {
             return None;
         }
-        let after = super::source_clock::native_boot_millis()?;
+        let after = clock.millis()?;
         let expires = before.checked_add(60_000)?;
         if after < before || after >= expires {
             return None;
@@ -84,6 +102,7 @@ impl NativeSourcePreparation {
         .ok()?;
         Some(Self {
             key,
+            clock,
             store: work.source_store.as_ref()?.clone(),
             activation,
             observer_scope: super::source_observer::ObserverScope::new(Arc::new(observer.clone())),
@@ -109,9 +128,14 @@ impl NativeSourcePreparation {
         work: &ExternalEnrollmentWork,
         producer: &ProducerEvidence,
         key: ExternalSourceKey,
+        boot: &str,
     ) -> Option<Self> {
         let selector = work.cold_resume.as_ref()?;
-        let before = super::source_clock::native_boot_millis()?;
+        let clock = Arc::new(NativeBootClock::capture()?);
+        if clock.boot_uuid() != boot {
+            return None;
+        }
+        let before = clock.millis()?;
         let stored = work
             .source_store
             .as_ref()?
@@ -128,8 +152,8 @@ impl NativeSourcePreparation {
         if !stored.is_accepted_at(before) || !selector.matches_activation(&stored.activation) {
             return None;
         }
-        let mut preparation = Self::capture(work, producer, key)?;
-        let after = super::source_clock::native_boot_millis()?;
+        let mut preparation = Self::capture_with_clock(work, producer, key, clock)?;
+        let after = preparation.native_boot_millis()?;
         if after < before
             || !stored.is_accepted_at(after)
             || !stored
@@ -161,14 +185,28 @@ impl NativeSourcePreparation {
         self.is_cold().then(|| self.observer.clone())
     }
 
-    /// Cached native-phase eligibility, rechecked against the constant-time
+    /// Reads only the original captured boot/namespace without waiting. Failure
+    /// cannot be repaired by constructing a new epoch during publication.
+    pub(super) fn native_boot_millis(&self) -> Option<u64> {
+        self.clock.millis()
+    }
+
+    /// Fails this fixture's original clock without modifying persisted evidence.
+    #[cfg(test)]
+    pub(super) fn invalidate_native_clock_for_tests(&self) {
+        self.clock.invalidate_for_tests();
+    }
+
+    /// Cached native-phase eligibility, rechecked against its retained
     /// suspend-aware boot clock before an exact already-published cold retry.
-    pub(super) fn cold_observation_is_accepted_at(&self, now: u64) -> bool {
+    pub(super) fn cold_observation_is_accepted(&self) -> bool {
         self.is_cold()
-            && self.receipt.get().is_some_and(|result| {
-                result
-                    .as_ref()
-                    .is_ok_and(|receipt| receipt.is_accepted_at(now))
+            && self.native_boot_millis().is_some_and(|now| {
+                self.receipt.get().is_some_and(|result| {
+                    result
+                        .as_ref()
+                        .is_ok_and(|receipt| receipt.is_accepted_at(now))
+                })
             })
     }
 
@@ -193,7 +231,8 @@ impl NativeSourcePreparation {
                     .store
                     .external_source_activation(&self.key)?
                     .ok_or_else(|| MezError::conflict("durable source claim disappeared"))?;
-                let now = super::source_clock::native_boot_millis()
+                let now = self
+                    .native_boot_millis()
                     .ok_or_else(|| MezError::conflict("durable source clock unavailable"))?;
                 if receipt.activation != self.activation
                     || !receipt.is_accepted_at(now)
@@ -266,7 +305,7 @@ impl NativeSourcePreparation {
             .ok_or_else(|| MezError::conflict("external source preparation unavailable"))?;
         self.acceptance
             .get_or_init(|| {
-                let now = super::source_clock::native_boot_millis().ok_or_else(|| {
+                let now = self.native_boot_millis().ok_or_else(|| {
                     MezError::conflict("external source activation clock unavailable")
                 })?;
                 store.accept_external_source_activation_with_observer(
@@ -307,7 +346,7 @@ impl NativeSourcePreparation {
     ) -> Result<()> {
         let unavailable = || MezError::conflict("source history native proof unavailable");
         self.admission.get().ok_or_else(unavailable)?;
-        let before = super::source_clock::native_boot_millis().ok_or_else(unavailable)?;
+        let before = self.native_boot_millis().ok_or_else(unavailable)?;
         let native = origin.reobserve().map_err(|_| unavailable())?;
         let digest = ancestry
             .continuity_digest(origin.uid(), native)
@@ -320,7 +359,7 @@ impl NativeSourcePreparation {
         {
             return Err(unavailable());
         }
-        let after = super::source_clock::native_boot_millis().ok_or_else(unavailable)?;
+        let after = self.native_boot_millis().ok_or_else(unavailable)?;
         if after < before {
             return Err(unavailable());
         }
@@ -369,7 +408,7 @@ impl NativeSourcePreparation {
             .external_source_activation(&self.key)?
             .filter(|receipt| receipt.activation == self.activation)
             .ok_or_else(unavailable)?;
-        let before = super::source_clock::native_boot_millis().ok_or_else(unavailable)?;
+        let before = self.native_boot_millis().ok_or_else(unavailable)?;
         if !origin.writer_confirmed() || !origin.observer_connected() {
             return Err(unavailable());
         }
@@ -385,7 +424,7 @@ impl NativeSourcePreparation {
         {
             return Err(unavailable());
         }
-        let after = super::source_clock::native_boot_millis().ok_or_else(unavailable)?;
+        let after = self.native_boot_millis().ok_or_else(unavailable)?;
         if after < before || !previous.is_accepted_at(after) || Instant::now() >= deadline {
             return Err(unavailable());
         }
@@ -430,7 +469,7 @@ impl NativeSourcePreparation {
         {
             return Err(unavailable());
         }
-        let completed = super::source_clock::native_boot_millis().ok_or_else(unavailable)?;
+        let completed = self.native_boot_millis().ok_or_else(unavailable)?;
         if completed < after || !receipt.is_accepted_at(completed) || Instant::now() >= deadline {
             return Err(unavailable());
         }
@@ -713,7 +752,8 @@ impl ExternalEnrollmentWork {
             }
             if self.cold_resume.is_some() {
                 let owner = store.find_external_source_owner(&key).ok()??;
-                let preparation = NativeSourcePreparation::capture_cold(self, producer, key)?;
+                let preparation =
+                    NativeSourcePreparation::capture_cold(self, producer, key, &boot)?;
                 if !self.source_preparation.set(preparation) {
                     return None;
                 }
@@ -724,7 +764,8 @@ impl ExternalEnrollmentWork {
             let _ = self.source_created.set(resolved.created);
             if resolved.created
                 && self.source_preparation.has_reservation()
-                && let Some(preparation) = NativeSourcePreparation::capture(self, producer, key)
+                && let Some(preparation) =
+                    NativeSourcePreparation::capture(self, producer, key, &boot)
             {
                 // Publish immutable inputs before I/O so a lost/failed write
                 // cannot cause this worker to mint a different attempt.
@@ -742,94 +783,5 @@ impl ExternalEnrollmentWork {
         // Native observation already has one-shot publication; a duplicate
         // worker cannot replace its original diagnostic namespace result.
         let _ = self.source_owner.set(owner);
-    }
-}
-
-/// Fixed Linux kernel boot UUID, bounded even if procfs behaves unexpectedly.
-#[cfg(target_os = "linux")]
-fn native_boot_uuid() -> Option<String> {
-    use std::io::Read;
-    let mut bytes = Vec::new();
-    std::fs::File::open("/proc/sys/kernel/random/boot_id")
-        .ok()?
-        .take(65)
-        .read_to_end(&mut bytes)
-        .ok()?;
-    parse_boot_uuid(&bytes)
-}
-
-/// Darwin native boot-session UUID; unavailable interfaces fail closed rather
-/// than substituting wall-clock boot time or a new daemon-lifetime random ID.
-#[cfg(target_os = "macos")]
-fn native_boot_uuid() -> Option<String> {
-    let mut bytes = [0u8; 64];
-    let mut len = bytes.len();
-    // SAFETY: fixed NUL-terminated sysctl name and bounded writable buffer; the
-    // kernel returns actual byte count and no mutation/new process is requested.
-    let status = unsafe {
-        libc::sysctlbyname(
-            c"kern.bootsessionuuid".as_ptr(),
-            bytes.as_mut_ptr().cast(),
-            &mut len,
-            std::ptr::null_mut(),
-            0,
-        )
-    };
-    if status != 0 || len > bytes.len() {
-        return None;
-    }
-    parse_boot_uuid(&bytes[..len])
-}
-
-/// Unknown platforms cannot manufacture durable native boot identity.
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
-fn native_boot_uuid() -> Option<String> {
-    None
-}
-
-/// Admits only one bounded UUID with a conventional kernel newline/NUL suffix.
-/// Arbitrary whitespace/control bytes and malformed native output stay absent.
-fn parse_boot_uuid(bytes: &[u8]) -> Option<String> {
-    let bytes = bytes
-        .strip_suffix(b"\n")
-        .or_else(|| bytes.strip_suffix(b"\0"))
-        .unwrap_or(bytes);
-    if bytes.len() != 36
-        || !bytes.iter().enumerate().all(|(i, b)| {
-            if [8, 13, 18, 23].contains(&i) {
-                *b == b'-'
-            } else {
-                b.is_ascii_hexdigit()
-            }
-        })
-    {
-        return None;
-    }
-    Some(std::str::from_utf8(bytes).ok()?.to_ascii_lowercase())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    /// Native UUID parsing accepts only fixed kernel output shape and preserves
-    /// boot identity across case/suffix conventions without an invented fallback.
-    #[test]
-    fn external_source_boot_uuid_parser_is_bounded_and_exact() {
-        let uuid = "01234567-89ab-cdef-0123-456789abcdef";
-        for bytes in [
-            uuid.as_bytes().to_vec(),
-            format!("{uuid}\n").into_bytes(),
-            format!("{}\0", uuid.to_ascii_uppercase()).into_bytes(),
-        ] {
-            assert_eq!(parse_boot_uuid(&bytes).as_deref(), Some(uuid));
-        }
-        for bytes in [
-            b"".as_slice(),
-            b"../private",
-            b"01234567-89ab-cdef-0123-456789abcdef\n\0",
-            b"01234567-89ab-cdef-0123-456789abcdef extra",
-        ] {
-            assert!(parse_boot_uuid(bytes).is_none());
-        }
     }
 }

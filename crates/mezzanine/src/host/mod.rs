@@ -10,6 +10,7 @@ pub(crate) mod async_runtime;
     reason = "the persistent local host integrates the completed host-Iroh owner in the next architecture phase"
 )]
 pub(crate) mod iroh;
+pub(crate) mod native_clock;
 #[allow(
     dead_code,
     reason = "outbound frontend IPC integration follows the shared endpoint lifetime checkpoint"

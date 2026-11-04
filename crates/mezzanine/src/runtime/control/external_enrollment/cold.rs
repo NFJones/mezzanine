@@ -143,13 +143,10 @@ impl RuntimeSessionService {
         {
             return false;
         }
-        let Some(now) = source_clock::native_boot_millis() else {
-            return false;
-        };
         if work
             .source_preparation
             .get()
-            .is_none_or(|preparation| !preparation.cold_observation_is_accepted_at(now))
+            .is_none_or(|preparation| !preparation.cold_observation_is_accepted())
         {
             return false;
         }
@@ -198,15 +195,15 @@ impl RuntimeSessionService {
         )
     }
 
-    /// Final actor step uses only a constant-time native boot clock syscall,
-    /// cached exact committed evidence and current source custody. No database,
+    /// Final actor step uses the retained native boot clock with bounded kernel
+    /// namespace metadata checks, cached evidence and current custody. No database,
     /// ancestry traversal or mutex wait runs on actor. Suspend can expire a boot
     /// window without advancing Instant, so that clock MUST be checked here.
     pub(super) fn publish_cold_claim(&mut self, work: &ExternalEnrollmentWork) -> Result<()> {
         let unavailable = || MezError::conflict("durable source final publication unavailable");
         let preparation = work.source_preparation.get().ok_or_else(unavailable)?;
         let receipt = preparation.accepted_receipt().ok_or_else(unavailable)?;
-        let now = source_clock::native_boot_millis().ok_or_else(unavailable)?;
+        let now = preparation.native_boot_millis().ok_or_else(unavailable)?;
         if !receipt.is_accepted_at(now)
             || !work.source_preparation.renewal_is_open()
             || self.persistence.cloned_token_usage_store().as_ref()
@@ -233,7 +230,7 @@ impl RuntimeSessionService {
         // Snapshot adoption is bounded but not constant-time. Its historical
         // expense is independent of registration; it cannot extend eligibility
         // or let an expired private grant escape after that projection work.
-        let now = source_clock::native_boot_millis().ok_or_else(unavailable)?;
+        let now = preparation.native_boot_millis().ok_or_else(unavailable)?;
         if !receipt.is_accepted_at(now) || !work.source_preparation.renewal_is_open() {
             return Err(unavailable());
         }

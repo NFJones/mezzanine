@@ -226,7 +226,9 @@ async fn external_cold_source_prepared_mapping_never_recovers_without_actual_acc
 
 /// A cold source needs its own actual commit and current final publication,
 /// unlike optional first-admission metadata. Failure must not tombstone another
-/// winner or remove a replacement registry's coincident reservation.
+/// winner or remove a replacement registry's coincident reservation. Native
+/// clock failure before or after the real claim must remain attached to that
+/// captured epoch; a fresh successful clock read cannot rescue publication.
 #[tokio::test(flavor = "current_thread")]
 async fn external_cold_source_required_publication_failures_do_not_grant_or_retire_foreign_scope() {
     for fault in [
@@ -236,6 +238,8 @@ async fn external_cold_source_required_publication_failures_do_not_grant_or_reti
         "store",
         "retired",
         "headroom",
+        "clock-before",
+        "clock-after",
     ] {
         let Some((mut fixture, store, original, ready)) =
             super::source_activation_fixture::accepted_source().await
@@ -360,6 +364,13 @@ async fn external_cold_source_required_publication_failures_do_not_grant_or_reti
                     .is_ok()
             );
         }
+        if fault == "clock-before" {
+            publication
+                .source_preparation
+                .get()
+                .unwrap()
+                .invalidate_native_clock_for_tests();
+        }
         let result = if fault == "unexecuted" {
             Ok(())
         } else {
@@ -368,11 +379,16 @@ async fn external_cold_source_required_publication_failures_do_not_grant_or_reti
                 .await
                 .unwrap()
         };
-        if ["sql", "retired"].contains(&fault) {
+        if ["sql", "retired", "clock-before"].contains(&fault) {
             assert!(result.is_err());
         }
-        if ["registry", "store"].contains(&fault) {
+        if ["registry", "store", "clock-after"].contains(&fault) {
             assert!(result.is_ok());
+        }
+        if fault == "clock-after" {
+            let preparation = publication.source_preparation.get().unwrap();
+            preparation.invalidate_native_clock_for_tests();
+            assert!(preparation.native_boot_millis().is_none());
         }
         if fault == "registry" {
             fixture.service.control.external_agents_mut().enrollments = Default::default();
@@ -444,7 +460,7 @@ async fn external_cold_source_required_publication_failures_do_not_grant_or_reti
             );
             assert_eq!(
                 retained.observer.unwrap().generation(),
-                if ["registry", "store"].contains(&fault) {
+                if ["registry", "store", "clock-after"].contains(&fault) {
                     2
                 } else {
                     1

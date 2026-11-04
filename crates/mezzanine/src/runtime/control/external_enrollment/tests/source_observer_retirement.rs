@@ -63,7 +63,10 @@ async fn external_source_old_observer_recovery_refuses_successor_and_tombstone()
             &native_activation,
             2,
             &proposal,
-            super::super::source_clock::native_boot_millis().unwrap(),
+            crate::host::native_clock::NativeBootClock::capture()
+                .unwrap()
+                .millis()
+                .unwrap(),
         )
     })
     .await
@@ -147,7 +150,10 @@ async fn external_source_old_observer_retirement_refuses_successor_fence() {
             &native_activation,
             2,
             &proposal,
-            super::super::source_clock::native_boot_millis().unwrap(),
+            crate::host::native_clock::NativeBootClock::capture()
+                .unwrap()
+                .millis()
+                .unwrap(),
         )
     })
     .await

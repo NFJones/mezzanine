@@ -1183,8 +1183,17 @@ binds source/kind and ordered UID/incarnation ancestors through the root; no raw
 native identifiers are stored. The 60-second window uses suspend-inclusive Linux
 CLOCK_BOOTTIME with verified zero offsets and matching worker/current-leader/
 leader-time-for-children namespace objects before and after sampling, or Darwin
-mach_continuous_time with checked timebase conversion. Unknown/offset clocks
-produce no fabricated window. The original proposal and write outcome survive
+mach_continuous_time with checked timebase conversion. The worker retains that
+clock and actual boot UUID through acceptance, renewal and final cold publication
+or replay. Linux checks namespace object identities around each sample using
+bounded kernel metadata observations, with retained handles preventing inode
+reuse. The verified offsets are immutable for an occupied namespace; sampling
+does not reopen/read the offset or UUID files. A native read failure, namespace
+change or rollback invalidates that original clock permanently. Concurrent
+sampling refuses without waiting, and contention alone does not invalidate it.
+A fresh clock cannot rescue a failed original claim. Unknown/offset clocks
+produce no fabricated window. These checks establish same-boot source windows;
+MMP durable TTL and reboot accounting remain separate qualification work. The original proposal and write outcome survive
 worker return, without automatic retry. Optional preparation failure leaves
 existing native lifecycle/reporting checks unchanged; abandoned work remains
 Prepared and cannot activate the old namespace. Existing/curated source behavior

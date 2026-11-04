@@ -2170,8 +2170,10 @@ coincident private numeric generations after control replacement.
 No private ready reply may escape until real cached claim success and final
 registry/admission/binding/native/store checks pass. Because suspend can expire
 boot windows without advancing Instant, final cold publication/replay MUST also
-check the constant-time native suspend-aware boot clock; no database, ancestry
-traversal or mutex waiting may occur on actor. Failed phase transfer, injected
+check the original retained native suspend-aware boot clock; no database,
+ancestry traversal or mutex waiting may occur on actor. Linux sampling uses
+bounded kernel namespace metadata checks before and after the counter read;
+clock/offset/boot-UUID files MUST NOT be reopened or read during publication. Failed phase transfer, injected
 success or claim failure MUST discard only the exact unexposed memory grant,
 detach its anchor before central retirement and NEVER queue a tombstone for
 another durable winner. Stale registry callbacks cannot consume or clean up
@@ -2244,7 +2246,18 @@ UID/incarnation chain THROUGH the pane root, not its out-of-scope parent. Linux
 CLOCK_BOOTTIME MUST have verified zero time-namespace offsets with matching
 worker/current-leader/leader-time-for-children namespace evidence before and
 after sampling; Darwin uses mach_continuous_time and checked
-timebase conversion. Missing/offset/ambiguous clocks MUST NOT fabricate a window.
+timebase conversion. The worker MUST retain its qualified clock and boot UUID
+through preparation, acceptance, renewal and final cold publication/replay.
+Linux MAY retain the verified zero offsets because offsets are immutable once
+a process enters that namespace; retained namespace handles MUST pin identity
+and every sample MUST still compare the actual current-thread, leader and
+children namespace objects before and after the counter read. Clock sampling
+MUST NOT wait for a simultaneous observer. Native read failure, changed namespace
+or a decreasing serialized sample permanently invalidates that captured clock;
+a new sample/epoch MUST NOT rescue its original proposal or cold publication.
+Contention alone MAY withhold a sample without invalidating the original clock.
+Missing/offset/ambiguous clocks MUST NOT fabricate a window. These same-boot
+checks do not establish MMP custody elapsed TTL or cross-boot recovery policy.
 The original proposal and write outcome MUST remain immutable through worker
 return; optional preparation failure MUST NOT change existing native admission
 or reporting authority. Existing/curated sources MUST NOT silently acquire new

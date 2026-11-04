@@ -54,7 +54,6 @@ mod publication;
 mod recovery;
 mod rotation;
 mod source;
-mod source_clock;
 mod source_end;
 mod source_history;
 mod source_observer;
