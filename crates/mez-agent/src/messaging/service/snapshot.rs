@@ -28,7 +28,7 @@ impl MessageService {
     /// Returns `InvalidState` when any retained payload is unavailable; no
     /// partial snapshot or substitute empty payload escapes on failure.
     pub fn snapshot_state(&self) -> Result<MessageServiceSnapshot> {
-        if self.has_unpublished_expiry() {
+        if self.has_unpublished_terminal() {
             return Err(MessageError::invalid_state(
                 "MMP original expiry must settle before snapshot",
             ));
@@ -313,6 +313,7 @@ impl MessageService {
                 acknowledged: std::sync::Mutex::new(acknowledged),
                 terminal: std::sync::Mutex::new(terminal),
                 sender_registered_after_sequence,
+                horizon_observed_at_ms: std::sync::Mutex::new(None),
                 ack_expiry_observed_at_ms: std::sync::Mutex::new(
                     retained.ack_expiry_observed_at_ms,
                 ),
@@ -384,7 +385,7 @@ impl MessageService {
         let mut service = Self {
             admission: None,
             acknowledgement: None,
-            expiry: None,
+            terminal_commit: None,
             ids,
             registered,
             registration_floors: if snapshot.schema_version >= 5 {

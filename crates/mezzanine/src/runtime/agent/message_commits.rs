@@ -206,7 +206,7 @@ impl RuntimeSessionService {
         let messages = self.control.message_service();
         if messages.has_unpublished_acceptance()
             || messages.has_unpublished_acknowledgement()
-            || messages.has_unpublished_expiry()
+            || messages.has_unpublished_terminal()
         {
             Err(MezError::conflict(
                 "original MMP storage work must settle before restore",

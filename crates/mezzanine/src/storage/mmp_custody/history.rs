@@ -52,6 +52,8 @@ pub(crate) struct FoldedTerminalExpiry {
     pub binding_index: u32,
     /// First actual strict TTL observation, shared by later bounded batches.
     pub observed_at_ms: u64,
+    /// Actual qualified release observation, absent until its journal exists.
+    pub release_observed_at_ms: Option<u64>,
 }
 
 /// Complete descriptive store inventory and order-independent ACK fold.
@@ -181,9 +183,28 @@ impl MmpCustodyStore {
                 sequence,
                 binding_index,
                 observed_at_ms,
+                release_observed_at_ms: None,
             },
         ));
         terminal_expiries.sort_unstable();
+        for key in &inventory.release_keys {
+            let release = self.read_stored_release_in_snapshot(transaction, key, limits)?;
+            for (index, first) in release.entries {
+                let slot = (release.sequence, index);
+                let position = terminal_expiries
+                    .binary_search_by_key(&slot, |value| (value.sequence, value.binding_index))
+                    .map_err(|_| {
+                        MezError::invalid_state("MMP release lacks original terminal slot")
+                    })?;
+                let terminal = &mut terminal_expiries[position];
+                if terminal.release_observed_at_ms.is_some() || terminal.observed_at_ms != first {
+                    return Err(MezError::invalid_state(
+                        "MMP terminal release conflicts with original history",
+                    ));
+                }
+                terminal.release_observed_at_ms = Some(release.observed_at_ms);
+            }
+        }
         let mut folded_acknowledgements = Vec::new();
         folded_acknowledgements
             .try_reserve_exact(acknowledgements.len())

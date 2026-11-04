@@ -29,6 +29,8 @@ enum Original {
     CrashNativeInput(PathBuf),
     CrashNativePreparation(PathBuf),
     CrashNativeStage(PathBuf, bool),
+    /// Actual t1 or r1 commit before lower adoption and abrupt process exit.
+    CrashTerminal(PathBuf, bool),
 }
 impl Fixture {
     async fn new(guarded: bool) -> Self {
@@ -44,7 +46,8 @@ impl Fixture {
             Original::CrashRegistered(config)
             | Original::CrashNativeInput(config)
             | Original::CrashNativePreparation(config)
-            | Original::CrashNativeStage(config, _) => config.clone(),
+            | Original::CrashNativeStage(config, _)
+            | Original::CrashTerminal(config, _) => config.clone(),
             _ => generated,
         };
         let session = Session::new_default(shell(), Size::new(80, 24).unwrap()).unwrap();
@@ -69,6 +72,7 @@ impl Fixture {
             Original::CrashNativeInput(_)
                 | Original::CrashNativePreparation(_)
                 | Original::CrashNativeStage(_, _)
+                | Original::CrashTerminal(_, _)
         ) {
             native_input::configure_original(&mut service);
         }
@@ -94,6 +98,7 @@ impl Fixture {
             Original::CrashNativeInput(_)
                 | Original::CrashNativePreparation(_)
                 | Original::CrashNativeStage(_, _)
+                | Original::CrashTerminal(_, _)
         ) {
             service
                 .message_service()
@@ -153,9 +158,23 @@ impl Fixture {
             root.adopt_native_continuity(service.message_service_mut())
                 .unwrap()
         );
+        let terminal_clock = match &original {
+            Original::CrashTerminal(_, release) => Some(
+                crate::runtime::current_unix_millis()
+                    - if *release {
+                        mez_agent::messaging::MESSAGE_TERMINAL_HANDOFF_MS
+                    } else {
+                        0
+                    },
+            ),
+            _ => None,
+        };
         for n in 1..=2 {
             let mut original_mail = mail(&raw, &native, n);
-            let accepted_at = if n == 2
+            let accepted_at = if n == 2 && terminal_clock.is_some() {
+                original_mail.ttl_ms = Some(1);
+                terminal_clock.unwrap() - 2
+            } else if n == 2
                 && matches!(&original, Original::CrashNativePreparation(_))
                 && std::env::var_os(native_input::EXPIRE_PREPARATION).is_some()
             {
@@ -252,6 +271,10 @@ impl Fixture {
             native: native.agent_id,
             raw: raw.agent_id,
         };
+        if let Original::CrashTerminal(_, release) = &original {
+            terminal::commit_then_crash(service, root, fixture, terminal_clock.unwrap(), *release)
+                .await;
+        }
         if matches!(
             &original,
             Original::CrashNativeInput(_)
@@ -269,30 +292,7 @@ impl Fixture {
             native_input::commit_then_crash(service, root, fixture, point).await;
         }
         if matches!(&original, Original::CrashRegistered(_)) {
-            use std::os::unix::fs::OpenOptionsExt;
-            let mut handoff = fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .mode(0o600)
-                .open(fixture.config.join("crash-expectations.json"))
-                .unwrap();
-            SnapshotRepository::new(fixture.config.clone())
-                .write_payload("crash-layout", &fixture.payload)
-                .unwrap();
-            serde_json::to_writer(
-                &mut handoff,
-                &CrashExpectations {
-                    epoch: fixture.epoch,
-                    native: fixture.native.to_string(),
-                    raw: fixture.raw.to_string(),
-                },
-            )
-            .unwrap();
-            handoff.sync_all().unwrap();
-            fs::File::open(&fixture.config).unwrap().sync_all().unwrap();
-            // Deliberately skip all Rust/service/root destructors. The kernel
-            // releases the live fence; no orderly message checkpoint is taken.
-            std::process::exit(0);
+            finish_crash(&fixture);
         }
         drop(service);
         drop(root);
@@ -871,6 +871,33 @@ struct CrashExpectations {
     raw: String,
 }
 
+/// Publishes only expected layout/public attribution, then exits without any
+/// source/actor/root/store destructor. This supplies no live recovery authority.
+fn finish_crash(fixture: &Fixture) -> ! {
+    use std::os::unix::fs::OpenOptionsExt;
+    SnapshotRepository::new(fixture.config.clone())
+        .write_payload("crash-layout", &fixture.payload)
+        .unwrap();
+    let mut handoff = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(fixture.config.join("crash-expectations.json"))
+        .unwrap();
+    serde_json::to_writer(
+        &mut handoff,
+        &CrashExpectations {
+            epoch: fixture.epoch,
+            native: fixture.native.to_string(),
+            raw: fixture.raw.to_string(),
+        },
+    )
+    .unwrap();
+    handoff.sync_all().unwrap();
+    fs::File::open(&fixture.config).unwrap().sync_all().unwrap();
+    std::process::exit(0);
+}
+
 const CRASH_ROOT: &str = "MEZ_TEST_REGISTERED_MMP_CRASH_ROOT";
 
 /// Exact-filter child entry. With the private parent environment it exits from
@@ -928,3 +955,5 @@ async fn native_factory_recovers_after_process_crash_without_message_checkpoint(
 
 mod native_ack_snapshot;
 mod native_input;
+
+mod terminal;

@@ -166,9 +166,10 @@ impl MmpCustodyStore {
                         .terminal_expiries
                         .binary_search_by_key(&key, |value| (value.sequence, value.binding_index));
                     if terminal.reason != mez_agent::messaging::DeliveryTerminalReason::Expired
-                        || terminal.released
                         || found.ok().is_none_or(|i| {
-                            history.terminal_expiries[i].observed_at_ms != terminal.observed_at_ms
+                            let actual = &history.terminal_expiries[i];
+                            actual.observed_at_ms != terminal.observed_at_ms
+                                || (terminal.released && actual.release_observed_at_ms.is_none())
                         })
                     {
                         return Err(invalid("terminal outcome needs durable recovery evidence"));

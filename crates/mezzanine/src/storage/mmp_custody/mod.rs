@@ -29,7 +29,6 @@ use crate::error::{MezError, Result};
 pub(crate) mod acceptance;
 pub(crate) mod acknowledgement;
 mod checkpoint;
-pub(crate) mod expiry;
 mod history;
 mod integrity;
 mod inventory;
@@ -38,6 +37,7 @@ pub(crate) mod native_input;
 pub(crate) mod ownership;
 mod recovery;
 mod registration;
+pub(crate) mod terminal_custody;
 
 /// Version of this private row/receipt store, independent of message snapshots.
 const SCHEMA_VERSION: i64 = 2;

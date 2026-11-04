@@ -10,7 +10,7 @@ use super::types::{MessageRecipientBindingSnapshot, MessageSequence};
 /// Ten-minute native handoff window after first observing a terminal/expiry
 /// fact. Repeated maintenance and clock rollback never renew this opportunity.
 /// Local source owners may protect already retained outcomes until handoff.
-pub(super) const TERMINAL_HANDOFF_MS: u64 = 600_000;
+pub const MESSAGE_TERMINAL_HANDOFF_MS: u64 = 600_000;
 
 /// Authoritatively observed reason an accepted recipient cannot commit mail.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

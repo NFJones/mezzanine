@@ -1,7 +1,7 @@
 //! Bounded expiry metadata and original-source qualification in one snapshot.
 
 use super::*;
-use mez_agent::messaging::{MESSAGE_EXPIRY_SLOT_LIMIT, MessageAcceptanceDecodeLimits};
+use mez_agent::messaging::{MESSAGE_TERMINAL_SLOT_LIMIT, MessageAcceptanceDecodeLimits};
 
 /// Historical data only; neither source/ACK nor sender/native authority.
 pub(in crate::storage::mmp_custody) struct StoredExpiry {
@@ -14,7 +14,7 @@ pub(in crate::storage::mmp_custody) struct StoredExpiry {
 /// Checks a fixed actual-allocation wrapper and the lower bodyless data frame.
 pub(super) fn decode(bytes: &[u8], store_id: &[u8]) -> Result<StoredExpiry> {
     if bytes.len() < 88
-        || bytes.len() > 84 + 4 * MESSAGE_EXPIRY_SLOT_LIMIT
+        || bytes.len() > 84 + 4 * MESSAGE_TERMINAL_SLOT_LIMIT
         || &bytes[..8] != b"MMPTEX01"
         || &bytes[8..24] != store_id
         || &bytes[24..32] != b"MMPEXP01"
@@ -26,7 +26,7 @@ pub(super) fn decode(bytes: &[u8], store_id: &[u8]) -> Result<StoredExpiry> {
     let count = u32::from_le_bytes(bytes[48..52].try_into().map_err(|_| invalid())?) as usize;
     if sequence == 0
         || count == 0
-        || count > MESSAGE_EXPIRY_SLOT_LIMIT
+        || count > MESSAGE_TERMINAL_SLOT_LIMIT
         || bytes.len() != 84 + 4 * count
     {
         return Err(invalid());

@@ -44,6 +44,7 @@ impl MessageService {
                 recipient_bindings.len(),
             ),
             sender_registered_after_sequence,
+            horizon_observed_at_ms: std::sync::Mutex::new(None),
             ack_expiry_observed_at_ms: std::sync::Mutex::new(None),
             recipient_bindings,
             accepted_at_ms: now_ms,

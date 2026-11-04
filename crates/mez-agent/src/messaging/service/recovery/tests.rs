@@ -41,6 +41,8 @@ impl MessageStorageRecoveryStore for Store {
                     expired_receipt: false,
                     expiry_observed_at_ms: None,
                     terminal_expiries: Vec::new(),
+                    terminal_releases: Vec::new(),
+                    horizon_observed_at_ms: None,
                 },
                 self.acknowledgements_override.clone().unwrap_or_else(|| {
                     (self.acknowledge_first && i == 0)

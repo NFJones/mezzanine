@@ -569,6 +569,7 @@ impl MessageService {
             terminal: std::sync::Mutex::new(vec![None; bindings.len()]),
             native_input_protection: super::native_input::protection_slots(bindings.len()),
             sender_registered_after_sequence: Some(sender_floor),
+            horizon_observed_at_ms: std::sync::Mutex::new(None),
             ack_expiry_observed_at_ms: std::sync::Mutex::new(None),
             recipient_bindings: bindings,
             accepted_at_ms: now_ms,

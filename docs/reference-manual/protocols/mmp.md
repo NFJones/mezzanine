@@ -404,8 +404,9 @@ Inventory and cold reconstruction restore actual unreleased observations even
 when the commit's adoption was lost or the checkpoint predates it; saved release
 bits cannot substitute for journal evidence. Physical tests cover close/reopen,
 commit-reply loss, trigger rollback, allocation tampering and independent fanout
-ACKs. Close/reopen expiry tests do not establish process-crash coverage at the
-t1 commit boundary.
+ACKs. Additional subprocess controls now exit after actual t1 or r1 commit
+before live adoption and recover through the real original factory without a
+manual message checkpoint.
 
 The internal actor now owns expiry selection and its original root continuation.
 The exclusive root retains the actual worker, first plan and lower escrow through
@@ -420,11 +421,29 @@ shutdown waits for expiry adoption. A separate subprocess exits with actual
 canonical preparation; startup after the original TTL expires still completes
 that canonical input and its exact ACK before any terminal selection.
 
-Guarded volatile cleanup and sender outcome consumption remain withheld.
-Validated owner retirement, durable sender handoff/horizon, rollback-safe elapsed
-clocks and reclamation remain unfinished. These internal operation bounds do not
-establish complete admitted-state capacity or enable normal host/all-ingress
-activation.
+The same source-owned terminal worker now journals finite outcome-horizon
+release. It freezes up to 64 actual unreleased expiry before-images and one
+release observation; actual r1 commit and original adoption precede live release.
+Version1 r1 records fit 916 bytes and bind original allocation/source/slots/first
+clocks. Each release must match actual t1 evidence and its 600000ms wall threshold
+in the same snapshot. Conflicts, missing observations, duplicate releases or
+unrelated-row damage refuse. Lost replies reconcile the same first bytes/plan.
+
+Cold recovery reconstructs release bits and pending custody from actual r1,
+even when adoption or a newer checkpoint was lost. An actual observed source
+horizon remains usable for later bounded batches through rollback and restart;
+generic snapshot bits cannot create it. The actor wakes for expiry or horizon,
+retaining issued work through shutdown. All recipient slots must ACK or release
+before logical pending custody ends; physical reclamation is separate. These
+journals do not consume a sender outcome or grant another owner its handoff.
+
+Guarded volatile cleanup and direct sender consumption remain withheld. The
+current runtime hint is in-memory context, not durable canonical handoff proof.
+Validated owner retirement, actual original-sender canonical handoff, rollback-
+safe elapsed/reboot clocks and reclamation remain unfinished. Current horizon
+thresholds are wall-clock qualification only. These internal operation bounds
+do not establish complete admitted-state capacity or enable normal host/all-
+ingress activation.
 
 The trusted storage-only reconstruction path now moves those originals into the
 canonical message owner as cold metadata, preserving pending obligations,

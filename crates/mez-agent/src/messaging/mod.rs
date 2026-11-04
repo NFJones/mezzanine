@@ -22,7 +22,8 @@ pub use dispatch::{
 pub use error::{MessageError, MessageErrorKind, Result};
 pub use json::delivery_batch_json;
 pub use outcomes::{
-    DeliveryTerminalReason, MessageDeliveryOutcome, MessageDeliveryTerminalSnapshot,
+    DeliveryTerminalReason, MESSAGE_TERMINAL_HANDOFF_MS, MessageDeliveryOutcome,
+    MessageDeliveryTerminalSnapshot,
 };
 pub use pending_limits::PendingDeliveryLimits;
 pub use requests::{
@@ -30,18 +31,16 @@ pub use requests::{
     MessageRequestReceipt, MessageRequests,
 };
 pub use service::{
-    MESSAGE_EXPIRY_SLOT_LIMIT, MESSAGE_PAYLOAD_DEMAND_BYTES, MESSAGE_PAYLOAD_DEMAND_RECIPIENTS,
-    MESSAGE_STORAGE_RECOVERY_SCRATCH_METADATA, MessageAcceptanceAttempt, MessageAcceptanceCommit,
-    MessageAcceptanceDecodeLimits, MessageAcceptanceJoin, MessageAcceptanceProof,
-    MessageAcceptanceRejected, MessageAcceptanceReservation, MessageAcceptanceSource,
-    MessageAcceptanceStore, MessageAcceptanceStoreError, MessageAcceptanceTicket,
-    MessageAcceptanceUncertain, MessageAcceptanceWrite, MessageAcceptanceWriteOutcome,
-    MessageAcknowledgementAttempt, MessageAcknowledgementCommit, MessageAcknowledgementEntry,
-    MessageAcknowledgementJoin, MessageAcknowledgementStore, MessageAcknowledgementTicket,
-    MessageAcknowledgementUncertain, MessageAcknowledgementWrite,
-    MessageAcknowledgementWriteOutcome, MessageExpiryAttempt, MessageExpiryCommit,
-    MessageExpiryJoin, MessageExpiryStore, MessageExpiryTicket, MessageExpiryUncertain,
-    MessageExpiryWrite, MessageExpiryWriteOutcome, MessageNativeCheckpoint,
+    MESSAGE_PAYLOAD_DEMAND_BYTES, MESSAGE_PAYLOAD_DEMAND_RECIPIENTS,
+    MESSAGE_STORAGE_RECOVERY_SCRATCH_METADATA, MESSAGE_TERMINAL_SLOT_LIMIT,
+    MessageAcceptanceAttempt, MessageAcceptanceCommit, MessageAcceptanceDecodeLimits,
+    MessageAcceptanceJoin, MessageAcceptanceProof, MessageAcceptanceRejected,
+    MessageAcceptanceReservation, MessageAcceptanceSource, MessageAcceptanceStore,
+    MessageAcceptanceStoreError, MessageAcceptanceTicket, MessageAcceptanceUncertain,
+    MessageAcceptanceWrite, MessageAcceptanceWriteOutcome, MessageAcknowledgementAttempt,
+    MessageAcknowledgementCommit, MessageAcknowledgementEntry, MessageAcknowledgementJoin,
+    MessageAcknowledgementStore, MessageAcknowledgementTicket, MessageAcknowledgementUncertain,
+    MessageAcknowledgementWrite, MessageAcknowledgementWriteOutcome, MessageNativeCheckpoint,
     MessageNativeContinuityRequest, MessageNativeContinuitySnapshot, MessageNativeContinuityStore,
     MessageNativeContinuityVerified, MessageNativeContinuityWrite, MessageNativeIncarnation,
     MessageNativeInputAnchor, MessageNativeInputCommit, MessageNativeInputRecord,
@@ -54,7 +53,9 @@ pub use service::{
     MessageStorageRecoveryStore, MessageStorageScope, MessageStorageSnapshot,
     MessageStorageSnapshotLease, MessageStorageSnapshotRequest, MessageStorageSnapshotStore,
     MessageStorageSnapshotVerified, MessageStorageSnapshotWrite, MessageStorageSourceSnapshot,
-    MessageStorageUsage, decode_message_acceptance,
+    MessageStorageUsage, MessageTerminalAttempt, MessageTerminalCommit, MessageTerminalJoin,
+    MessageTerminalKind, MessageTerminalStore, MessageTerminalTicket, MessageTerminalUncertain,
+    MessageTerminalWrite, MessageTerminalWriteOutcome, decode_message_acceptance,
 };
 pub use types::{
     AgentPresenceStatus, Delivery, DeliveryBatch, DeliveryCursor, DeliveryStatus, Envelope,

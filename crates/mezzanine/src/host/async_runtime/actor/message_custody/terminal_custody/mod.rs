@@ -1,18 +1,19 @@
-//! Bounded expiry selection after original native recovery probes have drained.
+//! Bounded expiry and horizon selection on the original actor/root lane.
 //!
-//! One actor continuation pairs with the existing exclusive root job; no second
-//! mailbox, source body or positive fact lives here. Idle deadlines wake a fresh
-//! canonical scan before selecting expiry. Pre-issuance capacity failure retains
-//! no physical attempt and backs off without excluding unrelated admission.
-//! Issued work instead drains through actual join/retry/adoption during shutdown.
-//! Sender release, retirement, elapsed-clock policy and reclaim are separate gates.
+//! One continuation pairs with each exact terminal operation; no second mailbox,
+//! body or positive lives here. Idle expiry/horizon deadlines reopen canonical
+//! scans before selection. Actual horizon release can free logical pending
+//! custody before new observation admission. Pre-issuance refusal backs off
+//! without excluding unrelated work; issued jobs retain real join/retry/adoption
+//! through shutdown. Durable sender consumption, validated retirement, elapsed
+//! clocks and physical reclaim remain separate activation gates.
 
 use super::*;
 
 impl AsyncRuntimeSessionActor {
     /// Selects at most one original expiry after higher-priority native input
     /// work and persistent preparation probes. A timer never bypasses that scan.
-    pub(super) fn pump_message_expiry(&mut self) {
+    pub(super) fn pump_message_terminal(&mut self) {
         let Some(owner) = self.message_custody.as_ref() else {
             return;
         };
@@ -24,7 +25,9 @@ impl AsyncRuntimeSessionActor {
             || owner.native_retry.is_some()
             || self.service.has_pending_native_input()
             || (self.service.native_input_storage_required() && owner.native_scan_pending)
-            || owner.expiry_retry_at.is_some_and(|at| at > Instant::now())
+            || owner
+                .terminal_retry_at
+                .is_some_and(|at| at > Instant::now())
             || self.service.message_service().payload_observer().is_none()
         {
             return;
@@ -34,26 +37,35 @@ impl AsyncRuntimeSessionActor {
         };
         let scope = owner.root.storage_scope();
         let now_ms = crate::runtime::current_unix_millis();
-        let selected = self.service.message_service_mut().prepare_storage_expiry(
-            scope,
-            now_ms,
-            8 * 1024 * 1024,
-        );
+        // Releasing actual aged outcomes can free logical custody before a
+        // fresh observation needs its decoder/metadata reservation.
+        let selected = match self
+            .service
+            .message_service_mut()
+            .prepare_storage_horizon_release(scope, now_ms, 8 * 1024 * 1024)
+        {
+            Ok(None) => self.service.message_service_mut().prepare_storage_expiry(
+                scope,
+                now_ms,
+                8 * 1024 * 1024,
+            ),
+            other => other,
+        };
         match selected {
             Ok(Some(ticket)) => {
                 // Install this continuation before the actual worker can run.
-                owner.pending = Some(Pending::Expiry);
+                owner.pending = Some(Pending::TerminalWrite);
                 owner.wake = Some(Wake::Observe);
                 match owner
                     .root
-                    .start_expiry(self.service.message_service_mut(), &ticket)
+                    .start_terminal(self.service.message_service_mut(), &ticket)
                 {
-                    Ok(()) => owner.expiry_retry_at = None,
+                    Ok(()) => owner.terminal_retry_at = None,
                     Err(error) => {
                         if self
                             .service
                             .message_service_mut()
-                            .cancel_storage_expiry(&ticket)
+                            .cancel_storage_terminal(&ticket)
                             .is_err()
                         {
                             owner.failure = Some(error);
@@ -63,7 +75,7 @@ impl AsyncRuntimeSessionActor {
                         } else {
                             owner.pending = None;
                             owner.wake = None;
-                            owner.expiry_retry_at =
+                            owner.terminal_retry_at =
                                 Some(Instant::now() + std::time::Duration::from_secs(1));
                         }
                     }
@@ -74,16 +86,21 @@ impl AsyncRuntimeSessionActor {
                     .service
                     .message_service()
                     .next_storage_expiry_at_ms(scope)
-                {
+                    .and_then(|expiry| {
+                        self.service
+                            .message_service()
+                            .next_storage_horizon_at_ms(scope)
+                            .map(|horizon| expiry.into_iter().chain(horizon).min())
+                    }) {
                     Ok(at) => {
-                        owner.expiry_retry_at = at.and_then(|at| {
+                        owner.terminal_retry_at = at.and_then(|at| {
                             Instant::now().checked_add(std::time::Duration::from_millis(
                                 at.saturating_sub(now_ms),
                             ))
                         })
                     }
                     Err(_) => {
-                        owner.expiry_retry_at =
+                        owner.terminal_retry_at =
                             Some(Instant::now() + std::time::Duration::from_secs(1))
                     }
                 }
@@ -91,7 +108,7 @@ impl AsyncRuntimeSessionActor {
             Err(_) => {
                 // No original was selected or issued. Real ACK/cache progress
                 // may use the idle lane before the next bounded capture try.
-                owner.expiry_retry_at = Some(Instant::now() + std::time::Duration::from_secs(1));
+                owner.terminal_retry_at = Some(Instant::now() + std::time::Duration::from_secs(1));
             }
         }
     }

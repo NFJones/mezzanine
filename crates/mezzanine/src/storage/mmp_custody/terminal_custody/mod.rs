@@ -1,7 +1,8 @@
-//! Source-bound expiry journals in the existing private custody store.
+//! Source-bound terminal journals in the existing private custody store.
 //!
 //! One actual lower reservation supplies immutable source/slots/first-clock
-//! data. The concrete port binds it to the original allocation and scope under
+//! data or exact horizon before-images. The concrete port binds the operation
+//! to the original allocation and scope under
 //! a retained kernel owner, checks source TTL and conflicting ACK/native facts
 //! in one immediate transaction, and preserves every non-target row around SQL
 //! effects. Bytes are descriptive; only the trusted callback can seal a lower
@@ -10,19 +11,21 @@
 
 use super::{integrity::unaffected_rows_digest, ownership::OwnedCustodyStore, *};
 use mez_agent::messaging::{
-    MessageError, MessageExpiryStore, MessageExpiryWrite, MessageStorageScope,
+    MessageError, MessageStorageScope, MessageTerminalKind, MessageTerminalStore,
+    MessageTerminalWrite,
 };
 
 mod read;
+mod release;
 
 /// Actual original allocation and pre-operation generation; not a capability.
 #[derive(Clone, Debug)]
-pub(crate) struct ExpiryPlan {
+pub(crate) struct TerminalPlan {
     store_id: Vec<u8>,
     generation: u64,
 }
 
-impl ExpiryPlan {
+impl TerminalPlan {
     /// Converts only a trusted idle root's already observed physical position.
     pub(super) fn from_position(store_id: Vec<u8>, generation: u64) -> Self {
         Self {
@@ -33,20 +36,20 @@ impl ExpiryPlan {
 }
 
 /// This borrow cannot outlive the actual original kernel/store owner.
-pub(crate) struct PlannedExpiryStore<'borrow, 'owner> {
+pub(crate) struct PlannedTerminalStore<'borrow, 'owner> {
     owned: &'borrow mut OwnedCustodyStore<'owner>,
-    plan: &'borrow ExpiryPlan,
+    plan: &'borrow TerminalPlan,
     scope: &'borrow MessageStorageScope,
 }
 
 impl<'owner> OwnedCustodyStore<'owner> {
     /// Captures the original physical position off actor under this live fence.
     #[cfg(test)]
-    pub(crate) fn expiry_plan(&mut self) -> Result<ExpiryPlan> {
+    pub(crate) fn terminal_plan(&mut self) -> Result<TerminalPlan> {
         self.revalidate()?;
         let store = self.store_mut();
         let state = store.current_state()?;
-        let plan = ExpiryPlan {
+        let plan = TerminalPlan {
             store_id: store.store_id.clone(),
             generation: u64::try_from(state.generation).map_err(|_| invalid())?,
         };
@@ -54,29 +57,32 @@ impl<'owner> OwnedCustodyStore<'owner> {
         Ok(plan)
     }
     /// Borrows original expiry I/O while retaining the actual root owner.
-    pub(crate) fn expiry_port<'borrow>(
+    pub(crate) fn terminal_port<'borrow>(
         &'borrow mut self,
-        plan: &'borrow ExpiryPlan,
+        plan: &'borrow TerminalPlan,
         scope: &'borrow MessageStorageScope,
-    ) -> PlannedExpiryStore<'borrow, 'owner> {
-        PlannedExpiryStore {
+    ) -> PlannedTerminalStore<'borrow, 'owner> {
+        PlannedTerminalStore {
             owned: self,
             plan,
             scope,
         }
     }
 }
-impl MessageExpiryStore for PlannedExpiryStore<'_, '_> {
+impl MessageTerminalStore for PlannedTerminalStore<'_, '_> {
     /// Success follows exact original commit/reconciliation and final physical
     /// fence revalidation. Every failure remains uncertain to the lower owner.
-    fn commit(&mut self, write: &MessageExpiryWrite) -> mez_agent::messaging::Result<()> {
-        self.commit_record(write)
-            .map_err(|error| MessageError::invalid_state(format!("MMP expiry storage: {error}")))
+    fn commit(&mut self, write: &MessageTerminalWrite) -> mez_agent::messaging::Result<()> {
+        match write.kind() {
+            MessageTerminalKind::ExpiryObservation => self.commit_expiry_record(write),
+            MessageTerminalKind::HorizonRelease => self.commit_release_record(write),
+        }
+        .map_err(|error| MessageError::invalid_state(format!("MMP terminal storage: {error}")))
     }
 }
-impl PlannedExpiryStore<'_, '_> {
+impl PlannedTerminalStore<'_, '_> {
     /// Never refreshes a first plan or regenerates slots/clock after failure.
-    fn commit_record(&mut self, write: &MessageExpiryWrite) -> Result<()> {
+    fn commit_expiry_record(&mut self, write: &MessageTerminalWrite) -> Result<()> {
         if !write.belongs_to(self.scope) {
             return Err(invalid());
         }
@@ -183,7 +189,7 @@ fn record_key(bytes: &[u8]) -> String {
 }
 /// Bounded source/ownership diagnostic without authored content.
 fn invalid() -> MezError {
-    MezError::invalid_state("MMP original terminal expiry unavailable")
+    MezError::invalid_state("MMP original terminal custody unavailable")
 }
 
 #[cfg(test)]

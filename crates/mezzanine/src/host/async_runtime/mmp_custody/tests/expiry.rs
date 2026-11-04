@@ -12,7 +12,7 @@ impl Drop for Gate {
 }
 
 /// One real stored raw source with an independent expiry-only physical gate.
-async fn scene(
+pub(super) async fn scene(
     fixture: &Fixture,
     probe: Arc<Probe>,
 ) -> (
@@ -23,7 +23,7 @@ async fn scene(
 ) {
     let mut root = fixture.root();
     assert_eq!(root.observe().await.unwrap(), CustodyWorkerStatus::Idle);
-    Arc::get_mut(&mut root.0).unwrap().expiry_probe = Some(probe);
+    Arc::get_mut(&mut root.0).unwrap().terminal_probe = Some(probe);
     let (mut service, sender, target, _) = fixture_service();
     root.configure_payload_spill(&mut service, Default::default())
         .unwrap();
@@ -36,7 +36,7 @@ async fn scene(
 }
 
 /// Persists through the actual root, with the original caller acceptance clock.
-async fn accept(
+pub(super) async fn accept(
     root: &MmpCustodyRoot,
     service: &mut MessageService,
     sender: &SenderIdentity,
@@ -66,7 +66,7 @@ async fn accept(
 fn reserve(
     root: &MmpCustodyRoot,
     service: &mut MessageService,
-) -> mez_agent::messaging::MessageExpiryTicket {
+) -> mez_agent::messaging::MessageTerminalTicket {
     service
         .prepare_storage_expiry(root.storage_scope(), 16, 8 * 1024 * 1024)
         .unwrap()
@@ -95,7 +95,7 @@ async fn expiry_root_lost_positive_keeps_original_through_stop_and_exact_join() 
     let observer = service.payload_observer().unwrap();
     let ticket = reserve(&root, &mut service);
     probe.panic_after_commit.store(true, Ordering::SeqCst);
-    root.start_expiry(&mut service, &ticket).unwrap();
+    root.start_terminal(&mut service, &ticket).unwrap();
     probe.started.notified().await;
     let waiting = {
         let root = root.clone();
@@ -105,7 +105,7 @@ async fn expiry_root_lost_positive_keeps_original_through_stop_and_exact_join() 
     waiting.abort();
     let _ = waiting.await;
     assert!(RootOwnership::acquire_existing(&fixture.path).is_err());
-    assert!(service.cancel_storage_expiry(&ticket).is_err());
+    assert!(service.cancel_storage_terminal(&ticket).is_err());
     assert!(
         service
             .delivery_outcomes_for(&sender.agent_id, 10)
@@ -118,24 +118,24 @@ async fn expiry_root_lost_positive_keeps_original_through_stop_and_exact_join() 
     );
     root.request_stop();
     probe.release();
-    let CustodyWorkerStatus::ExpiryRetryAt(due) = root.observe().await.unwrap() else {
+    let CustodyWorkerStatus::TerminalRetryAt(due) = root.observe().await.unwrap() else {
         panic!("actual worker loss must join");
     };
     assert_eq!(terminals(&fixture), 1);
     let disk = fixture.disk();
-    assert!(!root.retry_expiry(&mut service, Instant::now()).unwrap());
-    assert!(root.retry_expiry(&mut service, due).unwrap());
+    assert!(!root.retry_terminal(&mut service, Instant::now()).unwrap());
+    assert!(root.retry_terminal(&mut service, due).unwrap());
     assert_eq!(
         root.observe().await.unwrap(),
-        CustodyWorkerStatus::ExpiryAwaitingAdoption
+        CustodyWorkerStatus::TerminalAwaitingAdoption
     );
     let (mut foreign, _, _, _) = fixture_service();
-    assert!(root.adopt_expiry(&mut foreign).is_err());
+    assert!(root.adopt_terminal(&mut foreign).is_err());
     assert_eq!(
         root.observe().await.unwrap(),
-        CustodyWorkerStatus::ExpiryAwaitingAdoption
+        CustodyWorkerStatus::TerminalAwaitingAdoption
     );
-    assert_eq!(root.adopt_expiry(&mut service).unwrap(), 1);
+    assert_eq!(root.adopt_terminal(&mut service).unwrap(), 1);
     assert_eq!(fixture.disk(), disk);
     assert_eq!(probe.attempts.load(Ordering::SeqCst), 2);
     assert_eq!(observer.snapshot().unwrap().reserved_payload_bytes, 0);
@@ -163,7 +163,7 @@ async fn expiry_last_root_drop_drains_worker_before_releasing_physical_owner() {
     let (root, mut service, sender, _) = scene(&fixture, probe.clone()).await;
     let observer = service.payload_observer().unwrap();
     let ticket = reserve(&root, &mut service);
-    root.start_expiry(&mut service, &ticket).unwrap();
+    root.start_terminal(&mut service, &ticket).unwrap();
     probe.started.notified().await;
     drop(root);
     assert!(RootOwnership::acquire_existing(&fixture.path).is_err());
@@ -195,11 +195,11 @@ async fn expiry_position_failure_retains_positive_and_refreshes_without_rewrite(
     *probe.relocate_after_commit.lock().unwrap() =
         Some((fixture.path.clone(), retained.path.clone()));
     let ticket = reserve(&root, &mut service);
-    root.start_expiry(&mut service, &ticket).unwrap();
-    let CustodyWorkerStatus::ExpiryRetryAt(due) = root.observe().await.unwrap() else {
+    root.start_terminal(&mut service, &ticket).unwrap();
+    let CustodyWorkerStatus::TerminalRetryAt(due) = root.observe().await.unwrap() else {
         panic!("actual path replacement must refuse position");
     };
-    assert!(root.adopt_expiry(&mut service).is_err());
+    assert!(root.adopt_terminal(&mut service).is_err());
     assert!(
         service
             .delivery_outcomes_for(&sender.agent_id, 10)
@@ -210,12 +210,12 @@ async fn expiry_position_failure_retains_positive_and_refreshes_without_rewrite(
     let disk = retained.disk();
     std::fs::remove_dir(&fixture.path).unwrap();
     std::fs::rename(&retained.path, &fixture.path).unwrap();
-    assert!(root.retry_expiry(&mut service, due).unwrap());
+    assert!(root.retry_terminal(&mut service, due).unwrap());
     assert_eq!(
         root.observe().await.unwrap(),
-        CustodyWorkerStatus::ExpiryAwaitingAdoption
+        CustodyWorkerStatus::TerminalAwaitingAdoption
     );
-    assert_eq!(root.adopt_expiry(&mut service).unwrap(), 1);
+    assert_eq!(root.adopt_terminal(&mut service).unwrap(), 1);
     assert_eq!(probe.attempts.load(Ordering::SeqCst), 1);
     assert_eq!(fixture.disk(), disk);
 }
@@ -231,8 +231,8 @@ async fn expiry_unknown_store_result_retries_original_after_real_join() {
     let connection = fixture.connection();
     connection.execute_batch("CREATE TRIGGER refuse_expiry BEFORE INSERT ON records WHEN NEW.key LIKE 't1:%' BEGIN SELECT RAISE(FAIL,'fixture expiry refusal'); END").unwrap();
     let ticket = reserve(&root, &mut service);
-    root.start_expiry(&mut service, &ticket).unwrap();
-    let CustodyWorkerStatus::ExpiryRetryAt(due) = root.observe().await.unwrap() else {
+    root.start_terminal(&mut service, &ticket).unwrap();
+    let CustodyWorkerStatus::TerminalRetryAt(due) = root.observe().await.unwrap() else {
         panic!("physical failure remains unknown");
     };
     assert!(root.failure().unwrap().is_some());
@@ -240,12 +240,12 @@ async fn expiry_unknown_store_result_retries_original_after_real_join() {
     connection
         .execute_batch("DROP TRIGGER refuse_expiry")
         .unwrap();
-    assert!(root.retry_expiry(&mut service, due).unwrap());
+    assert!(root.retry_terminal(&mut service, due).unwrap());
     assert_eq!(
         root.observe().await.unwrap(),
-        CustodyWorkerStatus::ExpiryAwaitingAdoption
+        CustodyWorkerStatus::TerminalAwaitingAdoption
     );
-    assert_eq!(root.adopt_expiry(&mut service).unwrap(), 1);
+    assert_eq!(root.adopt_terminal(&mut service).unwrap(), 1);
     assert_eq!(
         service.delivery_outcomes_for(&sender.agent_id, 10).unwrap()[0].observed_at_ms,
         16
@@ -263,7 +263,7 @@ async fn expiry_actor_idle_deadline_wakes_and_shutdown_drains_original() {
     let _gate = Gate(probe.clone());
     let mut root = fixture.root();
     assert_eq!(root.observe().await.unwrap(), CustodyWorkerStatus::Idle);
-    Arc::get_mut(&mut root.0).unwrap().expiry_probe = Some(probe.clone());
+    Arc::get_mut(&mut root.0).unwrap().terminal_probe = Some(probe.clone());
     let mut service = crate::test_support::runtime::RuntimeServiceFixture::new().build();
     let sender = service
         .message_service_mut()

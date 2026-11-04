@@ -13,13 +13,13 @@ impl MessageService {
         scope: &MessageStorageScope,
         observed_at_ms: u64,
         metadata_budget: usize,
-    ) -> Result<Option<MessageExpiryTicket>> {
+    ) -> Result<Option<MessageTerminalTicket>> {
         let policy = self
             .storage_custody
             .as_ref()
             .filter(|p| p.scope == *scope)
             .ok_or_else(changed)?;
-        if self.expiry.is_some() {
+        if self.terminal_commit.is_some() {
             return Err(capacity());
         }
         for row in self.pending.values() {
@@ -42,7 +42,7 @@ impl MessageService {
                     && !self.acknowledgement_protects(row.sequence, recipient)
                 {
                     indices.push(u32::try_from(index).map_err(|_| capacity())?);
-                    if indices.len() == MESSAGE_EXPIRY_SLOT_LIMIT {
+                    if indices.len() == MESSAGE_TERMINAL_SLOT_LIMIT {
                         break;
                     }
                 }
@@ -68,38 +68,40 @@ impl MessageService {
                 source: row.clone(),
                 digest: row.envelope.storage_digest(scope)?,
                 observed_at_ms,
+                kind: MessageTerminalKind::ExpiryObservation,
+                before: vec![None; indices.len()],
                 indices,
                 metadata_bytes: bytes,
                 decode_payload_bytes: policy.limits.cache_payload_bytes,
                 published: AtomicBool::new(false),
                 _lease: lease,
             });
-            self.expiry = Some(PendingExpiry {
+            self.terminal_commit = Some(PendingTerminal {
                 identity: identity.clone(),
                 attempt: None,
             });
-            return Ok(Some(MessageExpiryTicket { identity }));
+            return Ok(Some(MessageTerminalTicket { identity }));
         }
         Ok(None)
     }
 
     /// Observes an unpublished original operation for restore/checkpoint fences.
     /// This is not physical join, commit, terminal status or noncommit evidence.
-    pub fn has_unpublished_expiry(&self) -> bool {
-        self.expiry.is_some()
+    pub fn has_unpublished_terminal(&self) -> bool {
+        self.terminal_commit.is_some()
     }
 
     /// A real first expiry observation applies to the immutable source TTL,
     /// including unselected fanout slots. Pending observation blocks new receive
     /// without creating terminal outcomes; existing pre-TTL ACK rights remain.
     pub(in crate::messaging::service) fn expiry_excludes(&self, sequence: MessageSequence) -> bool {
-        self.expiry
-            .as_ref()
-            .is_some_and(|p| p.identity.source.sequence == sequence)
-            || self
-                .queued_by_sequence
-                .get(&sequence)
-                .is_some_and(|row| known_expiry(row).map_or(true, |clock| clock.is_some()))
+        self.terminal_commit.as_ref().is_some_and(|p| {
+            p.identity.kind == MessageTerminalKind::ExpiryObservation
+                && p.identity.source.sequence == sequence
+        }) || self
+            .queued_by_sequence
+            .get(&sequence)
+            .is_some_and(|row| known_expiry(row).map_or(true, |clock| clock.is_some()))
     }
 
     /// A reserved slot is unavailable for receive or competing ACK while its
@@ -109,7 +111,7 @@ impl MessageService {
         sequence: MessageSequence,
         recipient: &AgentId,
     ) -> bool {
-        self.expiry.as_ref().is_some_and(|pending| {
+        self.terminal_commit.as_ref().is_some_and(|pending| {
             pending.identity.source.sequence == sequence
                 && pending.identity.indices.iter().any(|index| {
                     pending

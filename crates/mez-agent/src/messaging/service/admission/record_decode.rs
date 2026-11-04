@@ -86,6 +86,7 @@ impl MessageAcceptanceSource {
             acknowledged: std::sync::Mutex::new(acknowledged),
             terminal: std::sync::Mutex::new(terminal),
             native_input_protection: super::super::native_input::protection_slots(count),
+            horizon_observed_at_ms: std::sync::Mutex::new(None),
             ack_expiry_observed_at_ms: std::sync::Mutex::new(expiry_observed_at_ms),
         })
     }

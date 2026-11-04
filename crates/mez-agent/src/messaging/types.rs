@@ -677,6 +677,9 @@ pub(super) struct QueuedEnvelope {
     /// expired before an unoffered prefix was skipped. Not a delivery commit or
     /// terminal disposition; retained independently of endpoint replay lifetime.
     pub(super) ack_expiry_observed_at_ms: Mutex<Option<u64>>,
+    /// Maximum actual durable horizon-release observation for this source.
+    /// Only qualified operation/recovery can set it; saved generic bits cannot.
+    pub(super) horizon_observed_at_ms: Mutex<Option<u64>>,
     /// Stores the accepted at ms value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
@@ -710,7 +713,7 @@ pub struct MessageService {
     /// Charged frozen ACK prefix; payload stays in the canonical pending owner.
     pub(super) acknowledgement: Option<super::service::PendingAcknowledgement>,
     /// Exact source/slots awaiting a trusted durable expiry result.
-    pub(super) expiry: Option<super::service::PendingExpiry>,
+    pub(super) terminal_commit: Option<super::service::PendingTerminal>,
 
     /// Nonserializable identity of this live owner. Retained acceptance proofs
     /// cannot authenticate against another service or snapshot restoration.

@@ -28,6 +28,10 @@ pub struct MessageStorageRecoveredRecord {
     /// Exact stored recipient indices and first expiry observations. These are
     /// unreleased sender outcomes, never ACKs, cursors or native authority.
     pub terminal_expiries: Vec<(u32, u64)>,
+    /// Exact terminal slots with actual qualified horizon-release evidence.
+    pub terminal_releases: Vec<u32>,
+    /// Maximum qualified original horizon observation, not a new wall clock.
+    pub horizon_observed_at_ms: Option<u64>,
 }
 
 /// Trusted product recovery boundary; never implemented by a generic decoder.
@@ -276,15 +280,37 @@ impl MessageStorageRecovery {
                 released: false,
             });
         }
-        let pending = acknowledged.iter().any(|ack| !*ack);
-        let row = Arc::new(source.into_cold_occurrence(
+        if record.terminal_releases.is_empty() != record.horizon_observed_at_ms.is_none() {
+            return Err(unavailable());
+        }
+        for index in &record.terminal_releases {
+            let value = terminal
+                .get_mut(*index as usize)
+                .and_then(Option::as_mut)
+                .ok_or_else(unavailable)?;
+            if value.released
+                || record.horizon_observed_at_ms.is_none_or(|clock| {
+                    clock.saturating_sub(value.observed_at_ms) < MESSAGE_TERMINAL_HANDOFF_MS
+                })
+            {
+                return Err(unavailable());
+            }
+            value.released = true;
+        }
+        let pending = acknowledged
+            .iter()
+            .zip(&terminal)
+            .any(|(ack, terminal)| !*ack && terminal.is_none_or(|value| !value.released));
+        let mut row = source.into_cold_occurrence(
             &policy.scope,
             record.source_sha256,
             offered,
             acknowledged,
             terminal,
             record.expiry_observed_at_ms,
-        )?);
+        )?;
+        row.horizon_observed_at_ms = std::sync::Mutex::new(record.horizon_observed_at_ms);
+        let row = Arc::new(row);
         let additional = self.reserve_row(&row, pending)?;
         let scope = policy.scope.clone();
         if pending {

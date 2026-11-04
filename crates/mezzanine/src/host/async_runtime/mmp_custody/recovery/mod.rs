@@ -234,7 +234,7 @@ impl MmpCustodyRoot {
             #[cfg(test)]
             ack_probe: None,
             #[cfg(test)]
-            expiry_probe: None,
+            terminal_probe: None,
         }))
     }
 

@@ -189,7 +189,7 @@ impl MessageService {
         if self.storage_custody.is_some()
             || self.admission.is_some()
             || self.acknowledgement.is_some()
-            || self.expiry.is_some()
+            || self.terminal_commit.is_some()
             || !self.queued_by_sequence.is_empty()
             || !self.accepted_messages.is_empty()
         {

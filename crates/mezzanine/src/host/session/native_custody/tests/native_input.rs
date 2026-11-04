@@ -58,7 +58,6 @@ pub(super) async fn commit_then_crash(
     fixture: Fixture,
     point: NativeCrashPoint,
 ) -> ! {
-    use std::os::unix::fs::OpenOptionsExt;
     let (_, mut actor) =
         AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
     actor.register_message_custody(root).unwrap();
@@ -189,28 +188,7 @@ pub(super) async fn commit_then_crash(
             assert!(frame.unwrap()["rows"].as_array().unwrap().len() > 1);
         }
     }
-    SnapshotRepository::new(fixture.config.clone())
-        .write_payload("crash-layout", &fixture.payload)
-        .unwrap();
-    let mut handoff = fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(fixture.config.join("crash-expectations.json"))
-        .unwrap();
-    serde_json::to_writer(
-        &mut handoff,
-        &CrashExpectations {
-            epoch: fixture.epoch,
-            native: fixture.native.to_string(),
-            raw: fixture.raw.to_string(),
-        },
-    )
-    .unwrap();
-    handoff.sync_all().unwrap();
-    fs::File::open(&fixture.config).unwrap().sync_all().unwrap();
-    // No actor, source, worker, root, store or Fixture destructor may run here.
-    std::process::exit(0);
+    finish_crash(&fixture);
 }
 
 /// Exact-filter child entry is inert during ordinary harness discovery.

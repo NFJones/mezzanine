@@ -18,7 +18,7 @@ mod admission;
 
 use mez_core::ids::AgentId;
 
-use super::outcomes::TERMINAL_HANDOFF_MS;
+use super::outcomes::MESSAGE_TERMINAL_HANDOFF_MS;
 use super::{
     Delivery, Envelope, MessageAcceptanceProof, MessageAcceptanceReservation, MessageError,
     MessageErrorKind, MessageScope, MessageService, Result,
@@ -348,10 +348,9 @@ impl MessageRequests {
             {
                 receipt.expiry_observed_at_ms = Some(now_ms);
             }
-            if receipt
-                .expiry_observed_at_ms
-                .is_some_and(|observed| now_ms.saturating_sub(observed) >= TERMINAL_HANDOFF_MS)
-                && !retain_outcome(*generation)
+            if receipt.expiry_observed_at_ms.is_some_and(|observed| {
+                now_ms.saturating_sub(observed) >= MESSAGE_TERMINAL_HANDOFF_MS
+            }) && !retain_outcome(*generation)
             {
                 retired.push(*generation);
             }

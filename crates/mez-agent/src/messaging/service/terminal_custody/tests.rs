@@ -24,12 +24,18 @@ impl MessageAcknowledgementStore for Store {
         Ok(())
     }
 }
-impl MessageExpiryStore for Store {
-    fn commit(&mut self, write: &MessageExpiryWrite) -> Result<()> {
+impl MessageTerminalStore for Store {
+    fn commit(&mut self, write: &MessageTerminalWrite) -> Result<()> {
         let mut bytes = Vec::new();
         write.write_record(&mut bytes).unwrap();
         assert_eq!(bytes.len(), write.encoded_bytes());
-        assert_eq!(&bytes[..8], b"MMPEXP01");
+        assert_eq!(
+            &bytes[..8],
+            match write.kind() {
+                MessageTerminalKind::ExpiryObservation => b"MMPEXP01",
+                MessageTerminalKind::HorizonRelease => b"MMPREL01",
+            }
+        );
         if let Some(original) = &self.original {
             assert_eq!(original, &bytes);
         }
@@ -133,15 +139,15 @@ impl Scene {
             1
         );
     }
-    fn reserve(&mut self) -> MessageExpiryTicket {
+    fn reserve(&mut self) -> MessageTerminalTicket {
         self.service
             .prepare_storage_expiry(&self.scope, 16, 8 * 1024 * 1024)
             .unwrap()
             .unwrap()
     }
-    fn write(&mut self, ticket: &MessageExpiryTicket) -> MessageExpiryWrite {
+    fn write(&mut self, ticket: &MessageTerminalTicket) -> MessageTerminalWrite {
         self.service
-            .begin_storage_expiry_write(ticket, &self.scope)
+            .begin_storage_terminal_write(ticket, &self.scope)
             .unwrap()
     }
 }
@@ -178,7 +184,7 @@ fn expiry_original_requires_store_positive_and_exact_adoption() {
             .metadata_bytes
             > before
     );
-    assert!(scene.service.has_unpublished_expiry());
+    assert!(scene.service.has_unpublished_terminal());
     assert!(scene.service.snapshot_state().is_err());
     assert!(
         scene
@@ -220,7 +226,8 @@ fn expiry_original_requires_store_positive_and_exact_adoption() {
     assert_eq!(write.binding_indices().collect::<Vec<_>>(), vec![0]);
     assert!(write.belongs_to(&scene.scope));
     assert!(!write.belongs_to(&MessageStorageScope::default()));
-    let MessageExpiryWriteOutcome::Committed(commit) = write.persist(&mut Store::default()) else {
+    let MessageTerminalWriteOutcome::Committed(commit) = write.persist(&mut Store::default())
+    else {
         panic!("trusted lower port positive required");
     };
     assert!(
@@ -230,9 +237,9 @@ fn expiry_original_requires_store_positive_and_exact_adoption() {
             .unwrap()
             .is_empty()
     );
-    assert_eq!(scene.service.publish_expiry(&commit).unwrap(), 1);
-    assert_eq!(scene.service.publish_expiry(&commit).unwrap(), 0);
-    assert!(!scene.service.has_unpublished_expiry());
+    assert_eq!(scene.service.publish_terminal(&commit).unwrap(), 1);
+    assert_eq!(scene.service.publish_terminal(&commit).unwrap(), 0);
+    assert!(!scene.service.has_unpublished_terminal());
     assert_eq!(
         scene
             .service
@@ -291,30 +298,30 @@ fn expiry_uncertainty_preserves_first_observation_and_original_slots() {
         fail: true,
         ..Default::default()
     };
-    let MessageExpiryWriteOutcome::Unknown(unknown) = write.persist(&mut store) else {
+    let MessageTerminalWriteOutcome::Unknown(unknown) = write.persist(&mut store) else {
         panic!("actual fixture uncertainty required");
     };
     assert!(unknown.error().message().contains("lost reply"));
-    assert!(scene.service.cancel_storage_expiry(&ticket).is_err());
+    assert!(scene.service.cancel_storage_terminal(&ticket).is_err());
     assert!(
         scene
             .service
-            .begin_storage_expiry_write(&ticket, &scene.scope)
+            .begin_storage_terminal_write(&ticket, &scene.scope)
             .is_err()
     );
-    let write = scene.service.retry_expiry_write(unknown).unwrap();
+    let write = scene.service.retry_terminal_write(unknown).unwrap();
     assert!(!write.attempt().same_attempt(&original));
-    assert!(scene.service.validate_expiry_attempt(&original).is_err());
+    assert!(scene.service.validate_terminal_attempt(&original).is_err());
     assert_eq!(write.observed_at_ms(), 16);
     let replacement = scene
         .service
         .register_agent(None, None, "replacement", vec![]);
     let replacement_cursor = scene.service.subscribe(&replacement.agent_id).unwrap();
     store.fail = false;
-    let MessageExpiryWriteOutcome::Committed(commit) = write.persist(&mut store) else {
+    let MessageTerminalWriteOutcome::Committed(commit) = write.persist(&mut store) else {
         panic!("retry must reconcile");
     };
-    assert_eq!(scene.service.publish_expiry(&commit).unwrap(), 1);
+    assert_eq!(scene.service.publish_terminal(&commit).unwrap(), 1);
     assert_eq!(
         scene
             .service
@@ -339,11 +346,11 @@ fn expiry_uncertainty_preserves_first_observation_and_original_slots() {
 #[test]
 fn expiry_joined_loss_and_stale_positive_require_exact_attempt() {
     struct Join {
-        expected: MessageExpiryAttempt,
+        expected: MessageTerminalAttempt,
         allow: bool,
     }
-    impl MessageExpiryJoin for Join {
-        fn qualify_joined(&mut self, actual: &MessageExpiryAttempt) -> Result<()> {
+    impl MessageTerminalJoin for Join {
+        fn qualify_joined(&mut self, actual: &MessageTerminalAttempt) -> Result<()> {
             if self.allow && self.expected.same_attempt(actual) {
                 Ok(())
             } else {
@@ -357,7 +364,7 @@ fn expiry_joined_loss_and_stale_positive_require_exact_attempt() {
     let write = scene.write(&ticket);
     let old = write.attempt();
     let mut store = Store::default();
-    let MessageExpiryWriteOutcome::Committed(stale) = write.persist(&mut store) else {
+    let MessageTerminalWriteOutcome::Committed(stale) = write.persist(&mut store) else {
         panic!("fixture positive required");
     };
     let mut join = Join {
@@ -367,23 +374,23 @@ fn expiry_joined_loss_and_stale_positive_require_exact_attempt() {
     assert!(
         scene
             .service
-            .recover_joined_expiry_write(&old, &mut join)
+            .recover_joined_terminal_write(&old, &mut join)
             .is_err()
     );
-    scene.service.validate_expiry_attempt(&old).unwrap();
+    scene.service.validate_terminal_attempt(&old).unwrap();
     join.allow = true;
     let write = scene
         .service
-        .recover_joined_expiry_write(&old, &mut join)
+        .recover_joined_terminal_write(&old, &mut join)
         .unwrap();
-    assert!(scene.service.publish_expiry(&stale).is_err());
+    assert!(scene.service.publish_terminal(&stale).is_err());
     let mut foreign = Scene::new(true, false);
     foreign.direct();
-    assert!(foreign.service.publish_expiry(&stale).is_err());
-    let MessageExpiryWriteOutcome::Committed(current) = write.persist(&mut store) else {
+    assert!(foreign.service.publish_terminal(&stale).is_err());
+    let MessageTerminalWriteOutcome::Committed(current) = write.persist(&mut store) else {
         panic!("actual lower retry required");
     };
-    assert_eq!(scene.service.publish_expiry(&current).unwrap(), 1);
+    assert_eq!(scene.service.publish_terminal(&current).unwrap(), 1);
 }
 
 /// Only a never-issued reservation may release its fence. Foreign scope/budget
@@ -406,15 +413,15 @@ fn expiry_preflight_and_cancel_leave_source_eligible_without_terminal_fact() {
             .prepare_storage_expiry(&scene.scope, 16, 1)
             .is_err()
     );
-    assert!(!scene.service.has_unpublished_expiry());
+    assert!(!scene.service.has_unpublished_terminal());
     let ticket = scene.reserve();
     assert!(
         scene
             .service
-            .begin_storage_expiry_write(&ticket, &MessageStorageScope::default())
+            .begin_storage_terminal_write(&ticket, &MessageStorageScope::default())
             .is_err()
     );
-    scene.service.cancel_storage_expiry(&ticket).unwrap();
+    scene.service.cancel_storage_terminal(&ticket).unwrap();
     scene.offer();
     assert!(
         scene
@@ -496,10 +503,11 @@ fn expiry_respects_actual_ack_and_native_input_protections() {
             .is_none()
     );
     let write = native.write(&ticket);
-    let MessageExpiryWriteOutcome::Committed(commit) = write.persist(&mut Store::default()) else {
+    let MessageTerminalWriteOutcome::Committed(commit) = write.persist(&mut Store::default())
+    else {
         panic!("lower expiry required");
     };
-    native.service.publish_expiry(&commit).unwrap();
+    native.service.publish_terminal(&commit).unwrap();
     assert!(
         native
             .service
@@ -559,10 +567,11 @@ fn expiry_batch_bound_preserves_unselected_fanout_and_independent_ack() {
         panic!("unselected real ACK required");
     };
     scene.service.publish_acknowledgement(&ack).unwrap();
-    let MessageExpiryWriteOutcome::Committed(commit) = write.persist(&mut Store::default()) else {
+    let MessageTerminalWriteOutcome::Committed(commit) = write.persist(&mut Store::default())
+    else {
         panic!("first lower batch required");
     };
-    assert_eq!(scene.service.publish_expiry(&commit).unwrap(), 64);
+    assert_eq!(scene.service.publish_terminal(&commit).unwrap(), 64);
     let ticket = scene
         .service
         .prepare_storage_expiry(&scene.scope, 11, usize::MAX)
@@ -578,10 +587,11 @@ fn expiry_batch_bound_preserves_unselected_fanout_and_independent_ack() {
         write.binding_indices().collect::<Vec<_>>(),
         vec![64, 65, 66, 67, 68]
     );
-    let MessageExpiryWriteOutcome::Committed(commit) = write.persist(&mut Store::default()) else {
+    let MessageTerminalWriteOutcome::Committed(commit) = write.persist(&mut Store::default())
+    else {
         panic!("remaining lower batch required");
     };
-    assert_eq!(scene.service.publish_expiry(&commit).unwrap(), 5);
+    assert_eq!(scene.service.publish_terminal(&commit).unwrap(), 5);
     assert_eq!(
         scene
             .service
@@ -673,11 +683,11 @@ fn expiry_decoder_capacity_refusal_preserves_unissued_owner_and_escrow_charge() 
     assert!(
         scene
             .service
-            .begin_storage_expiry_write(&ticket, &scene.scope)
+            .begin_storage_terminal_write(&ticket, &scene.scope)
             .is_err()
     );
     assert_eq!(observer.snapshot().unwrap().reserved_payload_bytes, 0);
-    scene.service.cancel_storage_expiry(&ticket).unwrap();
+    scene.service.cancel_storage_terminal(&ticket).unwrap();
     drop(ticket);
     drop(delivery);
     let baseline = scene
@@ -694,10 +704,11 @@ fn expiry_decoder_capacity_refusal_preserves_unissued_owner_and_escrow_charge() 
         observer.snapshot().unwrap().reserved_payload_bytes,
         1024 * 1024
     );
-    let MessageExpiryWriteOutcome::Committed(commit) = write.persist(&mut Store::default()) else {
+    let MessageTerminalWriteOutcome::Committed(commit) = write.persist(&mut Store::default())
+    else {
         panic!("actual lower expiry callback required");
     };
-    scene.service.publish_expiry(&commit).unwrap();
+    scene.service.publish_terminal(&commit).unwrap();
     drop(ticket);
     drop(commit);
     assert_eq!(
@@ -763,10 +774,11 @@ fn expiry_deadline_tracks_strict_original_boundary_and_actual_slot_protection() 
     );
     let ticket = scene.reserve();
     let write = scene.write(&ticket);
-    let MessageExpiryWriteOutcome::Committed(commit) = write.persist(&mut Store::default()) else {
+    let MessageTerminalWriteOutcome::Committed(commit) = write.persist(&mut Store::default())
+    else {
         panic!("actual lower callback required");
     };
-    scene.service.publish_expiry(&commit).unwrap();
+    scene.service.publish_terminal(&commit).unwrap();
     assert_eq!(
         scene
             .service
@@ -781,3 +793,5 @@ fn expiry_deadline_tracks_strict_original_boundary_and_actual_slot_protection() 
             .is_err()
     );
 }
+
+mod horizon;

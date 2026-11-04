@@ -40,11 +40,11 @@ use crate::storage::mmp_custody::{CustodyStoreLimits, MmpCustodyStore};
 
 mod acknowledgement;
 mod checkpoint;
-mod expiry;
 mod native_continuity;
 mod native_input;
 mod payload_load;
 mod recovery;
+mod terminal_custody;
 pub(crate) use recovery::{CustodyRecoveryRequest, RecoveredMessageCustody};
 
 /// Retained source chosen by trusted session setup, never by an envelope.
@@ -96,9 +96,9 @@ pub(crate) enum CustodyWorkerStatus {
     /// Original native input worker joined unsuccessfully and retains its plan.
     NativeInputRetryAt(Instant),
     /// Original expiry commit and physical position await exact lower adoption.
-    ExpiryAwaitingAdoption,
+    TerminalAwaitingAdoption,
     /// Joined original expiry input/positive can retry after this deadline.
-    ExpiryRetryAt(Instant),
+    TerminalRetryAt(Instant),
     /// Opening failed; no lower write was issued by this root.
     Unavailable,
 }
@@ -222,14 +222,14 @@ enum State {
         retry_at: Instant,
     },
     /// One exact expiry attempt owns the same exclusive original connection.
-    Expiring {
-        admission: expiry::Admission,
-        worker: JoinHandle<Result<expiry::Written>>,
+    WritingTerminal {
+        admission: terminal_custody::Admission,
+        worker: JoinHandle<Result<terminal_custody::Written>>,
     },
     /// Actual joined terminal disposition awaits original adoption or retry.
-    Expired {
-        admission: expiry::Admission,
-        result: Result<Box<expiry::Written>>,
+    WrittenTerminal {
+        admission: terminal_custody::Admission,
+        result: Result<Box<terminal_custody::Written>>,
         retry_at: Instant,
     },
     /// Bounded failed-open diagnostic; cannot imply any issued write was unsent.
@@ -262,7 +262,7 @@ struct Inner {
     ack_probe: Option<Arc<acknowledgement::tests::Probe>>,
     /// Expiry-only actual worker gate/loss control, independent of acceptance.
     #[cfg(test)]
-    expiry_probe: Option<Arc<tests::Probe>>,
+    terminal_probe: Option<Arc<tests::Probe>>,
 }
 
 /// One session's owned storage lifecycle; observers may clone it safely.
@@ -372,7 +372,7 @@ impl MmpCustodyRoot {
             #[cfg(test)]
             ack_probe,
             #[cfg(test)]
-            expiry_probe: None,
+            terminal_probe: None,
         }))
     }
 
@@ -415,8 +415,8 @@ impl MmpCustodyRoot {
             {
                 return Poll::Pending;
             }
-            if matches!(&*state, State::Expiring { .. })
-                && expiry::poll_join(&mut state, cx).is_pending()
+            if matches!(&*state, State::WritingTerminal { .. })
+                && terminal_custody::poll_join(&mut state, cx).is_pending()
             {
                 return Poll::Pending;
             }
@@ -488,7 +488,7 @@ impl MmpCustodyRoot {
                 }
                 _ => None,
             },
-            State::Expired { .. } => expiry::failure(&state),
+            State::WrittenTerminal { .. } => terminal_custody::failure(&state),
             State::Acknowledged { .. } => acknowledgement::failure(&state),
             State::Loaded { .. } => payload_load::failure(&state),
             State::Snapshotted {
@@ -884,7 +884,7 @@ impl Drop for Inner {
                         .spawn_blocking(move || drop((admission, result)))
                         .await;
                 }
-                State::Expiring { admission, worker } => {
+                State::WritingTerminal { admission, worker } => {
                     let result = worker.await;
                     let _ = runtime
                         .spawn_blocking(move || drop((admission, result)))
@@ -1016,16 +1016,16 @@ fn status(state: &State) -> CustodyWorkerStatus {
                 CustodyWorkerStatus::NativeInputRetryAt(*retry_at)
             }
         }
-        State::Expiring { .. } => CustodyWorkerStatus::Running,
-        State::Expired {
+        State::WritingTerminal { .. } => CustodyWorkerStatus::Running,
+        State::WrittenTerminal {
             result, retry_at, ..
         } => match result.as_deref() {
-            Ok(expiry::Written {
-                outcome: mez_agent::messaging::MessageExpiryWriteOutcome::Committed(_),
+            Ok(terminal_custody::Written {
+                outcome: mez_agent::messaging::MessageTerminalWriteOutcome::Committed(_),
                 anchor: Ok(_),
                 ..
-            }) => CustodyWorkerStatus::ExpiryAwaitingAdoption,
-            _ => CustodyWorkerStatus::ExpiryRetryAt(*retry_at),
+            }) => CustodyWorkerStatus::TerminalAwaitingAdoption,
+            _ => CustodyWorkerStatus::TerminalRetryAt(*retry_at),
         },
         State::Unavailable(_) => CustodyWorkerStatus::Unavailable,
     }

@@ -18,8 +18,8 @@ use mez_core::ids::{AgentId, IdFactory, PaneId, StableId, WindowId};
 
 use super::error::{MessageError, MessageErrorKind, Result};
 use super::outcomes::{
-    DeliveryTerminalReason, MessageDeliveryOutcome, MessageDeliveryTerminalSnapshot,
-    TERMINAL_HANDOFF_MS,
+    DeliveryTerminalReason, MESSAGE_TERMINAL_HANDOFF_MS, MessageDeliveryOutcome,
+    MessageDeliveryTerminalSnapshot,
 };
 use super::pending_limits::PendingDeliveryLimits;
 
@@ -41,12 +41,12 @@ use super::validation::{
     validate_sender_identity,
 };
 
-mod expiry;
-pub(super) use expiry::PendingExpiry;
-pub use expiry::{
-    MESSAGE_EXPIRY_SLOT_LIMIT, MessageExpiryAttempt, MessageExpiryCommit, MessageExpiryJoin,
-    MessageExpiryStore, MessageExpiryTicket, MessageExpiryUncertain, MessageExpiryWrite,
-    MessageExpiryWriteOutcome,
+mod terminal_custody;
+pub(super) use terminal_custody::PendingTerminal;
+pub use terminal_custody::{
+    MESSAGE_TERMINAL_SLOT_LIMIT, MessageTerminalAttempt, MessageTerminalCommit,
+    MessageTerminalJoin, MessageTerminalKind, MessageTerminalStore, MessageTerminalTicket,
+    MessageTerminalUncertain, MessageTerminalWrite, MessageTerminalWriteOutcome,
 };
 mod acknowledgement;
 pub(super) use acknowledgement::PendingAcknowledgement;
@@ -165,7 +165,7 @@ impl MessageService {
         Self {
             admission: None,
             acknowledgement: None,
-            expiry: None,
+            terminal_commit: None,
             acceptance_runtime: Arc::new(()),
             registration_tokens: HashMap::new(),
             native_bindings: HashMap::new(),

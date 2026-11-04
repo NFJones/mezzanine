@@ -1,4 +1,4 @@
-//! Original expiry work on the existing root's exclusive physical lane.
+//! Original terminal work on the existing root's exclusive physical lane.
 //!
 //! Issuance retains exact lower escrow and the first settled position before a
 //! worker can run. Observers never take its handle or linear input. Unknown
@@ -10,44 +10,46 @@
 use std::task::Context;
 
 use mez_agent::messaging::{
-    MessageExpiryAttempt, MessageExpiryJoin, MessageExpiryTicket, MessageExpiryWrite,
-    MessageExpiryWriteOutcome,
+    MessageTerminalAttempt, MessageTerminalJoin, MessageTerminalTicket, MessageTerminalWrite,
+    MessageTerminalWriteOutcome,
 };
 
 use super::*;
-use crate::storage::mmp_custody::expiry::ExpiryPlan;
+use crate::storage::mmp_custody::terminal_custody::TerminalPlan;
 
 /// Exact first plan and lower decoder/source escrow outside abortable workers.
 pub(super) struct Admission {
-    plan: ExpiryPlan,
-    attempt: MessageExpiryAttempt,
+    plan: TerminalPlan,
+    attempt: MessageTerminalAttempt,
     failures: u32,
 }
 /// Joined physical result retained until original lower adoption.
 pub(super) struct Written {
     store: MmpCustodyStore,
-    pub(super) outcome: MessageExpiryWriteOutcome,
+    pub(super) outcome: MessageTerminalWriteOutcome,
     pub(super) anchor: Result<AcceptancePlan>,
 }
 
 impl MmpCustodyRoot {
     /// Issues one original reservation only after securing the idle root. Busy
     /// or stopping refusal leaves lower issuance untouched and cancellable.
-    pub fn start_expiry(
+    pub fn start_terminal(
         &self,
         service: &mut MessageService,
-        ticket: &MessageExpiryTicket,
+        ticket: &MessageTerminalTicket,
     ) -> Result<()> {
         let mut state = self.0.state.lock().map_err(|_| ownership_error())?;
         let State::Idle(opened) = &*state else {
-            return Err(MezError::conflict("MMP expiry requires an idle lane"));
+            return Err(MezError::conflict(
+                "MMP terminal work requires an idle lane",
+            ));
         };
         if self.0.stopping.load(Ordering::Acquire) {
             return Err(ownership_error());
         }
-        let plan = opened.anchor.for_expiry();
+        let plan = opened.anchor.for_terminal();
         let write = service
-            .begin_storage_expiry_write(ticket, &self.0.storage_scope)
+            .begin_storage_terminal_write(ticket, &self.0.storage_scope)
             .map_err(lower_error)?;
         let admission = Admission {
             plan,
@@ -58,17 +60,17 @@ impl MmpCustodyRoot {
         let State::Idle(opened) = previous else {
             return Err(ownership_error());
         };
-        let worker = self.spawn_expiry(Some(opened.store), admission.plan.clone(), write);
-        *state = State::Expiring { admission, worker };
+        let worker = self.spawn_terminal(Some(opened.store), admission.plan.clone(), write);
+        *state = State::WritingTerminal { admission, worker };
         Ok(())
     }
 
     /// Retries only after the actual original join and monotonic backoff. A
     /// positive with a failed position read refreshes that read without dropping
     /// its commit or issuing another lower write. Stop still permits this drain.
-    pub fn retry_expiry(&self, service: &mut MessageService, now: Instant) -> Result<bool> {
+    pub fn retry_terminal(&self, service: &mut MessageService, now: Instant) -> Result<bool> {
         let mut state = self.0.state.lock().map_err(|_| ownership_error())?;
-        let State::Expired {
+        let State::WrittenTerminal {
             admission,
             result,
             retry_at,
@@ -82,7 +84,7 @@ impl MmpCustodyRoot {
         if matches!(
             result.as_deref(),
             Ok(Written {
-                outcome: MessageExpiryWriteOutcome::Committed(_),
+                outcome: MessageTerminalWriteOutcome::Committed(_),
                 anchor: Ok(_),
                 ..
             })
@@ -90,10 +92,10 @@ impl MmpCustodyRoot {
             return Ok(false);
         }
         service
-            .validate_expiry_attempt(&admission.attempt)
+            .validate_terminal_attempt(&admission.attempt)
             .map_err(lower_error)?;
         let previous = std::mem::replace(&mut *state, State::Unavailable(ownership_error()));
-        let State::Expired {
+        let State::WrittenTerminal {
             mut admission,
             result,
             ..
@@ -102,7 +104,7 @@ impl MmpCustodyRoot {
             return Err(ownership_error());
         };
         if let Ok(written) = &result
-            && matches!(written.outcome, MessageExpiryWriteOutcome::Committed(_))
+            && matches!(written.outcome, MessageTerminalWriteOutcome::Committed(_))
         {
             let written = *result.map_err(|_| ownership_error())?;
             let ownership = self.0.ownership.clone();
@@ -115,20 +117,20 @@ impl MmpCustodyRoot {
                 })();
                 Ok(written)
             });
-            *state = State::Expiring { admission, worker };
+            *state = State::WritingTerminal { admission, worker };
             return Ok(true);
         }
         let (store, recovered) = match result.map(|written| *written) {
             Ok(Written {
                 store,
-                outcome: MessageExpiryWriteOutcome::Unknown(unknown),
+                outcome: MessageTerminalWriteOutcome::Unknown(unknown),
                 ..
-            }) => (Some(store), service.retry_expiry_write(unknown)),
+            }) => (Some(store), service.retry_terminal_write(unknown)),
             Err(_) => {
                 let mut joined = ObservedJoin(admission.attempt.clone());
                 (
                     None,
-                    service.recover_joined_expiry_write(&admission.attempt, &mut joined),
+                    service.recover_joined_terminal_write(&admission.attempt, &mut joined),
                 )
             }
             _ => return Err(ownership_error()),
@@ -139,7 +141,7 @@ impl MmpCustodyRoot {
                 let error = lower_error(error);
                 self.0.runtime.spawn_blocking(move || drop(store));
                 let retry_at = Instant::now() + retry_delay(admission.failures);
-                *state = State::Expired {
+                *state = State::WrittenTerminal {
                     admission,
                     result: Err(error.clone()),
                     retry_at,
@@ -148,29 +150,29 @@ impl MmpCustodyRoot {
             }
         };
         admission.attempt = write.attempt();
-        let worker = self.spawn_expiry(store, admission.plan.clone(), write);
-        *state = State::Expiring { admission, worker };
+        let worker = self.spawn_terminal(store, admission.plan.clone(), write);
+        *state = State::WritingTerminal { admission, worker };
         Ok(true)
     }
 
     /// Publishes only the exact joined positive after every fallible physical
     /// position check. Foreign adopters retain the result and exclusive lane.
-    pub fn adopt_expiry(&self, service: &mut MessageService) -> Result<usize> {
+    pub fn adopt_terminal(&self, service: &mut MessageService) -> Result<usize> {
         let mut state = self.0.state.lock().map_err(|_| ownership_error())?;
-        let State::Expired {
+        let State::WrittenTerminal {
             result: Ok(written),
             ..
         } = &*state
         else {
             return Err(ownership_error());
         };
-        let MessageExpiryWriteOutcome::Committed(commit) = &written.outcome else {
+        let MessageTerminalWriteOutcome::Committed(commit) = &written.outcome else {
             return Err(ownership_error());
         };
         written.anchor.as_ref().map_err(Clone::clone)?;
-        let count = service.publish_expiry(commit).map_err(lower_error)?;
+        let count = service.publish_terminal(commit).map_err(lower_error)?;
         let previous = std::mem::replace(&mut *state, State::Unavailable(ownership_error()));
-        if let State::Expired {
+        if let State::WrittenTerminal {
             result: Ok(written),
             ..
         } = previous
@@ -187,17 +189,17 @@ impl MmpCustodyRoot {
     }
 
     /// All store opening, hashing, commits and position reads stay off actor.
-    fn spawn_expiry(
+    fn spawn_terminal(
         &self,
         store: Option<MmpCustodyStore>,
-        plan: ExpiryPlan,
-        write: MessageExpiryWrite,
+        plan: TerminalPlan,
+        write: MessageTerminalWrite,
     ) -> JoinHandle<Result<Written>> {
         let destination = self.0.destination.clone();
         let ownership = self.0.ownership.clone();
         let scope = self.0.storage_scope.clone();
         #[cfg(test)]
-        let probe = self.0.expiry_probe.clone();
+        let probe = self.0.terminal_probe.clone();
         self.0.runtime.spawn_blocking(move || {
             #[cfg(test)]
             if let Some(probe) = &probe {
@@ -214,10 +216,10 @@ impl MmpCustodyRoot {
             };
             let outcome = {
                 let mut owned = fence.bind_store(&mut store)?;
-                write.persist(&mut owned.expiry_port(&plan, &scope))
+                write.persist(&mut owned.terminal_port(&plan, &scope))
             };
             #[cfg(test)]
-            if matches!(&outcome, MessageExpiryWriteOutcome::Committed(_))
+            if matches!(&outcome, MessageTerminalWriteOutcome::Committed(_))
                 && let Some(probe) = &probe
             {
                 probe.after_payload_read();
@@ -251,7 +253,7 @@ fn original_fence(ownership: &Mutex<Option<Arc<RootOwnership>>>) -> Result<Arc<R
 
 /// Observes only the retained actual worker and installs its exact disposition.
 pub(super) fn poll_join(state: &mut State, cx: &mut Context<'_>) -> Poll<()> {
-    let State::Expiring { worker, .. } = state else {
+    let State::WritingTerminal { worker, .. } = state else {
         return Poll::Ready(());
     };
     let result = match Pin::new(worker).poll(cx) {
@@ -259,11 +261,11 @@ pub(super) fn poll_join(state: &mut State, cx: &mut Context<'_>) -> Poll<()> {
         Poll::Ready(result) => result.map_err(|_| worker_error()).and_then(|result| result),
     };
     let previous = std::mem::replace(state, State::Unavailable(ownership_error()));
-    if let State::Expiring { mut admission, .. } = previous {
+    if let State::WritingTerminal { mut admission, .. } = previous {
         if !matches!(
             result.as_ref(),
             Ok(Written {
-                outcome: MessageExpiryWriteOutcome::Committed(_),
+                outcome: MessageTerminalWriteOutcome::Committed(_),
                 anchor: Ok(_),
                 ..
             })
@@ -271,7 +273,7 @@ pub(super) fn poll_join(state: &mut State, cx: &mut Context<'_>) -> Poll<()> {
             admission.failures = admission.failures.saturating_add(1);
         }
         let retry_at = Instant::now() + retry_delay(admission.failures);
-        *state = State::Expired {
+        *state = State::WrittenTerminal {
             admission,
             result: result.map(Box::new),
             retry_at,
@@ -283,14 +285,14 @@ pub(super) fn poll_join(state: &mut State, cx: &mut Context<'_>) -> Poll<()> {
 /// Borrows diagnostics without consuming input, positive or physical ownership.
 pub(super) fn failure(state: &State) -> Option<MezError> {
     match state {
-        State::Expired {
+        State::WrittenTerminal {
             result: Err(error), ..
         } => Some(error.clone()),
-        State::Expired {
+        State::WrittenTerminal {
             result: Ok(written),
             ..
         } => match &written.outcome {
-            MessageExpiryWriteOutcome::Unknown(unknown) => {
+            MessageTerminalWriteOutcome::Unknown(unknown) => {
                 Some(lower_error(unknown.error().clone()))
             }
             _ => written.anchor.as_ref().err().cloned(),
@@ -300,17 +302,17 @@ pub(super) fn failure(state: &State) -> Option<MezError> {
 }
 
 /// Constructed only after the root has actually observed this handle's join.
-struct ObservedJoin(MessageExpiryAttempt);
-impl MessageExpiryJoin for ObservedJoin {
+struct ObservedJoin(MessageTerminalAttempt);
+impl MessageTerminalJoin for ObservedJoin {
     fn qualify_joined(
         &mut self,
-        attempt: &MessageExpiryAttempt,
+        attempt: &MessageTerminalAttempt,
     ) -> mez_agent::messaging::Result<()> {
         if self.0.same_attempt(attempt) {
             Ok(())
         } else {
             Err(MessageError::invalid_state(
-                "MMP expiry original join changed",
+                "MMP terminal original join changed",
             ))
         }
     }

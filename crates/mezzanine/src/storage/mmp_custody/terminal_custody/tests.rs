@@ -7,9 +7,9 @@
 use super::super::ownership::RootOwnership;
 use super::*;
 use mez_agent::messaging::{
-    Envelope, MessageAcceptanceDecodeLimits, MessageAcceptanceWriteOutcome, MessageExpiryCommit,
-    MessageExpiryTicket, MessageExpiryUncertain, MessageExpiryWriteOutcome, MessageScope,
-    MessageService, MessageServiceSnapshot, Recipient, SenderIdentity,
+    Envelope, MessageAcceptanceDecodeLimits, MessageAcceptanceWriteOutcome, MessageScope,
+    MessageService, MessageServiceSnapshot, MessageTerminalCommit, MessageTerminalTicket,
+    MessageTerminalUncertain, MessageTerminalWriteOutcome, Recipient, SenderIdentity,
 };
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -106,7 +106,7 @@ impl Scene {
             Some(5),
         );
     }
-    fn reserve(&mut self) -> (MessageExpiryTicket, MessageExpiryWrite) {
+    fn reserve(&mut self) -> (MessageTerminalTicket, MessageTerminalWrite) {
         let ticket = self
             .service
             .prepare_storage_expiry(&self.scope, 16, 8 * 1024 * 1024)
@@ -114,7 +114,7 @@ impl Scene {
             .unwrap();
         let write = self
             .service
-            .begin_storage_expiry_write(&ticket, &self.scope)
+            .begin_storage_terminal_write(&ticket, &self.scope)
             .unwrap();
         (ticket, write)
     }
@@ -139,18 +139,29 @@ fn limits() -> MessageAcceptanceDecodeLimits {
         recipient_bytes: 1024 * 1024,
     }
 }
-fn positive(outcome: MessageExpiryWriteOutcome) -> MessageExpiryCommit {
+fn positive(outcome: MessageTerminalWriteOutcome) -> MessageTerminalCommit {
     match outcome {
-        MessageExpiryWriteOutcome::Committed(commit) => commit,
-        MessageExpiryWriteOutcome::Unknown(error) => {
+        MessageTerminalWriteOutcome::Committed(commit) => commit,
+        MessageTerminalWriteOutcome::Unknown(error) => {
             panic!("actual expiry did not commit: {}", error.error())
         }
     }
 }
-fn uncertain(outcome: MessageExpiryWriteOutcome) -> MessageExpiryUncertain {
+fn uncertain(outcome: MessageTerminalWriteOutcome) -> MessageTerminalUncertain {
     match outcome {
-        MessageExpiryWriteOutcome::Unknown(error) => error,
+        MessageTerminalWriteOutcome::Unknown(error) => error,
         _ => panic!("actual refusal must remain uncertain"),
+    }
+}
+
+/// Drops an actual concrete store reply after its real commit; no mock success.
+struct LostReply<S>(S);
+impl<S: MessageTerminalStore> MessageTerminalStore for LostReply<S> {
+    fn commit(&mut self, write: &MessageTerminalWrite) -> mez_agent::messaging::Result<()> {
+        self.0.commit(write)?;
+        Err(MessageError::invalid_state(
+            "injected actual postcommit reply loss",
+        ))
     }
 }
 
@@ -159,15 +170,6 @@ fn uncertain(outcome: MessageExpiryWriteOutcome) -> MessageExpiryUncertain {
 /// The decoder quantum is charged before I/O, without warming a second cache.
 #[test]
 fn expiry_real_commit_lost_reply_reconciles_before_outcome_publication() {
-    struct LostReply<S>(S);
-    impl<S: MessageExpiryStore> MessageExpiryStore for LostReply<S> {
-        fn commit(&mut self, write: &MessageExpiryWrite) -> mez_agent::messaging::Result<()> {
-            self.0.commit(write)?;
-            Err(MessageError::invalid_state(
-                "injected actual postcommit reply loss",
-            ))
-        }
-    }
     let fixture = Fixture::new();
     let fence = RootOwnership::acquire(&fixture.0).unwrap();
     let mut store = MmpCustodyStore::open(&fixture.0, "expiry-session").unwrap();
@@ -184,10 +186,14 @@ fn expiry_real_commit_lost_reply_reconciles_before_outcome_publication() {
             .reserved_payload_bytes,
         1024 * 1024
     );
-    let plan = fence.bind_store(&mut store).unwrap().expiry_plan().unwrap();
+    let plan = fence
+        .bind_store(&mut store)
+        .unwrap()
+        .terminal_plan()
+        .unwrap();
     let unknown = {
         let mut owned = fence.bind_store(&mut store).unwrap();
-        uncertain(write.persist(&mut LostReply(owned.expiry_port(&plan, &scene.scope))))
+        uncertain(write.persist(&mut LostReply(owned.terminal_port(&plan, &scene.scope))))
     };
     assert!(
         scene
@@ -196,7 +202,7 @@ fn expiry_real_commit_lost_reply_reconciles_before_outcome_publication() {
             .unwrap()
             .is_empty()
     );
-    assert!(scene.service.cancel_storage_expiry(&ticket).is_err());
+    assert!(scene.service.cancel_storage_terminal(&ticket).is_err());
     let generation = store.current_state().unwrap().generation;
     let original_rows = store
         .connection
@@ -207,10 +213,10 @@ fn expiry_real_commit_lost_reply_reconciles_before_outcome_publication() {
         )
         .unwrap();
     assert_eq!(original_rows, 1);
-    let write = scene.service.retry_expiry_write(unknown).unwrap();
+    let write = scene.service.retry_terminal_write(unknown).unwrap();
     let commit = {
         let mut owned = fence.bind_store(&mut store).unwrap();
-        positive(write.persist(&mut owned.expiry_port(&plan, &scene.scope)))
+        positive(write.persist(&mut owned.terminal_port(&plan, &scene.scope)))
     };
     assert_eq!(store.current_state().unwrap().generation, generation);
     assert_eq!(
@@ -223,7 +229,7 @@ fn expiry_real_commit_lost_reply_reconciles_before_outcome_publication() {
             .reserved_payload_bytes,
         0
     );
-    assert_eq!(scene.service.publish_expiry(&commit).unwrap(), 1);
+    assert_eq!(scene.service.publish_terminal(&commit).unwrap(), 1);
     let outcomes = scene
         .service
         .delivery_outcomes_for(&scene.sender.agent_id, 10)
@@ -270,10 +276,14 @@ fn expiry_reopen_restores_actual_first_observation_and_rejects_forged_release() 
     scene.direct(&mut store);
     let stale = scene.capture(&mut store, &fence);
     let (_, write) = scene.reserve();
-    let plan = fence.bind_store(&mut store).unwrap().expiry_plan().unwrap();
+    let plan = fence
+        .bind_store(&mut store)
+        .unwrap()
+        .terminal_plan()
+        .unwrap();
     let commit = {
         let mut owned = fence.bind_store(&mut store).unwrap();
-        positive(write.persist(&mut owned.expiry_port(&plan, &scene.scope)))
+        positive(write.persist(&mut owned.terminal_port(&plan, &scene.scope)))
     };
     drop(commit);
     drop(scene);
@@ -354,14 +364,18 @@ fn expiry_trigger_non_target_mutation_rolls_back_and_retries_original() {
         None,
     );
     let (ticket, write) = scene.reserve();
-    let plan = fence.bind_store(&mut store).unwrap().expiry_plan().unwrap();
+    let plan = fence
+        .bind_store(&mut store)
+        .unwrap()
+        .terminal_plan()
+        .unwrap();
     let generation = store.current_state().unwrap().generation;
     store.connection.execute_batch("CREATE TRIGGER expiry_damage AFTER INSERT ON records WHEN NEW.key LIKE 't1:%' BEGIN DELETE FROM records WHERE key='a1:0000000000000002:commit'; END;").unwrap();
     let unknown = {
         let mut owned = fence.bind_store(&mut store).unwrap();
-        uncertain(write.persist(&mut owned.expiry_port(&plan, &scene.scope)))
+        uncertain(write.persist(&mut owned.terminal_port(&plan, &scene.scope)))
     };
-    assert!(scene.service.cancel_storage_expiry(&ticket).is_err());
+    assert!(scene.service.cancel_storage_terminal(&ticket).is_err());
     assert_eq!(store.current_state().unwrap().generation, generation);
     assert_eq!(
         store.inventory_custody(limits()).unwrap().occurrences.len(),
@@ -382,12 +396,12 @@ fn expiry_trigger_non_target_mutation_rolls_back_and_retries_original() {
         .connection
         .execute_batch("DROP TRIGGER expiry_damage;")
         .unwrap();
-    let write = scene.service.retry_expiry_write(unknown).unwrap();
+    let write = scene.service.retry_terminal_write(unknown).unwrap();
     let commit = {
         let mut owned = fence.bind_store(&mut store).unwrap();
-        positive(write.persist(&mut owned.expiry_port(&plan, &scene.scope)))
+        positive(write.persist(&mut owned.terminal_port(&plan, &scene.scope)))
     };
-    assert_eq!(scene.service.publish_expiry(&commit).unwrap(), 1);
+    assert_eq!(scene.service.publish_terminal(&commit).unwrap(), 1);
     assert_eq!(
         store.inventory_custody(limits()).unwrap().occurrences.len(),
         2
@@ -405,10 +419,14 @@ fn expiry_record_requires_original_allocation_even_with_valid_key_and_checksum()
     let mut scene = Scene::new();
     scene.direct(&mut store);
     let (_, write) = scene.reserve();
-    let plan = fence.bind_store(&mut store).unwrap().expiry_plan().unwrap();
+    let plan = fence
+        .bind_store(&mut store)
+        .unwrap()
+        .terminal_plan()
+        .unwrap();
     let _commit = {
         let mut owned = fence.bind_store(&mut store).unwrap();
-        positive(write.persist(&mut owned.expiry_port(&plan, &scene.scope)))
+        positive(write.persist(&mut owned.terminal_port(&plan, &scene.scope)))
     };
     let (key, bytes): (String, Vec<u8>) = store
         .connection
@@ -482,10 +500,14 @@ fn expiry_actual_slot_guard_preserves_independent_fanout_ack() {
     let selected = write.binding_indices().collect::<Vec<_>>();
     assert_eq!(selected.len(), 1);
     let protected = 1 - selected[0];
-    let plan = fence.bind_store(&mut store).unwrap().expiry_plan().unwrap();
+    let plan = fence
+        .bind_store(&mut store)
+        .unwrap()
+        .terminal_plan()
+        .unwrap();
     let commit = {
         let mut owned = fence.bind_store(&mut store).unwrap();
-        positive(write.persist(&mut owned.expiry_port(&plan, &scene.scope)))
+        positive(write.persist(&mut owned.terminal_port(&plan, &scene.scope)))
     };
     let transaction = store.connection.unchecked_transaction().unwrap();
     assert!(
@@ -508,7 +530,7 @@ fn expiry_actual_slot_guard_preserves_independent_fanout_ack() {
         panic!("actual unselected ACK must commit");
     };
     scene.service.publish_acknowledgement(&ack_commit).unwrap();
-    scene.service.publish_expiry(&commit).unwrap();
+    scene.service.publish_terminal(&commit).unwrap();
     let history = store.fold_custody_history(limits()).unwrap();
     assert_eq!(history.acknowledgements.len(), 1);
     assert_eq!(history.acknowledgements[0].binding_index, protected);
@@ -523,3 +545,5 @@ fn expiry_actual_slot_guard_preserves_independent_fanout_ack() {
         1
     );
 }
+
+mod horizon;

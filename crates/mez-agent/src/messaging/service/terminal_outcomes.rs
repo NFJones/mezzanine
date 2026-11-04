@@ -156,7 +156,8 @@ impl MessageService {
                 if let Some(outcome) = terminal {
                     // Saturating subtraction avoids overflow at u64::MAX and
                     // does not renew the horizon on wall-clock rollback.
-                    if now_ms.saturating_sub(outcome.observed_at_ms) >= TERMINAL_HANDOFF_MS {
+                    if now_ms.saturating_sub(outcome.observed_at_ms) >= MESSAGE_TERMINAL_HANDOFF_MS
+                    {
                         outcome.released = true;
                     }
                     continue;

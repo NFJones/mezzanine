@@ -16191,10 +16191,44 @@ refusal MAY cancel only a never-issued reservation and schedule bounded retry
 while unrelated ACK/admission work uses the idle lane. Issued terminal work MUST
 settle through its original root and actor continuation even during shutdown.
 
-Validated retirement, durable sender consumption/horizon, rollback-safe elapsed
-clock basis and reclaim remain unfinished. Guarded volatile cleanup and outcome
-consumption MUST remain withheld. Normal activation MUST remain unavailable
-until the complete lifecycle, resource and ingress gates are qualified.
+Expiry observations and horizon release MUST use one source-owned terminal
+custody lane, rather than parallel mailboxes or independently issued mutation
+owners. A horizon reservation MUST freeze at most 64 exact unreleased original
+expiry before-images and its first release observation. It MUST NOT consume
+outcomes or change cursors before actual storage commit and original adoption.
+Only after every recipient has an actual positive ACK or released terminal fact
+MAY that source leave logical pending custody; physical source/receipt/allocator
+and canonical evidence MUST remain until separately qualified reclamation.
+Metadata MUST remain charged through the final source/proof/escrow owner.
+
+The actual fenced port MUST journal horizon releases as bodyless version1
+`r1:<digest>` records of at most 916 bytes, bound to the original allocation,
+complete source fingerprint, exact slots, original first terminal clocks and
+release observation. Each slot MUST have matching actual `t1` evidence in the
+same original snapshot and at least 600000ms between its first observation and
+release observation. Unknown reasons, duplicate/overlapping releases, conflicting
+source/ACK/native history and missing original observations MUST refuse.
+Non-target rows MUST survive every SQL effect. Uncertainty MUST reconcile the
+same immutable bytes and first plan, never recapture eligibility or time.
+
+Cold recovery MUST reconstruct actual release bits and logical pending status
+from these journals even when live adoption or a newer checkpoint was lost.
+Saved release bits alone MUST remain insufficient. A source's actual observed
+horizon MUST survive partial bounded release and wall rollback, including after
+restart, so remaining eligible slots do not wait for wall time to catch up.
+Generic snapshot data MUST NOT recreate that clock authority. The actor MUST
+wake for the earliest eligible expiry or horizon deadline and retain issued
+release through actual join/retry/adoption and shutdown. Process-crash recovery
+MUST preserve terminal history without native reinjection, a fabricated ACK,
+restored raw bearer or task/provider continuation.
+
+These horizon observations currently qualify wall-clock thresholds only;
+rollback-safe elapsed TTL/horizon and reboot policy remain activation gates.
+Validated retirement, original-sender canonical handoff/consumption and reclaim
+remain unfinished. An in-memory runtime hint alone MUST NOT authorize durable
+sender consumption. Guarded volatile cleanup and direct outcome consumption
+MUST remain withheld. Normal activation MUST remain unavailable until the
+complete lifecycle, resource and ingress gates are qualified.
 
 Native qualification MUST read the actual existing private active-session
 checkpoint for the same session and hydrate its transcripts while preserving
