@@ -10,6 +10,7 @@ mod config;
 mod displays;
 mod keybindings;
 mod layout;
+mod layout_sequence;
 mod mcp;
 mod permissions;
 mod plan;
@@ -42,6 +43,10 @@ use layout::{
     execute_runtime_layout_terminal_command, resolve_runtime_layout_command_outcome,
     runtime_kill_group_command, runtime_kill_pane_command, runtime_kill_window_command,
 };
+pub(crate) use layout_sequence::{
+    RuntimeTerminalControlRequest, RuntimeTerminalLayoutState, RuntimeTerminalSequence,
+    RuntimeTerminalSequenceWork,
+};
 pub(crate) use mcp::runtime_mcp_retry_event_payload;
 pub(super) use permissions::*;
 use plan::{RuntimeTerminalCommandPlan, runtime_terminal_command_plan};
@@ -59,6 +64,9 @@ pub(super) fn execute_runtime_command_sequence(
     primary_client_id: &mez_core::ids::ClientId,
     input: &str,
 ) -> Result<Vec<CommandOutcome>> {
+    if service.defer_terminal_layout_sequence(primary_client_id, input)? {
+        return Ok(Vec::new());
+    }
     if parse_command_sequence(input)?.iter().any(|command| {
         command.name == "agent-status"
             && terminal_status_options(&command.args).is_ok_and(|options| {
@@ -81,6 +89,9 @@ pub(super) fn execute_runtime_command_sequence_with_agent_browser(
     primary_client_id: &mez_core::ids::ClientId,
     input: &str,
 ) -> Result<(Vec<CommandOutcome>, Option<RuntimeAgentBrowserSnapshot>)> {
+    if service.defer_terminal_layout_sequence(primary_client_id, input)? {
+        return Ok((Vec::new(), None));
+    }
     let plan = runtime_terminal_command_plan(input)?;
     let mut outcomes = Vec::with_capacity(plan.len());
     let mut active_client_id = primary_client_id.clone();
@@ -119,6 +130,9 @@ pub(super) async fn execute_runtime_command_sequence_async(
     primary_client_id: &mez_core::ids::ClientId,
     input: &str,
 ) -> Result<Vec<CommandOutcome>> {
+    if service.defer_terminal_layout_sequence(primary_client_id, input)? {
+        return Ok(Vec::new());
+    }
     let plan = runtime_terminal_command_plan(input)?;
     let mut outcomes = Vec::with_capacity(plan.len());
     let mut active_client_id = primary_client_id.clone();

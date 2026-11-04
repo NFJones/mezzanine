@@ -142,6 +142,13 @@ impl RuntimeSessionService {
             Err(error) => runtime_json_rpc_error(&request.id, error.kind(), error.message()),
         };
         if cacheable_response {
+            match self.reserve_terminal_layout_control_request(&cache_key, &request) {
+                Ok(true) => return response,
+                Ok(false) => {}
+                Err(error) => {
+                    return runtime_json_rpc_error(&request.id, error.kind(), error.message());
+                }
+            }
             self.control.idempotency_mut().remember_response(
                 cache_key,
                 request.method,
@@ -830,7 +837,7 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(super) fn dispatch_runtime_terminal_step(
+    pub(in crate::runtime) fn dispatch_runtime_terminal_step(
         &mut self,
         primary_client_id: &mez_core::ids::ClientId,
         params: &str,

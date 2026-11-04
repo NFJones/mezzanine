@@ -171,7 +171,7 @@ impl AsyncRuntimeSessionActor {
     }
 
     /// Drains immediate sequence effects through the ordinary terminal host lane.
-    fn admit_terminal_status_sequence_effects(&mut self) -> crate::Result<()> {
+    pub(super) fn admit_terminal_status_sequence_effects(&mut self) -> crate::Result<()> {
         self.queue_deferred_pane_io_side_effects_from_service()?;
         self.queue_command_pane_pipe_health_timer_side_effects()?;
         self.queue_shell_lifecycle_timer_side_effects()?;
@@ -523,7 +523,7 @@ impl AsyncRuntimeSessionActor {
     }
 
     /// Admits a control continuation without waiting on the actor's own bounded ingress.
-    fn dispatch_control_continuation(&self, continuation: Box<AsyncRuntimeRequest>) {
+    pub(super) fn dispatch_control_continuation(&self, continuation: Box<AsyncRuntimeRequest>) {
         let sender = self.sender.clone();
         let task = tokio::spawn(async move {
             let _ = sender
@@ -540,6 +540,10 @@ impl AsyncRuntimeSessionActor {
         previous_id: u64,
         reply: TranscriptReceiptReply,
     ) -> Option<TranscriptReceiptReply> {
+        if let Some(sequence) = self.service.take_terminal_layout_sequence() {
+            self.advance_terminal_layout_sequence(previous_id, sequence, reply, None);
+            return None;
+        }
         let receipts = self
             .side_effect_routes
             .hold_transcript_receipts_after(previous_id);
@@ -824,7 +828,7 @@ impl AsyncRuntimeSessionActor {
     }
 
     /// Reports whether a planned step contains coordinates resolved from a frame.
-    fn step_uses_render_coordinates(step: &AttachedTerminalClientStepPlan) -> bool {
+    pub(super) fn step_uses_render_coordinates(step: &AttachedTerminalClientStepPlan) -> bool {
         step.actions.iter().any(|action| {
             matches!(
                 action,
@@ -2292,6 +2296,21 @@ impl AsyncRuntimeSessionActor {
                 }
                 false
             }
+            AsyncRuntimeRequest::CompleteTerminalLayout {
+                mut sequence,
+                work,
+                outcome,
+                reply,
+            } => {
+                let previous_id = self.side_effect_routes.next_transcript_claim_id();
+                let result = self.complete_terminal_layout_work(&mut sequence, &work, *outcome);
+                self.advance_terminal_layout_sequence(previous_id, sequence, *reply, result.err());
+                false
+            }
+            AsyncRuntimeRequest::CompleteTerminalLayoutReply { publication, tail } => {
+                self.publish_terminal_layout_reply(publication, Some(tail));
+                false
+            }
             AsyncRuntimeRequest::HandleMessageInput { .. }
             | AsyncRuntimeRequest::RetireMessageConnection { .. }
             | AsyncRuntimeRequest::MessageFanoutReadyFor { .. }
@@ -3723,6 +3742,32 @@ impl AsyncRuntimeSessionActor {
                                 None => self.dispatch_control_continuation(completion),
                             }
                         }
+                    }
+                    TranscriptReceiptReply::TerminalLayout {
+                        sequence,
+                        work,
+                        reply,
+                    } => {
+                        if let Some(error) = failure {
+                            if let crate::runtime::RuntimeTerminalSequenceWork::Status(status) =
+                                work.as_ref()
+                            {
+                                let _ = self
+                                    .service
+                                    .complete_terminal_status_outcomes(status, Err(error.clone()));
+                            }
+                            self.advance_terminal_layout_sequence(
+                                self.side_effect_routes.next_transcript_claim_id(),
+                                sequence,
+                                *reply,
+                                Some(error),
+                            );
+                        } else {
+                            self.dispatch_terminal_layout_work(sequence, work, reply);
+                        }
+                    }
+                    TranscriptReceiptReply::TerminalLayoutTail(publication) => {
+                        self.finish_terminal_layout_tail(publication, failure);
                     }
                     TranscriptReceiptReply::Applied(sender, result) => {
                         let _ = sender.send(match failure {

@@ -84,6 +84,7 @@ mod requests;
 pub(super) mod routes;
 pub(super) mod snapshot_resume;
 mod source_end;
+pub(super) mod terminal_layout;
 
 pub(super) use provider_handoff::SourceDispatch;
 

@@ -191,6 +191,9 @@ impl RuntimeSessionService {
         command: &str,
     ) -> Result<()> {
         let output = self.execute_and_present_terminal_command(primary_client_id, command)?;
+        if self.defer_terminal_layout_display_diagnostic(command) {
+            return Ok(());
+        }
         let output_excerpt = output.chars().take(384).collect::<String>();
         let truncated = output_excerpt.len() < output.len();
         self.append_primary_client_event(

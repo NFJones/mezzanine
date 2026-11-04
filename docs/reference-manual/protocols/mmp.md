@@ -627,9 +627,20 @@ cancel issued original storage work.
 Generic snapshots validate their message bytes but retain an attached durable
 ledger, allocator, scope and root, including messages accepted after the
 snapshot. Actual same-daemon raw connections survive live layout restore and
-are never classified unavailable from generic snapshot absence. Synchronous
-terminal layout integration and remaining lifecycle/resource gates still
-precede normal activation.
+are never classified unavailable from generic snapshot absence.
+
+With an internally registered custody actor, terminal `load-layout` uses the
+same snapshot drain from textual/control commands, key bindings, the colon
+prompt and `terminal/step`. Its parsed command sequence and original reply stay
+owned while prefix receipts and selected status/layout I/O finish. Later
+commands and buffered attached actions run in order after restore; old layout
+coordinates cancel as stale. Failures stop later commands and propagate instead
+of returning a successful Noop. RPC keys stay pending until the final response
+is cached, and reply cancellation cannot detach an issued original. A step RPC
+keeps its consumed/application/view shape and refreshes the current view with
+empty input, without repeating input or resize. Deferred diagnostics publish
+actual outcomes. Clock/reboot, reclamation, complete resource/ingress and final
+whole-issue gates still precede normal durable activation.
 
 Internal actor spill setup now enables a trusted native admission barrier. The
 actor journals current native intervals before selecting queued authorized

@@ -131,11 +131,12 @@ fn dispatch_runtime_snapshot_terminal_command(
     if let Some(client_id) = connection.caller_client_id().cloned() {
         *active_client_id = client_id;
     }
+    crate::runtime::commands_support::layout_sequence::require_snapshot_control_success(&response)?;
     Ok(response)
 }
 
 /// Resolves a load-layout selector to a concrete snapshot id.
-fn runtime_layout_id_for_selector(
+pub(super) fn runtime_layout_id_for_selector(
     snapshots: &SnapshotRepository,
     selector: &LayoutLoadSelector,
 ) -> Result<String> {

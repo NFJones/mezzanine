@@ -1039,6 +1039,7 @@ mod native_barrier;
 mod live_restore;
 mod raw_expiry;
 mod raw_retirement;
+mod terminal_layout;
 
 mod native_actions;
 

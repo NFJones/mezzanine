@@ -248,7 +248,10 @@ pub(crate) use commands::{RuntimeManualCompactionPreparation, RuntimeManualCompa
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 mod commands_support;
-pub(crate) use commands_support::RuntimeTerminalStatusWork;
+pub(crate) use commands_support::{
+    RuntimeTerminalControlRequest, RuntimeTerminalLayoutState, RuntimeTerminalSequence,
+    RuntimeTerminalSequenceWork, RuntimeTerminalStatusWork,
+};
 /// Exposes the config module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this

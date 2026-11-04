@@ -661,7 +661,10 @@ impl RuntimeSessionService {
             }
         }
 
-        for action in &step.actions {
+        for (action_index, action) in step.actions.iter().enumerate() {
+            if self.defer_terminal_layout_actions(&step.actions[action_index..]) {
+                break;
+            }
             if !matches!(action, TerminalClientLoopAction::EnterPrefixKeyMode) {
                 self.presentation.primary_prefix_key_pending = false;
             }
@@ -922,16 +925,19 @@ impl RuntimeSessionService {
                 TerminalClientLoopAction::ExecuteCommand(command) => {
                     match self.execute_and_present_terminal_command(primary_client_id, command) {
                         Ok(output) => {
+                            let deferred = self.mark_terminal_layout_mux_action(command);
                             report.registry_persistence_required = true;
-                            self.append_primary_client_event(
-                                primary_client_id,
-                                EventKind::Diagnostic,
-                                format!(
-                                    r#"{{"key_binding_command":"{}","output":"{}"}}"#,
-                                    json_escape(command),
-                                    json_escape(&output)
-                                ),
-                            )?;
+                            if !deferred {
+                                self.append_primary_client_event(
+                                    primary_client_id,
+                                    EventKind::Diagnostic,
+                                    format!(
+                                        r#"{{"key_binding_command":"{}","output":"{}"}}"#,
+                                        json_escape(command),
+                                        json_escape(&output)
+                                    ),
+                                )?;
+                            }
                             report.mux_actions_applied =
                                 report.mux_actions_applied.saturating_add(1);
                             report.view_refresh_required = true;

@@ -16224,9 +16224,27 @@ ledger, detach its opaque scope/root, reset its allocator, discard later accepte
 sources or revive snapshot capabilities. Actual raw socket leases MUST survive
 live layout restore; live absence MUST NOT select cold unavailability. Generic
 snapshot bytes MUST still be validated even when their display state is ignored.
-The actor MUST retain issued work if response observation is cancelled. Synchronous
-terminal layout integration and the remaining lifecycle/resource gates remain
-required before durable activation.
+The actor MUST retain issued work if response observation is cancelled.
+
+Actor-owned `load-layout` MUST use this same original-root snapshot drain for
+textual commands, framed `terminal/command`, key-bound commands, the colon prompt
+and `terminal/step`. A load-containing command sequence MUST retain its parsed
+commands and original reply before execution. Prefix commands and their required
+transcript receipts MUST precede the selected load. Later commands and buffered
+attached actions MUST wait for actual restore completion and run in original
+order on the resulting layout. Extended status in such a sequence MUST retain
+its exact report/command owner and complete before retiring that owner.
+A selector, hook or restore error MUST stop later commands, release the exact
+unissued command lease and propagate the real error; it MUST NOT appear as a
+successful `Noop`. RPC idempotency keys MUST remain reserved while pending and
+cache the final result, including failures. Cancelling the reply observer MUST
+NOT detach issued storage work. Coordinates captured for the old layout MUST
+use normal stale-input cancellation instead of targeting a replacement pane.
+`terminal/step` MUST retain its application/view response schema and consumed
+input count; a final view refresh MUST NOT replay submitted input or resize.
+Deferred command diagnostics MUST describe completed outcomes rather than an
+internal placeholder. Remaining clock, reclamation, resource, ingress and
+whole-issue qualification gates still precede durable activation.
 
 The internal actor spill setup now enables a one-way original-scope native
 admission barrier. While any actual current native interval is unrecorded, the

@@ -47,6 +47,14 @@ pub(in crate::host::async_runtime) enum TranscriptReceiptReply {
         Option<Box<crate::runtime::StatusControlWork>>,
         Box<AsyncRuntimeRequest>,
     ),
+    /// Original command prefix receipts must settle before its selected I/O.
+    TerminalLayout {
+        sequence: Box<crate::runtime::RuntimeTerminalSequence>,
+        work: Box<crate::runtime::RuntimeTerminalSequenceWork>,
+        reply: Box<TranscriptReceiptReply>,
+    },
+    /// Final sequence effects precede any buffered attached actions or reply.
+    TerminalLayoutTail(Box<super::super::actor::terminal_layout::TerminalLayoutPublication>),
     /// A settled asynchronous action or command result.
     Applied(oneshot::Sender<Result<bool>>, Result<bool>),
     /// Interactive terminal step whose transcript effects require a receipt.
@@ -588,6 +596,18 @@ pub(in crate::host::async_runtime) enum AsyncRuntimeRequest {
         /// The field is part of structured state exchanged across this module
         /// boundary and should remain aligned with the owning type invariant.
         reply: oneshot::Sender<Result<AsyncControlInputResult>>,
+    },
+    /// Selected terminal I/O completed; original sequence and reply remain owned.
+    CompleteTerminalLayout {
+        sequence: Box<crate::runtime::RuntimeTerminalSequence>,
+        work: Box<crate::runtime::RuntimeTerminalSequenceWork>,
+        outcome: Box<super::super::actor::terminal_layout::TerminalLayoutOutcome>,
+        reply: Box<TranscriptReceiptReply>,
+    },
+    /// Buffered attached actions completed after their original layout command.
+    CompleteTerminalLayoutReply {
+        publication: Box<super::super::actor::terminal_layout::TerminalLayoutPublication>,
+        tail: Result<AttachedClientStepApplication>,
     },
     /// Represents the Handle Message Input case for this enumeration.
     ///
@@ -1694,7 +1714,9 @@ impl AsyncRuntimeRequest {
             | Self::PaneCertificationSnapshot { .. }
             | Self::ManagedShellProcessScreenText { .. }
             | Self::ManagedZshAdmissionReady { .. } => Family::Terminal,
-            Self::ApplyAttachedTerminalStep { .. }
+            Self::CompleteTerminalLayout { .. }
+            | Self::CompleteTerminalLayoutReply { .. }
+            | Self::ApplyAttachedTerminalStep { .. }
             | Self::ResizeAttachedPrimaryTerminal { .. }
             | Self::ExecuteTerminalCommand { .. }
             | Self::ShowPrimaryDisplayOverlay { .. }

@@ -361,6 +361,7 @@ impl AsyncRuntimeSessionActor {
             return Err(MezError::conflict("MMP custody root already registered"));
         }
         self.service.enable_stored_message_actions()?;
+        self.service.enable_terminal_layout_sequences();
         self.message_custody = Some(Box::new(ActorMessageCustody {
             root,
             wake: Some(Wake::Observe),

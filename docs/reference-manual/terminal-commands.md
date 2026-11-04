@@ -246,6 +246,12 @@ inspection and resume use a separate `snapshots` store and cannot find those
 layouts. See [snapshot recovery](../operations/lifecycle-detach-and-recovery.md#snapshot-and-resume-deliberately)
 before choosing a recovery workflow.
 
+A failed load reports its selector, hook or restore error and stops later
+commands in the same sequence. When the actor owns durable message custody,
+loading waits for original message work and native registration ends before
+replacing the layout. Commands and attached actions following the load then run
+on the restored layout; live raw message connections keep their accepted mail.
+
 ### Configuration discovery
 
 `add-options` displays the schema-owned reference for supported live

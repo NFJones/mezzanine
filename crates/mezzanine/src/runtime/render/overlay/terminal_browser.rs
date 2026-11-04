@@ -149,10 +149,38 @@ impl RuntimeSessionService {
             .presentation
             .overlay_action_registry
             .current_generation();
-        let (outcomes, mut agent_browser) =
+        let (outcomes, agent_browser) =
             crate::runtime::commands_support::execute_runtime_command_sequence_with_agent_browser(
                 self, client, input,
             )?;
+        if self.mark_terminal_layout_interactive() {
+            return Ok(crate::runtime::runtime_command_outcomes_json(&outcomes));
+        }
+        self.present_terminal_command_outcomes(client, outcomes, agent_browser, generation)
+    }
+
+    /// Selects current presentation ownership after a deferred layout has applied.
+    pub(in crate::runtime) fn present_terminal_layout_outcomes(
+        &mut self,
+        client: &ClientId,
+        outcomes: Vec<CommandOutcome>,
+        browser: Option<crate::runtime::commands_support::RuntimeAgentBrowserSnapshot>,
+    ) -> Result<String> {
+        let generation = self
+            .presentation
+            .overlay_action_registry
+            .current_generation();
+        self.present_terminal_command_outcomes(client, outcomes, browser, generation)
+    }
+
+    /// Publishes completed command outcomes only after any deferred layout load.
+    pub(in crate::runtime) fn present_terminal_command_outcomes(
+        &mut self,
+        client: &ClientId,
+        outcomes: Vec<CommandOutcome>,
+        mut agent_browser: Option<crate::runtime::commands_support::RuntimeAgentBrowserSnapshot>,
+        generation: u32,
+    ) -> Result<String> {
         let output = crate::runtime::runtime_command_outcomes_json(&outcomes);
         if self.require_live().is_err() {
             return Ok(output);

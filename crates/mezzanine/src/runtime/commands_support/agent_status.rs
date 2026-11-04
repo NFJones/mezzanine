@@ -42,6 +42,12 @@ pub(crate) fn terminal_status_options(args: &[String]) -> Result<mez_agent::slas
 impl RuntimeTerminalStatusWork {
     /// Renders captured snapshots off actor without accessing mutable runtime state.
     pub(crate) fn render(&self) -> Result<String> {
+        self.render_outcomes()
+            .map(|outcomes| crate::runtime::runtime_command_outcomes_json(&outcomes))
+    }
+
+    /// Renders typed display outcomes without granting live owner authority.
+    pub(crate) fn render_outcomes(&self) -> Result<Vec<CommandOutcome>> {
         let mut outcomes = self.outcomes.clone();
         for (index, report) in &self.reports {
             outcomes[*index] = CommandOutcome::Display {
@@ -49,7 +55,7 @@ impl RuntimeTerminalStatusWork {
                 body: report.render()?,
             };
         }
-        Ok(crate::runtime::runtime_command_outcomes_json(&outcomes))
+        Ok(outcomes)
     }
 }
 
@@ -62,7 +68,24 @@ impl RuntimeSessionService {
         client: &ClientId,
         input: &str,
     ) -> Option<Result<RuntimeTerminalStatusWork>> {
+        if self.terminal_layout_sequence_requested(input) {
+            return None;
+        }
         let commands = parse_command_sequence(input).ok()?;
+        if self.terminal_layout_sequence_active() {
+            return Some(Err(MezError::conflict(
+                "terminal layout sequence already pending",
+            )));
+        }
+        self.prepare_terminal_status_commands(client, commands)
+    }
+
+    /// Captures typed command inputs for the ordered layout sequence coordinator.
+    pub(in crate::runtime) fn prepare_terminal_status_commands(
+        &mut self,
+        client: &ClientId,
+        commands: Vec<super::CommandInvocation>,
+    ) -> Option<Result<RuntimeTerminalStatusWork>> {
         if !commands.iter().any(|command| {
             command.name == "agent-status"
                 && terminal_status_options(&command.args).is_ok_and(|options| {
@@ -152,6 +175,24 @@ impl RuntimeSessionService {
         work: &RuntimeTerminalStatusWork,
         result: Result<String>,
     ) -> Result<String> {
+        self.complete_terminal_status_result(work, result)
+    }
+
+    /// Completes typed status results under the same exact pane/report leases.
+    pub(crate) fn complete_terminal_status_outcomes(
+        &mut self,
+        work: &RuntimeTerminalStatusWork,
+        result: Result<Vec<CommandOutcome>>,
+    ) -> Result<Vec<CommandOutcome>> {
+        self.complete_terminal_status_result(work, result)
+    }
+
+    /// Shared lease validation and retirement for textual and typed reports.
+    fn complete_terminal_status_result<T>(
+        &mut self,
+        work: &RuntimeTerminalStatusWork,
+        result: Result<T>,
+    ) -> Result<T> {
         let current = self.session.is_attached_primary(&work.client)
             && work
                 .reports
