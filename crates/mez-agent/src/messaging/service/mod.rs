@@ -102,6 +102,11 @@ use snapshot_codec::*;
 mod auxiliary;
 mod fanout;
 mod native_commits;
+mod native_continuity;
+pub use native_continuity::{
+    MessageNativeContinuityRequest, MessageNativeContinuitySnapshot, MessageNativeContinuityStore,
+    MessageNativeContinuityVerified, MessageNativeContinuityWrite,
+};
 mod offers;
 mod pending;
 mod receive;

@@ -1,0 +1,182 @@
+//! Actual token capture and exact native journal publication controls.
+
+use super::*;
+
+/// Trusted synchronous test port; actual SQLite/fence controls live in product.
+struct Store;
+impl MessageNativeContinuityStore for Store {
+    fn commit(&mut self, write: &MessageNativeContinuityWrite) -> Result<()> {
+        write.snapshot().validate()
+    }
+}
+
+/// Creates a native binding from actual registration and opaque shell tokens.
+fn scene() -> (
+    MessageService,
+    MessageStorageScope,
+    SenderIdentity,
+    MessageSenderRegistration,
+    MessageNativeIncarnation,
+) {
+    let mut service = MessageService::default();
+    let target = service.register_agent(None, None, "native", vec![]);
+    let scope = MessageStorageScope::default();
+    service
+        .enable_storage_custody(&scope, Default::default())
+        .unwrap();
+    let registration = service
+        .capture_sender_registration(&target.agent_id)
+        .unwrap();
+    let incarnation = MessageNativeIncarnation::default();
+    service
+        .bind_native_conversation(&registration, "conversation", &incarnation)
+        .unwrap();
+    (service, scope, target, registration, incarnation)
+}
+
+/// Captured raw tuples remain inert; only the exact real port completion may
+/// mark the current actual binding. Objective telemetry is excluded and cannot
+/// replace the namespace or force another continuity event.
+#[test]
+fn exact_native_journal_completion_marks_only_actual_current_binding() {
+    let (mut service, scope, target, _, _) = scene();
+    assert!(!service.native_continuity_is_recorded(&target.agent_id));
+    let request = service
+        .prepare_native_continuity(&scope, &target.agent_id)
+        .unwrap();
+    let snapshot = request.write().snapshot().clone();
+    let decoded: MessageNativeContinuitySnapshot =
+        serde_json::from_slice(&serde_json::to_vec(&snapshot).unwrap()).unwrap();
+    decoded.validate().unwrap();
+    assert!(!service.native_continuity_is_recorded(&target.agent_id));
+    let verified = request.write().persist(&mut Store).unwrap();
+    assert!(request.finish(&mut service, verified).unwrap());
+    service
+        .update_agent_objective(&target.agent_id, Some("changed objective"), 1)
+        .unwrap();
+    assert!(service.native_continuity_is_recorded(&target.agent_id));
+    let refreshed = service
+        .prepare_native_continuity(&scope, &target.agent_id)
+        .unwrap();
+    assert_eq!(refreshed.write().snapshot(), &snapshot);
+}
+
+/// Identical public data from another capture cannot substitute for this exact
+/// request. The original completion remains usable by its actual input owner.
+#[test]
+fn equal_native_snapshot_data_cannot_steal_another_capture_completion() {
+    let (mut service, scope, target, _, _) = scene();
+    let a = service
+        .prepare_native_continuity(&scope, &target.agent_id)
+        .unwrap();
+    let b = service
+        .prepare_native_continuity(&scope, &target.agent_id)
+        .unwrap();
+    assert_eq!(a.write().snapshot(), b.write().snapshot());
+    let verified = a.write().persist(&mut Store).unwrap();
+    assert!(b.finish(&mut service, verified).is_err());
+    assert!(!service.native_continuity_is_recorded(&target.agent_id));
+    let verified = a.write().persist(&mut Store).unwrap();
+    assert!(a.finish(&mut service, verified).unwrap());
+}
+
+/// An independent shell binding with equal labels/floor cannot inherit a late
+/// journal result. Exact opaque epoch identity is required for live publication.
+#[test]
+fn late_native_continuity_does_not_mark_replacement_shell() {
+    let (mut service, scope, target, registration, _) = scene();
+    let request = service
+        .prepare_native_continuity(&scope, &target.agent_id)
+        .unwrap();
+    let verified = request.write().persist(&mut Store).unwrap();
+    service
+        .bind_native_conversation(
+            &registration,
+            "conversation",
+            &MessageNativeIncarnation::default(),
+        )
+        .unwrap();
+    assert!(!request.finish(&mut service, verified).unwrap());
+    assert!(!service.native_continuity_is_recorded(&target.agent_id));
+}
+
+/// Sparse immutable authority reconciliation can replace the actual MMP
+/// namespace without changing shell epoch/CID or advancing any message floor.
+/// A saved shell epoch alone therefore cannot prove registration continuity.
+#[test]
+fn namespace_replacement_at_same_epoch_and_floor_requires_its_own_fact() {
+    let (mut service, scope, mut target, _, incarnation) = scene();
+    let old = service
+        .prepare_native_continuity(&scope, &target.agent_id)
+        .unwrap();
+    let before = old.write().snapshot().clone();
+    let verified = old.write().persist(&mut Store).unwrap();
+    target.window_id = Some(StableId::opaque("window").unwrap());
+    service.ensure_agent_identity(target.clone(), 1).unwrap();
+    let registration = service
+        .capture_sender_registration(&target.agent_id)
+        .unwrap();
+    service
+        .bind_native_conversation(&registration, "conversation", &incarnation)
+        .unwrap();
+    let new = service
+        .prepare_native_continuity(&scope, &target.agent_id)
+        .unwrap();
+    assert_eq!(
+        before.native.shell_incarnation,
+        new.write().snapshot().native.shell_incarnation
+    );
+    assert_eq!(
+        before.registered_after_sequence,
+        new.write().snapshot().registered_after_sequence
+    );
+    assert_ne!(
+        before.native.registration_namespace,
+        new.write().snapshot().native.registration_namespace
+    );
+    assert!(!old.finish(&mut service, verified).unwrap());
+    assert!(!service.native_continuity_is_recorded(&target.agent_id));
+    let verified = new.write().persist(&mut Store).unwrap();
+    assert!(new.finish(&mut service, verified).unwrap());
+}
+
+/// Worker-held metadata must stay reserved after a failed premature adoption.
+/// It cannot disappear from the cap while the real input still has another owner.
+#[test]
+fn native_capture_lease_survives_an_unjoined_worker_copy() {
+    let (mut service, scope, target, _, _) = scene();
+    let before = service.storage_usage().unwrap().unwrap().metadata_bytes;
+    let request = service
+        .prepare_native_continuity(&scope, &target.agent_id)
+        .unwrap();
+    let extra = request.write();
+    let verified = request.write().persist(&mut Store).unwrap();
+    assert!(request.finish(&mut service, verified).is_err());
+    assert!(service.storage_usage().unwrap().unwrap().metadata_bytes > before);
+    drop(extra);
+    assert_eq!(
+        service.storage_usage().unwrap().unwrap().metadata_bytes,
+        before
+    );
+    assert!(!service.native_continuity_is_recorded(&target.agent_id));
+}
+
+/// Raw endpoints and foreign roots cannot be promoted by a continuity capture.
+/// This refusal creates no native owner and leaves metadata accounting unchanged.
+#[test]
+fn raw_or_foreign_scope_cannot_capture_native_continuity() {
+    let (mut service, scope, target, _, _) = scene();
+    let raw = service.register_agent(None, None, "raw", vec![]);
+    let before = service.storage_usage().unwrap().unwrap();
+    assert!(
+        service
+            .prepare_native_continuity(&scope, &raw.agent_id)
+            .is_err()
+    );
+    assert!(
+        service
+            .prepare_native_continuity(&MessageStorageScope::default(), &target.agent_id)
+            .is_err()
+    );
+    assert_eq!(service.storage_usage().unwrap().unwrap(), before);
+}

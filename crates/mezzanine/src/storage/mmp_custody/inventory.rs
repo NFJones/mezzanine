@@ -36,7 +36,7 @@ pub(crate) struct CustodyInventory {
     pub store_id: Vec<u8>,
     /// Store generation observed with all inventoried records.
     pub generation: u64,
-    /// Highest stage sequence reserved in this store's transactional state.
+    /// Highest acceptance or native-registration floor reserved transactionally.
     pub sequence_watermark: u64,
     /// False for v1 migration, whose earlier removed history cannot be proven.
     pub watermark_origin_trusted: bool,
@@ -44,6 +44,8 @@ pub(crate) struct CustodyInventory {
     pub occurrences: Vec<StoredOccurrenceRef>,
     /// Content-addressed ACK keys verified against their exact sources.
     pub acknowledgement_keys: Vec<String>,
+    /// Verified native registration observations, never live endpoint authority.
+    pub native_continuity_keys: Vec<String>,
     /// Fully cleaned abort sequences, never accepted messages.
     pub aborted_sequences: Vec<u64>,
     /// Logical charge already retained by this inventory, shared with its fold.
@@ -109,6 +111,7 @@ enum Key<'a> {
     Stage(u64),
     Commit(u64),
     Acknowledgement(&'a str),
+    NativeContinuity(&'a str),
 }
 
 impl MmpCustodyStore {
@@ -228,6 +231,7 @@ impl MmpCustodyStore {
             watermark_origin_trusted: state.watermark_origin_trusted,
             occurrences: Vec::new(),
             acknowledgement_keys: Vec::new(),
+            native_continuity_keys: Vec::new(),
             aborted_sequences: Vec::new(),
             retained_metadata: 0,
         };
@@ -248,6 +252,26 @@ impl MmpCustodyStore {
                 let key: Option<String> = row.get(0).map_err(database_error)?;
                 let key = key.ok_or_else(|| invalid("row key exceeds policy"))?;
                 match parse_key(&key)? {
+                    Key::NativeContinuity(key) => {
+                        if let Some(previous) = group.take() {
+                            self.finish_inventory_group(
+                                transaction,
+                                previous,
+                                limits,
+                                &mut metadata,
+                                &mut inventory,
+                                pending,
+                            )?;
+                        }
+                        self.read_native_continuity_in_snapshot(transaction, key)?
+                            .ok_or_else(|| invalid("native continuity record is missing"))?;
+                        charge(&mut metadata, ACK_CHARGE)?;
+                        inventory
+                            .native_continuity_keys
+                            .try_reserve(1)
+                            .map_err(|_| invalid("native inventory allocation failed"))?;
+                        inventory.native_continuity_keys.push(key.to_string());
+                    }
                     Key::Acknowledgement(key) => {
                         if let Some(previous) = group.take() {
                             self.finish_inventory_group(
@@ -280,7 +304,7 @@ impl MmpCustodyStore {
                             Key::Chunk(sequence, _)
                             | Key::Stage(sequence)
                             | Key::Commit(sequence) => sequence,
-                            Key::Acknowledgement(_) => {
+                            Key::Acknowledgement(_) | Key::NativeContinuity(_) => {
                                 return Err(invalid("unexpected acknowledgment key"));
                             }
                         };
@@ -466,6 +490,14 @@ fn parse_key(key: &str) -> Result<Key<'_>> {
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
     {
         return Ok(Key::Acknowledgement(key));
+    }
+    if let Some(digest) = key.strip_prefix("n1:")
+        && digest.len() == 64
+        && digest
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    {
+        return Ok(Key::NativeContinuity(key));
     }
     Err(invalid("unknown record key"))
 }

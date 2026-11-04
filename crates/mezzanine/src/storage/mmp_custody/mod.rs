@@ -30,7 +30,9 @@ pub(crate) mod acceptance;
 pub(crate) mod acknowledgement;
 mod checkpoint;
 mod history;
+mod integrity;
 mod inventory;
+pub(crate) mod native_continuity;
 pub(crate) mod ownership;
 mod recovery;
 
@@ -152,7 +154,7 @@ struct CustodyState {
     generation: i64,
     /// Empty only at generation zero; otherwise one exact batch digest.
     batch: Vec<u8>,
-    /// Highest sequence reserved by a committed first-stage transaction.
+    /// Highest sequence reserved by an acceptance stage or native registration.
     watermark: u64,
     /// Whether this watermark covers the store since its original allocation.
     watermark_origin_trusted: bool,
@@ -482,12 +484,24 @@ impl MmpCustodyStore {
         generation: u64,
         writes: &[CustodyWrite<'_>],
     ) -> Result<CustodyCommit> {
+        self.commit_in_transaction_with_floor(transaction, generation, writes, 0)
+    }
+
+    /// Native registration floors reserve allocator gaps atomically with their
+    /// metadata. They create no accepted occurrence or delivery cursor.
+    fn commit_in_transaction_with_floor(
+        &self,
+        transaction: &rusqlite::Transaction<'_>,
+        generation: u64,
+        writes: &[CustodyWrite<'_>],
+        native_floor: u64,
+    ) -> Result<CustodyCommit> {
         let digest = batch_digest(writes)?;
         let expected = i64::try_from(generation)
             .map_err(|_| MezError::invalid_args("MMP custody generation overflow"))?;
         let state = self.checked_state(transaction)?;
         let mut stage_created = None;
-        let mut highest_referenced = 0;
+        let mut highest_referenced = native_floor;
         for write in writes {
             if let Some((sequence, suffix)) = occurrence_sequence(write.key)? {
                 highest_referenced = highest_referenced.max(sequence);
@@ -538,7 +552,7 @@ impl MmpCustodyStore {
             }
             sequence
         } else {
-            state.watermark
+            state.watermark.max(native_floor)
         };
         if highest_referenced > watermark {
             return Err(MezError::invalid_state(

@@ -133,6 +133,23 @@ impl Drop for Fixture {
     }
 }
 
+/// Checks the actual OS ownership boundary, not only an Arc/status label.
+async fn wait_until_unlocked(path: &std::path::Path) {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            match RootOwnership::acquire_existing(path) {
+                Ok(owner) => {
+                    drop(owner);
+                    break;
+                }
+                Err(_) => tokio::task::yield_now().await,
+            }
+        }
+    })
+    .await
+    .unwrap();
+}
+
 /// Creates real registered actors and one trusted original request origin.
 fn fixture_service() -> (
     MessageService,
@@ -1017,4 +1034,5 @@ mod payload_load;
 mod native_binding;
 
 mod checkpoint;
+mod native_continuity;
 mod recovery;

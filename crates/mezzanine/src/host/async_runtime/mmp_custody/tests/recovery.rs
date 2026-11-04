@@ -57,23 +57,6 @@ async fn checkpointed_original(fixture: &Fixture) -> MessageServiceSnapshot {
     snapshot
 }
 
-/// Checks the actual OS ownership boundary, not only an Arc/status label.
-async fn wait_until_unlocked(path: &std::path::Path) {
-    tokio::time::timeout(Duration::from_secs(5), async {
-        loop {
-            match RootOwnership::acquire_existing(path) {
-                Ok(owner) => {
-                    drop(owner);
-                    break;
-                }
-                Err(_) => tokio::task::yield_now().await,
-            }
-        }
-    })
-    .await
-    .unwrap();
-}
-
 /// Keeps destination policy explicit instead of accepting checkpoint limits.
 fn request(checkpoint: MessageServiceSnapshot) -> CustodyRecoveryRequest {
     CustodyRecoveryRequest {

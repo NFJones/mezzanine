@@ -416,6 +416,27 @@ through cancellable setup, preserving native facts for later qualification.
 Those facts do not restore a native identity. Actual session/root registration,
 native continuity and the remaining durability gates still precede publication.
 
+The original root also has an owned native registration journal independent of
+manual message snapshots. Its bounded version1 `n1` observations preserve the
+actual namespace, shell epoch, native owner, immutable identity and interval
+floor under the original allocation. Recording that floor reserves cancelled
+sequence gaps atomically without creating messages or acknowledgements. An
+outstanding acceptance or ACK reservation must settle before capture. Records
+are limited to 240 KiB encoded and 512 KiB conservative decoded metadata.
+
+Cancelled observers and lost positive replies retain the original input and
+first preimage for joined, backed-off retry. Only exact adoption marks a current
+same-runtime binding as recorded. Replacement namespaces or shell epochs cannot
+inherit the marker. Immutable identity reconciliation can replace a namespace
+without changing shell epoch, CID or floor, so saved labels alone remain
+insufficient. Inventory validates each fact and retains only its compact key.
+Stored observations do not restore native authority or prove current lifecycle
+availability. Publication barriers and private session/context qualification
+remain implementation work before durable activation.
+Journal transactions also preserve a fingerprint of every non-target row from
+the original input. Trigger deletion or rechecksummed mutation of an unrelated
+source, ACK or native fact rolls the whole attempted write back.
+
 The opt-in requires an actually empty original store. It is not enabled by
 normal product construction: trusted cold recovery, native restart deduplication
 and all ingress remain separate integration gates. Existing stores and saved

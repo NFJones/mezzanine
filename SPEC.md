@@ -16067,6 +16067,39 @@ from those bytes. The owned storage recovery worker is implemented; actual host
 session/root registration, native continuity, canonical commit deduplication and
 the other durable activation gates remain required.
 
+Native registration continuity MUST be recorded independently of an optional
+manual message checkpoint. The original root's owned lane now writes bounded
+version1 `n1:<SHA256(agent-id)>` observations in the private row store. Each fact
+binds the actual registration namespace, opaque shell epoch, derived native
+owner, immutable identity (excluding objective telemetry), and registration
+sequence floor to the original store allocation. The floor MUST reserve any
+cancelled sequence gaps atomically with the record and MUST survive record
+removal; it MUST NOT create a message or ACK. Its full u64 range is independent
+of SQLite's signed store generation. An outstanding lower acceptance or ACK
+reservation MUST settle before this metadata capture can begin.
+
+Native metadata writes MUST retain their actual input, metadata reservation,
+first original position/preimage and worker through cancellation, joined loss
+and backed-off retry. Only their exact last batch MAY reconcile a lost positive.
+The original input MUST bind a bounded fingerprint of all non-target rows.
+Native transactions MUST preserve those rows through every SQL effect, including
+triggers; deletion or rechecksummed mutation of an unrelated accepted source,
+ACK or native fact MUST roll the whole attempted write back before commit.
+Exact one-time adoption MAY mark the actual still-current same-runtime binding
+as recorded. A foreign runtime or replacement namespace/epoch MUST NOT inherit
+that marker, even if CID and registration floor are equal. Immutable identity
+reconciliation can replace the namespace without changing either shell epoch or
+floor. Saved epoch/CID/floor bytes alone MUST NOT authorize its resurrection.
+
+Native observations MUST fit 240 KiB encoded and a conservative 512 KiB decoded
+structural metadata budget. Inventory MUST validate framing, key, native tuple,
+allocation and allocator floor before retaining a compact reference. These
+versioned facts remain descriptive; the live marker does not establish current
+availability or replace a lifecycle publication barrier. Actual lifecycle
+barriers, private session/context qualification and qualified native restore
+remain required before durable product activation. This journal component
+does not enable those paths or introduce a configuration/wire field.
+
 Immutable envelope auxiliary metadata MUST additionally fit a 16 MiB logical
 budget over the deduplicated replay/custody union after normal replay eviction.
 Charge 1,024 bytes per occurrence plus 64 bytes and four times UTF-8 length for

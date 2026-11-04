@@ -614,6 +614,12 @@ impl AsyncRuntimeSessionActor {
             )) => Err(MezError::invalid_state(
                 "MMP recovery must finish before root actor registration",
             )),
+            CustodyEvent::Observed(Ok(
+                CustodyWorkerStatus::NativeContinuityAwaitingAdoption
+                | CustodyWorkerStatus::NativeContinuityRetryAt(_),
+            )) => Err(MezError::invalid_state(
+                "MMP native continuity requires its original metadata adopter",
+            )),
             CustodyEvent::Observed(Err(error)) => Err(error),
             CustodyEvent::Observed(Ok(CustodyWorkerStatus::Running)) => {
                 owner.wake = Some(Wake::Observe);

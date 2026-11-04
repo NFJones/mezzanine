@@ -84,12 +84,31 @@ pub(in crate::messaging) struct LiveNativeBinding {
     admission_available: bool,
     delivery_available: bool,
     owner: MessageNativeOwner,
+    /// Actual same-runtime journal completion, never reconstructed from a DTO.
+    pub(super) continuity_recorded: bool,
 }
 
 impl LiveNativeBinding {
     /// Borrows the actual allocation for checkpoint preflight, without copying it.
     pub(super) fn registration(&self) -> &MessageSenderRegistration {
         &self.registration
+    }
+
+    /// Projects only this actual binding after its caller reserves metadata.
+    pub(super) fn continuity_checkpoint(&self) -> MessageNativeCheckpoint {
+        MessageNativeCheckpoint {
+            agent_id: self.registration.agent_id().to_string(),
+            registration_namespace: *self.registration.identity.native_namespace.as_bytes(),
+            shell_incarnation: self.incarnation.snapshot_identity(),
+            owner: self.owner.clone(),
+            admission_available: self.admission_available,
+            delivery_available: self.delivery_available,
+        }
+    }
+
+    /// Clones only this actual opaque shell token, never serialized UUID bytes.
+    pub(super) fn continuity_incarnation(&self) -> MessageNativeIncarnation {
+        self.incarnation.clone()
     }
 }
 
@@ -161,6 +180,7 @@ impl MessageService {
                 admission_available: true,
                 delivery_available: true,
                 owner: owner.clone(),
+                continuity_recorded: false,
             },
         );
         self.rebase_native_cursor(registration.agent_id());

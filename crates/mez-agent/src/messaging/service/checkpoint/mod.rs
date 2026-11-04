@@ -515,7 +515,7 @@ fn capacity() -> MessageError {
 }
 
 /// Charges registry/presence copies before any strings or capabilities are cloned.
-fn identity_charge(identity: &SenderIdentity) -> usize {
+pub(super) fn identity_charge(identity: &SenderIdentity) -> usize {
     let fields = [
         identity.agent_id.as_str(),
         identity.pane_id.as_ref().map_or("", PaneId::as_str),
