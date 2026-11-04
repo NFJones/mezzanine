@@ -227,14 +227,14 @@ impl AsyncRuntimeSessionActor {
     /// Interrupts actual canonical publication with real staged bytes on disk,
     /// while the root continues owning its original preparation and lease.
     #[cfg(test)]
-    pub(in crate::host) fn fail_native_receipt_publication_for_tests(
+    pub(in crate::host) fn fail_custody_receipt_publication_for_tests(
         &self,
-        point: crate::storage::transcript::NativeReceiptPublicationFault,
+        point: crate::storage::transcript::CustodyReceiptPublicationFault,
     ) {
         self.service
             .agent_transcript_store()
             .unwrap()
-            .fail_native_receipt_publication_for_tests(point);
+            .fail_custody_receipt_publication_for_tests(point);
     }
 
     /// Applies actual live presence and the production delivery notification.

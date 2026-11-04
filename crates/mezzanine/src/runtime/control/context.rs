@@ -504,6 +504,17 @@ fn runtime_agent_transcript_context_with_ranges_and_mcp_epoch(
             continue;
         }
         if entry.role == TranscriptRole::System
+            && let Some(TranscriptContextEvent::TerminalHandoff { event }) =
+                TranscriptContextEvent::from_transcript_content(&entry.content)
+        {
+            blocks.push(ContextBlock::reference_event(
+                ContextSourceKind::RuntimeHint,
+                event.label,
+                event.content,
+            ));
+            continue;
+        }
+        if entry.role == TranscriptRole::System
             && let Some(TranscriptContextEvent::NativePeerMessage { event }) =
                 TranscriptContextEvent::from_transcript_content(&entry.content)
         {
@@ -988,6 +999,57 @@ pub(crate) fn runtime_peer_message_logged_payload(payload: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    /// Canonical delivery facts restore only their fixed RuntimeHint reference.
+    /// Provenance never becomes peer input, user instruction or task execution
+    /// through hydration, even when the original recipient has disappeared.
+    #[test]
+    fn canonical_terminal_handoff_hydrates_only_as_neutral_runtime_reference() {
+        use mez_agent::messaging::DeliveryTerminalReason;
+        use mez_agent::transcript::{
+            TranscriptContextEvent, TranscriptTerminalHandoffEvent, TranscriptTerminalHandoffSource,
+        };
+        let source = TranscriptTerminalHandoffSource {
+            terminal_handoff_version: 1,
+            store_id: [1; 16],
+            source_sha256: [2; 32],
+            message_sequence: 7,
+            binding_index: 0,
+            message_id: "accepted-action".into(),
+            sender: "original-sender".into(),
+            sender_registered_after_sequence: 0,
+            recipient: "missing-recipient".into(),
+            registered_after_sequence: 2,
+            native_owner: serde_json::from_value(serde_json::json!({
+                "conversation_id": "original-sender", "incarnation": "1".repeat(64)
+            }))
+            .unwrap(),
+            reason: DeliveryTerminalReason::Expired,
+            observed_at_ms: 0,
+        };
+        let event = TranscriptTerminalHandoffEvent::new(source, 11).unwrap();
+        let expected = event.content.clone();
+        let row = TranscriptEntry {
+            conversation_id: "original-sender".into(),
+            sequence: 1,
+            created_at_unix_seconds: 1,
+            role: TranscriptRole::System,
+            turn_id: "original".into(),
+            agent_id: "original-sender".into(),
+            pane_id: "pane".into(),
+            content: TranscriptContextEvent::TerminalHandoff {
+                event: Box::new(event),
+            }
+            .to_transcript_content(),
+        };
+        let context = super::runtime_agent_transcript_context("pane", &[row]);
+        assert_eq!(context.blocks.len(), 1);
+        assert_eq!(
+            context.blocks[0].source,
+            mez_agent::ContextSourceKind::RuntimeHint
+        );
+        assert_eq!(context.blocks[0].content, expected);
+    }
+
     /// A typed native archive record remains untrusted peer reference context
     /// when hydrated. Its provenance is descriptive and cannot become a user
     /// instruction or runtime delivery/scheduling authority through replay.

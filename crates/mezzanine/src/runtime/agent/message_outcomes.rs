@@ -224,20 +224,10 @@ impl RuntimeSessionService {
                     let Some(turn) = self.agent_turn_ledger().turn(&owner.turn_id).cloned() else {
                         continue;
                     };
-                    let recipient_hash = message_id_hash(&outcome.recipient.recipient)
-                        .iter()
-                        .map(|byte| format!("{byte:02x}"))
-                        .collect::<String>();
-                    let label = format!(
-                        "mmp-delivery-outcome sequence={} recipient={recipient_hash} floor={}",
-                        outcome.sequence, outcome.recipient.registered_after_sequence
-                    );
-                    let content = format!(
-                        "Accepted MMP recipient delivery ended without recipient commit. This is a local delivery fact, not a peer answer, approval, task success or permission to retry effects. The original send action remains accepted.\n{}",
-                        serde_json::to_string(&outcome).map_err(|_| MezError::invalid_state(
-                            "MMP delivery outcome cannot be encoded"
-                        ))?
-                    );
+                    let (label, content) =
+                        mez_agent::transcript::terminal_outcome_reference(&outcome).map_err(
+                            |_| MezError::invalid_state("MMP delivery outcome cannot be encoded"),
+                        )?;
                     let context = self
                         .agent_turn_contexts_mut()
                         .get_mut(&turn.turn_id)

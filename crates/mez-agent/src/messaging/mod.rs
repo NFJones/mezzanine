@@ -53,9 +53,11 @@ pub use service::{
     MessageStorageRecoveryStore, MessageStorageScope, MessageStorageSnapshot,
     MessageStorageSnapshotLease, MessageStorageSnapshotRequest, MessageStorageSnapshotStore,
     MessageStorageSnapshotVerified, MessageStorageSnapshotWrite, MessageStorageSourceSnapshot,
-    MessageStorageUsage, MessageTerminalAttempt, MessageTerminalCommit, MessageTerminalJoin,
-    MessageTerminalKind, MessageTerminalStore, MessageTerminalTicket, MessageTerminalUncertain,
-    MessageTerminalWrite, MessageTerminalWriteOutcome, decode_message_acceptance,
+    MessageStorageUsage, MessageTerminalAttempt, MessageTerminalCommit,
+    MessageTerminalHandoffAnchor, MessageTerminalHandoffCommit, MessageTerminalHandoffRecord,
+    MessageTerminalHandoffStore, MessageTerminalJoin, MessageTerminalKind, MessageTerminalStore,
+    MessageTerminalTicket, MessageTerminalUncertain, MessageTerminalWrite,
+    MessageTerminalWriteOutcome, decode_message_acceptance,
 };
 pub use types::{
     AgentPresenceStatus, Delivery, DeliveryBatch, DeliveryCursor, DeliveryStatus, Envelope,

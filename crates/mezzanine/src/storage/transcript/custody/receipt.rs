@@ -1,30 +1,32 @@
-//! Physical plans for canonical append receipts ending in native peer input.
+//! Physical plans for canonical append receipts ending in a typed custody row.
 //!
 //! The ordinary transcript receipt owns immutable canonical rows, including any
 //! preceding chronology. Its two bodyless plans bind the original complete
-//! batch and the final native row. Prefix writes may precede the MMP preparation,
-//! but the peer row cannot be appended until that preparation is durable. Neither
-//! decoded plans nor typed row provenance grant delivery or ACK authority.
+//! batch and the final row. Prefix writes may precede original MMP preparation,
+//! but the final row requires that preparation to be durable. Native input and
+//! neutral sender facts retain distinct source/actor/row validation. Neither
+//! decoded plans nor typed provenance grant delivery, consumption or ACK rights.
 
 use super::*;
-use mez_agent::transcript::{TranscriptContextEvent, TranscriptNativeInputSource, TranscriptRole};
+use mez_agent::transcript::TranscriptRole;
 
-/// Bounds one native canonical operation independently of transport payloads.
-pub(crate) const MAX_NATIVE_APPEND_BYTES: usize = 32 * 1024 * 1024;
+/// Bounds one canonical custody operation independently of transport payloads.
+pub(crate) const MAX_CUSTODY_APPEND_BYTES: usize = 32 * 1024 * 1024;
 /// A receipt cannot expand an untrusted JSON array into an unbounded row owner.
-pub(crate) const MAX_NATIVE_APPEND_ROWS: usize = 2048;
+pub(crate) const MAX_CUSTODY_APPEND_ROWS: usize = 2048;
 
-/// Immutable original physical batch and final input position, never a token.
+/// Immutable original physical batch and final custody position, never a token.
+/// The persisted `input` spelling remains part of the existing native v3 format.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct NativeInputAppendPlan {
+pub(crate) struct CustodyAppendPlan {
     version: u32,
-    source: TranscriptNativeInputSource,
-    before: NativeTranscriptPlan,
-    input: NativeTranscriptPlan,
+    source: CustodySource,
+    before: CustodyTranscriptPlan,
+    input: CustodyTranscriptPlan,
 }
 
-impl NativeInputAppendPlan {
+impl CustodyAppendPlan {
     /// Borrows exact source attribution; original-root verification remains
     /// necessary before this private canonical receipt can qualify native ACK.
     /// Binds this descriptive receipt to the original private store object.
@@ -32,12 +34,12 @@ impl NativeInputAppendPlan {
         Ok(self.before.root == Identity::of(root)?)
     }
 
-    pub(crate) fn source(&self) -> &TranscriptNativeInputSource {
+    pub(crate) fn source(&self) -> &CustodySource {
         &self.source
     }
 
     /// Returns the final row's first frozen physical position for MMP p1/c1.
-    pub(crate) fn input(&self) -> &NativeTranscriptPlan {
+    pub(crate) fn input(&self) -> &CustodyTranscriptPlan {
         &self.input
     }
 
@@ -45,17 +47,17 @@ impl NativeInputAppendPlan {
     /// This validates data only; filesystem and original source owners qualify
     /// it separately under their actual leases.
     pub(crate) fn validate_rows(&self, rows: &[TranscriptEntry]) -> Result<()> {
-        if self.version != 1 || rows.is_empty() || rows.len() > MAX_NATIVE_APPEND_ROWS {
+        if self.version != 1 || rows.is_empty() || rows.len() > MAX_CUSTODY_APPEND_ROWS {
             return Err(unavailable());
         }
         self.source.validate().map_err(|_| unavailable())?;
-        self.before.validate_span(MAX_NATIVE_APPEND_BYTES)?;
+        self.before.validate_span(MAX_CUSTODY_APPEND_BYTES)?;
         self.input.validate()?;
         if self.before.root != self.input.root
             || self.before.directory != self.input.directory
             || self.before.archive != self.input.archive
             || self.before.conversation_id != self.input.conversation_id
-            || self.input.conversation_id != self.source.native_owner.conversation_id()
+            || self.input.conversation_id != self.source.conversation_id()
         {
             return Err(unavailable());
         }
@@ -79,31 +81,23 @@ impl NativeInputAppendPlan {
             || self.input.canonical_sha256
                 != <[u8; 32]>::from(Sha256::digest(&encoded[prefix_bytes..]))
             || last.role != TranscriptRole::System
-            || last.agent_id != self.source.recipient
+            || !self.source.matches_row(last)
         {
-            return Err(unavailable());
-        }
-        let Some(TranscriptContextEvent::NativePeerMessage { event }) =
-            TranscriptContextEvent::from_transcript_content(&last.content)
-        else {
-            return Err(unavailable());
-        };
-        if event.source != self.source {
             return Err(unavailable());
         }
         Ok(())
     }
 }
 
-impl NativeTranscriptLease {
+impl CustodyTranscriptLease {
     /// Validates this original batch without changing history or receipt files.
-    pub(crate) fn check_native_append_plan(
+    pub(crate) fn check_custody_append_plan(
         &self,
-        plan: &NativeInputAppendPlan,
+        plan: &CustodyAppendPlan,
         rows: &[TranscriptEntry],
     ) -> Result<()> {
         plan.validate_rows(rows)?;
-        self.validate_plan_span(&plan.before, MAX_NATIVE_APPEND_BYTES)?;
+        self.validate_plan_span(&plan.before, MAX_CUSTODY_APPEND_BYTES)?;
         let (encoded, _) = encode_rows(rows)?;
         let mut file = &self.archive;
         file.seek(SeekFrom::Start(plan.before.prefix_bytes))?;
@@ -121,26 +115,26 @@ impl NativeTranscriptLease {
     /// batch. It remains pending until the separate original MMP c1 commits.
     pub(crate) fn publish_append_receipt(
         &self,
-        plan: NativeInputAppendPlan,
+        plan: CustodyAppendPlan,
         rows: &[TranscriptEntry],
-    ) -> Result<std::sync::Arc<crate::storage::transcript::NativeInputAppendReceipt>> {
-        self.check_native_append_plan(&plan, rows)?;
+    ) -> Result<std::sync::Arc<crate::storage::transcript::CustodyAppendReceipt>> {
+        self.check_custody_append_plan(&plan, rows)?;
         self.store
-            .publish_native_input_append_receipt(plan, rows, &self.lease)
+            .publish_custody_append_receipt(plan, rows, &self.lease)
     }
 
     /// Assigns contiguous positions under the original ordinary mutation lease.
     /// The caller must retain the returned plan before publishing its canonical
     /// receipt; subsequent retries may not choose another destination or span.
-    pub(crate) fn prepare_native_append(
+    pub(crate) fn prepare_custody_append(
         &self,
         prefix: &mut Vec<TranscriptEntry>,
         input: &mut TranscriptEntry,
-    ) -> Result<NativeInputAppendPlan> {
+    ) -> Result<CustodyAppendPlan> {
         self.validate_paths()?;
         self.store
             .validate_restored_transcript(&self.conversation_id)?;
-        if prefix.len() >= MAX_NATIVE_APPEND_ROWS {
+        if prefix.len() >= MAX_CUSTODY_APPEND_ROWS {
             return Err(unavailable());
         }
         // Share the exact bookkeeping identity while holding the same physical
@@ -170,17 +164,13 @@ impl NativeTranscriptLease {
                 return Err(unavailable());
             }
         }
-        let Some(TranscriptContextEvent::NativePeerMessage { event }) =
-            TranscriptContextEvent::from_transcript_content(&input.content)
-        else {
-            return Err(unavailable());
-        };
+        let source = CustodySource::from_row(input)?;
         let rows = prefix.iter().chain(std::iter::once(&*input));
         let mut all = Vec::new();
         let mut prefix_bytes = 0;
         for row in rows {
             let bytes = encoded_row(row)?;
-            if all.len().saturating_add(bytes.len()) > MAX_NATIVE_APPEND_BYTES {
+            if all.len().saturating_add(bytes.len()) > MAX_CUSTODY_APPEND_BYTES {
                 return Err(unavailable());
             }
             if row.sequence == input.sequence {
@@ -190,7 +180,7 @@ impl NativeTranscriptLease {
         }
         let original_bytes = self.archive.metadata()?.len();
         let mut digest = prefix_hasher(&self.archive, original_bytes)?;
-        let before = NativeTranscriptPlan {
+        let before = CustodyTranscriptPlan {
             root: Identity::of(&self.root)?,
             directory: Identity::of(&self.directory)?,
             archive: Identity::of(&self.archive)?,
@@ -210,9 +200,9 @@ impl NativeTranscriptLease {
         native.archive_sequence = input.sequence;
         native.canonical_sha256 = Sha256::digest(&all[prefix_bytes..]).into();
         native.row_bytes = all.len() - prefix_bytes;
-        let plan = NativeInputAppendPlan {
+        let plan = CustodyAppendPlan {
             version: 1,
-            source: event.source,
+            source,
             before,
             input: native,
         };
@@ -228,19 +218,19 @@ impl NativeTranscriptLease {
 
     /// Writes only the already selected preceding chronology. The final peer
     /// bytes remain unwritten until the original MMP p1 has committed.
-    pub(crate) fn append_native_prefix(
+    pub(crate) fn append_custody_prefix(
         &self,
-        plan: &NativeInputAppendPlan,
+        plan: &CustodyAppendPlan,
         rows: &[TranscriptEntry],
     ) -> Result<()> {
-        self.append_native_span(plan, rows, false)
+        self.append_custody_span(plan, rows, false)
     }
 
     /// Completes the exact retained batch after original MMP preparation, then
     /// reconciles ordinary transcript indexes/catalog from those canonical rows.
-    pub(crate) fn append_native_receipt(
+    pub(crate) fn append_custody_receipt(
         &self,
-        plan: &NativeInputAppendPlan,
+        plan: &CustodyAppendPlan,
         rows: &[TranscriptEntry],
     ) -> Result<()> {
         #[cfg(test)]
@@ -254,7 +244,7 @@ impl NativeTranscriptLease {
                 "injected native canonical append failure before input",
             )));
         }
-        self.append_native_span(plan, rows, true)?;
+        self.append_custody_span(plan, rows, true)?;
         let entries = rows.iter().collect::<Vec<_>>();
         self.store
             .append_conversation_rows_locked(&self.conversation_id, &entries, &self.lease)?;
@@ -263,14 +253,14 @@ impl NativeTranscriptLease {
 
     /// Reconciles only its own exact suffix while retaining the first original
     /// prefix. Partial own bytes may finish; foreign bytes or backing refuse.
-    fn append_native_span(
+    fn append_custody_span(
         &self,
-        plan: &NativeInputAppendPlan,
+        plan: &CustodyAppendPlan,
         rows: &[TranscriptEntry],
         complete: bool,
     ) -> Result<()> {
         plan.validate_rows(rows)?;
-        self.validate_plan_span(&plan.before, MAX_NATIVE_APPEND_BYTES)?;
+        self.validate_plan_span(&plan.before, MAX_CUSTODY_APPEND_BYTES)?;
         let (encoded, prefix_bytes) = encode_rows(rows)?;
         let mut file = &self.archive;
         file.seek(SeekFrom::Start(plan.before.prefix_bytes))?;
@@ -292,14 +282,14 @@ impl NativeTranscriptLease {
         file.sync_all()?;
         self.directory.sync_all()?;
         self.root.sync_all()?;
-        self.validate_plan_span(&plan.before, MAX_NATIVE_APPEND_BYTES)?;
+        self.validate_plan_span(&plan.before, MAX_CUSTODY_APPEND_BYTES)?;
         self.check_preparation(&plan.input)
     }
 }
 
 /// Bounds all exact encoded bytes before retaining the receipt's batch image.
 fn encode_rows(rows: &[TranscriptEntry]) -> Result<(Vec<u8>, usize)> {
-    if rows.is_empty() || rows.len() > MAX_NATIVE_APPEND_ROWS {
+    if rows.is_empty() || rows.len() > MAX_CUSTODY_APPEND_ROWS {
         return Err(unavailable());
     }
     let mut encoded = Vec::new();
@@ -307,7 +297,7 @@ fn encode_rows(rows: &[TranscriptEntry]) -> Result<(Vec<u8>, usize)> {
     for (index, row) in rows.iter().enumerate() {
         row.validate()?;
         let bytes = encoded_row(row)?;
-        if encoded.len().saturating_add(bytes.len()) > MAX_NATIVE_APPEND_BYTES {
+        if encoded.len().saturating_add(bytes.len()) > MAX_CUSTODY_APPEND_BYTES {
             return Err(unavailable());
         }
         if index + 1 == rows.len() {
@@ -321,8 +311,8 @@ fn encode_rows(rows: &[TranscriptEntry]) -> Result<(Vec<u8>, usize)> {
 /// Bounds a pure application prefix before its canonical memory commit. Reserve
 /// one maximum escaped native row and maximum sequence width for later physical
 /// placement. No archive access or transport attribution happens at preflight.
-pub(crate) fn validate_native_append_prefix(rows: &[TranscriptEntry]) -> Result<()> {
-    if rows.len() >= MAX_NATIVE_APPEND_ROWS {
+pub(crate) fn validate_custody_append_prefix(rows: &[TranscriptEntry]) -> Result<()> {
+    if rows.len() >= MAX_CUSTODY_APPEND_ROWS {
         return Err(unavailable());
     }
     let mut bytes = 0usize;
@@ -332,7 +322,7 @@ pub(crate) fn validate_native_append_prefix(rows: &[TranscriptEntry]) -> Result<
         bytes = bytes
             .checked_add(encoded_row(&widest)?.len())
             .ok_or_else(unavailable)?;
-        if bytes > MAX_NATIVE_APPEND_BYTES - MAX_ROW_BYTES {
+        if bytes > MAX_CUSTODY_APPEND_BYTES - MAX_ROW_BYTES {
             return Err(unavailable());
         }
     }

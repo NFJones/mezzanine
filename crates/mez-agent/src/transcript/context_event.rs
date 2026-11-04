@@ -52,6 +52,10 @@ const EXECUTION_BLOCK_LABEL_LIMIT_BYTES: usize = 4 * 1024;
 /// Provider-independent context that is durable across conversation turns.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TranscriptContextEvent {
+    /// Neutral original sender delivery fact; no peer input, ACK or task rights.
+    TerminalHandoff {
+        event: Box<super::TranscriptTerminalHandoffEvent>,
+    },
     /// Canonical untrusted peer input with descriptive original-source provenance.
     /// It is never delivery/ACK authority until the actual product port qualifies it.
     NativePeerMessage {
@@ -320,6 +324,11 @@ impl TranscriptContextEvent {
     /// Encodes one event as a reserved system transcript entry.
     pub fn to_transcript_content(&self) -> String {
         let payload = match self {
+            Self::TerminalHandoff { event } => serde_json::json!({
+                "version": TRANSCRIPT_CONTEXT_EVENT_VERSION,
+                "kind": "terminal_handoff",
+                "event": event,
+            }),
             Self::NativePeerMessage { event } => serde_json::json!({
                 "version": TRANSCRIPT_CONTEXT_EVENT_VERSION,
                 "kind": "native_peer_message",
@@ -431,6 +440,14 @@ impl TranscriptContextEvent {
             return None;
         }
         match value.get("kind")?.as_str()? {
+            "terminal_handoff" => {
+                let event: super::TranscriptTerminalHandoffEvent =
+                    serde_json::from_value(value.get("event")?.clone()).ok()?;
+                event.validate().ok()?;
+                Some(Self::TerminalHandoff {
+                    event: Box::new(event),
+                })
+            }
             "native_peer_message" => {
                 let event: super::TranscriptNativeInputEvent =
                     serde_json::from_value(value.get("event")?.clone()).ok()?;

@@ -729,7 +729,7 @@ impl AgentTranscriptStore {
         operation: ArchiveRecoveryOperation,
         payload_layout: CatalogPayloadLayout,
     ) -> Result<()> {
-        self.ensure_native_input_receipts_settled_locked(conversation_id)?;
+        self.ensure_custody_receipts_settled_locked(conversation_id)?;
         let directory = archive_recovery_directory(self);
         fs::create_dir_all(&directory)?;
         set_private_dir_permissions(&directory)?;

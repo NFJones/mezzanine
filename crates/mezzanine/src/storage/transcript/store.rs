@@ -748,7 +748,7 @@ impl AgentTranscriptStore {
             #[cfg(test)]
             fail_next_transcript_append: Arc::new(AtomicBool::new(false)),
             #[cfg(test)]
-            native_receipt_publication_fault: Arc::new(AtomicU8::new(0)),
+            custody_receipt_publication_fault: Arc::new(AtomicU8::new(0)),
             #[cfg(test)]
             fail_transcript_append_attempts: Arc::new(AtomicU8::new(0)),
             #[cfg(test)]
@@ -796,7 +796,7 @@ impl AgentTranscriptStore {
             fail_compaction_epoch_before_marker: Arc::new(AtomicBool::new(false)),
             fail_next_transcript_append: Arc::new(AtomicBool::new(false)),
             #[cfg(test)]
-            native_receipt_publication_fault: Arc::new(AtomicU8::new(0)),
+            custody_receipt_publication_fault: Arc::new(AtomicU8::new(0)),
             fail_transcript_append_attempts: Arc::new(AtomicU8::new(0)),
             fail_transcript_append_after_first: Arc::new(AtomicBool::new(false)),
             fail_transcript_append_before_sync: Arc::new(AtomicBool::new(false)),
@@ -1226,7 +1226,7 @@ impl AgentTranscriptStore {
     pub fn append(&self, entry: &TranscriptEntry) -> Result<()> {
         entry.validate()?;
         let _conversation_lock = self.acquire_conversation_lock(&entry.conversation_id)?;
-        self.ensure_native_input_receipts_settled_locked(&entry.conversation_id)?;
+        self.ensure_custody_receipts_settled_locked(&entry.conversation_id)?;
         self.append_one_locked(entry)?;
         Ok(())
     }
@@ -1294,7 +1294,7 @@ impl AgentTranscriptStore {
                             error
                         }
                     })?;
-            self.ensure_native_input_receipts_settled_locked(&conversation_id)?;
+            self.ensure_custody_receipts_settled_locked(&conversation_id)?;
             bytes = bytes.saturating_add(self.append_conversation_rows_locked(
                 &conversation_id,
                 &entries,
@@ -1592,7 +1592,7 @@ impl AgentTranscriptStore {
         baseline: Option<&Option<AgentCompactionEpoch>>,
     ) -> Result<()> {
         let conversation_id = epoch.conversation_id.as_str();
-        self.ensure_native_input_receipts_settled_locked(conversation_id)?;
+        self.ensure_custody_receipts_settled_locked(conversation_id)?;
         let through_sequence = epoch.through_sequence;
         let summary = epoch.summary.as_str();
         validate_conversation_id(conversation_id)?;
@@ -3531,7 +3531,7 @@ impl AgentTranscriptStore {
         existing_path: &Path,
         entries: &[TranscriptEntry],
     ) -> Result<()> {
-        self.ensure_native_input_receipts_settled_locked(conversation_id)?;
+        self.ensure_custody_receipts_settled_locked(conversation_id)?;
         let session_dir = self.ensure_session_dir(conversation_id)?;
         let path = self.transcript_path_for(conversation_id)?;
         let temp_path = session_dir.join("history.tsv.tmp");

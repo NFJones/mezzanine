@@ -3,6 +3,7 @@
 use super::*;
 use mez_agent::transcript::TranscriptRole;
 
+mod handoff;
 mod receipts;
 mod staging;
 
@@ -49,7 +50,7 @@ fn native_transcript_completes_exact_partial_own_row_without_duplicate_append() 
     let mut fixture = Fixture::new();
     let lease = fixture
         .store
-        .native_input_lease("original", false, None)
+        .custody_lease("original", false, None)
         .unwrap();
     let plan = lease.prepare(&mut fixture.row).unwrap();
     let encoded = encoded_row(&fixture.row).unwrap();
@@ -70,7 +71,7 @@ fn native_transcript_refuses_changed_prefix_and_foreign_partial_suffix() {
     let mut fixture = Fixture::new();
     let lease = fixture
         .store
-        .native_input_lease("original", false, None)
+        .custody_lease("original", false, None)
         .unwrap();
     let plan = lease.prepare(&mut fixture.row).unwrap();
     let mut file = OpenOptions::new().append(true).open(&lease.path).unwrap();
@@ -92,7 +93,7 @@ fn native_transcript_existing_lease_does_not_create_missing_archive() {
     assert!(
         fixture
             .store
-            .native_input_lease("original", false, None)
+            .custody_lease("original", false, None)
             .is_err()
     );
     assert!(!history.exists());

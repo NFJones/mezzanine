@@ -634,18 +634,18 @@ async fn native_input_final_root_drop_drains_actual_worker_before_releasing_fenc
 /// and a correctly sequenced later row can proceed normally.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn native_input_first_plan_keeps_kernel_lease_across_publication_failures() {
-    use crate::storage::transcript::NativeReceiptPublicationFault;
+    use crate::storage::transcript::CustodyReceiptPublicationFault;
     for fault in [
-        NativeReceiptPublicationFault::BeforeStage,
-        NativeReceiptPublicationFault::Partial,
-        NativeReceiptPublicationFault::Complete,
-        NativeReceiptPublicationFault::Linked,
+        CustodyReceiptPublicationFault::BeforeStage,
+        CustodyReceiptPublicationFault::Partial,
+        CustodyReceiptPublicationFault::Complete,
+        CustodyReceiptPublicationFault::Linked,
     ] {
         let fixture = Fixture::new(true);
         let scene = Scene::new(&fixture).await;
         scene
             .transcript
-            .fail_native_receipt_publication_for_tests(fault);
+            .fail_custody_receipt_publication_for_tests(fault);
         scene.start();
         let CustodyWorkerStatus::NativeInputRetryAt(due) = scene.root.observe().await.unwrap()
         else {

@@ -397,7 +397,7 @@ impl MessageService {
 
     /// Original sender authentication is separate from mutable objective or
     /// presence telemetry. Exact registration floor prevents reused-ID claims.
-    fn owns_outcomes(&self, queued: &QueuedEnvelope, sender: &AgentId) -> bool {
+    pub(super) fn owns_outcomes(&self, queued: &QueuedEnvelope, sender: &AgentId) -> bool {
         self.native_sender_is_current(queued)
             && queued.envelope.sender.agent_id == *sender
             && queued

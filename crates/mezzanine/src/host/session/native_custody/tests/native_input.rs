@@ -64,11 +64,11 @@ pub(super) async fn commit_then_crash(
     let before_row = point != NativeCrashPoint::Committed;
     match point {
         NativeCrashPoint::Prepared => actor.fail_next_native_canonical_append_for_tests(),
-        NativeCrashPoint::PartialStage => actor.fail_native_receipt_publication_for_tests(
-            crate::storage::transcript::NativeReceiptPublicationFault::Partial,
+        NativeCrashPoint::PartialStage => actor.fail_custody_receipt_publication_for_tests(
+            crate::storage::transcript::CustodyReceiptPublicationFault::Partial,
         ),
-        NativeCrashPoint::CompleteStage => actor.fail_native_receipt_publication_for_tests(
-            crate::storage::transcript::NativeReceiptPublicationFault::Complete,
+        NativeCrashPoint::CompleteStage => actor.fail_custody_receipt_publication_for_tests(
+            crate::storage::transcript::CustodyReceiptPublicationFault::Complete,
         ),
         NativeCrashPoint::Committed => (),
     }

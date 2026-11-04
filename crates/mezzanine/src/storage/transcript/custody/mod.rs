@@ -1,11 +1,14 @@
-//! Original physical destination for one canonical native receive input.
+//! Original physical destination for one canonical messaging custody operation.
 //!
-//! The MMP owner persists a bodyless preparation before calling `append` and
-//! publishes its canonical commit journal only after `seal` succeeds. A retained
+//! Native recipient input and neutral sender terminal handoff share physical
+//! ownership while retaining distinct typed sources, namespaces and row kinds.
+//! The original MMP owner must persist preparation before the final append and
+//! publish its canonical commit journal only after `seal` succeeds. A retained
 //! conversation lease spans both journals and the actual append. Preparation
 //! freezes physical identities, the complete original prefix and exact row
 //! bytes, so a retry cannot allocate a later sequence or adopt a replacement
-//! archive. No method schedules a turn, grants native ownership or ACKs mail.
+//! archive. No method schedules a turn, grants native ownership, consumes an
+//! outcome or ACKs mail. Native v3 persistence bytes remain unchanged.
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
@@ -19,12 +22,14 @@ use sha2::{Digest, Sha256};
 use super::AgentTranscriptStore;
 
 mod receipt;
+mod source;
 use super::encoding::{decode_transcript_entry, encode_transcript_entry};
 use crate::error::{MezError, Result};
 pub(crate) use receipt::{
-    MAX_NATIVE_APPEND_BYTES, MAX_NATIVE_APPEND_ROWS, NativeInputAppendPlan,
-    validate_native_append_prefix,
+    CustodyAppendPlan, MAX_CUSTODY_APPEND_BYTES, MAX_CUSTODY_APPEND_ROWS,
+    validate_custody_append_prefix,
 };
+pub(crate) use source::{CustodyAnchor, CustodyReceiptKind, CustodySource};
 
 /// Conservative encoded bound including escaping of a bounded native frame.
 const MAX_ROW_BYTES: usize = 16 * 1024 * 1024;
@@ -50,7 +55,7 @@ impl Identity {
 /// Bodyless original append position, durable in the original MMP preparation.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct NativeTranscriptPlan {
+pub(crate) struct CustodyTranscriptPlan {
     root: Identity,
     directory: Identity,
     archive: Identity,
@@ -63,7 +68,7 @@ pub(crate) struct NativeTranscriptPlan {
     pub canonical_sha256: [u8; 32],
     row_bytes: usize,
 }
-impl NativeTranscriptPlan {
+impl CustodyTranscriptPlan {
     /// Checks persisted framing before any bounded read or path derivation.
     pub(crate) fn validate(&self) -> Result<()> {
         self.validate_span(MAX_ROW_BYTES)
@@ -104,7 +109,7 @@ impl NativeTranscriptPlan {
 }
 
 /// Live original archive and ordinary mutation lease; never serialized.
-pub(crate) struct NativeTranscriptLease {
+pub(crate) struct CustodyTranscriptLease {
     store: AgentTranscriptStore,
     conversation_id: String,
     lease: File,
@@ -120,21 +125,18 @@ impl AgentTranscriptStore {
     /// snapshot; this method never seals input, ACKs mail or schedules work.
     /// A lookup-only absence can abort an incomplete unpublished stage only
     /// with neither original journal, before any canonical byte was permitted.
-    pub(crate) fn recover_native_input_lease(
+    pub(crate) fn recover_custody_lease(
         &self,
-        anchor: &mez_agent::messaging::MessageNativeInputAnchor,
+        anchor: &impl CustodyAnchor,
         store_id: &[u8; 16],
         occurrence: &[u8; 32],
-        expected: Option<(
-            &mez_agent::transcript::TranscriptNativeInputSource,
-            &NativeTranscriptPlan,
-        )>,
+        expected: Option<(&CustodySource, &CustodyTranscriptPlan)>,
         application_projection: bool,
     ) -> Result<(
-        Option<std::sync::Arc<super::NativeInputAppendReceipt>>,
-        Option<NativeTranscriptLease>,
+        Option<std::sync::Arc<super::CustodyAppendReceipt>>,
+        Option<CustodyTranscriptLease>,
     )> {
-        let conversation = anchor.native_owner().conversation_id();
+        let conversation = anchor.conversation_id();
         validate_conversation_id(conversation)?;
         if !self.root.try_exists()? {
             return if expected.is_none() && !application_projection {
@@ -145,9 +147,10 @@ impl AgentTranscriptStore {
         }
         let _root = open_directory(&self.root)?;
         let lock = self.acquire_conversation_lock(conversation)?;
-        let canonical = self.native_input_append_receipt_locked(conversation, occurrence, &lock)?;
+        let canonical =
+            self.custody_append_receipt_locked(conversation, anchor.kind(), occurrence, &lock)?;
         let stage = if canonical.is_none() {
-            self.native_input_stage_locked(conversation, occurrence, &lock)?
+            self.custody_stage_locked(conversation, anchor.kind(), occurrence, &lock)?
         } else {
             None
         };
@@ -156,16 +159,21 @@ impl AgentTranscriptStore {
         }
         let create =
             canonical.is_none() && stage.is_none() && expected.is_none() && application_projection;
-        let lease = self.native_input_lease_locked(conversation, create, Some(occurrence), lock)?;
-        let checked = |plan: &NativeInputAppendPlan, rows: &[TranscriptEntry]| -> Result<()> {
-            if !plan.source().matches_anchor(anchor, store_id)
+        let lease = self.custody_lease_locked(
+            conversation,
+            create,
+            Some((anchor.kind(), occurrence)),
+            lock,
+        )?;
+        let checked = |plan: &CustodyAppendPlan, rows: &[TranscriptEntry]| -> Result<()> {
+            if !anchor.matches(plan.source(), store_id)
                 || plan.source().occurrence() != *occurrence
                 || expected
                     .is_some_and(|(source, input)| source != plan.source() || input != plan.input())
             {
                 return Err(unavailable());
             }
-            lease.check_native_append_plan(plan, rows)
+            lease.check_custody_append_plan(plan, rows)
         };
         let canonical = match (canonical, stage) {
             (Some(canonical), _) => {
@@ -197,32 +205,32 @@ impl AgentTranscriptStore {
     /// creation is restricted to its empty private history file. The caller
     /// holds this lease through original preparation, append and commit journal.
     #[cfg(test)]
-    pub(crate) fn native_input_lease(
+    pub(crate) fn custody_lease(
         &self,
         conversation_id: &str,
         create_empty: bool,
-        occurrence: Option<&[u8; 32]>,
-    ) -> Result<NativeTranscriptLease> {
+        occurrence: Option<(CustodyReceiptKind, &[u8; 32])>,
+    ) -> Result<CustodyTranscriptLease> {
         validate_conversation_id(conversation_id)?;
         let lease = self.acquire_conversation_lock(conversation_id)?;
-        self.native_input_lease_locked(conversation_id, create_empty, occurrence, lease)
+        self.custody_lease_locked(conversation_id, create_empty, occurrence, lease)
     }
 
     /// Builds the physical owner from this exact already-held conversation
     /// lock; cold receipt recovery must never release/reacquire between probe
     /// and promotion. Only this module supplies that real matching lock.
-    fn native_input_lease_locked(
+    fn custody_lease_locked(
         &self,
         conversation_id: &str,
         create_empty: bool,
-        occurrence: Option<&[u8; 32]>,
+        occurrence: Option<(CustodyReceiptKind, &[u8; 32])>,
         lease: File,
-    ) -> Result<NativeTranscriptLease> {
+    ) -> Result<CustodyTranscriptLease> {
         let root = open_directory(&self.root)?;
         let directory = open_directory(&self.root.join(conversation_id))?;
         let foreign_receipts = match occurrence {
-            Some(occurrence) => {
-                self.has_foreign_native_input_receipts_locked(conversation_id, occurrence, &lease)?
+            Some((kind, occurrence)) => {
+                self.has_foreign_custody_receipts_locked(conversation_id, kind, occurrence, &lease)?
             }
             None => self.has_unsettled_append_receipts_locked(conversation_id, &lease)?,
         };
@@ -248,7 +256,7 @@ impl AgentTranscriptStore {
         archive.sync_all()?;
         directory.sync_all()?;
         root.sync_all()?;
-        let opened = NativeTranscriptLease {
+        let opened = CustodyTranscriptLease {
             store: self.clone(),
             conversation_id: conversation_id.into(),
             lease,
@@ -262,15 +270,17 @@ impl AgentTranscriptStore {
     }
 }
 
-impl NativeTranscriptLease {
+impl CustodyTranscriptLease {
     /// Reads only this lease's occurrence without recursively acquiring its
     /// kernel lock. Used for idempotent c1 image retirement after worker loss.
     pub(crate) fn lookup_append_receipt(
         &self,
+        kind: CustodyReceiptKind,
         occurrence: &[u8; 32],
-    ) -> Result<Option<std::sync::Arc<super::NativeInputAppendReceipt>>> {
-        self.store.native_input_append_receipt_locked(
+    ) -> Result<Option<std::sync::Arc<super::CustodyAppendReceipt>>> {
+        self.store.custody_append_receipt_locked(
             &self.conversation_id,
+            kind,
             occurrence,
             &self.lease,
         )
@@ -279,7 +289,7 @@ impl NativeTranscriptLease {
     /// Freezes the actual next sequence and complete validated physical prefix.
     /// The caller must durably retain the returned plan before appending.
     #[cfg(test)]
-    pub(crate) fn prepare(&self, row: &mut TranscriptEntry) -> Result<NativeTranscriptPlan> {
+    pub(crate) fn prepare(&self, row: &mut TranscriptEntry) -> Result<CustodyTranscriptPlan> {
         self.validate_paths()?;
         self.store
             .validate_restored_transcript(&self.conversation_id)?;
@@ -291,7 +301,7 @@ impl NativeTranscriptLease {
         let prefix_bytes = self.archive.metadata()?.len();
         let prefix_sha256 = prefix_digest(&self.archive, prefix_bytes)?;
         self.validate_paths()?;
-        let plan = NativeTranscriptPlan {
+        let plan = CustodyTranscriptPlan {
             root: Identity::of(&self.root)?,
             directory: Identity::of(&self.directory)?,
             archive: Identity::of(&self.archive)?,
@@ -307,7 +317,7 @@ impl NativeTranscriptLease {
     }
 
     /// Rechecks a retained first preparation before publishing it after loss.
-    pub(crate) fn check_preparation(&self, plan: &NativeTranscriptPlan) -> Result<()> {
+    pub(crate) fn check_preparation(&self, plan: &CustodyTranscriptPlan) -> Result<()> {
         self.validate_plan(plan)
     }
 
@@ -315,7 +325,7 @@ impl NativeTranscriptLease {
     /// can be reconciled from its frozen bytes; foreign suffixes fail closed.
     /// Derived transcript indexes use the ordinary reconciliation path.
     #[cfg(test)]
-    pub(crate) fn append(&self, plan: &NativeTranscriptPlan, row: &TranscriptEntry) -> Result<()> {
+    pub(crate) fn append(&self, plan: &CustodyTranscriptPlan, row: &TranscriptEntry) -> Result<()> {
         self.validate_plan(plan)?;
         let encoded = encoded_row(row)?;
         if row.sequence != plan.archive_sequence
@@ -348,7 +358,7 @@ impl NativeTranscriptLease {
 
     /// Requalifies the actual original complete row and syncs it before the MMP
     /// canonical commit may be journaled. Missing/partial/wrong rows refuse.
-    pub(crate) fn seal(&self, plan: &NativeTranscriptPlan) -> Result<TranscriptEntry> {
+    pub(crate) fn seal(&self, plan: &CustodyTranscriptPlan) -> Result<TranscriptEntry> {
         self.validate_plan(plan)?;
         let mut file = &self.archive;
         file.seek(SeekFrom::Start(plan.prefix_bytes))?;
@@ -373,12 +383,12 @@ impl NativeTranscriptLease {
     }
 
     /// Every attempt stays bound to the first physical destination and prefix.
-    fn validate_plan(&self, plan: &NativeTranscriptPlan) -> Result<()> {
+    fn validate_plan(&self, plan: &CustodyTranscriptPlan) -> Result<()> {
         self.validate_plan_span(plan, MAX_ROW_BYTES)
     }
 
     /// Applies the same original-backing/prefix checks to a bounded batch plan.
-    fn validate_plan_span(&self, plan: &NativeTranscriptPlan, max_bytes: usize) -> Result<()> {
+    fn validate_plan_span(&self, plan: &CustodyTranscriptPlan, max_bytes: usize) -> Result<()> {
         plan.validate_span(max_bytes)?;
         self.validate_paths()?;
         if plan.conversation_id != self.conversation_id
@@ -466,7 +476,7 @@ fn open_directory(path: &std::path::Path) -> Result<File> {
 }
 /// Refusals intentionally omit paths and private native input.
 fn unavailable() -> MezError {
-    MezError::invalid_state("original canonical native transcript unavailable")
+    MezError::invalid_state("original canonical custody transcript unavailable")
 }
 
 #[cfg(test)]

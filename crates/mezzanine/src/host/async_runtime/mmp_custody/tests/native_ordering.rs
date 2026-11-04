@@ -114,8 +114,8 @@ async fn stopped_bookkeeping_waits_for_issued_native_first_plan() {
         actor.observe_message_custody_for_tests().await.unwrap(),
         CustodyWorkerStatus::NativeInputAwaitingAdoption
     );
-    actor.fail_native_receipt_publication_for_tests(
-        crate::storage::transcript::NativeReceiptPublicationFault::BeforeStage,
+    actor.fail_custody_receipt_publication_for_tests(
+        crate::storage::transcript::CustodyReceiptPublicationFault::BeforeStage,
     );
     actor.poll_message_custody_for_tests();
     assert!(matches!(

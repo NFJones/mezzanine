@@ -1,16 +1,16 @@
-//! Unpublished canonical native images, qualified only by the original root.
+//! Unpublished canonical custody images, qualified only by the original root.
 //!
 //! A complete private stage retains its exact row owner through process loss.
 //! It can be linked into the final namespace only after source and physical
 //! batch qualification under the conversation lease. An incomplete JSON prefix
-//! owns no canonical input: only lookup-only original-root recovery with neither
-//! p1 nor c1 may abort it, leaving the accepted transport source untouched.
-//! Ordinary producers fence every staged native name without decoding it.
+//! owns no canonical row: only lookup-only original-root recovery with neither
+//! preparation nor canonical journal may abort it, leaving its source untouched.
+//! Ordinary producers fence both native and handoff stages without decoding them.
 
 use super::*;
 
 /// An actual bounded private staging object, never a decoded input capability.
-pub(in crate::storage::transcript) struct NativeInputStage {
+pub(in crate::storage::transcript) struct CustodyStage {
     file: File,
     root: File,
     directory: File,
@@ -19,12 +19,10 @@ pub(in crate::storage::transcript) struct NativeInputStage {
     data: Option<AppendReceipt>,
 }
 
-impl NativeInputStage {
+impl CustodyStage {
     /// A complete immutable plan remains data until original-root qualification.
-    pub(in crate::storage::transcript) fn plan(&self) -> Option<&NativeInputAppendPlan> {
-        self.data
-            .as_ref()
-            .and_then(|data| data.native_input.as_ref())
+    pub(in crate::storage::transcript) fn plan(&self) -> Option<&CustodyAppendPlan> {
+        self.data.as_ref().and_then(AppendReceipt::custody_plan)
     }
 
     /// Reconstructs only fully validated complete canonical rows.
@@ -78,7 +76,7 @@ impl NativeInputStage {
         self,
         store: &AgentTranscriptStore,
         lease: &File,
-    ) -> Result<Arc<NativeInputAppendReceipt>> {
+    ) -> Result<Arc<CustodyAppendReceipt>> {
         let data = self.data.as_ref().ok_or_else(invalid)?;
         self.revalidate()?;
         self.file.sync_all()?;
@@ -95,11 +93,11 @@ impl NativeInputStage {
         self.directory.sync_all()?;
         self.root.sync_all()?;
         let owner = store
-            .native_input_append_receipt_locked(
+            .custody_append_receipt_locked(
                 &data.conversation_id,
+                data.custody_plan().ok_or_else(invalid)?.source().kind(),
                 &data
-                    .native_input
-                    .as_ref()
+                    .custody_plan()
                     .ok_or_else(invalid)?
                     .source()
                     .occurrence(),
@@ -123,15 +121,16 @@ impl AgentTranscriptStore {
     /// Reads only this original occurrence's staged file under its mutation
     /// lease. Invalid complete frames and malformed prefixes refuse, rather
     /// than being treated as an interrupted write or qualified absence.
-    pub(in crate::storage::transcript) fn native_input_stage_locked(
+    pub(in crate::storage::transcript) fn custody_stage_locked(
         &self,
         conversation: &str,
+        kind: CustodyReceiptKind,
         occurrence: &[u8; 32],
         _lease: &File,
-    ) -> Result<Option<NativeInputStage>> {
+    ) -> Result<Option<CustodyStage>> {
         let path = self
             .append_receipt_directory()
-            .join(filename(conversation, occurrence))
+            .join(filename(conversation, kind, occurrence))
             .with_extension("json.tmp");
         let file = match private_file(&path) {
             Ok(file) => file,
@@ -152,10 +151,9 @@ impl AgentTranscriptStore {
         let data = match decode(&bytes) {
             Ok(data) => {
                 if data.conversation_id != conversation
-                    || data
-                        .native_input
-                        .as_ref()
-                        .is_none_or(|p| p.source().occurrence() != *occurrence)
+                    || data.custody_plan().is_none_or(|p| {
+                        p.source().kind() != kind || p.source().occurrence() != *occurrence
+                    })
                 {
                     return Err(invalid());
                 }
@@ -164,7 +162,7 @@ impl AgentTranscriptStore {
             Err(_) if incomplete_json(&bytes) => None,
             Err(error) => return Err(error),
         };
-        let stage = NativeInputStage {
+        let stage = CustodyStage {
             file,
             root: directory(&self.root)?,
             directory: directory(path.parent().ok_or_else(invalid)?)?,
@@ -180,18 +178,19 @@ impl AgentTranscriptStore {
     /// under all relevant conversation locks. A selected special/aliased/
     /// oversized object is an error, never a free append slot. Ordinary receipt
     /// checks must reuse these paths so a second enumeration cannot hide loss.
-    pub(in crate::storage::transcript) fn has_native_input_staging_paths(
+    pub(in crate::storage::transcript) fn has_custody_staging_paths(
         &self,
         conversation: &str,
-        except: Option<&[u8; 32]>,
+        except: Option<(CustodyReceiptKind, &[u8; 32])>,
         paths: &[PathBuf],
     ) -> Result<bool> {
-        let own = except.map(|occurrence| format!("{}.tmp", filename(conversation, occurrence)));
+        let own = except
+            .map(|(kind, occurrence)| format!("{}.tmp", filename(conversation, kind, occurrence)));
         for path in paths {
             let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
                 return Err(invalid());
             };
-            if !name.ends_with(".json.tmp") || !is_native_filename(&path.with_extension("")) {
+            if !name.ends_with(".json.tmp") || !is_custody_filename(&path.with_extension("")) {
                 continue;
             }
             let final_path = path.with_extension("");
@@ -220,7 +219,7 @@ fn incomplete_json(bytes: &[u8]) -> bool {
         Err(_) => return false,
     };
     let mut nodes = 8192;
-    let mut text = MAX_NATIVE_APPEND_BYTES + 64 * 1024;
+    let mut text = MAX_CUSTODY_APPEND_BYTES + 256 * 1024;
     let mut decoder = serde_json::Deserializer::from_slice(bytes);
     matches!(Count { nodes: &mut nodes, text: &mut text }.deserialize(&mut decoder),
         Err(error) if error.is_eof())

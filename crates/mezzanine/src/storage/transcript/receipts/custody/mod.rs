@@ -1,6 +1,7 @@
-//! Original private canonical receipt ownership for native input recovery.
+//! Original private canonical receipt ownership for messaging custody recovery.
 //!
-//! Native receipts share ordinary transcript routing and mutation locks, but
+//! Recipient input and sender handoff use distinct namespaces/versions under
+//! one checked owner. They share ordinary transcript routing and mutation locks;
 //! generic recovery must retain them for the original MMP root. The receipt owns
 //! canonical row images, never another envelope queue or a task/provider resume
 //! token. Actual private file objects, complete bytes and original physical
@@ -8,7 +9,7 @@
 
 use super::*;
 mod staging;
-use crate::storage::transcript::native_input::{MAX_NATIVE_APPEND_BYTES, MAX_NATIVE_APPEND_ROWS};
+use crate::storage::transcript::custody::{MAX_CUSTODY_APPEND_BYTES, MAX_CUSTODY_APPEND_ROWS};
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::os::unix::fs::{DirBuilderExt, MetadataExt};
@@ -19,7 +20,7 @@ pub(super) const MAX_RECEIPT_BYTES: usize = 64 * 1024 * 1024 + 256 * 1024;
 
 /// Actual private canonical receipt; deserialized row metadata cannot construct
 /// this owner without the retained original filesystem objects and checked read.
-pub(crate) struct NativeInputAppendReceipt {
+pub(crate) struct CustodyAppendReceipt {
     data: AppendReceipt,
     file: File,
     root: File,
@@ -29,14 +30,13 @@ pub(crate) struct NativeInputAppendReceipt {
     bytes: u64,
 }
 
-impl NativeInputAppendReceipt {
+impl CustodyAppendReceipt {
     /// Borrows descriptive original source/position data qualified by this read.
-    pub(crate) fn plan(&self) -> &NativeInputAppendPlan {
-        // Native construction below rejects every receipt without this field.
+    pub(crate) fn plan(&self) -> &CustodyAppendPlan {
+        // Construction below validates exactly one version-matching source role.
         self.data
-            .native_input
-            .as_ref()
-            .expect("validated native canonical receipt")
+            .custody_plan()
+            .expect("validated custody canonical receipt")
     }
 
     /// Reconstructs only this immutable receipt's validated canonical rows.
@@ -70,7 +70,7 @@ impl NativeInputAppendReceipt {
         Ok(())
     }
 
-    /// Retires only this actual file after the original root published c1. It
+    /// Retires only this actual file after its original root journal committed. It
     /// does not open, repair or otherwise claim rights over a replacement archive.
     pub(crate) fn retire(&self) -> Result<()> {
         if let Err(error) = self.revalidate() {
@@ -109,19 +109,23 @@ impl NativeInputAppendReceipt {
 }
 
 /// Canonical namespace is separate from ordinary numeric append generations.
-pub(super) fn filename(conversation: &str, occurrence: &[u8; 32]) -> String {
+pub(super) fn filename(
+    conversation: &str,
+    kind: CustodyReceiptKind,
+    occurrence: &[u8; 32],
+) -> String {
     let digest = occurrence
         .iter()
         .map(|b| format!("{b:02x}"))
         .collect::<String>();
-    format!("{conversation}-native-{digest}.json")
+    format!("{conversation}-{}-{digest}.json", kind.namespace())
 }
 
 /// Faults actual publication boundaries; no source, journal or join is forged.
 #[cfg(test)]
 #[derive(Clone, Copy)]
 #[repr(u8)]
-pub(crate) enum NativeReceiptPublicationFault {
+pub(crate) enum CustodyReceiptPublicationFault {
     BeforeStage = 1,
     Partial = 2,
     Complete = 3,
@@ -131,37 +135,39 @@ pub(crate) enum NativeReceiptPublicationFault {
 impl AgentTranscriptStore {
     /// Selects one real file-publication fault on this store and its clones.
     #[cfg(test)]
-    pub(crate) fn fail_native_receipt_publication_for_tests(
+    pub(crate) fn fail_custody_receipt_publication_for_tests(
         &self,
-        point: NativeReceiptPublicationFault,
+        point: CustodyReceiptPublicationFault,
     ) {
-        self.native_receipt_publication_fault
+        self.custody_receipt_publication_fault
             .store(point as u8, std::sync::atomic::Ordering::SeqCst);
     }
 
     /// Reads one exact native canonical owner without loading a source envelope
     /// or enumerating unrelated conversations. Missing is not commit proof.
-    pub(crate) fn native_input_append_receipt(
+    pub(crate) fn custody_append_receipt(
         &self,
         conversation: &str,
+        kind: CustodyReceiptKind,
         occurrence: &[u8; 32],
-    ) -> Result<Option<Arc<NativeInputAppendReceipt>>> {
+    ) -> Result<Option<Arc<CustodyAppendReceipt>>> {
         validate_conversation_id(conversation)?;
         // Historical lookup may legitimately see a removed transcript root.
         if !self.root.try_exists()? {
             return Ok(None);
         }
         let lease = self.acquire_conversation_lock(conversation)?;
-        self.native_input_append_receipt_locked(conversation, occurrence, &lease)
+        self.custody_append_receipt_locked(conversation, kind, occurrence, &lease)
     }
 
     /// Same exact file qualification under an existing native mutation owner.
-    pub(in crate::storage::transcript) fn native_input_append_receipt_locked(
+    pub(in crate::storage::transcript) fn custody_append_receipt_locked(
         &self,
         conversation: &str,
+        kind: CustodyReceiptKind,
         occurrence: &[u8; 32],
         _lease: &File,
-    ) -> Result<Option<Arc<NativeInputAppendReceipt>>> {
+    ) -> Result<Option<Arc<CustodyAppendReceipt>>> {
         let root = match directory(&self.root) {
             Ok(root) => root,
             Err(error) if error.io_kind() == Some(std::io::ErrorKind::NotFound) => return Ok(None),
@@ -173,7 +179,7 @@ impl AgentTranscriptStore {
             Err(error) if error.io_kind() == Some(std::io::ErrorKind::NotFound) => return Ok(None),
             Err(error) => return Err(error),
         };
-        let path = parent_path.join(filename(conversation, occurrence));
+        let path = parent_path.join(filename(conversation, kind, occurrence));
         let file = match private_file(&path) {
             Ok(file) => file,
             Err(error) if error.io_kind() == Some(std::io::ErrorKind::NotFound) => return Ok(None),
@@ -182,7 +188,7 @@ impl AgentTranscriptStore {
         let length = file.metadata()?.len();
         let bytes = read_bytes(&file)?;
         let data = decode(&bytes)?;
-        if data.version != NATIVE_RECEIPT_VERSION
+        if data.version != kind.receipt_version()
             || data.conversation_id != conversation
             || data.filename()
                 != path
@@ -190,19 +196,17 @@ impl AgentTranscriptStore {
                     .and_then(|p| p.to_str())
                     .ok_or_else(invalid)?
             || data
-                .native_input
-                .as_ref()
-                .is_none_or(|p| p.source().occurrence() != *occurrence)
+                .custody_plan()
+                .is_none_or(|p| p.source().kind() != kind || p.source().occurrence() != *occurrence)
             || !data
-                .native_input
-                .as_ref()
+                .custody_plan()
                 .ok_or_else(invalid)?
                 .root_matches(&root)?
         {
             return Err(invalid());
         }
         reconcile_publication_names(&file, &path, &parent)?;
-        let owner = Arc::new(NativeInputAppendReceipt {
+        let owner = Arc::new(CustodyAppendReceipt {
             data,
             file,
             root,
@@ -218,18 +222,21 @@ impl AgentTranscriptStore {
     /// Publishes a complete private canonical row image under the already-held
     /// ordinary conversation lease. Matching retry bytes reconcile; an existing
     /// different payload or staging prefix refuses before publication.
-    pub(in crate::storage::transcript) fn publish_native_input_append_receipt(
+    pub(in crate::storage::transcript) fn publish_custody_append_receipt(
         &self,
-        plan: NativeInputAppendPlan,
+        plan: CustodyAppendPlan,
         rows: &[TranscriptEntry],
         _lease: &File,
-    ) -> Result<Arc<NativeInputAppendReceipt>> {
+    ) -> Result<Arc<CustodyAppendReceipt>> {
         plan.validate_rows(rows)?;
         let batch = TranscriptAppendBatch::rows(rows.to_vec())?;
-        let mut data = AppendReceipt::from_batch(&batch, plan.source().message_sequence)?;
-        data.version = NATIVE_RECEIPT_VERSION;
-        data.native_input = Some(plan);
-        data.digest = digest_payload(&data.rows, None, data.native_input.as_ref())?;
+        let mut data = AppendReceipt::from_batch(&batch, plan.source().message_sequence())?;
+        data.version = plan.source().kind().receipt_version();
+        match plan.source().kind() {
+            CustodyReceiptKind::NativeInput => data.native_input = Some(plan),
+            CustodyReceiptKind::TerminalHandoff => data.terminal_handoff = Some(plan),
+        }
+        data.digest = digest_payload(&data.rows, None, data.custody_plan())?;
         data.batch()?;
         let bytes = serde_json::to_vec(&data).map_err(|_| invalid())?;
         if bytes.len() > MAX_RECEIPT_BYTES {
@@ -238,10 +245,10 @@ impl AgentTranscriptStore {
         bounded_json(&bytes)?;
         #[cfg(test)]
         let fault = self
-            .native_receipt_publication_fault
+            .custody_receipt_publication_fault
             .swap(0, std::sync::atomic::Ordering::SeqCst);
         #[cfg(test)]
-        if fault == NativeReceiptPublicationFault::BeforeStage as u8 {
+        if fault == CustodyReceiptPublicationFault::BeforeStage as u8 {
             return Err(publication_fault());
         }
         let _root = directory(&self.root)?;
@@ -252,9 +259,10 @@ impl AgentTranscriptStore {
             Err(error) => return Err(error.into()),
         }
         let parent = directory(&parent_path)?;
-        let native = data.native_input.as_ref().ok_or_else(invalid)?;
-        if let Some(existing) = self.native_input_append_receipt_locked(
+        let native = data.custody_plan().ok_or_else(invalid)?;
+        if let Some(existing) = self.custody_append_receipt_locked(
             &data.conversation_id,
+            native.source().kind(),
             &native.source().occurrence(),
             _lease,
         )? {
@@ -298,7 +306,7 @@ impl AgentTranscriptStore {
         }
         let through = bytes.len();
         #[cfg(test)]
-        let through = if fault == NativeReceiptPublicationFault::Partial as u8 {
+        let through = if fault == CustodyReceiptPublicationFault::Partial as u8 {
             (bytes.len() / 2).max(1)
         } else {
             through
@@ -308,21 +316,22 @@ impl AgentTranscriptStore {
         }
         file.sync_all()?;
         #[cfg(test)]
-        if fault == NativeReceiptPublicationFault::Partial as u8
-            || fault == NativeReceiptPublicationFault::Complete as u8
+        if fault == CustodyReceiptPublicationFault::Partial as u8
+            || fault == CustodyReceiptPublicationFault::Complete as u8
         {
             return Err(publication_fault());
         }
         fs::hard_link(&temporary, &path)?;
         #[cfg(test)]
-        if fault == NativeReceiptPublicationFault::Linked as u8 {
+        if fault == CustodyReceiptPublicationFault::Linked as u8 {
             return Err(publication_fault());
         }
         fs::remove_file(&temporary)?;
         parent.sync_all()?;
         _root.sync_all()?;
-        self.native_input_append_receipt_locked(
+        self.custody_append_receipt_locked(
             &data.conversation_id,
+            native.source().kind(),
             &native.source().occurrence(),
             _lease,
         )?
@@ -331,13 +340,16 @@ impl AgentTranscriptStore {
 }
 
 /// Recognizes only the explicit native namespace, not words in a conversation ID.
-pub(super) fn is_native_filename(path: &Path) -> bool {
+pub(super) fn is_custody_filename(path: &Path) -> bool {
     path.file_name()
         .and_then(|p| p.to_str())
         .and_then(|p| p.strip_suffix(".json"))
-        .and_then(|p| p.rsplit_once("-native-"))
-        .is_some_and(|(_, hash)| {
-            hash.len() == 64
+        .is_some_and(|stem| {
+            let mut parts = stem.rsplitn(3, '-');
+            let hash = parts.next().unwrap_or_default();
+            matches!(parts.next(), Some("native" | "handoff"))
+                && parts.next().is_some_and(|cid| !cid.is_empty())
+                && hash.len() == 64
                 && hash
                     .bytes()
                     .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
@@ -367,7 +379,11 @@ fn read_bytes(file: &File) -> Result<Vec<u8>> {
 fn decode(bytes: &[u8]) -> Result<AppendReceipt> {
     bounded_json(bytes)?;
     let data: AppendReceipt = serde_json::from_slice(bytes).map_err(|_| invalid())?;
-    if data.version != NATIVE_RECEIPT_VERSION || data.native_input.is_none() {
+    if !matches!(
+        data.version,
+        NATIVE_RECEIPT_VERSION | HANDOFF_RECEIPT_VERSION
+    ) || data.custody_plan().is_none()
+    {
         return Err(invalid());
     }
     data.batch()?;
@@ -442,7 +458,7 @@ fn file_digest(file: &File) -> Result<[u8; 32]> {
 fn bounded_json(bytes: &[u8]) -> Result<()> {
     use serde::de::DeserializeSeed;
     let mut nodes = 8192usize;
-    let mut text = MAX_NATIVE_APPEND_BYTES + 64 * 1024;
+    let mut text = MAX_CUSTODY_APPEND_BYTES + 256 * 1024;
     let mut decoder = serde_json::Deserializer::from_slice(bytes);
     Count {
         nodes: &mut nodes,
@@ -466,14 +482,14 @@ impl<'de> serde::de::DeserializeSeed<'de> for Count<'_> {
         *self.nodes = self
             .nodes
             .checked_sub(1)
-            .ok_or_else(|| serde::de::Error::custom("native receipt nodes"))?;
+            .ok_or_else(|| serde::de::Error::custom("custody receipt nodes"))?;
         decoder.deserialize_any(self)
     }
 }
 impl<'de> serde::de::Visitor<'de> for Count<'_> {
     type Value = ();
     fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("bounded native canonical receipt")
+        f.write_str("bounded custody canonical receipt")
     }
     fn visit_map<A: serde::de::MapAccess<'de>>(
         self,
@@ -506,8 +522,8 @@ impl<'de> serde::de::Visitor<'de> for Count<'_> {
             .is_some()
         {
             count += 1;
-            if count > MAX_NATIVE_APPEND_ROWS {
-                return Err(serde::de::Error::custom("native receipt sequence"));
+            if count > MAX_CUSTODY_APPEND_ROWS {
+                return Err(serde::de::Error::custom("custody receipt sequence"));
             }
         }
         Ok(())
@@ -516,7 +532,7 @@ impl<'de> serde::de::Visitor<'de> for Count<'_> {
         *self.text = self
             .text
             .checked_sub(value.len())
-            .ok_or_else(|| E::custom("native receipt text"))?;
+            .ok_or_else(|| E::custom("custody receipt text"))?;
         Ok(())
     }
     fn visit_string<E: serde::de::Error>(self, value: String) -> std::result::Result<(), E> {
@@ -540,7 +556,7 @@ impl<'de> serde::de::Visitor<'de> for Count<'_> {
 }
 
 fn invalid() -> MezError {
-    MezError::invalid_state("original native canonical append receipt unavailable")
+    MezError::invalid_state("original custody canonical append receipt unavailable")
 }
 
 /// One actual injected interrupted publication, never uncertainty fabricated as success.
@@ -548,7 +564,7 @@ fn invalid() -> MezError {
 fn publication_fault() -> MezError {
     std::io::Error::new(
         std::io::ErrorKind::Interrupted,
-        "injected native canonical receipt publication boundary failure",
+        "injected custody canonical receipt publication boundary failure",
     )
     .into()
 }

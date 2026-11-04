@@ -439,6 +439,18 @@ journals do not consume a sender outcome or grant another owner its handoff.
 
 Guarded volatile cleanup and direct sender consumption remain withheld. The
 current runtime hint is in-memory context, not durable canonical handoff proof.
+The internal handoff capability now freezes the actual original native sender
+and unreleased terminal before-image. Live capture checks the original sender;
+historical lookup retains attribution without recreating a task or provider.
+Slot protection and metadata remain owned through the last anchor/proof clone.
+A distinct typed terminal-handoff codec preserves the fixed neutral RuntimeHint
+and rejects altered semantics, provenance or chronology. Replay restores only
+that neutral reference. Shared physical transcript custody now supports separate
+v4 handoff images while preserving native v3 bytes: both classes retain actual
+file/prefix/row ownership, fence ordinary mutations and survive generic recovery.
+These are internal capabilities and physical recovery images; the original-root
+canonical handoff journal, separate consumption and actor integration are still
+required before a sender outcome can be durably consumed.
 Validated owner retirement, actual original-sender canonical handoff, rollback-
 safe elapsed/reboot clocks and reclamation remain unfinished. Current horizon
 thresholds are wall-clock qualification only. These internal operation bounds

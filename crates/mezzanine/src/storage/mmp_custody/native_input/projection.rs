@@ -81,7 +81,7 @@ impl NativeInputProjection {
                 return Err(invalid());
             }
         }
-        crate::storage::transcript::native_input::validate_native_append_prefix(&prefix)?;
+        crate::storage::transcript::custody::validate_custody_append_prefix(&prefix)?;
         self.prefix = prefix;
         Ok(self)
     }

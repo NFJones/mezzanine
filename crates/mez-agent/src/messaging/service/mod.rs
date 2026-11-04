@@ -41,6 +41,11 @@ use super::validation::{
     validate_sender_identity,
 };
 
+mod terminal_handoff;
+pub use terminal_handoff::{
+    MessageTerminalHandoffAnchor, MessageTerminalHandoffCommit, MessageTerminalHandoffRecord,
+    MessageTerminalHandoffStore,
+};
 mod terminal_custody;
 pub(super) use terminal_custody::PendingTerminal;
 pub use terminal_custody::{

@@ -372,16 +372,7 @@ impl MessageService {
             self.storage_metadata_base_usage()?,
             policy.limits.metadata_bytes,
         )?;
-        let protection = {
-            let mut slots = row
-                .native_input_protection
-                .lock()
-                .map_err(|_| unavailable())?;
-            let slot = slots.get_mut(index).ok_or_else(unavailable)?;
-            let protection = slot.upgrade().unwrap_or_else(|| Arc::new(()));
-            *slot = Arc::downgrade(&protection);
-            protection
-        };
+        let protection = protect_slot(row, index)?;
         Ok(MessageNativeInputAnchor(Arc::new(Source {
             runtime: self.acceptance_runtime.clone(),
             scope: policy.scope.clone(),
@@ -425,4 +416,17 @@ pub(super) fn protects(row: &QueuedEnvelope, recipient: &AgentId) -> bool {
     row.native_input_protection.lock().map_or(true, |slots| {
         slots.get(index).is_none_or(|slot| slot.strong_count() > 0)
     })
+}
+
+/// Shares only one pre-reserved original slot's bounded protection control block.
+/// Native input and terminal handoff cannot let maintenance discard their source.
+pub(super) fn protect_slot(row: &QueuedEnvelope, index: usize) -> Result<Arc<()>> {
+    let mut slots = row
+        .native_input_protection
+        .lock()
+        .map_err(|_| unavailable())?;
+    let slot = slots.get_mut(index).ok_or_else(unavailable)?;
+    let protection = slot.upgrade().unwrap_or_else(|| Arc::new(()));
+    *slot = Arc::downgrade(&protection);
+    Ok(protection)
 }

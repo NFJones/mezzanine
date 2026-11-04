@@ -56,13 +56,13 @@ mod prefix_publication;
 mod prefix_seal;
 pub(crate) use prefix_projection::{project_compaction_prefix, validate_compaction_prefix_source};
 pub(crate) use prefix_seal::{TranscriptPrefixExpectation, TranscriptPrefixSeal};
-pub(crate) mod native_input;
+pub(crate) mod custody;
 /// Durable, exact-batch acceptance receipts for uncertain transcript writes.
 mod receipts;
 pub(crate) use append_batch::TranscriptAppendBatch;
-pub(crate) use receipts::NativeInputAppendReceipt;
+pub(crate) use receipts::CustodyAppendReceipt;
 #[cfg(test)]
-pub(crate) use receipts::native_input::NativeReceiptPublicationFault;
+pub(crate) use receipts::custody::CustodyReceiptPublicationFault;
 /// Leased, validated sequence frontiers and raw replay counts.
 mod replay_position;
 /// Exposes the store module boundary.

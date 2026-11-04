@@ -10,6 +10,7 @@ mod error;
 mod records;
 mod steering;
 mod summary;
+mod terminal_handoff;
 
 pub use checkpoint::{AgentSessionMetadata, PaneModelProfileSelection};
 pub use context_event::{TRANSCRIPT_CONTEXT_EVENT_MARKER, TranscriptContextEvent};
@@ -22,6 +23,9 @@ pub use steering::{
 pub use summary::{
     ConversationSummary, bounded_summary_text, summarize_conversation,
     transcript_entry_user_content,
+};
+pub use terminal_handoff::{
+    TranscriptTerminalHandoffEvent, TranscriptTerminalHandoffSource, terminal_outcome_reference,
 };
 
 /// Persistence boundary required by agent transcript projection.

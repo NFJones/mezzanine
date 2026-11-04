@@ -16224,6 +16224,25 @@ restored raw bearer or task/provider continuation.
 
 These horizon observations currently qualify wall-clock thresholds only;
 rollback-safe elapsed TTL/horizon and reboot policy remain activation gates.
+Original-sender handoff capture MUST freeze an actual unreleased terminal slot,
+its complete source fingerprint and original native sender under the actual
+guarded service/scope. Live capture MUST authenticate that original sender;
+historical lookup MUST NOT revive a sender, task or provider. Shared slot
+protection and charged source metadata MUST survive through the final opaque
+anchor/canonical-proof owner. Descriptive records MUST NOT recreate those caps.
+
+Canonical terminal handoff MUST use a typed neutral RuntimeHint with a distinct
+source/occurrence domain from recipient input. Its first reason/clock, sender,
+recipient interval and complete neutral projection MUST remain immutable. Replay
+MUST hydrate only the neutral runtime reference, never peer input or a task.
+The shared physical transcript owner MUST preserve native v3 receipt bytes and
+use separate v4 `-handoff-` receipt framing, source validation and digest domain.
+Generic recovery MUST retain both receipt classes for their original root;
+ordinary mutations MUST fence their published and staged images. Original file,
+prefix, immutable row image and same-lease checks apply to both source roles.
+Canonical proof MUST precede a separate durable consumption transaction; the
+source MUST remain pending until canonical receipt retirement has completed.
+
 Validated retirement, original-sender canonical handoff/consumption and reclaim
 remain unfinished. An in-memory runtime hint alone MUST NOT authorize durable
 sender consumption. Guarded volatile cleanup and direct outcome consumption

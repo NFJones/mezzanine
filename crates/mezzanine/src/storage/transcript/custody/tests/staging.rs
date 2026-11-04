@@ -2,26 +2,26 @@
 
 use super::receipts::input;
 use super::*;
-use crate::storage::transcript::NativeReceiptPublicationFault;
+use crate::storage::transcript::CustodyReceiptPublicationFault;
 
 /// Creates only a physical candidate and injects failure after its real bytes
 /// reach the selected boundary. Original-source qualification is tested at the
 /// MMP root/factory boundary, not inferred from these descriptive row fields.
 fn staged(
     fixture: &Fixture,
-    fault: NativeReceiptPublicationFault,
-) -> (super::super::NativeInputAppendPlan, Vec<TranscriptEntry>) {
+    fault: CustodyReceiptPublicationFault,
+) -> (super::super::CustodyAppendPlan, Vec<TranscriptEntry>) {
     let mut native = input(fixture);
     let lease = fixture
         .store
-        .native_input_lease("original", false, None)
+        .custody_lease("original", false, None)
         .unwrap();
     let plan = lease
-        .prepare_native_append(&mut Vec::new(), &mut native)
+        .prepare_custody_append(&mut Vec::new(), &mut native)
         .unwrap();
     fixture
         .store
-        .fail_native_receipt_publication_for_tests(fault);
+        .fail_custody_receipt_publication_for_tests(fault);
     let rows = vec![native];
     assert!(lease.publish_append_receipt(plan.clone(), &rows).is_err());
     (plan, rows)
@@ -33,7 +33,7 @@ fn staged(
 #[test]
 fn complete_native_stage_fences_ordinary_writers_and_preserves_exact_image() {
     let fixture = Fixture::new();
-    let (plan, rows) = staged(&fixture, NativeReceiptPublicationFault::Complete);
+    let (plan, rows) = staged(&fixture, CustodyReceiptPublicationFault::Complete);
     assert!(
         fixture
             .store
@@ -81,19 +81,31 @@ fn complete_native_stage_fences_ordinary_writers_and_preserves_exact_image() {
     let occurrence = plan.source().occurrence();
     let lease = fixture
         .store
-        .native_input_lease("original", false, Some(&occurrence))
+        .custody_lease(
+            "original",
+            false,
+            Some((
+                crate::storage::transcript::custody::CustodyReceiptKind::NativeInput,
+                &occurrence,
+            )),
+        )
         .unwrap();
     let stage = fixture
         .store
-        .native_input_stage_locked("original", &occurrence, &lease.lease)
+        .custody_stage_locked(
+            "original",
+            crate::storage::transcript::custody::CustodyReceiptKind::NativeInput,
+            &occurrence,
+            &lease.lease,
+        )
         .unwrap()
         .unwrap();
     assert_eq!(stage.plan(), Some(&plan));
     assert_eq!(stage.rows().unwrap(), rows);
-    lease.check_native_append_plan(&plan, &rows).unwrap();
+    lease.check_custody_append_plan(&plan, &rows).unwrap();
     let owner = stage.publish(&fixture.store, &lease.lease).unwrap();
     lease
-        .append_native_receipt(&plan, &owner.rows().unwrap())
+        .append_custody_receipt(&plan, &owner.rows().unwrap())
         .unwrap();
     assert_eq!(fixture.store.inspect("original").unwrap()[1], rows[0]);
 }
@@ -104,7 +116,7 @@ fn complete_native_stage_fences_ordinary_writers_and_preserves_exact_image() {
 #[test]
 fn partial_native_stage_abort_preserves_archive_without_committing_input() {
     let fixture = Fixture::new();
-    let (plan, _) = staged(&fixture, NativeReceiptPublicationFault::Partial);
+    let (plan, _) = staged(&fixture, CustodyReceiptPublicationFault::Partial);
     let occurrence = plan.source().occurrence();
     assert!(
         fixture
@@ -114,11 +126,23 @@ fn partial_native_stage_abort_preserves_archive_without_committing_input() {
     );
     let lease = fixture
         .store
-        .native_input_lease("original", false, Some(&occurrence))
+        .custody_lease(
+            "original",
+            false,
+            Some((
+                crate::storage::transcript::custody::CustodyReceiptKind::NativeInput,
+                &occurrence,
+            )),
+        )
         .unwrap();
     let stage = fixture
         .store
-        .native_input_stage_locked("original", &occurrence, &lease.lease)
+        .custody_stage_locked(
+            "original",
+            crate::storage::transcript::custody::CustodyReceiptKind::NativeInput,
+            &occurrence,
+            &lease.lease,
+        )
         .unwrap()
         .unwrap();
     assert!(stage.plan().is_none());
@@ -138,7 +162,7 @@ fn partial_native_stage_abort_preserves_archive_without_committing_input() {
 #[test]
 fn corrupt_complete_native_stage_is_preserved_and_refused() {
     let fixture = Fixture::new();
-    let (plan, _) = staged(&fixture, NativeReceiptPublicationFault::Complete);
+    let (plan, _) = staged(&fixture, CustodyReceiptPublicationFault::Complete);
     let path = fs::read_dir(fixture.root.join(".append-receipts"))
         .unwrap()
         .next()
@@ -152,12 +176,24 @@ fn corrupt_complete_native_stage_is_preserved_and_refused() {
     let occurrence = plan.source().occurrence();
     let lease = fixture
         .store
-        .native_input_lease("original", false, Some(&occurrence))
+        .custody_lease(
+            "original",
+            false,
+            Some((
+                crate::storage::transcript::custody::CustodyReceiptKind::NativeInput,
+                &occurrence,
+            )),
+        )
         .unwrap();
     assert!(
         fixture
             .store
-            .native_input_stage_locked("original", &occurrence, &lease.lease)
+            .custody_stage_locked(
+                "original",
+                crate::storage::transcript::custody::CustodyReceiptKind::NativeInput,
+                &occurrence,
+                &lease.lease
+            )
             .is_err()
     );
     assert_eq!(fs::read(&path).unwrap(), changed);
@@ -172,10 +208,10 @@ fn published_native_receipt_refuses_conflicting_temporary_owner() {
     let mut native = input(&fixture);
     let lease = fixture
         .store
-        .native_input_lease("original", false, None)
+        .custody_lease("original", false, None)
         .unwrap();
     let plan = lease
-        .prepare_native_append(&mut Vec::new(), &mut native)
+        .prepare_custody_append(&mut Vec::new(), &mut native)
         .unwrap();
     let occurrence = plan.source().occurrence();
     let owner = lease.publish_append_receipt(plan, &[native]).unwrap();
@@ -197,7 +233,12 @@ fn published_native_receipt_refuses_conflicting_temporary_owner() {
     assert!(
         fixture
             .store
-            .native_input_append_receipt_locked("original", &occurrence, &lease.lease)
+            .custody_append_receipt_locked(
+                "original",
+                crate::storage::transcript::custody::CustodyReceiptKind::NativeInput,
+                &occurrence,
+                &lease.lease
+            )
             .is_err()
     );
     assert_eq!(fs::read(&temp).unwrap(), b"{");
@@ -224,15 +265,27 @@ fn published_native_receipt_refuses_conflicting_temporary_owner() {
 #[test]
 fn complete_native_stage_refuses_replaced_staging_object() {
     let fixture = Fixture::new();
-    let (plan, _) = staged(&fixture, NativeReceiptPublicationFault::Complete);
+    let (plan, _) = staged(&fixture, CustodyReceiptPublicationFault::Complete);
     let occurrence = plan.source().occurrence();
     let lease = fixture
         .store
-        .native_input_lease("original", false, Some(&occurrence))
+        .custody_lease(
+            "original",
+            false,
+            Some((
+                crate::storage::transcript::custody::CustodyReceiptKind::NativeInput,
+                &occurrence,
+            )),
+        )
         .unwrap();
     let stage = fixture
         .store
-        .native_input_stage_locked("original", &occurrence, &lease.lease)
+        .custody_stage_locked(
+            "original",
+            crate::storage::transcript::custody::CustodyReceiptKind::NativeInput,
+            &occurrence,
+            &lease.lease,
+        )
         .unwrap()
         .unwrap();
     let path = fs::read_dir(fixture.root.join(".append-receipts"))

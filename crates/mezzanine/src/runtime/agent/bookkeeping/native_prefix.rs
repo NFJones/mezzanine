@@ -85,7 +85,7 @@ impl RuntimeSessionService {
             .ok_or_else(|| {
                 MezError::invalid_state("native input preceding canonical event cannot be encoded")
             })?;
-            if rows.len() >= crate::storage::transcript::native_input::MAX_NATIVE_APPEND_ROWS - 1 {
+            if rows.len() >= crate::storage::transcript::custody::MAX_CUSTODY_APPEND_ROWS - 1 {
                 return Err(MezError::invalid_state(
                     "native input canonical prefix row capacity",
                 ));

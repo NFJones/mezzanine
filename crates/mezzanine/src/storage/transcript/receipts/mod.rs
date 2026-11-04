@@ -28,21 +28,24 @@ use sha2::{Digest, Sha256};
 use crate::error::{MezError, MezErrorKind, Result};
 
 use super::TranscriptAppendBatch;
+use super::custody::CustodyAppendPlan;
+use super::custody::CustodyReceiptKind;
 use super::encoding::{decode_transcript_entry, encode_transcript_entry};
 use super::fs::{set_private_dir_permissions, set_private_file_permissions};
-use super::native_input::NativeInputAppendPlan;
 use super::types::{AgentCompactionEpoch, AgentTranscriptStore};
 
+pub(super) mod custody;
 /// Initial projection publication and whole-payload recovery checks.
 mod initial_projection;
-pub(super) mod native_input;
-pub(crate) use native_input::NativeInputAppendReceipt;
+pub(crate) use custody::CustodyAppendReceipt;
 
 const RECEIPT_VERSION: u64 = 1;
 /// Projection-bearing receipts retain a complete initial replay source.
 const PROJECTION_RECEIPT_VERSION: u64 = 2;
 /// Original native input remains owned until the MMP canonical journal commits.
 const NATIVE_RECEIPT_VERSION: u64 = 3;
+/// Original sender handoff uses a separate source role and receipt namespace.
+const HANDOFF_RECEIPT_VERSION: u64 = 4;
 
 /// One-shot test handshake after receipt path enumeration, before opening files.
 #[cfg(test)]
@@ -68,7 +71,10 @@ pub(super) struct AppendReceipt {
     compaction_epoch: Option<AgentCompactionEpoch>,
     /// Original physical batch and source; never decoded as ACK authority.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    native_input: Option<NativeInputAppendPlan>,
+    native_input: Option<CustodyAppendPlan>,
+    /// Original sender terminal fact; cannot be decoded as native peer input.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    terminal_handoff: Option<CustodyAppendPlan>,
 }
 
 impl AppendReceipt {
@@ -100,6 +106,7 @@ impl AppendReceipt {
             rows,
             compaction_epoch,
             native_input: None,
+            terminal_handoff: None,
         })
     }
 
@@ -108,19 +115,34 @@ impl AppendReceipt {
         if self.generation == 0
             || !matches!(
                 self.version,
-                RECEIPT_VERSION | PROJECTION_RECEIPT_VERSION | NATIVE_RECEIPT_VERSION
+                RECEIPT_VERSION
+                    | PROJECTION_RECEIPT_VERSION
+                    | NATIVE_RECEIPT_VERSION
+                    | HANDOFF_RECEIPT_VERSION
             )
             || (self.version == RECEIPT_VERSION
-                && (self.compaction_epoch.is_some() || self.native_input.is_some()))
+                && (self.compaction_epoch.is_some() || self.custody_plan().is_some()))
             || (self.version == PROJECTION_RECEIPT_VERSION
-                && (self.compaction_epoch.is_none() || self.native_input.is_some()))
+                && (self.compaction_epoch.is_none() || self.custody_plan().is_some()))
             || (self.version == NATIVE_RECEIPT_VERSION
-                && (self.compaction_epoch.is_some() || self.native_input.is_none()))
+                && (self.compaction_epoch.is_some()
+                    || self.terminal_handoff.is_some()
+                    || self
+                        .native_input
+                        .as_ref()
+                        .is_none_or(|p| p.source().kind() != CustodyReceiptKind::NativeInput)))
+            || (self.version == HANDOFF_RECEIPT_VERSION
+                && (self.compaction_epoch.is_some()
+                    || self.native_input.is_some()
+                    || self
+                        .terminal_handoff
+                        .as_ref()
+                        .is_none_or(|p| p.source().kind() != CustodyReceiptKind::TerminalHandoff)))
             || self.digest
                 != digest_payload(
                     &self.rows,
                     self.compaction_epoch.as_ref(),
-                    self.native_input.as_ref(),
+                    self.custody_plan(),
                 )?
         {
             return Err(MezError::invalid_state(
@@ -132,9 +154,9 @@ impl AppendReceipt {
             .iter()
             .map(|row| decode_transcript_entry(row))
             .collect::<Result<Vec<_>>>()?;
-        if let Some(native) = &self.native_input {
+        if let Some(native) = self.custody_plan() {
             native.validate_rows(&entries)?;
-            if self.generation != native.source().message_sequence {
+            if self.generation != native.source().message_sequence() {
                 return Err(MezError::invalid_state(
                     "native transcript receipt generation changed",
                 ));
@@ -161,8 +183,12 @@ impl AppendReceipt {
 
     /// Routes metadata-only ownership without relaxing numeric row identities.
     fn filename(&self) -> String {
-        if let Some(native) = &self.native_input {
-            return native_input::filename(&self.conversation_id, &native.source().occurrence());
+        if let Some(native) = self.custody_plan() {
+            return custody::filename(
+                &self.conversation_id,
+                native.source().kind(),
+                &native.source().occurrence(),
+            );
         }
         if self.version == PROJECTION_RECEIPT_VERSION && self.first_sequence == 0 {
             return format!(
@@ -174,6 +200,13 @@ impl AppendReceipt {
             "{}-{:020}-{:020}.json",
             self.conversation_id, self.first_sequence, self.generation
         )
+    }
+
+    /// Borrows physical data only after version/kind validation at admission.
+    fn custody_plan(&self) -> Option<&CustodyAppendPlan> {
+        self.native_input
+            .as_ref()
+            .or(self.terminal_handoff.as_ref())
     }
 }
 
@@ -195,14 +228,21 @@ fn digest_rows(rows: &[String]) -> String {
 fn digest_payload(
     rows: &[String],
     epoch: Option<&AgentCompactionEpoch>,
-    native: Option<&NativeInputAppendPlan>,
+    native: Option<&CustodyAppendPlan>,
 ) -> Result<String> {
     if let Some(native) = native {
         let metadata = serde_json::to_vec(native).map_err(|_| {
             MezError::invalid_state("native transcript receipt metadata encode failed")
         })?;
         let mut digest = Sha256::new();
-        digest.update(b"mezzanine-native-transcript-append-v3\0");
+        digest.update(match native.source().kind() {
+            CustodyReceiptKind::NativeInput => {
+                b"mezzanine-native-transcript-append-v3\0".as_slice()
+            }
+            CustodyReceiptKind::TerminalHandoff => {
+                b"mezzanine-terminal-transcript-append-v4\0".as_slice()
+            }
+        });
         digest.update(digest_rows(rows).as_bytes());
         digest.update((metadata.len() as u64).to_le_bytes());
         digest.update(metadata);
@@ -248,7 +288,15 @@ fn receipt_conversation_id(path: &Path) -> Result<Option<&str>> {
         name
     };
     let stem = name.strip_suffix(".json").ok_or_else(invalid)?;
-    if let Some((conversation, digest)) = stem.rsplit_once("-native-")
+    if let Some((conversation, digest)) =
+        ["-native-", "-handoff-"].into_iter().find_map(|separator| {
+            stem.rsplit_once(separator).filter(|(_, hash)| {
+                hash.len() == 64
+                    && hash
+                        .bytes()
+                        .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+            })
+        })
         && digest.len() == 64
         && digest
             .bytes()
@@ -336,8 +384,8 @@ impl AgentTranscriptStore {
                         "transcript receipt is not a regular file",
                     ));
                 }
-                let receipt: AppendReceipt = if native_input::is_native_filename(&path) {
-                    native_input::read_data(&path)?
+                let receipt: AppendReceipt = if custody::is_custody_filename(&path) {
+                    custody::read_data(&path)?
                 } else {
                     serde_json::from_slice(&fs::read(&path)?).map_err(|error| {
                         MezError::invalid_state(format!(
@@ -419,8 +467,8 @@ impl AgentTranscriptStore {
     /// owner must settle accepted rows, and no receipt is replayed or retired.
     pub(super) fn ensure_fork_receipts_settled(&self, source: &str, target: &str) -> Result<()> {
         let paths = self.append_receipt_paths()?;
-        if self.has_native_input_staging_paths(source, None, &paths)?
-            || self.has_native_input_staging_paths(target, None, &paths)?
+        if self.has_custody_staging_paths(source, None, &paths)?
+            || self.has_custody_staging_paths(target, None, &paths)?
         {
             return Err(MezError::conflict(
                 "saved fork requires native staging to settle",
@@ -447,7 +495,7 @@ impl AgentTranscriptStore {
         _lease: &fs::File,
     ) -> Result<bool> {
         let paths = self.append_receipt_paths()?;
-        if self.has_native_input_staging_paths(conversation_id, None, &paths)? {
+        if self.has_custody_staging_paths(conversation_id, None, &paths)? {
             return Ok(true);
         }
         Ok(self
@@ -464,16 +512,16 @@ impl AgentTranscriptStore {
     /// publish a later suffix before original-root c1 settlement. Only the
     /// native worker's private lease methods may complete that canonical owner.
     /// Every caller already holds the conversation's actual mutation lock.
-    pub(super) fn ensure_native_input_receipts_settled_locked(
+    pub(super) fn ensure_custody_receipts_settled_locked(
         &self,
         conversation_id: &str,
     ) -> Result<()> {
         let paths = self.append_receipt_paths()?;
-        if self.has_native_input_staging_paths(conversation_id, None, &paths)?
+        if self.has_custody_staging_paths(conversation_id, None, &paths)?
             || self
                 .read_locked_append_receipts_at(&[conversation_id], paths)?
                 .iter()
-                .any(|(_, receipt, _)| receipt.native_input.is_some())
+                .any(|(_, receipt, _)| receipt.custody_plan().is_some())
         {
             return Err(
                 MezError::conflict("canonical native input append remains unsettled")
@@ -503,7 +551,7 @@ impl AgentTranscriptStore {
     ) -> Result<bool> {
         let paths = self.append_receipt_paths()?;
         Ok(
-            self.has_native_input_staging_paths(conversation_id, None, &paths)?
+            self.has_custody_staging_paths(conversation_id, None, &paths)?
                 || !self
                     .read_locked_append_receipts_at(&[conversation_id], paths)?
                     .is_empty(),
@@ -512,23 +560,24 @@ impl AgentTranscriptStore {
 
     /// Allows an original native worker to own its exact canonical receipt
     /// under the same mutation lease; every other recovery owner still fences it.
-    pub(super) fn has_foreign_native_input_receipts_locked(
+    pub(super) fn has_foreign_custody_receipts_locked(
         &self,
         conversation: &str,
+        kind: CustodyReceiptKind,
         occurrence: &[u8; 32],
         _lease: &fs::File,
     ) -> Result<bool> {
         let paths = self.append_receipt_paths()?;
         Ok(
-            self.has_native_input_staging_paths(conversation, Some(occurrence), &paths)?
+            self.has_custody_staging_paths(conversation, Some((kind, occurrence)), &paths)?
                 || self
                     .read_locked_append_receipts_at(&[conversation], paths)?
                     .iter()
                     .any(|(_, receipt, _)| {
-                        receipt
-                            .native_input
-                            .as_ref()
-                            .is_none_or(|native| native.source().occurrence() != *occurrence)
+                        receipt.custody_plan().is_none_or(|native| {
+                            native.source().kind() != kind
+                                || native.source().occurrence() != *occurrence
+                        })
                     }),
         )
     }
@@ -556,7 +605,7 @@ impl AgentTranscriptStore {
         let entries = batch.entries();
         let receipt = AppendReceipt::from_batch(batch, generation)?;
         let _lock = self.acquire_conversation_lock(&receipt.conversation_id)?;
-        self.ensure_native_input_receipts_settled_locked(&receipt.conversation_id)?;
+        self.ensure_custody_receipts_settled_locked(&receipt.conversation_id)?;
         // Admission must not leave a replayable receipt for a sequence that
         // already belongs to different durable content. Check the complete
         // archive off-actor so an older batch cannot hide behind a long tail.
@@ -697,7 +746,7 @@ impl AgentTranscriptStore {
         let receipts = self
             .read_append_receipts()?
             .into_iter()
-            .filter(|(_, receipt, _)| receipt.native_input.is_none())
+            .filter(|(_, receipt, _)| receipt.custody_plan().is_none())
             .collect::<Vec<_>>();
         self.preflight_initial_projection_receipts(&receipts)?;
         // Reject mutually inconsistent retained claims before any append can
