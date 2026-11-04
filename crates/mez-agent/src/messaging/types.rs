@@ -709,6 +709,8 @@ pub struct MessageService {
     pub(super) admission: Option<super::service::PendingMessageAdmission>,
     /// Charged frozen ACK prefix; payload stays in the canonical pending owner.
     pub(super) acknowledgement: Option<super::service::PendingAcknowledgement>,
+    /// Exact source/slots awaiting a trusted durable expiry result.
+    pub(super) expiry: Option<super::service::PendingExpiry>,
 
     /// Nonserializable identity of this live owner. Retained acceptance proofs
     /// cannot authenticate against another service or snapshot restoration.

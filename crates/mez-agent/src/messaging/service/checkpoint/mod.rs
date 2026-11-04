@@ -185,6 +185,7 @@ impl MessageService {
         if self.storage_custody.is_none()
             || self.admission.is_some()
             || self.acknowledgement.is_some()
+            || self.expiry.is_some()
         {
             return Err(changed());
         }

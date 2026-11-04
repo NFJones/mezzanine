@@ -19,7 +19,9 @@ impl MessageService {
                 .ok_or_else(|| {
                     MessageError::invalid_state("MMP offered occurrence is no longer retained")
                 })?;
-            if !self.accepted_recipient(queued, &batch.cursor.recipient) {
+            if !self.accepted_recipient(queued, &batch.cursor.recipient)
+                || self.expiry_protects(queued.sequence, &batch.cursor.recipient)
+            {
                 return Err(MessageError::forbidden(
                     "MMP offer recipient interval changed",
                 ));
@@ -62,6 +64,7 @@ impl MessageService {
         let endpoint = self.queued_by_sequence.get(&sequence).ok_or_else(invalid)?;
         if !self.accepted_recipient(endpoint, recipient)
             || self.recipient_is_terminal(endpoint, recipient)
+            || self.expiry_protects(endpoint.sequence, recipient)
         {
             return Err(invalid());
         }
@@ -70,6 +73,11 @@ impl MessageService {
             std::ops::Bound::Excluded(after),
             std::ops::Bound::Included(sequence),
         )) {
+            if self.accepted_recipient(queued, recipient)
+                && self.expiry_protects(queued.sequence, recipient)
+            {
+                return Err(invalid());
+            }
             if self.accepted_recipient(queued, recipient)
                 && !self.recipient_is_terminal(queued, recipient)
                 && !expired(queued, observed_at_ms)

@@ -156,14 +156,30 @@ impl MmpCustodyStore {
                     }
                 }
             }
-            // Terminal/outcome journals are not implemented yet. Snapshot bits
-            // alone cannot justify discarding custody or restarting a TTL.
-            if row.terminal.iter().any(Option::is_some)
-                || (row.delivery.status == "expired"
-                    && history
-                        .expiries
-                        .binary_search_by_key(&row.sequence, |e| e.sequence)
-                        .is_err())
+            // Initial expiry observations require exact actual t1 slots. Owner
+            // retirement and consumed/horizon releases still need their own
+            // durable producers; snapshot bits never grant those transitions.
+            for (index, terminal) in row.terminal.iter().enumerate() {
+                if let Some(terminal) = terminal {
+                    let key = (row.sequence, index as u32);
+                    let found = history
+                        .terminal_expiries
+                        .binary_search_by_key(&key, |value| (value.sequence, value.binding_index));
+                    if terminal.reason != mez_agent::messaging::DeliveryTerminalReason::Expired
+                        || terminal.released
+                        || found.ok().is_none_or(|i| {
+                            history.terminal_expiries[i].observed_at_ms != terminal.observed_at_ms
+                        })
+                    {
+                        return Err(invalid("terminal outcome needs durable recovery evidence"));
+                    }
+                }
+            }
+            if row.delivery.status == "expired"
+                && history
+                    .expiries
+                    .binary_search_by_key(&row.sequence, |e| e.sequence)
+                    .is_err()
             {
                 return Err(invalid("terminal outcome needs durable recovery evidence"));
             }

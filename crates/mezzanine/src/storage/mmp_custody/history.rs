@@ -41,6 +41,14 @@ pub(crate) struct FoldedExpiry {
     pub observed_at_ms: u64,
 }
 
+/// One original per-recipient first expiry observation, never an ACK or release.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct FoldedTerminalExpiry {
+    pub sequence: u64,
+    pub binding_index: u32,
+    pub observed_at_ms: u64,
+}
+
 /// Complete descriptive store inventory and order-independent ACK fold.
 pub(crate) struct CustodyHistory {
     /// Original checked allocation and compact source/ACK/abort references.
@@ -49,6 +57,8 @@ pub(crate) struct CustodyHistory {
     pub acknowledgements: Vec<FoldedAcknowledgement>,
     /// Sorted occurrence-wide maximum exclusion clocks.
     pub expiries: Vec<FoldedExpiry>,
+    /// Sorted exact terminal slots retaining their original first observations.
+    pub terminal_expiries: Vec<FoldedTerminalExpiry>,
     /// One above the highest *surviving* occurrence or abort, if representable.
     /// This is not a durable watermark and must never itself seed an allocator.
     pub observed_next_sequence: Option<u64>,
@@ -120,6 +130,55 @@ impl MmpCustodyStore {
                 }
             }
         }
+        let mut terminals = HashMap::new();
+        let mut terminal_source_clocks = HashMap::new();
+        for key in &inventory.expiry_keys {
+            let frame = self.read_stored_expiry_in_snapshot(transaction, key, limits)?;
+            if let Some(prior) = terminal_source_clocks.get(&frame.sequence) {
+                if *prior != frame.observed_at_ms {
+                    return Err(MezError::invalid_state(
+                        "MMP terminal expiry has conflicting first observations",
+                    ));
+                }
+            } else {
+                charge(&mut metadata, FOLDED_ENTRY_CHARGE)?;
+                terminal_source_clocks
+                    .try_reserve(1)
+                    .map_err(|_| capacity())?;
+                terminal_source_clocks.insert(frame.sequence, frame.observed_at_ms);
+            }
+            for index in frame.binding_indices {
+                let slot = (frame.sequence, index);
+                if terminals.contains_key(&slot) || acknowledgements.contains_key(&slot) {
+                    return Err(MezError::invalid_state(
+                        "MMP terminal expiry conflicts with original slot history",
+                    ));
+                }
+                charge(&mut metadata, FOLDED_ENTRY_CHARGE)?;
+                terminals.try_reserve(1).map_err(|_| capacity())?;
+                terminals.insert(slot, frame.observed_at_ms);
+            }
+            if let Some(prior) = expiries.get_mut(&frame.sequence) {
+                *prior = (*prior).max(frame.observed_at_ms);
+            } else {
+                charge(&mut metadata, FOLDED_ENTRY_CHARGE)?;
+                expiries.try_reserve(1).map_err(|_| capacity())?;
+                expiries.insert(frame.sequence, frame.observed_at_ms);
+            }
+        }
+        drop(terminal_source_clocks);
+        let mut terminal_expiries = Vec::new();
+        terminal_expiries
+            .try_reserve_exact(terminals.len())
+            .map_err(|_| capacity())?;
+        terminal_expiries.extend(terminals.into_iter().map(
+            |((sequence, binding_index), observed_at_ms)| FoldedTerminalExpiry {
+                sequence,
+                binding_index,
+                observed_at_ms,
+            },
+        ));
+        terminal_expiries.sort_unstable();
         let mut folded_acknowledgements = Vec::new();
         folded_acknowledgements
             .try_reserve_exact(acknowledgements.len())
@@ -147,6 +206,7 @@ impl MmpCustodyStore {
             inventory,
             acknowledgements: folded_acknowledgements,
             expiries: folded_expiries,
+            terminal_expiries,
             observed_next_sequence: highest.checked_add(1),
             retained_metadata: metadata,
         })

@@ -54,9 +54,15 @@ impl MessageAcceptanceSource {
         digest: [u8; 32],
         offered_at_ms: Vec<Option<u64>>,
         acknowledged: Vec<bool>,
+        terminal: Vec<Option<super::super::MessageDeliveryTerminalSnapshot>>,
         expiry_observed_at_ms: Option<u64>,
     ) -> Result<QueuedEnvelope> {
         let count = self.recipient_bindings.len();
+        if offered_at_ms.len() != count || acknowledged.len() != count || terminal.len() != count {
+            return Err(MessageError::invalid_state(
+                "MMP cold recipient slot framing unavailable",
+            ));
+        }
         let audience = audience_from_snapshot(Some(&self.audience))?;
         let recipient_bindings = self
             .recipient_bindings
@@ -78,7 +84,7 @@ impl MessageAcceptanceSource {
             sender_registered_after_sequence: Some(self.sender_registered_after_sequence),
             offered_at_ms: std::sync::Mutex::new(offered_at_ms),
             acknowledged: std::sync::Mutex::new(acknowledged),
-            terminal: std::sync::Mutex::new(vec![None; count]),
+            terminal: std::sync::Mutex::new(terminal),
             native_input_protection: super::super::native_input::protection_slots(count),
             ack_expiry_observed_at_ms: std::sync::Mutex::new(expiry_observed_at_ms),
         })

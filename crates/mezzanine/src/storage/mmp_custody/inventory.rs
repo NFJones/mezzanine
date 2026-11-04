@@ -44,6 +44,8 @@ pub(crate) struct CustodyInventory {
     pub occurrences: Vec<StoredOccurrenceRef>,
     /// Content-addressed ACK keys verified against their exact sources.
     pub acknowledgement_keys: Vec<String>,
+    /// Source-bound strict-expiry records, never restored owner capabilities.
+    pub expiry_keys: Vec<String>,
     /// Verified native registration observations, never live endpoint authority.
     pub native_continuity_keys: Vec<String>,
     /// Fully cleaned abort sequences, never accepted messages.
@@ -111,6 +113,7 @@ enum Key<'a> {
     Stage(u64),
     Commit(u64),
     Acknowledgement(&'a str),
+    Expiry(&'a str),
     NativeContinuity(&'a str),
     NativeInput(&'a str),
 }
@@ -232,6 +235,7 @@ impl MmpCustodyStore {
             watermark_origin_trusted: state.watermark_origin_trusted,
             occurrences: Vec::new(),
             acknowledgement_keys: Vec::new(),
+            expiry_keys: Vec::new(),
             native_continuity_keys: Vec::new(),
             aborted_sequences: Vec::new(),
             retained_metadata: 0,
@@ -253,6 +257,25 @@ impl MmpCustodyStore {
                 let key: Option<String> = row.get(0).map_err(database_error)?;
                 let key = key.ok_or_else(|| invalid("row key exceeds policy"))?;
                 match parse_key(&key)? {
+                    Key::Expiry(key) => {
+                        if let Some(previous) = group.take() {
+                            self.finish_inventory_group(
+                                transaction,
+                                previous,
+                                limits,
+                                &mut metadata,
+                                &mut inventory,
+                                pending,
+                            )?;
+                        }
+                        self.read_stored_expiry_in_snapshot(transaction, key, limits)?;
+                        charge(&mut metadata, ACK_CHARGE)?;
+                        inventory
+                            .expiry_keys
+                            .try_reserve(1)
+                            .map_err(|_| invalid("expiry inventory capacity"))?;
+                        inventory.expiry_keys.push(key.to_owned());
+                    }
                     Key::NativeInput(key) => {
                         if let Some(previous) = group.take() {
                             self.finish_inventory_group(
@@ -329,6 +352,7 @@ impl MmpCustodyStore {
                             | Key::Stage(sequence)
                             | Key::Commit(sequence) => sequence,
                             Key::Acknowledgement(_)
+                            | Key::Expiry(_)
                             | Key::NativeContinuity(_)
                             | Key::NativeInput(_) => {
                                 return Err(invalid("unexpected acknowledgment key"));
@@ -508,6 +532,14 @@ fn parse_key(key: &str) -> Result<Key<'_>> {
                 Ok(Key::Chunk(sequence, index))
             }
         };
+    }
+    if let Some(digest) = key.strip_prefix("t1:")
+        && digest.len() == 64
+        && digest
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Ok(Key::Expiry(key));
     }
     if let Some(digest) = key.strip_prefix("k1:")
         && digest.len() == 64

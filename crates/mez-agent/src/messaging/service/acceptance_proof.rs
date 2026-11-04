@@ -314,6 +314,7 @@ impl MessageService {
                 row.envelope.message_type == "send"
                     && !expired(row, now_ms)
                     && !self.recipient_is_terminal(row, &request.sender.0)
+                    && !self.expiry_protects(row.sequence, &request.sender.0)
                     && self.reply_acceptance_fields_match(
                         request,
                         recipient,

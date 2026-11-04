@@ -16149,6 +16149,40 @@ work. Saved positive bits MUST qualify against the original ACK journal and
 source history. Missing original ACK evidence MUST withhold factory publication
 while retaining the accepted originals and canonical input.
 
+The internal expiry storage boundary MUST freeze one accepted source and at
+most 64 original recipient slots before issuance. Reservation alone MUST NOT
+publish a terminal outcome, advance a cursor or release custody. It MUST skip
+actual ACK/native protections, retain the first strict TTL observation through
+uncertain writes and preserve original source metadata through the final proof
+owner. A selected source MUST withhold fresh receive through wall-clock rollback;
+an already offered, unselected recipient MAY still complete its genuine ACK.
+Later bounded batches MUST preserve the source's first known expiry observation.
+
+The concrete original-store expiry port MUST hold the actual kernel owner and
+write a bodyless `t1:<digest>` journal in one immediate SQLite transaction. Its
+at most 340 bytes MUST bind the actual allocation, complete accepted-source
+fingerprint, original sequence, first observation and sorted unique slot indices.
+Full original source/TTL validation and absence of conflicting exact positive
+ACK, `p1` or `c1` facts MUST precede commit. Every non-target row MUST survive SQL
+effects unchanged. A lost reply MUST reconcile the same original bytes and first
+position, never choose a replacement plan. Decoder payload and structural
+metadata MUST be reserved before issuance; these operation limits alone MUST
+NOT establish whole admitted-state resource liveness.
+
+Inventory and cold reconstruction MUST qualify these journals against original
+source, ACK and native history in the same read snapshot. Actual committed
+expiry observations MUST survive a missing adoption or stale checkpoint with
+their original times and unreleased sender outcomes. Saved terminal/release bits
+alone MUST NOT create that evidence. Exact terminal slots MUST refuse competing
+positive ACK/native input while independent fanout slots remain settleable.
+The new journal boundary does not yet supply an actor maintenance producer,
+validated retirement, durable sender consumption/horizon, rollback-safe elapsed
+clock basis or reclaim. Guarded volatile cleanup and outcome consumption MUST
+remain withheld. Startup native probes MUST settle persistent canonical staging
+and preparation before a future producer can select expired slots. Normal
+activation MUST remain unavailable until the complete lifecycle and resource
+and ingress gates are qualified.
+
 Native qualification MUST read the actual existing private active-session
 checkpoint for the same session and hydrate its transcripts while preserving
 that checkpoint unchanged. Matching original epoch, CID, pane, window, project

@@ -40,6 +40,7 @@ impl MessageStorageRecoveryStore for Store {
                     source_sha256: [sequence as u8; 32],
                     expired_receipt: false,
                     expiry_observed_at_ms: None,
+                    terminal_expiries: Vec::new(),
                 },
                 self.acknowledgements_override.clone().unwrap_or_else(|| {
                     (self.acknowledge_first && i == 0)

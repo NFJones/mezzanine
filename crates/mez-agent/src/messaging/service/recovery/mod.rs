@@ -25,6 +25,9 @@ pub struct MessageStorageRecoveredRecord {
     pub expired_receipt: bool,
     /// Original durable expiry exclusion clock, without restarting the TTL.
     pub expiry_observed_at_ms: Option<u64>,
+    /// Exact stored recipient indices and first expiry observations. These are
+    /// unreleased sender outcomes, never ACKs, cursors or native authority.
+    pub terminal_expiries: Vec<(u32, u64)>,
 }
 
 /// Trusted product recovery boundary; never implemented by a generic decoder.
@@ -255,12 +258,31 @@ impl MessageStorageRecovery {
         if record.expired_receipt && record.expiry_observed_at_ms.is_none() {
             return Err(unavailable());
         }
+        let mut terminal = vec![None; count];
+        for (slot, observed_at_ms) in &record.terminal_expiries {
+            let slot = *slot as usize;
+            if slot >= count
+                || acknowledged[slot]
+                || terminal[slot].is_some()
+                || source.envelope().ttl_ms.is_none_or(|ttl| {
+                    source.accepted_at_ms().saturating_add(ttl) >= *observed_at_ms
+                })
+            {
+                return Err(unavailable());
+            }
+            terminal[slot] = Some(MessageDeliveryTerminalSnapshot {
+                reason: DeliveryTerminalReason::Expired,
+                observed_at_ms: *observed_at_ms,
+                released: false,
+            });
+        }
         let pending = acknowledged.iter().any(|ack| !*ack);
         let row = Arc::new(source.into_cold_occurrence(
             &policy.scope,
             record.source_sha256,
             offered,
             acknowledged,
+            terminal,
             record.expiry_observed_at_ms,
         )?);
         let additional = self.reserve_row(&row, pending)?;

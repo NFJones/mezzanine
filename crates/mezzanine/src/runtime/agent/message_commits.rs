@@ -204,7 +204,10 @@ impl RuntimeSessionService {
         }
         self.ensure_no_prepared_tracked_message_for_restore()?;
         let messages = self.control.message_service();
-        if messages.has_unpublished_acceptance() || messages.has_unpublished_acknowledgement() {
+        if messages.has_unpublished_acceptance()
+            || messages.has_unpublished_acknowledgement()
+            || messages.has_unpublished_expiry()
+        {
             Err(MezError::conflict(
                 "original MMP storage work must settle before restore",
             ))

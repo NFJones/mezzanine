@@ -227,6 +227,15 @@ impl<'a> Port<'a> {
                         source_sha256: occurrence.digest,
                         expired_receipt: saved.is_some_and(|row| row.delivery.status == "expired"),
                         expiry_observed_at_ms,
+                        terminal_expiries: {
+                            let values = &evidence.history.terminal_expiries;
+                            let start = values.partition_point(|value| value.sequence < sequence);
+                            let end = values.partition_point(|value| value.sequence <= sequence);
+                            values[start..end]
+                                .iter()
+                                .map(|value| (value.binding_index, value.observed_at_ms))
+                                .collect()
+                        },
                     },
                     acks[start..end]
                         .iter()

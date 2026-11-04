@@ -324,6 +324,15 @@ impl MessageService {
         outcome: &MessageDeliveryOutcome,
     ) -> Result<bool> {
         self.require_outcome_sender(sender)?;
+        if self
+            .storage_custody
+            .as_ref()
+            .is_some_and(|p| p.native_continuity_required)
+        {
+            return Err(MessageError::invalid_state(
+                "MMP durable terminal handoff requires original storage settlement",
+            ));
+        }
         let queued = self
             .queued_by_sequence
             .get(&outcome.sequence)

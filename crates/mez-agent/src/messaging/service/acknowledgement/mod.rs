@@ -686,6 +686,9 @@ impl MessageService {
         sequence: MessageSequence,
         recipient: &AgentId,
     ) -> bool {
+        if self.expiry_protects(sequence, recipient) {
+            return true;
+        }
         if self
             .pending
             .get(&sequence)
@@ -705,16 +708,18 @@ impl MessageService {
                 })
         })
     }
-    /// Prevents clock rollback from selecting a captured expired prefix anew.
+    /// Prevents new selection after a reserved or durable strict expiry
+    /// observation. Existing exact pre-expiry offers keep their ACK authority.
     pub(super) fn acknowledgement_excludes(&self, sequence: MessageSequence) -> bool {
-        self.acknowledgement.as_ref().is_some_and(|pending| {
-            pending
-                .identity
-                .entries
-                .binary_search_by_key(&sequence, |entry| entry.sequence)
-                .ok()
-                .is_some_and(|index| !pending.identity.entries[index].acknowledged)
-        })
+        self.expiry_excludes(sequence)
+            || self.acknowledgement.as_ref().is_some_and(|pending| {
+                pending
+                    .identity
+                    .entries
+                    .binary_search_by_key(&sequence, |entry| entry.sequence)
+                    .ok()
+                    .is_some_and(|index| !pending.identity.entries[index].acknowledged)
+            })
     }
     /// Replaces only a previously validated current nonce, preserving original data.
     fn replace_acknowledgement_attempt(

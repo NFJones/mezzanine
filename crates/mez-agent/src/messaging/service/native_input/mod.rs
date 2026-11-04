@@ -174,6 +174,7 @@ impl MessageService {
         for row in self.pending.values() {
             for index in 0..row.recipient_bindings.len() {
                 if after.is_some_and(|cursor| (row.sequence, index) <= cursor)
+                    || self.expiry_protects(row.sequence, &row.recipient_bindings[index].0)
                     || row
                         .native_bindings
                         .as_ref()
@@ -222,6 +223,8 @@ impl MessageService {
     /// reviving a registration, renewing TTL or manufacturing a genuine offer.
     pub fn native_input_can_receive(&self, source: &MessageNativeInputAnchor, now_ms: u64) -> bool {
         self.native_input_anchor_is_original(source)
+            && !self.expiry_protects(source.sequence(), source.recipient())
+            && !self.acknowledgement_excludes(source.sequence())
             && source
                 .0
                 .row
@@ -343,6 +346,9 @@ impl MessageService {
                 .get(index)
                 .is_none_or(Option::is_some)
         {
+            return Err(unavailable());
+        }
+        if self.expiry_protects(row.sequence, recipient) {
             return Err(unavailable());
         }
         let digest = row.envelope.storage_digest(&policy.scope)?;

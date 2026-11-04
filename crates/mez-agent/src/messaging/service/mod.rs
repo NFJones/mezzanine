@@ -41,6 +41,13 @@ use super::validation::{
     validate_sender_identity,
 };
 
+mod expiry;
+pub(super) use expiry::PendingExpiry;
+pub use expiry::{
+    MESSAGE_EXPIRY_SLOT_LIMIT, MessageExpiryAttempt, MessageExpiryCommit, MessageExpiryJoin,
+    MessageExpiryStore, MessageExpiryTicket, MessageExpiryUncertain, MessageExpiryWrite,
+    MessageExpiryWriteOutcome,
+};
 mod acknowledgement;
 pub(super) use acknowledgement::PendingAcknowledgement;
 pub use acknowledgement::{
@@ -158,6 +165,7 @@ impl MessageService {
         Self {
             admission: None,
             acknowledgement: None,
+            expiry: None,
             acceptance_runtime: Arc::new(()),
             registration_tokens: HashMap::new(),
             native_bindings: HashMap::new(),
@@ -504,6 +512,7 @@ impl MessageService {
                 self.registered.get(recipient).is_some_and(|identity| {
                     self.recipient_is_available(&identity.agent_id)
                         && !self.recipient_is_terminal(queued, recipient)
+                        && !self.expiry_protects(queued.sequence, recipient)
                         && self.accepted_recipient(queued, recipient)
                         && recipient_matches(identity, &queued.envelope.recipient)
                         && audience_matches(identity, &queued.audience)

@@ -28,6 +28,11 @@ impl MessageService {
     /// Returns `InvalidState` when any retained payload is unavailable; no
     /// partial snapshot or substitute empty payload escapes on failure.
     pub fn snapshot_state(&self) -> Result<MessageServiceSnapshot> {
+        if self.has_unpublished_expiry() {
+            return Err(MessageError::invalid_state(
+                "MMP original expiry must settle before snapshot",
+            ));
+        }
         if self
             .queued_by_sequence
             .values()
@@ -379,6 +384,7 @@ impl MessageService {
         let mut service = Self {
             admission: None,
             acknowledgement: None,
+            expiry: None,
             ids,
             registered,
             registration_floors: if snapshot.schema_version >= 5 {

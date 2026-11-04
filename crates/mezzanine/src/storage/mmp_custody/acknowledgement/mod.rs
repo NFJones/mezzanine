@@ -239,6 +239,13 @@ impl PlannedAcknowledgementStore<'_> {
                     "MMP ACK original source content changed",
                 ));
             }
+            if entry.acknowledged {
+                self.store.ensure_slot_not_expired_in_snapshot(
+                    &transaction,
+                    entry.sequence,
+                    entry.binding_index,
+                )?;
+            }
             previous = entry.sequence;
         }
         if previous != record.endpoint_sequence() {

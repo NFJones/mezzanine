@@ -185,6 +185,7 @@ impl MessageService {
             if !expired(queued, now_ms)
                 && !self.acknowledgement_excludes(queued.sequence)
                 && !self.recipient_is_terminal(queued, &identity.agent_id)
+                && !self.expiry_protects(queued.sequence, &identity.agent_id)
                 && !filter.native_commits.is_some_and(|excluded| {
                     excluded.contains(&(identity.agent_id.clone(), queued.sequence))
                 })

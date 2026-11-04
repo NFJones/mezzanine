@@ -221,6 +221,11 @@ impl NativeInputPort<'_> {
         {
             return Err(invalid());
         }
+        self.store.ensure_slot_not_expired_in_snapshot(
+            &transaction,
+            anchor.sequence(),
+            anchor.binding_index() as u32,
+        )?;
         let committed = self
             .store
             .read_native_input_metadata_in_snapshot(&transaction, &committed_key)?;
@@ -552,15 +557,24 @@ fn validate_anchor(
 }
 /// Stable key derives solely from original source identity and frozen slot.
 fn occurrence(anchor: &MessageNativeInputAnchor, store_id: [u8; 16]) -> [u8; 32] {
+    source_occurrence(
+        store_id,
+        anchor.source_sha256(),
+        anchor.binding_index() as u32,
+    )
+}
+/// Derives descriptive journal routing from the actual allocation/source/slot.
+/// These deterministic bytes confer no native input or ACK authority.
+pub(super) fn source_occurrence(store_id: [u8; 16], source: [u8; 32], index: u32) -> [u8; 32] {
     let mut hash = Sha256::new();
     hash.update(b"mez-native-canonical-input-v1\0");
     hash.update(store_id);
-    hash.update(anchor.source_sha256());
-    hash.update((anchor.binding_index() as u32).to_le_bytes());
+    hash.update(source);
+    hash.update(index.to_le_bytes());
     hash.finalize().into()
 }
 /// Key text is a fixed lowercase digest, never a path or native capability.
-fn record_key(prefix: &str, occurrence: &[u8; 32]) -> String {
+pub(super) fn record_key(prefix: &str, occurrence: &[u8; 32]) -> String {
     use std::fmt::Write;
     let mut key = String::with_capacity(67);
     key.push_str(prefix);

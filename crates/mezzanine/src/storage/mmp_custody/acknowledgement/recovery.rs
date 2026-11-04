@@ -172,6 +172,9 @@ impl MmpCustodyStore {
             }) {
                 return Err(invalid("offer occurred after expiry"));
             }
+            if acknowledged {
+                self.ensure_slot_not_expired_in_snapshot(transaction, sequence, binding_index)?;
+            }
             previous = sequence;
             decisions.push(StoredAcknowledgementDecision {
                 sequence,
