@@ -29,6 +29,7 @@ use crate::storage::transcript::{
 const MAX_JOURNAL_BYTES: usize = 32 * 1024;
 
 mod projection;
+mod retirement;
 pub(crate) use projection::NativeInputProjection;
 
 /// Descriptive source and original physical append receipt.
@@ -95,6 +96,8 @@ impl NativeInputAttempt {
 pub(crate) struct NativeInputPort<'a> {
     store: &'a mut MmpCustodyStore,
     attempt: &'a NativeInputAttempt,
+    /// This actual port invocation established canonical absence for that input.
+    absent_for: Option<MessageNativeInputAnchor>,
 }
 impl MmpCustodyStore {
     /// Observes actual decoder work in root tests; native lookup must qualify
@@ -113,6 +116,7 @@ impl MmpCustodyStore {
         NativeInputPort {
             store: self,
             attempt,
+            absent_for: None,
         }
     }
 
@@ -185,9 +189,28 @@ impl MessageNativeInputStore for NativeInputPort<'_> {
         &mut self,
         anchor: &MessageNativeInputAnchor,
     ) -> mez_agent::messaging::Result<Option<MessageNativeInputRecord>> {
-        self.execute(anchor).map_err(|error| {
+        self.absent_for = None;
+        let result = self.execute(anchor).map_err(|error| {
             mez_agent::messaging::MessageError::invalid_state(format!(
                 "MMP canonical native input: {error}"
+            ))
+        })?;
+        if result.is_none() {
+            self.absent_for = Some(anchor.clone());
+        }
+        Ok(result)
+    }
+
+    /// End data is available only after this exact original canonical lookup
+    /// established absence. A direct or foreign call cannot skip that boundary.
+    fn retired_owner(
+        &mut self,
+        anchor: &MessageNativeInputAnchor,
+    ) -> mez_agent::messaging::Result<Option<mez_agent::messaging::MessageNativeRetirementRecord>>
+    {
+        self.observe_retired_owner(anchor).map_err(|error| {
+            mez_agent::messaging::MessageError::invalid_state(format!(
+                "MMP native retirement lookup: {error}"
             ))
         })
     }
@@ -221,7 +244,7 @@ impl NativeInputPort<'_> {
         {
             return Err(invalid());
         }
-        self.store.ensure_slot_not_expired_in_snapshot(
+        self.store.ensure_slot_not_terminal_in_snapshot(
             &transaction,
             anchor.sequence(),
             anchor.binding_index() as u32,

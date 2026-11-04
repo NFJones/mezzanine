@@ -8,7 +8,7 @@
 
 use std::task::Context;
 
-use mez_agent::messaging::{MessageNativeInputAnchor, MessageNativeInputCommit};
+use mez_agent::messaging::{MessageNativeInputAnchor, MessageNativeInputObservation};
 
 use super::*;
 use crate::storage::mmp_custody::native_input::{NativeInputAttempt, NativeInputProjection};
@@ -24,7 +24,7 @@ pub(super) struct Admission {
 /// Joined real canonical result and the updated serialized root connection.
 pub(super) struct Written {
     opened: Opened,
-    committed: Option<MessageNativeInputCommit>,
+    observation: MessageNativeInputObservation,
 }
 
 impl MmpCustodyRoot {
@@ -91,7 +91,7 @@ impl MmpCustodyRoot {
     pub fn adopt_native_input(
         &self,
         service: &MessageService,
-    ) -> Result<Option<MessageNativeInputCommit>> {
+    ) -> Result<MessageNativeInputObservation> {
         let mut state = self.0.state.lock().map_err(|_| ownership_error())?;
         let State::WrittenNativeInput {
             admission,
@@ -112,9 +112,12 @@ impl MmpCustodyRoot {
         else {
             return Err(ownership_error());
         };
-        let Written { opened, committed } = *written;
+        let Written {
+            opened,
+            observation,
+        } = *written;
         *state = State::Idle(opened);
-        Ok(committed)
+        Ok(observation)
     }
 
     /// Executes actual original I/O while every first-plan cell remains owned
@@ -160,10 +163,10 @@ impl MmpCustodyRoot {
             if let Some(probe) = &probe {
                 probe.before_write();
             }
-            let committed = {
+            let observation = {
                 let mut owned = fence.bind_store(&mut store)?;
                 let result = source
-                    .verify(&mut owned.store_mut().native_input_port(&input))
+                    .observe(&mut owned.store_mut().native_input_port(&input))
                     .map_err(lower_error)?;
                 owned.revalidate()?;
                 result
@@ -178,7 +181,7 @@ impl MmpCustodyRoot {
             let anchor = store.acceptance_plan(0)?;
             Ok(Written {
                 opened: Opened { store, anchor },
-                committed,
+                observation,
             })
         })
     }

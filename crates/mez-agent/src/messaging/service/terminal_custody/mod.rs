@@ -19,6 +19,7 @@ use super::*;
 mod consumption;
 mod horizon;
 mod ownership;
+mod retirement;
 mod selection;
 
 /// Maximum slots in one source-bound terminal operation.
@@ -33,6 +34,8 @@ const MAX_METADATA: usize = 8 * 1024 * 1024;
 pub enum MessageTerminalKind {
     /// Publish the first strict original TTL observation into unsettled slots.
     ExpiryObservation,
+    /// Publish one exact ended-native-recipient observation after canonical absence.
+    RecipientRetirement,
     /// Release actual terminal outcomes after their finite handoff horizon.
     HorizonRelease,
     /// Consume one original outcome only after actual canonical sender handoff.
@@ -50,6 +53,7 @@ struct Identity {
     indices: Vec<u32>,
     before: Vec<Option<MessageDeliveryTerminalSnapshot>>,
     handoff: Option<MessageTerminalHandoffCommit>,
+    retirement: Option<MessageNativeRetirementWitness>,
     metadata_bytes: usize,
     decode_payload_bytes: usize,
     published: AtomicBool,
@@ -66,7 +70,7 @@ impl std::fmt::Debug for Identity {
     }
 }
 
-/// The existing canonical service retains every unpublished expiry operation.
+/// The existing canonical service retains every unpublished terminal operation.
 #[derive(Debug)]
 pub(in crate::messaging) struct PendingTerminal {
     identity: Arc<Identity>,
@@ -186,6 +190,10 @@ impl MessageTerminalWrite {
     pub fn canonical_handoff(&self) -> Option<&MessageTerminalHandoffCommit> {
         self.identity.handoff.as_ref()
     }
+    /// Borrows actual canonical-absence/end qualification only for retirement.
+    pub fn retired_recipient(&self) -> Option<&MessageNativeRetirementWitness> {
+        self.identity.retirement.as_ref()
+    }
     /// Borrows original terminal before-images for horizon release. Observation
     /// writes have none; descriptive entries alone cannot grant release rights.
     pub fn terminal_entries(
@@ -202,7 +210,7 @@ impl MessageTerminalWrite {
     pub fn sequence(&self) -> MessageSequence {
         self.identity.source.sequence
     }
-    /// Returns the original operation clock: first expiry or frozen release.
+    /// Returns the original operation clock: first terminal observation or frozen release.
     /// Retry never observes a newer clock or changes selected before-images.
     pub fn observed_at_ms(&self) -> u64 {
         self.identity.observed_at_ms
@@ -245,15 +253,17 @@ impl MessageTerminalWrite {
         HEADER_BYTES
             + match self.kind() {
                 MessageTerminalKind::ExpiryObservation => 4,
+                MessageTerminalKind::RecipientRetirement => 84,
                 MessageTerminalKind::HorizonRelease => 13,
                 MessageTerminalKind::SenderConsumption => 0,
             } * self.identity.indices.len()
     }
-    /// Writes bodyless version1 expiry or horizon data. The bytes are descriptive and
+    /// Writes bodyless version1 terminal data. These bytes are descriptive and
     /// cannot construct a source, positive result, sender receipt or live owner.
     pub fn write_record(&self, writer: &mut impl Write) -> io::Result<()> {
         writer.write_all(match self.kind() {
             MessageTerminalKind::ExpiryObservation => b"MMPEXP01",
+            MessageTerminalKind::RecipientRetirement => b"MMPRET01",
             MessageTerminalKind::HorizonRelease => b"MMPREL01",
             MessageTerminalKind::SenderConsumption => return self.write_consumption_record(writer),
         })?;
@@ -263,6 +273,15 @@ impl MessageTerminalWrite {
         writer.write_all(&self.identity.digest)?;
         for (slot, index) in self.identity.indices.iter().enumerate() {
             writer.write_all(&index.to_le_bytes())?;
+            if self.kind() == MessageTerminalKind::RecipientRetirement {
+                let record = self
+                    .retired_recipient()
+                    .ok_or_else(|| io::Error::other("MMP original retirement witness missing"))?
+                    .record();
+                writer.write_all(&record.end.registration_namespace)?;
+                writer.write_all(&record.lifetime_sha256)?;
+                writer.write_all(&record.end_sha256)?;
+            }
             if self.kind() == MessageTerminalKind::HorizonRelease {
                 let before = self
                     .identity

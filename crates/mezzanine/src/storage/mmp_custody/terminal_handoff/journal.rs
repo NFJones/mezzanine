@@ -220,27 +220,20 @@ impl MmpCustodyStore {
         limits: MessageAcceptanceDecodeLimits,
     ) -> Result<()> {
         if source.store_id.as_slice() != self.store_id
-            || source.reason != DeliveryTerminalReason::Expired
             || self.validate_accepted_occurrence_in_snapshot(transaction, source.sequence)?
                 != source.source_sha256
         {
             return Err(invalid());
         }
-        let mut found = None;
-        self.visit_expiry_metadata(transaction, |key, frame| {
-            if frame.sequence == source.sequence && frame.binding_indices.contains(&source.index) {
-                if found.is_some()
-                    || frame.source_sha256 != source.source_sha256
-                    || frame.observed_at_ms != source.observed_at_ms
-                {
-                    return Err(invalid());
-                }
-                found = Some(key.to_owned());
-            }
-            Ok(())
-        })?;
-        let key = found.ok_or_else(invalid)?;
-        self.read_stored_expiry_in_snapshot(transaction, &key, limits)?;
+        let actual = self
+            .stored_terminal_in_snapshot(transaction, source.sequence, source.index, limits)?
+            .ok_or_else(invalid)?;
+        if actual.source_sha256 != source.source_sha256
+            || actual.terminal.reason != source.reason
+            || actual.terminal.observed_at_ms != source.observed_at_ms
+        {
+            return Err(invalid());
+        }
         Ok(())
     }
 
@@ -257,7 +250,7 @@ impl MmpCustodyStore {
                 && release
                     .entries
                     .iter()
-                    .any(|(index, _)| *index == source.index)
+                    .any(|(index, _, _)| *index == source.index)
             {
                 return Err(invalid());
             }

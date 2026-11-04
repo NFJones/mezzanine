@@ -123,8 +123,9 @@ pub use native_continuity::{
     MessageNativeContinuityVerified, MessageNativeContinuityWrite,
 };
 pub use native_input::{
-    MessageNativeInputAnchor, MessageNativeInputCommit, MessageNativeInputRecord,
-    MessageNativeInputStore,
+    MessageNativeInputAnchor, MessageNativeInputCommit, MessageNativeInputObservation,
+    MessageNativeInputRecord, MessageNativeInputStore, MessageNativeRetirementRecord,
+    MessageNativeRetirementWitness,
 };
 pub use native_recovery::{
     MessageNativeRecovery, MessageNativeRecoveryRecord, MessageNativeRecoveryStore,
@@ -524,7 +525,7 @@ impl MessageService {
                 self.registered.get(recipient).is_some_and(|identity| {
                     self.recipient_is_available(&identity.agent_id)
                         && !self.recipient_is_terminal(queued, recipient)
-                        && !self.expiry_protects(queued.sequence, recipient)
+                        && !self.terminal_protects(queued.sequence, recipient)
                         && self.accepted_recipient(queued, recipient)
                         && recipient_matches(identity, &queued.envelope.recipient)
                         && audience_matches(identity, &queued.audience)

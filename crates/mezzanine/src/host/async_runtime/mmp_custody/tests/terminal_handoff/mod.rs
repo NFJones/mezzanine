@@ -1,6 +1,6 @@
 //! Actual original source/terminal capabilities with shared physical receipt
-//! recovery. This is not the future canonical handoff root worker or consume
-//! journal; writing a typed archive row alone must leave the outcome pending.
+//! recovery and real canonical handoff/consume workers. Writing a typed archive
+//! row alone must leave the outcome pending.
 
 use super::*;
 use crate::storage::transcript::{AgentTranscriptStore, CustodyReceiptPublicationFault};
@@ -16,7 +16,7 @@ mod consumption;
 mod crash;
 mod failures;
 
-/// Real source/expiry/root setup shared by canonical and failure test owners.
+/// Real source/terminal/root setup shared by canonical and failure test owners.
 /// Application projection is descriptive until the actual root journals it.
 struct Scene {
     root: MmpCustodyRoot,
@@ -29,6 +29,14 @@ struct Scene {
 }
 impl Scene {
     async fn new(fixture: &Fixture, probe: Arc<Probe>) -> Self {
+        Self::build(fixture, probe, false).await
+    }
+    /// Uses a real ended native recipient and d1 instead of a TTL observation.
+    async fn retired(fixture: &Fixture, probe: Arc<Probe>) -> Self {
+        Self::build(fixture, probe, true).await
+    }
+    /// Publishes either genuine terminal reason before native sender capture.
+    async fn build(fixture: &Fixture, probe: Arc<Probe>, retired: bool) -> Self {
         let mut root = fixture.root();
         assert_eq!(root.observe().await.unwrap(), CustodyWorkerStatus::Idle);
         Arc::get_mut(&mut root.0).unwrap().handoff_probe = Some(probe);
@@ -55,11 +63,80 @@ impl Scene {
             CustodyWorkerStatus::NativeContinuityAwaitingAdoption
         );
         root.adopt_native_continuity(&mut service).unwrap();
-        super::expiry::accept(&root, &mut service, &sender, &target, 10, 5).await;
-        let ticket = service
-            .prepare_storage_expiry(root.storage_scope(), 16, usize::MAX)
-            .unwrap()
+        let ticket = if retired {
+            let recipient_registration = service
+                .capture_sender_registration(&target.agent_id)
+                .unwrap();
+            service
+                .bind_native_conversation(
+                    &recipient_registration,
+                    "native-recipient",
+                    &MessageNativeIncarnation::default(),
+                )
+                .unwrap();
+            root.start_native_continuity(&service, &target.agent_id)
+                .unwrap();
+            assert_eq!(
+                root.observe().await.unwrap(),
+                CustodyWorkerStatus::NativeContinuityAwaitingAdoption
+            );
+            root.adopt_native_continuity(&mut service).unwrap();
+            let mut original = envelope(&sender, &target, "retired-original");
+            original.ttl_ms = None;
+            assert!(original.ttl_ms.is_none());
+            let accepted = service
+                .prepare_acceptance(
+                    &sender.agent_id,
+                    original,
+                    MessageScope::Session,
+                    10,
+                    4096,
+                    None,
+                )
+                .unwrap();
+            root.start(&mut service, &accepted, None).unwrap();
+            assert_eq!(
+                root.observe().await.unwrap(),
+                CustodyWorkerStatus::AwaitingAdoption
+            );
+            root.adopt(&mut service, None).unwrap();
+            service.retire_agent_identity(&target.agent_id);
+            assert!(root.start_registration_end(&service).unwrap());
+            assert_eq!(
+                root.observe().await.unwrap(),
+                CustodyWorkerStatus::RegistrationEndAwaitingAdoption
+            );
+            root.adopt_registration_end(&mut service).unwrap();
+            let lookup = service
+                .capture_native_input_lookup(accepted.sequence(), 0)
+                .unwrap();
+            root.start_native_input(
+                &service,
+                lookup,
+                AgentTranscriptStore::new(fixture.path.join("canonical")),
+                None,
+            )
             .unwrap();
+            assert_eq!(
+                root.observe().await.unwrap(),
+                CustodyWorkerStatus::NativeInputAwaitingAdoption
+            );
+            let mez_agent::messaging::MessageNativeInputObservation::RecipientEnded(witness) =
+                root.adopt_native_input(&service).unwrap()
+            else {
+                panic!("actual ended source required");
+            };
+            service
+                .prepare_storage_native_retirement(root.storage_scope(), &witness, 16, usize::MAX)
+                .unwrap()
+                .unwrap()
+        } else {
+            super::expiry::accept(&root, &mut service, &sender, &target, 10, 5).await;
+            service
+                .prepare_storage_expiry(root.storage_scope(), 16, usize::MAX)
+                .unwrap()
+                .unwrap()
+        };
         root.start_terminal(&mut service, &ticket).unwrap();
         assert_eq!(
             root.observe().await.unwrap(),
@@ -301,3 +378,5 @@ async fn terminal_handoff_actual_source_recovers_physical_stage_after_sender_rep
         );
     }
 }
+
+mod retirement;

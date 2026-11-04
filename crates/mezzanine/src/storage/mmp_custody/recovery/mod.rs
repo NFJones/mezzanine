@@ -163,15 +163,14 @@ impl MmpCustodyStore {
                 if let Some(terminal) = terminal {
                     let key = (row.sequence, index as u32);
                     let found = history
-                        .terminal_expiries
+                        .terminal_observations
                         .binary_search_by_key(&key, |value| (value.sequence, value.binding_index));
-                    if terminal.reason != mez_agent::messaging::DeliveryTerminalReason::Expired
-                        || found.ok().is_none_or(|i| {
-                            let actual = &history.terminal_expiries[i];
-                            actual.observed_at_ms != terminal.observed_at_ms
-                                || (terminal.released && !actual.released())
-                        })
-                    {
+                    if found.ok().is_none_or(|i| {
+                        let actual = &history.terminal_observations[i];
+                        actual.reason != terminal.reason
+                            || actual.observed_at_ms != terminal.observed_at_ms
+                            || (terminal.released && !actual.released())
+                    }) {
                         return Err(invalid("terminal outcome needs durable recovery evidence"));
                     }
                 }

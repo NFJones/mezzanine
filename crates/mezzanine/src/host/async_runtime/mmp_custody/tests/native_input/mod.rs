@@ -26,11 +26,24 @@ impl Scene {
     /// Uses real registration, continuity, acceptance, selection and canonical
     /// context append before constructing its immutable transcript projection.
     async fn new(fixture: &Fixture) -> Self {
+        Self::build(fixture, false).await
+    }
+    /// Guarded provenance is required by the actual retired-owner controls.
+    async fn guarded(fixture: &Fixture) -> Self {
+        Self::build(fixture, true).await
+    }
+    /// Builds either primitive canonical input or the complete guarded boundary.
+    async fn build(fixture: &Fixture, guarded: bool) -> Self {
         let root = fixture.root();
         assert_eq!(root.observe().await.unwrap(), CustodyWorkerStatus::Idle);
         let (mut service, sender, target, _) = fixture_service();
         root.configure_payload_spill(&mut service, Default::default())
             .unwrap();
+        if guarded {
+            service
+                .require_native_continuity(root.storage_scope())
+                .unwrap();
+        }
         let registration = service
             .capture_sender_registration(&target.agent_id)
             .unwrap();
@@ -50,6 +63,9 @@ impl Scene {
         assert!(root.adopt_native_continuity(&mut service).unwrap());
         service.subscribe(&target.agent_id).unwrap();
         let mut original = envelope(&sender, &target, "original-peer-message");
+        if guarded {
+            original.ttl_ms = None;
+        }
         original.payload = "actual peer input\0with newline\nand untrusted guidance".into();
         let ticket = service
             .prepare_acceptance(
@@ -153,6 +169,7 @@ impl Scene {
         self.root
             .adopt_native_input(&self.service)
             .unwrap()
+            .into_commit()
             .unwrap()
     }
     /// Verifies the canonical occurrence count directly in physical storage.
@@ -210,6 +227,7 @@ async fn native_input_commits_canonical_archive_before_actual_exact_ack() {
             .root
             .adopt_native_input(&scene.service)
             .unwrap()
+            .into_commit()
             .is_none()
     );
     assert_eq!(scene.canonical_count(), 0);
@@ -702,3 +720,5 @@ async fn native_input_first_plan_keeps_kernel_lease_across_publication_failures(
         );
     }
 }
+
+mod retirement;

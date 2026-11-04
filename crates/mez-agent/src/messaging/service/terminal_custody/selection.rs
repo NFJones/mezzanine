@@ -70,6 +70,7 @@ impl MessageService {
                 observed_at_ms,
                 kind: MessageTerminalKind::ExpiryObservation,
                 handoff: None,
+                retirement: None,
                 before: vec![None; indices.len()],
                 indices,
                 metadata_bytes: bytes,
@@ -107,7 +108,7 @@ impl MessageService {
 
     /// A reserved slot is unavailable for receive or competing ACK while its
     /// actual expiry owner is unsettled; its terminal outcome is still absent.
-    pub(in crate::messaging::service) fn expiry_protects(
+    pub(in crate::messaging::service) fn terminal_protects(
         &self,
         sequence: MessageSequence,
         recipient: &AgentId,
@@ -128,7 +129,7 @@ impl MessageService {
 
 /// Preserves the earliest already observed strict expiry across later bounded
 /// batches and wall-clock rollback. Recipient retirement is not TTL evidence.
-fn known_expiry(row: &QueuedEnvelope) -> Result<Option<u64>> {
+pub(super) fn known_expiry(row: &QueuedEnvelope) -> Result<Option<u64>> {
     let mut first = *row
         .ack_expiry_observed_at_ms
         .lock()

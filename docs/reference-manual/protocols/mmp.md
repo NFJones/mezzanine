@@ -422,7 +422,7 @@ canonical preparation; startup after the original TTL expires still completes
 that canonical input and its exact ACK before any terminal selection.
 
 The same source-owned terminal worker now journals finite outcome-horizon
-release. It freezes up to 64 actual unreleased expiry before-images and one
+release. It freezes up to 64 actual unreleased terminal before-images and one
 release observation; actual r1 commit and original adoption precede live release.
 Version1 r1 records fit 916 bytes and bind original allocation/source/slots/first
 clocks. Each release must match actual t1 evidence and its 600000ms wall threshold
@@ -580,10 +580,21 @@ cannot consume the original positive.
 Inventory cross-checks related native facts against ends. An ended namespace
 cannot publish a late n1 or return through an older optional checkpoint and
 matching private context. Live restore preflight refuses already-pending end intents. An o1 record
-itself changes no message slot, ACK or terminal outcome. Exact source-bound
-retired-recipient observation, canonical input precedence, full raw/native
-lifecycle handling and generic live-restore drain remain required before durable
-retirement and normal activation can be advertised.
+itself changes no message slot, ACK or terminal outcome.
+
+The internal native lookup checks canonical receipts and recovers original append
+preparation before considering that end. Actual absence plus exact b1/o1
+namespace, floor, cutoff, publication order and fingerprints can return an opaque
+source-bound witness. Its lookup anchor reserves 32 KiB structural metadata.
+Missing provenance remains unknown. Existing application input ownership,
+canonical commit, ACK or known source expiry wins before retirement selection.
+The common terminal worker journals one original slot as a bodyless 168-byte
+version1 `d1` record, preserving its first source, clock and unrelated row image
+through worker loss and joined retry. Only original adoption publishes
+`recipient_retired`; no ACK, peer input, task or provider continuation is created.
+R1 horizon release, canonical sender H1/S1 and cold folding preserve that reason.
+Metadata pressure uses bounded lookup backoff. Full raw/native lifecycle and
+generic live-restore drain still precede normal durable activation.
 
 Internal actor spill setup now enables a trusted native admission barrier. The
 actor journals current native intervals before selecting queued authorized

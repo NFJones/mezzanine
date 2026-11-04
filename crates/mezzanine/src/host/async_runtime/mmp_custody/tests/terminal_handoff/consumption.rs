@@ -91,9 +91,12 @@ async fn sender_consumption_root_commits_before_adoption_without_horizon_authori
         recipient_bytes: 1024 * 1024,
     };
     let history = store.fold_custody_history(limits).unwrap();
-    assert_eq!(history.terminal_expiries.len(), 1);
-    assert!(history.terminal_expiries[0].sender_consumed);
-    assert_eq!(history.terminal_expiries[0].release_observed_at_ms, None);
+    assert_eq!(history.terminal_observations.len(), 1);
+    assert!(history.terminal_observations[0].sender_consumed);
+    assert_eq!(
+        history.terminal_observations[0].release_observed_at_ms,
+        None
+    );
     assert!(history.acknowledgements.is_empty());
     assert_eq!(scene.root.adopt_terminal(&mut scene.service).unwrap(), 1);
     assert_eq!(

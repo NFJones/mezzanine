@@ -323,7 +323,7 @@ impl MessageService {
                     .copied()
                     .flatten();
                 if before.is_some_and(|value| !value.released)
-                    && !self.expiry_protects(row.sequence, &row.recipient_bindings[index].0)
+                    && !self.terminal_protects(row.sequence, &row.recipient_bindings[index].0)
                 {
                     return self.terminal_handoff_anchor(row, index, false).map(Some);
                 }
@@ -384,7 +384,7 @@ impl MessageService {
                 .map_err(|_| unavailable())?
                 .get(index)
                 != Some(&false)
-            || self.expiry_protects(row.sequence, &row.recipient_bindings[index].0)
+            || self.terminal_protects(row.sequence, &row.recipient_bindings[index].0)
         {
             return Err(unavailable());
         }

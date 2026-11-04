@@ -43,14 +43,16 @@ pub(crate) struct FoldedExpiry {
     pub observed_at_ms: u64,
 }
 
-/// One original per-recipient first expiry observation, never an ACK or release.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) struct FoldedTerminalExpiry {
+/// One original per-recipient first terminal observation, never an ACK or release.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct FoldedTerminalObservation {
+    /// Exact terminal reason, independently qualified by t1 or d1.
+    pub reason: mez_agent::messaging::DeliveryTerminalReason,
     /// Original accepted occurrence, qualified against its complete source.
     pub sequence: u64,
     /// Exact frozen recipient slot, never newly resolved membership.
     pub binding_index: u32,
-    /// First actual strict TTL observation, shared by later bounded batches.
+    /// First actual reason-specific observation, never renewed during recovery.
     pub observed_at_ms: u64,
     /// Actual qualified release observation, absent until its journal exists.
     pub release_observed_at_ms: Option<u64>,
@@ -58,7 +60,7 @@ pub(crate) struct FoldedTerminalExpiry {
     pub sender_consumed: bool,
 }
 
-impl FoldedTerminalExpiry {
+impl FoldedTerminalObservation {
     /// A positive release requires either actual r1 or actual canonical s1.
     pub(crate) fn released(&self) -> bool {
         self.release_observed_at_ms.is_some() || self.sender_consumed
@@ -74,7 +76,7 @@ pub(crate) struct CustodyHistory {
     /// Sorted occurrence-wide maximum exclusion clocks.
     pub expiries: Vec<FoldedExpiry>,
     /// Sorted exact terminal slots retaining their original first observations.
-    pub terminal_expiries: Vec<FoldedTerminalExpiry>,
+    pub terminal_observations: Vec<FoldedTerminalObservation>,
     /// One above the highest *surviving* occurrence or abort, if representable.
     /// This is not a durable watermark and must never itself seed an allocator.
     pub observed_next_sequence: Option<u64>,
@@ -172,7 +174,13 @@ impl MmpCustodyStore {
                 }
                 charge(&mut metadata, FOLDED_ENTRY_CHARGE)?;
                 terminals.try_reserve(1).map_err(|_| capacity())?;
-                terminals.insert(slot, frame.observed_at_ms);
+                terminals.insert(
+                    slot,
+                    (
+                        mez_agent::messaging::DeliveryTerminalReason::Expired,
+                        frame.observed_at_ms,
+                    ),
+                );
             }
             if let Some(prior) = expiries.get_mut(&frame.sequence) {
                 *prior = (*prior).max(frame.observed_at_ms);
@@ -183,12 +191,31 @@ impl MmpCustodyStore {
             }
         }
         drop(terminal_source_clocks);
-        let mut terminal_expiries = Vec::new();
-        terminal_expiries
+        for key in &inventory.retirement_keys {
+            let frame = self.read_stored_retirement_in_snapshot(transaction, key, limits)?;
+            let slot = (frame.sequence, frame.binding_index);
+            if terminals.contains_key(&slot) || acknowledgements.contains_key(&slot) {
+                return Err(MezError::invalid_state(
+                    "MMP retirement conflicts with original slot history",
+                ));
+            }
+            charge(&mut metadata, FOLDED_ENTRY_CHARGE)?;
+            terminals.try_reserve(1).map_err(|_| capacity())?;
+            terminals.insert(
+                slot,
+                (
+                    mez_agent::messaging::DeliveryTerminalReason::RecipientRetired,
+                    frame.observed_at_ms,
+                ),
+            );
+        }
+        let mut terminal_observations = Vec::new();
+        terminal_observations
             .try_reserve_exact(terminals.len())
             .map_err(|_| capacity())?;
-        terminal_expiries.extend(terminals.into_iter().map(
-            |((sequence, binding_index), observed_at_ms)| FoldedTerminalExpiry {
+        terminal_observations.extend(terminals.into_iter().map(
+            |((sequence, binding_index), (reason, observed_at_ms))| FoldedTerminalObservation {
+                reason,
                 sequence,
                 binding_index,
                 observed_at_ms,
@@ -196,18 +223,21 @@ impl MmpCustodyStore {
                 sender_consumed: false,
             },
         ));
-        terminal_expiries.sort_unstable();
+        terminal_observations.sort_unstable_by_key(|value| (value.sequence, value.binding_index));
         for key in &inventory.release_keys {
             let release = self.read_stored_release_in_snapshot(transaction, key, limits)?;
-            for (index, first) in release.entries {
+            for (index, first, reason) in release.entries {
                 let slot = (release.sequence, index);
-                let position = terminal_expiries
+                let position = terminal_observations
                     .binary_search_by_key(&slot, |value| (value.sequence, value.binding_index))
                     .map_err(|_| {
                         MezError::invalid_state("MMP release lacks original terminal slot")
                     })?;
-                let terminal = &mut terminal_expiries[position];
-                if terminal.release_observed_at_ms.is_some() || terminal.observed_at_ms != first {
+                let terminal = &mut terminal_observations[position];
+                if terminal.release_observed_at_ms.is_some()
+                    || terminal.observed_at_ms != first
+                    || terminal.reason != reason
+                {
                     return Err(MezError::invalid_state(
                         "MMP terminal release conflicts with original history",
                     ));
@@ -218,13 +248,16 @@ impl MmpCustodyStore {
         for key in &inventory.consumption_keys {
             let consumed = self.read_stored_consumption_in_snapshot(transaction, key, limits)?;
             let slot = (consumed.sequence, consumed.binding_index);
-            let position = terminal_expiries
+            let position = terminal_observations
                 .binary_search_by_key(&slot, |value| (value.sequence, value.binding_index))
                 .map_err(|_| {
                     MezError::invalid_state("MMP consumption lacks original terminal slot")
                 })?;
-            let terminal = &mut terminal_expiries[position];
-            if terminal.released() || terminal.observed_at_ms != consumed.terminal.observed_at_ms {
+            let terminal = &mut terminal_observations[position];
+            if terminal.released()
+                || terminal.observed_at_ms != consumed.terminal.observed_at_ms
+                || terminal.reason != consumed.terminal.reason
+            {
                 return Err(MezError::invalid_state(
                     "MMP consumption conflicts with original history",
                 ));
@@ -258,7 +291,7 @@ impl MmpCustodyStore {
             inventory,
             acknowledgements: folded_acknowledgements,
             expiries: folded_expiries,
-            terminal_expiries,
+            terminal_observations,
             observed_next_sequence: highest.checked_add(1),
             retained_metadata: metadata,
         })

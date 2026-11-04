@@ -201,7 +201,7 @@ impl MessageService {
             .filter(|queued| queued.sequence <= sequence)
             .filter(|queued| self.accepted_recipient(queued, recipient))
             .filter(|queued| !self.recipient_is_terminal(queued, recipient))
-            .filter(|queued| !self.expiry_protects(queued.sequence, recipient))
+            .filter(|queued| !self.terminal_protects(queued.sequence, recipient))
             .filter(|queued| recipient_matches(identity, &queued.envelope.recipient))
             .filter(|queued| audience_matches(identity, &queued.audience))
             .filter(|queued| sequences.insert(queued.sequence))

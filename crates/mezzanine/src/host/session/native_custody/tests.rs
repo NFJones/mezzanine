@@ -33,6 +33,8 @@ enum Original {
     CrashNativeStage(PathBuf, bool),
     /// Actual t1 or r1 commit before lower adoption and abrupt process exit.
     CrashTerminal(PathBuf, bool),
+    /// Actual ended native slot d1/r1 before adoption and abrupt process exit.
+    CrashRetirement(PathBuf, bool),
 }
 impl Fixture {
     async fn new(guarded: bool) -> Self {
@@ -49,7 +51,8 @@ impl Fixture {
             | Original::CrashNativeInput(config)
             | Original::CrashNativePreparation(config)
             | Original::CrashNativeStage(config, _)
-            | Original::CrashTerminal(config, _) => config.clone(),
+            | Original::CrashTerminal(config, _)
+            | Original::CrashRetirement(config, _) => config.clone(),
             _ => generated,
         };
         let session = Session::new_default(shell(), Size::new(80, 24).unwrap()).unwrap();
@@ -75,6 +78,7 @@ impl Fixture {
                 | Original::CrashNativePreparation(_)
                 | Original::CrashNativeStage(_, _)
                 | Original::CrashTerminal(_, _)
+                | Original::CrashRetirement(_, _)
         ) {
             native_input::configure_original(&mut service);
         }
@@ -101,6 +105,7 @@ impl Fixture {
                 | Original::CrashNativePreparation(_)
                 | Original::CrashNativeStage(_, _)
                 | Original::CrashTerminal(_, _)
+                | Original::CrashRetirement(_, _)
         ) {
             service
                 .message_service()
@@ -161,7 +166,7 @@ impl Fixture {
                 .unwrap()
         );
         let terminal_clock = match &original {
-            Original::CrashTerminal(_, release) => Some(
+            Original::CrashTerminal(_, release) | Original::CrashRetirement(_, release) => Some(
                 crate::runtime::current_unix_millis()
                     - if *release {
                         mez_agent::messaging::MESSAGE_TERMINAL_HANDOFF_MS
@@ -174,7 +179,9 @@ impl Fixture {
         for n in 1..=2 {
             let mut original_mail = mail(&raw, &native, n);
             let accepted_at = if n == 2 && terminal_clock.is_some() {
-                original_mail.ttl_ms = Some(1);
+                if matches!(&original, Original::CrashTerminal(_, _)) {
+                    original_mail.ttl_ms = Some(1);
+                }
                 terminal_clock.unwrap() - 2
             } else if n == 2
                 && matches!(&original, Original::CrashNativePreparation(_))
@@ -293,8 +300,26 @@ impl Fixture {
             raw: raw.agent_id,
         };
         if let Original::CrashTerminal(_, release) = &original {
-            terminal::commit_then_crash(service, root, fixture, terminal_clock.unwrap(), *release)
-                .await;
+            terminal::commit_then_crash(
+                service,
+                root,
+                fixture,
+                terminal_clock.unwrap(),
+                *release,
+                false,
+            )
+            .await;
+        }
+        if let Original::CrashRetirement(_, release) = &original {
+            terminal::commit_then_crash(
+                service,
+                root,
+                fixture,
+                terminal_clock.unwrap(),
+                *release,
+                true,
+            )
+            .await;
         }
         if matches!(
             &original,

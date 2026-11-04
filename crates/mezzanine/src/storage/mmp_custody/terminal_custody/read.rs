@@ -99,7 +99,7 @@ impl MmpCustodyStore {
     }
     /// Prevents a positive ACK/native input from contradicting an actual stored
     /// terminal slot. Presence refuses; these metadata bytes confer no positive.
-    pub(in crate::storage::mmp_custody) fn ensure_slot_not_expired_in_snapshot(
+    pub(in crate::storage::mmp_custody) fn ensure_slot_not_terminal_in_snapshot(
         &self,
         transaction: &rusqlite::Transaction<'_>,
         sequence: u64,
@@ -110,7 +110,8 @@ impl MmpCustodyStore {
                 return Err(invalid());
             }
             Ok(())
-        })
+        })?;
+        self.ensure_slot_not_retired_in_snapshot(transaction, sequence, index)
     }
     /// Validates complete immutable source bytes before decoding one reserved
     /// payload quantum, checks original strict TTL and every frozen slot, then
@@ -142,6 +143,7 @@ impl MmpCustodyStore {
         }
         let store_id: [u8; 16] = self.store_id.as_slice().try_into().map_err(|_| invalid())?;
         for index in &frame.binding_indices {
+            self.ensure_slot_not_retired_in_snapshot(transaction, frame.sequence, *index)?;
             let occurrence = super::super::native_input::source_occurrence(
                 store_id,
                 frame.source_sha256,

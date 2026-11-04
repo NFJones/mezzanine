@@ -25,9 +25,9 @@ pub struct MessageStorageRecoveredRecord {
     pub expired_receipt: bool,
     /// Original durable expiry exclusion clock, without restarting the TTL.
     pub expiry_observed_at_ms: Option<u64>,
-    /// Exact stored recipient indices and first expiry observations. These are
+    /// Exact stored recipient indices, reasons and first observations. These are
     /// unreleased sender outcomes, never ACKs, cursors or native authority.
-    pub terminal_expiries: Vec<(u32, u64)>,
+    pub terminal_observations: Vec<(u32, DeliveryTerminalReason, u64)>,
     /// Exact terminal slots with actual qualified horizon-release evidence.
     pub terminal_releases: Vec<u32>,
     /// Exact terminal slots with actual canonical sender-consumption evidence.
@@ -266,19 +266,24 @@ impl MessageStorageRecovery {
             return Err(unavailable());
         }
         let mut terminal = vec![None; count];
-        for (slot, observed_at_ms) in &record.terminal_expiries {
+        for (slot, reason, observed_at_ms) in &record.terminal_observations {
             let slot = *slot as usize;
             if slot >= count
                 || acknowledged[slot]
                 || terminal[slot].is_some()
-                || source.envelope().ttl_ms.is_none_or(|ttl| {
-                    source.accepted_at_ms().saturating_add(ttl) >= *observed_at_ms
-                })
+                || match reason {
+                    DeliveryTerminalReason::Expired => source.envelope().ttl_ms.is_none_or(|ttl| {
+                        source.accepted_at_ms().saturating_add(ttl) >= *observed_at_ms
+                    }),
+                    DeliveryTerminalReason::RecipientRetired => {
+                        *observed_at_ms < source.accepted_at_ms()
+                    }
+                }
             {
                 return Err(unavailable());
             }
             terminal[slot] = Some(MessageDeliveryTerminalSnapshot {
-                reason: DeliveryTerminalReason::Expired,
+                reason: *reason,
                 observed_at_ms: *observed_at_ms,
                 released: false,
             });

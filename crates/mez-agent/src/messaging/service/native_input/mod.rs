@@ -10,6 +10,11 @@
 use super::*;
 use serde::{Deserialize, Serialize};
 
+mod retirement;
+pub use retirement::{
+    MessageNativeInputObservation, MessageNativeRetirementRecord, MessageNativeRetirementWitness,
+};
+
 /// Source-owned transport attribution, never serializable or caller-constructed.
 #[derive(Clone)]
 pub struct MessageNativeInputAnchor(pub(super) Arc<Source>);
@@ -23,6 +28,9 @@ pub(super) struct Source {
     pub(super) digest: [u8; 32],
     pub(super) native: MessageNativeOwner,
     pub(super) offered_at_ms: Option<u64>,
+    /// One immutable bounded end observation shares this source's metadata
+    /// lease, including repeated lookup through clones of the same anchor.
+    retirement: std::sync::OnceLock<Arc<MessageNativeRetirementRecord>>,
     /// Dedicated small control block keeps row weak protection bounded even
     /// after the larger source/metadata reservation has actually retired.
     _protection: Arc<()>,
@@ -69,6 +77,16 @@ pub trait MessageNativeInputStore {
         &mut self,
         anchor: &MessageNativeInputAnchor,
     ) -> Result<Option<MessageNativeInputRecord>>;
+    /// Optionally qualifies an original ended owner after this exact lookup
+    /// returned canonical absence. Canonical-only ports report unknown. A
+    /// product port must validate original lifetime/end journals and refuse
+    /// calls that did not first establish absence for this actual anchor.
+    fn retired_owner(
+        &mut self,
+        _anchor: &MessageNativeInputAnchor,
+    ) -> Result<Option<MessageNativeRetirementRecord>> {
+        Ok(None)
+    }
 }
 
 /// Actual canonical commit, separate from source selection and public metadata.
@@ -174,7 +192,7 @@ impl MessageService {
         for row in self.pending.values() {
             for index in 0..row.recipient_bindings.len() {
                 if after.is_some_and(|cursor| (row.sequence, index) <= cursor)
-                    || self.expiry_protects(row.sequence, &row.recipient_bindings[index].0)
+                    || self.terminal_protects(row.sequence, &row.recipient_bindings[index].0)
                     || row
                         .native_bindings
                         .as_ref()
@@ -223,7 +241,7 @@ impl MessageService {
     /// reviving a registration, renewing TTL or manufacturing a genuine offer.
     pub fn native_input_can_receive(&self, source: &MessageNativeInputAnchor, now_ms: u64) -> bool {
         self.native_input_anchor_is_original(source)
-            && !self.expiry_protects(source.sequence(), source.recipient())
+            && !self.terminal_protects(source.sequence(), source.recipient())
             && !self.acknowledgement_excludes(source.sequence())
             && source
                 .0
@@ -318,6 +336,30 @@ impl MessageService {
                 .is_some_and(|row| Arc::ptr_eq(row, &anchor.0.row))
     }
 
+    /// Tests whether an optional historical probe still has an unsettled own
+    /// slot. A completed original is not a replacement source; poisoned slots
+    /// fail closed instead of being treated as an empty retry projection.
+    pub fn native_input_anchor_is_unsettled(
+        &self,
+        anchor: &MessageNativeInputAnchor,
+    ) -> Result<bool> {
+        if !self.native_input_anchor_is_original(anchor) {
+            return Ok(false);
+        }
+        let ack = anchor
+            .0
+            .row
+            .acknowledged
+            .lock()
+            .map_err(|_| unavailable())?;
+        let terminal = anchor.0.row.terminal.lock().map_err(|_| unavailable())?;
+        let index = anchor.binding_index();
+        match (ack.get(index), terminal.get(index)) {
+            (Some(ack), Some(terminal)) => Ok(!ack && terminal.is_none()),
+            _ => Err(unavailable()),
+        }
+    }
+
     /// Precharges all copied attribution before allocating a retained anchor.
     fn native_input_anchor(
         &self,
@@ -348,7 +390,7 @@ impl MessageService {
         {
             return Err(unavailable());
         }
-        if self.expiry_protects(row.sequence, recipient) {
+        if self.terminal_protects(row.sequence, recipient) {
             return Err(unavailable());
         }
         let digest = row.envelope.storage_digest(&policy.scope)?;
@@ -356,7 +398,9 @@ impl MessageService {
         // Charge its retained original source as well as copied attribution;
         // dropping the ledger owner must not leave this Arc unaccounted.
         let bytes = super::storage_policy::source_metadata_bytes(row)
-            .saturating_add(4096)
+            // Bounded lifetime/end decoding and shared retirement observation
+            // remain charged through the final original source/witness owner.
+            .saturating_add(32 * 1024)
             .saturating_add(
                 8usize.saturating_mul(
                     recipient
@@ -381,6 +425,7 @@ impl MessageService {
             digest,
             native: native.clone(),
             offered_at_ms,
+            retirement: std::sync::OnceLock::new(),
             _protection: protection,
             _lease: lease,
         })))

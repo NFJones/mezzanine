@@ -240,7 +240,7 @@ impl PlannedAcknowledgementStore<'_> {
                 ));
             }
             if entry.acknowledged {
-                self.store.ensure_slot_not_expired_in_snapshot(
+                self.store.ensure_slot_not_terminal_in_snapshot(
                     &transaction,
                     entry.sequence,
                     entry.binding_index,

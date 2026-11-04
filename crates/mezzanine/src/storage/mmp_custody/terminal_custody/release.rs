@@ -1,13 +1,14 @@
 //! Immutable original terminal-horizon release records under the same fence.
 //!
-//! A release cites actual original t1 before-images and a frozen horizon
+//! A release cites actual original t1/d1 before-images and a frozen horizon
 //! observation. No sender identity/consumption is inferred from these bytes.
 //! Validation shares the original read/commit snapshot and preserves all other
 //! rows. Frames describe history; only the trusted write seals a lower positive.
 
 use super::*;
 use mez_agent::messaging::{
-    MESSAGE_TERMINAL_HANDOFF_MS, MESSAGE_TERMINAL_SLOT_LIMIT, MessageAcceptanceDecodeLimits,
+    DeliveryTerminalReason, MESSAGE_TERMINAL_HANDOFF_MS, MESSAGE_TERMINAL_SLOT_LIMIT,
+    MessageAcceptanceDecodeLimits,
 };
 
 /// Actual stored data, not a runtime source, original sender or release owner.
@@ -15,11 +16,11 @@ pub(in crate::storage::mmp_custody) struct StoredRelease {
     pub sequence: u64,
     pub observed_at_ms: u64,
     pub source_sha256: [u8; 32],
-    pub entries: Vec<(u32, u64)>,
+    pub entries: Vec<(u32, u64, DeliveryTerminalReason)>,
 }
 
-/// Validates bounded allocation/source/slot/first-clock framing; only expiry
-/// horizons are implemented. Unknown reason/format must remain unavailable.
+/// Validates bounded allocation/source/slot/reason/first-clock framing.
+/// Unknown reason or format must remain unavailable.
 fn decode(bytes: &[u8], store_id: &[u8]) -> Result<StoredRelease> {
     if bytes.len() < 97
         || bytes.len() > 84 + 13 * MESSAGE_TERMINAL_SLOT_LIMIT
@@ -43,14 +44,18 @@ fn decode(bytes: &[u8], store_id: &[u8]) -> Result<StoredRelease> {
     for entry in bytes[84..].as_chunks::<13>().0 {
         let index = u32::from_le_bytes(entry[..4].try_into().map_err(|_| invalid())?);
         let first = u64::from_le_bytes(entry[4..12].try_into().map_err(|_| invalid())?);
+        let reason = match entry[12] {
+            1 => DeliveryTerminalReason::Expired,
+            2 => DeliveryTerminalReason::RecipientRetired,
+            _ => return Err(invalid()),
+        };
         if index >= 4096
-            || entry[12] != 1
             || observed_at_ms.saturating_sub(first) < MESSAGE_TERMINAL_HANDOFF_MS
-            || entries.last().is_some_and(|(prior, _)| *prior >= index)
+            || entries.last().is_some_and(|(prior, _, _)| *prior >= index)
         {
             return Err(invalid());
         }
-        entries.push((index, first));
+        entries.push((index, first, reason));
     }
     Ok(StoredRelease {
         sequence,
@@ -80,7 +85,7 @@ impl PlannedTerminalStore<'_, '_> {
             || frame.observed_at_ms != write.observed_at_ms()
             || frame.entries.iter().copied().ne(write
                 .terminal_entries()
-                .map(|(index, terminal)| (index, terminal.observed_at_ms)))
+                .map(|(index, terminal)| (index, terminal.observed_at_ms, terminal.reason)))
         {
             return Err(invalid());
         }
@@ -99,7 +104,7 @@ impl PlannedTerminalStore<'_, '_> {
                 && other
                     .entries
                     .iter()
-                    .any(|(index, _)| frame.entries.iter().any(|(target, _)| index == target))
+                    .any(|(index, _, _)| frame.entries.iter().any(|(target, _, _)| index == target))
             {
                 return Err(invalid());
             }
@@ -134,44 +139,24 @@ impl PlannedTerminalStore<'_, '_> {
 
 impl MmpCustodyStore {
     /// Qualifies actual terminal before-images in this same original snapshot.
-    /// Each full t1 reader releases its decoded source before the next read.
+    /// Each full t1/d1 reader releases its decoded source before the next read.
     fn validate_release_in_snapshot(
         &self,
         transaction: &rusqlite::Transaction<'_>,
         frame: &StoredRelease,
         limits: MessageAcceptanceDecodeLimits,
     ) -> Result<()> {
-        let mut found = vec![false; frame.entries.len()];
-        for (index, _) in &frame.entries {
+        for (index, first, reason) in &frame.entries {
             self.ensure_slot_not_consumed_in_snapshot(transaction, frame.sequence, *index)?;
-        }
-        self.visit_expiry_metadata(transaction, |key, expiry| {
-            if expiry.sequence != frame.sequence {
-                return Ok(());
-            }
-            let relevant = frame
-                .entries
-                .iter()
-                .any(|(index, _)| expiry.binding_indices.contains(index));
-            if !relevant {
-                return Ok(());
-            }
-            let expiry = self.read_stored_expiry_in_snapshot(transaction, key, limits)?;
-            if expiry.source_sha256 != frame.source_sha256 {
+            let actual = self
+                .stored_terminal_in_snapshot(transaction, frame.sequence, *index, limits)?
+                .ok_or_else(invalid)?;
+            if actual.source_sha256 != frame.source_sha256
+                || actual.terminal.observed_at_ms != *first
+                || actual.terminal.reason != *reason
+            {
                 return Err(invalid());
             }
-            for (slot, (index, first)) in frame.entries.iter().enumerate() {
-                if expiry.binding_indices.contains(index) {
-                    if found[slot] || expiry.observed_at_ms != *first {
-                        return Err(invalid());
-                    }
-                    found[slot] = true;
-                }
-            }
-            Ok(())
-        })?;
-        if found.iter().any(|found| !found) {
-            return Err(invalid());
         }
         Ok(())
     }

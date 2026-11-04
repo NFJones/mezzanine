@@ -686,7 +686,7 @@ impl MessageService {
         sequence: MessageSequence,
         recipient: &AgentId,
     ) -> bool {
-        if self.expiry_protects(sequence, recipient) {
+        if self.terminal_protects(sequence, recipient) {
             return true;
         }
         if self

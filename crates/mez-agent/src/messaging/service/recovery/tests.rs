@@ -13,7 +13,7 @@ struct Store {
     next_sequence: u64,
     acknowledgements_override: Option<Vec<(u32, u64)>>,
     swallow_row_error: bool,
-    terminal_expiries: Vec<(u32, u64)>,
+    terminal_observations: Vec<(u32, u64)>,
     terminal_consumptions: Vec<u32>,
 }
 impl MessageAcceptanceStore for Store {
@@ -42,7 +42,11 @@ impl MessageStorageRecoveryStore for Store {
                     source_sha256: [sequence as u8; 32],
                     expired_receipt: false,
                     expiry_observed_at_ms: None,
-                    terminal_expiries: self.terminal_expiries.clone(),
+                    terminal_observations: self
+                        .terminal_observations
+                        .iter()
+                        .map(|(index, clock)| (*index, DeliveryTerminalReason::Expired, *clock))
+                        .collect(),
                     terminal_releases: Vec::new(),
                     terminal_consumptions: self.terminal_consumptions.clone(),
                     horizon_observed_at_ms: None,
@@ -81,7 +85,7 @@ impl MessageStorageRecoveryStore for Store {
 #[test]
 fn recovery_sender_consumption_does_not_mint_horizon_observation() {
     let (mut store, _) = originals();
-    store.terminal_expiries = vec![(0, 111)];
+    store.terminal_observations = vec![(0, 111)];
     store.terminal_consumptions = vec![0];
     let recovered = MessageService::recover_storage_custody(
         &MessageStorageScope::default(),
@@ -110,7 +114,7 @@ fn recovery_sender_consumption_refuses_duplicate_or_missing_terminal_slots() {
         (vec![(0, 111)], vec![1]),
     ] {
         let (mut store, _) = originals();
-        store.terminal_expiries = terminals;
+        store.terminal_observations = terminals;
         store.terminal_consumptions = consumed;
         assert!(
             MessageService::recover_storage_custody(

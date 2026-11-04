@@ -10,6 +10,8 @@
 use super::*;
 use mez_agent::messaging::{MessageNativeInputAnchor, MessageNativeInputCommit};
 
+mod retirement;
+
 /// One actually joined result retained until its exact application/ACK owner
 /// accepts it. Failure before handoff cannot lose proof or retry an idle root.
 pub(super) struct NativeInputResult {
@@ -146,6 +148,11 @@ impl AsyncRuntimeSessionActor {
             return;
         }
         let retrying = retry.is_some();
+        if retrying {
+            // One real retry deadline opens at most one further pass. Multiple
+            // unissued refusals cannot continuously renew each other's scans.
+            owner.request_native_scan();
+        }
         let source = if let Some(source) = retry {
             source
         } else {
@@ -169,6 +176,18 @@ impl AsyncRuntimeSessionActor {
                 }
             }
         };
+        match self
+            .service
+            .message_service()
+            .native_input_anchor_is_unsettled(&source)
+        {
+            Ok(true) => {}
+            Ok(false) => return,
+            Err(error) => {
+                owner.failure = Some(error.into());
+                return;
+            }
+        }
         if !retrying
             && owner.native_retry.as_ref().is_some_and(|(_, parked)| {
                 parked.sequence() == source.sequence()

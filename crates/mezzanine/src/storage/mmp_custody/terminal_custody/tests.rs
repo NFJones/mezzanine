@@ -512,11 +512,11 @@ fn expiry_actual_slot_guard_preserves_independent_fanout_ack() {
     let transaction = store.connection.unchecked_transaction().unwrap();
     assert!(
         store
-            .ensure_slot_not_expired_in_snapshot(&transaction, 1, selected[0])
+            .ensure_slot_not_terminal_in_snapshot(&transaction, 1, selected[0])
             .is_err()
     );
     store
-        .ensure_slot_not_expired_in_snapshot(&transaction, 1, protected)
+        .ensure_slot_not_terminal_in_snapshot(&transaction, 1, protected)
         .unwrap();
     store.finish_transaction(transaction).unwrap();
     let ack_plan = store.acknowledgement_plan().unwrap();
@@ -534,8 +534,8 @@ fn expiry_actual_slot_guard_preserves_independent_fanout_ack() {
     let history = store.fold_custody_history(limits()).unwrap();
     assert_eq!(history.acknowledgements.len(), 1);
     assert_eq!(history.acknowledgements[0].binding_index, protected);
-    assert_eq!(history.terminal_expiries.len(), 1);
-    assert_eq!(history.terminal_expiries[0].binding_index, selected[0]);
+    assert_eq!(history.terminal_observations.len(), 1);
+    assert_eq!(history.terminal_observations[0].binding_index, selected[0]);
     assert_eq!(
         scene
             .service

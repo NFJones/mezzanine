@@ -16151,9 +16151,34 @@ end MUST refuse late n1 publication for that namespace. Qualified cold recovery
 MUST NOT restore an ended namespace merely because an old optional checkpoint
 and private context still match. Live restore preflight MUST refuse already-pending
 actual end intents. An o1 fact alone MUST NOT mutate a source slot, supply
-an ACK or release an accepted original. Source-bound retired-recipient
-observations, canonical input precedence, full native/raw lifecycle integration
-and generic live-restore drain remain required before durable activation.
+an ACK or release an accepted original.
+
+An original native-input lookup MUST resolve canonical receipt/preparation and
+private append recovery before qualifying retirement. Only actual absence from
+that same source lookup MAY yield an opaque source-bound end witness. The
+witness MUST bind the frozen native recipient, original namespace/floor, strict
+floor < source sequence <= end cutoff, strictly ordered b1/o1 publication and
+both immutable row fingerprints. Missing provenance stays unknown. Its anchor
+MUST reserve 32 KiB structural metadata through the final owner. A preexisting
+application offer, independent source protector, canonical positive, ACK or
+already selected terminal operation MUST exclude retirement. Known source-wide
+expiry takes precedence for still-unselected slots.
+
+The common original terminal lane MAY select one exact ended native slot and
+write a bodyless version1 `d1:<digest>` record of exactly 168 bytes. It MUST bind
+the original store allocation, complete source fingerprint, slot, namespace,
+b1/o1 fingerprints and first observation clamped to acceptance time. The fenced
+transaction MUST requalify original source, end/cutoff/publication and absence
+of conflicting p1/c1/ACK/t1/d1 evidence, retaining its first bytes and non-target
+fingerprint across joined uncertainty. Reservation and storage commit alone
+MUST NOT publish a terminal outcome. Original positive adoption publishes only
+`recipient_retired`, without ACK, peer input, task or provider continuation.
+Later R1 release, canonical H1 handoff, S1 consumption and cold reconstruction
+MUST preserve this exact reason and first clock. A later expiry of a different
+slot MUST NOT invalidate a prior genuine d1. Metadata refusal MUST retry through
+bounded original lookup backoff; an existing canonical owner keeps precedence.
+Full native/raw lifecycle integration and generic live-restore drain remain
+required before durable activation.
 
 The internal actor spill setup now enables a one-way original-scope native
 admission barrier. While any actual current native interval is unrecorded, the
@@ -16249,10 +16274,10 @@ refusal MAY cancel only a never-issued reservation and schedule bounded retry
 while unrelated ACK/admission work uses the idle lane. Issued terminal work MUST
 settle through its original root and actor continuation even during shutdown.
 
-Expiry observations and horizon release MUST use one source-owned terminal
+Expiry/retirement observations and horizon release MUST use one source-owned terminal
 custody lane, rather than parallel mailboxes or independently issued mutation
 owners. A horizon reservation MUST freeze at most 64 exact unreleased original
-expiry before-images and its first release observation. It MUST NOT consume
+terminal before-images and its first release observation. It MUST NOT consume
 outcomes or change cursors before actual storage commit and original adoption.
 Only after every recipient has an actual positive ACK or released terminal fact
 MAY that source leave logical pending custody; physical source/receipt/allocator
@@ -16262,7 +16287,7 @@ Metadata MUST remain charged through the final source/proof/escrow owner.
 The actual fenced port MUST journal horizon releases as bodyless version1
 `r1:<digest>` records of at most 916 bytes, bound to the original allocation,
 complete source fingerprint, exact slots, original first terminal clocks and
-release observation. Each slot MUST have matching actual `t1` evidence in the
+release observation. Each slot MUST have matching actual `t1` or `d1` evidence with the same reason in the
 same original snapshot and at least 600000ms between its first observation and
 release observation. Unknown reasons, duplicate/overlapping releases, conflicting
 source/ACK/native history and missing original observations MUST refuse.

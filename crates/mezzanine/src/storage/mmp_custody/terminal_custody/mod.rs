@@ -18,12 +18,15 @@ use mez_agent::messaging::{
 mod consumption;
 mod read;
 mod release;
+mod retirement;
 
 /// Actual original allocation and pre-operation generation; not a capability.
 #[derive(Clone, Debug)]
 pub(crate) struct TerminalPlan {
     store_id: Vec<u8>,
     generation: u64,
+    /// Exact retirement input and non-target image retained outside workers.
+    retirement: std::sync::Arc<std::sync::OnceLock<retirement::First>>,
 }
 
 impl TerminalPlan {
@@ -32,6 +35,7 @@ impl TerminalPlan {
         Self {
             store_id,
             generation,
+            retirement: Default::default(),
         }
     }
 }
@@ -53,6 +57,7 @@ impl<'owner> OwnedCustodyStore<'owner> {
         let plan = TerminalPlan {
             store_id: store.store_id.clone(),
             generation: u64::try_from(state.generation).map_err(|_| invalid())?,
+            retirement: Default::default(),
         };
         self.revalidate()?;
         Ok(plan)
@@ -76,6 +81,7 @@ impl MessageTerminalStore for PlannedTerminalStore<'_, '_> {
     fn commit(&mut self, write: &MessageTerminalWrite) -> mez_agent::messaging::Result<()> {
         match write.kind() {
             MessageTerminalKind::ExpiryObservation => self.commit_expiry_record(write),
+            MessageTerminalKind::RecipientRetirement => self.commit_retirement_record(write),
             MessageTerminalKind::HorizonRelease => self.commit_release_record(write),
             MessageTerminalKind::SenderConsumption => self.commit_consumption_record(write),
         }

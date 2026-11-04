@@ -7,7 +7,7 @@
 use super::*;
 
 impl MessageService {
-    /// Freezes up to64 actual expired outcomes from one original whose handoff
+    /// Freezes up to64 actual terminal outcomes from one original whose handoff
     /// horizon has elapsed. Sender DTOs, receipt labels and current registration
     /// absence cannot select a release. No live slot changes before adoption.
     pub fn prepare_storage_horizon_release(
@@ -40,7 +40,6 @@ impl MessageService {
                 if let Some(terminal) = terminals[index]
                     && !acknowledged[index]
                     && !terminal.released
-                    && terminal.reason == DeliveryTerminalReason::Expired
                     && observed_at_ms.saturating_sub(terminal.observed_at_ms)
                         >= MESSAGE_TERMINAL_HANDOFF_MS
                     && !self.acknowledgement_protects(row.sequence, recipient)
@@ -75,6 +74,7 @@ impl MessageService {
                 observed_at_ms,
                 kind: MessageTerminalKind::HorizonRelease,
                 handoff: None,
+                retirement: None,
                 indices,
                 before,
                 metadata_bytes: bytes,
@@ -115,7 +115,6 @@ impl MessageService {
                 if let Some(terminal) = terminals[index]
                     && !acknowledged[index]
                     && !terminal.released
-                    && terminal.reason == DeliveryTerminalReason::Expired
                     && !self.acknowledgement_protects(row.sequence, recipient)
                     && let Some(at) = terminal
                         .observed_at_ms

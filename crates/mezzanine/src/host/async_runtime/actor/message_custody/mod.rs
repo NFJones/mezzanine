@@ -682,6 +682,7 @@ impl AsyncRuntimeSessionActor {
         let mut payload_read = None;
         let mut capacity_ready = false;
         let mut native_absence = None;
+        let mut native_retirement = None;
         let mut handoff_absence = None;
         let mut native_ack_receipt = None;
         let result = match event {
@@ -1181,18 +1182,28 @@ impl AsyncRuntimeSessionActor {
                 owner
                     .root
                     .adopt_native_input(self.service.message_service())
-                    .and_then(|proof| {
+                    .and_then(|observation| {
                         if let Some(Pending::NativeInput { source, receipt }) = owner.pending.take()
                         {
-                            match (receipt, proof) {
-                                (receipt, Some(proof)) => {
+                            use mez_agent::messaging::MessageNativeInputObservation;
+                            match (receipt, observation) {
+                                (receipt, MessageNativeInputObservation::Committed(proof)) => {
                                     // Retain the actual reply before application
                                     // validation, position or request-reply work.
                                     owner.native_result =
                                         Some(NativeInputResult::new(receipt, proof));
                                 }
-                                (None, None) => native_absence = Some(source),
-                                (Some(_), None) => {
+                                (None, MessageNativeInputObservation::Absent) => {
+                                    native_absence = Some(source)
+                                }
+                                (None, MessageNativeInputObservation::RecipientEnded(witness)) => {
+                                    native_retirement = Some(witness)
+                                }
+                                (
+                                    Some(_),
+                                    MessageNativeInputObservation::Absent
+                                    | MessageNativeInputObservation::RecipientEnded(_),
+                                ) => {
                                     return Err(MezError::invalid_state(
                                         "native canonical write returned absence",
                                     ));
@@ -1285,6 +1296,9 @@ impl AsyncRuntimeSessionActor {
         }
         if let Some(source) = native_absence {
             self.activate_absent_native_message(source);
+        }
+        if let Some(witness) = native_retirement {
+            self.activate_retired_native_message(witness);
         }
         if let Some(read) = payload_read {
             self.complete_payload_read(read);

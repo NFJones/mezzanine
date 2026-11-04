@@ -46,6 +46,8 @@ pub(crate) struct CustodyInventory {
     pub acknowledgement_keys: Vec<String>,
     /// Source-bound strict-expiry records, never restored owner capabilities.
     pub expiry_keys: Vec<String>,
+    /// Exact source-bound retired native slots, linked to original b1/o1 facts.
+    pub retirement_keys: Vec<String>,
     /// Original terminal horizon release references, never sender authority.
     pub release_keys: Vec<String>,
     /// Original canonical-proof-qualified consumed outcome references.
@@ -122,6 +124,7 @@ enum Key<'a> {
     Commit(u64),
     Acknowledgement(&'a str),
     Expiry(&'a str),
+    Retirement(&'a str),
     Release(&'a str),
     Consumption(&'a str),
     NativeContinuity(&'a str),
@@ -249,6 +252,7 @@ impl MmpCustodyStore {
             occurrences: Vec::new(),
             acknowledgement_keys: Vec::new(),
             expiry_keys: Vec::new(),
+            retirement_keys: Vec::new(),
             release_keys: Vec::new(),
             consumption_keys: Vec::new(),
             native_continuity_keys: Vec::new(),
@@ -377,6 +381,25 @@ impl MmpCustodyStore {
                         }
                         charge(&mut metadata, ACK_CHARGE)?;
                     }
+                    Key::Retirement(key) => {
+                        if let Some(previous) = group.take() {
+                            self.finish_inventory_group(
+                                transaction,
+                                previous,
+                                limits,
+                                &mut metadata,
+                                &mut inventory,
+                                pending,
+                            )?;
+                        }
+                        self.read_stored_retirement_in_snapshot(transaction, key, limits)?;
+                        charge(&mut metadata, ACK_CHARGE)?;
+                        inventory
+                            .retirement_keys
+                            .try_reserve(1)
+                            .map_err(|_| invalid("retirement inventory allocation failed"))?;
+                        inventory.retirement_keys.push(key.to_string());
+                    }
                     Key::RegistrationEnd(key) => {
                         if let Some(previous) = group.take() {
                             self.finish_inventory_group(
@@ -471,6 +494,7 @@ impl MmpCustodyStore {
                             | Key::Commit(sequence) => sequence,
                             Key::Acknowledgement(_)
                             | Key::Expiry(_)
+                            | Key::Retirement(_)
                             | Key::Release(_)
                             | Key::Consumption(_)
                             | Key::NativeContinuity(_)
@@ -655,6 +679,14 @@ fn parse_key(key: &str) -> Result<Key<'_>> {
                 Ok(Key::Chunk(sequence, index))
             }
         };
+    }
+    if let Some(digest) = key.strip_prefix("d1:")
+        && digest.len() == 64
+        && digest
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Ok(Key::Retirement(key));
     }
     if let Some(digest) = key.strip_prefix("r1:")
         && digest.len() == 64

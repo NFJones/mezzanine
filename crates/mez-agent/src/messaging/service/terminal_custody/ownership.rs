@@ -108,9 +108,14 @@ impl MessageService {
         }
         for index in &commit.identity.indices {
             match commit.identity.kind {
-                MessageTerminalKind::ExpiryObservation => {
+                MessageTerminalKind::ExpiryObservation
+                | MessageTerminalKind::RecipientRetirement => {
                     terminal[*index as usize] = Some(MessageDeliveryTerminalSnapshot {
-                        reason: DeliveryTerminalReason::Expired,
+                        reason: if commit.identity.kind == MessageTerminalKind::ExpiryObservation {
+                            DeliveryTerminalReason::Expired
+                        } else {
+                            DeliveryTerminalReason::RecipientRetired
+                        },
                         observed_at_ms: commit.identity.observed_at_ms,
                         released: false,
                     });

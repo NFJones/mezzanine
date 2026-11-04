@@ -73,8 +73,11 @@ async fn terminal_handoff_root_journals_original_fact_without_consuming_outcome(
     )
     .unwrap();
     let history = store.fold_custody_history(io.decode_limits()).unwrap();
-    assert_eq!(history.terminal_expiries.len(), 1);
-    assert_eq!(history.terminal_expiries[0].release_observed_at_ms, None);
+    assert_eq!(history.terminal_observations.len(), 1);
+    assert_eq!(
+        history.terminal_observations[0].release_observed_at_ms,
+        None
+    );
     assert!(history.acknowledgements.is_empty());
     drop(store);
     drop(io);

@@ -148,7 +148,7 @@ impl MmpCustodyStore {
                 && release
                     .entries
                     .iter()
-                    .any(|(index, _)| *index == frame.binding_index)
+                    .any(|(index, _, _)| *index == frame.binding_index)
             {
                 return Err(invalid());
             }

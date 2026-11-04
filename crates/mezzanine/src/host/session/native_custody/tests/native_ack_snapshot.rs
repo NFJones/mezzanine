@@ -37,6 +37,7 @@ pub(super) async fn commit_later_original(
     assert!(
         root.adopt_native_input(service.message_service())
             .unwrap()
+            .into_commit()
             .is_none()
     );
     for sequence in [1, 2] {
@@ -109,6 +110,7 @@ pub(super) async fn commit_later_original(
     let proof = root
         .adopt_native_input(service.message_service())
         .unwrap()
+        .into_commit()
         .unwrap();
     service
         .agent_shell_store_mut()

@@ -63,6 +63,7 @@ impl MessageService {
             indices: vec![u32::try_from(index).map_err(|_| changed())?],
             before: vec![Some(before)],
             handoff: Some(proof.clone()),
+            retirement: None,
             metadata_bytes: bytes,
             decode_payload_bytes: policy.limits.cache_payload_bytes,
             published: AtomicBool::new(false),
