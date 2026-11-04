@@ -449,7 +449,7 @@ refused before issuing I/O. Actual issued workers retain their actor/root owner
 through loss, backed-off retry and shutdown. Replacements require their own
 journal adoption. Qualified internal session startup retains the same barrier.
 
-A dedicated internal SessionFactory path now qualifies original schema10 custody
+A dedicated internal SessionFactory path now qualifies original custody
 and native observations in the same SQLite snapshot, then registers the actual
 root with the actor before publication. Version2 journal records include their
 commit generation and the actual admission guard at capture. Legacy version1 or
@@ -466,18 +466,35 @@ startup retains the original root and metadata leases throughout installation.
 Final checkpoint publication compares the original under the compound writer's
 session lock, preserving any newer checkpoint on refusal.
 
-The entry is internal and requires the original schema10 snapshot plus a scoped
-active checkpoint no larger than 256 KiB. Changed, missing, corrupt or oversized
-private evidence refuses startup. Generic restore still refuses schema10 and
-creates fresh native epochs. Independent crash startup without a manual message
-checkpoint, canonical commit-before-ACK dedup, terminal journals, reclaim and
-complete admitted-state resource/liveness coverage remain unfinished. These
-limits keep normal durable activation gated; no public option is added.
+Fresh internal factory setup now publishes a private original registration before
+returning its actor. The fixed MMPROOT1/registration.v1 record binds original
+UUID, owner and actual directory/database identities, independently of manual
+message snapshots. Its checksummed framing fits 362 bytes; exclusive staging,
+file sync, no-overwrite publication, exact stage cleanup and directory sync own
+at most two such files. Nonempty history cannot be retroactively registered.
+Foreign/malformed publications or an unowned staging collision refuse startup.
+
+Without a message snapshot, restart builds an empty-reference schema10 seed
+from that existing original registration. The same complete inventory/source/
+ACK scanner reconstructs actual originals, settled slots and allocator gaps.
+The first seed/position remains owned through retry; no missing original is
+initialized. Copies, changed allocations, unsafe files and unknown framing
+refuse. Generic factory startup rejects an existing custody root before socket
+or process publication, even when the layout lacks message state.
+
+Fresh setup also initializes an empty scoped private checkpoint, preserving any
+existing conversation bindings on refusal. This entry still needs trusted
+whole-session layout input on restart and a scoped active checkpoint no larger
+than 256 KiB. Changed, missing, corrupt or oversized private evidence refuses
+startup. Generic message restore still refuses schema10 and creates fresh native
+epochs. Native canonical commit-before-ACK dedup, terminal journals, reclaim,
+complete admitted-state resource/liveness coverage and normal host/all-ingress
+activation remain unfinished. No public option is added.
 
 Fresh opt-in requires an actually empty original store; only qualified recovery
 can install an existing store. Normal product construction keeps durable mode
-disabled: independent crash recovery, native restart deduplication and all
-ingress remain separate integration gates. Existing stores and saved
+disabled: complete crash recovery/liveness, native restart deduplication and
+all ingress remain separate integration gates. Existing stores and saved
 snapshots cannot select this policy. No configuration schema or wire field changes.
 Normal product traffic retains the existing resident limits.
 Replay limits and payload validation remain independent; a pending byte budget

@@ -60,7 +60,7 @@ async fn checkpointed_original(fixture: &Fixture) -> MessageServiceSnapshot {
 /// Keeps destination policy explicit instead of accepting checkpoint limits.
 fn request(checkpoint: MessageServiceSnapshot) -> CustodyRecoveryRequest {
     CustodyRecoveryRequest {
-        checkpoint,
+        checkpoint: Some(checkpoint),
         limits: Default::default(),
         retention_messages: 16,
         retention_bytes: 4 * 1024 * 1024,

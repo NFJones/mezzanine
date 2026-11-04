@@ -128,6 +128,15 @@ impl PreparedNativeCustodyContext {
 }
 
 impl RuntimeSessionService {
+    /// Initializes an empty actual private source before first durable admission.
+    /// Existing bindings refuse fresh setup instead of being overwritten.
+    pub(crate) fn initialize_native_custody_metadata(&mut self) -> Result<()> {
+        self.persistence
+            .cloned_transcript_store()
+            .ok_or_else(changed)?
+            .initialize_native_session_metadata(self.session().id.as_str())
+    }
+
     /// Hydrates private original contexts without publishing fresh epoch bytes.
     /// Missing/oversized/corrupt active metadata refuses this dedicated startup;
     /// generic restore retains its existing fresh-identity behavior.

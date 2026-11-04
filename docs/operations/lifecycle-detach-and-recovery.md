@@ -191,11 +191,15 @@ metadata marks it unrestorable. A dedicated internal factory now reconstructs
 original custody and qualifies native bindings using the actual private active
 checkpoint and guarded original journal before publishing sockets, processes or
 the actor. It retains the original root throughout startup. This entry requires
-the original schema10 snapshot and a scoped active checkpoint of at most 256 KiB.
-Missing, changed or corrupt evidence refuses startup.
-Independent crash startup without a manual message snapshot, canonical native
-commit deduplication and the remaining durability gates are unfinished, so this
-mode is still unavailable in normal product setup.
+trusted whole-session layout input and a scoped active checkpoint of at most
+256 KiB. Fresh internal setup now publishes an original physical registration
+before acceptance, allowing restart to scan original messages/ACKs without a
+manual message checkpoint. Generic factory startup refuses an existing custody
+root rather than ignore its mail when layout data lacks message state. Missing,
+copied, changed or corrupt original/private evidence refuses startup.
+Canonical native commit deduplication, complete recovery/liveness and the
+remaining durability gates are unfinished, so this mode is still unavailable in
+normal product setup.
 A saved store identifier or matching pane/conversation label grants no recovery
 or reconnect authority.
 

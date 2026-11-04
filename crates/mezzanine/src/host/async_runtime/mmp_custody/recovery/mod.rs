@@ -20,8 +20,9 @@ use super::*;
 
 /// Trusted startup input, consumed so only this root retains its checkpoint.
 pub(crate) struct CustodyRecoveryRequest {
-    /// Original schema10 data selected by trusted session/snapshot setup.
-    pub checkpoint: MessageServiceSnapshot,
+    /// Optional original schema10 selected by trusted snapshot setup. Absence
+    /// requires an existing physical registration and actual native context.
+    pub checkpoint: Option<MessageServiceSnapshot>,
     /// Destination-owned limits, never supplied by the saved checkpoint.
     pub limits: MessageStorageLimits,
     /// Destination-owned disposable replay count and byte bounds.
@@ -90,7 +91,9 @@ impl RecoveredMessageCustody {
 
 /// Immutable original retained outside every actual recovery worker.
 struct Input {
-    checkpoint: Arc<MessageServiceSnapshot>,
+    checkpoint: OnceLock<Arc<MessageServiceSnapshot>>,
+    /// Requires the published original on every retry, never a fresh baseline.
+    from_registration: bool,
     native_context: Option<Arc<PreparedNativeCustodyContext>>,
     limits: MessageStorageLimits,
     retention_messages: usize,
@@ -189,8 +192,14 @@ impl MmpCustodyRoot {
         native_context: Option<Arc<PreparedNativeCustodyContext>>,
         #[cfg(test)] probe: Option<Arc<super::tests::Probe>>,
     ) -> Self {
+        let from_registration = request.checkpoint.is_none();
+        let checkpoint = request
+            .checkpoint
+            .map(|s| OnceLock::from(Arc::new(s)))
+            .unwrap_or_default();
         let input = Arc::new(Input {
-            checkpoint: Arc::new(request.checkpoint),
+            checkpoint,
+            from_registration,
             native_context,
             limits: request.limits,
             retention_messages: request.retention_messages,
@@ -275,7 +284,11 @@ impl MmpCustodyRoot {
         };
         if !Arc::ptr_eq(&admission.input.identity, &written.identity)
             || Arc::strong_count(&admission.input) != 1
-            || Arc::strong_count(&admission.input.checkpoint) != 1
+            || admission
+                .input
+                .checkpoint
+                .get()
+                .is_none_or(|c| Arc::strong_count(c) != 1)
             || admission
                 .input
                 .native_context
@@ -302,7 +315,9 @@ impl MmpCustodyRoot {
             ..
         } = *written;
         let input = Arc::try_unwrap(admission.input).map_err(|_| ownership_error())?;
-        let checkpoint = Arc::try_unwrap(input.checkpoint).map_err(|_| ownership_error())?;
+        let checkpoint =
+            Arc::try_unwrap(input.checkpoint.into_inner().ok_or_else(ownership_error)?)
+                .map_err(|_| ownership_error())?;
         *state = State::Idle(opened);
         Ok(RecoveredMessageCustody {
             checkpoint,
@@ -327,13 +342,7 @@ fn spawn(
     #[cfg(test)] probe: Option<Arc<super::tests::Probe>>,
 ) -> JoinHandle<Result<Written>> {
     runtime.spawn_blocking(move || {
-        let binding = input
-            .checkpoint
-            .storage_snapshot
-            .as_ref()
-            .and_then(|s| s.binding.as_ref())
-            .ok_or_else(ownership_error)?;
-        if binding.owner != destination.owner {
+        if input.from_registration && input.native_context.is_none() {
             return Err(ownership_error());
         }
         let existing = ownership
@@ -362,6 +371,33 @@ fn spawn(
             if !observed.same_position(anchor) {
                 return Err(ownership_error());
             }
+            if input.from_registration {
+                let observed = owned.registered_recovery_checkpoint(
+                    input.retention_messages,
+                    input.retention_bytes,
+                )?;
+                let captured = input.checkpoint.get_or_init(|| Arc::new(observed.clone()));
+                if captured
+                    .storage_snapshot
+                    .as_ref()
+                    .and_then(|s| s.binding.as_ref())
+                    != observed
+                        .storage_snapshot
+                        .as_ref()
+                        .and_then(|s| s.binding.as_ref())
+                {
+                    return Err(ownership_error());
+                }
+            }
+            let checkpoint = input.checkpoint.get().ok_or_else(ownership_error)?;
+            if checkpoint
+                .storage_snapshot
+                .as_ref()
+                .and_then(|s| s.binding.as_ref())
+                .is_none_or(|b| b.owner != destination.owner)
+            {
+                return Err(ownership_error());
+            }
             #[cfg(test)]
             if let Some(probe) = &probe {
                 probe.before_write();
@@ -369,7 +405,7 @@ fn spawn(
             let (service, lease, native_lease, native_bindings) =
                 if let Some(context) = &input.native_context {
                     let recovered = owned.reconstruct_native_service(
-                        input.checkpoint.clone(),
+                        checkpoint.clone(),
                         &scope,
                         input.limits,
                         input.retention_messages,
@@ -384,7 +420,7 @@ fn spawn(
                     )
                 } else {
                     let (service, lease) = owned.reconstruct_cold_service(
-                        input.checkpoint.clone(),
+                        checkpoint.clone(),
                         &scope,
                         input.limits,
                         input.retention_messages,

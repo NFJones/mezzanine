@@ -16128,7 +16128,9 @@ barriers remain required during qualified native startup as well as live
 operation.
 
 The dedicated internal native SessionFactory recovery path MUST qualify the
-original schema10 store and native journal in the same SQLite read snapshot.
+original store and native journal in the same SQLite read snapshot. A supplied
+schema10 checkpoint adds reference/floor constraints; it MUST NOT be required
+when the original has a trusted physical registration.
 Version2 native records MUST carry their actual commit generation and the lower
 owner's captured native admission guard. Version1 and unguarded observations
 MUST remain unavailable for native resurrection. The current original allocator
@@ -16153,14 +16155,38 @@ Final private checkpoint publication MUST compare the original under the same
 session lock as its compound sidecar/checkpoint writes; a newer checkpoint MUST
 remain intact on refusal. Generic restore MUST continue to refuse schema10 and
 use fresh native epochs.
-This internal entry currently requires the original schema10 snapshot and an
-existing scoped active metadata file of at most 256 KiB. Missing, changed,
-oversized or corrupt private evidence MUST refuse rather than fall back to an
-empty original. These conservative limits do not qualify complete admitted-state
-recovery. Independent crash startup without an optional manual checkpoint,
+
+Fresh internal setup MUST publish a bounded private original registration before
+returning an actor capable of durable acceptance. The registration.v1 file uses
+MMPROOT1 framing, original store UUID, zero origin generation/watermark, actual
+directory/database device/inode identities, bounded owner and SHA256 checksum.
+Its at most 362 bytes MUST publish through an exclusively created fixed staging
+slot, file sync, no-overwrite link, exact owned-stage removal and directory sync.
+At most two such files are created during publication. Only a fenced, actually
+empty trusted-origin store MAY publish; nonempty history MUST NOT acquire an
+origin retroactively. An identical settled publication MAY reconcile a lost
+result. Foreign or malformed publication and unowned staging MUST refuse.
+
+When no manual message checkpoint is supplied, recovery MUST read the existing
+registration under the owned original root and build a bodyless schema10 seed
+with no source/native/cursor/ACK claims. Complete original inventory, source
+and ACK scanning MUST determine current custody and persistent allocator gaps;
+zero origin floors MUST NOT replace current history. Retry MUST retain its first
+seed and store position, recheck the same original registration and withhold
+replacement baselines. Missing, copied, replaced, corrupt, future or unsafe
+registration-based inputs MUST fail closed without initializing a replacement.
+Generic factory startup MUST refuse an existing custody root before sockets/processes,
+even when layout data omits its optional message checkpoint.
+
+Fresh setup MUST initialize an actual empty private active checkpoint without
+overwriting existing conversation bindings. Recovery still requires trusted
+whole-session layout input and an existing scoped active metadata file of at
+most 256 KiB. Missing, changed, oversized or corrupt private evidence MUST refuse
+rather than fall back to an empty original. These conservative limits do not
+qualify complete admitted-state recovery. Normal host/default activation,
 canonical context commit-before-ACK deduplication, terminal journals, reclaim,
-complete resource-bound liveness and all-ingress activation remain required
-before normal durable product setup. No config or wire field enables this path.
+complete resource-bound liveness and all-ingress integration remain required.
+No config or wire field enables this internal path.
 
 Immutable envelope auxiliary metadata MUST additionally fit a 16 MiB logical
 budget over the deduplicated replay/custody union after normal replay eviction.

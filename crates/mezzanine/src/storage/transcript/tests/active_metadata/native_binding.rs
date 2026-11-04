@@ -123,3 +123,29 @@ fn native_metadata_capture_refuses_missing_and_oversized_sources() {
     assert!(store.capture_native_session_metadata("$scope").is_err());
     assert_eq!(fs::read(&path).unwrap(), original);
 }
+
+/// Fresh custody must start with a real scoped private source without replacing
+/// existing conversation bindings. Empty initialization is retryable; nonempty
+/// current metadata remains byte-for-byte intact when fresh setup refuses it.
+#[test]
+fn fresh_native_metadata_initialization_preserves_existing_conversations() {
+    let root = temp_root("fresh-native-metadata");
+    let store = AgentTranscriptStore::new(root);
+    store.initialize_native_session_metadata("$scope").unwrap();
+    store.initialize_native_session_metadata("$scope").unwrap();
+    assert!(
+        store
+            .capture_native_session_metadata("$scope")
+            .unwrap()
+            .1
+            .is_empty()
+    );
+    let record = agent_session_metadata("$scope", "retained-conversation");
+    store
+        .save_agent_session_metadata("$scope", &[record])
+        .unwrap();
+    let path = store.agent_session_metadata_checkpoint_file("$scope");
+    let original = fs::read(&path).unwrap();
+    assert!(store.initialize_native_session_metadata("$scope").is_err());
+    assert_eq!(fs::read(&path).unwrap(), original);
+}

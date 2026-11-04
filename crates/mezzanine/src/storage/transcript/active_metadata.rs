@@ -257,6 +257,32 @@ impl NativeMetadataOrigin {
 }
 
 impl AgentTranscriptStore {
+    /// Creates the empty private session source before fresh custody activation.
+    /// Existing current or legacy conversation bindings are preserved and refuse
+    /// fresh setup; only an absent/empty source can initialize under this lock.
+    pub(crate) fn initialize_native_session_metadata(&self, id: &str) -> Result<()> {
+        let _lock = self.lock_agent_session_metadata(id)?;
+        let checkpoint =
+            match read_checkpoint(&self.agent_session_metadata_checkpoint_file(id), id)? {
+                Some(checkpoint) => checkpoint,
+                None => self.legacy_checkpoint(id)?,
+            };
+        if !checkpoint_records(
+            &self.agent_session_metadata_checkpoint_file(id),
+            &checkpoint,
+            id,
+        )?
+        .is_empty()
+        {
+            return Err(MezError::conflict(
+                "fresh native custody cannot replace active private bindings",
+            ));
+        }
+        self.publish_active_metadata(id, &checkpoint)
+            .map_err(PublicationFailure::into_error)?;
+        Ok(())
+    }
+
     /// Reads an existing, bounded original active checkpoint for trusted native
     /// startup. No legacy import or empty checkpoint creation can qualify it.
     pub(crate) fn capture_native_session_metadata(

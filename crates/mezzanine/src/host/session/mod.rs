@@ -196,7 +196,7 @@ impl SessionFactory {
         .await
     }
 
-    /// Explicit trusted whole-session cold-custody startup. This internal entry
+    /// Explicit trusted fresh/recovered native custody startup. This internal entry
     /// is not selected by ordinary product construction until all durable gates
     /// are implemented; generic snapshot startup remains fresh and refuses10.
     #[allow(
@@ -222,11 +222,14 @@ impl SessionFactory {
     async fn create_owned(
         request: SessionFactoryRequest,
         native: PaneProcessRetirementOwner,
-        recover_custody: bool,
+        durable_custody: bool,
         #[cfg(test)] native_probe: Option<NativePaneStartupProbe>,
     ) -> Result<SessionRuntime> {
         validate_request(&request)?;
         let session_id = request.session.id.to_string();
+        if !durable_custody {
+            native_custody::require_no_original(&request.config.root, &session_id)?;
+        }
         let registry = request
             .sockets
             .publish_registry
@@ -234,7 +237,7 @@ impl SessionFactory {
             .transpose()?;
         let mut artifacts = SessionRuntimeArtifacts::new(registry.clone(), session_id.clone());
 
-        let early_listeners = if recover_custody {
+        let early_listeners = if durable_custody {
             None
         } else {
             Some(native_custody::bind_listeners(
@@ -268,7 +271,7 @@ impl SessionFactory {
             request.created_at_unix_seconds,
         )
         .await?;
-        let prepared_native = if recover_custody {
+        let prepared_native = if durable_custody {
             Some(
                 native_custody::prepare(
                     &mut service,

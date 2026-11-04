@@ -269,6 +269,29 @@ impl MmpCustodyRoot {
         )
     }
 
+    /// Publishes the original physical allocation on the owned opening worker
+    /// before trusted fresh setup may activate custody. Existing history refuses.
+    pub fn open_registered(
+        root: PathBuf,
+        owner: String,
+        limits: CustodyStoreLimits,
+        runtime: Handle,
+    ) -> Self {
+        Self::construct_policy(
+            Destination {
+                root,
+                owner,
+                limits,
+            },
+            runtime,
+            true,
+            #[cfg(test)]
+            None,
+            #[cfg(test)]
+            None,
+        )
+    }
+
     /// Registers the actual opening handle before observers can access the root.
     fn construct(
         destination: Destination,
@@ -276,10 +299,31 @@ impl MmpCustodyRoot {
         #[cfg(test)] probe: Option<Arc<tests::Probe>>,
         #[cfg(test)] ack_probe: Option<Arc<acknowledgement::tests::Probe>>,
     ) -> Self {
+        Self::construct_policy(
+            destination,
+            runtime,
+            false,
+            #[cfg(test)]
+            probe,
+            #[cfg(test)]
+            ack_probe,
+        )
+    }
+
+    /// Makes publication authority an explicit trusted construction choice.
+    fn construct_policy(
+        destination: Destination,
+        runtime: Handle,
+        publish_registration: bool,
+        #[cfg(test)] probe: Option<Arc<tests::Probe>>,
+        #[cfg(test)] ack_probe: Option<Arc<acknowledgement::tests::Probe>>,
+    ) -> Self {
         let source = destination.clone();
         let ownership = Arc::new(Mutex::new(None));
         let opening_ownership = ownership.clone();
-        let worker = runtime.spawn_blocking(move || open_destination(&source, &opening_ownership));
+        let worker = runtime.spawn_blocking(move || {
+            open_destination(&source, &opening_ownership, publish_registration)
+        });
         Self(Arc::new(Inner {
             state: Mutex::new(State::Opening(worker)),
             observer: tokio::sync::Mutex::new(()),
@@ -801,12 +845,16 @@ impl Drop for Inner {
 fn open_destination(
     source: &Destination,
     ownership: &Mutex<Option<Arc<RootOwnership>>>,
+    publish_registration: bool,
 ) -> Result<Opened> {
     let fence = Arc::new(RootOwnership::acquire(&source.root)?);
     fence.validate_root()?;
     let mut store = MmpCustodyStore::open_with_limits(&source.root, &source.owner, source.limits)?;
     {
-        let _bound = fence.bind_store(&mut store)?;
+        let mut bound = fence.bind_store(&mut store)?;
+        if publish_registration {
+            bound.publish_registration()?;
+        }
     }
     *ownership.lock().map_err(|_| ownership_error())? = Some(fence);
     let anchor = store.acceptance_plan(0)?;

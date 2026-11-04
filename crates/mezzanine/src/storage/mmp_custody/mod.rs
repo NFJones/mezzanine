@@ -35,6 +35,7 @@ mod inventory;
 pub(crate) mod native_continuity;
 pub(crate) mod ownership;
 mod recovery;
+mod registration;
 
 /// Version of this private row/receipt store, independent of message snapshots.
 const SCHEMA_VERSION: i64 = 2;
