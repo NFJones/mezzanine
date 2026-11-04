@@ -11,7 +11,7 @@ use mez_agent::transcript::{TranscriptContextEvent, TranscriptRole};
 use mez_core::ids::AgentId;
 
 /// Actual native actor with guarded spill/registration settled before admission.
-async fn scene(
+pub(super) async fn scene(
     fixture: &Fixture,
 ) -> (
     AsyncRuntimeSessionHandle,
@@ -36,7 +36,7 @@ async fn scene(
 /// Accepts a genuine same-conversation native self-message via the established
 /// tracked native ingress. Its original request, lower source and actual disk
 /// acceptance settle through the actor before any input probe can begin.
-async fn accept(
+pub(super) async fn accept(
     actor: &mut AsyncRuntimeSessionActor,
     recipient: &AgentId,
     turn: &mez_agent::AgentTurnRecord,
@@ -270,7 +270,7 @@ async fn actor_native_receive_journal_refusal_preserves_one_input_and_provider_g
 /// Stop/namespace tests need its real claim and completion events before native
 /// canonical work can acquire the archive prefix. The caller joins it before
 /// closing actor request admission.
-fn writer(
+pub(super) fn writer(
     handle: &AsyncRuntimeSessionHandle,
 ) -> (
     std::sync::Arc<std::sync::atomic::AtomicBool>,
@@ -1223,26 +1223,35 @@ async fn assert_postcanonical_application_recovery(
             .insert(turn.turn_id.clone(), committed);
     }
     tokio::time::sleep(Duration::from_millis(1100)).await;
-    let mut acknowledged = false;
-    for _ in 0..4 {
-        actor.poll_message_custody_for_tests();
-        let status = actor.observe_message_custody_for_tests().await.unwrap();
-        if status == CustodyWorkerStatus::NativeContinuityAwaitingAdoption {
-            assert!(
-                retire,
-                "only actual namespace replacement needs a continuity journal"
-            );
-            continue;
+    let before_recovery = fixture.probe.attempts.load(Ordering::SeqCst);
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            actor.poll_message_custody_for_tests();
+            match actor.observe_message_custody_for_tests().await.unwrap() {
+                CustodyWorkerStatus::Idle => {
+                    // An equally-ready application timer may win before the
+                    // idle observation left by unrelated acceptance. Drive the
+                    // actual pump again without claiming that I/O was issued.
+                    tokio::time::sleep(Duration::from_millis(1)).await;
+                }
+                CustodyWorkerStatus::NativeContinuityAwaitingAdoption => assert!(
+                    retire,
+                    "only actual namespace replacement needs a continuity journal"
+                ),
+                CustodyWorkerStatus::AcknowledgementAwaitingAdoption => break,
+                status => panic!("application retry issued unexpected physical work: {status:?}"),
+            }
         }
+    })
+    .await
+    .unwrap();
+    if !retire {
         assert_eq!(
-            status,
-            CustodyWorkerStatus::AcknowledgementAwaitingAdoption,
-            "application recovery must use an ACK job, not retry an idle canonical root"
+            fixture.probe.attempts.load(Ordering::SeqCst),
+            before_recovery,
+            "local application/ACK must not reissue canonical or acceptance I/O"
         );
-        acknowledged = true;
-        break;
     }
-    assert!(acknowledged);
     assert_eq!(
         fixture
             .connection()
@@ -1325,9 +1334,31 @@ async fn assert_postcanonical_application_recovery(
         );
     }
     if let Some(closing) = closing {
-        actor.poll_message_custody_for_tests();
-        assert!(closing.await.unwrap().is_ok());
+        finish_shutdown(&mut actor, closing).await;
     }
+}
+
+/// Drives actual shutdown to its reply when application and idle-root events
+/// are simultaneously ready. Neither one poll nor a status name proves drain.
+async fn finish_shutdown(
+    actor: &mut AsyncRuntimeSessionActor,
+    mut closing: tokio::sync::oneshot::Receiver<Result<crate::runtime::RuntimeLifecycleState>>,
+) {
+    let result = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            actor.poll_message_custody_for_tests();
+            match closing.try_recv() {
+                Ok(result) => break result,
+                Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {
+                    tokio::time::sleep(Duration::from_millis(1)).await;
+                }
+                Err(error) => panic!("actual shutdown reply lost: {error}"),
+            }
+        }
+    })
+    .await
+    .unwrap();
+    assert!(result.is_ok());
 }
 
 /// A real post-c1 request-reply error must retry local application work and then
@@ -1392,6 +1423,13 @@ async fn assert_acknowledged_application_retry(shutdown: bool) {
         actor.service.has_pending_native_input(),
         "the actual ACK must not discard its failing scheduler continuation"
     );
+    assert!(
+        actor
+            .service
+            .ensure_runtime_message_transfers_settled_for_restore()
+            .is_err(),
+        "runtime replacement must retain the unfinished original continuation"
+    );
     assert!(actor.service.pending_native_input_ack().is_none());
     actor
         .service
@@ -1422,7 +1460,7 @@ async fn assert_acknowledged_application_retry(shutdown: bool) {
         1
     );
     if let Some(closing) = closing {
-        assert!(closing.await.unwrap().is_ok());
+        finish_shutdown(&mut actor, closing).await;
         assert!(actor.service.pending_agent_provider_tasks().is_empty());
     } else {
         assert_eq!(

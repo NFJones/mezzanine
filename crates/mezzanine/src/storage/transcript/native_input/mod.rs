@@ -104,8 +104,8 @@ impl NativeTranscriptPlan {
 }
 
 /// Live original archive and ordinary mutation lease; never serialized.
-pub(crate) struct NativeTranscriptLease<'a> {
-    store: &'a AgentTranscriptStore,
+pub(crate) struct NativeTranscriptLease {
+    store: AgentTranscriptStore,
     conversation_id: String,
     lease: File,
     root: File,
@@ -115,19 +115,111 @@ pub(crate) struct NativeTranscriptLease<'a> {
 }
 
 impl AgentTranscriptStore {
+    /// Probes and recovers canonical ownership under one actual conversation
+    /// lock. Only the original MMP root supplies its verified source/journal
+    /// snapshot; this method never seals input, ACKs mail or schedules work.
+    /// A lookup-only absence can abort an incomplete unpublished stage only
+    /// with neither original journal, before any canonical byte was permitted.
+    pub(crate) fn recover_native_input_lease(
+        &self,
+        anchor: &mez_agent::messaging::MessageNativeInputAnchor,
+        store_id: &[u8; 16],
+        occurrence: &[u8; 32],
+        expected: Option<(
+            &mez_agent::transcript::TranscriptNativeInputSource,
+            &NativeTranscriptPlan,
+        )>,
+        application_projection: bool,
+    ) -> Result<(
+        Option<std::sync::Arc<super::NativeInputAppendReceipt>>,
+        Option<NativeTranscriptLease>,
+    )> {
+        let conversation = anchor.native_owner().conversation_id();
+        validate_conversation_id(conversation)?;
+        if !self.root.try_exists()? {
+            return if expected.is_none() && !application_projection {
+                Ok((None, None))
+            } else {
+                Err(unavailable())
+            };
+        }
+        let _root = open_directory(&self.root)?;
+        let lock = self.acquire_conversation_lock(conversation)?;
+        let canonical = self.native_input_append_receipt_locked(conversation, occurrence, &lock)?;
+        let stage = if canonical.is_none() {
+            self.native_input_stage_locked(conversation, occurrence, &lock)?
+        } else {
+            None
+        };
+        if canonical.is_none() && stage.is_none() && expected.is_none() && !application_projection {
+            return Ok((None, None));
+        }
+        let create =
+            canonical.is_none() && stage.is_none() && expected.is_none() && application_projection;
+        let lease = self.native_input_lease_locked(conversation, create, Some(occurrence), lock)?;
+        let checked = |plan: &NativeInputAppendPlan, rows: &[TranscriptEntry]| -> Result<()> {
+            if !plan.source().matches_anchor(anchor, store_id)
+                || plan.source().occurrence() != *occurrence
+                || expected
+                    .is_some_and(|(source, input)| source != plan.source() || input != plan.input())
+            {
+                return Err(unavailable());
+            }
+            lease.check_native_append_plan(plan, rows)
+        };
+        let canonical = match (canonical, stage) {
+            (Some(canonical), _) => {
+                checked(canonical.plan(), &canonical.rows()?)?;
+                Some(canonical)
+            }
+            (None, Some(stage)) if stage.plan().is_some() => {
+                checked(stage.plan().ok_or_else(unavailable)?, &stage.rows()?)?;
+                Some(stage.publish(self, &lease.lease)?)
+            }
+            (None, Some(stage)) => {
+                // A durable preparation can only follow final publication;
+                // an incomplete stage alongside p1 is inconsistent, not absent.
+                if expected.is_some() {
+                    return Err(unavailable());
+                }
+                if !application_projection {
+                    stage.abort_incomplete()?;
+                    return Ok((None, None));
+                }
+                None
+            }
+            (None, None) => None,
+        };
+        Ok((canonical, Some(lease)))
+    }
+
     /// Opens only the actual existing conversation. Missing backing refuses;
     /// creation is restricted to its empty private history file. The caller
     /// holds this lease through original preparation, append and commit journal.
+    #[cfg(test)]
     pub(crate) fn native_input_lease(
         &self,
         conversation_id: &str,
         create_empty: bool,
         occurrence: Option<&[u8; 32]>,
-    ) -> Result<NativeTranscriptLease<'_>> {
+    ) -> Result<NativeTranscriptLease> {
         validate_conversation_id(conversation_id)?;
+        let lease = self.acquire_conversation_lock(conversation_id)?;
+        self.native_input_lease_locked(conversation_id, create_empty, occurrence, lease)
+    }
+
+    /// Builds the physical owner from this exact already-held conversation
+    /// lock; cold receipt recovery must never release/reacquire between probe
+    /// and promotion. Only this module supplies that real matching lock.
+    fn native_input_lease_locked(
+        &self,
+        conversation_id: &str,
+        create_empty: bool,
+        occurrence: Option<&[u8; 32]>,
+        lease: File,
+    ) -> Result<NativeTranscriptLease> {
         let root = open_directory(&self.root)?;
         let directory = open_directory(&self.root.join(conversation_id))?;
-        let lease = self.acquire_conversation_lock(conversation_id)?;
         let foreign_receipts = match occurrence {
             Some(occurrence) => {
                 self.has_foreign_native_input_receipts_locked(conversation_id, occurrence, &lease)?
@@ -157,7 +249,7 @@ impl AgentTranscriptStore {
         directory.sync_all()?;
         root.sync_all()?;
         let opened = NativeTranscriptLease {
-            store: self,
+            store: self.clone(),
             conversation_id: conversation_id.into(),
             lease,
             root,
@@ -170,7 +262,20 @@ impl AgentTranscriptStore {
     }
 }
 
-impl NativeTranscriptLease<'_> {
+impl NativeTranscriptLease {
+    /// Reads only this lease's occurrence without recursively acquiring its
+    /// kernel lock. Used for idempotent c1 image retirement after worker loss.
+    pub(crate) fn lookup_append_receipt(
+        &self,
+        occurrence: &[u8; 32],
+    ) -> Result<Option<std::sync::Arc<super::NativeInputAppendReceipt>>> {
+        self.store.native_input_append_receipt_locked(
+            &self.conversation_id,
+            occurrence,
+            &self.lease,
+        )
+    }
+
     /// Freezes the actual next sequence and complete validated physical prefix.
     /// The caller must durably retain the returned plan before appending.
     #[cfg(test)]

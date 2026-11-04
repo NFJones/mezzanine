@@ -312,7 +312,16 @@ impl AgentTranscriptStore {
         &self,
         conversation_ids: &[&str],
     ) -> Result<Vec<(PathBuf, AppendReceipt, Vec<TranscriptEntry>)>> {
-        let paths = self.append_receipt_paths()?;
+        self.read_locked_append_receipts_at(conversation_ids, self.append_receipt_paths()?)
+    }
+
+    /// Reads the same captured inventory used for native staging admission.
+    /// Re-enumeration must not hide a selected path lost under its owner's lock.
+    fn read_locked_append_receipts_at(
+        &self,
+        conversation_ids: &[&str],
+        paths: Vec<PathBuf>,
+    ) -> Result<Vec<(PathBuf, AppendReceipt, Vec<TranscriptEntry>)>> {
         paths
             .into_iter()
             .filter_map(|path| match receipt_conversation_id(&path) {
@@ -409,7 +418,15 @@ impl AgentTranscriptStore {
     /// ownership. This is only an admission fence: the existing persistence
     /// owner must settle accepted rows, and no receipt is replayed or retired.
     pub(super) fn ensure_fork_receipts_settled(&self, source: &str, target: &str) -> Result<()> {
-        for (_, receipt, _) in self.read_locked_append_receipts(&[source, target])? {
+        let paths = self.append_receipt_paths()?;
+        if self.has_native_input_staging_paths(source, None, &paths)?
+            || self.has_native_input_staging_paths(target, None, &paths)?
+        {
+            return Err(MezError::conflict(
+                "saved fork requires native staging to settle",
+            ));
+        }
+        for (_, receipt, _) in self.read_locked_append_receipts_at(&[source, target], paths)? {
             if receipt.conversation_id == source || receipt.conversation_id == target {
                 return Err(MezError::conflict(
                     "saved fork requires source and target append receipts to settle",
@@ -422,14 +439,19 @@ impl AgentTranscriptStore {
     /// Checks only recovery owners overlapping a physical source prefix. The
     /// caller holds this exact conversation's append lease; later-only receipt
     /// ownership cannot block verification of an earlier original source.
+    /// Undecoded native staging conservatively fences every prefix.
     pub(super) fn prefix_has_pending_append_receipts(
         &self,
         conversation_id: &str,
         through: u64,
         _lease: &fs::File,
     ) -> Result<bool> {
+        let paths = self.append_receipt_paths()?;
+        if self.has_native_input_staging_paths(conversation_id, None, &paths)? {
+            return Ok(true);
+        }
         Ok(self
-            .read_locked_append_receipts(&[conversation_id])?
+            .read_locked_append_receipts_at(&[conversation_id], paths)?
             .iter()
             .any(|(_, receipt, rows)| {
                 receipt.conversation_id == conversation_id
@@ -441,15 +463,17 @@ impl AgentTranscriptStore {
     /// Ordinary producers cannot fill the native row's reserved position or
     /// publish a later suffix before original-root c1 settlement. Only the
     /// native worker's private lease methods may complete that canonical owner.
-    pub(super) fn ensure_native_input_receipts_settled(
+    /// Every caller already holds the conversation's actual mutation lock.
+    pub(super) fn ensure_native_input_receipts_settled_locked(
         &self,
         conversation_id: &str,
-        _lease: &fs::File,
     ) -> Result<()> {
-        if self
-            .read_locked_append_receipts(&[conversation_id])?
-            .iter()
-            .any(|(_, receipt, _)| receipt.native_input.is_some())
+        let paths = self.append_receipt_paths()?;
+        if self.has_native_input_staging_paths(conversation_id, None, &paths)?
+            || self
+                .read_locked_append_receipts_at(&[conversation_id], paths)?
+                .iter()
+                .any(|(_, receipt, _)| receipt.native_input.is_some())
         {
             return Err(
                 MezError::conflict("canonical native input append remains unsettled")
@@ -466,9 +490,7 @@ impl AgentTranscriptStore {
     pub(crate) fn has_unsettled_append_receipts(&self, conversation_id: &str) -> Result<bool> {
         validate_conversation_id(conversation_id)?;
         let _lease = self.acquire_conversation_lock(conversation_id)?;
-        Ok(!self
-            .read_locked_append_receipts(&[conversation_id])?
-            .is_empty())
+        self.has_unsettled_append_receipts_locked(conversation_id, &_lease)
     }
 
     /// Checks append ownership while the caller retains the ordinary mutation
@@ -479,9 +501,13 @@ impl AgentTranscriptStore {
         conversation_id: &str,
         _lease: &fs::File,
     ) -> Result<bool> {
-        Ok(!self
-            .read_locked_append_receipts(&[conversation_id])?
-            .is_empty())
+        let paths = self.append_receipt_paths()?;
+        Ok(
+            self.has_native_input_staging_paths(conversation_id, None, &paths)?
+                || !self
+                    .read_locked_append_receipts_at(&[conversation_id], paths)?
+                    .is_empty(),
+        )
     }
 
     /// Allows an original native worker to own its exact canonical receipt
@@ -492,15 +518,19 @@ impl AgentTranscriptStore {
         occurrence: &[u8; 32],
         _lease: &fs::File,
     ) -> Result<bool> {
-        Ok(self
-            .read_locked_append_receipts(&[conversation])?
-            .iter()
-            .any(|(_, receipt, _)| {
-                receipt
-                    .native_input
-                    .as_ref()
-                    .is_none_or(|native| native.source().occurrence() != *occurrence)
-            }))
+        let paths = self.append_receipt_paths()?;
+        Ok(
+            self.has_native_input_staging_paths(conversation, Some(occurrence), &paths)?
+                || self
+                    .read_locked_append_receipts_at(&[conversation], paths)?
+                    .iter()
+                    .any(|(_, receipt, _)| {
+                        receipt
+                            .native_input
+                            .as_ref()
+                            .is_none_or(|native| native.source().occurrence() != *occurrence)
+                    }),
+        )
     }
 
     /// Preserves ordinary row-only admission and its v1 recovery contract.
@@ -526,7 +556,7 @@ impl AgentTranscriptStore {
         let entries = batch.entries();
         let receipt = AppendReceipt::from_batch(batch, generation)?;
         let _lock = self.acquire_conversation_lock(&receipt.conversation_id)?;
-        self.ensure_native_input_receipts_settled(&receipt.conversation_id, &_lock)?;
+        self.ensure_native_input_receipts_settled_locked(&receipt.conversation_id)?;
         // Admission must not leave a replayable receipt for a sequence that
         // already belongs to different durable content. Check the complete
         // archive off-actor so an older batch cannot hide behind a long tail.

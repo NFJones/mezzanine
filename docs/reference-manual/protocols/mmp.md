@@ -515,6 +515,25 @@ exact receipt to retire. Each internal operation allows 2,048 rows / 32 MiB of
 encoded canonical rows, with a 64 MiB plus 256 KiB receipt file bound; complete
 admitted-state resource/liveness qualification remains outstanding.
 
+The original attempt retains its actual conversation lock and physical handles
+even when receipt publication fails before creating a file. Retry keeps the
+first batch position; a competing ordinary writer cannot take it. Native
+issuance waits for queued and in-flight ordinary transcript rows. After actual
+issuance, new bookkeeping reads for that conversation wait for native commit,
+including Stop bookkeeping, so they observe the committed frontier.
+
+Original-root lookup checks unpublished native staging under that same lock.
+A complete image must match its accepted source, original preparation if present,
+and physical batch/suffix before the same file is promoted. A final/temp pair
+reconciles only for two names of the same object. Corrupt complete images,
+conflicting owners and replacement backing refuse; append, fork, delete and
+prefix mutations also fence staging. An incomplete private JSON prefix can be
+aborted only by lookup without a live projection and with neither journal.
+Final publication precedes canonical bytes, so this abort commits no input and
+preserves the accepted envelope. Genuine selection can then create a new local
+message turn; it does not restart the interrupted task. An existing live attempt
+instead finishes its original partial bytes and selected position.
+
 Sequenced ordinary peer projections use a digest-validated `peer_reference`
 context event for up to 2 MiB of exact untrusted content, including NUL bytes.
 These references have no native attribution or ACK rights. Legacy ordinary
@@ -550,10 +569,13 @@ continues. A delivery or eligibility notification received behind an active scan
 cursor preserves one further pass, so earlier cold sources are revisited. The
 scan stops when exhausted without another notification.
 
-Process-exit tests stop after canonical commit and after preparation while the
-native row is still missing. The real factory and actor qualify the original
+Process-exit tests stop after canonical commit, after preparation while the
+native row is still missing, and during partial/complete unpublished staging.
+For a complete staged image, the real factory and actor qualify the original
 binding, finish or deduplicate the canonical row, and ACK its historical slot
-without creating a task or provider request. A real synced archive observation
+without creating a task or provider request. Partial staging is aborted before
+genuine fresh selection, preserving the interrupted task unchanged.
+A real synced archive observation
 may advance only the current original private transcript frontier; descriptive
 serialization discards that observation, and historical `c1` alone cannot claim
 current backing.
@@ -563,8 +585,7 @@ capability label; the original guarded binding and private context must match,
 and explicit external harnesses remain excluded. A current proven native binding
 also preserves an originally absent project scope when its restored process has
 a working directory: receiving mail must not replace that registration through
-metadata enrichment. Complete receipt-staging and producer-order qualification,
-exact ACK snapshot qualification, resource/liveness and normal all-ingress activation
+metadata enrichment. Exact ACK snapshot qualification, resource/liveness and normal all-ingress activation
 still require implementation and qualification.
 
 Fresh opt-in requires an actually empty original store; only qualified recovery

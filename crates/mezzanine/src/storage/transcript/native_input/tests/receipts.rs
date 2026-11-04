@@ -8,7 +8,7 @@ use std::os::unix::fs::DirBuilderExt;
 
 /// Builds descriptive canonical input data for filesystem-owner tests only.
 /// These row fields do not create a message, native binding or ACK capability.
-fn input(fixture: &Fixture) -> TranscriptEntry {
+pub(super) fn input(fixture: &Fixture) -> TranscriptEntry {
     let mut row = fixture.row.clone();
     row.role = TranscriptRole::System;
     let source = TranscriptNativeInputSource {

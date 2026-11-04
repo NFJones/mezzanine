@@ -61,6 +61,8 @@ pub(crate) mod native_input;
 mod receipts;
 pub(crate) use append_batch::TranscriptAppendBatch;
 pub(crate) use receipts::NativeInputAppendReceipt;
+#[cfg(test)]
+pub(crate) use receipts::native_input::NativeReceiptPublicationFault;
 /// Leased, validated sequence frontiers and raw replay counts.
 mod replay_position;
 /// Exposes the store module boundary.

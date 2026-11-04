@@ -289,8 +289,9 @@ impl RuntimeBookkeepingCandidateWork {
 impl RuntimeSessionService {
     /// Claims ordered chronology candidates using current accepted pending rows.
     pub(crate) fn claim_bookkeeping_candidates(&mut self) -> Vec<RuntimeBookkeepingCandidateWork> {
+        let canonical_writers = self.native_input_writing_conversations();
         self.persistence
-            .claim_bookkeeping_candidates()
+            .claim_bookkeeping_candidates(&canonical_writers)
             .into_iter()
             .map(|candidate| self.bookkeeping_work_for_candidate(candidate))
             .collect()
@@ -351,6 +352,19 @@ impl RuntimeSessionService {
         if self.persistence.transcript_uses_adapter() {
             return Err(MezError::invalid_state(
                 "inline completion persistence is not permitted in adapter mode",
+            ));
+        }
+        if self
+            .native_input_writing_conversations()
+            .iter()
+            .any(|conversation| {
+                self.persistence
+                    .bookkeeping_candidate_conversation(generation)
+                    == Some(conversation.as_str())
+            })
+        {
+            return Err(MezError::conflict(
+                "original native canonical producer must finish before bookkeeping read",
             ));
         }
         let candidate = self

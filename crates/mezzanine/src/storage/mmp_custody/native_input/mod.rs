@@ -64,6 +64,9 @@ pub(crate) struct NativeInputAttempt {
     row: Option<std::sync::Arc<NativeInputProjection>>,
     /// First original canonical position survives failure before publication.
     canonical_first: OnceLock<(NativeInputAppendPlan, Vec<TranscriptEntry>)>,
+    /// Original kernel/physical owner survives joined failure and backoff before
+    /// the first canonical receipt is published; no later producer can reseat it.
+    lease: OnceLock<crate::storage::transcript::native_input::NativeTranscriptLease>,
     /// Actual private row image survives worker loss and does not become a task.
     canonical: OnceLock<std::sync::Arc<NativeInputAppendReceipt>>,
     first: OnceLock<Preparation>,
@@ -80,6 +83,7 @@ impl NativeInputAttempt {
             transcript,
             row,
             canonical_first: OnceLock::new(),
+            lease: OnceLock::new(),
             canonical: OnceLock::new(),
             first: OnceLock::new(),
             completion: OnceLock::new(),
@@ -244,45 +248,35 @@ impl NativeInputPort<'_> {
             self.retire_canonical_receipt(&committed)?;
             return Ok(Some(receipt(&committed, false)));
         }
-        if self.attempt.canonical.get().is_none()
-            && let Some(canonical) = self
-                .attempt
-                .transcript
-                .native_input_append_receipt(anchor.native_owner().conversation_id(), &occurrence)?
-        {
-            if !canonical.plan().source().matches_anchor(anchor, &store_id)
-                || pending.as_ref().is_some_and(|p| {
-                    p.source != *canonical.plan().source()
-                        || p.transcript != *canonical.plan().input()
-                })
-                || self
+        if self.attempt.lease.get().is_none() {
+            let (canonical, lease) = self.attempt.transcript.recover_native_input_lease(
+                anchor,
+                &store_id,
+                &occurrence,
+                pending.as_ref().map(|p| (&p.source, &p.transcript)),
+                self.attempt.row.is_some(),
+            )?;
+            if let Some(canonical) = canonical {
+                if self
                     .attempt
                     .canonical_first
                     .get()
                     .is_some_and(|(p, _)| p != canonical.plan())
-            {
-                return Err(invalid());
+                {
+                    return Err(invalid());
+                }
+                self.attempt
+                    .canonical
+                    .set(canonical)
+                    .map_err(|_| invalid())?;
             }
-            self.attempt
-                .canonical
-                .set(canonical)
-                .map_err(|_| invalid())?;
+            if let Some(lease) = lease {
+                self.attempt.lease.set(lease).map_err(|_| invalid())?;
+            } else {
+                return Ok(None);
+            }
         }
-        if pending.is_none()
-            && self.attempt.row.is_none()
-            && self.attempt.first.get().is_none()
-            && self.attempt.canonical.get().is_none()
-        {
-            return Ok(None);
-        }
-        let lease = self.attempt.transcript.native_input_lease(
-            anchor.native_owner().conversation_id(),
-            pending.is_none()
-                && self.attempt.first.get().is_none()
-                && self.attempt.canonical.get().is_none()
-                && self.attempt.canonical_first.get().is_none(),
-            Some(&occurrence),
-        )?;
+        let lease = self.attempt.lease.get().ok_or_else(invalid)?;
         if self.attempt.canonical.get().is_none() && pending.is_none() {
             if self.attempt.canonical_first.get().is_none() {
                 let projection = self.attempt.row.as_ref().ok_or_else(invalid)?;
@@ -460,10 +454,13 @@ impl NativeInputPort<'_> {
         let retained = self.attempt.canonical.get().cloned();
         let canonical = match retained {
             Some(canonical) => Some(canonical),
-            None => self.attempt.transcript.native_input_append_receipt(
-                journal.source.native_owner.conversation_id(),
-                &journal.source.occurrence(),
-            )?,
+            None => match self.attempt.lease.get() {
+                Some(lease) => lease.lookup_append_receipt(&journal.source.occurrence())?,
+                None => self.attempt.transcript.native_input_append_receipt(
+                    journal.source.native_owner.conversation_id(),
+                    &journal.source.occurrence(),
+                )?,
+            },
         };
         if let Some(canonical) = canonical {
             if canonical.plan().source() != &journal.source

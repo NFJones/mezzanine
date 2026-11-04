@@ -720,12 +720,16 @@ impl AgentTranscriptStore {
         Ok(())
     }
 
+    /// Begins a lifecycle mutation under its caller's conversation lock. Native
+    /// staging/final owners must settle before deletion, archive, restore or
+    /// legacy promotion can change the original physical destination.
     pub(super) fn write_archive_recovery_journal(
         &self,
         conversation_id: &str,
         operation: ArchiveRecoveryOperation,
         payload_layout: CatalogPayloadLayout,
     ) -> Result<()> {
+        self.ensure_native_input_receipts_settled_locked(conversation_id)?;
         let directory = archive_recovery_directory(self);
         fs::create_dir_all(&directory)?;
         set_private_dir_permissions(&directory)?;

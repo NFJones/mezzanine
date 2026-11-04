@@ -390,10 +390,9 @@ async fn native_input_preparation_refuses_replacement_archive_and_recovers_origi
     std::fs::rename(&original, &retained).unwrap();
     let mut replacement = scene.row.clone();
     replacement.content = "replacement context must receive no old input".into();
-    // Ordinary writers now refuse while the original native receipt owns its
-    // position. Build unrelated backing separately, then physically substitute
-    // it to exercise the stronger original-inode check as before.
-    assert!(scene.transcript.append(&replacement).is_err());
+    // The original kernel mutation lease now survives this joined failure.
+    // Build unrelated backing separately, then physically substitute it to
+    // exercise the original-inode check without blocking on our own lease.
     let staged = AgentTranscriptStore::new(scene.transcript.root().join("replacement-staging"));
     staged.append(&replacement).unwrap();
     std::fs::rename(staged.root().join("native-receiver"), &original).unwrap();
@@ -627,4 +626,79 @@ async fn native_input_final_root_drop_drains_actual_worker_before_releasing_fenc
             .last_sequence,
         0
     );
+}
+
+/// Real publication faults at every boundary must keep the kernel mutation
+/// lease with the original root job. A competing ordinary row cannot steal its
+/// first sequence; after exact retry/c1/adoption it receives a content conflict,
+/// and a correctly sequenced later row can proceed normally.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn native_input_first_plan_keeps_kernel_lease_across_publication_failures() {
+    use crate::storage::transcript::NativeReceiptPublicationFault;
+    for fault in [
+        NativeReceiptPublicationFault::BeforeStage,
+        NativeReceiptPublicationFault::Partial,
+        NativeReceiptPublicationFault::Complete,
+        NativeReceiptPublicationFault::Linked,
+    ] {
+        let fixture = Fixture::new(true);
+        let scene = Scene::new(&fixture).await;
+        scene
+            .transcript
+            .fail_native_receipt_publication_for_tests(fault);
+        scene.start();
+        let CustodyWorkerStatus::NativeInputRetryAt(due) = scene.root.observe().await.unwrap()
+        else {
+            panic!("actual interrupted publication must join");
+        };
+        let kernel = std::fs::File::open(
+            scene
+                .transcript
+                .root()
+                .join(".conversation-locks/native-receiver.lock"),
+        )
+        .unwrap();
+        assert_eq!(
+            rustix::fs::flock(
+                &kernel,
+                rustix::fs::FlockOperation::NonBlockingLockExclusive
+            )
+            .unwrap_err(),
+            rustix::io::Errno::WOULDBLOCK
+        );
+        let mut foreign = scene.row.clone();
+        foreign.sequence = 2;
+        foreign.content = "competing ordinary input".into();
+        let later = foreign.clone();
+        let store = scene.transcript.clone();
+        let (started, ready) = std::sync::mpsc::channel();
+        let (done, result) = std::sync::mpsc::channel();
+        let writer = std::thread::spawn(move || {
+            started.send(()).unwrap();
+            done.send(store.append_many(&[foreign])).unwrap();
+        });
+        ready.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert!(matches!(
+            result.recv_timeout(Duration::from_millis(50)),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+        ));
+        scene.root.retry_native_input(due).unwrap();
+        let proof = scene.adopt().await;
+        assert_eq!(proof.record().archive_sequence, 2);
+        assert!(
+            result
+                .recv_timeout(Duration::from_secs(2))
+                .unwrap()
+                .is_err()
+        );
+        writer.join().unwrap();
+        assert_eq!(scene.canonical_count(), 1);
+        let mut later = later;
+        later.sequence = 3;
+        scene.transcript.append_many(&[later.clone()]).unwrap();
+        assert_eq!(
+            scene.transcript.inspect("native-receiver").unwrap().last(),
+            Some(&later)
+        );
+    }
 }

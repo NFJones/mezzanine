@@ -16228,6 +16228,12 @@ chronology order and use the same canonical event identity as bookkeeping.
 Under the original conversation lease, validated committed identities MUST be
 removed before selecting the first immutable batch position. Retry MUST retain
 both that selected batch and its first position, without deduplicating anew.
+The actual conversation lease and original physical handles MUST remain owned
+across joined publication errors, panic and retry backoff, including before a
+receipt exists. Queued or in-flight ordinary transcript rows MUST settle before
+native issuance. Once that native job is actually issued, new bookkeeping reads
+for its conversation MUST wait for canonical commit so they cannot capture a
+frontier that the original native write will advance.
 
 The canonical receipt MUST be published before prefix rows. Prefix rows MUST
 precede `p1`; native input bytes MUST follow `p1`. Generic transcript recovery
@@ -16237,6 +16243,21 @@ unsettled. A root lookup MUST check its exact canonical receipt even when `p1`
 is absent, preventing a second context insertion in that crash window. Original
 root qualification MAY finish a missing or partial native row from the retained
 canonical image without reloading a source envelope or reconstructing a task.
+Original-root recovery MUST also inspect the exact unpublished native staging
+name under the same conversation lease. A complete stage MUST match the accepted
+source, any original preparation and actual physical batch/suffix before its
+same file object can be published. A linked final/staging pair MAY reconcile
+only when both names identify that same original object. Invalid complete data,
+conflicting owners and replacement backing MUST refuse without discarding the
+candidate. Ordinary append, fork, delete and prefix mutation MUST fence native
+staging as well as published native receipts.
+An incomplete bounded private JSON prefix MAY be aborted only by a lookup-only
+original-root attempt with neither `p1` nor `c1`: final publication precedes all
+canonical bytes, so this candidate owns no committed input. Abort MUST preserve
+the accepted original envelope and its obligations. Subsequent genuine live
+selection MAY create new input; it MUST NOT restart the interrupted task.
+A still-live attempt with its original projection MUST instead finish its exact
+retained bytes and first physical plan.
 Only after `c1` MAY that exact canonical receipt retire. A real synced archive
 observation MAY advance the still-current original private transcript frontier;
 this observation MUST NOT survive descriptive serialization. Historical `c1`
@@ -16302,10 +16323,12 @@ that membership, replace the registration allocation or strand accepted slots.
 Only matching live registration/private epoch and conversation ownership MAY
 select this preservation; public labels or stale independent contexts MUST NOT.
 
-Connected internal tests cover process exit both after canonical commit and
-after preparation with the native row still missing, original-root factory/actor
-recovery, user-before-peer ordering and preflight refusal without live mutation.
-Complete receipt-staging/producer-order and exact ACK snapshot qualification,
+Connected internal tests cover process exit after canonical commit, after
+preparation with the native row still missing, and during partial or complete
+unpublished staging. They also cover original-root factory/actor recovery,
+competing ordinary writers through failed publication, queued/in-flight producer
+ordering, Stop bookkeeping, and preflight refusal without live mutation.
+Exact ACK snapshot qualification,
 resource/liveness qualification and all-ingress activation remain required;
 normal durable activation MUST stay disabled until the remaining issue
 requirements pass.

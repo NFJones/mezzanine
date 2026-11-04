@@ -64,7 +64,7 @@ impl RuntimeSessionService {
             .get_mut(id)
             .ok_or_else(|| MezError::invalid_state("original native receipt missing"))?;
         let work = match &receipt.durable_input {
-            Some(NativeReceipt::Pending(work)) => work.clone(),
+            Some(NativeReceipt::Pending(work) | NativeReceipt::Writing(work)) => work.clone(),
             Some(NativeReceipt::Committed {
                 proof: original, ..
             }) if original.anchor().sequence() == proof.anchor().sequence()

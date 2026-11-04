@@ -95,7 +95,7 @@ impl NativeInputAppendPlan {
     }
 }
 
-impl NativeTranscriptLease<'_> {
+impl NativeTranscriptLease {
     /// Validates this original batch without changing history or receipt files.
     pub(crate) fn check_native_append_plan(
         &self,
@@ -103,7 +103,18 @@ impl NativeTranscriptLease<'_> {
         rows: &[TranscriptEntry],
     ) -> Result<()> {
         plan.validate_rows(rows)?;
-        self.validate_plan_span(&plan.before, MAX_NATIVE_APPEND_BYTES)
+        self.validate_plan_span(&plan.before, MAX_NATIVE_APPEND_BYTES)?;
+        let (encoded, _) = encode_rows(rows)?;
+        let mut file = &self.archive;
+        file.seek(SeekFrom::Start(plan.before.prefix_bytes))?;
+        let mut present = Vec::new();
+        Read::by_ref(&mut file)
+            .take(encoded.len() as u64)
+            .read_to_end(&mut present)?;
+        if !encoded.starts_with(&present) {
+            return Err(unavailable());
+        }
+        Ok(())
     }
 
     /// Publishes canonical recovery ownership only for this original physical

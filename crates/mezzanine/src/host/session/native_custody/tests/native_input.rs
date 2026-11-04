@@ -12,6 +12,17 @@ use mez_agent::transcript::TranscriptContextEvent;
 
 const NATIVE_CRASH_ROOT: &str = "MEZ_TEST_CANONICAL_NATIVE_CRASH_ROOT";
 const NATIVE_PREPARATION_ROOT: &str = "MEZ_TEST_CANONICAL_NATIVE_PREPARATION_ROOT";
+const NATIVE_PARTIAL_STAGE_ROOT: &str = "MEZ_TEST_CANONICAL_NATIVE_PARTIAL_STAGE_ROOT";
+const NATIVE_COMPLETE_STAGE_ROOT: &str = "MEZ_TEST_CANONICAL_NATIVE_COMPLETE_STAGE_ROOT";
+
+/// Actual file/journal boundary at which the child exits without destructors.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum NativeCrashPoint {
+    Committed,
+    Prepared,
+    PartialStage,
+    CompleteStage,
+}
 
 /// Identical local-only native harness configuration in both processes. No
 /// provider is dispatched; the loopback endpoint cannot contact a paid service.
@@ -43,14 +54,22 @@ pub(super) async fn commit_then_crash(
     service: RuntimeSessionService,
     root: MmpCustodyRoot,
     fixture: Fixture,
-    before_row: bool,
+    point: NativeCrashPoint,
 ) -> ! {
     use std::os::unix::fs::OpenOptionsExt;
     let (_, mut actor) =
         AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
     actor.register_message_custody(root).unwrap();
-    if before_row {
-        actor.fail_next_native_canonical_append_for_tests();
+    let before_row = point != NativeCrashPoint::Committed;
+    match point {
+        NativeCrashPoint::Prepared => actor.fail_next_native_canonical_append_for_tests(),
+        NativeCrashPoint::PartialStage => actor.fail_native_receipt_publication_for_tests(
+            crate::storage::transcript::NativeReceiptPublicationFault::Partial,
+        ),
+        NativeCrashPoint::CompleteStage => actor.fail_native_receipt_publication_for_tests(
+            crate::storage::transcript::NativeReceiptPublicationFault::Complete,
+        ),
+        NativeCrashPoint::Committed => (),
     }
     let mut canonical_observations = 0;
     let mut payload_observations = 0;
@@ -104,7 +123,7 @@ pub(super) async fn commit_then_crash(
         1,
         "only earlier seq1 ACK exists before crash"
     );
-    if before_row {
+    if point == NativeCrashPoint::Prepared {
         assert_eq!(
             database
                 .query_row(
@@ -116,20 +135,57 @@ pub(super) async fn commit_then_crash(
             1
         );
         let store = AgentTranscriptStore::under_config_root(&fixture.config);
-        let pending = store.pending_append_receipts().unwrap();
-        assert_eq!(
-            pending.len(),
-            1,
-            "actual canonical native row image must remain owned"
-        );
+        // The root still owns its actual mutation lease in this retry state.
+        // Inspect produced bytes forensically; acquiring another lease here
+        // would wait for the very child whose process exit we are exercising.
+        let paths = fs::read_dir(store.root().join(".append-receipts"))
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .collect::<Vec<_>>();
+        assert_eq!(paths.len(), 1);
+        let pending: serde_json::Value =
+            serde_json::from_slice(&fs::read(&paths[0]).unwrap()).unwrap();
+        let rows = pending["rows"].as_array().unwrap();
         assert!(
-            pending[0].len() > 1,
+            rows.len() > 1,
             "actual preceding chronology belongs to the receipt"
         );
-        assert!(matches!(
-            TranscriptContextEvent::from_transcript_content(&pending[0].last().unwrap().content),
-            Some(TranscriptContextEvent::NativePeerMessage { .. })
-        ));
+        assert!(
+            rows.last()
+                .unwrap()
+                .as_str()
+                .unwrap()
+                .contains("native_peer_message")
+        );
+    }
+    if matches!(
+        point,
+        NativeCrashPoint::PartialStage | NativeCrashPoint::CompleteStage
+    ) {
+        assert_eq!(
+            database
+                .query_row(
+                    "SELECT COUNT(*) FROM records WHERE key LIKE 'p1:%'",
+                    [],
+                    |r| r.get::<_, i64>(0)
+                )
+                .unwrap(),
+            0
+        );
+        let store = AgentTranscriptStore::under_config_root(&fixture.config);
+        let paths = fs::read_dir(store.root().join(".append-receipts"))
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .collect::<Vec<_>>();
+        assert_eq!(paths.len(), 1);
+        assert!(paths[0].to_str().unwrap().ends_with(".json.tmp"));
+        let bytes = fs::read(&paths[0]).unwrap();
+        let frame = serde_json::from_slice::<serde_json::Value>(&bytes);
+        if point == NativeCrashPoint::PartialStage {
+            assert!(frame.unwrap_err().is_eof());
+        } else {
+            assert!(frame.unwrap()["rows"].as_array().unwrap().len() > 1);
+        }
     }
     SnapshotRepository::new(fixture.config.clone())
         .write_payload("crash-layout", &fixture.payload)
@@ -170,7 +226,7 @@ async fn canonical_native_process_crash_child() {
 /// creating a new task, resuming a provider or reconstructing a raw bearer.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn native_factory_crash_after_canonical_commit_dedups_before_actor_ack() {
-    assert_native_crash_recovery(false).await;
+    assert_native_crash_recovery(NativeCrashPoint::Committed).await;
 }
 
 /// Kernel/process loss after original p1 but before any native row byte must
@@ -178,7 +234,7 @@ async fn native_factory_crash_after_canonical_commit_dedups_before_actor_ack() {
 /// an envelope-cache load. No original actor/source/root destructor runs.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn native_factory_recovers_prepared_missing_row_without_reinjection_or_task() {
-    assert_native_crash_recovery(true).await;
+    assert_native_crash_recovery(NativeCrashPoint::Prepared).await;
 }
 
 /// The test-only append failure sits at the real write boundary; this child
@@ -194,19 +250,28 @@ async fn canonical_native_preparation_crash_child() {
 
 /// Executes the actual subprocess/factory/actor pair at either side of the
 /// canonical append while retaining the same original scope and absence checks.
-async fn assert_native_crash_recovery(before_row: bool) {
+async fn assert_native_crash_recovery(point: NativeCrashPoint) {
+    let before_row = point != NativeCrashPoint::Committed;
+    let partial = point == NativeCrashPoint::PartialStage;
     let directory = CrashDirectory::new();
     let mut child = tokio::process::Command::new(std::env::current_exe().unwrap());
-    let (entry, variable) = if before_row {
-        (
+    let (entry, variable) = match point {
+        NativeCrashPoint::Prepared => (
             "host::session::native_custody::tests::native_input::canonical_native_preparation_crash_child",
             NATIVE_PREPARATION_ROOT,
-        )
-    } else {
-        (
+        ),
+        NativeCrashPoint::Committed => (
             "host::session::native_custody::tests::native_input::canonical_native_process_crash_child",
             NATIVE_CRASH_ROOT,
-        )
+        ),
+        NativeCrashPoint::PartialStage => (
+            "host::session::native_custody::tests::native_input::canonical_native_partial_stage_crash_child",
+            NATIVE_PARTIAL_STAGE_ROOT,
+        ),
+        NativeCrashPoint::CompleteStage => (
+            "host::session::native_custody::tests::native_input::canonical_native_complete_stage_crash_child",
+            NATIVE_COMPLETE_STAGE_ROOT,
+        ),
     };
     child
         .args(["--exact", entry, "--nocapture"])
@@ -347,12 +412,40 @@ async fn assert_native_crash_recovery(before_row: bool) {
             .snapshot_identity(),
         fixture.epoch
     );
-    assert_eq!(
-        exited.service.agent_turn_ledger().turns(),
-        restored_turns,
-        "canonical recovery must preserve interrupted history without creating or resuming a task"
-    );
-    assert!(exited.service.pending_agent_provider_tasks().is_empty());
+    if partial {
+        let turns = exited.service.agent_turn_ledger().turns();
+        for original in &restored_turns {
+            assert_eq!(
+                turns.iter().find(|t| t.turn_id == original.turn_id),
+                Some(original)
+            );
+        }
+        let fresh = turns
+            .iter()
+            .filter(|t| !restored_turns.iter().any(|old| old.turn_id == t.turn_id))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            fresh.len(),
+            1,
+            "unpublished partial candidate must permit one genuine fresh receive"
+        );
+        assert_eq!(fresh[0].trigger, mez_agent::AgentTurnTrigger::LocalMessage);
+        assert!(
+            exited
+                .service
+                .pending_agent_provider_tasks()
+                .iter()
+                .all(|task| !restored_turns.iter().any(|old| old.turn_id == task.turn_id)),
+            "no interrupted task/provider restart"
+        );
+    } else {
+        assert_eq!(
+            exited.service.agent_turn_ledger().turns(),
+            restored_turns,
+            "complete canonical recovery cannot create or resume a task"
+        );
+        assert!(exited.service.pending_agent_provider_tasks().is_empty());
+    }
     assert_eq!(
         exited
             .service
@@ -375,17 +468,25 @@ async fn assert_native_crash_recovery(before_row: bool) {
         transcripts.pending_append_receipts().unwrap().is_empty(),
         "only actual c1 may retire the canonical row image"
     );
-    assert_eq!(
-        exited
-            .service
-            .message_service()
-            .storage_usage()
+    assert!(
+        fs::read_dir(transcripts.root().join(".append-receipts"))
             .unwrap()
-            .unwrap()
-            .cache,
-        mez_agent::messaging::MessagePayloadUsage::default(),
-        "historical c1 settlement must not hydrate payload into the cache"
+            .all(|entry| !entry.unwrap().path().to_string_lossy().ends_with(".tmp")),
+        "no unresolved staging remains after actual settlement"
     );
+    if !partial {
+        assert_eq!(
+            exited
+                .service
+                .message_service()
+                .storage_usage()
+                .unwrap()
+                .unwrap()
+                .cache,
+            mez_agent::messaging::MessagePayloadUsage::default(),
+            "historical c1 settlement must not hydrate payload into the cache"
+        );
+    }
     assert_eq!(
         count(transcripts.inspect(&cid).unwrap()),
         1,
@@ -426,4 +527,41 @@ async fn native_private_match_accepts_empty_capabilities_and_rejects_external_or
     fact.identity.capabilities.clear();
     fact.native.shell_incarnation[0] ^= 1;
     assert!(!context.matches(&fact));
+}
+
+/// Real process loss with a complete synced stage but no final receipt/p1 must
+/// finish its original canonical image without task/provider reconstruction.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn native_factory_recovers_complete_unpublished_stage_without_new_task() {
+    assert_native_crash_recovery(NativeCrashPoint::CompleteStage).await;
+}
+
+/// An incomplete unpublished candidate has committed no canonical input. The
+/// original root preserves the accepted envelope and permits one fresh receive,
+/// while every interrupted original task remains historical and unresumed.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn native_factory_aborts_partial_unpublished_stage_before_fresh_receive() {
+    assert_native_crash_recovery(NativeCrashPoint::PartialStage).await;
+}
+
+/// The exact-filter child exits only after actual partial staged bytes remain
+/// with a joined original-root failure, without any p1/c1 or Rust cleanup.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn canonical_native_partial_stage_crash_child() {
+    let Some(root) = std::env::var_os(NATIVE_PARTIAL_STAGE_ROOT) else {
+        return;
+    };
+    let _ = Fixture::build(true, Original::CrashNativeStage(root.into(), true)).await;
+    panic!("partial-stage child must exit before cleanup");
+}
+
+/// Complete staged row bytes and original physical plan survive child exit;
+/// neither the final receipt name nor MMP preparation has yet been published.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn canonical_native_complete_stage_crash_child() {
+    let Some(root) = std::env::var_os(NATIVE_COMPLETE_STAGE_ROOT) else {
+        return;
+    };
+    let _ = Fixture::build(true, Original::CrashNativeStage(root.into(), false)).await;
+    panic!("complete-stage child must exit before cleanup");
 }

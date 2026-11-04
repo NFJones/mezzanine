@@ -381,6 +381,9 @@ pub struct AgentTranscriptStore {
     /// One-shot failure before any transcript row is appended.
     #[cfg(test)]
     pub(super) fail_next_transcript_append: Arc<AtomicBool>,
+    /// One-shot actual native canonical receipt publication boundary fault.
+    #[cfg(test)]
+    pub(super) native_receipt_publication_fault: Arc<AtomicU8>,
     /// Number of consecutive precommit batch faults for worker recovery tests.
     #[cfg(test)]
     pub(super) fail_transcript_append_attempts: Arc<AtomicU8>,

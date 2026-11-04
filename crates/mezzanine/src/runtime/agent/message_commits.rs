@@ -192,21 +192,7 @@ impl RuntimeSessionService {
     /// still owes settlement. A cancelled observer or missing current receipt is
     /// insufficient evidence; this preflight changes no identity or pane state.
     pub(crate) fn ensure_runtime_message_transfers_settled_for_restore(&self) -> Result<()> {
-        if self.agent.native_input_permit.is_some()
-            || self
-                .agent
-                .received_peer_message_presentations
-                .values()
-                .any(|r| {
-                    matches!(
-                        r.durable_input,
-                        Some(
-                            super::messages::durable::NativeReceipt::Pending(_)
-                                | super::messages::durable::NativeReceipt::Committed { .. }
-                        )
-                    )
-                })
-        {
+        if self.has_pending_native_input() {
             return Err(MezError::conflict(
                 "original native canonical input/ACK custody pending",
             ));

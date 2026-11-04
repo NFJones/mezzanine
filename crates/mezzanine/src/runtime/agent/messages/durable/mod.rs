@@ -64,6 +64,8 @@ pub(in crate::runtime::agent) struct NativeWork {
 #[derive(Debug, Clone)]
 pub(in crate::runtime::agent) enum NativeReceipt {
     Pending(Arc<NativeWork>),
+    /// Actual original root job issued; its first physical lease/plan is owned.
+    Writing(Arc<NativeWork>),
     Committed {
         work: Arc<NativeWork>,
         proof: MessageNativeInputCommit,
@@ -86,6 +88,7 @@ impl RuntimeSessionService {
             .filter_map(|r| match &r.durable_input {
                 Some(
                     NativeReceipt::Pending(work)
+                    | NativeReceipt::Writing(work)
                     | NativeReceipt::Committed { work, .. }
                     | NativeReceipt::Acknowledged {
                         continuation: Some(NativeContinuation { work, .. }),
@@ -372,7 +375,11 @@ impl RuntimeSessionService {
                     r.conversation_id == conversation
                         && matches!(
                             r.durable_input,
-                            Some(NativeReceipt::Pending(_) | NativeReceipt::Committed { .. })
+                            Some(
+                                NativeReceipt::Pending(_)
+                                    | NativeReceipt::Writing(_)
+                                    | NativeReceipt::Committed { .. }
+                            )
                         )
                 })
     }
@@ -387,7 +394,11 @@ impl RuntimeSessionService {
                 r.conversation_id == conversation
                     && matches!(
                         r.durable_input,
-                        Some(NativeReceipt::Pending(_) | NativeReceipt::Committed { .. })
+                        Some(
+                            NativeReceipt::Pending(_)
+                                | NativeReceipt::Writing(_)
+                                | NativeReceipt::Committed { .. }
+                        )
                     )
             })
     }
@@ -405,6 +416,7 @@ impl RuntimeSessionService {
                         r.durable_input,
                         Some(
                             NativeReceipt::Pending(_)
+                                | NativeReceipt::Writing(_)
                                 | NativeReceipt::Committed { .. }
                                 | NativeReceipt::Acknowledged {
                                     continuation: Some(_)
@@ -422,9 +434,11 @@ impl RuntimeSessionService {
             .values()
             .any(|receipt| {
                 let work = match &receipt.durable_input {
-                    Some(NativeReceipt::Pending(work) | NativeReceipt::Committed { work, .. }) => {
-                        work
-                    }
+                    Some(
+                        NativeReceipt::Pending(work)
+                        | NativeReceipt::Writing(work)
+                        | NativeReceipt::Committed { work, .. },
+                    ) => work,
                     _ => return false,
                 };
                 work.source.sequence() == source.sequence()
@@ -433,6 +447,30 @@ impl RuntimeSessionService {
                     && work.source.recipient() == source.recipient()
                     && work.source.native_owner() == source.native_owner()
             })
+    }
+
+    /// Records only an actual successful root issuance. Before that boundary,
+    /// existing ordinary bookkeeping/raw owners must drain; afterward new reads
+    /// wait for this original canonical producer instead of sampling stale state.
+    pub(crate) fn note_native_input_write_issued(&mut self, id: &str) {
+        if let Some(receipt) = self.agent.received_peer_message_presentations.get_mut(id)
+            && let Some(NativeReceipt::Pending(work)) = &receipt.durable_input
+        {
+            receipt.durable_input = Some(NativeReceipt::Writing(work.clone()));
+        }
+    }
+
+    /// Freezes only CIDs with genuinely issued canonical work, not candidates
+    /// still waiting for earlier ordinary producers. No row body is cloned.
+    pub(in crate::runtime::agent) fn native_input_writing_conversations(&self) -> BTreeSet<String> {
+        self.agent
+            .received_peer_message_presentations
+            .values()
+            .filter_map(|receipt| match &receipt.durable_input {
+                Some(NativeReceipt::Writing(work)) => Some(work.turn.conversation_id.clone()),
+                _ => None,
+            })
+            .collect()
     }
 
     /// Borrows the existing bounded receipt owner; no second mailbox is built.
@@ -453,7 +491,10 @@ impl RuntimeSessionService {
                 };
                 if self
                     .persistence
-                    .bookkeeping_pending(&work.turn.conversation_id)
+                    .has_pending_transcript_entries(&work.turn.conversation_id)
+                    || self
+                        .persistence
+                        .bookkeeping_pending(&work.turn.conversation_id)
                 {
                     return None;
                 }

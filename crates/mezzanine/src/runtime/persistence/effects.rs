@@ -454,6 +454,28 @@ impl RuntimePersistenceComponent {
         ))
     }
 
+    /// Checks already assigned raw append ownership without cloning row bodies.
+    /// A native first plan must wait until both queued and in-flight ordinary
+    /// rows settle; canonical positions already belong to those producers.
+    pub(crate) fn has_pending_transcript_entries(&self, conversation_id: &str) -> bool {
+        self.initial_transcript_pending(conversation_id)
+            || self
+                .in_flight_transcript_entries
+                .iter()
+                .any(|((owner, _), batches)| {
+                    owner == conversation_id && batches.iter().any(|(_, rows)| !rows.is_empty())
+                })
+            || self
+                .queued_transcript_effects
+                .iter()
+                .any(|effect| match effect {
+                    RuntimeSideEffect::PersistTranscriptEntries { entries, .. } => entries
+                        .iter()
+                        .any(|row| row.conversation_id == conversation_id),
+                    _ => false,
+                })
+    }
+
     /// Returns queued transcript entries for one conversation without draining
     /// the external persistence worker's ordered effect queue.
     pub(crate) fn pending_transcript_entries(
@@ -693,6 +715,7 @@ mod tests {
             content: "exact queued text".to_string(),
         };
         let mut component = RuntimePersistenceComponent::default();
+        assert!(!component.has_pending_transcript_entries("drained-write"));
         assert_eq!(
             component.deferred_transcript_next_sequence("drained-write"),
             None
@@ -711,7 +734,10 @@ mod tests {
             component.pending_transcript_entries("drained-write"),
             vec![row.clone()]
         );
+        assert!(component.has_pending_transcript_entries("drained-write"));
+        assert!(!component.has_pending_transcript_entries("other-conversation"));
         assert_eq!(component.take_transcript_effects().len(), 1);
+        assert!(component.has_pending_transcript_entries("drained-write"));
         assert_eq!(
             component.deferred_transcript_next_sequence("drained-write"),
             Some(2)
@@ -757,6 +783,7 @@ mod tests {
                 .pending_transcript_entries("drained-write")
                 .is_empty()
         );
+        assert!(!component.has_pending_transcript_entries("drained-write"));
         let _ = std::fs::remove_dir_all(root);
     }
 

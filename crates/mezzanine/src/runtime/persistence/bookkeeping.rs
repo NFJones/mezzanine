@@ -166,12 +166,16 @@ impl RuntimePersistenceComponent {
     }
 
     /// Claims the oldest unblocked candidate for each conversation.
-    pub(crate) fn claim_bookkeeping_candidates(&mut self) -> Vec<RuntimeBookkeepingCandidate> {
+    pub(crate) fn claim_bookkeeping_candidates(
+        &mut self,
+        canonical_writers: &std::collections::BTreeSet<String>,
+    ) -> Vec<RuntimeBookkeepingCandidate> {
         let mut seen = std::collections::BTreeSet::new();
         self.bookkeeping_candidates
             .iter()
             .filter_map(|candidate| {
-                if !seen.insert(candidate.turn.conversation_id.clone())
+                if canonical_writers.contains(&candidate.turn.conversation_id)
+                    || !seen.insert(candidate.turn.conversation_id.clone())
                     || candidate.blocked
                     || self.bookkeeping_claims.contains_key(&candidate.generation)
                 {
@@ -184,6 +188,14 @@ impl RuntimePersistenceComponent {
                 Some(candidate.clone())
             })
             .collect()
+    }
+
+    /// Borrows the original candidate's routing key without claiming its read.
+    pub(crate) fn bookkeeping_candidate_conversation(&self, generation: u64) -> Option<&str> {
+        self.bookkeeping_candidates
+            .iter()
+            .find(|candidate| candidate.generation == generation)
+            .map(|candidate| candidate.turn.conversation_id.as_str())
     }
 
     /// Claims only the requested oldest conversation candidate for synchronous

@@ -107,6 +107,7 @@ impl AsyncRuntimeSessionActor {
             );
             match result {
                 Ok(()) => {
+                    self.service.note_native_input_write_issued(&id);
                     owner.pending = Some(Pending::NativeInput {
                         source,
                         receipt: Some(id),

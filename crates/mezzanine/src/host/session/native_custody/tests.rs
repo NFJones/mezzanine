@@ -24,6 +24,7 @@ enum Original {
     CrashRegistered(PathBuf),
     CrashNativeInput(PathBuf),
     CrashNativePreparation(PathBuf),
+    CrashNativeStage(PathBuf, bool),
 }
 impl Fixture {
     async fn new(guarded: bool) -> Self {
@@ -38,7 +39,8 @@ impl Fixture {
         let config = match &original {
             Original::CrashRegistered(config)
             | Original::CrashNativeInput(config)
-            | Original::CrashNativePreparation(config) => config.clone(),
+            | Original::CrashNativePreparation(config)
+            | Original::CrashNativeStage(config, _) => config.clone(),
             _ => generated,
         };
         let session = Session::new_default(shell(), Size::new(80, 24).unwrap()).unwrap();
@@ -60,7 +62,9 @@ impl Fixture {
             .unwrap();
         if matches!(
             &original,
-            Original::CrashNativeInput(_) | Original::CrashNativePreparation(_)
+            Original::CrashNativeInput(_)
+                | Original::CrashNativePreparation(_)
+                | Original::CrashNativeStage(_, _)
         ) {
             native_input::configure_original(&mut service);
         }
@@ -83,7 +87,9 @@ impl Fixture {
             .unwrap();
         let native = if matches!(
             &original,
-            Original::CrashNativeInput(_) | Original::CrashNativePreparation(_)
+            Original::CrashNativeInput(_)
+                | Original::CrashNativePreparation(_)
+                | Original::CrashNativeStage(_, _)
         ) {
             service
                 .message_service()
@@ -210,10 +216,19 @@ impl Fixture {
         };
         if matches!(
             &original,
-            Original::CrashNativeInput(_) | Original::CrashNativePreparation(_)
+            Original::CrashNativeInput(_)
+                | Original::CrashNativePreparation(_)
+                | Original::CrashNativeStage(_, _)
         ) {
-            let before_row = matches!(&original, Original::CrashNativePreparation(_));
-            native_input::commit_then_crash(service, root, fixture, before_row).await;
+            let point = match &original {
+                Original::CrashNativePreparation(_) => native_input::NativeCrashPoint::Prepared,
+                Original::CrashNativeStage(_, true) => native_input::NativeCrashPoint::PartialStage,
+                Original::CrashNativeStage(_, false) => {
+                    native_input::NativeCrashPoint::CompleteStage
+                }
+                _ => native_input::NativeCrashPoint::Committed,
+            };
+            native_input::commit_then_crash(service, root, fixture, point).await;
         }
         if matches!(&original, Original::CrashRegistered(_)) {
             use std::os::unix::fs::OpenOptionsExt;

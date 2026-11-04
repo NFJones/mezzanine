@@ -7,6 +7,7 @@
 //! plans are checked again before append or retirement.
 
 use super::*;
+mod staging;
 use crate::storage::transcript::native_input::{MAX_NATIVE_APPEND_BYTES, MAX_NATIVE_APPEND_ROWS};
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
@@ -14,7 +15,7 @@ use std::os::unix::fs::{DirBuilderExt, MetadataExt};
 use std::sync::Arc;
 
 /// JSON escaping can double the already encoded canonical TSV; metadata is small.
-const MAX_RECEIPT_BYTES: usize = 64 * 1024 * 1024 + 256 * 1024;
+pub(super) const MAX_RECEIPT_BYTES: usize = 64 * 1024 * 1024 + 256 * 1024;
 
 /// Actual private canonical receipt; deserialized row metadata cannot construct
 /// this owner without the retained original filesystem objects and checked read.
@@ -62,6 +63,7 @@ impl NativeInputAppendReceipt {
         {
             return Err(invalid());
         }
+        reconcile_publication_names(&self.file, &self.path, &self.directory)?;
         self.file.sync_all()?;
         self.directory.sync_all()?;
         self.root.sync_all()?;
@@ -90,6 +92,11 @@ impl NativeInputAppendReceipt {
             {
                 return Err(invalid());
             }
+            match fs::symlink_metadata(self.path.with_extension("json.tmp")) {
+                Ok(_) => return Err(invalid()),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => (),
+                Err(error) => return Err(error.into()),
+            }
             self.directory.sync_all()?;
             self.root.sync_all()?;
             return Ok(());
@@ -110,7 +117,28 @@ pub(super) fn filename(conversation: &str, occurrence: &[u8; 32]) -> String {
     format!("{conversation}-native-{digest}.json")
 }
 
+/// Faults actual publication boundaries; no source, journal or join is forged.
+#[cfg(test)]
+#[derive(Clone, Copy)]
+#[repr(u8)]
+pub(crate) enum NativeReceiptPublicationFault {
+    BeforeStage = 1,
+    Partial = 2,
+    Complete = 3,
+    Linked = 4,
+}
+
 impl AgentTranscriptStore {
+    /// Selects one real file-publication fault on this store and its clones.
+    #[cfg(test)]
+    pub(crate) fn fail_native_receipt_publication_for_tests(
+        &self,
+        point: NativeReceiptPublicationFault,
+    ) {
+        self.native_receipt_publication_fault
+            .store(point as u8, std::sync::atomic::Ordering::SeqCst);
+    }
+
     /// Reads one exact native canonical owner without loading a source envelope
     /// or enumerating unrelated conversations. Missing is not commit proof.
     pub(crate) fn native_input_append_receipt(
@@ -119,6 +147,21 @@ impl AgentTranscriptStore {
         occurrence: &[u8; 32],
     ) -> Result<Option<Arc<NativeInputAppendReceipt>>> {
         validate_conversation_id(conversation)?;
+        // Historical lookup may legitimately see a removed transcript root.
+        if !self.root.try_exists()? {
+            return Ok(None);
+        }
+        let lease = self.acquire_conversation_lock(conversation)?;
+        self.native_input_append_receipt_locked(conversation, occurrence, &lease)
+    }
+
+    /// Same exact file qualification under an existing native mutation owner.
+    pub(in crate::storage::transcript) fn native_input_append_receipt_locked(
+        &self,
+        conversation: &str,
+        occurrence: &[u8; 32],
+        _lease: &File,
+    ) -> Result<Option<Arc<NativeInputAppendReceipt>>> {
         let root = match directory(&self.root) {
             Ok(root) => root,
             Err(error) if error.io_kind() == Some(std::io::ErrorKind::NotFound) => return Ok(None),
@@ -158,19 +201,7 @@ impl AgentTranscriptStore {
         {
             return Err(invalid());
         }
-        // A crash between hard-link publication and staging retirement leaves
-        // two names for the SAME actual object, not a second canonical receipt.
-        if file.metadata()?.nlink() == 2 {
-            let staged = private_file(&path.with_extension("json.tmp"))?;
-            if !same(&file, &staged)? {
-                return Err(invalid());
-            }
-            fs::remove_file(path.with_extension("json.tmp"))?;
-            parent.sync_all()?;
-        }
-        if file.metadata()?.nlink() != 1 {
-            return Err(invalid());
-        }
+        reconcile_publication_names(&file, &path, &parent)?;
         let owner = Arc::new(NativeInputAppendReceipt {
             data,
             file,
@@ -205,6 +236,14 @@ impl AgentTranscriptStore {
             return Err(invalid());
         }
         bounded_json(&bytes)?;
+        #[cfg(test)]
+        let fault = self
+            .native_receipt_publication_fault
+            .swap(0, std::sync::atomic::Ordering::SeqCst);
+        #[cfg(test)]
+        if fault == NativeReceiptPublicationFault::BeforeStage as u8 {
+            return Err(publication_fault());
+        }
         let _root = directory(&self.root)?;
         let parent_path = self.append_receipt_directory();
         match fs::DirBuilder::new().mode(0o700).create(&parent_path) {
@@ -214,9 +253,11 @@ impl AgentTranscriptStore {
         }
         let parent = directory(&parent_path)?;
         let native = data.native_input.as_ref().ok_or_else(invalid)?;
-        if let Some(existing) =
-            self.native_input_append_receipt(&data.conversation_id, &native.source().occurrence())?
-        {
+        if let Some(existing) = self.native_input_append_receipt_locked(
+            &data.conversation_id,
+            &native.source().occurrence(),
+            _lease,
+        )? {
             if existing.digest != <[u8; 32]>::from(Sha256::digest(&bytes)) {
                 return Err(invalid());
             }
@@ -255,14 +296,37 @@ impl AgentTranscriptStore {
             }
             offset += count;
         }
-        file.write_all(&bytes[present..])?;
+        let through = bytes.len();
+        #[cfg(test)]
+        let through = if fault == NativeReceiptPublicationFault::Partial as u8 {
+            (bytes.len() / 2).max(1)
+        } else {
+            through
+        };
+        if present < through {
+            file.write_all(&bytes[present..through])?;
+        }
         file.sync_all()?;
+        #[cfg(test)]
+        if fault == NativeReceiptPublicationFault::Partial as u8
+            || fault == NativeReceiptPublicationFault::Complete as u8
+        {
+            return Err(publication_fault());
+        }
         fs::hard_link(&temporary, &path)?;
+        #[cfg(test)]
+        if fault == NativeReceiptPublicationFault::Linked as u8 {
+            return Err(publication_fault());
+        }
         fs::remove_file(&temporary)?;
         parent.sync_all()?;
         _root.sync_all()?;
-        self.native_input_append_receipt(&data.conversation_id, &native.source().occurrence())?
-            .ok_or_else(invalid)
+        self.native_input_append_receipt_locked(
+            &data.conversation_id,
+            &native.source().occurrence(),
+            _lease,
+        )?
+        .ok_or_else(invalid)
     }
 }
 
@@ -477,4 +541,36 @@ impl<'de> serde::de::Visitor<'de> for Count<'_> {
 
 fn invalid() -> MezError {
     MezError::invalid_state("original native canonical append receipt unavailable")
+}
+
+/// One actual injected interrupted publication, never uncertainty fabricated as success.
+#[cfg(test)]
+fn publication_fault() -> MezError {
+    std::io::Error::new(
+        std::io::ErrorKind::Interrupted,
+        "injected native canonical receipt publication boundary failure",
+    )
+    .into()
+}
+
+/// Two publication names may survive only as links to the same exact file.
+/// Every retained owner checks this too, so a later conflicting temporary name
+/// cannot be stranded when its final receipt retires after c1.
+fn reconcile_publication_names(file: &File, path: &Path, parent: &File) -> Result<()> {
+    match private_file(&path.with_extension("json.tmp")) {
+        Ok(staged) => {
+            if !same(file, &staged)? || file.metadata()?.nlink() != 2 {
+                return Err(invalid());
+            }
+            fs::remove_file(path.with_extension("json.tmp"))?;
+            parent.sync_all()?;
+        }
+        Err(error) if error.io_kind() == Some(std::io::ErrorKind::NotFound) => {
+            if file.metadata()?.nlink() != 1 {
+                return Err(invalid());
+            }
+        }
+        Err(error) => return Err(error),
+    }
+    Ok(())
 }

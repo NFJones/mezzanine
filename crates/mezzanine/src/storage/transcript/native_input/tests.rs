@@ -4,6 +4,7 @@ use super::*;
 use mez_agent::transcript::TranscriptRole;
 
 mod receipts;
+mod staging;
 
 /// Owns only an isolated generated physical transcript destination.
 struct Fixture {
