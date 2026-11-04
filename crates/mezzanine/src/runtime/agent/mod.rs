@@ -883,6 +883,9 @@ pub(crate) struct RuntimeAgentComponent {
     received_peer_message_presentations: BTreeMap<String, RuntimeReceivedPeerMessagePresentation>,
     /// One real original-root absence result awaiting a canonical receive.
     native_input_permit: Option<messages::durable::NativeInputPermit>,
+    /// One-shot fault after real native ACK, before its scheduler handoff.
+    #[cfg(test)]
+    fail_next_native_ack_continuation: bool,
     /// Highest chronology sequence owned by replayed history in each active turn.
     ///
     /// Compaction refresh replaces exactly this prefix so prompt-boundary

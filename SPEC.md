@@ -16262,6 +16262,24 @@ After actual context insertion the runtime MUST retain its original source,
 transcript target and immutable chronology projection until canonical commit
 and exact native ACK. Provider offers, scheduler recovery, peer waits and joined
 coordination MUST hold their affected conversation through that interval.
+The actor MUST retain an actual joined canonical result before any fallible
+application handoff. The original receive receipt MUST own sealed proof before
+transcript-position, request-reply or coordination decoration. A decoration
+failure MUST retain that proof and source with monotonic per-receipt application
+backoff; it MUST NOT retry an already consumed physical root job. Other owners
+MUST remain eligible for application and storage work. An owned live receive
+MUST NOT bypass failed application work through a historical `c1` scan.
+Pre-issuance native ACK admission failure MUST likewise retain its actual proof.
+After exact ACK, any unfinished original scheduler handoff MUST remain owned by
+the same receive receipt until completed or suppressed during shutdown.
+Presentation persistence, pane/conversation retirement and terminal cleanup
+MUST NOT discard such an unfinished application continuation. Neither local
+retry state nor saved display metadata confers new task or provider authority.
+Position application and provider release MUST require the original actual
+native registration/private incarnation as well as turn, pane and conversation
+ownership. Reusing the same CID MUST NOT transfer those effects to a replacement.
+A retained opaque source MAY observe its still-current owner after ACK removed
+pending custody; this read-only observation MUST NOT reopen delivery eligibility.
 Interrupted bookkeeping MUST exclude peer projections already owned by this
 root. An old context's completion MUST NOT feed or advance a replacement.
 Shutdown MUST finish already selected canonical input and its ACK while
@@ -16287,7 +16305,7 @@ select this preservation; public labels or stale independent contexts MUST NOT.
 Connected internal tests cover process exit both after canonical commit and
 after preparation with the native row still missing, original-root factory/actor
 recovery, user-before-peer ordering and preflight refusal without live mutation.
-Complete receipt-staging/producer-order qualification, post-commit error custody,
+Complete receipt-staging/producer-order and exact ACK snapshot qualification,
 resource/liveness qualification and all-ingress activation remain required;
 normal durable activation MUST stay disabled until the remaining issue
 requirements pass.

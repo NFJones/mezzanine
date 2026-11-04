@@ -970,3 +970,491 @@ async fn actor_native_prefix_preflight_failure_leaves_live_context_and_source_un
         0
     );
 }
+
+/// Builds a real tracked native request and authenticated reverse-audience
+/// reply before transferring root scheduling to the actor. Tracking, acceptance
+/// and native continuity all use their production owners; no receipt is forged.
+async fn request_reply_scene(
+    fixture: &Fixture,
+) -> (
+    AsyncRuntimeSessionHandle,
+    AsyncRuntimeSessionActor,
+    AgentId,
+    mez_agent::AgentTurnRecord,
+    SenderIdentity,
+) {
+    let root = fixture.root();
+    assert_eq!(root.observe().await.unwrap(), CustodyWorkerStatus::Idle);
+    let (mut service, turn, peer) = super::native_actor::prepared_service(fixture);
+    root.configure_payload_spill(service.message_service_mut(), Default::default())
+        .unwrap();
+    service
+        .message_service_mut()
+        .require_native_continuity(root.storage_scope())
+        .unwrap();
+    service.refresh_native_message_bindings().unwrap();
+    let recipient = AgentId::opaque(turn.agent_id.clone()).unwrap();
+    root.start_native_continuity(service.message_service(), &recipient)
+        .unwrap();
+    assert_eq!(
+        root.observe().await.unwrap(),
+        CustodyWorkerStatus::NativeContinuityAwaitingAdoption
+    );
+    root.adopt_native_continuity(service.message_service_mut())
+        .unwrap();
+    let sender = service
+        .message_service()
+        .registered_identity(&recipient)
+        .unwrap()
+        .clone();
+    let request = Envelope {
+        protocol: "mmp/1",
+        id: "original-application-fault-request".into(),
+        message_type: "send".into(),
+        time: "original-request".into(),
+        sender,
+        recipient: Recipient::Agent(peer.agent_id.clone()),
+        correlation_id: None,
+        ttl_ms: None,
+        content_type: "text/plain".into(),
+        payload: "please reply".into(),
+        extension_fields: vec![],
+    };
+    let request_id = request.id.clone();
+    let ticket = service
+        .prepare_tracked_runtime_message(
+            &turn,
+            request,
+            MessageScope::Session,
+            crate::runtime::current_unix_millis(),
+        )
+        .unwrap();
+    service
+        .start_prepared_tracked_runtime_message(&ticket, |messages, requests, original| {
+            root.start(messages, original, Some(requests))
+        })
+        .unwrap();
+    assert_eq!(
+        root.observe().await.unwrap(),
+        CustodyWorkerStatus::AwaitingAdoption
+    );
+    service
+        .adopt_prepared_tracked_runtime_message(&ticket, |messages, requests| {
+            root.adopt(messages, Some(requests))
+        })
+        .unwrap();
+    let reply = Envelope {
+        protocol: "mmp/1",
+        id: "actual-application-fault-reply".into(),
+        message_type: "send".into(),
+        time: "original-reply".into(),
+        sender: peer.clone(),
+        recipient: Recipient::Agent(recipient.clone()),
+        correlation_id: Some(request_id),
+        ttl_ms: None,
+        content_type: "text/plain".into(),
+        payload: "actual canonical native receive input".into(),
+        extension_fields: vec![],
+    };
+    let ticket = service
+        .message_service_mut()
+        .prepare_acceptance(
+            &peer.agent_id,
+            reply,
+            MessageScope::Session,
+            crate::runtime::current_unix_millis(),
+            4096,
+            None,
+        )
+        .unwrap();
+    root.start(service.message_service_mut(), &ticket, None)
+        .unwrap();
+    assert_eq!(
+        root.observe().await.unwrap(),
+        CustodyWorkerStatus::AwaitingAdoption
+    );
+    root.adopt(service.message_service_mut(), None).unwrap();
+    let (handle, mut actor) = AsyncRuntimeSessionActor::new(
+        service,
+        crate::host::async_runtime::AsyncRuntimeActorConfig::default(),
+    )
+    .unwrap();
+    actor.register_message_custody(root).unwrap();
+    (handle, actor, recipient, turn, peer)
+}
+
+/// Exercises an actual request-reply decoration refusal after real c1. Removing
+/// only the live context copy cannot erase the worker's canonical source/image.
+/// Recovery, actual Stop/rebinding and shutdown must all preserve exact ACK
+/// custody without another input write or provider admission before settlement.
+async fn assert_postcanonical_application_recovery(
+    retire: bool,
+    shutdown: bool,
+    replace_incarnation: bool,
+) {
+    let fixture = Fixture::new(true);
+    let (_, mut actor, recipient, turn, peer) = request_reply_scene(&fixture).await;
+    let before = actor.service.agent_turn_contexts()[&turn.turn_id].clone();
+    actor.poll_message_custody_for_tests();
+    assert_eq!(
+        actor.observe_message_custody_for_tests().await.unwrap(),
+        CustodyWorkerStatus::NativeInputAwaitingAdoption
+    );
+    let committed = actor.service.agent_turn_contexts()[&turn.turn_id].clone();
+    assert_eq!(peer_blocks(&actor, &turn), 1);
+    // Actual application-state loss at the post-context boundary: the original
+    // memory work, root and envelope owners remain intact. No proof is injected.
+    actor
+        .service
+        .agent_turn_contexts_mut()
+        .insert(turn.turn_id.clone(), before);
+    actor.poll_message_custody_for_tests();
+    assert_eq!(
+        actor.observe_message_custody_for_tests().await.unwrap(),
+        CustodyWorkerStatus::NativeInputAwaitingAdoption
+    );
+    assert_eq!(
+        fixture
+            .connection()
+            .query_row(
+                "SELECT COUNT(*) FROM records WHERE key LIKE 'c1:%'",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+        1
+    );
+    assert!(actor.service.pending_native_input_ack().is_none());
+    assert!(actor.service.pending_agent_provider_tasks().is_empty());
+    assert!(
+        actor
+            .service
+            .native_input_pending_for_conversation(&turn.conversation_id)
+    );
+    let after_canonical = fixture.probe.attempts.load(Ordering::SeqCst);
+    // A real notification may restart a scan. Its historical c1 must not ACK
+    // around the actual live receipt's failed application step.
+    actor
+        .native_presence_changed_for_tests(
+            &recipient,
+            mez_agent::messaging::AgentPresenceStatus::Available,
+        )
+        .unwrap();
+    for _ in 0..8 {
+        actor.poll_message_custody_for_tests();
+    }
+    assert_eq!(
+        fixture.probe.attempts.load(Ordering::SeqCst),
+        after_canonical
+    );
+    assert_eq!(
+        fixture
+            .connection()
+            .query_row(
+                "SELECT COUNT(*) FROM records WHERE key LIKE 'k1:%'",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+        0
+    );
+    if !retire && !shutdown {
+        let mut unrelated = super::native_actor::source(&actor, &turn, &peer);
+        unrelated.id = "unrelated-root-admission-during-application-backoff".into();
+        let (reply, response) = tokio::sync::oneshot::channel();
+        actor
+            .start_tracked_native_message(
+                &turn,
+                unrelated,
+                MessageScope::Session,
+                crate::runtime::current_unix_millis(),
+                reply,
+            )
+            .unwrap();
+        assert_eq!(
+            actor.observe_message_custody_for_tests().await.unwrap(),
+            CustodyWorkerStatus::AwaitingAdoption
+        );
+        assert!(
+            response.await.unwrap().unwrap().accepted,
+            "an application fault must leave the idle root available to unrelated ingress"
+        );
+        assert!(actor.service.pending_agent_provider_tasks().is_empty());
+    }
+    let closing = if shutdown {
+        Some(actor.begin_message_custody_shutdown_for_tests())
+    } else {
+        None
+    };
+    if replace_incarnation {
+        // A genuine new private incarnation at the SAME reusable CID/task
+        // labels cannot inherit the old input's application continuation.
+        let mut shell = actor
+            .service
+            .agent_shell_store()
+            .get(&turn.pane_id)
+            .unwrap()
+            .clone();
+        shell.native_message_incarnation = Default::default();
+        shell.transcript_high_water = 0;
+        shell.transcript_entries = 0;
+        actor
+            .service
+            .agent_shell_store_mut()
+            .restore_session(&turn.pane_id, shell)
+            .unwrap();
+        actor.service.refresh_native_message_bindings().unwrap();
+    } else if retire {
+        let primary = actor.service.session().clients()[0].id.clone();
+        actor
+            .service
+            .execute_agent_shell_command(&primary, "/stop")
+            .unwrap();
+        actor
+            .service
+            .agent_shell_store_mut()
+            .bind_conversation(&turn.pane_id, "post-commit-replacement", 0)
+            .unwrap();
+        actor.service.refresh_native_message_bindings().unwrap();
+    } else {
+        actor
+            .service
+            .agent_turn_contexts_mut()
+            .insert(turn.turn_id.clone(), committed);
+    }
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+    let mut acknowledged = false;
+    for _ in 0..4 {
+        actor.poll_message_custody_for_tests();
+        let status = actor.observe_message_custody_for_tests().await.unwrap();
+        if status == CustodyWorkerStatus::NativeContinuityAwaitingAdoption {
+            assert!(
+                retire,
+                "only actual namespace replacement needs a continuity journal"
+            );
+            continue;
+        }
+        assert_eq!(
+            status,
+            CustodyWorkerStatus::AcknowledgementAwaitingAdoption,
+            "application recovery must use an ACK job, not retry an idle canonical root"
+        );
+        acknowledged = true;
+        break;
+    }
+    assert!(acknowledged);
+    assert_eq!(
+        fixture
+            .connection()
+            .query_row(
+                "SELECT COUNT(*) FROM records WHERE key LIKE 'c1:%'",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        fixture
+            .connection()
+            .query_row(
+                "SELECT COUNT(*) FROM records WHERE key LIKE 'k1:%'",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+        1
+    );
+    assert!(!actor.service.has_pending_native_input());
+    let rows = actor
+        .service
+        .agent_transcript_store()
+        .unwrap()
+        .inspect(&turn.conversation_id)
+        .unwrap();
+    assert_eq!(
+        rows.iter()
+            .filter(|row| matches!(
+                TranscriptContextEvent::from_transcript_content(&row.content),
+                Some(TranscriptContextEvent::NativePeerMessage { .. })
+            ))
+            .count(),
+        1
+    );
+    if replace_incarnation {
+        assert_eq!(
+            actor
+                .service
+                .agent_shell_store()
+                .get(&turn.pane_id)
+                .unwrap()
+                .transcript_high_water,
+            0
+        );
+        assert_eq!(
+            actor
+                .service
+                .agent_shell_store()
+                .get(&turn.pane_id)
+                .unwrap()
+                .transcript_entries,
+            0
+        );
+    }
+    if retire || shutdown {
+        assert!(actor.service.pending_agent_provider_tasks().is_empty());
+    } else {
+        assert_eq!(
+            actor
+                .service
+                .pending_agent_provider_tasks()
+                .iter()
+                .filter(|task| task.turn_id == turn.turn_id)
+                .count(),
+            1
+        );
+        let context = &actor.service.agent_turn_contexts()[&turn.turn_id];
+        let peer = context
+            .chronology()
+            .iter()
+            .find(|event| event.block().source == mez_agent::ContextSourceKind::PeerMessage)
+            .unwrap();
+        assert!(
+            context.peer_message_is_pending(peer.sequence()),
+            "the genuine tracked reply must retain its original event"
+        );
+    }
+    if let Some(closing) = closing {
+        actor.poll_message_custody_for_tests();
+        assert!(closing.await.unwrap().is_ok());
+    }
+}
+
+/// A real post-c1 request-reply error must retry local application work and then
+/// ACK exactly once, without losing proof or reissuing canonical input bytes.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn actor_native_application_failure_keeps_proof_and_retries_without_storage_replay() {
+    assert_postcanonical_application_recovery(false, false, false).await;
+}
+
+/// Stop and a new native namespace retire application decorations, while the
+/// original canonical proof still settles only its historical transport slot.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn actor_native_application_failure_survives_retirement_without_successor_work() {
+    assert_postcanonical_application_recovery(true, false, false).await;
+}
+
+/// Graceful shutdown drains the retained post-canonical error through its real
+/// ACK while withholding any provider continuation even after local recovery.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn actor_native_shutdown_drains_application_retry_without_provider_continuation() {
+    assert_postcanonical_application_recovery(false, true, false).await;
+}
+
+/// A boundary fault after real durable ACK must leave the existing receipt's
+/// scheduler continuation owned through actual flush/pane cleanup. Local retry
+/// or shutdown may finish it, without another storage write or ACK publication.
+async fn assert_acknowledged_application_retry(shutdown: bool) {
+    let fixture = Fixture::new(true);
+    let (_, mut actor, recipient, turn) = scene(&fixture).await;
+    accept(
+        &mut actor,
+        &recipient,
+        &turn,
+        "native-post-ACK-handoff-fault",
+    )
+    .await;
+    for _ in 0..2 {
+        actor.poll_message_custody_for_tests();
+        assert_eq!(
+            actor.observe_message_custody_for_tests().await.unwrap(),
+            CustodyWorkerStatus::NativeInputAwaitingAdoption
+        );
+    }
+    actor.service.fail_next_native_ack_continuation_for_tests();
+    actor.poll_message_custody_for_tests();
+    assert_eq!(
+        actor.observe_message_custody_for_tests().await.unwrap(),
+        CustodyWorkerStatus::AcknowledgementAwaitingAdoption
+    );
+    assert_eq!(
+        fixture
+            .connection()
+            .query_row(
+                "SELECT COUNT(*) FROM records WHERE key LIKE 'k1:%'",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+        1
+    );
+    assert!(
+        actor.service.has_pending_native_input(),
+        "the actual ACK must not discard its failing scheduler continuation"
+    );
+    assert!(actor.service.pending_native_input_ack().is_none());
+    actor
+        .service
+        .flush_received_peer_message_presentations()
+        .unwrap();
+    actor
+        .service
+        .clear_received_peer_message_presentations_for_pane(&turn.pane_id);
+    assert!(
+        actor.service.has_pending_native_input(),
+        "presentation cleanup cannot consume application work"
+    );
+    let writes = fixture.probe.attempts.load(Ordering::SeqCst);
+    let closing = shutdown.then(|| actor.begin_message_custody_shutdown_for_tests());
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+    actor.poll_message_custody_for_tests();
+    assert!(!actor.service.has_pending_native_input());
+    assert_eq!(fixture.probe.attempts.load(Ordering::SeqCst), writes);
+    assert_eq!(
+        fixture
+            .connection()
+            .query_row(
+                "SELECT COUNT(*) FROM records WHERE key LIKE 'k1:%'",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+        1
+    );
+    if let Some(closing) = closing {
+        assert!(closing.await.unwrap().is_ok());
+        assert!(actor.service.pending_agent_provider_tasks().is_empty());
+    } else {
+        assert_eq!(
+            actor
+                .service
+                .pending_agent_provider_tasks()
+                .iter()
+                .filter(|task| task.turn_id == turn.turn_id)
+                .count(),
+            1
+        );
+    }
+}
+
+/// Retrying an injected scheduler-boundary error after actual ACK uses only the
+/// original application owner, even when pane presentation cleanup runs first.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn actor_native_acknowledged_continuation_survives_cleanup_and_retries_once() {
+    assert_acknowledged_application_retry(false).await;
+}
+
+/// Shutdown suppresses an unfinished original provider handoff after ACK and
+/// releases the retained receipt without another physical settlement job.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn actor_native_shutdown_suppresses_acknowledged_continuation_after_failure() {
+    assert_acknowledged_application_retry(true).await;
+}
+
+/// Even when pane/CID/task labels are reused, a fresh real private incarnation
+/// cannot inherit an old input's counters, request-reply pin or provider offer.
+/// The genuine old c1 still authorizes settlement of only its original slot.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn actor_native_application_retry_does_not_adopt_same_cid_replacement_incarnation() {
+    assert_postcanonical_application_recovery(true, false, true).await;
+}

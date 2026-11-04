@@ -529,6 +529,19 @@ without injecting it into a successor. Root-boundary tests cover these actual
 writes and ACKs. The guarded internal actor probes the original root before live
 receive or unread-prompt injection, retains each selected canonical projection
 through storage and ACK, and holds its provider/scheduler/peer continuations.
+The actor retains each joined result before application handoff, and its receive
+receipt owns sealed proof before position/request-reply/coordination updates.
+Recoverable application errors use per-receipt monotonic backoff, independent
+of physical storage retry, while unrelated ingress and other application owners
+remain eligible. Historical `c1` scans cannot ACK around a live receipt's failed
+application step. ACK admission refusal keeps its original proof. After exact
+ACK, an unfinished original scheduler handoff remains in that receipt through
+presentation, pane, conversation and terminal cleanup; shutdown suppresses new
+provider continuation. Local retry and saved display data grant no new task
+ownership. Position/provider updates also require the original actual native
+namespace: reusing the same conversation ID with a fresh private incarnation
+cannot inherit the old input's counters or provider offer. Read-only owner
+observation after ACK does not reopen delivery eligibility.
 Interrupted bookkeeping excludes that root-owned peer occurrence. Shutdown
 drains selected input without opening a provider continuation; a successor
 context cannot inherit an old completion. Cold-read capacity refusal retains
@@ -551,7 +564,7 @@ and explicit external harnesses remain excluded. A current proven native binding
 also preserves an originally absent project scope when its restored process has
 a working directory: receiving mail must not replace that registration through
 metadata enrichment. Complete receipt-staging and producer-order qualification,
-post-commit error custody, resource/liveness and normal all-ingress activation
+exact ACK snapshot qualification, resource/liveness and normal all-ingress activation
 still require implementation and qualification.
 
 Fresh opt-in requires an actually empty original store; only qualified recovery

@@ -16,6 +16,24 @@ use super::*;
 use crate::storage::mmp_custody::native_input::NativeInputProjection;
 use crate::storage::transcript::AgentTranscriptStore;
 
+mod completion;
+
+/// Monotonic application/admission backoff, never a storage retry or proof.
+#[derive(Debug, Clone)]
+pub(in crate::runtime::agent) struct NativeRetry {
+    at: std::time::Instant,
+    _failure: MezError,
+}
+
+/// Exact ACK already settled, but its original scheduler handoff still belongs
+/// to this receipt. Presentation cleanup cannot discard this continuation.
+#[derive(Debug, Clone)]
+pub(in crate::runtime::agent) struct NativeContinuation {
+    work: Arc<NativeWork>,
+    continue_turn: bool,
+    retry: Option<NativeRetry>,
+}
+
 /// Speculative data prepared before context commit, carrying no receive proof.
 #[derive(Debug, Clone)]
 struct PreparedNativeInput {
@@ -49,8 +67,12 @@ pub(in crate::runtime::agent) enum NativeReceipt {
     Committed {
         work: Arc<NativeWork>,
         proof: MessageNativeInputCommit,
+        applied: bool,
+        retry: Option<NativeRetry>,
     },
-    Acknowledged,
+    Acknowledged {
+        continuation: Option<NativeContinuation>,
+    },
 }
 
 impl RuntimeSessionService {
@@ -62,11 +84,13 @@ impl RuntimeSessionService {
             .received_peer_message_presentations
             .values()
             .filter_map(|r| match &r.durable_input {
-                Some(NativeReceipt::Pending(work) | NativeReceipt::Committed { work, .. })
-                    if work.turn.turn_id == turn =>
-                {
-                    Some(work.projection.event_sequence())
-                }
+                Some(
+                    NativeReceipt::Pending(work)
+                    | NativeReceipt::Committed { work, .. }
+                    | NativeReceipt::Acknowledged {
+                        continuation: Some(NativeContinuation { work, .. }),
+                    },
+                ) if work.turn.turn_id == turn => Some(work.projection.event_sequence()),
                 _ => None,
             })
             .collect()
@@ -379,9 +403,36 @@ impl RuntimeSessionService {
                 .any(|r| {
                     matches!(
                         r.durable_input,
-                        Some(NativeReceipt::Pending(_) | NativeReceipt::Committed { .. })
+                        Some(
+                            NativeReceipt::Pending(_)
+                                | NativeReceipt::Committed { .. }
+                                | NativeReceipt::Acknowledged {
+                                    continuation: Some(_)
+                                }
+                        )
                     )
                 })
+    }
+
+    /// An actual live receive owner must finish its application work before a
+    /// historical c1 lookup can authorize ACK. Saved display data never matches.
+    pub(crate) fn native_input_source_is_owned(&self, source: &MessageNativeInputAnchor) -> bool {
+        self.agent
+            .received_peer_message_presentations
+            .values()
+            .any(|receipt| {
+                let work = match &receipt.durable_input {
+                    Some(NativeReceipt::Pending(work) | NativeReceipt::Committed { work, .. }) => {
+                        work
+                    }
+                    _ => return false,
+                };
+                work.source.sequence() == source.sequence()
+                    && work.source.binding_index() == source.binding_index()
+                    && work.source.source_sha256() == source.source_sha256()
+                    && work.source.recipient() == source.recipient()
+                    && work.source.native_owner() == source.native_owner()
+            })
     }
 
     /// Borrows the existing bounded receipt owner; no second mailbox is built.
@@ -413,172 +464,5 @@ impl RuntimeSessionService {
                     work.projection.clone(),
                 ))
             })
-    }
-
-    /// Records a real joined original archive frontier without manufacturing a
-    /// received context, task or provider continuation. Historical journal-only
-    /// proof and a replacement native namespace cannot update current backing.
-    pub(crate) fn observe_native_input_archive(
-        &mut self,
-        proof: &MessageNativeInputCommit,
-    ) -> Result<()> {
-        if !proof.record().archive_observed
-            || !self
-                .message_service()
-                .native_input_owner_is_current(proof.anchor())
-        {
-            return Ok(());
-        }
-        let Some(pane) = proof.anchor().recipient().as_str().strip_prefix("agent-") else {
-            return Ok(());
-        };
-        let Some(shell) = self.agent_shell_store().get(pane) else {
-            return Ok(());
-        };
-        if shell.session_id != proof.anchor().native_owner().conversation_id() {
-            return Ok(());
-        }
-        let pane = pane.to_owned();
-        let high = shell
-            .transcript_high_water
-            .max(proof.record().archive_sequence);
-        let added = high - shell.transcript_high_water;
-        let raw = shell.transcript_entries.checked_add(added).ok_or_else(|| {
-            MezError::invalid_state("native canonical transcript frontier exhausted")
-        })?;
-        self.agent_shell_store_mut().restore_transcript_position(
-            &pane,
-            mez_agent::AgentTranscriptPosition {
-                logical_high_water: high,
-                active_raw_entries: raw,
-            },
-        )?;
-        Ok(())
-    }
-
-    /// Actual joined storage proof attaches only to the original receipt. Late
-    /// completion still settles old transport, without feeding its successor.
-    pub(crate) fn complete_native_input_commit(
-        &mut self,
-        id: &str,
-        proof: MessageNativeInputCommit,
-    ) -> Result<()> {
-        let work = self
-            .agent
-            .received_peer_message_presentations
-            .get(id)
-            .and_then(|r| match &r.durable_input {
-                Some(NativeReceipt::Pending(work)) => Some(work.clone()),
-                _ => None,
-            })
-            .ok_or_else(|| MezError::invalid_state("original native receipt missing"))?;
-        if proof.anchor().sequence() != work.source.sequence()
-            || proof.anchor().source_sha256() != work.source.source_sha256()
-            || proof.anchor().binding_index() != work.source.binding_index()
-        {
-            return Err(MezError::invalid_state(
-                "original native commit source changed",
-            ));
-        }
-        if self
-            .agent_shell_store()
-            .get(&work.turn.pane_id)
-            .is_some_and(|s| s.session_id == work.turn.conversation_id)
-        {
-            let row = work.projection.committed_row(&proof)?;
-            self.agent_shell_store_mut()
-                .record_transcript_append(&work.turn.pane_id, &[row])?;
-        }
-        if self.native_receive_turn_is_current(&work.turn) {
-            self.record_request_reply_commit(&work.turn, work.source.sequence(), &work.envelope)?;
-            self.record_joined_coordination_mail(
-                &work.turn,
-                work.source.sequence(),
-                &work.envelope,
-            );
-        }
-        if let Some(receipt) = self.agent.received_peer_message_presentations.get_mut(id) {
-            receipt.durable_input = Some(NativeReceipt::Committed { work, proof });
-        }
-        Ok(())
-    }
-
-    /// Gives the actor one already-sealed exact original native ACK candidate.
-    pub(crate) fn pending_native_input_ack(&self) -> Option<(String, MessageNativeInputCommit)> {
-        self.agent
-            .received_peer_message_presentations
-            .iter()
-            .find_map(|(id, r)| match &r.durable_input {
-                Some(NativeReceipt::Committed { proof, .. }) => Some((id.clone(), proof.clone())),
-                _ => None,
-            })
-    }
-
-    /// Records actual exact-slot settlement and resumes only the original live
-    /// turn. Historical proof lookup with no receipt never schedules anything.
-    pub(crate) fn complete_native_input_ack(
-        &mut self,
-        id: &str,
-        now_ms: u64,
-        continue_turn: bool,
-    ) -> Result<()> {
-        let work = self
-            .agent
-            .received_peer_message_presentations
-            .get(id)
-            .and_then(|r| match &r.durable_input {
-                Some(NativeReceipt::Committed { work, .. }) => Some(work.clone()),
-                _ => None,
-            })
-            .ok_or_else(|| MezError::invalid_state("original native ACK receipt missing"))?;
-        if let Some(receipt) = self.agent.received_peer_message_presentations.get_mut(id) {
-            receipt.durable_input = Some(NativeReceipt::Acknowledged);
-        }
-        if !continue_turn {
-            // Transport settlement must survive shutdown, without publishing a
-            // fresh provider or scheduler continuation after admission closed.
-            self.remove_pending_agent_provider_task(&work.turn.turn_id);
-            return Ok(());
-        }
-        if self.native_receive_turn_is_current(&work.turn) {
-            let turn = self
-                .agent_turn_ledger()
-                .turn(&work.turn.turn_id)
-                .cloned()
-                .ok_or_else(|| MezError::invalid_state("original native turn missing"))?;
-            if turn.state == AgentTurnState::Blocked
-                && !crate::runtime::control::runtime_owned_bridge_message(&work.envelope)
-            {
-                self.agent
-                    .agent_turn_peer_wait_wake_pending
-                    .insert(turn.turn_id.clone());
-                let _ = self.resume_parked_peer_wait(&turn)?;
-            }
-            if turn.state == AgentTurnState::Running
-                && !self.agent_provider_task_is_owned(&turn.turn_id)
-            {
-                self.queue_agent_provider_task(turn.turn_id);
-            }
-        }
-        self.recover_received_peer_message_turn_scheduling(now_ms)?;
-        let _ = self.flush_received_peer_message_presentations();
-        Ok(())
-    }
-
-    /// Original application ownership must survive in the actual live runtime.
-    fn native_receive_turn_is_current(&self, turn: &AgentTurnRecord) -> bool {
-        self.agent_shell_store()
-            .get(&turn.pane_id)
-            .is_some_and(|s| s.session_id == turn.conversation_id)
-            && self.agent_turn_contexts().contains_key(&turn.turn_id)
-            && self
-                .agent_turn_ledger()
-                .turn(&turn.turn_id)
-                .is_some_and(|t| {
-                    matches!(
-                        t.state,
-                        AgentTurnState::Queued | AgentTurnState::Running | AgentTurnState::Blocked
-                    )
-                })
     }
 }

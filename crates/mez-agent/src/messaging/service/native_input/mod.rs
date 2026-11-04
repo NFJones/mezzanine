@@ -205,7 +205,16 @@ impl MessageService {
     /// presence, TTL or transport settlement. This can route actual canonical
     /// archive observations, but never revives a stale recipient namespace.
     pub fn native_input_owner_is_current(&self, source: &MessageNativeInputAnchor) -> bool {
-        self.native_input_anchor_is_original(source)
+        // The opaque anchor already retains an actual accepted source from
+        // this runtime. ACK may remove its pending-map entry before the final
+        // application continuation retires; that must not replace or revoke
+        // the still-current registration/private owner. Fresh delivery continues
+        // to require pending custody through native_input_can_receive below.
+        Arc::ptr_eq(&self.acceptance_runtime, &source.0.runtime)
+            && self
+                .storage_custody
+                .as_ref()
+                .is_some_and(|p| p.scope == source.0.scope)
             && self.accepted_recipient(&source.0.row, source.recipient())
     }
 

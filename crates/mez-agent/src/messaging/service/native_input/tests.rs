@@ -492,3 +492,38 @@ fn native_input_archive_observation_cannot_round_trip_through_data() {
     assert!(!restored.archive_observed);
     assert_eq!(restored.archive_sequence, observed.archive_sequence);
 }
+
+/// Original current-owner observation survives actual lower ACK settlement and
+/// removal from pending custody. It never reopens delivery, crosses service
+/// allocations or adopts a new private incarnation at the same public CID.
+/// The illustrative lower callback is not a filesystem qualification claim.
+#[test]
+fn native_current_owner_survives_ack_without_reopening_delivery_or_rebinding() {
+    let mut scene = Scene::new();
+    let sequence = scene.accept("current-owner-after-ack", None);
+    scene.offer(11);
+    let proof = scene.proof(sequence, 11);
+    assert!(scene.service.native_input_owner_is_current(proof.anchor()));
+    assert!(
+        !Scene::new()
+            .service
+            .native_input_owner_is_current(proof.anchor())
+    );
+    scene.ack(&proof);
+    assert!(
+        !scene
+            .service
+            .native_input_anchor_is_original(proof.anchor())
+    );
+    assert!(scene.service.native_input_owner_is_current(proof.anchor()));
+    assert!(!scene.service.native_input_can_receive(proof.anchor(), 12));
+    scene
+        .service
+        .bind_native_conversation(
+            &scene.registration,
+            "original-context",
+            &MessageNativeIncarnation::default(),
+        )
+        .unwrap();
+    assert!(!scene.service.native_input_owner_is_current(proof.anchor()));
+}

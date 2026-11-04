@@ -569,6 +569,7 @@ impl RuntimeSessionService {
             .agent
             .received_peer_message_presentations
             .iter()
+            .filter(|(_, receipt)| !receipt.native_continuation_is_pending())
             .map(|(identity, receipt)| (identity.clone(), receipt.clone()))
             .collect::<Vec<_>>();
         #[cfg(test)]
@@ -730,7 +731,7 @@ impl RuntimeSessionService {
         receipt: &super::super::RuntimeReceivedPeerMessagePresentation,
     ) -> bool {
         if let Some(state) = &receipt.durable_input {
-            return matches!(state, super::durable::NativeReceipt::Acknowledged);
+            return matches!(state, super::durable::NativeReceipt::Acknowledged { .. });
         }
         self.control
             .message_service()
@@ -807,6 +808,7 @@ impl RuntimeSessionService {
                 receipt.conversation_id == conversation_id
                     && receipt.presentation_attempted
                     && self.received_peer_message_presentation_is_acknowledged(receipt)
+                    && !receipt.native_continuation_is_pending()
             })
             .filter_map(|(identity, receipt)| {
                 self.received_peer_message_presentation_is_persisted(
@@ -841,6 +843,7 @@ impl RuntimeSessionService {
                 receipt.pane_id == pane_id
                     && (!receipt.native_commit_proven
                         || self.received_peer_message_presentation_is_acknowledged(receipt))
+                    && !receipt.native_continuation_is_pending()
             })
             .map(|(identity, _)| identity.clone())
             .collect::<Vec<_>>();
@@ -875,8 +878,9 @@ impl RuntimeSessionService {
             .received_peer_message_presentations
             .iter()
             .filter(|(_, receipt)| {
-                receipt.native_commit_proven
-                    && !self.received_peer_message_presentation_is_acknowledged(receipt)
+                receipt.native_continuation_is_pending()
+                    || (receipt.native_commit_proven
+                        && !self.received_peer_message_presentation_is_acknowledged(receipt))
             })
             .map(|(identity, _)| identity.clone())
             .collect::<BTreeSet<_>>();
@@ -914,6 +918,7 @@ impl RuntimeSessionService {
             .filter(|(_, receipt)| {
                 receipt.turn_id == turn_id
                     && self.received_peer_message_presentation_is_acknowledged(receipt)
+                    && !receipt.native_continuation_is_pending()
             })
             .filter_map(|(identity, receipt)| {
                 self.received_peer_message_presentation_is_persisted(
@@ -934,6 +939,17 @@ impl RuntimeSessionService {
 }
 
 impl super::super::RuntimeReceivedPeerMessagePresentation {
+    /// ACK and application cleanup are separate boundaries. Keep the original
+    /// continuation through presentation persistence or conversation retirement.
+    fn native_continuation_is_pending(&self) -> bool {
+        matches!(
+            self.durable_input,
+            Some(super::durable::NativeReceipt::Acknowledged {
+                continuation: Some(_)
+            })
+        )
+    }
+
     /// Charges exactly the source strings retained by a live receiver receipt.
     fn logical_bytes(&self, identity: &str) -> usize {
         peer_presentation_source_bytes([
