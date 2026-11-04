@@ -456,6 +456,16 @@ commit generation and the actual admission guard at capture. Legacy version1 or
 unguarded observations cannot restore a native endpoint. Unknown legacy source
 ownership also remains unavailable to a recovered native binding.
 
+Schema10 checkpoints keep exact source-slot ACKs independently of the cumulative
+cursor. A later native ACK above cursor zero does not settle an earlier pending
+original. The earlier actual commit/ACK can then advance through both explicit
+positives. Factory tests exercise this with real canonical and ACK journal writes
+before dropping the original owners. They also replace the actual private epoch
+at the same CID before ACK: the old positive stays with its original slot,
+leaving the replacement cursor zero and creating no replacement task/provider
+work. Saved positive bits cannot replace missing original ACK journal evidence;
+factory publication refuses while the accepted originals and canonical row stay.
+
 This path reads the existing private active-session checkpoint and actual
 transcripts, preserving the checkpoint through qualification. Original epoch,
 CID, pane, window, project and native harness must agree. Opaque qualified epochs
@@ -585,7 +595,8 @@ capability label; the original guarded binding and private context must match,
 and explicit external harnesses remain excluded. A current proven native binding
 also preserves an originally absent project scope when its restored process has
 a working directory: receiving mail must not replace that registration through
-metadata enrichment. Exact ACK snapshot qualification, resource/liveness and normal all-ingress activation
+metadata enrichment. Durable terminal/outcome/expiry/retirement and clock journals,
+reclamation, resource/liveness and normal all-ingress activation
 still require implementation and qualification.
 
 Fresh opt-in requires an actually empty original store; only qualified recovery

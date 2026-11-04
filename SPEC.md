@@ -16138,6 +16138,17 @@ origin, full inventory and source-bound ACK history MUST qualify before any
 native registry construction. Unknown legacy source ownership MUST NOT acquire
 native delivery or sender rights from a current binding.
 
+Schema10 recovery MUST preserve exact source-slot ACK facts independently of a
+current cumulative cursor. A later native ACK MAY be above cursor zero while an
+earlier original remains pending; restoring it MUST NOT skip that earlier input.
+After the earlier actual commit/ACK, the current original cursor MAY advance
+through both explicit positives. A canonical ACK for an old private incarnation
+MUST remain bound to its old slot even when a replacement uses the same CID;
+it MUST NOT advance the replacement cursor or create replacement task/provider
+work. Saved positive bits MUST qualify against the original ACK journal and
+source history. Missing original ACK evidence MUST withhold factory publication
+while retaining the accepted originals and canonical input.
+
 Native qualification MUST read the actual existing private active-session
 checkpoint for the same session and hydrate its transcripts while preserving
 that checkpoint unchanged. Matching original epoch, CID, pane, window, project
@@ -16328,7 +16339,9 @@ preparation with the native row still missing, and during partial or complete
 unpublished staging. They also cover original-root factory/actor recovery,
 competing ordinary writers through failed publication, queued/in-flight producer
 ordering, Stop bookkeeping, and preflight refusal without live mutation.
-Exact ACK snapshot qualification,
+Connected schema10 factory controls also cover out-of-order exact ACKs, an old
+private incarnation's ACK at the same CID, and missing original ACK evidence.
+Durable terminal/outcome/expiry/retirement and clock journals, reclamation,
 resource/liveness qualification and all-ingress activation remain required;
 normal durable activation MUST stay disabled until the remaining issue
 requirements pass.

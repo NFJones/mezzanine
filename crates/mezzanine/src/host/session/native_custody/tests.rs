@@ -20,6 +20,10 @@ struct Fixture {
 /// abruptly after durable journal/acceptance/ACK, without root/service Drop.
 enum Original {
     Snapshot,
+    /// Exact later-slot native ACK; optionally replace the actual private epoch.
+    NativeAckSnapshot {
+        replace_incarnation: bool,
+    },
     Registered,
     CrashRegistered(PathBuf),
     CrashNativeInput(PathBuf),
@@ -115,7 +119,10 @@ impl Fixture {
             .subscribe(&native.agent_id)
             .unwrap();
         service.checkpoint_agent_session_metadata().unwrap();
-        let open = if matches!(&original, Original::Snapshot) {
+        let open = if matches!(
+            &original,
+            Original::Snapshot | Original::NativeAckSnapshot { .. }
+        ) {
             MmpCustodyRoot::open
         } else {
             MmpCustodyRoot::open_registered
@@ -165,7 +172,7 @@ impl Fixture {
                 CustodyWorkerStatus::AwaitingAdoption
             );
             root.adopt(service.message_service_mut(), None).unwrap();
-            if n == 1 {
+            if n == 1 && !matches!(&original, Original::NativeAckSnapshot { .. }) {
                 assert_eq!(
                     service
                         .message_service()
@@ -194,8 +201,18 @@ impl Fixture {
                 .release_stored_payload(n, root.storage_scope())
                 .unwrap();
         }
+        if let Original::NativeAckSnapshot {
+            replace_incarnation,
+        } = &original
+        {
+            native_ack_snapshot::commit_later_original(&mut service, &root, *replace_incarnation)
+                .await;
+        }
         let mut payload = SessionSnapshotPayload::from_session(service.session());
-        if matches!(&original, Original::Snapshot) {
+        if matches!(
+            &original,
+            Original::Snapshot | Original::NativeAckSnapshot { .. }
+        ) {
             root.start_checkpoint(service.message_service()).unwrap();
             assert_eq!(
                 root.observe().await.unwrap(),
@@ -205,7 +222,12 @@ impl Fixture {
             payload.message_state = Some(checkpoint);
             drop(lease);
         }
-        let epoch = context.native_message_incarnation.snapshot_identity();
+        let epoch = service
+            .agent_shell_store()
+            .get("%1")
+            .unwrap()
+            .native_message_incarnation
+            .snapshot_identity();
         let root_dir = root_path(&config, service.session().id.as_str());
         let fixture = Self {
             config,
@@ -888,4 +910,5 @@ async fn native_factory_recovers_after_process_crash_without_message_checkpoint(
     assert_factory_redelivery(&fixture).await;
 }
 
+mod native_ack_snapshot;
 mod native_input;
