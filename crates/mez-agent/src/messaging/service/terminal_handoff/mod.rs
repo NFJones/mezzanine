@@ -31,6 +31,33 @@ struct Source {
 /// Actual original sender/terminal source; neither data nor canonical proof.
 #[derive(Clone)]
 pub struct MessageTerminalHandoffAnchor(Arc<Source>);
+
+/// One charged source decoder/scratch owner retained outside the physical worker.
+/// It is not a canonical result, disposition or permission to consume an outcome.
+#[derive(Clone)]
+pub struct MessageTerminalHandoffIo {
+    source: MessageTerminalHandoffAnchor,
+    _payload: super::payload_budget::PayloadReservation,
+    _metadata: Arc<MessageStorageSnapshotLease>,
+    limits: MessageAcceptanceDecodeLimits,
+}
+impl std::fmt::Debug for MessageTerminalHandoffIo {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MessageTerminalHandoffIo")
+            .field("source", &self.source)
+            .finish_non_exhaustive()
+    }
+}
+impl MessageTerminalHandoffIo {
+    /// Borrows only the actual source whose decoder reservation this owns.
+    pub fn source(&self) -> &MessageTerminalHandoffAnchor {
+        &self.source
+    }
+    /// Bounds one-at-a-time accepted source/ACK qualification on the root worker.
+    pub fn decode_limits(&self) -> MessageAcceptanceDecodeLimits {
+        self.limits
+    }
+}
 impl std::fmt::Debug for MessageTerminalHandoffAnchor {
     /// Redacts authored IDs, outcomes, native attribution and private scope.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -181,6 +208,39 @@ impl MessageTerminalHandoffAnchor {
 }
 
 impl MessageService {
+    /// Reserves a complete decoder quantum and bounded recovery scratch before
+    /// issuing canonical I/O. The root must retain this owner through actual
+    /// join/retry, independently of observer cancellation or source replacement.
+    pub fn reserve_terminal_handoff_io(
+        &mut self,
+        source: &MessageTerminalHandoffAnchor,
+    ) -> Result<MessageTerminalHandoffIo> {
+        if !self.terminal_handoff_anchor_is_original(source) {
+            return Err(unavailable());
+        }
+        let policy = self.storage_custody.as_ref().ok_or_else(unavailable)?;
+        let limits = MessageAcceptanceDecodeLimits {
+            payload_bytes: policy.limits.cache_payload_bytes,
+            auxiliary_bytes: 512 * 1024,
+            recipient_count: 4096,
+            recipient_bytes: 1024 * 1024,
+        };
+        let metadata = checkpoint::reserve_checkpoint(
+            policy.checkpoint_bytes.clone(),
+            MESSAGE_STORAGE_RECOVERY_SCRATCH_METADATA,
+            self.storage_metadata_base_usage()?,
+            policy.limits.metadata_bytes,
+        )?;
+        let payload = self
+            .reserve_storage_payload(0, limits.payload_bytes, 0, None)?
+            .ok_or_else(unavailable)?;
+        Ok(MessageTerminalHandoffIo {
+            source: source.clone(),
+            _payload: payload,
+            _metadata: Arc::new(metadata),
+            limits,
+        })
+    }
     /// Captures only an authenticated original native sender's exact actual
     /// unconsumed outcome under trusted durable setup. A DTO cannot select a
     /// different source/slot/clock or infer a sender from public identity text.

@@ -38,6 +38,7 @@ pub(crate) mod ownership;
 mod recovery;
 mod registration;
 pub(crate) mod terminal_custody;
+pub(crate) mod terminal_handoff;
 
 /// Version of this private row/receipt store, independent of message snapshots.
 const SCHEMA_VERSION: i64 = 2;

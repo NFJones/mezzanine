@@ -428,3 +428,69 @@ fn terminal_handoff_canonical_callback_rejects_wrong_original_occurrence() {
         1
     );
 }
+
+/// The actual root must reserve a complete source decoder and metadata scratch
+/// before I/O. Clones share that one charge through final worker ownership;
+/// refusal of a competing reservation must release only its temporary charge.
+#[test]
+fn terminal_handoff_io_keeps_decoder_and_scratch_through_last_worker_owner() {
+    let mut scene = Scene::new(true, true);
+    let source = scene.live();
+    let observer = scene.service.payload_observer().unwrap();
+    let before = scene
+        .service
+        .storage_custody
+        .as_ref()
+        .unwrap()
+        .checkpoint_bytes
+        .load(Ordering::Acquire);
+    let io = scene.service.reserve_terminal_handoff_io(&source).unwrap();
+    let charged = scene
+        .service
+        .storage_custody
+        .as_ref()
+        .unwrap()
+        .checkpoint_bytes
+        .load(Ordering::Acquire);
+    assert!(charged >= before + MESSAGE_STORAGE_RECOVERY_SCRATCH_METADATA);
+    assert_eq!(
+        observer.snapshot().unwrap().reserved_payload_bytes,
+        io.decode_limits().payload_bytes
+    );
+    assert!(scene.service.reserve_terminal_handoff_io(&source).is_err());
+    assert_eq!(
+        scene
+            .service
+            .storage_custody
+            .as_ref()
+            .unwrap()
+            .checkpoint_bytes
+            .load(Ordering::Acquire),
+        charged
+    );
+    let retained = io.clone();
+    drop(io);
+    assert_eq!(
+        observer.snapshot().unwrap().reserved_payload_bytes,
+        retained.decode_limits().payload_bytes
+    );
+    let mut foreign = Scene::new(true, true);
+    assert!(
+        foreign
+            .service
+            .reserve_terminal_handoff_io(&source)
+            .is_err()
+    );
+    drop(retained);
+    assert_eq!(observer.snapshot().unwrap().reserved_payload_bytes, 0);
+    assert_eq!(
+        scene
+            .service
+            .storage_custody
+            .as_ref()
+            .unwrap()
+            .checkpoint_bytes
+            .load(Ordering::Acquire),
+        before
+    );
+}

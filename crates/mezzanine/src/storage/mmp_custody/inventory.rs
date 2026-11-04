@@ -119,6 +119,7 @@ enum Key<'a> {
     Release(&'a str),
     NativeContinuity(&'a str),
     NativeInput(&'a str),
+    TerminalHandoff(&'a str),
 }
 
 impl MmpCustodyStore {
@@ -322,6 +323,29 @@ impl MmpCustodyStore {
                         }
                         charge(&mut metadata, ACK_CHARGE)?;
                     }
+                    Key::TerminalHandoff(key) => {
+                        if let Some(previous) = group.take() {
+                            self.finish_inventory_group(
+                                transaction,
+                                previous,
+                                limits,
+                                &mut metadata,
+                                &mut inventory,
+                                pending,
+                            )?;
+                        }
+                        self.read_handoff_in_snapshot(transaction, key, limits)?
+                            .ok_or_else(|| invalid("terminal handoff journal is missing"))?;
+                        let other = if let Some(rest) = key.strip_prefix("u1:") {
+                            format!("h1:{rest}")
+                        } else {
+                            format!("u1:{}", &key[3..])
+                        };
+                        if self.read(&other)?.is_some() {
+                            return Err(invalid("terminal handoff has two journal phases"));
+                        }
+                        charge(&mut metadata, ACK_CHARGE)?;
+                    }
                     Key::NativeContinuity(key) => {
                         if let Some(previous) = group.take() {
                             self.finish_inventory_group(
@@ -378,7 +402,8 @@ impl MmpCustodyStore {
                             | Key::Expiry(_)
                             | Key::Release(_)
                             | Key::NativeContinuity(_)
-                            | Key::NativeInput(_) => {
+                            | Key::NativeInput(_)
+                            | Key::TerminalHandoff(_) => {
                                 return Err(invalid("unexpected acknowledgment key"));
                             }
                         };
@@ -588,6 +613,14 @@ fn parse_key(key: &str) -> Result<Key<'_>> {
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
     {
         return Ok(Key::NativeInput(key));
+    }
+    if let Some(digest) = key.strip_prefix("u1:").or_else(|| key.strip_prefix("h1:"))
+        && digest.len() == 64
+        && digest
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    {
+        return Ok(Key::TerminalHandoff(key));
     }
     if let Some(digest) = key.strip_prefix("n1:")
         && digest.len() == 64

@@ -10,6 +10,118 @@ use mez_agent::transcript::{
     TranscriptTerminalHandoffSource,
 };
 
+mod canonical;
+mod crash;
+mod failures;
+
+/// Real source/expiry/root setup shared by canonical and failure test owners.
+/// Application projection is descriptive until the actual root journals it.
+struct Scene {
+    root: MmpCustodyRoot,
+    service: MessageService,
+    sender: SenderIdentity,
+    registration: mez_agent::messaging::MessageSenderRegistration,
+    source: mez_agent::messaging::MessageTerminalHandoffAnchor,
+    transcript: AgentTranscriptStore,
+    projection: Arc<crate::storage::mmp_custody::terminal_handoff::TerminalHandoffProjection>,
+}
+impl Scene {
+    async fn new(fixture: &Fixture, probe: Arc<Probe>) -> Self {
+        let mut root = fixture.root();
+        assert_eq!(root.observe().await.unwrap(), CustodyWorkerStatus::Idle);
+        Arc::get_mut(&mut root.0).unwrap().handoff_probe = Some(probe);
+        let (mut service, sender, target, _) = fixture_service();
+        root.configure_payload_spill(&mut service, Default::default())
+            .unwrap();
+        service
+            .require_native_continuity(root.storage_scope())
+            .unwrap();
+        let registration = service
+            .capture_sender_registration(&sender.agent_id)
+            .unwrap();
+        service
+            .bind_native_conversation(
+                &registration,
+                "native-sender",
+                &MessageNativeIncarnation::default(),
+            )
+            .unwrap();
+        root.start_native_continuity(&service, &sender.agent_id)
+            .unwrap();
+        assert_eq!(
+            root.observe().await.unwrap(),
+            CustodyWorkerStatus::NativeContinuityAwaitingAdoption
+        );
+        root.adopt_native_continuity(&mut service).unwrap();
+        super::expiry::accept(&root, &mut service, &sender, &target, 10, 5).await;
+        let ticket = service
+            .prepare_storage_expiry(root.storage_scope(), 16, usize::MAX)
+            .unwrap()
+            .unwrap();
+        root.start_terminal(&mut service, &ticket).unwrap();
+        assert_eq!(
+            root.observe().await.unwrap(),
+            CustodyWorkerStatus::TerminalAwaitingAdoption
+        );
+        root.adopt_terminal(&mut service).unwrap();
+        drop(ticket);
+        let outcome = service
+            .delivery_outcomes_for(&sender.agent_id, 1)
+            .unwrap()
+            .remove(0);
+        let source = service
+            .capture_terminal_handoff(&sender.agent_id, &outcome)
+            .unwrap();
+        let transcript = AgentTranscriptStore::new(fixture.path.join("canonical"));
+        let mut row = TranscriptEntry {
+            conversation_id: "native-sender".into(),
+            sequence: 1,
+            created_at_unix_seconds: 1,
+            role: TranscriptRole::User,
+            turn_id: "actual-original-context".into(),
+            agent_id: sender.agent_id.to_string(),
+            pane_id: "original-pane".into(),
+            content: "original prefix".into(),
+        };
+        transcript.append(&row).unwrap();
+        row.role = TranscriptRole::System;
+        let (label, content) = mez_agent::transcript::terminal_outcome_reference(&outcome).unwrap();
+        row.content = content;
+        let projection = Arc::new(
+            crate::storage::mmp_custody::terminal_handoff::TerminalHandoffProjection::new(
+                row,
+                11,
+                label,
+                Vec::new(),
+            )
+            .unwrap(),
+        );
+        Self {
+            root,
+            service,
+            sender,
+            registration,
+            source,
+            transcript,
+            projection,
+        }
+    }
+    fn start(&mut self) {
+        self.root
+            .start_terminal_handoff(
+                &mut self.service,
+                self.source.clone(),
+                self.transcript.clone(),
+                Some(self.projection.clone()),
+            )
+            .unwrap();
+    }
+    /// Observes actual physical journal phases without claiming lower adoption.
+    fn phases(fixture: &Fixture) -> (i64, i64, i64) {
+        fixture.connection().query_row("SELECT (SELECT count(*) FROM records WHERE key LIKE 'u1:%'),(SELECT count(*) FROM records WHERE key LIKE 'h1:%'),generation FROM state", [], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?))).unwrap()
+    }
+}
+
 /// Real original SQLite/native continuity, acceptance and t1 lead to actual
 /// sender caps. A replaced epoch can neither materialize another live handoff
 /// nor retarget its complete staged image. Qualified lookup retains old source

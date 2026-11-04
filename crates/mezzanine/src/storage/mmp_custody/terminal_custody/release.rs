@@ -174,7 +174,7 @@ impl MmpCustodyStore {
     }
 
     /// Streams bounded descriptive metadata; not a positive-release constructor.
-    fn visit_release_metadata(
+    pub(in crate::storage::mmp_custody) fn visit_release_metadata(
         &self,
         transaction: &rusqlite::Transaction<'_>,
         mut visit: impl FnMut(&str, &StoredRelease) -> Result<()>,

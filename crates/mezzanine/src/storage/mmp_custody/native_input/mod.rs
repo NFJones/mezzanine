@@ -22,7 +22,7 @@ use serde::{Deserialize, Serialize};
 use super::{integrity::unaffected_rows_digest, *};
 use crate::storage::transcript::{
     AgentTranscriptStore, CustodyAppendReceipt,
-    custody::{CustodyAppendPlan, CustodyReceiptKind, CustodySource, CustodyTranscriptPlan},
+    custody::{CustodyAppendPlan, CustodyExpectation, CustodyReceiptKind, CustodyTranscriptPlan},
 };
 
 /// Bounded metadata only; no native payload or transcript content is stored here.
@@ -254,17 +254,13 @@ impl NativeInputPort<'_> {
             return Ok(Some(receipt(&committed, false)));
         }
         if self.attempt.lease.get().is_none() {
-            let expected_source = pending
-                .as_ref()
-                .map(|p| CustodySource::NativeInput(p.source.clone()));
             let (canonical, lease) = self.attempt.transcript.recover_custody_lease(
                 anchor,
                 &store_id,
                 &occurrence,
                 pending
                     .as_ref()
-                    .zip(expected_source.as_ref())
-                    .map(|(p, source)| (source, &p.transcript)),
+                    .map(|p| CustodyExpectation::NativeInput(&p.source, &p.transcript)),
                 self.attempt.row.is_some(),
             )?;
             if let Some(canonical) = canonical {

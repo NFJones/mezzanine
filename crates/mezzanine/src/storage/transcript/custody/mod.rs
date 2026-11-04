@@ -29,7 +29,7 @@ pub(crate) use receipt::{
     CustodyAppendPlan, MAX_CUSTODY_APPEND_BYTES, MAX_CUSTODY_APPEND_ROWS,
     validate_custody_append_prefix,
 };
-pub(crate) use source::{CustodyAnchor, CustodyReceiptKind, CustodySource};
+pub(crate) use source::{CustodyAnchor, CustodyExpectation, CustodyReceiptKind, CustodySource};
 
 /// Conservative encoded bound including escaping of a bounded native frame.
 const MAX_ROW_BYTES: usize = 16 * 1024 * 1024;
@@ -130,7 +130,7 @@ impl AgentTranscriptStore {
         anchor: &impl CustodyAnchor,
         store_id: &[u8; 16],
         occurrence: &[u8; 32],
-        expected: Option<(&CustodySource, &CustodyTranscriptPlan)>,
+        expected: Option<CustodyExpectation<'_>>,
         application_projection: bool,
     ) -> Result<(
         Option<std::sync::Arc<super::CustodyAppendReceipt>>,
@@ -168,8 +168,7 @@ impl AgentTranscriptStore {
         let checked = |plan: &CustodyAppendPlan, rows: &[TranscriptEntry]| -> Result<()> {
             if !anchor.matches(plan.source(), store_id)
                 || plan.source().occurrence() != *occurrence
-                || expected
-                    .is_some_and(|(source, input)| source != plan.source() || input != plan.input())
+                || expected.is_some_and(|expected| !expected.matches(plan))
             {
                 return Err(unavailable());
             }

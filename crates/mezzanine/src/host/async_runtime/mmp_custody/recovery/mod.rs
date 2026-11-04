@@ -235,6 +235,10 @@ impl MmpCustodyRoot {
             ack_probe: None,
             #[cfg(test)]
             terminal_probe: None,
+            #[cfg(test)]
+            handoff_probe: None,
+            #[cfg(test)]
+            handoff_crash_after: None,
         }))
     }
 

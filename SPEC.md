@@ -16243,7 +16243,30 @@ prefix, immutable row image and same-lease checks apply to both source roles.
 Canonical proof MUST precede a separate durable consumption transaction; the
 source MUST remain pending until canonical receipt retirement has completed.
 
-Validated retirement, original-sender canonical handoff/consumption and reclaim
+The original root MUST reserve a complete source decoder quantum and bounded
+recovery scratch before canonical handoff I/O and retain those reservations
+through actual worker join and retry. Its bodyless `u1` preparation and `h1`
+canonical journals MUST fit 4096 bytes each, binding original allocation/source,
+exact slot/first terminal reason and clock, and the first physical transcript
+plan. Variable message IDs and payloads MUST NOT be duplicated into those
+journals. Source, actual t1, native attribution and ACK conflicts MUST qualify
+under one original snapshot; unfinished handoff MUST refuse an actual r1 release.
+Every transaction MUST preserve all non-target rows and reconcile the same
+immutable generation/preimage/bytes after loss. Generic inventory MUST validate
+both phases and refuse contradictory simultaneous u1/h1 for one occurrence.
+
+Only actual final-row read and sync MAY precede h1. Its canonical receipt MUST
+retire after h1 before returning opaque proof. h1 alone MUST NOT release the
+terminal outcome. Cold lookup MUST finish original u1 or an orphan h1 receipt
+without sender/task revival or another archive position. Historical h1 after
+legitimate archive cleanup MUST retain original attribution without touching a
+replacement target or claiming a fresh archive observation. The root MUST cache
+an actual positive before fallible post-callback checks, preserve its original
+archive observation through lost worker replies, and retain all issued ownership
+through Stop and actual join. Actor integration MUST require its exact original
+continuation; an unmatched canonical handoff status MUST refuse adoption.
+
+Validated retirement, live original-sender handoff/consumption and reclaim
 remain unfinished. An in-memory runtime hint alone MUST NOT authorize durable
 sender consumption. Guarded volatile cleanup and direct outcome consumption
 MUST remain withheld. Normal activation MUST remain unavailable until the

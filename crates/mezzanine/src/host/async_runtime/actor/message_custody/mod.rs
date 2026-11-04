@@ -1048,7 +1048,9 @@ impl AsyncRuntimeSessionActor {
             }
             CustodyEvent::Observed(Ok(
                 CustodyWorkerStatus::NativeInputAwaitingAdoption
-                | CustodyWorkerStatus::NativeInputRetryAt(_),
+                | CustodyWorkerStatus::NativeInputRetryAt(_)
+                | CustodyWorkerStatus::TerminalHandoffAwaitingAdoption
+                | CustodyWorkerStatus::TerminalHandoffRetryAt(_),
             )) => Err(MezError::invalid_state(
                 "native canonical job lacks original actor continuation",
             )),

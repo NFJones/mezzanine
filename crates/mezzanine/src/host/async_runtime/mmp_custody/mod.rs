@@ -45,6 +45,7 @@ mod native_input;
 mod payload_load;
 mod recovery;
 mod terminal_custody;
+mod terminal_handoff;
 pub(crate) use recovery::{CustodyRecoveryRequest, RecoveredMessageCustody};
 
 /// Retained source chosen by trusted session setup, never by an envelope.
@@ -99,6 +100,10 @@ pub(crate) enum CustodyWorkerStatus {
     TerminalAwaitingAdoption,
     /// Joined original expiry input/positive can retry after this deadline.
     TerminalRetryAt(Instant),
+    /// Original canonical sender fact/probe joined and awaits its adopter.
+    TerminalHandoffAwaitingAdoption,
+    /// Same original sender fact may retry only after actual join and backoff.
+    TerminalHandoffRetryAt(Instant),
     /// Opening failed; no lower write was issued by this root.
     Unavailable,
 }
@@ -221,6 +226,17 @@ enum State {
         result: Result<Box<native_input::Written>>,
         retry_at: Instant,
     },
+    /// Original sender handoff shares the exclusive original connection lane.
+    WritingTerminalHandoff {
+        admission: terminal_handoff::Admission,
+        worker: JoinHandle<Result<terminal_handoff::Written>>,
+    },
+    /// Joined canonical sender proof remains owned through exact adoption.
+    WrittenTerminalHandoff {
+        admission: terminal_handoff::Admission,
+        result: Result<Box<terminal_handoff::Written>>,
+        retry_at: Instant,
+    },
     /// One exact expiry attempt owns the same exclusive original connection.
     WritingTerminal {
         admission: terminal_custody::Admission,
@@ -263,6 +279,12 @@ struct Inner {
     /// Expiry-only actual worker gate/loss control, independent of acceptance.
     #[cfg(test)]
     terminal_probe: Option<Arc<tests::Probe>>,
+    /// Independent actual handoff worker gate for original proof/loss controls.
+    #[cfg(test)]
+    handoff_probe: Option<Arc<tests::Probe>>,
+    /// Isolated child can exit only after an actual handoff journal commit.
+    #[cfg(test)]
+    handoff_crash_after: Option<crate::storage::mmp_custody::terminal_handoff::HandoffCrashPoint>,
 }
 
 /// One session's owned storage lifecycle; observers may clone it safely.
@@ -373,6 +395,10 @@ impl MmpCustodyRoot {
             ack_probe,
             #[cfg(test)]
             terminal_probe: None,
+            #[cfg(test)]
+            handoff_probe: None,
+            #[cfg(test)]
+            handoff_crash_after: None,
         }))
     }
 
@@ -412,6 +438,11 @@ impl MmpCustodyRoot {
             }
             if matches!(&*state, State::WritingNativeInput { .. })
                 && native_input::poll_join(&mut state, cx).is_pending()
+            {
+                return Poll::Pending;
+            }
+            if matches!(&*state, State::WritingTerminalHandoff { .. })
+                && terminal_handoff::poll_join(&mut state, cx).is_pending()
             {
                 return Poll::Pending;
             }
@@ -501,6 +532,9 @@ impl MmpCustodyRoot {
                 result: Err(error), ..
             }
             | State::WrittenNativeInput {
+                result: Err(error), ..
+            }
+            | State::WrittenTerminalHandoff {
                 result: Err(error), ..
             } => Some(error.clone()),
             _ => None,
@@ -878,6 +912,12 @@ impl Drop for Inner {
                         .spawn_blocking(move || drop((admission, result)))
                         .await;
                 }
+                State::WritingTerminalHandoff { admission, worker } => {
+                    let result = worker.await;
+                    let _ = runtime
+                        .spawn_blocking(move || drop((admission, result)))
+                        .await;
+                }
                 State::RecordingNative { admission, worker } => {
                     let result = worker.await;
                     let _ = runtime
@@ -1014,6 +1054,16 @@ fn status(state: &State) -> CustodyWorkerStatus {
                 CustodyWorkerStatus::NativeInputAwaitingAdoption
             } else {
                 CustodyWorkerStatus::NativeInputRetryAt(*retry_at)
+            }
+        }
+        State::WritingTerminalHandoff { .. } => CustodyWorkerStatus::Running,
+        State::WrittenTerminalHandoff {
+            result, retry_at, ..
+        } => {
+            if result.is_ok() {
+                CustodyWorkerStatus::TerminalHandoffAwaitingAdoption
+            } else {
+                CustodyWorkerStatus::TerminalHandoffRetryAt(*retry_at)
             }
         }
         State::WritingTerminal { .. } => CustodyWorkerStatus::Running,

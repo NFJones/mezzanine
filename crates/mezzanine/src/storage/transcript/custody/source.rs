@@ -12,6 +12,28 @@ use mez_agent::transcript::{
     TranscriptContextEvent, TranscriptNativeInputSource, TranscriptTerminalHandoffSource,
 };
 
+/// Role-specific journal expectations, in addition to actual-anchor matching.
+/// Native p1 freezes its first offer clock; terminal source matching already
+/// freezes every first terminal field, so its journal need not duplicate IDs.
+#[derive(Clone, Copy)]
+pub(crate) enum CustodyExpectation<'a> {
+    NativeInput(&'a TranscriptNativeInputSource, &'a CustodyTranscriptPlan),
+    TerminalHandoff(&'a CustodyTranscriptPlan),
+}
+impl CustodyExpectation<'_> {
+    /// Checks exact first placement and the matching role's immutable metadata.
+    pub(super) fn matches(self, plan: &CustodyAppendPlan) -> bool {
+        match self {
+            Self::NativeInput(source, input) => {
+                plan.source().native_input() == Some(source) && plan.input() == input
+            }
+            Self::TerminalHandoff(input) => {
+                plan.source().kind() == CustodyReceiptKind::TerminalHandoff && plan.input() == input
+            }
+        }
+    }
+}
+
 /// Distinct physical namespaces owned by the same checked publication machinery.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CustodyReceiptKind {

@@ -448,9 +448,19 @@ and rejects altered semantics, provenance or chronology. Replay restores only
 that neutral reference. Shared physical transcript custody now supports separate
 v4 handoff images while preserving native v3 bytes: both classes retain actual
 file/prefix/row ownership, fence ordinary mutations and survive generic recovery.
-These are internal capabilities and physical recovery images; the original-root
-canonical handoff journal, separate consumption and actor integration are still
-required before a sender outcome can be durably consumed.
+The internal original-root worker now also commits bodyless u1 preparation and
+h1 canonical journals, each bounded to 4096 bytes. They bind the original source,
+first terminal before-image and physical append plan without duplicating IDs or
+payloads. Source/t1/ACK conflicts are checked in one snapshot using a reserved
+decoder and scratch owner. Transactions protect non-target rows and reconcile
+the same first plan across failure. Actual h1 commit precedes canonical receipt
+retirement and opaque proof; it leaves the terminal outcome pending. Cold lookup
+can finish u1 or retire an orphan h1 image without a live sender, task or another
+archive position. Historical proof after legitimate archive cleanup grants no
+fresh target or archive observation. The root retains actual positives and I/O
+ownership through lost replies, retry and Stop. These internal journal/root
+boundaries still require separate durable consumption and actor integration
+before a live sender outcome can be durably handed off and consumed.
 Validated owner retirement, actual original-sender canonical handoff, rollback-
 safe elapsed/reboot clocks and reclamation remain unfinished. Current horizon
 thresholds are wall-clock qualification only. These internal operation bounds

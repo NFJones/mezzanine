@@ -43,8 +43,8 @@ use super::validation::{
 
 mod terminal_handoff;
 pub use terminal_handoff::{
-    MessageTerminalHandoffAnchor, MessageTerminalHandoffCommit, MessageTerminalHandoffRecord,
-    MessageTerminalHandoffStore,
+    MessageTerminalHandoffAnchor, MessageTerminalHandoffCommit, MessageTerminalHandoffIo,
+    MessageTerminalHandoffRecord, MessageTerminalHandoffStore,
 };
 mod terminal_custody;
 pub(super) use terminal_custody::PendingTerminal;
