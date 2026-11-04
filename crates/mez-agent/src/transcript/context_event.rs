@@ -33,6 +33,9 @@ const MCP_CATALOG_SNAPSHOT_KIND: &str = "mcp_catalog_snapshot";
 const MCP_COMPACTION_EPOCH_KIND: &str = "mcp_compaction_epoch";
 /// Event kind for one exact context block immediately preceding a user event.
 const PROMPT_BOUNDARY_KIND: &str = "prompt_boundary";
+/// Exact untrusted peer reference; has no transport provenance or ACK authority.
+const PEER_REFERENCE_KIND: &str = "peer_reference";
+const PEER_REFERENCE_CONTENT_LIMIT_BYTES: usize = 2 * 1024 * 1024;
 /// Event kind for one exact cache-visible execution block.
 const EXECUTION_BLOCK_KIND: &str = "execution_block";
 /// Maximum serialized environment projection accepted from durable storage.
@@ -221,7 +224,12 @@ impl TranscriptContextEvent {
     ) -> Option<Self> {
         let label = label.into();
         let content = content.into();
-        if event_sequence == 0 || !valid_prompt_boundary(source, &label, &content) {
+        let valid = if source == ContextSourceKind::PeerMessage {
+            valid_peer_reference(&label, &content)
+        } else {
+            valid_prompt_boundary(source, &label, &content)
+        };
+        if event_sequence == 0 || !valid {
             return None;
         }
         Some(Self::PromptBoundary {
@@ -365,7 +373,7 @@ impl TranscriptContextEvent {
                 content,
             } => serde_json::json!({
                 "version": TRANSCRIPT_CONTEXT_EVENT_VERSION,
-                "kind": PROMPT_BOUNDARY_KIND,
+                "kind": if *source == ContextSourceKind::PeerMessage && event_sequence.is_some() { PEER_REFERENCE_KIND } else { PROMPT_BOUNDARY_KIND },
                 "source": prompt_boundary_source_name(*source),
                 "event_sequence": event_sequence,
                 "projection_sha256": projection_sha256,
@@ -470,6 +478,34 @@ impl TranscriptContextEvent {
                 })
             }
             MCP_COMPACTION_EPOCH_KIND => Some(Self::McpCompactionEpoch),
+            PEER_REFERENCE_KIND => {
+                if value.as_object()?.len() != 7 || value.get("source")?.as_str()? != "peer_message"
+                {
+                    return None;
+                }
+                let event_sequence = value.get("event_sequence")?.as_u64()?;
+                let label = value.get("label")?.as_str()?;
+                let content = value.get("content")?.as_str()?;
+                let digest = value.get("projection_sha256")?.as_str()?;
+                if event_sequence == 0
+                    || !valid_peer_reference(label, content)
+                    || prompt_boundary_sha256(
+                        ContextSourceKind::PeerMessage,
+                        Some(event_sequence),
+                        label,
+                        content,
+                    ) != digest
+                {
+                    return None;
+                }
+                Some(Self::PromptBoundary {
+                    source: ContextSourceKind::PeerMessage,
+                    event_sequence: Some(event_sequence),
+                    projection_sha256: digest.to_owned(),
+                    label: label.to_owned(),
+                    content: content.to_owned(),
+                })
+            }
             PROMPT_BOUNDARY_KIND => {
                 let source = prompt_boundary_source(value.get("source")?.as_str()?)?;
                 let event_sequence = value.get("event_sequence").and_then(Value::as_u64);
@@ -636,6 +672,16 @@ fn prompt_boundary_source(source: &str) -> Option<ContextSourceKind> {
         "configuration" => Some(ContextSourceKind::Configuration),
         _ => None,
     }
+}
+
+/// Peer reference data uses the same bound as native canonical input. It cannot
+/// become a user instruction and carries no original-root transport provenance.
+fn valid_peer_reference(label: &str, content: &str) -> bool {
+    !label.trim().is_empty()
+        && label.len() <= PROMPT_BOUNDARY_LABEL_LIMIT_BYTES
+        && !label.bytes().any(|b| b == 0)
+        && !content.trim().is_empty()
+        && content.len() <= PEER_REFERENCE_CONTENT_LIMIT_BYTES
 }
 
 /// Validates exact prompt-boundary fields before they become model-visible.
@@ -937,6 +983,59 @@ mod tests {
                 "must remain a direct user event",
             )
             .is_none()
+        );
+    }
+
+    /// Peer blocks include a header beyond the transport truncation limit and
+    /// arbitrary untrusted payload bytes. Their larger reference codec retains
+    /// exact content while rejecting tampering, authority claims and overflow.
+    #[test]
+    fn peer_reference_preserves_large_untrusted_content_and_validates_framing() {
+        let content = format!("{}\0tail", "x".repeat(300 * 1024));
+        let event = TranscriptContextEvent::prompt_boundary_with_event_sequence(
+            ContextSourceKind::PeerMessage,
+            42,
+            "peer source",
+            content.clone(),
+        )
+        .unwrap();
+        let encoded = event.to_transcript_content();
+        assert!(encoded.contains("\"kind\":\"peer_reference\""));
+        assert_eq!(
+            TranscriptContextEvent::from_transcript_content(&encoded),
+            Some(event)
+        );
+        for tampered in [
+            encoded.replace("tail", "evil"),
+            encoded.replace("peer_message", "policy"),
+            encoded.replace("\"event_sequence\":42", "\"event_sequence\":0"),
+            encoded.replace("\"kind\":", "\"native_owner\":true,\"kind\":"),
+        ] {
+            assert!(TranscriptContextEvent::from_transcript_content(&tampered).is_none());
+        }
+        assert!(
+            TranscriptContextEvent::prompt_boundary_with_event_sequence(
+                ContextSourceKind::PeerMessage,
+                42,
+                "peer source",
+                "x".repeat(2 * 1024 * 1024 + 1),
+            )
+            .is_none()
+        );
+        // The old smaller ordinary frame remains readable as persisted data.
+        let ordinary = TranscriptContextEvent::prompt_boundary_with_event_sequence(
+            ContextSourceKind::PeerMessage,
+            7,
+            "legacy peer",
+            "legacy data",
+        )
+        .unwrap();
+        let legacy = ordinary
+            .to_transcript_content()
+            .replace("peer_reference", "prompt_boundary");
+        assert_eq!(
+            TranscriptContextEvent::from_transcript_content(&legacy),
+            Some(ordinary)
         );
     }
 

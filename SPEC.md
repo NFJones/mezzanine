@@ -16215,6 +16215,39 @@ through SQL effects. Both journal formats are bounded to 32 KiB and bind the
 original allocation, source fingerprint, frozen native owner, recipient slot and
 genuine offer clock. Inventory MUST validate them against the accepted original.
 
+The existing canonical transcript append-receipt pipeline MUST retain a native
+input's immutable row image and preceding new canonical chronology. Its version3
+native owner MUST bind the original source occurrence and two physical plans:
+the complete contiguous batch at its original prefix, and the final native row.
+It MUST use a distinct occurrence namespace, bounded to 2,048 rows, 32 MiB of
+encoded canonical rows and 64 MiB plus 256 KiB of receipt framing. These are
+internal operation bounds, not qualification of complete admitted-state liveness.
+Prefix projection and its conservative byte admission MUST complete before live
+context insertion or new task admission. Projection MUST preserve original
+chronology order and use the same canonical event identity as bookkeeping.
+Under the original conversation lease, validated committed identities MUST be
+removed before selecting the first immutable batch position. Retry MUST retain
+both that selected batch and its first position, without deduplicating anew.
+
+The canonical receipt MUST be published before prefix rows. Prefix rows MUST
+precede `p1`; native input bytes MUST follow `p1`. Generic transcript recovery
+MUST validate but leave native receipt completion and retirement to the original
+MMP root. Ordinary append producers MUST refuse while this native owner remains
+unsettled. A root lookup MUST check its exact canonical receipt even when `p1`
+is absent, preventing a second context insertion in that crash window. Original
+root qualification MAY finish a missing or partial native row from the retained
+canonical image without reloading a source envelope or reconstructing a task.
+Only after `c1` MAY that exact canonical receipt retire. A real synced archive
+observation MAY advance the still-current original private transcript frontier;
+this observation MUST NOT survive descriptive serialization. Historical `c1`
+alone MUST NOT claim current physical backing or advance a replacement binding.
+
+Ordinary sequenced peer projections MUST use the `peer_reference` context-event
+kind, retain up to 2 MiB of exact untrusted content (including NUL bytes) and a
+4 KiB non-NUL label, and validate their complete projection digest. They carry
+no native source attribution or transport authority. Persisted legacy
+`prompt_boundary` frames retain their existing smaller decoding contract.
+
 Canonical native input MUST use a typed peer-reference transcript event with
 validated original-source provenance and complete projection digest. Hydration
 MUST preserve its untrusted peer provenance. Later execution bookkeeping MUST
@@ -16251,11 +16284,13 @@ that membership, replace the registration allocation or strand accepted slots.
 Only matching live registration/private epoch and conversation ownership MAY
 select this preservation; public labels or stale independent contexts MUST NOT.
 
-Connected internal tests cover canonical commit-before-ACK process exit and
-original-root factory/actor deduplication. Complete cold preparation recovery,
-canonical prefix ownership, resource/liveness qualification and all-ingress
-activation remain required; normal durable activation MUST stay disabled until
-the remaining issue requirements pass.
+Connected internal tests cover process exit both after canonical commit and
+after preparation with the native row still missing, original-root factory/actor
+recovery, user-before-peer ordering and preflight refusal without live mutation.
+Complete receipt-staging/producer-order qualification, post-commit error custody,
+resource/liveness qualification and all-ingress activation remain required;
+normal durable activation MUST stay disabled until the remaining issue
+requirements pass.
 
 Immutable envelope auxiliary metadata MUST additionally fit a 16 MiB logical
 budget over the deduplicated replay/custody union after normal replay eviction.

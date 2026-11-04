@@ -203,6 +203,16 @@ impl AsyncRuntimeSessionActor {
         self.poll_message_custody();
     }
 
+    /// Injects a failure at the actual canonical append boundary after original
+    /// preparation, without manufacturing receipt, join or commit evidence.
+    #[cfg(test)]
+    pub(in crate::host) fn fail_next_native_canonical_append_for_tests(&self) {
+        self.service
+            .agent_transcript_store()
+            .unwrap()
+            .fail_next_transcript_append();
+    }
+
     /// Applies actual live presence and the production delivery notification.
     /// No selection, native binding, worker status or commit is manufactured.
     #[cfg(test)]
@@ -895,7 +905,12 @@ impl AsyncRuntimeSessionActor {
                                 (Some(id), Some(proof)) => {
                                     self.service.complete_native_input_commit(&id, proof)?
                                 }
-                                (None, Some(proof)) => owner.recovered_native_ack = Some(proof),
+                                (None, Some(proof)) => {
+                                    // Keep actual proof owned before a current
+                                    // private-position decoration can fail.
+                                    owner.recovered_native_ack = Some(proof.clone());
+                                    self.service.observe_native_input_archive(&proof)?;
+                                }
                                 (None, None) => native_absence = Some(source),
                                 (Some(_), None) => {
                                     return Err(MezError::invalid_state(

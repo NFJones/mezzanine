@@ -3,6 +3,8 @@
 use super::*;
 use mez_agent::transcript::TranscriptRole;
 
+mod receipts;
+
 /// Owns only an isolated generated physical transcript destination.
 struct Fixture {
     root: PathBuf,
@@ -44,7 +46,10 @@ impl Drop for Fixture {
 #[test]
 fn native_transcript_completes_exact_partial_own_row_without_duplicate_append() {
     let mut fixture = Fixture::new();
-    let lease = fixture.store.native_input_lease("original", false).unwrap();
+    let lease = fixture
+        .store
+        .native_input_lease("original", false, None)
+        .unwrap();
     let plan = lease.prepare(&mut fixture.row).unwrap();
     let encoded = encoded_row(&fixture.row).unwrap();
     let mut file = OpenOptions::new().append(true).open(&lease.path).unwrap();
@@ -62,7 +67,10 @@ fn native_transcript_completes_exact_partial_own_row_without_duplicate_append() 
 #[test]
 fn native_transcript_refuses_changed_prefix_and_foreign_partial_suffix() {
     let mut fixture = Fixture::new();
-    let lease = fixture.store.native_input_lease("original", false).unwrap();
+    let lease = fixture
+        .store
+        .native_input_lease("original", false, None)
+        .unwrap();
     let plan = lease.prepare(&mut fixture.row).unwrap();
     let mut file = OpenOptions::new().append(true).open(&lease.path).unwrap();
     file.write_all(b"foreign partial bytes").unwrap();
@@ -80,6 +88,11 @@ fn native_transcript_existing_lease_does_not_create_missing_archive() {
     let fixture = Fixture::new();
     let history = fixture.root.join("original/history.tsv");
     fs::remove_file(&history).unwrap();
-    assert!(fixture.store.native_input_lease("original", false).is_err());
+    assert!(
+        fixture
+            .store
+            .native_input_lease("original", false, None)
+            .is_err()
+    );
     assert!(!history.exists());
 }

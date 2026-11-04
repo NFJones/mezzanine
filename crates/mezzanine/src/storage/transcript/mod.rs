@@ -38,6 +38,8 @@ pub(crate) mod compaction_handoff;
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 mod encoding;
+mod entry_identity;
+pub(crate) use entry_identity::canonical_transcript_entry_identity;
 /// Exposes the fs module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this
@@ -58,6 +60,7 @@ pub(crate) mod native_input;
 /// Durable, exact-batch acceptance receipts for uncertain transcript writes.
 mod receipts;
 pub(crate) use append_batch::TranscriptAppendBatch;
+pub(crate) use receipts::NativeInputAppendReceipt;
 /// Leased, validated sequence frontiers and raw replay counts.
 mod replay_position;
 /// Exposes the store module boundary.

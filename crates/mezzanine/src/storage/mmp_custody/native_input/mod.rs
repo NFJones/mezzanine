@@ -20,7 +20,10 @@ use mez_agent::transcript::{
 use serde::{Deserialize, Serialize};
 
 use super::{integrity::unaffected_rows_digest, *};
-use crate::storage::transcript::{AgentTranscriptStore, native_input::NativeTranscriptPlan};
+use crate::storage::transcript::{
+    AgentTranscriptStore, NativeInputAppendReceipt,
+    native_input::{NativeInputAppendPlan, NativeTranscriptPlan},
+};
 
 /// Bounded metadata only; no native payload or transcript content is stored here.
 const MAX_JOURNAL_BYTES: usize = 32 * 1024;
@@ -59,6 +62,10 @@ struct Completion {
 pub(crate) struct NativeInputAttempt {
     transcript: AgentTranscriptStore,
     row: Option<std::sync::Arc<NativeInputProjection>>,
+    /// First original canonical position survives failure before publication.
+    canonical_first: OnceLock<(NativeInputAppendPlan, Vec<TranscriptEntry>)>,
+    /// Actual private row image survives worker loss and does not become a task.
+    canonical: OnceLock<std::sync::Arc<NativeInputAppendReceipt>>,
     first: OnceLock<Preparation>,
     completion: OnceLock<Completion>,
 }
@@ -72,6 +79,8 @@ impl NativeInputAttempt {
         Self {
             transcript,
             row,
+            canonical_first: OnceLock::new(),
+            canonical: OnceLock::new(),
             first: OnceLock::new(),
             completion: OnceLock::new(),
         }
@@ -232,15 +241,73 @@ impl NativeInputPort<'_> {
                 }
                 self.publish_completion(completion)?;
             }
-            return Ok(Some(receipt(&committed)));
+            self.retire_canonical_receipt(&committed)?;
+            return Ok(Some(receipt(&committed, false)));
         }
-        if pending.is_none() && self.attempt.row.is_none() && self.attempt.first.get().is_none() {
+        if self.attempt.canonical.get().is_none()
+            && let Some(canonical) = self
+                .attempt
+                .transcript
+                .native_input_append_receipt(anchor.native_owner().conversation_id(), &occurrence)?
+        {
+            if !canonical.plan().source().matches_anchor(anchor, &store_id)
+                || pending.as_ref().is_some_and(|p| {
+                    p.source != *canonical.plan().source()
+                        || p.transcript != *canonical.plan().input()
+                })
+                || self
+                    .attempt
+                    .canonical_first
+                    .get()
+                    .is_some_and(|(p, _)| p != canonical.plan())
+            {
+                return Err(invalid());
+            }
+            self.attempt
+                .canonical
+                .set(canonical)
+                .map_err(|_| invalid())?;
+        }
+        if pending.is_none()
+            && self.attempt.row.is_none()
+            && self.attempt.first.get().is_none()
+            && self.attempt.canonical.get().is_none()
+        {
             return Ok(None);
         }
         let lease = self.attempt.transcript.native_input_lease(
             anchor.native_owner().conversation_id(),
-            pending.is_none() && self.attempt.first.get().is_none(),
+            pending.is_none()
+                && self.attempt.first.get().is_none()
+                && self.attempt.canonical.get().is_none()
+                && self.attempt.canonical_first.get().is_none(),
+            Some(&occurrence),
         )?;
+        if self.attempt.canonical.get().is_none() && pending.is_none() {
+            if self.attempt.canonical_first.get().is_none() {
+                let projection = self.attempt.row.as_ref().ok_or_else(invalid)?;
+                let mut row = projection.materialize(anchor, store_id)?;
+                let mut prefix = projection.prefix().to_vec();
+                let plan = lease.prepare_native_append(&mut prefix, &mut row)?;
+                prefix.push(row);
+                self.attempt
+                    .canonical_first
+                    .set((plan, prefix))
+                    .map_err(|_| invalid())?;
+            }
+            // Retain both placement and selected rows before publication. A
+            // retry must not deduplicate anew against a later archive suffix.
+            let (plan, rows) = self.attempt.canonical_first.get().ok_or_else(invalid)?;
+            let canonical = lease.publish_append_receipt(plan.clone(), rows)?;
+            self.attempt
+                .canonical
+                .set(canonical)
+                .map_err(|_| invalid())?;
+        }
+        if let Some(canonical) = self.attempt.canonical.get() {
+            canonical.revalidate()?;
+            lease.append_native_prefix(canonical.plan(), &canonical.rows()?)?;
+        }
         let pending = match pending {
             Some(pending) => {
                 validate_anchor(&pending, anchor, store_id)?;
@@ -256,17 +323,15 @@ impl NativeInputPort<'_> {
             }
             None => {
                 if self.attempt.first.get().is_none() {
-                    let mut row = self
-                        .attempt
-                        .row
-                        .as_ref()
-                        .ok_or_else(invalid)?
-                        .materialize(anchor, store_id)?;
-                    let source = checked_event(&row, anchor, store_id)?;
-                    if anchor.offered_at_ms() != Some(source.offered_at_ms) {
+                    let canonical = self.attempt.canonical.get().ok_or_else(invalid)?;
+                    let source = canonical.plan().source().clone();
+                    // Existing canonical ownership recovers its original clock;
+                    // fresh selection alone must still prove its genuine offer.
+                    if !source.matches_anchor(anchor, &store_id) {
                         return Err(invalid());
                     }
-                    let transcript = lease.prepare(&mut row)?;
+                    let transcript = canonical.plan().input().clone();
+                    lease.check_preparation(&transcript)?;
                     let transaction = self
                         .store
                         .connection
@@ -330,17 +395,16 @@ impl NativeInputPort<'_> {
                 first.journal.clone()
             }
         };
-        // Only a retained actual application row may create missing input.
-        // A cold lookup can requalify an existing row but never invent one.
-        if let Some(first) = self.attempt.first.get() {
-            let mut row = self
-                .attempt
-                .row
-                .as_ref()
-                .ok_or_else(invalid)?
-                .materialize(anchor, store_id)?;
-            row.sequence = first.journal.transcript.archive_sequence;
-            lease.append(&pending.transcript, &row)?;
+        // The actual canonical receipt is application ownership, not a saved
+        // display frame. It can finish missing/partial original input after
+        // process loss without decoding an envelope or recreating a turn.
+        if let Some(canonical) = self.attempt.canonical.get() {
+            if canonical.plan().source() != &pending.source
+                || canonical.plan().input() != &pending.transcript
+            {
+                return Err(invalid());
+            }
+            lease.append_native_receipt(canonical.plan(), &canonical.rows()?)?;
         }
         let row = lease.seal(&pending.transcript)?;
         if checked_event(&row, anchor, store_id)? != pending.source {
@@ -381,8 +445,37 @@ impl NativeInputPort<'_> {
         }
         let completion = self.attempt.completion.get().ok_or_else(invalid)?;
         self.publish_completion(completion)?;
-        Ok(Some(receipt(&completion.journal)))
+        self.retire_canonical_receipt(&completion.journal)?;
+        Ok(Some(receipt(&completion.journal, true)))
     }
+    /// Canonical row images retire only after c1. Historical proof does not
+    /// grant rights over a replacement canonical root or conversation backing.
+    fn retire_canonical_receipt(&self, journal: &NativeInputJournal) -> Result<()> {
+        if !journal
+            .transcript
+            .root_matches_store(&self.attempt.transcript)?
+        {
+            return Ok(());
+        }
+        let retained = self.attempt.canonical.get().cloned();
+        let canonical = match retained {
+            Some(canonical) => Some(canonical),
+            None => self.attempt.transcript.native_input_append_receipt(
+                journal.source.native_owner.conversation_id(),
+                &journal.source.occurrence(),
+            )?,
+        };
+        if let Some(canonical) = canonical {
+            if canonical.plan().source() != &journal.source
+                || canonical.plan().input() != &journal.transcript
+            {
+                return Err(invalid());
+            }
+            canonical.retire()?;
+        }
+        Ok(())
+    }
+
     /// Publishes or reconciles only the exact retained final batch. Later row
     /// changes or positions cannot become a fresh retry baseline after loss.
     fn publish_completion(&self, completion: &Completion) -> Result<()> {
@@ -490,13 +583,14 @@ fn encode(journal: &NativeInputJournal) -> Result<Vec<u8>> {
 }
 /// Converts only an actual qualified journal/row boundary into descriptive
 /// facts; the lower trusted callback separately seals its opaque commit.
-fn receipt(journal: &NativeInputJournal) -> MessageNativeInputRecord {
+fn receipt(journal: &NativeInputJournal, archive_observed: bool) -> MessageNativeInputRecord {
     MessageNativeInputRecord {
         store_id: journal.source.store_id,
         occurrence: journal.source.occurrence(),
         archive_sequence: journal.transcript.archive_sequence,
         canonical_sha256: journal.transcript.canonical_sha256,
         offered_at_ms: journal.source.offered_at_ms,
+        archive_observed,
     }
 }
 /// Content-free diagnostic never prints private source data or physical paths.

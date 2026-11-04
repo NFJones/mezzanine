@@ -2070,6 +2070,15 @@ impl RuntimeSessionService {
             ));
         }
         self.check_deferred_steering_receipts(&turn, prompt_sequence.get(), &receipts)?;
+        for (sequence, _) in &delivered_messages {
+            self.prepare_native_input_context(
+                &recipient,
+                *sequence,
+                &turn,
+                &context,
+                active_imported_history_sequence_high_water,
+            )?;
+        }
         self.agent_turn_ledger_mut().queue_turn(turn.clone())?;
         self.bind_deferred_steering_receipts(&turn, prompt_sequence.get(), receipts);
         self.snapshot_agent_native_shell_timeout_for_turn(&turn_id);

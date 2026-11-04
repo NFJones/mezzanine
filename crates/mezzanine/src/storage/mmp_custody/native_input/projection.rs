@@ -14,6 +14,8 @@ pub(crate) struct NativeInputProjection {
     row: TranscriptEntry,
     event_sequence: u64,
     label: String,
+    /// Actual preceding canonical chronology, captured with this application input.
+    prefix: Vec<TranscriptEntry>,
 }
 impl NativeInputProjection {
     /// Returns the original chronology occurrence retained by this receive owner.
@@ -36,13 +38,26 @@ impl NativeInputProjection {
     /// canonical content; the worker constructs the typed archive framing.
     pub(crate) fn new(row: TranscriptEntry, event_sequence: u64, label: String) -> Result<Self> {
         row.validate()?;
-        if row.role != TranscriptRole::System
+        if row.conversation_id.len() > 256
+            || row.agent_id.len() > 256
+            || row.agent_id.chars().any(char::is_control)
+            || row.role != TranscriptRole::System
             || event_sequence == 0
             || label.trim().is_empty()
             || label.len() > 4096
             || label.contains('\0')
             || row.content.trim().is_empty()
             || row.content.len() > 2 * 1024 * 1024
+            || [
+                &row.conversation_id,
+                &row.turn_id,
+                &row.agent_id,
+                &row.pane_id,
+            ]
+            .iter()
+            .map(|value| value.len())
+            .sum::<usize>()
+                > 16 * 1024
         {
             return Err(invalid());
         }
@@ -50,7 +65,36 @@ impl NativeInputProjection {
             row,
             event_sequence,
             label,
+            prefix: Vec::new(),
         })
+    }
+
+    /// Attaches preceding actual canonical events before the peer row. This is
+    /// an immutable projection candidate, not canonical storage/ACK evidence.
+    pub(crate) fn with_prefix(mut self, prefix: Vec<TranscriptEntry>) -> Result<Self> {
+        for row in &prefix {
+            row.validate()?;
+            if row.conversation_id != self.row.conversation_id
+                || row.agent_id != self.row.agent_id
+                || row.pane_id != self.row.pane_id
+            {
+                return Err(invalid());
+            }
+        }
+        crate::storage::transcript::native_input::validate_native_append_prefix(&prefix)?;
+        self.prefix = prefix;
+        Ok(self)
+    }
+
+    /// Checks the exact event that was prepared before the live context changed.
+    /// Matching descriptive data alone does not create application ownership.
+    pub(crate) fn matches_event(&self, sequence: u64, label: &str, content: &str) -> bool {
+        self.event_sequence == sequence && self.label == label && self.row.content == content
+    }
+
+    /// Borrows actual preceding chronology without another runtime lookup.
+    pub(super) fn prefix(&self) -> &[TranscriptEntry] {
+        &self.prefix
     }
 
     /// Adds only actual original-root/source provenance on the owned worker.

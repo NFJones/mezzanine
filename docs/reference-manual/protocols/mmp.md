@@ -502,6 +502,24 @@ survive every SQL effect. A changed or missing original backing refuses retry.
 Retained source metadata remains charged through the final proof owner, even
 after transport ACK and replay eviction.
 
+The existing transcript receipt pipeline also retains a version3 canonical row
+image ending in the native input, with its preceding new chronology and original
+batch/final-row physical plans. Projection and bounded size admission happen
+before live context/task commit. The original transcript lease deduplicates
+already committed event identities and freezes the exact batch. The receipt
+precedes prefix writes, prefix rows precede `p1`, and the native row follows `p1`.
+Ordinary writers wait for this owner; generic transcript recovery validates it
+without consuming it. Original-root recovery can finish its missing or partial
+row without loading another envelope or creating a task. Only `c1` permits the
+exact receipt to retire. Each internal operation allows 2,048 rows / 32 MiB of
+encoded canonical rows, with a 64 MiB plus 256 KiB receipt file bound; complete
+admitted-state resource/liveness qualification remains outstanding.
+
+Sequenced ordinary peer projections use a digest-validated `peer_reference`
+context event for up to 2 MiB of exact untrusted content, including NUL bytes.
+These references have no native attribution or ACK rights. Legacy ordinary
+prompt-boundary frames keep their smaller decoding contract.
+
 The archive row is typed untrusted peer-reference data. Its provenance does not
 become delivery authority through deserialization, and later bookkeeping treats
 its ordinary chronology projection as the same event. Only actual root storage
@@ -519,18 +537,22 @@ continues. A delivery or eligibility notification received behind an active scan
 cursor preserves one further pass, so earlier cold sources are revisited. The
 scan stops when exhausted without another notification.
 
-A process-exit test stops after canonical commit but before native ACK. The real
-factory and actor then qualify the original binding, deduplicate the canonical
-row and ACK its historical slot without creating a task or provider request.
+Process-exit tests stop after canonical commit and after preparation while the
+native row is still missing. The real factory and actor qualify the original
+binding, finish or deduplicate the canonical row, and ACK its historical slot
+without creating a task or provider request. A real synced archive observation
+may advance only the current original private transcript frontier; descriptive
+serialization discards that observation, and historical `c1` alone cannot claim
+current backing.
 Historical lookup itself does not add a subscription; qualified startup may
 already have restored one for the original native binding. Built-in native continuity does not depend on an optional discovery
 capability label; the original guarded binding and private context must match,
 and explicit external harnesses remain excluded. A current proven native binding
 also preserves an originally absent project scope when its restored process has
 a working directory: receiving mail must not replace that registration through
-metadata enrichment. Complete cold preparation
-recovery, canonical prefix ownership, resource/liveness and normal all-ingress
-activation still require implementation and qualification.
+metadata enrichment. Complete receipt-staging and producer-order qualification,
+post-commit error custody, resource/liveness and normal all-ingress activation
+still require implementation and qualification.
 
 Fresh opt-in requires an actually empty original store; only qualified recovery
 can install an existing store. Normal product construction keeps durable mode

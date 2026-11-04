@@ -1222,6 +1222,7 @@ impl AgentTranscriptStore {
     pub fn append(&self, entry: &TranscriptEntry) -> Result<()> {
         entry.validate()?;
         let _conversation_lock = self.acquire_conversation_lock(&entry.conversation_id)?;
+        self.ensure_native_input_receipts_settled(&entry.conversation_id, &_conversation_lock)?;
         self.append_one_locked(entry)?;
         Ok(())
     }
@@ -1289,6 +1290,7 @@ impl AgentTranscriptStore {
                             error
                         }
                     })?;
+            self.ensure_native_input_receipts_settled(&conversation_id, &_conversation_lock)?;
             bytes = bytes.saturating_add(self.append_conversation_rows_locked(
                 &conversation_id,
                 &entries,

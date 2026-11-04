@@ -11,6 +11,7 @@ use crate::host::async_runtime::{AsyncRuntimeActorConfig, AsyncRuntimeSessionAct
 use mez_agent::transcript::TranscriptContextEvent;
 
 const NATIVE_CRASH_ROOT: &str = "MEZ_TEST_CANONICAL_NATIVE_CRASH_ROOT";
+const NATIVE_PREPARATION_ROOT: &str = "MEZ_TEST_CANONICAL_NATIVE_PREPARATION_ROOT";
 
 /// Identical local-only native harness configuration in both processes. No
 /// provider is dispatched; the loopback endpoint cannot contact a paid service.
@@ -42,11 +43,15 @@ pub(super) async fn commit_then_crash(
     service: RuntimeSessionService,
     root: MmpCustodyRoot,
     fixture: Fixture,
+    before_row: bool,
 ) -> ! {
     use std::os::unix::fs::OpenOptionsExt;
     let (_, mut actor) =
         AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
     actor.register_message_custody(root).unwrap();
+    if before_row {
+        actor.fail_next_native_canonical_append_for_tests();
+    }
     let mut canonical_observations = 0;
     let mut payload_observations = 0;
     for _ in 0..16 {
@@ -54,6 +59,9 @@ pub(super) async fn commit_then_crash(
         let status = actor.observe_message_custody_for_tests().await.unwrap();
         if status == CustodyWorkerStatus::PayloadLoadAwaitingAdoption {
             payload_observations += 1;
+        }
+        if before_row && matches!(status, CustodyWorkerStatus::NativeInputRetryAt(_)) {
+            break;
         }
         if status == CustodyWorkerStatus::NativeInputAwaitingAdoption {
             canonical_observations += 1;
@@ -67,8 +75,9 @@ pub(super) async fn commit_then_crash(
         "actual original cold source must use the owned reload"
     );
     assert_eq!(
-        canonical_observations, 2,
-        "real absence then real canonical write must finish"
+        canonical_observations,
+        if before_row { 1 } else { 2 },
+        "real absence precedes owned canonical write or joined pre-row failure"
     );
     let database = rusqlite::Connection::open(
         root_path(&fixture.config, &fixture.payload.session_id).join("custody.sqlite"),
@@ -82,7 +91,7 @@ pub(super) async fn commit_then_crash(
                 |r| r.get::<_, i64>(0)
             )
             .unwrap(),
-        1
+        if before_row { 0 } else { 1 }
     );
     assert_eq!(
         database
@@ -95,6 +104,33 @@ pub(super) async fn commit_then_crash(
         1,
         "only earlier seq1 ACK exists before crash"
     );
+    if before_row {
+        assert_eq!(
+            database
+                .query_row(
+                    "SELECT COUNT(*) FROM records WHERE key LIKE 'p1:%'",
+                    [],
+                    |r| r.get::<_, i64>(0)
+                )
+                .unwrap(),
+            1
+        );
+        let store = AgentTranscriptStore::under_config_root(&fixture.config);
+        let pending = store.pending_append_receipts().unwrap();
+        assert_eq!(
+            pending.len(),
+            1,
+            "actual canonical native row image must remain owned"
+        );
+        assert!(
+            pending[0].len() > 1,
+            "actual preceding chronology belongs to the receipt"
+        );
+        assert!(matches!(
+            TranscriptContextEvent::from_transcript_content(&pending[0].last().unwrap().content),
+            Some(TranscriptContextEvent::NativePeerMessage { .. })
+        ));
+    }
     SnapshotRepository::new(fixture.config.clone())
         .write_payload("crash-layout", &fixture.payload)
         .unwrap();
@@ -134,10 +170,48 @@ async fn canonical_native_process_crash_child() {
 /// creating a new task, resuming a provider or reconstructing a raw bearer.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn native_factory_crash_after_canonical_commit_dedups_before_actor_ack() {
+    assert_native_crash_recovery(false).await;
+}
+
+/// Kernel/process loss after original p1 but before any native row byte must
+/// finish the exact retained canonical receipt, without a new receive task or
+/// an envelope-cache load. No original actor/source/root destructor runs.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn native_factory_recovers_prepared_missing_row_without_reinjection_or_task() {
+    assert_native_crash_recovery(true).await;
+}
+
+/// The test-only append failure sits at the real write boundary; this child
+/// exits with actual joined p1/receipt ownership instead of inventing a status.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn canonical_native_preparation_crash_child() {
+    let Some(root) = std::env::var_os(NATIVE_PREPARATION_ROOT) else {
+        return;
+    };
+    let _ = Fixture::build(true, Original::CrashNativePreparation(root.into())).await;
+    panic!("preparation child must exit before cleanup");
+}
+
+/// Executes the actual subprocess/factory/actor pair at either side of the
+/// canonical append while retaining the same original scope and absence checks.
+async fn assert_native_crash_recovery(before_row: bool) {
     let directory = CrashDirectory::new();
     let mut child = tokio::process::Command::new(std::env::current_exe().unwrap());
-    child.args(["--exact", "host::session::native_custody::tests::native_input::canonical_native_process_crash_child", "--nocapture"])
-        .env(NATIVE_CRASH_ROOT, &directory.0).kill_on_drop(true);
+    let (entry, variable) = if before_row {
+        (
+            "host::session::native_custody::tests::native_input::canonical_native_preparation_crash_child",
+            NATIVE_PREPARATION_ROOT,
+        )
+    } else {
+        (
+            "host::session::native_custody::tests::native_input::canonical_native_process_crash_child",
+            NATIVE_CRASH_ROOT,
+        )
+    };
+    child
+        .args(["--exact", entry, "--nocapture"])
+        .env(variable, &directory.0)
+        .kill_on_drop(true);
     let output = tokio::time::timeout(Duration::from_secs(45), child.output())
         .await
         .unwrap()
@@ -180,7 +254,10 @@ async fn native_factory_crash_after_canonical_commit_dedups_before_actor_ack() {
             })
             .count()
     };
-    assert_eq!(count(transcripts.inspect(&cid).unwrap()), 1);
+    assert_eq!(
+        count(transcripts.inspect(&cid).unwrap()),
+        usize::from(!before_row)
+    );
     let mut request = fixture.request();
     request.config.layers = vec![config()];
     let mut runtime = SessionFactory::create_with_native_custody(
@@ -276,6 +353,28 @@ async fn native_factory_crash_after_canonical_commit_dedups_before_actor_ack() {
         "canonical recovery must preserve interrupted history without creating or resuming a task"
     );
     assert!(exited.service.pending_agent_provider_tasks().is_empty());
+    assert_eq!(
+        exited
+            .service
+            .agent_shell_store()
+            .get("%1")
+            .unwrap()
+            .transcript_high_water,
+        transcripts.inspect(&cid).unwrap().last().unwrap().sequence
+    );
+    assert_eq!(
+        exited
+            .service
+            .agent_shell_store()
+            .get("%1")
+            .unwrap()
+            .transcript_entries,
+        transcripts.inspect(&cid).unwrap().len() as u64
+    );
+    assert!(
+        transcripts.pending_append_receipts().unwrap().is_empty(),
+        "only actual c1 may retire the canonical row image"
+    );
     assert_eq!(
         exited
             .service

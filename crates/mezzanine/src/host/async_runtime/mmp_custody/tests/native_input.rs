@@ -390,7 +390,13 @@ async fn native_input_preparation_refuses_replacement_archive_and_recovers_origi
     std::fs::rename(&original, &retained).unwrap();
     let mut replacement = scene.row.clone();
     replacement.content = "replacement context must receive no old input".into();
-    scene.transcript.append(&replacement).unwrap();
+    // Ordinary writers now refuse while the original native receipt owns its
+    // position. Build unrelated backing separately, then physically substitute
+    // it to exercise the stronger original-inode check as before.
+    assert!(scene.transcript.append(&replacement).is_err());
+    let staged = AgentTranscriptStore::new(scene.transcript.root().join("replacement-staging"));
+    staged.append(&replacement).unwrap();
+    std::fs::rename(staged.root().join("native-receiver"), &original).unwrap();
     let before = fixture.disk();
     scene.root.retry_native_input(due).unwrap();
     let CustodyWorkerStatus::NativeInputRetryAt(next) = scene.root.observe().await.unwrap() else {
@@ -437,7 +443,12 @@ async fn native_input_sealed_commit_settles_original_after_context_replacement()
         .start_native_input(&scene.service, lookup, missing.clone(), None)
         .unwrap();
     let recovered = scene.adopt().await;
-    assert_eq!(first.record(), recovered.record());
+    assert!(first.record().archive_observed);
+    assert!(!recovered.record().archive_observed);
+    assert_eq!(
+        serde_json::to_value(first.record()).unwrap(),
+        serde_json::to_value(recovered.record()).unwrap()
+    );
     assert!(!missing.root().exists());
     scene.ack(&recovered).await;
     assert_eq!(
@@ -514,7 +525,12 @@ async fn native_input_committed_lookup_needs_no_payload_cache_or_source_decode()
         .start_native_input(&scene.service, lookup, scene.transcript.clone(), None)
         .unwrap();
     let recovered = scene.adopt().await;
-    assert_eq!(first.record(), recovered.record());
+    assert!(first.record().archive_observed);
+    assert!(!recovered.record().archive_observed);
+    assert_eq!(
+        serde_json::to_value(first.record()).unwrap(),
+        serde_json::to_value(recovered.record()).unwrap()
+    );
     assert_eq!(
         scene.service.storage_usage().unwrap().unwrap().cache,
         mez_agent::messaging::MessagePayloadUsage::default()

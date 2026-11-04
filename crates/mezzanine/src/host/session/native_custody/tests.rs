@@ -23,6 +23,7 @@ enum Original {
     Registered,
     CrashRegistered(PathBuf),
     CrashNativeInput(PathBuf),
+    CrashNativePreparation(PathBuf),
 }
 impl Fixture {
     async fn new(guarded: bool) -> Self {
@@ -35,9 +36,9 @@ impl Fixture {
             rand::random::<u64>()
         ));
         let config = match &original {
-            Original::CrashRegistered(config) | Original::CrashNativeInput(config) => {
-                config.clone()
-            }
+            Original::CrashRegistered(config)
+            | Original::CrashNativeInput(config)
+            | Original::CrashNativePreparation(config) => config.clone(),
             _ => generated,
         };
         let session = Session::new_default(shell(), Size::new(80, 24).unwrap()).unwrap();
@@ -57,7 +58,10 @@ impl Fixture {
             .agent_shell_store_mut()
             .enter_or_resume("%1")
             .unwrap();
-        if matches!(&original, Original::CrashNativeInput(_)) {
+        if matches!(
+            &original,
+            Original::CrashNativeInput(_) | Original::CrashNativePreparation(_)
+        ) {
             native_input::configure_original(&mut service);
         }
         let context = service.agent_shell_store().get("%1").unwrap().clone();
@@ -77,7 +81,10 @@ impl Fixture {
             .agent_shell_store_mut()
             .record_transcript_entries("%1", 1)
             .unwrap();
-        let native = if matches!(&original, Original::CrashNativeInput(_)) {
+        let native = if matches!(
+            &original,
+            Original::CrashNativeInput(_) | Original::CrashNativePreparation(_)
+        ) {
             service
                 .message_service()
                 .registered_identity(&AgentId::opaque("agent-%1").unwrap())
@@ -201,8 +208,12 @@ impl Fixture {
             native: native.agent_id,
             raw: raw.agent_id,
         };
-        if matches!(&original, Original::CrashNativeInput(_)) {
-            native_input::commit_then_crash(service, root, fixture).await;
+        if matches!(
+            &original,
+            Original::CrashNativeInput(_) | Original::CrashNativePreparation(_)
+        ) {
+            let before_row = matches!(&original, Original::CrashNativePreparation(_));
+            native_input::commit_then_crash(service, root, fixture, before_row).await;
         }
         if matches!(&original, Original::CrashRegistered(_)) {
             use std::os::unix::fs::OpenOptionsExt;
@@ -305,18 +316,25 @@ fn mail(raw: &SenderIdentity, native: &SenderIdentity, n: u64) -> Envelope {
         extension_fields: Vec::new(),
     }
 }
-async fn wait_unlocked(path: &Path) {
+/// Waits for and retains one actual kernel fence. Returning that same owner
+/// avoids a release/reacquire gap in parallel subprocess tests: fork may briefly
+/// inherit a CLOEXEC descriptor until exec, even after the original closes it.
+async fn wait_for_ownership(path: &Path) -> RootOwnership {
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             if let Ok(owner) = RootOwnership::acquire_existing(path) {
-                drop(owner);
-                break;
+                return owner;
             }
             tokio::task::yield_now().await;
         }
     })
     .await
-    .unwrap();
+    .unwrap()
+}
+
+/// Waits for destructor/worker retirement when no subsequent read needs a fence.
+async fn wait_unlocked(path: &Path) {
+    drop(wait_for_ownership(path).await);
 }
 
 /// Private context plus guarded original publication restores the exact native
@@ -664,8 +682,7 @@ async fn assert_originals_retained(fixture: &Fixture) {
     use crate::storage::mmp_custody::MmpCustodyStore;
     use mez_agent::messaging::MessageAcceptanceDecodeLimits;
     let root = root_path(&fixture.config, &fixture.payload.session_id);
-    wait_unlocked(&root).await;
-    let owner = RootOwnership::acquire_existing(&root).unwrap();
+    let owner = wait_for_ownership(&root).await;
     let mut store =
         MmpCustodyStore::open_existing(&root, &fixture.payload.session_id, Default::default())
             .unwrap();

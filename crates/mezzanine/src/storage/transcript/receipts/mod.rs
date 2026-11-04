@@ -30,14 +30,19 @@ use crate::error::{MezError, MezErrorKind, Result};
 use super::TranscriptAppendBatch;
 use super::encoding::{decode_transcript_entry, encode_transcript_entry};
 use super::fs::{set_private_dir_permissions, set_private_file_permissions};
+use super::native_input::NativeInputAppendPlan;
 use super::types::{AgentCompactionEpoch, AgentTranscriptStore};
 
 /// Initial projection publication and whole-payload recovery checks.
 mod initial_projection;
+pub(super) mod native_input;
+pub(crate) use native_input::NativeInputAppendReceipt;
 
 const RECEIPT_VERSION: u64 = 1;
 /// Projection-bearing receipts retain a complete initial replay source.
 const PROJECTION_RECEIPT_VERSION: u64 = 2;
+/// Original native input remains owned until the MMP canonical journal commits.
+const NATIVE_RECEIPT_VERSION: u64 = 3;
 
 /// One-shot test handshake after receipt path enumeration, before opening files.
 #[cfg(test)]
@@ -51,7 +56,7 @@ pub(super) struct ReceiptEnumerationBarrier {
 
 /// Versioned exact payload and generation retained until durable settlement.
 #[derive(Serialize, Deserialize)]
-struct AppendReceipt {
+pub(super) struct AppendReceipt {
     version: u64,
     conversation_id: String,
     first_sequence: u64,
@@ -61,6 +66,9 @@ struct AppendReceipt {
     /// Version-two initial authority; forbidden on a version-one receipt.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     compaction_epoch: Option<AgentCompactionEpoch>,
+    /// Original physical batch and source; never decoded as ACK authority.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    native_input: Option<NativeInputAppendPlan>,
 }
 
 impl AppendReceipt {
@@ -82,7 +90,7 @@ impl AppendReceipt {
         } else {
             RECEIPT_VERSION
         };
-        let digest = digest_payload(&rows, compaction_epoch.as_ref())?;
+        let digest = digest_payload(&rows, compaction_epoch.as_ref(), None)?;
         Ok(Self {
             version,
             conversation_id: batch.conversation_id().into(),
@@ -91,16 +99,29 @@ impl AppendReceipt {
             digest,
             rows,
             compaction_epoch,
+            native_input: None,
         })
     }
 
     /// Reconstructs and validates the complete payload before trusting its rows.
     fn batch(&self) -> Result<TranscriptAppendBatch> {
         if self.generation == 0
-            || !matches!(self.version, RECEIPT_VERSION | PROJECTION_RECEIPT_VERSION)
-            || (self.version == RECEIPT_VERSION && self.compaction_epoch.is_some())
-            || (self.version == PROJECTION_RECEIPT_VERSION && self.compaction_epoch.is_none())
-            || self.digest != digest_payload(&self.rows, self.compaction_epoch.as_ref())?
+            || !matches!(
+                self.version,
+                RECEIPT_VERSION | PROJECTION_RECEIPT_VERSION | NATIVE_RECEIPT_VERSION
+            )
+            || (self.version == RECEIPT_VERSION
+                && (self.compaction_epoch.is_some() || self.native_input.is_some()))
+            || (self.version == PROJECTION_RECEIPT_VERSION
+                && (self.compaction_epoch.is_none() || self.native_input.is_some()))
+            || (self.version == NATIVE_RECEIPT_VERSION
+                && (self.compaction_epoch.is_some() || self.native_input.is_none()))
+            || self.digest
+                != digest_payload(
+                    &self.rows,
+                    self.compaction_epoch.as_ref(),
+                    self.native_input.as_ref(),
+                )?
         {
             return Err(MezError::invalid_state(
                 "transcript receipt identity is invalid",
@@ -111,6 +132,14 @@ impl AppendReceipt {
             .iter()
             .map(|row| decode_transcript_entry(row))
             .collect::<Result<Vec<_>>>()?;
+        if let Some(native) = &self.native_input {
+            native.validate_rows(&entries)?;
+            if self.generation != native.source().message_sequence {
+                return Err(MezError::invalid_state(
+                    "native transcript receipt generation changed",
+                ));
+            }
+        }
         let batch = match self.compaction_epoch.as_ref() {
             Some(epoch) => TranscriptAppendBatch::initial_projection(epoch.clone(), entries)?,
             None => TranscriptAppendBatch::rows(entries)?,
@@ -132,6 +161,9 @@ impl AppendReceipt {
 
     /// Routes metadata-only ownership without relaxing numeric row identities.
     fn filename(&self) -> String {
+        if let Some(native) = &self.native_input {
+            return native_input::filename(&self.conversation_id, &native.source().occurrence());
+        }
         if self.version == PROJECTION_RECEIPT_VERSION && self.first_sequence == 0 {
             return format!(
                 "{}-initial-{:020}.json",
@@ -160,7 +192,26 @@ fn digest_rows(rows: &[String]) -> String {
 
 /// Preserves the v1 digest while binding v2 rows and complete epoch bytes to a
 /// separate domain. Empty metadata-only payloads still have full CID authority.
-fn digest_payload(rows: &[String], epoch: Option<&AgentCompactionEpoch>) -> Result<String> {
+fn digest_payload(
+    rows: &[String],
+    epoch: Option<&AgentCompactionEpoch>,
+    native: Option<&NativeInputAppendPlan>,
+) -> Result<String> {
+    if let Some(native) = native {
+        let metadata = serde_json::to_vec(native).map_err(|_| {
+            MezError::invalid_state("native transcript receipt metadata encode failed")
+        })?;
+        let mut digest = Sha256::new();
+        digest.update(b"mezzanine-native-transcript-append-v3\0");
+        digest.update(digest_rows(rows).as_bytes());
+        digest.update((metadata.len() as u64).to_le_bytes());
+        digest.update(metadata);
+        return Ok(digest
+            .finalize()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect());
+    }
     let Some(epoch) = epoch else {
         return Ok(digest_rows(rows));
     };
@@ -197,6 +248,15 @@ fn receipt_conversation_id(path: &Path) -> Result<Option<&str>> {
         name
     };
     let stem = name.strip_suffix(".json").ok_or_else(invalid)?;
+    if let Some((conversation, digest)) = stem.rsplit_once("-native-")
+        && digest.len() == 64
+        && digest
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    {
+        validate_conversation_id(conversation)?;
+        return Ok((!staging).then_some(conversation));
+    }
     let (prefix, generation) = stem.rsplit_once('-').ok_or_else(invalid)?;
     let (conversation_id, sequence) = prefix.rsplit_once('-').ok_or_else(invalid)?;
     validate_conversation_id(conversation_id)?;
@@ -267,12 +327,15 @@ impl AgentTranscriptStore {
                         "transcript receipt is not a regular file",
                     ));
                 }
-                let receipt: AppendReceipt =
+                let receipt: AppendReceipt = if native_input::is_native_filename(&path) {
+                    native_input::read_data(&path)?
+                } else {
                     serde_json::from_slice(&fs::read(&path)?).map_err(|error| {
                         MezError::invalid_state(format!(
                             "transcript receipt decode failed: {error}"
                         ))
-                    })?;
+                    })?
+                };
                 validate_conversation_id(&receipt.conversation_id)?;
                 if path
                     .file_name()
@@ -375,6 +438,27 @@ impl AgentTranscriptStore {
             }))
     }
 
+    /// Ordinary producers cannot fill the native row's reserved position or
+    /// publish a later suffix before original-root c1 settlement. Only the
+    /// native worker's private lease methods may complete that canonical owner.
+    pub(super) fn ensure_native_input_receipts_settled(
+        &self,
+        conversation_id: &str,
+        _lease: &fs::File,
+    ) -> Result<()> {
+        if self
+            .read_locked_append_receipts(&[conversation_id])?
+            .iter()
+            .any(|(_, receipt, _)| receipt.native_input.is_some())
+        {
+            return Err(
+                MezError::conflict("canonical native input append remains unsettled")
+                    .mark_local_transcript_precommit_retryable(),
+            );
+        }
+        Ok(())
+    }
+
     /// Reports retained append ownership under the exact conversation lease.
     /// Failed child setup uses this fence before removing files: an accepted or
     /// uncertain payload must remain available for checked recovery. Invalid
@@ -400,6 +484,25 @@ impl AgentTranscriptStore {
             .is_empty())
     }
 
+    /// Allows an original native worker to own its exact canonical receipt
+    /// under the same mutation lease; every other recovery owner still fences it.
+    pub(super) fn has_foreign_native_input_receipts_locked(
+        &self,
+        conversation: &str,
+        occurrence: &[u8; 32],
+        _lease: &fs::File,
+    ) -> Result<bool> {
+        Ok(self
+            .read_locked_append_receipts(&[conversation])?
+            .iter()
+            .any(|(_, receipt, _)| {
+                receipt
+                    .native_input
+                    .as_ref()
+                    .is_none_or(|native| native.source().occurrence() != *occurrence)
+            }))
+    }
+
     /// Preserves ordinary row-only admission and its v1 recovery contract.
     pub(crate) fn accept_append_receipt(
         &self,
@@ -423,6 +526,7 @@ impl AgentTranscriptStore {
         let entries = batch.entries();
         let receipt = AppendReceipt::from_batch(batch, generation)?;
         let _lock = self.acquire_conversation_lock(&receipt.conversation_id)?;
+        self.ensure_native_input_receipts_settled(&receipt.conversation_id, &_lock)?;
         // Admission must not leave a replayable receipt for a sequence that
         // already belongs to different durable content. Check the complete
         // archive off-actor so an older batch cannot hide behind a long tail.
@@ -560,7 +664,11 @@ impl AgentTranscriptStore {
     /// Reconciles accepted batches with the durable archive off the actor.
     /// Failure leaves the receipt available for a later checked recovery.
     pub(crate) fn recover_append_receipts(&self) -> Result<()> {
-        let receipts = self.read_append_receipts()?;
+        let receipts = self
+            .read_append_receipts()?
+            .into_iter()
+            .filter(|(_, receipt, _)| receipt.native_input.is_none())
+            .collect::<Vec<_>>();
         self.preflight_initial_projection_receipts(&receipts)?;
         // Reject mutually inconsistent retained claims before any append can
         // make one side of the conflict durable. A damaged journal remains

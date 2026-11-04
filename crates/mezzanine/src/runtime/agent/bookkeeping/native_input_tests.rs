@@ -55,8 +55,8 @@ fn native_input_identity_matches_later_peer_projection_without_duplicating_input
     .unwrap()
     .to_transcript_content();
     assert_eq!(
-        RuntimeSessionService::runtime_transcript_entry_identity(&native),
-        RuntimeSessionService::runtime_transcript_entry_identity(&ordinary)
+        canonical_transcript_entry_identity(&native),
+        canonical_transcript_entry_identity(&ordinary)
     );
     ordinary.content = TranscriptContextEvent::prompt_boundary_with_event_sequence(
         ContextSourceKind::PeerMessage,
@@ -67,8 +67,8 @@ fn native_input_identity_matches_later_peer_projection_without_duplicating_input
     .unwrap()
     .to_transcript_content();
     assert_ne!(
-        RuntimeSessionService::runtime_transcript_entry_identity(&native),
-        RuntimeSessionService::runtime_transcript_entry_identity(&ordinary)
+        canonical_transcript_entry_identity(&native),
+        canonical_transcript_entry_identity(&ordinary)
     );
 }
 
@@ -79,10 +79,7 @@ fn native_input_identity_matches_later_peer_projection_without_duplicating_input
 fn native_input_identity_keeps_complete_large_peer_content() {
     let first = row(&"x".repeat(300 * 1024));
     let second = row(&format!("{}y", "x".repeat(300 * 1024)));
-    let key = RuntimeSessionService::runtime_transcript_entry_identity(&first);
+    let key = canonical_transcript_entry_identity(&first);
     assert!(key.2.starts_with("[mez-canonical-peer-identity/v1]"));
-    assert_ne!(
-        key,
-        RuntimeSessionService::runtime_transcript_entry_identity(&second)
-    );
+    assert_ne!(key, canonical_transcript_entry_identity(&second));
 }

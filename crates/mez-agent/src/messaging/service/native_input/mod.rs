@@ -54,6 +54,11 @@ pub struct MessageNativeInputRecord {
     pub canonical_sha256: [u8; 32],
     /// Original genuine native selection clock, not a replay clock renewal.
     pub offered_at_ms: u64,
+    /// True only for this trusted callback's actual original archive read/sync.
+    /// Historical c1 lookup alone does not claim current backing. Serialization
+    /// deliberately discards this observation rather than importing it as fact.
+    #[serde(skip)]
+    pub archive_observed: bool,
 }
 
 /// Trusted synchronous canonical-storage boundary run on the owned worker.
@@ -194,6 +199,14 @@ impl MessageService {
             }
         }
         Ok(None)
+    }
+
+    /// Checks the original slot's still-current native owner independently of
+    /// presence, TTL or transport settlement. This can route actual canonical
+    /// archive observations, but never revives a stale recipient namespace.
+    pub fn native_input_owner_is_current(&self, source: &MessageNativeInputAnchor) -> bool {
+        self.native_input_anchor_is_original(source)
+            && self.accepted_recipient(&source.0.row, source.recipient())
     }
 
     /// Tests current delivery eligibility for an original lookup without

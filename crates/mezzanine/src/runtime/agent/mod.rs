@@ -882,7 +882,7 @@ pub(crate) struct RuntimeAgentComponent {
     /// Receiver-owned peer presentation receipts awaiting durable pane settlement.
     received_peer_message_presentations: BTreeMap<String, RuntimeReceivedPeerMessagePresentation>,
     /// One real original-root absence result awaiting a canonical receive.
-    native_input_permit: Option<mez_agent::messaging::MessageNativeInputAnchor>,
+    native_input_permit: Option<messages::durable::NativeInputPermit>,
     /// Highest chronology sequence owned by replayed history in each active turn.
     ///
     /// Compaction refresh replaces exactly this prefix so prompt-boundary

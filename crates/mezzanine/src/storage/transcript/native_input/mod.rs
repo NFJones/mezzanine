@@ -17,8 +17,14 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use super::AgentTranscriptStore;
+
+mod receipt;
 use super::encoding::{decode_transcript_entry, encode_transcript_entry};
 use crate::error::{MezError, Result};
+pub(crate) use receipt::{
+    MAX_NATIVE_APPEND_BYTES, MAX_NATIVE_APPEND_ROWS, NativeInputAppendPlan,
+    validate_native_append_prefix,
+};
 
 /// Conservative encoded bound including escaping of a bounded native frame.
 const MAX_ROW_BYTES: usize = 16 * 1024 * 1024;
@@ -60,11 +66,17 @@ pub(crate) struct NativeTranscriptPlan {
 impl NativeTranscriptPlan {
     /// Checks persisted framing before any bounded read or path derivation.
     pub(crate) fn validate(&self) -> Result<()> {
+        self.validate_span(MAX_ROW_BYTES)
+    }
+
+    /// A canonical receipt may own a bounded contiguous batch as well as its
+    /// final native row. Single-row MMP plans retain the narrower row bound.
+    fn validate_span(&self, max_bytes: usize) -> Result<()> {
         validate_conversation_id(&self.conversation_id)?;
         if self.conversation_id.len() > 256
             || self.archive_sequence == 0
             || self.row_bytes == 0
-            || self.row_bytes > MAX_ROW_BYTES
+            || self.row_bytes > max_bytes
             || self.root.inode == 0
             || self.directory.inode == 0
             || self.archive.inode == 0
@@ -74,6 +86,17 @@ impl NativeTranscriptPlan {
         }
         Ok(())
     }
+    /// Historical c1 may survive legitimate target cleanup. This checks only
+    /// the named original root before optional receipt retirement; it grants no
+    /// right to open or mutate a replacement conversation/archive.
+    pub(crate) fn root_matches_store(&self, store: &AgentTranscriptStore) -> Result<bool> {
+        match open_directory(&store.root) {
+            Ok(root) => Ok(Identity::of(&root)? == self.root),
+            Err(error) if error.io_kind() == Some(std::io::ErrorKind::NotFound) => Ok(false),
+            Err(error) => Err(error),
+        }
+    }
+
     /// Binds the preparation to the original frozen native conversation.
     pub(crate) fn conversation_id(&self) -> &str {
         &self.conversation_id
@@ -99,14 +122,19 @@ impl AgentTranscriptStore {
         &self,
         conversation_id: &str,
         create_empty: bool,
+        occurrence: Option<&[u8; 32]>,
     ) -> Result<NativeTranscriptLease<'_>> {
         validate_conversation_id(conversation_id)?;
         let root = open_directory(&self.root)?;
         let directory = open_directory(&self.root.join(conversation_id))?;
         let lease = self.acquire_conversation_lock(conversation_id)?;
-        if self.active_delete_pending(conversation_id)?
-            || self.has_unsettled_append_receipts_locked(conversation_id, &lease)?
-        {
+        let foreign_receipts = match occurrence {
+            Some(occurrence) => {
+                self.has_foreign_native_input_receipts_locked(conversation_id, occurrence, &lease)?
+            }
+            None => self.has_unsettled_append_receipts_locked(conversation_id, &lease)?,
+        };
+        if self.active_delete_pending(conversation_id)? || foreign_receipts {
             return Err(unavailable());
         }
         let path = self.root.join(conversation_id).join("history.tsv");
@@ -120,7 +148,7 @@ impl AgentTranscriptStore {
             .create(create_empty)
             .truncate(false)
             .mode(0o600)
-            .custom_flags(libc::O_NOFOLLOW)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
             .open(&path)?;
         if !archive.metadata()?.is_file() || archive.metadata()?.nlink() != 1 {
             return Err(unavailable());
@@ -145,6 +173,7 @@ impl AgentTranscriptStore {
 impl NativeTranscriptLease<'_> {
     /// Freezes the actual next sequence and complete validated physical prefix.
     /// The caller must durably retain the returned plan before appending.
+    #[cfg(test)]
     pub(crate) fn prepare(&self, row: &mut TranscriptEntry) -> Result<NativeTranscriptPlan> {
         self.validate_paths()?;
         self.store
@@ -180,6 +209,7 @@ impl NativeTranscriptLease<'_> {
     /// Appends or completes only the exact prepared row. A partial own write
     /// can be reconciled from its frozen bytes; foreign suffixes fail closed.
     /// Derived transcript indexes use the ordinary reconciliation path.
+    #[cfg(test)]
     pub(crate) fn append(&self, plan: &NativeTranscriptPlan, row: &TranscriptEntry) -> Result<()> {
         self.validate_plan(plan)?;
         let encoded = encoded_row(row)?;
@@ -239,7 +269,12 @@ impl NativeTranscriptLease<'_> {
 
     /// Every attempt stays bound to the first physical destination and prefix.
     fn validate_plan(&self, plan: &NativeTranscriptPlan) -> Result<()> {
-        plan.validate()?;
+        self.validate_plan_span(plan, MAX_ROW_BYTES)
+    }
+
+    /// Applies the same original-backing/prefix checks to a bounded batch plan.
+    fn validate_plan_span(&self, plan: &NativeTranscriptPlan, max_bytes: usize) -> Result<()> {
+        plan.validate_span(max_bytes)?;
         self.validate_paths()?;
         if plan.conversation_id != self.conversation_id
             || plan.root != Identity::of(&self.root)?
@@ -262,7 +297,7 @@ impl NativeTranscriptLease<'_> {
         }
         let named = OpenOptions::new()
             .read(true)
-            .custom_flags(libc::O_NOFOLLOW)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
             .open(&self.path)?;
         if Identity::of(&named)? != Identity::of(&self.archive)?
             || !named.metadata()?.is_file()
@@ -285,6 +320,12 @@ fn encoded_row(row: &TranscriptEntry) -> Result<Vec<u8>> {
 }
 /// Hashes the complete original prefix with fixed-size scratch memory.
 fn prefix_digest(file: &File, bytes: u64) -> Result<[u8; 32]> {
+    Ok(prefix_hasher(file, bytes)?.finalize().into())
+}
+
+/// Retains the original streaming digest state so receipt preparation can bind
+/// preceding canonical rows before those exact bytes reach the archive.
+fn prefix_hasher(file: &File, bytes: u64) -> Result<Sha256> {
     if file.metadata()?.len() < bytes {
         return Err(unavailable());
     }
@@ -305,7 +346,7 @@ fn prefix_digest(file: &File, bytes: u64) -> Result<[u8; 32]> {
     if copied != bytes {
         return Err(unavailable());
     }
-    Ok(hash.finalize().into())
+    Ok(hash)
 }
 /// Opens only an actual directory, without following its final symlink.
 fn open_directory(path: &std::path::Path) -> Result<File> {

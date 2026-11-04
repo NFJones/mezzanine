@@ -16,6 +16,23 @@ use super::*;
 use crate::storage::mmp_custody::native_input::NativeInputProjection;
 use crate::storage::transcript::AgentTranscriptStore;
 
+/// Speculative data prepared before context commit, carrying no receive proof.
+#[derive(Debug, Clone)]
+struct PreparedNativeInput {
+    target: AgentTranscriptStore,
+    projection: Arc<NativeInputProjection>,
+    turn: AgentTurnRecord,
+    envelope: Arc<Envelope>,
+}
+
+/// One actual lower absence/selection, with an optional preflighted candidate.
+/// Only the later private context boundary can turn it into `NativeWork`.
+#[derive(Debug, Clone)]
+pub(in crate::runtime::agent) struct NativeInputPermit {
+    source: MessageNativeInputAnchor,
+    prepared: Option<PreparedNativeInput>,
+}
+
 /// One genuine post-context input owner, never deserialized from presentation.
 #[derive(Debug, Clone)]
 pub(in crate::runtime::agent) struct NativeWork {
@@ -106,7 +123,10 @@ impl RuntimeSessionService {
         else {
             return Ok(false);
         };
-        self.agent.native_input_permit = Some(selected);
+        self.agent.native_input_permit = Some(NativeInputPermit {
+            source: selected,
+            prepared: None,
+        });
         let result = self.deliver_pending_runtime_agent_messages(now_ms);
         // A refusal did not commit canonical input. Release the permit rather
         // than holding an unrelated recipient behind this source indefinitely.
@@ -125,7 +145,8 @@ impl RuntimeSessionService {
                 .agent
                 .native_input_permit
                 .as_ref()
-                .is_some_and(|source| {
+                .is_some_and(|permit| {
+                    let source = &permit.source;
                     source.recipient() == recipient
                         && source.sequence() == message.sequence
                         && self
@@ -141,22 +162,26 @@ impl RuntimeSessionService {
                 })
     }
 
-    /// Captures the actual context chronology event and original storage target
-    /// before the receipt can expose canonical proof to any continuation.
-    pub(super) fn capture_native_input_work(
+    /// Builds the complete immutable candidate before any live context or task
+    /// mutation. The real context allocator supplies the event ID; this method
+    /// never predicts IDs or manufactures a receipt from transcript metadata.
+    pub(crate) fn prepare_native_input_context(
         &mut self,
         recipient: &AgentId,
         sequence: u64,
         turn: &AgentTurnRecord,
-    ) -> Result<Option<NativeReceipt>> {
+        context: &mez_agent::AgentContext,
+        imported_high_water: u64,
+    ) -> Result<()> {
         if !self.native_input_storage_required() {
-            return Ok(None);
+            return Ok(());
         }
-        let source = self
+        let source = &self
             .agent
             .native_input_permit
             .as_ref()
-            .ok_or_else(|| MezError::invalid_state("original native input permit missing"))?;
+            .ok_or_else(|| MezError::invalid_state("original native input permit missing"))?
+            .source;
         if source.recipient() != recipient
             || source.sequence() != sequence
             || source.native_owner().conversation_id() != turn.conversation_id
@@ -168,16 +193,15 @@ impl RuntimeSessionService {
         let envelope = source.resident_envelope()?;
         let label =
             crate::runtime::control::runtime_peer_message_block_label(sequence, &envelope.id);
-        let event = self
-            .agent_turn_contexts()
-            .get(&turn.turn_id)
-            .and_then(|c| {
-                c.chronology().iter().rev().find(|e| {
-                    e.block().source == mez_agent::ContextSourceKind::PeerMessage
-                        && e.block().label == label
-                })
+        let event = context
+            .chronology()
+            .iter()
+            .rev()
+            .find(|e| {
+                e.block().source == mez_agent::ContextSourceKind::PeerMessage
+                    && e.block().label == label
             })
-            .ok_or_else(|| MezError::invalid_state("actual native input chronology missing"))?;
+            .ok_or_else(|| MezError::invalid_state("planned native input chronology missing"))?;
         let row = TranscriptEntry {
             conversation_id: turn.conversation_id.clone(),
             sequence: 1,
@@ -188,24 +212,126 @@ impl RuntimeSessionService {
             pane_id: turn.pane_id.clone(),
             content: event.block().content.clone(),
         };
-        let projection = Arc::new(NativeInputProjection::new(
-            row,
+        let prefix = self.project_native_input_prefix(
+            turn,
+            context,
+            imported_high_water,
             event.sequence().get(),
-            event.block().label.clone(),
-        )?);
+        )?;
+        let projection = Arc::new(
+            NativeInputProjection::new(row, event.sequence().get(), label)?.with_prefix(prefix)?,
+        );
         let target = self
             .agent_transcript_store()
             .cloned()
             .ok_or_else(|| MezError::invalid_state("canonical native transcript store missing"))?;
-        let work = NativeWork {
-            source: source.clone(),
+        let prepared = PreparedNativeInput {
             target,
             projection,
             turn: turn.clone(),
             envelope,
         };
-        self.agent.native_input_permit.take();
-        Ok(Some(NativeReceipt::Pending(Arc::new(work))))
+        self.agent
+            .native_input_permit
+            .as_mut()
+            .ok_or_else(|| MezError::invalid_state("original native input permit missing"))?
+            .prepared = Some(prepared);
+        Ok(())
+    }
+
+    /// Commits a real allocated peer occurrence only after its entire canonical
+    /// projection passes preflight. Failure leaves the original live context
+    /// untouched and the accepted lower source pending for retry.
+    pub(super) fn append_received_peer_context(
+        &mut self,
+        recipient: &AgentId,
+        sequence: u64,
+        turn: &AgentTurnRecord,
+        label: String,
+        content: String,
+    ) -> Result<()> {
+        if !self.native_input_storage_required() {
+            self.agent_turn_contexts_mut()
+                .get_mut(&turn.turn_id)
+                .ok_or_else(|| {
+                    MezError::invalid_state("runtime agent turn context is unavailable")
+                })?
+                .append_peer_message_event(label, content)?;
+            return Ok(());
+        }
+        let mut candidate = self
+            .agent_turn_contexts()
+            .get(&turn.turn_id)
+            .cloned()
+            .ok_or_else(|| MezError::invalid_state("runtime agent turn context is unavailable"))?;
+        candidate.append_peer_message_event(label, content)?;
+        self.prepare_native_input_context(
+            recipient,
+            sequence,
+            turn,
+            &candidate,
+            self.agent_turn_imported_history_sequence_high_water(&turn.turn_id),
+        )?;
+        self.agent_turn_contexts_mut()
+            .insert(turn.turn_id.clone(), candidate);
+        Ok(())
+    }
+
+    /// Moves the preflighted candidate only after the actual context occurrence
+    /// exists. No new prefix encoding or size admission can fail after commit.
+    pub(super) fn capture_native_input_work(
+        &mut self,
+        recipient: &AgentId,
+        sequence: u64,
+        turn: &AgentTurnRecord,
+    ) -> Result<Option<NativeReceipt>> {
+        if !self.native_input_storage_required() {
+            return Ok(None);
+        }
+        let permit = self
+            .agent
+            .native_input_permit
+            .as_ref()
+            .ok_or_else(|| MezError::invalid_state("original native input permit missing"))?;
+        let prepared = permit
+            .prepared
+            .as_ref()
+            .ok_or_else(|| MezError::invalid_state("native input preflight missing"))?;
+        if permit.source.recipient() != recipient
+            || permit.source.sequence() != sequence
+            || prepared.turn != *turn
+            || !self
+                .agent_turn_contexts()
+                .get(&turn.turn_id)
+                .is_some_and(|context| {
+                    context.chronology().iter().any(|event| {
+                        prepared.projection.matches_event(
+                            event.sequence().get(),
+                            &event.block().label,
+                            &event.block().content,
+                        )
+                    })
+                })
+        {
+            return Err(MezError::invalid_state(
+                "preflighted native input changed before commit",
+            ));
+        }
+        let permit = self
+            .agent
+            .native_input_permit
+            .take()
+            .ok_or_else(|| MezError::invalid_state("original native input permit missing"))?;
+        let prepared = permit
+            .prepared
+            .ok_or_else(|| MezError::invalid_state("native input preflight missing"))?;
+        Ok(Some(NativeReceipt::Pending(Arc::new(NativeWork {
+            source: permit.source,
+            target: prepared.target,
+            projection: prepared.projection,
+            turn: prepared.turn,
+            envelope: prepared.envelope,
+        }))))
     }
 
     /// Provider and peer/scheduler continuations wait through exact native ACK.
@@ -213,7 +339,7 @@ impl RuntimeSessionService {
         self.agent
             .native_input_permit
             .as_ref()
-            .is_some_and(|s| s.native_owner().conversation_id() == conversation)
+            .is_some_and(|p| p.source.native_owner().conversation_id() == conversation)
             || self
                 .agent
                 .received_peer_message_presentations
@@ -287,6 +413,47 @@ impl RuntimeSessionService {
                     work.projection.clone(),
                 ))
             })
+    }
+
+    /// Records a real joined original archive frontier without manufacturing a
+    /// received context, task or provider continuation. Historical journal-only
+    /// proof and a replacement native namespace cannot update current backing.
+    pub(crate) fn observe_native_input_archive(
+        &mut self,
+        proof: &MessageNativeInputCommit,
+    ) -> Result<()> {
+        if !proof.record().archive_observed
+            || !self
+                .message_service()
+                .native_input_owner_is_current(proof.anchor())
+        {
+            return Ok(());
+        }
+        let Some(pane) = proof.anchor().recipient().as_str().strip_prefix("agent-") else {
+            return Ok(());
+        };
+        let Some(shell) = self.agent_shell_store().get(pane) else {
+            return Ok(());
+        };
+        if shell.session_id != proof.anchor().native_owner().conversation_id() {
+            return Ok(());
+        }
+        let pane = pane.to_owned();
+        let high = shell
+            .transcript_high_water
+            .max(proof.record().archive_sequence);
+        let added = high - shell.transcript_high_water;
+        let raw = shell.transcript_entries.checked_add(added).ok_or_else(|| {
+            MezError::invalid_state("native canonical transcript frontier exhausted")
+        })?;
+        self.agent_shell_store_mut().restore_transcript_position(
+            &pane,
+            mez_agent::AgentTranscriptPosition {
+                logical_high_water: high,
+                active_raw_entries: raw,
+            },
+        )?;
+        Ok(())
     }
 
     /// Actual joined storage proof attaches only to the original receipt. Late

@@ -169,12 +169,13 @@ impl RuntimeSessionService {
                     let content = crate::runtime::control::runtime_peer_message_context_content(
                         &message.envelope,
                     );
-                    self.agent_turn_contexts_mut()
-                        .get_mut(&turn.turn_id)
-                        .ok_or_else(|| {
-                            MezError::invalid_state("runtime agent turn context is unavailable")
-                        })?
-                        .append_peer_message_event(label, content)?;
+                    self.append_received_peer_context(
+                        &recipient,
+                        message.sequence,
+                        &turn,
+                        label,
+                        content,
+                    )?;
                     self.register_received_peer_message_presentation(
                         recipient.clone(),
                         message.sequence,
@@ -705,6 +706,15 @@ impl RuntimeSessionService {
             return Err(MezError::invalid_state(
                 "injected peer-message idle-turn pre-commit failure",
             ));
+        }
+        for (sequence, _) in &delivered_messages {
+            self.prepare_native_input_context(
+                &recipient,
+                *sequence,
+                &turn,
+                &context,
+                imported_history_sequence_high_water,
+            )?;
         }
         self.agent_turn_ledger_mut().queue_turn(turn.clone())?;
         self.snapshot_agent_native_shell_timeout_for_turn(&turn_id);

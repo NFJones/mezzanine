@@ -164,6 +164,28 @@ async fn actor_native_receive_persists_before_ack_and_releases_original_provider
             .count(),
         1
     );
+    let user = rows
+        .iter()
+        .position(|row| {
+            matches!(
+                TranscriptContextEvent::from_transcript_content(&row.content),
+                Some(TranscriptContextEvent::UserEvent { .. })
+            )
+        })
+        .expect("the actual user request must already be canonical before ACK");
+    let peer = rows
+        .iter()
+        .position(|row| {
+            matches!(
+                TranscriptContextEvent::from_transcript_content(&row.content),
+                Some(TranscriptContextEvent::NativePeerMessage { .. })
+            )
+        })
+        .unwrap();
+    assert!(
+        user < peer,
+        "native input cannot precede its original user request"
+    );
     actor.poll_message_custody_for_tests();
     assert_eq!(
         actor.observe_message_custody_for_tests().await.unwrap(),
@@ -872,5 +894,79 @@ async fn actor_native_active_scan_preserves_notification_for_earlier_cold_source
             )
             .unwrap(),
         2
+    );
+}
+
+/// A valid in-memory event can exceed the narrower canonical user codec. Native
+/// receive must refuse at preflight without adding a peer, losing its source,
+/// advancing its cursor or exposing a provider continuation.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn actor_native_prefix_preflight_failure_leaves_live_context_and_source_unchanged() {
+    let fixture = Fixture::new(true);
+    let (_, mut actor, recipient, turn) = scene(&fixture).await;
+    actor
+        .service
+        .agent_turn_contexts_mut()
+        .get_mut(&turn.turn_id)
+        .unwrap()
+        .append_user_event("steering", "accepted memory event\0not canonical")
+        .unwrap();
+    let before = actor
+        .service
+        .agent_turn_contexts()
+        .get(&turn.turn_id)
+        .unwrap()
+        .clone();
+    let offers_before = actor
+        .service
+        .pending_agent_provider_tasks()
+        .iter()
+        .map(|task| task.turn_id.clone())
+        .collect::<Vec<_>>();
+    accept(&mut actor, &recipient, &turn, "native-prefix-refusal").await;
+    actor.poll_message_custody_for_tests();
+    assert_eq!(
+        actor.observe_message_custody_for_tests().await.unwrap(),
+        CustodyWorkerStatus::NativeInputAwaitingAdoption
+    );
+    assert_eq!(
+        *actor
+            .service
+            .agent_turn_contexts()
+            .get(&turn.turn_id)
+            .unwrap(),
+        before
+    );
+    assert_eq!(peer_blocks(&actor, &turn), 0);
+    assert!(!actor.service.has_pending_native_input());
+    assert_eq!(
+        actor
+            .service
+            .pending_agent_provider_tasks()
+            .iter()
+            .map(|task| task.turn_id.clone())
+            .collect::<Vec<_>>(),
+        offers_before,
+        "refused input must leave the original provider offer unchanged"
+    );
+    assert_eq!(
+        actor
+            .service
+            .message_service()
+            .subscription(&recipient)
+            .unwrap()
+            .last_sequence,
+        0
+    );
+    assert_eq!(
+        fixture
+            .connection()
+            .query_row(
+                "SELECT COUNT(*) FROM records WHERE key LIKE 'c1:%' OR key LIKE 'k1:%'",
+                [],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
+        0
     );
 }

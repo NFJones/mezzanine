@@ -14,7 +14,7 @@ use super::{
     runtime_unrecovered_action_failure_output, transcript_entries_for_execution,
 };
 use crate::storage::token_usage::new_token_usage_event_id;
-use crate::storage::transcript::ConversationTranscriptRead;
+use crate::storage::transcript::{ConversationTranscriptRead, canonical_transcript_entry_identity};
 use mez_agent::TranscriptContextEvent;
 
 mod checked_source;
@@ -22,6 +22,7 @@ mod physical_source;
 pub(crate) use physical_source::RuntimeTranscriptPrefixReceipt;
 mod completion_archive;
 pub(crate) use checked_source::RuntimeCompletionCheckedSource;
+mod native_prefix;
 mod projection;
 use crate::runtime::persistence::RuntimeBookkeepingClaimIdentity;
 use completion_archive::RuntimeCompletionArchiveRead;
@@ -616,7 +617,7 @@ impl RuntimeSessionService {
         let mut identities = BTreeMap::<_, BTreeMap<_, u64>>::new();
         for row in existing {
             identities
-                .entry(Self::runtime_transcript_entry_identity(row))
+                .entry(canonical_transcript_entry_identity(row))
                 .or_default()
                 .entry((
                     row.conversation_id.clone(),
@@ -629,7 +630,7 @@ impl RuntimeSessionService {
         let mut result = Vec::new();
         let mut through = 0u64;
         for mut entry in entries {
-            let identity = Self::runtime_transcript_entry_identity(&entry);
+            let identity = canonical_transcript_entry_identity(&entry);
             let attribution = (
                 entry.conversation_id.clone(),
                 entry.agent_id.clone(),
@@ -1182,13 +1183,13 @@ impl RuntimeSessionService {
     ) -> Vec<TranscriptEntry> {
         let mut identities = existing_entries
             .iter()
-            .map(Self::runtime_transcript_entry_identity)
+            .map(canonical_transcript_entry_identity)
             .collect::<std::collections::BTreeSet<_>>();
         let mut sequence = first_sequence;
         entries
             .into_iter()
             .filter_map(|mut entry| {
-                if !identities.insert(Self::runtime_transcript_entry_identity(&entry)) {
+                if !identities.insert(canonical_transcript_entry_identity(&entry)) {
                     return None;
                 }
                 entry.sequence = sequence;
@@ -1196,59 +1197,6 @@ impl RuntimeSessionService {
                 Some(entry)
             })
             .collect()
-    }
-
-    /// Returns the durable identity of one transcript row without volatile
-    /// sequence or timestamp fields.
-    fn runtime_transcript_entry_identity(entry: &TranscriptEntry) -> (String, u8, String) {
-        let role = match entry.role {
-            TranscriptRole::User => 0,
-            TranscriptRole::Assistant => 1,
-            TranscriptRole::Tool => 2,
-            TranscriptRole::System => 3,
-        };
-        let event = TranscriptContextEvent::from_transcript_content(&entry.content);
-        let owner = if matches!(
-            &event,
-            Some(TranscriptContextEvent::McpCatalogSnapshot { .. })
-        ) {
-            String::new()
-        } else {
-            entry.turn_id.clone()
-        };
-        // The native commit row and later ordinary execution projection own
-        // the same canonical chronology event. Hash borrowed fields directly:
-        // normalization must not inherit the smaller prompt-boundary codec cap.
-        let peer_identity = |sequence: u64, label: &str, content: &str| {
-            use sha2::{Digest, Sha256};
-            let mut hash = Sha256::new();
-            hash.update(b"mez-canonical-peer-identity-v1\0");
-            hash.update(sequence.to_le_bytes());
-            hash.update((label.len() as u64).to_le_bytes());
-            hash.update(label.as_bytes());
-            hash.update((content.len() as u64).to_le_bytes());
-            hash.update(content.as_bytes());
-            use std::fmt::Write;
-            let mut key = String::from("[mez-canonical-peer-identity/v1]");
-            for byte in hash.finalize() {
-                let _ = write!(key, "{byte:02x}");
-            }
-            key
-        };
-        let content = match event {
-            Some(TranscriptContextEvent::NativePeerMessage { event }) => {
-                peer_identity(event.event_sequence, &event.label, &event.content)
-            }
-            Some(TranscriptContextEvent::PromptBoundary {
-                source: ContextSourceKind::PeerMessage,
-                event_sequence: Some(sequence),
-                label,
-                content,
-                ..
-            }) => peer_identity(sequence, &label, &content),
-            _ => entry.content.clone(),
-        };
-        (owner, role, content)
     }
 
     /// Persists the originating prompt and available settled observations when

@@ -146,6 +146,7 @@ fn record(clock: u64) -> MessageNativeInputRecord {
         archive_sequence: 1,
         canonical_sha256: [3; 32],
         offered_at_ms: clock,
+        archive_observed: false,
     }
 }
 
@@ -477,4 +478,17 @@ fn native_input_canonical_result_rejects_impossible_facts_and_keeps_zero_offer()
             .last_sequence,
         1
     );
+}
+
+/// An actual port observation is a transient fact. Serializing a descriptive
+/// journal record must not let imported data claim current physical backing.
+#[test]
+fn native_input_archive_observation_cannot_round_trip_through_data() {
+    let mut observed = record(10);
+    observed.archive_observed = true;
+    let encoded = serde_json::to_string(&observed).unwrap();
+    assert!(!encoded.contains("archive_observed"));
+    let restored: MessageNativeInputRecord = serde_json::from_str(&encoded).unwrap();
+    assert!(!restored.archive_observed);
+    assert_eq!(restored.archive_sequence, observed.archive_sequence);
 }
