@@ -154,13 +154,29 @@ impl Fixture {
                 .unwrap()
         );
         for n in 1..=2 {
+            let mut original_mail = mail(&raw, &native, n);
+            let accepted_at = if n == 2
+                && matches!(&original, Original::CrashNativePreparation(_))
+                && std::env::var_os(native_input::EXPIRE_PREPARATION).is_some()
+            {
+                let now = crate::runtime::current_unix_millis();
+                original_mail.ttl_ms = Some(3000);
+                fs::write(
+                    config.join("expiry-deadline.json"),
+                    serde_json::to_vec(&now.saturating_add(3000)).unwrap(),
+                )
+                .unwrap();
+                now
+            } else {
+                100
+            };
             let ticket = service
                 .message_service_mut()
                 .prepare_acceptance(
                     &raw.agent_id,
-                    mail(&raw, &native, n),
+                    original_mail,
                     MessageScope::Session,
-                    100,
+                    accepted_at,
                     4096,
                     None,
                 )

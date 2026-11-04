@@ -1,9 +1,11 @@
-//! Bounded, quarantined fold of complete stored acknowledgement evidence.
+//! Bounded, quarantined fold of complete stored ACK and expiry evidence.
 //!
 //! This is a storage observation, not a second mailbox or a restored live
 //! owner. A single snapshot validates the complete inventory and each ACK's
 //! original sources before combining recipient-specific positive decisions and
-//! occurrence-wide expiry observations. No cursor, native input, registration,
+//! occurrence-wide ACK expiry exclusions and exact unreleased terminal slots.
+//! Terminal batches preserve their first original observation; conflicting slot
+//! or first-clock history refuses the whole candidate. No cursor, native input, registration,
 //! sender receipt or allocator authority can be published from this fold alone.
 //! A separate persistent watermark and trusted restoration boundary are still
 //! required before compaction or delivery may discard or consume evidence.
@@ -44,8 +46,11 @@ pub(crate) struct FoldedExpiry {
 /// One original per-recipient first expiry observation, never an ACK or release.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct FoldedTerminalExpiry {
+    /// Original accepted occurrence, qualified against its complete source.
     pub sequence: u64,
+    /// Exact frozen recipient slot, never newly resolved membership.
     pub binding_index: u32,
+    /// First actual strict TTL observation, shared by later bounded batches.
     pub observed_at_ms: u64,
 }
 

@@ -725,3 +725,59 @@ fn expiry_decoder_capacity_refusal_preserves_unissued_owner_and_escrow_charge() 
         baseline
     );
 }
+
+/// Idle expiry scheduling uses the strict original deadline, never a renewed
+/// acceptance clock. Actual ACK protection suppresses a wake, cancellation
+/// restores it, and committed terminal observations remove the eligible slot.
+#[test]
+fn expiry_deadline_tracks_strict_original_boundary_and_actual_slot_protection() {
+    let mut scene = Scene::new(true, false);
+    scene.direct();
+    assert_eq!(
+        scene
+            .service
+            .next_storage_expiry_at_ms(&scene.scope)
+            .unwrap(),
+        Some(16)
+    );
+    scene.offer();
+    let ack = scene
+        .service
+        .prepare_acknowledgement(&scene.target.agent_id, 1, 512 * 1024)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        scene
+            .service
+            .next_storage_expiry_at_ms(&scene.scope)
+            .unwrap(),
+        None
+    );
+    scene.service.cancel_acknowledgement(&ack).unwrap();
+    assert_eq!(
+        scene
+            .service
+            .next_storage_expiry_at_ms(&scene.scope)
+            .unwrap(),
+        Some(16)
+    );
+    let ticket = scene.reserve();
+    let write = scene.write(&ticket);
+    let MessageExpiryWriteOutcome::Committed(commit) = write.persist(&mut Store::default()) else {
+        panic!("actual lower callback required");
+    };
+    scene.service.publish_expiry(&commit).unwrap();
+    assert_eq!(
+        scene
+            .service
+            .next_storage_expiry_at_ms(&scene.scope)
+            .unwrap(),
+        None
+    );
+    assert!(
+        scene
+            .service
+            .next_storage_expiry_at_ms(&MessageStorageScope::default())
+            .is_err()
+    );
+}

@@ -404,13 +404,27 @@ Inventory and cold reconstruction restore actual unreleased observations even
 when the commit's adoption was lost or the checkpoint predates it; saved release
 bits cannot substitute for journal evidence. Physical tests cover close/reopen,
 commit-reply loss, trigger rollback, allocation tampering and independent fanout
-ACKs. They do not yet establish actor/process-crash expiry production.
+ACKs. Close/reopen expiry tests do not establish process-crash coverage at the
+t1 commit boundary.
 
-Guarded maintenance and sender outcome consumption remain withheld. An owned
-actor producer, startup canonical-probe priority, validated owner retirement,
-durable sender handoff/horizon, rollback-safe elapsed clocks and reclamation
-remain unfinished. These internal operation bounds do not establish complete
-admitted-state capacity or enable normal host/all-ingress activation.
+The internal actor now owns expiry selection and its original root continuation.
+The exclusive root retains the actual worker, first plan and lower escrow through
+cancelled observers, joined worker loss, backed-off retry and shutdown. A failed
+post-commit physical position read retains the positive while only that read is
+refreshed. A strict original TTL deadline wakes an idle actor and reopens native
+probes first; unresolved canonical input or application work withholds selection.
+Pre-issuance capacity refusal backs off while unrelated work can use the lane.
+Connected controls exercise real post-commit worker loss, physical root relocation,
+position-only retry, kernel-owner retirement and an otherwise idle actor whose
+shutdown waits for expiry adoption. A separate subprocess exits with actual
+canonical preparation; startup after the original TTL expires still completes
+that canonical input and its exact ACK before any terminal selection.
+
+Guarded volatile cleanup and sender outcome consumption remain withheld.
+Validated owner retirement, durable sender handoff/horizon, rollback-safe elapsed
+clocks and reclamation remain unfinished. These internal operation bounds do not
+establish complete admitted-state capacity or enable normal host/all-ingress
+activation.
 
 The trusted storage-only reconstruction path now moves those originals into the
 canonical message owner as cold metadata, preserving pending obligations,

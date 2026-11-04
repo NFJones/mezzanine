@@ -5,7 +5,7 @@
 //! and decoder scratch share one metadata ceiling. Bodies are decoded one at a
 //! time and never retained in the result. This is an unpublished transport
 //! candidate: native continuity, canonical input deduplication, durable terminal
-//! journals, and actual root/session installation remain separate gates. No
+//! releases, and actual root/session installation remain separate gates. No
 //! generic snapshot data or matching owner label acquires live authority here.
 
 use std::io::{self, Write};

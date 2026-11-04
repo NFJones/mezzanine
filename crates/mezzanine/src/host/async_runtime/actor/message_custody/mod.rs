@@ -20,6 +20,7 @@ use mez_agent::messaging::{DeliveryCursor, FanoutBatch, MessageError};
 
 mod actions;
 mod checkpoint;
+mod expiry;
 mod native;
 mod native_continuity;
 mod native_input;
@@ -62,6 +63,8 @@ pub(super) enum CustodyEvent {
     NativeReceiveRetry,
     /// Local application/admission backoff is due; no physical retry is implied.
     NativeApplicationReady,
+    /// Idle expiry deadline/capture retry; canonical probes still precede selection.
+    ExpiryReady,
     /// Actual joined disposition, still requiring canonical lower adoption.
     Observed(Result<CustodyWorkerStatus>),
     /// Original job's backoff expired; no new admission may replace it.
@@ -72,6 +75,8 @@ pub(super) enum CustodyEvent {
 
 /// Original actor continuation paired with the root's one exclusive job.
 enum Pending {
+    /// The root owns exact original expiry source/slot/clock and worker escrow.
+    Expiry,
     /// The root owns the exact native metadata input; no message is reserved.
     NativeContinuity,
     /// Exact original canonical probe/write; receipt absence means lookup only.
@@ -119,6 +124,8 @@ pub(in crate::host::async_runtime) struct ActorMessageCustody {
     wake: Option<Wake>,
     /// Independent capacity poll; it never blocks unrelated fresh admission.
     payload_retry_at: Option<Instant>,
+    /// Independent idle expiry deadline or pre-issuance capacity backoff.
+    expiry_retry_at: Option<Instant>,
     /// Bounded payload-free requests, each fenced to its original registration.
     payload_reads: std::collections::VecDeque<PayloadRead>,
     /// Payload-free bounded scan progress, reset by actual delivery notification.
@@ -311,6 +318,7 @@ impl AsyncRuntimeSessionActor {
             root,
             wake: Some(Wake::Observe),
             payload_retry_at: None,
+            expiry_retry_at: None,
             payload_reads: std::collections::VecDeque::new(),
             native_scan_after: None,
             native_scan_pending: true,
@@ -361,6 +369,7 @@ impl AsyncRuntimeSessionActor {
     pub(super) fn reset_native_message_input_scan(&mut self) {
         if let Some(owner) = self.message_custody.as_mut() {
             owner.request_native_scan();
+            owner.expiry_retry_at = None;
         }
     }
 
@@ -451,6 +460,16 @@ impl AsyncRuntimeSessionActor {
             .message_service()
             .pending_native_continuity()
             .is_some();
+        let expiry_at = self.message_custody.as_ref().and_then(|owner| {
+            (owner.pending.is_none()
+                && owner.wake.is_none()
+                && owner.failure.is_none()
+                && owner.shutdown.is_none()
+                && owner.native_result.is_none()
+                && owner.native_retry.is_none())
+            .then_some(owner.expiry_retry_at)
+            .flatten()
+        });
         let physical = async move {
             match next {
                 Some((root, Wake::Observe)) => CustodyEvent::Observed(root.observe().await),
@@ -490,7 +509,7 @@ impl AsyncRuntimeSessionActor {
                 None => pending().await,
             }
         };
-        async move {
+        let application = async move {
             if let Some(at) = application_at {
                 tokio::select! {
                     event = physical => event,
@@ -498,6 +517,15 @@ impl AsyncRuntimeSessionActor {
                 }
             } else {
                 physical.await
+            }
+        };
+        async move {
+            tokio::select! {
+                event = application => event,
+                _ = async move {
+                    if let Some(at) = expiry_at { tokio::time::sleep_until(at).await; }
+                    else { pending::<()>().await; }
+                } => CustodyEvent::ExpiryReady,
             }
         }
     }
@@ -511,6 +539,7 @@ impl AsyncRuntimeSessionActor {
         self.pump_native_message_applications();
         self.pump_native_message_continuity();
         self.pump_native_message_input();
+        self.pump_message_expiry();
         self.pump_message_payload_reads();
         self.pump_stored_message_actions();
         let ready = self.message_custody.as_ref().is_some_and(|owner| {
@@ -551,6 +580,11 @@ impl AsyncRuntimeSessionActor {
             CustodyEvent::AdmissionReady
             | CustodyEvent::NativeReceiveRetry
             | CustodyEvent::NativeApplicationReady => Ok(()),
+            CustodyEvent::ExpiryReady => {
+                owner.expiry_retry_at = None;
+                owner.request_native_scan();
+                Ok(())
+            }
             CustodyEvent::NativeCaptureRetry => {
                 if owner.pending.is_none()
                     && matches!(owner.wake, Some(Wake::NativeCaptureRetry(_)))
@@ -566,7 +600,11 @@ impl AsyncRuntimeSessionActor {
             }
             CustodyEvent::Observed(Ok(CustodyWorkerStatus::Idle)) => {
                 owner.payload_retry_at = None;
-                if matches!(owner.pending, Some(Pending::NativeContinuity)) {
+                if matches!(owner.pending, Some(Pending::Expiry)) {
+                    Err(MezError::invalid_state(
+                        "MMP expiry lost its original worker state",
+                    ))
+                } else if matches!(owner.pending, Some(Pending::NativeContinuity)) {
                     Err(MezError::invalid_state(
                         "MMP native journal lost its original worker state",
                     ))
@@ -861,6 +899,10 @@ impl AsyncRuntimeSessionActor {
                 .retry_acknowledgement(self.service.message_service_mut(), Instant::now())
                 .map(|_| owner.wake = Some(Wake::Observe)),
             CustodyEvent::Retry => match owner.pending {
+                Some(Pending::Expiry) => owner
+                    .root
+                    .retry_expiry(self.service.message_service_mut(), Instant::now())
+                    .map(|_| owner.wake = Some(Wake::Observe)),
                 Some(Pending::NativeInput { .. }) => owner
                     .root
                     .retry_native_input(Instant::now())
@@ -918,6 +960,30 @@ impl AsyncRuntimeSessionActor {
                 | CustodyWorkerStatus::RecoveryRetryAt(_),
             )) => Err(MezError::invalid_state(
                 "MMP recovery must finish before root actor registration",
+            )),
+            CustodyEvent::Observed(Ok(CustodyWorkerStatus::ExpiryAwaitingAdoption))
+                if matches!(owner.pending, Some(Pending::Expiry)) =>
+            {
+                owner
+                    .root
+                    .adopt_expiry(self.service.message_service_mut())
+                    .map(|_| {
+                        owner.pending = None;
+                        owner.wake = None;
+                        owner.failure = None;
+                        owner.expiry_retry_at = None;
+                    })
+            }
+            CustodyEvent::Observed(Ok(CustodyWorkerStatus::ExpiryRetryAt(at)))
+                if matches!(owner.pending, Some(Pending::Expiry)) =>
+            {
+                owner.wake = Some(Wake::Retry(at));
+                Ok(())
+            }
+            CustodyEvent::Observed(Ok(
+                CustodyWorkerStatus::ExpiryAwaitingAdoption | CustodyWorkerStatus::ExpiryRetryAt(_),
+            )) => Err(MezError::invalid_state(
+                "MMP expiry has no original actor continuation",
             )),
             CustodyEvent::Observed(Ok(CustodyWorkerStatus::NativeContinuityAwaitingAdoption))
                 if matches!(owner.pending, Some(Pending::NativeContinuity)) =>

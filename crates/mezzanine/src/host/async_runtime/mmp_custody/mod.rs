@@ -40,6 +40,7 @@ use crate::storage::mmp_custody::{CustodyStoreLimits, MmpCustodyStore};
 
 mod acknowledgement;
 mod checkpoint;
+mod expiry;
 mod native_continuity;
 mod native_input;
 mod payload_load;
@@ -94,6 +95,10 @@ pub(crate) enum CustodyWorkerStatus {
     NativeInputAwaitingAdoption,
     /// Original native input worker joined unsuccessfully and retains its plan.
     NativeInputRetryAt(Instant),
+    /// Original expiry commit and physical position await exact lower adoption.
+    ExpiryAwaitingAdoption,
+    /// Joined original expiry input/positive can retry after this deadline.
+    ExpiryRetryAt(Instant),
     /// Opening failed; no lower write was issued by this root.
     Unavailable,
 }
@@ -216,6 +221,17 @@ enum State {
         result: Result<Box<native_input::Written>>,
         retry_at: Instant,
     },
+    /// One exact expiry attempt owns the same exclusive original connection.
+    Expiring {
+        admission: expiry::Admission,
+        worker: JoinHandle<Result<expiry::Written>>,
+    },
+    /// Actual joined terminal disposition awaits original adoption or retry.
+    Expired {
+        admission: expiry::Admission,
+        result: Result<Box<expiry::Written>>,
+        retry_at: Instant,
+    },
     /// Bounded failed-open diagnostic; cannot imply any issued write was unsent.
     Unavailable(MezError),
 }
@@ -244,6 +260,9 @@ struct Inner {
     /// ACK-only physical gate/panic probe, independent of acceptance fixtures.
     #[cfg(test)]
     ack_probe: Option<Arc<acknowledgement::tests::Probe>>,
+    /// Expiry-only actual worker gate/loss control, independent of acceptance.
+    #[cfg(test)]
+    expiry_probe: Option<Arc<tests::Probe>>,
 }
 
 /// One session's owned storage lifecycle; observers may clone it safely.
@@ -352,6 +371,8 @@ impl MmpCustodyRoot {
             probe,
             #[cfg(test)]
             ack_probe,
+            #[cfg(test)]
+            expiry_probe: None,
         }))
     }
 
@@ -391,6 +412,11 @@ impl MmpCustodyRoot {
             }
             if matches!(&*state, State::WritingNativeInput { .. })
                 && native_input::poll_join(&mut state, cx).is_pending()
+            {
+                return Poll::Pending;
+            }
+            if matches!(&*state, State::Expiring { .. })
+                && expiry::poll_join(&mut state, cx).is_pending()
             {
                 return Poll::Pending;
             }
@@ -462,6 +488,7 @@ impl MmpCustodyRoot {
                 }
                 _ => None,
             },
+            State::Expired { .. } => expiry::failure(&state),
             State::Acknowledged { .. } => acknowledgement::failure(&state),
             State::Loaded { .. } => payload_load::failure(&state),
             State::Snapshotted {
@@ -857,6 +884,12 @@ impl Drop for Inner {
                         .spawn_blocking(move || drop((admission, result)))
                         .await;
                 }
+                State::Expiring { admission, worker } => {
+                    let result = worker.await;
+                    let _ = runtime
+                        .spawn_blocking(move || drop((admission, result)))
+                        .await;
+                }
                 State::Acknowledging { admission, worker } => {
                     let result = worker.await;
                     let _ = runtime
@@ -983,6 +1016,17 @@ fn status(state: &State) -> CustodyWorkerStatus {
                 CustodyWorkerStatus::NativeInputRetryAt(*retry_at)
             }
         }
+        State::Expiring { .. } => CustodyWorkerStatus::Running,
+        State::Expired {
+            result, retry_at, ..
+        } => match result.as_deref() {
+            Ok(expiry::Written {
+                outcome: mez_agent::messaging::MessageExpiryWriteOutcome::Committed(_),
+                anchor: Ok(_),
+                ..
+            }) => CustodyWorkerStatus::ExpiryAwaitingAdoption,
+            _ => CustodyWorkerStatus::ExpiryRetryAt(*retry_at),
+        },
         State::Unavailable(_) => CustodyWorkerStatus::Unavailable,
     }
 }

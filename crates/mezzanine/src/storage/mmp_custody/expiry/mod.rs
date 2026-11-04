@@ -5,7 +5,7 @@
 //! a retained kernel owner, checks source TTL and conflicting ACK/native facts
 //! in one immediate transaction, and preserves every non-target row around SQL
 //! effects. Bytes are descriptive; only the trusted callback can seal a lower
-//! positive. Inventory/fold/reconstruction and the eventual root/actor producer
+//! positive. Inventory/fold/reconstruction and the original root/actor producer
 //! remain responsible for publishing recovered terminal state, never a decoder.
 
 use super::{integrity::unaffected_rows_digest, ownership::OwnedCustodyStore, *};
@@ -22,6 +22,16 @@ pub(crate) struct ExpiryPlan {
     generation: u64,
 }
 
+impl ExpiryPlan {
+    /// Converts only a trusted idle root's already observed physical position.
+    pub(super) fn from_position(store_id: Vec<u8>, generation: u64) -> Self {
+        Self {
+            store_id,
+            generation,
+        }
+    }
+}
+
 /// This borrow cannot outlive the actual original kernel/store owner.
 pub(crate) struct PlannedExpiryStore<'borrow, 'owner> {
     owned: &'borrow mut OwnedCustodyStore<'owner>,
@@ -31,6 +41,7 @@ pub(crate) struct PlannedExpiryStore<'borrow, 'owner> {
 
 impl<'owner> OwnedCustodyStore<'owner> {
     /// Captures the original physical position off actor under this live fence.
+    #[cfg(test)]
     pub(crate) fn expiry_plan(&mut self) -> Result<ExpiryPlan> {
         self.revalidate()?;
         let store = self.store_mut();

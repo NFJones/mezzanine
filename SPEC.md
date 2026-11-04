@@ -16175,13 +16175,26 @@ expiry observations MUST survive a missing adoption or stale checkpoint with
 their original times and unreleased sender outcomes. Saved terminal/release bits
 alone MUST NOT create that evidence. Exact terminal slots MUST refuse competing
 positive ACK/native input while independent fanout slots remain settleable.
-The new journal boundary does not yet supply an actor maintenance producer,
-validated retirement, durable sender consumption/horizon, rollback-safe elapsed
-clock basis or reclaim. Guarded volatile cleanup and outcome consumption MUST
-remain withheld. Startup native probes MUST settle persistent canonical staging
-and preparation before a future producer can select expired slots. Normal
-activation MUST remain unavailable until the complete lifecycle and resource
-and ingress gates are qualified.
+The internal actor expiry producer MUST install its original continuation before
+issuing the root worker. That root MUST retain its first settled position, exact
+lower escrow and actual handle through observer cancellation, joined loss,
+backed-off retry and shutdown. A positive with a failed physical position read
+MUST stay owned while only that read is refreshed; adoption MUST follow its
+successful original recheck. Last-root retirement MUST drain the actual worker
+before releasing its physical owner or decoder escrow.
+
+A strict original TTL deadline MUST wake an otherwise idle actor and reopen its
+native scan before expiry selection. Startup native probes MUST settle persistent
+canonical staging and preparation first. An unsettled native scan, retry or
+application continuation MUST withhold expiry selection. Pre-issuance capacity
+refusal MAY cancel only a never-issued reservation and schedule bounded retry
+while unrelated ACK/admission work uses the idle lane. Issued terminal work MUST
+settle through its original root and actor continuation even during shutdown.
+
+Validated retirement, durable sender consumption/horizon, rollback-safe elapsed
+clock basis and reclaim remain unfinished. Guarded volatile cleanup and outcome
+consumption MUST remain withheld. Normal activation MUST remain unavailable
+until the complete lifecycle, resource and ingress gates are qualified.
 
 Native qualification MUST read the actual existing private active-session
 checkpoint for the same session and hydrate its transcripts while preserving

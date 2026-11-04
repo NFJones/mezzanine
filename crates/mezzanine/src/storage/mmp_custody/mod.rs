@@ -29,10 +29,6 @@ use crate::error::{MezError, Result};
 pub(crate) mod acceptance;
 pub(crate) mod acknowledgement;
 mod checkpoint;
-#[allow(
-    dead_code,
-    reason = "durable expiry producer root integration continues under e048f9a8"
-)]
 pub(crate) mod expiry;
 mod history;
 mod integrity;

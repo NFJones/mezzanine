@@ -12,6 +12,8 @@ use mez_agent::transcript::TranscriptContextEvent;
 
 const NATIVE_CRASH_ROOT: &str = "MEZ_TEST_CANONICAL_NATIVE_CRASH_ROOT";
 const NATIVE_PREPARATION_ROOT: &str = "MEZ_TEST_CANONICAL_NATIVE_PREPARATION_ROOT";
+/// Child-only control: accept a real finite TTL before preparing canonical input.
+pub(super) const EXPIRE_PREPARATION: &str = "MEZ_TEST_CANONICAL_EXPIRE_PREPARATION";
 const NATIVE_PARTIAL_STAGE_ROOT: &str = "MEZ_TEST_CANONICAL_NATIVE_PARTIAL_STAGE_ROOT";
 const NATIVE_COMPLETE_STAGE_ROOT: &str = "MEZ_TEST_CANONICAL_NATIVE_COMPLETE_STAGE_ROOT";
 
@@ -226,7 +228,7 @@ async fn canonical_native_process_crash_child() {
 /// creating a new task, resuming a provider or reconstructing a raw bearer.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn native_factory_crash_after_canonical_commit_dedups_before_actor_ack() {
-    assert_native_crash_recovery(NativeCrashPoint::Committed).await;
+    assert_native_crash_recovery(NativeCrashPoint::Committed, false).await;
 }
 
 /// Kernel/process loss after original p1 but before any native row byte must
@@ -234,7 +236,7 @@ async fn native_factory_crash_after_canonical_commit_dedups_before_actor_ack() {
 /// an envelope-cache load. No original actor/source/root destructor runs.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn native_factory_recovers_prepared_missing_row_without_reinjection_or_task() {
-    assert_native_crash_recovery(NativeCrashPoint::Prepared).await;
+    assert_native_crash_recovery(NativeCrashPoint::Prepared, false).await;
 }
 
 /// The test-only append failure sits at the real write boundary; this child
@@ -250,7 +252,7 @@ async fn canonical_native_preparation_crash_child() {
 
 /// Executes the actual subprocess/factory/actor pair at either side of the
 /// canonical append while retaining the same original scope and absence checks.
-async fn assert_native_crash_recovery(point: NativeCrashPoint) {
+async fn assert_native_crash_recovery(point: NativeCrashPoint, expire_preparation: bool) {
     let before_row = point != NativeCrashPoint::Committed;
     let partial = point == NativeCrashPoint::PartialStage;
     let directory = CrashDirectory::new();
@@ -273,6 +275,10 @@ async fn assert_native_crash_recovery(point: NativeCrashPoint) {
             NATIVE_COMPLETE_STAGE_ROOT,
         ),
     };
+    if expire_preparation {
+        assert!(point == NativeCrashPoint::Prepared);
+        child.env(EXPIRE_PREPARATION, "1");
+    }
     child
         .args(["--exact", entry, "--nocapture"])
         .env(variable, &directory.0)
@@ -286,6 +292,19 @@ async fn assert_native_crash_recovery(point: NativeCrashPoint) {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
+    if expire_preparation {
+        // This file schedules the fixture wait only; it supplies no disposition
+        // authority. The factory/actor must use the actual accepted TTL/history.
+        let deadline: u64 =
+            serde_json::from_slice(&fs::read(directory.0.join("expiry-deadline.json")).unwrap())
+                .unwrap();
+        let wait = deadline
+            .saturating_sub(crate::runtime::current_unix_millis())
+            .saturating_add(1);
+        assert!(wait <= 3001);
+        tokio::time::sleep(Duration::from_millis(wait)).await;
+        assert!(crate::runtime::current_unix_millis() > deadline);
+    }
     let expected: CrashExpectations =
         serde_json::from_slice(&fs::read(directory.0.join("crash-expectations.json")).unwrap())
             .unwrap();
@@ -372,6 +391,19 @@ async fn assert_native_crash_recovery(point: NativeCrashPoint) {
     .unwrap();
     handle.shutdown().await.unwrap();
     let mut exited = runner.await.unwrap();
+    if expire_preparation {
+        let db = rusqlite::Connection::open(&path).unwrap();
+        assert_eq!(
+            db.query_row(
+                "SELECT COUNT(*) FROM records WHERE key LIKE 't1:%'",
+                [],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
+            0,
+            "actual original p1 must finish canonical input and ACK before expiry selection"
+        );
+    }
     let settled_subscription = exited
         .service
         .message_service()
@@ -533,7 +565,7 @@ async fn native_private_match_accepts_empty_capabilities_and_rejects_external_or
 /// finish its original canonical image without task/provider reconstruction.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn native_factory_recovers_complete_unpublished_stage_without_new_task() {
-    assert_native_crash_recovery(NativeCrashPoint::CompleteStage).await;
+    assert_native_crash_recovery(NativeCrashPoint::CompleteStage, false).await;
 }
 
 /// An incomplete unpublished candidate has committed no canonical input. The
@@ -541,7 +573,7 @@ async fn native_factory_recovers_complete_unpublished_stage_without_new_task() {
 /// while every interrupted original task remains historical and unresumed.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn native_factory_aborts_partial_unpublished_stage_before_fresh_receive() {
-    assert_native_crash_recovery(NativeCrashPoint::PartialStage).await;
+    assert_native_crash_recovery(NativeCrashPoint::PartialStage, false).await;
 }
 
 /// The exact-filter child exits only after actual partial staged bytes remain
@@ -564,4 +596,13 @@ async fn canonical_native_complete_stage_crash_child() {
     };
     let _ = Fixture::build(true, Original::CrashNativeStage(root.into(), false)).await;
     panic!("complete-stage child must exit before cleanup");
+}
+
+/// The child exits with a real p1/canonical receipt and a finite accepted TTL.
+/// Restart begins only after that original TTL expired. The actual factory and
+/// actor must finish canonical recovery/ACK instead of terminalizing the slot,
+/// without reloading/reinjecting input or creating task/provider continuation.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn native_factory_recovers_prepared_input_before_expiry_after_process_crash() {
+    assert_native_crash_recovery(NativeCrashPoint::Prepared, true).await;
 }

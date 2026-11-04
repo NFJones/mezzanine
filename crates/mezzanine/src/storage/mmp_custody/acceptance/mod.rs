@@ -129,6 +129,11 @@ impl AcceptancePlan {
         )
     }
 
+    /// Converts only an idle settled root position into an original expiry plan.
+    pub(crate) fn for_expiry(&self) -> super::expiry::ExpiryPlan {
+        super::expiry::ExpiryPlan::from_position(self.store_id.clone(), self.generation)
+    }
+
     /// Binds an idle root's already-observed store position to its next occurrence.
     /// The root may call this only before issuance, with no unsettled store work.
     pub(crate) fn for_sequence(&self, sequence: u64) -> Self {

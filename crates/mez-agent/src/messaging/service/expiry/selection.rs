@@ -142,3 +142,53 @@ fn known_expiry(row: &QueuedEnvelope) -> Result<Option<u64>> {
     }
     Ok(first)
 }
+
+impl MessageService {
+    /// Returns the earliest strict original TTL boundary for an eligible slot.
+    /// Zero means an actual expiry witness already exists, not a renewed clock.
+    /// Protected or settled slots and unrepresentable strict deadlines create no
+    /// wake. This does not release outcomes or establish elapsed-clock policy.
+    pub fn next_storage_expiry_at_ms(&self, scope: &MessageStorageScope) -> Result<Option<u64>> {
+        if !self
+            .storage_custody
+            .as_ref()
+            .is_some_and(|p| p.scope == *scope)
+        {
+            return Err(changed());
+        }
+        let mut next = None;
+        for row in self.pending.values() {
+            let eligible = {
+                let acknowledged = row.acknowledged.lock().map_err(|_| changed())?;
+                let terminal = row.terminal.lock().map_err(|_| changed())?;
+                if acknowledged.len() != row.recipient_bindings.len()
+                    || terminal.len() != acknowledged.len()
+                {
+                    return Err(changed());
+                }
+                row.recipient_bindings
+                    .iter()
+                    .enumerate()
+                    .any(|(i, (id, _))| {
+                        !acknowledged[i]
+                            && terminal[i].is_none()
+                            && !self.acknowledgement_protects(row.sequence, id)
+                    })
+            };
+            if !eligible {
+                continue;
+            }
+            let at = if known_expiry(row)?.is_some() {
+                Some(0)
+            } else {
+                row.envelope
+                    .ttl_ms
+                    .and_then(|ttl| row.accepted_at_ms.saturating_add(ttl).checked_add(1))
+            };
+            if let Some(at) = at {
+                next = Some(next.map_or(at, |prior: u64| prior.min(at)));
+            }
+        }
+        Ok(next)
+    }
+}
