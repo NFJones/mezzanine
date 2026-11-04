@@ -13,6 +13,8 @@ struct Store {
     next_sequence: u64,
     acknowledgements_override: Option<Vec<(u32, u64)>>,
     swallow_row_error: bool,
+    terminal_expiries: Vec<(u32, u64)>,
+    terminal_consumptions: Vec<u32>,
 }
 impl MessageAcceptanceStore for Store {
     fn commit(
@@ -40,8 +42,9 @@ impl MessageStorageRecoveryStore for Store {
                     source_sha256: [sequence as u8; 32],
                     expired_receipt: false,
                     expiry_observed_at_ms: None,
-                    terminal_expiries: Vec::new(),
+                    terminal_expiries: self.terminal_expiries.clone(),
                     terminal_releases: Vec::new(),
+                    terminal_consumptions: self.terminal_consumptions.clone(),
                     horizon_observed_at_ms: None,
                 },
                 self.acknowledgements_override.clone().unwrap_or_else(|| {
@@ -69,6 +72,66 @@ impl MessageStorageRecoveryStore for Store {
             }
         }
         Ok(self.next_sequence)
+    }
+}
+
+/// Trusted-port consumption settles only actual original terminal slots and
+/// supplies no elapsed-horizon clock. Product controls separately qualify real
+/// h1/native evidence; this fixture tests the lower reconstruction contract.
+#[test]
+fn recovery_sender_consumption_does_not_mint_horizon_observation() {
+    let (mut store, _) = originals();
+    store.terminal_expiries = vec![(0, 111)];
+    store.terminal_consumptions = vec![0];
+    let recovered = MessageService::recover_storage_custody(
+        &MessageStorageScope::default(),
+        Default::default(),
+        1000,
+        1024 * 1024,
+        &mut store,
+    )
+    .unwrap();
+    assert!(recovered.pending.is_empty());
+    let row = &recovered.queued_by_sequence[&2];
+    assert_eq!(*row.horizon_observed_at_ms.lock().unwrap(), None);
+    assert_eq!(row.acknowledged.lock().unwrap()[0], false);
+    let terminal = row.terminal.lock().unwrap()[0].unwrap();
+    assert!(terminal.released);
+    assert_eq!(terminal.observed_at_ms, 111);
+}
+
+/// Duplicate or out-of-range consumed slots and consumption without an actual
+/// terminal before-image refuse the entire candidate, freeing its decoder.
+#[test]
+fn recovery_sender_consumption_refuses_duplicate_or_missing_terminal_slots() {
+    for (terminals, consumed) in [
+        (vec![], vec![0]),
+        (vec![(0, 111)], vec![0, 0]),
+        (vec![(0, 111)], vec![1]),
+    ] {
+        let (mut store, _) = originals();
+        store.terminal_expiries = terminals;
+        store.terminal_consumptions = consumed;
+        assert!(
+            MessageService::recover_storage_custody(
+                &MessageStorageScope::default(),
+                Default::default(),
+                1000,
+                1024 * 1024,
+                &mut store
+            )
+            .is_err()
+        );
+        assert_eq!(
+            store
+                .observer
+                .as_ref()
+                .unwrap()
+                .snapshot()
+                .unwrap()
+                .reserved_payload_bytes,
+            0
+        );
     }
 }
 

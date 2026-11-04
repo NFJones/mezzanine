@@ -1,12 +1,14 @@
-//! Source-owned terminal observation and horizon-release before publication.
+//! Source-owned terminal observation, horizon release and sender consumption.
 //!
 //! One accepted source and at most64 exact original slots share one reservation,
 //! nonce, worker escrow and trusted-store positive. Observation freezes first
 //! strict expiry; horizon release freezes actual terminal before-images and a
-//! release clock. Neither changes a live slot before original adoption. Unknown
+//! release clock. Consumption owns one actual canonical proof and first terminal
+//! before-image, without horizon-clock authority. No live slot changes before
+//! original adoption. Unknown
 //! writes and joined loss retain immutable data and decoder/source metadata
 //! through the final owner, independently of pending/replay cleanup. Generic
-//! frames confer no source, sender, release or task authority. Canonical sender
+//! frames confer no source, sender, release or task authority. Live actor/runtime
 //! handoff, validated retirement and elapsed-clock policy remain product gates.
 
 use std::io::{self, Write};
@@ -14,6 +16,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::*;
 
+mod consumption;
 mod horizon;
 mod ownership;
 mod selection;
@@ -25,14 +28,15 @@ const HEADER_BYTES: usize = 60;
 /// Bounds retained control data and future encoding independently of payload.
 const MAX_METADATA: usize = 8 * 1024 * 1024;
 
-/// The terminal mutation frozen before issuance; no sender-consumption variant
-/// exists until the product can qualify its actual canonical handoff.
+/// The exact terminal mutation frozen before issuance and original adoption.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MessageTerminalKind {
     /// Publish the first strict original TTL observation into unsettled slots.
     ExpiryObservation,
     /// Release actual terminal outcomes after their finite handoff horizon.
     HorizonRelease,
+    /// Consume one original outcome only after actual canonical sender handoff.
+    SenderConsumption,
 }
 
 /// One actual source/reservation identity, never reconstructed from framing.
@@ -45,6 +49,7 @@ struct Identity {
     kind: MessageTerminalKind,
     indices: Vec<u32>,
     before: Vec<Option<MessageDeliveryTerminalSnapshot>>,
+    handoff: Option<MessageTerminalHandoffCommit>,
     metadata_bytes: usize,
     decode_payload_bytes: usize,
     published: AtomicBool,
@@ -138,6 +143,10 @@ pub trait MessageTerminalJoin {
 }
 
 impl MessageTerminalTicket {
+    /// Reports the selected original mutation without granting another write.
+    pub fn kind(&self) -> MessageTerminalKind {
+        self.identity.kind
+    }
     /// Returns the complete reserved logical metadata and encoding charge.
     pub fn metadata_bytes(&self) -> usize {
         self.identity.metadata_bytes
@@ -171,6 +180,11 @@ impl MessageTerminalWrite {
     /// Returns the immutable operation kind selected by this actual owner.
     pub fn kind(&self) -> MessageTerminalKind {
         self.identity.kind
+    }
+    /// Borrows actual opaque canonical proof only for sender consumption.
+    /// Framing or a descriptive record cannot construct this proof.
+    pub fn canonical_handoff(&self) -> Option<&MessageTerminalHandoffCommit> {
+        self.identity.handoff.as_ref()
     }
     /// Borrows original terminal before-images for horizon release. Observation
     /// writes have none; descriptive entries alone cannot grant release rights.
@@ -225,10 +239,14 @@ impl MessageTerminalWrite {
     }
     /// Returns the fixed bounded physical framing size; no body is encoded.
     pub fn encoded_bytes(&self) -> usize {
+        if self.kind() == MessageTerminalKind::SenderConsumption {
+            return consumption::ENCODED_BYTES;
+        }
         HEADER_BYTES
             + match self.kind() {
                 MessageTerminalKind::ExpiryObservation => 4,
                 MessageTerminalKind::HorizonRelease => 13,
+                MessageTerminalKind::SenderConsumption => 0,
             } * self.identity.indices.len()
     }
     /// Writes bodyless version1 expiry or horizon data. The bytes are descriptive and
@@ -237,6 +255,7 @@ impl MessageTerminalWrite {
         writer.write_all(match self.kind() {
             MessageTerminalKind::ExpiryObservation => b"MMPEXP01",
             MessageTerminalKind::HorizonRelease => b"MMPREL01",
+            MessageTerminalKind::SenderConsumption => return self.write_consumption_record(writer),
         })?;
         writer.write_all(&self.sequence().to_le_bytes())?;
         writer.write_all(&self.observed_at_ms().to_le_bytes())?;

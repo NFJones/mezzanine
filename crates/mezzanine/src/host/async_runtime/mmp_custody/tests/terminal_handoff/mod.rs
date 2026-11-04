@@ -11,6 +11,7 @@ use mez_agent::transcript::{
 };
 
 mod canonical;
+mod consumption;
 mod crash;
 mod failures;
 

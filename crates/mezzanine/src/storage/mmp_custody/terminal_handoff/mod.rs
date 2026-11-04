@@ -25,6 +25,7 @@ use std::sync::{Arc, OnceLock};
 
 mod journal;
 mod projection;
+pub(in crate::storage::mmp_custody) use journal::HandoffConsumption;
 use journal::{HandoffJournal, Source};
 pub(crate) use projection::TerminalHandoffProjection;
 

@@ -54,6 +54,15 @@ pub(crate) struct FoldedTerminalExpiry {
     pub observed_at_ms: u64,
     /// Actual qualified release observation, absent until its journal exists.
     pub release_observed_at_ms: Option<u64>,
+    /// Actual canonical-proof consumption, with no horizon clock authority.
+    pub sender_consumed: bool,
+}
+
+impl FoldedTerminalExpiry {
+    /// A positive release requires either actual r1 or actual canonical s1.
+    pub(crate) fn released(&self) -> bool {
+        self.release_observed_at_ms.is_some() || self.sender_consumed
+    }
 }
 
 /// Complete descriptive store inventory and order-independent ACK fold.
@@ -184,6 +193,7 @@ impl MmpCustodyStore {
                 binding_index,
                 observed_at_ms,
                 release_observed_at_ms: None,
+                sender_consumed: false,
             },
         ));
         terminal_expiries.sort_unstable();
@@ -204,6 +214,22 @@ impl MmpCustodyStore {
                 }
                 terminal.release_observed_at_ms = Some(release.observed_at_ms);
             }
+        }
+        for key in &inventory.consumption_keys {
+            let consumed = self.read_stored_consumption_in_snapshot(transaction, key, limits)?;
+            let slot = (consumed.sequence, consumed.binding_index);
+            let position = terminal_expiries
+                .binary_search_by_key(&slot, |value| (value.sequence, value.binding_index))
+                .map_err(|_| {
+                    MezError::invalid_state("MMP consumption lacks original terminal slot")
+                })?;
+            let terminal = &mut terminal_expiries[position];
+            if terminal.released() || terminal.observed_at_ms != consumed.terminal.observed_at_ms {
+                return Err(MezError::invalid_state(
+                    "MMP consumption conflicts with original history",
+                ));
+            }
+            terminal.sender_consumed = true;
         }
         let mut folded_acknowledgements = Vec::new();
         folded_acknowledgements

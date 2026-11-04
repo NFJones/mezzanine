@@ -169,7 +169,7 @@ impl MmpCustodyStore {
                         || found.ok().is_none_or(|i| {
                             let actual = &history.terminal_expiries[i];
                             actual.observed_at_ms != terminal.observed_at_ms
-                                || (terminal.released && actual.release_observed_at_ms.is_none())
+                                || (terminal.released && !actual.released())
                         })
                     {
                         return Err(invalid("terminal outcome needs durable recovery evidence"));

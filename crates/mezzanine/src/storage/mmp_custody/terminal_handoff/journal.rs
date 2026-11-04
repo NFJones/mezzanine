@@ -6,6 +6,7 @@
 //! qualify this descriptive evidence before it can authorize a storage result.
 
 use super::*;
+use mez_agent::messaging::MessageDeliveryTerminalSnapshot;
 use mez_agent::messaging::{DeliveryTerminalReason, MessageAcceptanceDecodeLimits};
 use serde::{Deserialize, Serialize};
 
@@ -19,6 +20,15 @@ pub(super) struct Source {
     index: u32,
     reason: DeliveryTerminalReason,
     observed_at_ms: u64,
+}
+
+/// Descriptive s1 link to an actual original canonical journal, never proof.
+pub(in crate::storage::mmp_custody) struct HandoffConsumption {
+    pub sequence: u64,
+    pub source_sha256: [u8; 32],
+    pub binding_index: u32,
+    pub terminal: MessageDeliveryTerminalSnapshot,
+    pub canonical: MessageTerminalHandoffRecord,
 }
 impl Source {
     /// Freezes the exact actual original terminal, excluding variable payloads.
@@ -105,6 +115,42 @@ impl HandoffJournal {
 }
 
 impl MmpCustodyStore {
+    /// Requalifies s1's complete original h1 relation in the same source/ACK
+    /// snapshot. A decoded reference never replaces the writer's opaque proof.
+    pub(in crate::storage::mmp_custody) fn qualify_handoff_consumption(
+        &self,
+        transaction: &rusqlite::Transaction<'_>,
+        value: &HandoffConsumption,
+        limits: MessageAcceptanceDecodeLimits,
+    ) -> Result<()> {
+        let source = Source {
+            store_id: value.canonical.store_id,
+            source_sha256: value.source_sha256,
+            sequence: value.sequence,
+            index: value.binding_index,
+            reason: value.terminal.reason,
+            observed_at_ms: value.terminal.observed_at_ms,
+        };
+        let occurrence = source.occurrence();
+        if value.terminal.released
+            || occurrence != value.canonical.occurrence
+            || read_record(transaction, &key_for("u1", &occurrence))?.is_some()
+        {
+            return Err(invalid());
+        }
+        let actual = self
+            .read_handoff_in_snapshot(transaction, &key_for("h1", &occurrence), limits)?
+            .ok_or_else(invalid)?;
+        let expected = actual.record(false);
+        if actual.source != source
+            || value.canonical.archive_sequence != expected.archive_sequence
+            || value.canonical.canonical_sha256 != expected.canonical_sha256
+            || value.canonical.store_id != expected.store_id
+        {
+            return Err(invalid());
+        }
+        Ok(())
+    }
     /// Reads checked bounded metadata; no returned DTO grants a handoff token.
     pub(super) fn read_handoff_metadata(
         &self,
@@ -205,6 +251,7 @@ impl MmpCustodyStore {
         transaction: &rusqlite::Transaction<'_>,
         source: &Source,
     ) -> Result<()> {
+        self.ensure_slot_not_consumed_in_snapshot(transaction, source.sequence, source.index)?;
         self.visit_release_metadata(transaction, |_, release| {
             if release.sequence == source.sequence
                 && release

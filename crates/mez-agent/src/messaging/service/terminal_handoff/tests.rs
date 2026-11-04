@@ -3,6 +3,7 @@
 
 use super::*;
 use std::sync::atomic::Ordering;
+mod consumption;
 
 struct Store;
 impl MessageAcceptanceStore for Store {
@@ -45,9 +46,17 @@ struct Scene {
 }
 impl Scene {
     fn new(native: bool, guarded: bool) -> Self {
+        Self::with_recipients(native, guarded, 1)
+    }
+    /// Uses a frozen real group only for fanout; ordinary fixture callers keep
+    /// their original unicast source and registration ownership checks.
+    fn with_recipients(native: bool, guarded: bool, count: usize) -> Self {
         let mut service = MessageService::default();
         let sender = service.register_agent(None, None, "sender", vec![]);
-        let recipient = service.register_agent(None, None, "recipient", vec![]);
+        let recipient = service.register_agent(None, None, "recipient", vec!["outcomes".into()]);
+        for _ in 1..count {
+            service.register_agent(None, None, "another recipient", vec!["outcomes".into()]);
+        }
         let registration = service
             .capture_sender_registration(&sender.agent_id)
             .unwrap();
@@ -80,7 +89,11 @@ impl Scene {
             message_type: "send".into(),
             time: "original".into(),
             sender: sender.clone(),
-            recipient: Recipient::Agent(recipient.agent_id.clone()),
+            recipient: if count == 1 {
+                Recipient::Agent(recipient.agent_id.clone())
+            } else {
+                Recipient::Group("outcomes".into())
+            },
             correlation_id: None,
             ttl_ms: Some(5),
             content_type: "text/plain".into(),

@@ -48,6 +48,8 @@ pub(crate) struct CustodyInventory {
     pub expiry_keys: Vec<String>,
     /// Original terminal horizon release references, never sender authority.
     pub release_keys: Vec<String>,
+    /// Original canonical-proof-qualified consumed outcome references.
+    pub consumption_keys: Vec<String>,
     /// Verified native registration observations, never live endpoint authority.
     pub native_continuity_keys: Vec<String>,
     /// Fully cleaned abort sequences, never accepted messages.
@@ -117,6 +119,7 @@ enum Key<'a> {
     Acknowledgement(&'a str),
     Expiry(&'a str),
     Release(&'a str),
+    Consumption(&'a str),
     NativeContinuity(&'a str),
     NativeInput(&'a str),
     TerminalHandoff(&'a str),
@@ -241,6 +244,7 @@ impl MmpCustodyStore {
             acknowledgement_keys: Vec::new(),
             expiry_keys: Vec::new(),
             release_keys: Vec::new(),
+            consumption_keys: Vec::new(),
             native_continuity_keys: Vec::new(),
             aborted_sequences: Vec::new(),
             retained_metadata: 0,
@@ -280,6 +284,25 @@ impl MmpCustodyStore {
                             .try_reserve(1)
                             .map_err(|_| invalid("release inventory capacity"))?;
                         inventory.release_keys.push(key.to_owned());
+                    }
+                    Key::Consumption(key) => {
+                        if let Some(previous) = group.take() {
+                            self.finish_inventory_group(
+                                transaction,
+                                previous,
+                                limits,
+                                &mut metadata,
+                                &mut inventory,
+                                pending,
+                            )?;
+                        }
+                        self.read_stored_consumption_in_snapshot(transaction, key, limits)?;
+                        charge(&mut metadata, ACK_CHARGE)?;
+                        inventory
+                            .consumption_keys
+                            .try_reserve(1)
+                            .map_err(|_| invalid("release inventory capacity"))?;
+                        inventory.consumption_keys.push(key.to_owned());
                     }
                     Key::Expiry(key) => {
                         if let Some(previous) = group.take() {
@@ -401,6 +424,7 @@ impl MmpCustodyStore {
                             Key::Acknowledgement(_)
                             | Key::Expiry(_)
                             | Key::Release(_)
+                            | Key::Consumption(_)
                             | Key::NativeContinuity(_)
                             | Key::NativeInput(_)
                             | Key::TerminalHandoff(_) => {
@@ -621,6 +645,14 @@ fn parse_key(key: &str) -> Result<Key<'_>> {
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
     {
         return Ok(Key::TerminalHandoff(key));
+    }
+    if let Some(digest) = key.strip_prefix("s1:")
+        && digest.len() == 64
+        && digest
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    {
+        return Ok(Key::Consumption(key));
     }
     if let Some(digest) = key.strip_prefix("n1:")
         && digest.len() == 64

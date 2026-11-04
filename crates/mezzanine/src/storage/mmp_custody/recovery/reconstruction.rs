@@ -255,6 +255,16 @@ impl<'a> Port<'a> {
                                 .map(|value| (value.binding_index, value.observed_at_ms))
                                 .collect()
                         },
+                        terminal_consumptions: {
+                            let values = &evidence.history.terminal_expiries;
+                            let start = values.partition_point(|value| value.sequence < sequence);
+                            let end = values.partition_point(|value| value.sequence <= sequence);
+                            values[start..end]
+                                .iter()
+                                .filter(|value| value.sender_consumed)
+                                .map(|value| value.binding_index)
+                                .collect()
+                        },
                     },
                     acks[start..end]
                         .iter()

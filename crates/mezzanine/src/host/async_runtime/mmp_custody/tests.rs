@@ -18,6 +18,8 @@ pub(super) struct Probe {
     attempts: AtomicUsize,
     /// One-shot loss after real marker completion but before the root gets it.
     panic_after_commit: AtomicBool,
+    /// Isolated crash child exits only after the selected real worker commit.
+    exit_after_commit: AtomicBool,
     /// One-shot actual loss after durable uncommitted cleanup but before receipt.
     panic_after_refusal: AtomicBool,
     /// Optional generated-directory relocation after actual commit.
@@ -31,6 +33,7 @@ impl Probe {
             gate: (Mutex::new(released), std::sync::Condvar::new()),
             attempts: AtomicUsize::new(0),
             panic_after_commit: AtomicBool::new(false),
+            exit_after_commit: AtomicBool::new(false),
             panic_after_refusal: AtomicBool::new(false),
             relocate_after_commit: Mutex::new(None),
         })
@@ -71,6 +74,9 @@ impl Probe {
     }
     /// Injects actual loss after a complete source read, before root publication.
     pub(super) fn after_payload_read(&self) {
+        if self.exit_after_commit.load(Ordering::SeqCst) {
+            std::process::exit(0);
+        }
         self.relocate_if_requested();
         if self.panic_after_commit.swap(false, Ordering::SeqCst) {
             panic!("injected loss after actual custody payload read");

@@ -142,6 +142,9 @@ impl MmpCustodyStore {
         limits: MessageAcceptanceDecodeLimits,
     ) -> Result<()> {
         let mut found = vec![false; frame.entries.len()];
+        for (index, _) in &frame.entries {
+            self.ensure_slot_not_consumed_in_snapshot(transaction, frame.sequence, *index)?;
+        }
         self.visit_expiry_metadata(transaction, |key, expiry| {
             if expiry.sequence != frame.sequence {
                 return Ok(());

@@ -16266,6 +16266,26 @@ archive observation through lost worker replies, and retain all issued ownership
 through Stop and actual join. Actor integration MUST require its exact original
 continuation; an unmatched canonical handoff status MUST refuse adoption.
 
+Original-sender consumption MUST use the same source-owned terminal lane and
+require an opaque canonical handoff commit for that exact source and terminal
+before-image. Its reservation MUST retain the canonical proof through issuance,
+uncertainty, actual join/retry and adoption. The fixed 157-byte version1 `s1`
+frame MUST bind original allocation/source/slot/first terminal reason and clock
+to the exact h1 occurrence and canonical row position/digest. The original fenced
+port MUST requalify actual h1/source/t1/native/ACK evidence and exclude conflicting
+r1 or duplicate s1 releases in the same transaction. All non-target rows MUST
+survive SQL effects; retries MUST reconcile the original bytes and first plan.
+Stop MUST allow this accepted canonical fact's consumption drain.
+
+s1 commit MUST precede live release. Publication MUST release only that original
+outcome, preserving its first reason/time and all ACK/cursor state. Consumption
+MUST NOT create a horizon observation or qualify another slot's horizon. Cold
+fold/reconstruction MUST distinguish actual canonical consumption from r1 clocks,
+reject overlapping releases, and require actual s1/h1 evidence for saved consumed
+bits. A process crash after s1 but before adoption MUST recover settlement from
+original journals without a second canonical row, orphan receipt or revived
+sender, raw bearer, task or provider. Generic decoding MUST NOT mint those rights.
+
 Validated retirement, live original-sender handoff/consumption and reclaim
 remain unfinished. An in-memory runtime hint alone MUST NOT authorize durable
 sender consumption. Guarded volatile cleanup and direct outcome consumption

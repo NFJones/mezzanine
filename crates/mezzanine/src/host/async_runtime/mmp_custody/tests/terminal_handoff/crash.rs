@@ -36,15 +36,112 @@ async fn terminal_handoff_process_crash_child() {
         .unwrap();
     drop(checkpoint);
     drop(lease);
-    Arc::get_mut(&mut scene.root.0).unwrap().handoff_crash_after =
-        Some(if std::env::var(CHILD_PHASE).unwrap() == "u1" {
+    let phase = std::env::var(CHILD_PHASE).unwrap();
+    Arc::get_mut(&mut scene.root.0).unwrap().handoff_crash_after = if phase == "s1" {
+        None
+    } else {
+        Some(if phase == "u1" {
             HandoffCrashPoint::Preparation
         } else {
             HandoffCrashPoint::Canonical
-        });
+        })
+    };
     scene.start();
+    if phase == "s1" {
+        assert_eq!(
+            scene.root.observe().await.unwrap(),
+            CustodyWorkerStatus::TerminalHandoffAwaitingAdoption
+        );
+        let proof = scene
+            .root
+            .adopt_terminal_handoff(&scene.service)
+            .unwrap()
+            .unwrap();
+        let probe = Probe::new(true);
+        probe.exit_after_commit.store(true, Ordering::SeqCst);
+        Arc::get_mut(&mut scene.root.0).unwrap().terminal_probe = Some(probe);
+        let ticket = scene
+            .service
+            .prepare_storage_sender_consumption(scene.root.storage_scope(), &proof, usize::MAX)
+            .unwrap();
+        scene
+            .root
+            .start_terminal(&mut scene.service, &ticket)
+            .unwrap();
+    }
     let _ = scene.root.observe().await;
     panic!("actual worker must terminate process before returning");
+}
+
+/// A real s1 commit before live adoption survives process death. The earlier
+/// checkpoint still says unreleased, so only original source/h1/s1 qualification
+/// can reconstruct settlement. It adds no horizon clock, ACK, live sender/task,
+/// raw bearer or second canonical row, and leaves no orphan handoff receipt.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn sender_consumption_root_recovers_s1_after_process_crash_before_adoption() {
+    let fixture = Fixture::new(true);
+    let output = tokio::time::timeout(Duration::from_secs(60), tokio::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "host::async_runtime::mmp_custody::tests::terminal_handoff::crash::terminal_handoff_process_crash_child", "--quiet"])
+        .env(CHILD_PATH, &fixture.path).env(CHILD_PHASE, "s1").kill_on_drop(true).output()).await.unwrap().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let count: i64 = fixture
+        .connection()
+        .query_row(
+            "SELECT count(*) FROM records WHERE key LIKE 's1:%'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(count, 1);
+    let checkpoint = serde_json::from_slice(
+        &std::fs::read(fixture.path.join("handoff-checkpoint.json")).unwrap(),
+    )
+    .unwrap();
+    let root = MmpCustodyRoot::recover(
+        fixture.path.clone(),
+        "original-session".into(),
+        Default::default(),
+        Handle::current(),
+        CustodyRecoveryRequest {
+            checkpoint: Some(checkpoint),
+            limits: Default::default(),
+            retention_messages: 16,
+            retention_bytes: 4 * 1024 * 1024,
+        },
+    );
+    let observed = root.observe().await.unwrap();
+    assert_eq!(
+        observed,
+        CustodyWorkerStatus::RecoveryAwaitingAdoption,
+        "{:?}",
+        root.failure().unwrap()
+    );
+    let mut service = root.adopt_recovery().unwrap().into_service();
+    service
+        .require_native_continuity(root.storage_scope())
+        .unwrap();
+    assert_eq!(
+        service.storage_usage().unwrap().unwrap().pending_messages,
+        0
+    );
+    assert!(service.discover_agents().is_empty());
+    assert!(
+        service
+            .next_terminal_handoff_lookup(None)
+            .unwrap()
+            .is_none()
+    );
+    let transcript = AgentTranscriptStore::new(fixture.path.join("canonical"));
+    assert_eq!(transcript.inspect("native-sender").unwrap().len(), 2);
+    assert!(
+        !transcript
+            .has_unsettled_append_receipts("native-sender")
+            .unwrap()
+    );
 }
 
 /// Both crash boundaries leave the original terminal obligation pending. Cold

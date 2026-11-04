@@ -113,6 +113,10 @@ impl MessageTerminalHandoffCommit {
 }
 
 impl MessageTerminalHandoffAnchor {
+    /// Shares only the actual accepted allocation with the common terminal lane.
+    pub(super) fn original_row(&self) -> &Arc<QueuedEnvelope> {
+        &self.0.row
+    }
     /// Requires the actual live storage scope, not equal source/session labels.
     pub fn belongs_to(&self, scope: &MessageStorageScope) -> bool {
         self.0.scope == *scope

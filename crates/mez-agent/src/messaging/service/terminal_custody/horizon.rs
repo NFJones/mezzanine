@@ -74,6 +74,7 @@ impl MessageService {
                 digest: row.envelope.storage_digest(scope)?,
                 observed_at_ms,
                 kind: MessageTerminalKind::HorizonRelease,
+                handoff: None,
                 indices,
                 before,
                 metadata_bytes: bytes,

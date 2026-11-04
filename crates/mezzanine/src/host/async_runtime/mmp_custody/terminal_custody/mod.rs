@@ -31,8 +31,9 @@ pub(super) struct Written {
 }
 
 impl MmpCustodyRoot {
-    /// Issues one original reservation only after securing the idle root. Busy
-    /// or stopping refusal leaves lower issuance untouched and cancellable.
+    /// Issues only after securing the idle root. Busy or stopped maintenance
+    /// leaves lower issuance untouched. Canonical-proof consumption may finish
+    /// its already accepted fact through Stop before the actor retires.
     pub fn start_terminal(
         &self,
         service: &mut MessageService,
@@ -44,7 +45,9 @@ impl MmpCustodyRoot {
                 "MMP terminal work requires an idle lane",
             ));
         };
-        if self.0.stopping.load(Ordering::Acquire) {
+        if self.0.stopping.load(Ordering::Acquire)
+            && ticket.kind() != mez_agent::messaging::MessageTerminalKind::SenderConsumption
+        {
             return Err(ownership_error());
         }
         let plan = opened.anchor.for_terminal();

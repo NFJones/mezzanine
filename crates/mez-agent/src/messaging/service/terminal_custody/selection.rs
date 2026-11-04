@@ -69,6 +69,7 @@ impl MessageService {
                 digest: row.envelope.storage_digest(scope)?,
                 observed_at_ms,
                 kind: MessageTerminalKind::ExpiryObservation,
+                handoff: None,
                 before: vec![None; indices.len()],
                 indices,
                 metadata_bytes: bytes,

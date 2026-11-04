@@ -15,6 +15,7 @@ use mez_agent::messaging::{
     MessageTerminalWrite,
 };
 
+mod consumption;
 mod read;
 mod release;
 
@@ -76,6 +77,7 @@ impl MessageTerminalStore for PlannedTerminalStore<'_, '_> {
         match write.kind() {
             MessageTerminalKind::ExpiryObservation => self.commit_expiry_record(write),
             MessageTerminalKind::HorizonRelease => self.commit_release_record(write),
+            MessageTerminalKind::SenderConsumption => self.commit_consumption_record(write),
         }
         .map_err(|error| MessageError::invalid_state(format!("MMP terminal storage: {error}")))
     }

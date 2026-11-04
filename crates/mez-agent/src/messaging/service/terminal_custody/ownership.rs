@@ -115,7 +115,7 @@ impl MessageService {
                         released: false,
                     });
                 }
-                MessageTerminalKind::HorizonRelease => {
+                MessageTerminalKind::HorizonRelease | MessageTerminalKind::SenderConsumption => {
                     // Every exact Some before-image was validated above.
                     if let Some(value) = terminal[*index as usize].as_mut() {
                         value.released = true;

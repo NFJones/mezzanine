@@ -34,6 +34,7 @@ impl MessageTerminalStore for Store {
             match write.kind() {
                 MessageTerminalKind::ExpiryObservation => b"MMPEXP01",
                 MessageTerminalKind::HorizonRelease => b"MMPREL01",
+                MessageTerminalKind::SenderConsumption => b"MMPCON01",
             }
         );
         if let Some(original) = &self.original {

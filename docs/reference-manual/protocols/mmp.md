@@ -459,8 +459,16 @@ can finish u1 or retire an orphan h1 image without a live sender, task or anothe
 archive position. Historical proof after legitimate archive cleanup grants no
 fresh target or archive observation. The root retains actual positives and I/O
 ownership through lost replies, retry and Stop. These internal journal/root
-boundaries still require separate durable consumption and actor integration
-before a live sender outcome can be durably handed off and consumed.
+boundaries remain unavailable to normal durable ingress until their live
+actor/runtime ownership and continuation are connected.
+The internal terminal lane now also supports separate canonical-proof-only s1
+consumption. Its 157-byte frame binds the original first terminal and source to
+the actual h1 row/digest. Commit and original adoption precede release; neither
+changes ACKs, cursors, first clocks or another recipient's horizon. Cold recovery
+distinguishes consumed slots from actual r1 horizon observations and checks the
+original h1/source/t1/ACK evidence. Issued consumption can drain through Stop and
+exact retry. Live actor/runtime ownership, preflight and continuation still need
+to be connected before normal durable mode can use this complete handoff path.
 Validated owner retirement, actual original-sender canonical handoff, rollback-
 safe elapsed/reboot clocks and reclamation remain unfinished. Current horizon
 thresholds are wall-clock qualification only. These internal operation bounds

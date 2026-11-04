@@ -30,6 +30,9 @@ pub struct MessageStorageRecoveredRecord {
     pub terminal_expiries: Vec<(u32, u64)>,
     /// Exact terminal slots with actual qualified horizon-release evidence.
     pub terminal_releases: Vec<u32>,
+    /// Exact terminal slots with actual canonical sender-consumption evidence.
+    /// These release only their original outcomes and convey no horizon clock.
+    pub terminal_consumptions: Vec<u32>,
     /// Maximum qualified original horizon observation, not a new wall clock.
     pub horizon_observed_at_ms: Option<u64>,
 }
@@ -293,6 +296,16 @@ impl MessageStorageRecovery {
                     clock.saturating_sub(value.observed_at_ms) < MESSAGE_TERMINAL_HANDOFF_MS
                 })
             {
+                return Err(unavailable());
+            }
+            value.released = true;
+        }
+        for index in &record.terminal_consumptions {
+            let value = terminal
+                .get_mut(*index as usize)
+                .and_then(Option::as_mut)
+                .ok_or_else(unavailable)?;
+            if value.released {
                 return Err(unavailable());
             }
             value.released = true;
