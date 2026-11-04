@@ -61,6 +61,41 @@ fn exact_native_journal_completion_marks_only_actual_current_binding() {
     assert_eq!(refreshed.write().snapshot(), &snapshot);
 }
 
+/// Enabling guarded admission must invalidate an earlier unguarded completion,
+/// whether its worker has already joined or returns afterward. Only a freshly
+/// captured guarded publication can open the barrier for the same native tuple.
+#[test]
+fn guarded_native_barrier_requires_a_guarded_capture_even_for_the_same_binding() {
+    for already_joined in [false, true] {
+        let (mut service, scope, target, _, _) = scene();
+        let request = service
+            .prepare_native_continuity(&scope, &target.agent_id)
+            .unwrap();
+        assert!(!request.write().snapshot().admission_guarded);
+        let verified = request.write().persist(&mut Store).unwrap();
+        let pending = if already_joined {
+            assert!(request.finish(&mut service, verified).unwrap());
+            None
+        } else {
+            Some((request, verified))
+        };
+        service.require_native_continuity(&scope).unwrap();
+        if let Some((request, verified)) = pending {
+            assert!(!request.finish(&mut service, verified).unwrap());
+        }
+        assert!(!service.native_continuity_is_recorded(&target.agent_id));
+        assert_eq!(service.pending_native_continuity(), Some(&target.agent_id));
+        let guarded = service
+            .prepare_native_continuity(&scope, &target.agent_id)
+            .unwrap();
+        assert!(guarded.write().snapshot().admission_guarded);
+        let verified = guarded.write().persist(&mut Store).unwrap();
+        assert!(guarded.finish(&mut service, verified).unwrap());
+        service.require_native_continuity(&scope).unwrap();
+        assert!(service.native_continuity_is_recorded(&target.agent_id));
+    }
+}
+
 /// Identical public data from another capture cannot substitute for this exact
 /// request. The original completion remains usable by its actual input owner.
 #[test]
@@ -152,7 +187,10 @@ fn native_capture_lease_survives_an_unjoined_worker_copy() {
     let extra = request.write();
     let verified = request.write().persist(&mut Store).unwrap();
     assert!(request.finish(&mut service, verified).is_err());
-    assert!(service.storage_usage().unwrap().unwrap().metadata_bytes > before);
+    assert!(
+        service.storage_usage().unwrap().unwrap().metadata_bytes
+            >= before + super::super::recovery::MESSAGE_STORAGE_RECOVERY_SCRATCH_METADATA
+    );
     drop(extra);
     assert_eq!(
         service.storage_usage().unwrap().unwrap().metadata_bytes,

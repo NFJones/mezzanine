@@ -39,6 +39,15 @@ fn capture_after(
     capabilities: Vec<String>,
     preceding: usize,
 ) -> (MessageService, MessageNativeContinuityRequest) {
+    capture_with_policy(capabilities, preceding, false)
+}
+
+/// Exercises guarded publication separately from legacy unguarded fixtures.
+fn capture_with_policy(
+    capabilities: Vec<String>,
+    preceding: usize,
+    guarded: bool,
+) -> (MessageService, MessageNativeContinuityRequest) {
     let mut service = MessageService::default();
     for _ in 0..preceding {
         service.register_agent(None, None, "other", vec![]);
@@ -48,6 +57,9 @@ fn capture_after(
     service
         .enable_storage_custody(&scope, Default::default())
         .unwrap();
+    if guarded {
+        service.require_native_continuity(&scope).unwrap();
+    }
     let registration = service
         .capture_sender_registration(&identity.agent_id)
         .unwrap();
@@ -586,3 +598,5 @@ fn native_write_rolls_back_trigger_changes_to_unrelated_custody() {
         "native trigger mutations committed: {escaped:?}"
     );
 }
+
+mod lifetime;

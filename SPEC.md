@@ -16100,6 +16100,29 @@ factory below combines these observations with original allocation and actual
 private context evidence. The journal alone MUST NOT enable native restore or
 introduce a configuration/wire field.
 
+Guarded native publication MUST preserve bounded version1 `b1:<native-owner>`
+lifetime provenance before replacing latest n1. A b1 record MUST bind the original
+store allocation, exact namespace/shell epoch/derived owner/agent/floor and first
+known guarded publication generation. Its at most 4096 bytes MUST omit identity
+capability vectors and normalize availability false. These records MUST NOT
+establish retirement, current availability, live registration or task authority.
+A parent displaced by another binding MAY still return through exact rollback;
+n1 replacement or absence alone MUST NOT authorize recipient retirement.
+
+One n1 transaction MAY retain at most its actual previous and current guarded
+lifetime tuples, for at most three records within the existing 256 KiB batch.
+It MUST freeze the exact input, history preimages and non-target fingerprint on
+the first attempt, preserve that plan through joined loss, and verify all target
+bytes after SQL effects. Existing equal history MUST retain its earliest known
+publication. Backfill MAY use only an actual present guarded prior n1; missing
+or already overwritten legacy epochs MUST remain unknown. Unguarded observations
+MUST NOT acquire this provenance. Inventory MUST validate tuple-derived keys,
+allocation, publication generation and allocator floors with bounded key metadata;
+existing history MUST agree with a matching current guarded n1. Capture MUST
+reserve 2 MiB recovery scratch plus bounded plan/encoding metadata before I/O,
+retaining the charge through the final worker/input owner. Explicit validated
+registration-end authority and linked terminal observations remain required.
+
 The internal actor spill setup now enables a one-way original-scope native
 admission barrier. While any actual current native interval is unrecorded, the
 lower owner MUST withhold fresh source reservations and storage-qualified
@@ -16108,6 +16131,9 @@ Native receive MUST withhold input for that interval. Existing genuine
 source-bound ACKs MUST remain settleable. Saved/wire/config data MUST NOT select
 this trusted setup policy; primitive storage construction alone is not product
 activation or native restart qualification.
+The first guard transition MUST invalidate earlier unguarded live markers, and
+late unguarded completions MUST NOT open guarded admission for an equal binding.
+Repeated guard setup MUST preserve already recorded guarded markers.
 An entry with a replaced registration token MUST remain pending until the
 actual native view is reconciled and journaled; its missing current token MUST
 NOT temporarily downgrade that known endpoint to unbound/raw admission.

@@ -86,6 +86,8 @@ impl MessageService {
     /// duplicate acceptance replies, and cannot deliver native input. Existing
     /// source-bound ACKs remain settleable. Foreign scope or unsettled lower
     /// reservations refuse without changing policy; saved data cannot enable it.
+    /// The first transition invalidates unguarded completions. Repeated calls
+    /// preserve already recorded guarded bindings.
     pub fn require_native_continuity(&mut self, scope: &MessageStorageScope) -> Result<()> {
         self.require_storage_scope(Some(scope))?;
         if self.admission.is_some() || self.acknowledgement.is_some() {
@@ -93,10 +95,13 @@ impl MessageService {
                 "MMP native barrier requires settled reservations",
             ));
         }
-        self.storage_custody
-            .as_mut()
-            .ok_or_else(changed)?
-            .native_continuity_required = true;
+        let policy = self.storage_custody.as_mut().ok_or_else(changed)?;
+        if !policy.native_continuity_required {
+            policy.native_continuity_required = true;
+            for binding in self.native_bindings.values_mut() {
+                binding.continuity_recorded = false;
+            }
+        }
         Ok(())
     }
 
@@ -155,7 +160,10 @@ impl MessageService {
         let identity = self.registered.get(id).ok_or_else(changed)?;
         let policy = self.storage_custody.as_ref().ok_or_else(changed)?;
         let charge = checkpoint::identity_charge(identity)
-            .saturating_add(4096)
+            // Previous n1 decode, fixed lifetime images, current encoding and
+            // exact batch reconciliation remain charged through actual join.
+            .saturating_add(super::recovery::MESSAGE_STORAGE_RECOVERY_SCRATCH_METADATA)
+            .saturating_add(16 * 1024)
             .saturating_add(id.as_str().len().saturating_mul(8));
         let lease = checkpoint::reserve_checkpoint(
             policy.checkpoint_bytes.clone(),
@@ -231,7 +239,12 @@ impl MessageNativeContinuityRequest {
             lease,
             ..
         } = capture;
-        let current = service.sender_registration_is_current(&registration)
+        let current = (!service
+            .storage_custody
+            .as_ref()
+            .is_some_and(|p| p.native_continuity_required)
+            || snapshot.admission_guarded)
+            && service.sender_registration_is_current(&registration)
             && service.native_owner_for_registration(&registration, &incarnation)
                 == Some(&snapshot.native.owner);
         if current {

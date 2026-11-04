@@ -104,12 +104,13 @@ async fn actor_native_barrier_records_before_any_source_or_request_generation() 
         exited.service.tracked_message_request_usage(),
         ((0, 0, 0), 0)
     );
-    assert_eq!(fixture.disk(), (1, 1));
+    assert_eq!(fixture.disk(), (1, 2));
 }
 
 /// A new real shell epoch observed during old metadata I/O cannot inherit the
 /// old positive. The actor records the replacement before opening admission,
-/// preserving one current descriptive row without creating a message sequence.
+/// preserving the current observation and both lifetime tuples without creating
+/// a message sequence.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn actor_native_barrier_reobserves_replacement_after_late_positive() {
     let fixture = Fixture::new(false);
@@ -154,7 +155,7 @@ async fn actor_native_barrier_reobserves_replacement_after_late_positive() {
         "replacement-native"
     );
     assert_eq!(exited.service.message_service().next_message_sequence(), 1);
-    assert_eq!(fixture.disk(), (2, 1));
+    assert_eq!(fixture.disk(), (2, 3));
 }
 
 /// Real postcommit worker loss retains the original journal input through actual
@@ -219,5 +220,5 @@ async fn actor_shutdown_drains_native_journal_before_returning_service() {
     shutdown.await.unwrap().unwrap();
     let exited = runner.await.unwrap();
     assert_eq!(exited.service.message_service().next_message_sequence(), 1);
-    assert_eq!(fixture.disk(), (1, 1));
+    assert_eq!(fixture.disk(), (1, 2));
 }

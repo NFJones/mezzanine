@@ -542,6 +542,24 @@ Journal transactions also preserve a fingerprint of every non-target row from
 the original input. Trigger deletion or rechecksummed mutation of an unrelated
 source, ACK or native fact rolls the whole attempted write back.
 
+Guarded n1 transactions now retain immutable version1 `b1` lifetime provenance
+for their actual current and previous guarded tuples. Each record is at most
+4096 bytes and contains the original allocation, namespace, shell epoch, derived
+owner, agent/floor and first known guarded publication. Availability is normalized
+false; capability vectors are omitted. These descriptive facts supply neither
+retirement nor live restore authority. An exact original parent can return after
+binding replacement, so a changed or missing latest n1 cannot prove its end.
+
+The same original transaction freezes at most three records and its first input,
+history preimages and non-target image, with exact target checks after SQL effects.
+Lost replies reconcile that batch. Equal history retains its first known
+publication; backfill uses only an actual present guarded prior n1 and never
+invents missing/overwritten legacy history. Inventory validates bounded history
+keys and cross-checks matching current observations. Native capture now reserves
+2 MiB of recovery scratch and bounded plan metadata through actual join and last
+input ownership. Explicit registration-end journals and linked retired-recipient
+observations remain required before durable retirement can be advertised.
+
 Internal actor spill setup now enables a trusted native admission barrier. The
 actor journals current native intervals before selecting queued authorized
 actions, whose original source owners retain their bodies. New reservations and
@@ -549,6 +567,9 @@ storage-qualified duplicate replies wait while any current native interval is
 unrecorded; native input also waits for its exact interval. Direct ingress can
 receive an explicit never-accepted busy result and retry after journal progress.
 No sequence or native request generation is assigned for that refusal.
+Enabling the guard invalidates earlier unguarded live markers. A late unguarded
+completion cannot open guarded admission, even for the same binding; repeating
+setup preserves already recorded guarded markers.
 Existing genuine ACKs remain settleable, including when a metadata capture was
 refused before issuing I/O. Actual issued workers retain their actor/root owner
 through loss, backed-off retry and shutdown. Replacements require their own

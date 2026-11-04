@@ -1046,6 +1046,7 @@ mod native_binding;
 
 mod checkpoint;
 mod native_continuity;
+mod native_lifetime;
 mod recovery;
 
 mod native_input;

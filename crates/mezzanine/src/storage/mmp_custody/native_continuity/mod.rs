@@ -2,14 +2,19 @@
 //!
 //! Each bounded record captures an actual registration namespace, shell epoch,
 //! immutable identity and interval floor. Updates compare the exact original
-//! preimage/position and reconcile only their own last committed batch. All
-//! unrelated rows remain bound to the original input through trigger effects and
+//! preimage/position and reconcile only their own last committed batch.
+//! Guarded lifetime provenance is retained in the same transaction before latest
+//! n1 changes. These facts describe original namespace/epochs, never retirement.
+//! All unrelated rows remain bound to the original input through trigger effects and
 //! retries; any mutation rolls the attempted write back. A floor
 //! reserves allocator gaps atomically without accepting a message. Readers return
 //! quarantined observations, never native restore/registration authority. Product
 //! lifecycle publication and private-context qualification remain separate gates.
 
 use std::io::{self, Write};
+use std::sync::{Arc, OnceLock};
+
+mod lifetime;
 
 use mez_agent::messaging::{
     MessageNativeContinuitySnapshot, MessageNativeContinuityStore, MessageNativeContinuityWrite,
@@ -34,6 +39,8 @@ pub(crate) struct NativeContinuityPlan {
     previous: Option<[u8; 32]>,
     /// All non-target rows at the original position, retained across retries.
     unaffected: [u8; 32],
+    /// Exact first history targets/input outside physical worker uncertainty.
+    lifetime: Arc<OnceLock<lifetime::LifetimePlan>>,
 }
 impl NativeContinuityPlan {
     /// Rechecks the exact one-batch native post-position after owned I/O.
@@ -101,7 +108,13 @@ impl MmpCustodyStore {
         let previous = match self.read(&key)? {
             None => None,
             Some(bytes) => {
-                self.decode_native_record(&key, &bytes, state.watermark, state.generation as u64)?;
+                let observation = self.decode_native_record(
+                    &key,
+                    &bytes,
+                    state.watermark,
+                    state.generation as u64,
+                )?;
+                self.validate_native_lifetime_observation(&transaction, &observation)?;
                 Some(Sha256::digest(&bytes).into())
             }
         };
@@ -114,6 +127,7 @@ impl MmpCustodyStore {
             key,
             previous,
             unaffected,
+            lifetime: Arc::new(OnceLock::new()),
         })
     }
 
@@ -150,11 +164,16 @@ impl MmpCustodyStore {
             return Err(invalid("snapshot belongs to another connection"));
         }
         let state = self.checked_state(transaction)?;
-        self.read(key)?
+        let record = self
+            .read(key)?
             .map(|bytes| {
                 self.decode_native_record(key, &bytes, state.watermark, state.generation as u64)
             })
-            .transpose()
+            .transpose()?;
+        if let Some(record) = &record {
+            self.validate_native_lifetime_observation(transaction, record)?;
+        }
+        Ok(record)
     }
 
     /// Checks record framing, bounded decoded size, original allocation and key
@@ -241,25 +260,47 @@ impl NativeContinuityPort<'_> {
             .unchecked_transaction()
             .map_err(database_error)?;
         let state = self.store.checked_state(&transaction)?;
-        if unaffected_rows_digest(&transaction, &[&self.plan.key])? != self.plan.unaffected {
-            return Err(invalid("unrelated rows changed before write"));
+        if self.plan.lifetime.get().is_none() {
+            let captured = lifetime::LifetimePlan::capture(
+                self.store,
+                &transaction,
+                self.plan,
+                snapshot,
+                &bytes,
+            )?;
+            self.plan
+                .lifetime
+                .set(captured)
+                .map_err(|_| invalid("lifetime plan already selected"))?;
         }
+        let lifetime = self
+            .plan
+            .lifetime
+            .get()
+            .ok_or_else(|| invalid("lifetime plan missing"))?;
+        if !lifetime.matches_input(&bytes) {
+            return Err(invalid("lifetime original input changed"));
+        }
+        lifetime.revalidate(self.store, &transaction, &self.plan.key, false)?;
         if state.watermark < self.plan.watermark {
             return Err(invalid("watermark rollback"));
         }
+        let mut writes = vec![CustodyWrite {
+            key: &self.plan.key,
+            previous: self.plan.previous.as_ref().map(|s| s.as_slice()),
+            value: Some(&bytes),
+        }];
+        writes.extend(lifetime.writes());
         self.store.commit_in_transaction_with_floor(
             &transaction,
             self.plan.generation,
-            &[CustodyWrite {
-                key: &self.plan.key,
-                previous: self.plan.previous.as_ref().map(|s| s.as_slice()),
-                value: Some(&bytes),
-            }],
+            &writes,
             snapshot.registered_after_sequence,
         )?;
-        if unaffected_rows_digest(&transaction, &[&self.plan.key])? != self.plan.unaffected {
-            return Err(invalid("write changed unrelated rows"));
+        if self.store.read(&self.plan.key)?.as_deref() != Some(bytes.as_slice()) {
+            return Err(invalid("native target changed during SQL effects"));
         }
+        lifetime.revalidate(self.store, &transaction, &self.plan.key, true)?;
         self.store.finish_transaction(transaction)
     }
 }

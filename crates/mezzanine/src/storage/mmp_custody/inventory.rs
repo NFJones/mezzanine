@@ -52,6 +52,8 @@ pub(crate) struct CustodyInventory {
     pub consumption_keys: Vec<String>,
     /// Verified native registration observations, never live endpoint authority.
     pub native_continuity_keys: Vec<String>,
+    /// Immutable guarded namespace/epoch provenance, never retirement authority.
+    pub native_lifetime_keys: Vec<String>,
     /// Fully cleaned abort sequences, never accepted messages.
     pub aborted_sequences: Vec<u64>,
     /// Logical charge already retained by this inventory, shared with its fold.
@@ -121,6 +123,7 @@ enum Key<'a> {
     Release(&'a str),
     Consumption(&'a str),
     NativeContinuity(&'a str),
+    NativeLifetime(&'a str),
     NativeInput(&'a str),
     TerminalHandoff(&'a str),
 }
@@ -246,6 +249,7 @@ impl MmpCustodyStore {
             release_keys: Vec::new(),
             consumption_keys: Vec::new(),
             native_continuity_keys: Vec::new(),
+            native_lifetime_keys: Vec::new(),
             aborted_sequences: Vec::new(),
             retained_metadata: 0,
         };
@@ -369,6 +373,26 @@ impl MmpCustodyStore {
                         }
                         charge(&mut metadata, ACK_CHARGE)?;
                     }
+                    Key::NativeLifetime(key) => {
+                        if let Some(previous) = group.take() {
+                            self.finish_inventory_group(
+                                transaction,
+                                previous,
+                                limits,
+                                &mut metadata,
+                                &mut inventory,
+                                pending,
+                            )?;
+                        }
+                        self.read_native_lifetime_in_snapshot(transaction, key)?
+                            .ok_or_else(|| invalid("native lifetime record is missing"))?;
+                        charge(&mut metadata, ACK_CHARGE)?;
+                        inventory
+                            .native_lifetime_keys
+                            .try_reserve(1)
+                            .map_err(|_| invalid("native lifetime inventory allocation failed"))?;
+                        inventory.native_lifetime_keys.push(key.to_string());
+                    }
                     Key::NativeContinuity(key) => {
                         if let Some(previous) = group.take() {
                             self.finish_inventory_group(
@@ -426,6 +450,7 @@ impl MmpCustodyStore {
                             | Key::Release(_)
                             | Key::Consumption(_)
                             | Key::NativeContinuity(_)
+                            | Key::NativeLifetime(_)
                             | Key::NativeInput(_)
                             | Key::TerminalHandoff(_) => {
                                 return Err(invalid("unexpected acknowledgment key"));
@@ -653,6 +678,14 @@ fn parse_key(key: &str) -> Result<Key<'_>> {
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
     {
         return Ok(Key::Consumption(key));
+    }
+    if let Some(digest) = key.strip_prefix("b1:")
+        && digest.len() == 64
+        && digest
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    {
+        return Ok(Key::NativeLifetime(key));
     }
     if let Some(digest) = key.strip_prefix("n1:")
         && digest.len() == 64
