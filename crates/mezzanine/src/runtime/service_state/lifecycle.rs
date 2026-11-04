@@ -172,6 +172,8 @@ pub(crate) enum RuntimeSnapshotControlAsyncWorkKind {
     Resume {
         /// Shell to seed restored panes with.
         shell: crate::host::shell::ResolvedShell,
+        /// The actor ran live hooks before ending any original identity.
+        hooks_validated: bool,
     },
 }
 

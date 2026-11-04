@@ -11,7 +11,7 @@ impl AsyncRuntimeSessionActor {
     /// Starts one retained actual end before new native publication can advance
     /// the original store. Capture refusals issue no I/O; genuine ACKs can still
     /// use the idle lane to release capacity before the bounded retry.
-    pub(super) fn pump_message_registration_end(&mut self) {
+    pub(in crate::host::async_runtime::actor) fn pump_message_registration_end(&mut self) {
         let Some(owner) = self.message_custody.as_mut() else {
             return;
         };

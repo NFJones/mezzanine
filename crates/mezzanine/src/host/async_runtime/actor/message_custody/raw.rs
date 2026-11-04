@@ -111,6 +111,17 @@ impl AsyncRuntimeSessionActor {
                     )));
                 }
             };
+        if self.service.message_restore_pending() && !request.is_acknowledgement() {
+            // A live layout drain is temporary capacity, not a transport error:
+            // preserve the socket/registration and consume this unaccepted frame.
+            return Ok(Some((
+                RawPreparation::Reply(mmp_storage_error_response(&MessageError::new(
+                    MessageErrorKind::Capacity,
+                    "MMP layout restore pending; message not accepted",
+                ))),
+                consumed,
+            )));
+        }
         let owner = self
             .message_custody
             .as_ref()

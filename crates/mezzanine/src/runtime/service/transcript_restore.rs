@@ -740,8 +740,9 @@ impl RuntimeSessionService {
         Ok(())
     }
 
-    /// Stages validated durable MMP state before restored agent bindings and
-    /// pane processes become observable.
+    /// Validates generic message snapshots before restored bindings become
+    /// observable. An attached original durable ledger/root is preserved; only
+    /// an unattached service installs inert reconstructed display/transport data.
     pub fn restore_message_state_for_restored_snapshot(
         &mut self,
         payload: &crate::storage::snapshot::SessionSnapshotPayload,
@@ -753,7 +754,13 @@ impl RuntimeSessionService {
             (snapshot.schema_version == 1).then_some(snapshot.retained_messages.len());
         let discarded_accepted_messages =
             (snapshot.schema_version == 1).then_some(snapshot.accepted_messages.len());
+        // Generic bytes are validated but cannot replace an attached original
+        // ledger or recreate its opaque storage scope and live capabilities.
+        // Cold factory reconstruction has its own sealed root-bound path.
         let restored = mez_agent::messaging::MessageService::from_snapshot_state(snapshot)?;
+        if self.message_service().payload_observer().is_some() {
+            return Ok(());
+        }
         self.retire_runtime_message_transfers_for_restore()?;
         *self.control.message_service_mut() = restored;
         self.retire_unbound_external_message_identities();

@@ -16,7 +16,7 @@ impl RuntimeSessionService {
     /// Refreshes the complete trusted native view before source freeze or live
     /// context selection. Resident-only traffic keeps its existing behavior.
     pub(crate) fn refresh_native_message_bindings(&mut self) -> Result<()> {
-        if self.message_service().payload_observer().is_none() {
+        if self.message_restore_pending() || self.message_service().payload_observer().is_none() {
             return Ok(());
         }
         let mut bindings = Vec::new();

@@ -206,6 +206,22 @@ impl RuntimeSessionService {
         )
     }
 
+    /// Validates layout and generic MMP display bytes before retiring any live
+    /// owner. The clone is discarded; it grants no registration or root rights.
+    pub(crate) fn validate_runtime_snapshot_resume(
+        &self,
+        payload: &crate::storage::snapshot::SessionSnapshotPayload,
+    ) -> Result<()> {
+        let mut prepared = self.session.clone();
+        prepared.replace_layout_from_restore_input(
+            crate::storage::snapshot::session_restore_input(payload)?,
+        )?;
+        if let Some(snapshot) = payload.message_state.as_ref() {
+            let _ = mez_agent::messaging::MessageService::from_snapshot_state(snapshot)?;
+        }
+        Ok(())
+    }
+
     /// Runs the apply runtime snapshot resume for connection operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in
@@ -218,6 +234,7 @@ impl RuntimeSessionService {
         resume_plan: crate::storage::snapshot::LayoutLoadPlan,
         caller_client_id: &mez_core::ids::ClientId,
     ) -> Result<String> {
+        self.validate_runtime_snapshot_resume(&payload)?;
         self.ensure_runtime_message_transfers_settled_for_restore()?;
         let previous_session = self.session.clone();
         let previous_window_created_at_unix_seconds =
@@ -232,6 +249,10 @@ impl RuntimeSessionService {
             .iter()
             .flat_map(|window| window.panes().iter().map(|pane| pane.id.to_string()))
             .collect::<Vec<_>>();
+        // The actor has already journaled these ends on the original root.
+        // Synchronous callers retain their existing no-pending-work preflight.
+        self.retire_runtime_message_transfers_for_restore()?;
+        self.ensure_runtime_message_transfers_settled_for_restore()?;
         let replaced_pane_id_refs = replaced_pane_ids
             .iter()
             .map(String::as_str)
@@ -247,7 +268,6 @@ impl RuntimeSessionService {
         self.clear_pane_transaction_parsers();
         self.clear_pane_process_lifecycle_tracking();
         self.persistence.clear_pane_transcript_refs();
-        self.retire_runtime_message_transfers_for_restore()?;
         *self.agent_shell_store_mut() = AgentShellStore::default();
         *self.agent_turn_ledger_mut() = AgentTurnLedger::new(false);
         self.reconcile_active_turn_sleep_inhibition();

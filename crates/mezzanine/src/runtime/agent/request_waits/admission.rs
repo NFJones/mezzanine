@@ -105,7 +105,7 @@ impl RuntimeSessionService {
         scope: MessageScope,
         now_ms: u64,
     ) -> Result<RuntimePreparedTrackedMessage> {
-        if self.agent.request_waits.pending.is_some() {
+        if self.message_restore_pending() || self.agent.request_waits.pending.is_some() {
             return Err(changed());
         }
         self.refresh_native_message_bindings()?;

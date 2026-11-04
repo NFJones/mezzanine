@@ -127,7 +127,7 @@ impl AsyncRuntimeSessionActor {
         let Some(owner) = self.message_custody.as_mut() else {
             return;
         };
-        if owner.shutdown.is_some() {
+        if owner.shutdown.is_some() || self.service.message_restore_pending() {
             return;
         }
         let watermark = self.service.message_service().next_message_sequence();
@@ -236,6 +236,9 @@ impl AsyncRuntimeSessionActor {
 
     /// Only a real original-root absence can reach native selection or reload.
     pub(super) fn activate_absent_native_message(&mut self, source: MessageNativeInputAnchor) {
+        if self.service.message_restore_pending() {
+            return;
+        }
         if self
             .message_custody
             .as_ref()
@@ -290,7 +293,7 @@ impl AsyncRuntimeSessionActor {
         let Some(owner) = self.message_custody.as_mut() else {
             return;
         };
-        let continue_turn = owner.shutdown.is_none();
+        let continue_turn = owner.shutdown.is_none() && !self.service.message_restore_pending();
         if let Some(result) = owner.native_result.as_mut()
             && !result.applied
             && result.wake_at() <= Instant::now()
@@ -365,7 +368,8 @@ impl AsyncRuntimeSessionActor {
         let continue_turn = self
             .message_custody
             .as_ref()
-            .is_some_and(|o| o.shutdown.is_none());
+            .is_some_and(|o| o.shutdown.is_none())
+            && !self.service.message_restore_pending();
         if let Err(error) = self.service.complete_native_input_ack(id, continue_turn) {
             self.service.defer_native_input_completion(id, error);
         }

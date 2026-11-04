@@ -22,6 +22,7 @@ impl AsyncRuntimeSessionActor {
             || owner.pending.is_some()
             || owner.failure.is_some()
             || owner.shutdown.is_some()
+            || self.service.message_restore_pending()
         {
             return;
         }

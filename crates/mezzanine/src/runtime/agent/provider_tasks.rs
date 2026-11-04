@@ -745,6 +745,9 @@ impl RuntimeSessionService {
         agent_id: &AgentId,
         turn_id: &str,
     ) -> Result<Option<AgentTurnRecord>> {
+        if self.message_restore_pending() {
+            return Ok(None);
+        }
         self.require_live()?;
         self.ensure_completion_admission_open()?;
         if self.completion_finalization_holds_new_work() {

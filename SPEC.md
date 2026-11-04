@@ -16208,7 +16208,24 @@ Actor shutdown MUST retire its actual raw leases after original ACK/application
 settlement and drain any resulting end intents before consuming its shutdown
 reply or releasing the original root. Fresh raw terminal work stays withheld
 during Stop; its accepted original and committed end remain recoverable.
-Generic live-restore drain and the remaining lifecycle/resource gates remain
+Actor-owned `snapshot/resume` MUST validate incoming layout and generic message
+metadata and run live resume hooks before retiring an old registration or pane.
+It MUST retain one original request while issued acceptance/ACK/canonical work,
+application receipts and prior end intents settle on the original root. It MUST
+then retire the old native pane identities, journal every resulting end and only
+apply the layout after those original operations have joined and been adopted.
+Fresh native input, optional canonical probes, registration publication and
+message/turn admission MUST pause during this drain; completed original results
+MUST remain settleable without admitting further work for the retiring pane.
+Concurrent resume MUST report a conflict without replacing the original request.
+
+A generic snapshot MUST NOT replace an already storage-backed MessageService
+ledger, detach its opaque scope/root, reset its allocator, discard later accepted
+sources or revive snapshot capabilities. Actual raw socket leases MUST survive
+live layout restore; live absence MUST NOT select cold unavailability. Generic
+snapshot bytes MUST still be validated even when their display state is ignored.
+The actor MUST retain issued work if response observation is cancelled. Synchronous
+terminal layout integration and the remaining lifecycle/resource gates remain
 required before durable activation.
 
 The internal actor spill setup now enables a one-way original-scope native

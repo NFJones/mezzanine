@@ -613,8 +613,23 @@ and otherwise bounding the end by the persistent allocator. A namespace actually
 restored as native is not ended by raw absence. Generic snapshots/UUID bytes
 cannot select this path. Shutdown retires actual raw leases after original ACK
 settlement, then drains their end journals before releasing its reply/root.
-Fresh terminal work stays withheld during Stop. Generic live-restore draining
-and remaining lifecycle/resource gates still precede normal activation.
+Fresh terminal work stays withheld during Stop.
+
+Actor-owned `snapshot/resume` now stages and validates layout/message metadata
+and runs resume hooks before retiring native pane identities. One original
+request waits for issued writes, canonical proofs/application results and old
+ends, then journals the ends created by native retirement on the same root
+before layout application. Fresh native input/probes/publication and further
+message/turn admission pause during that drain; existing original results still
+settle. A concurrent resume receives a conflict. Cancelling the reply does not
+cancel issued original storage work.
+
+Generic snapshots validate their message bytes but retain an attached durable
+ledger, allocator, scope and root, including messages accepted after the
+snapshot. Actual same-daemon raw connections survive live layout restore and
+are never classified unavailable from generic snapshot absence. Synchronous
+terminal layout integration and remaining lifecycle/resource gates still
+precede normal activation.
 
 Internal actor spill setup now enables a trusted native admission barrier. The
 actor journals current native intervals before selecting queued authorized

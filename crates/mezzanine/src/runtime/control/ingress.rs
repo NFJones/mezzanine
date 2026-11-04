@@ -325,6 +325,7 @@ impl RuntimeSessionService {
         } else if request.method == "snapshot/resume" {
             RuntimeSnapshotControlAsyncWorkKind::Resume {
                 shell: self.session.shell.clone().into(),
+                hooks_validated: false,
             }
         } else {
             RuntimeSnapshotControlAsyncWorkKind::Dispatch {
@@ -420,7 +421,15 @@ impl RuntimeSessionService {
             RuntimeSnapshotControlAsyncOutcome::Dispatch(result) => result,
             RuntimeSnapshotControlAsyncOutcome::Resume(result) => {
                 result.and_then(|(payload, _restored)| {
-                    self.require_snapshot_resume_hooks_allow(&payload)?;
+                    if !matches!(
+                        work.kind,
+                        RuntimeSnapshotControlAsyncWorkKind::Resume {
+                            hooks_validated: true,
+                            ..
+                        }
+                    ) {
+                        self.require_snapshot_resume_hooks_allow(&payload)?;
+                    }
                     let snapshot_id = runtime_snapshot_id_from_request(&work.request);
                     let resume_plan = payload.resume_plan();
                     self.apply_runtime_snapshot_resume_for_connection(

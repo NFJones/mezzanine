@@ -123,7 +123,7 @@ impl AsyncRuntimeSessionActor {
         let Some(owner) = self.message_custody.as_mut() else {
             return;
         };
-        if owner.shutdown.is_some() {
+        if owner.shutdown.is_some() || self.service.message_restore_pending() {
             return;
         }
         let retry = if owner

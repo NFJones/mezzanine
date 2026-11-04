@@ -166,7 +166,7 @@ pub(super) async fn execute_snapshot_control_async_work(
                 .await,
             )
         }
-        RuntimeSnapshotControlAsyncWorkKind::Resume { shell } => {
+        RuntimeSnapshotControlAsyncWorkKind::Resume { shell, .. } => {
             let snapshot_id: std::result::Result<String, MezError> = work
                 .request
                 .params
@@ -314,6 +314,7 @@ impl AsyncRuntimeSessionActor {
                 },
             ),
             message_custody: None,
+            snapshot_resume: None,
             event_delivery_notify,
             event_delivery_revision_tx,
             client_clipboard_routes: Default::default(),
@@ -480,6 +481,10 @@ impl AsyncRuntimeSessionActor {
             // Observation is cancellable; its actual handle remains in the root.
             if self.poll_message_custody() {
                 break;
+            }
+            if let Some(request) = self.poll_snapshot_resume() {
+                let _ = Box::pin(self.handle_request(request)).await;
+                continue;
             }
             if self.message_custody_shutdown_pending() {
                 // Admission is closed. Do not execute already-queued ingress

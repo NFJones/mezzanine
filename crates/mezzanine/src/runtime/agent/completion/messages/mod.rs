@@ -161,7 +161,9 @@ impl RuntimeSessionService {
         approval_id: Option<&str>,
     ) -> Result<ActionResult> {
         self.ensure_completion_admission_open()?;
-        if self.agent.completion_settlements.message_storage_stopping {
+        if self.agent.completion_settlements.message_storage_stopping
+            || self.message_restore_pending()
+        {
             return Err(MezError::conflict("message source storage is stopping"));
         }
         let execution = self

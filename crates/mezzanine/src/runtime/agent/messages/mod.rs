@@ -88,6 +88,9 @@ impl RuntimeSessionService {
     /// for the exact canonical plaintext media type; other committed payloads
     /// remain durable and model-visible without pane presentation.
     pub(crate) fn deliver_pending_runtime_agent_messages(&mut self, now_ms: u64) -> Result<usize> {
+        if self.message_restore_pending() {
+            return Ok(0);
+        }
         self.refresh_native_message_bindings()?;
         self.recover_received_peer_message_turn_scheduling(now_ms)?;
         self.recover_joined_coordination_wakes()?;

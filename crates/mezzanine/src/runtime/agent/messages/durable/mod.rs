@@ -113,7 +113,7 @@ impl RuntimeSessionService {
         source: &MessageNativeInputAnchor,
         now_ms: u64,
     ) -> Result<bool> {
-        if self.agent.native_input_permit.is_some() {
+        if self.message_restore_pending() || self.agent.native_input_permit.is_some() {
             return Ok(false);
         }
         if !self

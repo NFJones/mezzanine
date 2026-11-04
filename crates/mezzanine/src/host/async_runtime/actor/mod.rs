@@ -82,6 +82,7 @@ mod provider_retry_handoff;
 mod queue;
 mod requests;
 pub(super) mod routes;
+pub(super) mod snapshot_resume;
 mod source_end;
 
 pub(super) use provider_handoff::SourceDispatch;

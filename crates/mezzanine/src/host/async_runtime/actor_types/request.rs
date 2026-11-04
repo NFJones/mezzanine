@@ -556,6 +556,8 @@ pub(in crate::host::async_runtime) enum AsyncRuntimeRequest {
     /// Callers use this variant to describe one explicit state or command path
     /// without relying on stringly typed status values.
     CompleteSnapshotControlInput {
+        /// Only the retained actor continuation may complete after its original drain.
+        message_restore_drained: bool,
         /// Total input bytes consumed through the completed frame.
         consumed_prefix: usize,
         /// Encoded responses accumulated through earlier frames.

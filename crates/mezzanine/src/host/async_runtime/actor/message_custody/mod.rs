@@ -436,6 +436,7 @@ impl AsyncRuntimeSessionActor {
     /// An idle/absent root is pending forever until another request issues work.
     pub(super) fn message_custody_wakeup(&self) -> impl Future<Output = CustodyEvent> + use<> {
         let handoff_owned = self.service.has_pending_terminal_handoff();
+        let restoring = self.service.message_restore_pending();
         let next = self
             .message_custody
             .as_ref()
@@ -445,7 +446,8 @@ impl AsyncRuntimeSessionActor {
             .as_ref()
             .and_then(|owner| owner.payload_retry_at);
         let native_retry = self.message_custody.as_ref().and_then(|owner| {
-            (owner.shutdown.is_none()
+            (!restoring
+                && owner.shutdown.is_none()
                 && owner.pending.is_none()
                 && owner.wake.is_none()
                 && owner.failure.is_none()
@@ -475,8 +477,10 @@ impl AsyncRuntimeSessionActor {
                     && o.failure.is_none()
                     && ((o.native_result.is_none()
                         && o.native_scan_pending
+                        && !restoring
                         && o.shutdown.is_none())
                         || (o.native_result.is_none()
+                            && !restoring
                             && o.shutdown.is_none()
                             && o.native_retry
                                 .as_ref()
@@ -504,6 +508,7 @@ impl AsyncRuntimeSessionActor {
                             .pending_terminal_handoff_consumption()
                             .is_some()
                         || (!handoff_owned
+                            && !restoring
                             && owner.shutdown.is_none()
                             && owner.handoff_scan_pending))
             });
@@ -527,7 +532,8 @@ impl AsyncRuntimeSessionActor {
                     // None is the current work's own pre-issue retry and must
                     // still wake; Some retains an independent parked source.
                     owner.handoff_retry.as_ref().and_then(|(at, source)| {
-                        (root_idle && (source.is_none() || !handoff_owned)).then_some(*at)
+                        (root_idle && (source.is_none() || (!handoff_owned && !restoring)))
+                            .then_some(*at)
                     }),
                 )
                 .chain(
@@ -539,18 +545,21 @@ impl AsyncRuntimeSessionActor {
                 .min()
         });
         let continuation_wait = self.service.stored_message_continuation_needs_wake();
-        let native_ready = self.message_custody.as_ref().is_some_and(|owner| {
-            owner.pending.is_none()
-                && owner.wake.is_none()
-                && owner.failure.is_none()
-                && owner.shutdown.is_none()
-        }) && self
-            .service
-            .message_service()
-            .pending_native_continuity()
-            .is_some();
+        let native_ready = !restoring
+            && self.message_custody.as_ref().is_some_and(|owner| {
+                owner.pending.is_none()
+                    && owner.wake.is_none()
+                    && owner.failure.is_none()
+                    && owner.shutdown.is_none()
+            })
+            && self
+                .service
+                .message_service()
+                .pending_native_continuity()
+                .is_some();
         let expiry_at = self.message_custody.as_ref().and_then(|owner| {
-            (owner.pending.is_none()
+            (!restoring
+                && owner.pending.is_none()
                 && owner.wake.is_none()
                 && owner.failure.is_none()
                 && owner.shutdown.is_none()
@@ -626,6 +635,19 @@ impl AsyncRuntimeSessionActor {
                 } => CustodyEvent::TerminalMaintenanceReady,
             }
         }
+    }
+
+    /// Original physical and joined application owners must settle before a
+    /// live layout restore can retire their registrations. Unissued optional
+    /// scans remain dormant and grant no canonical or replacement authority.
+    pub(super) fn message_custody_quiescent_for_restore(&self) -> bool {
+        self.message_custody.as_ref().is_some_and(|owner| {
+            owner.pending.is_none()
+                && owner.parked_ack.is_none()
+                && owner.wake.is_none()
+                && owner.native_result.is_none()
+                && owner.failure.is_none()
+        })
     }
 
     /// Gives storage completion a bounded turn even under continuously busy ingress.

@@ -890,6 +890,8 @@ pub(crate) struct RuntimeAgentComponent {
     received_peer_message_presentations: BTreeMap<String, RuntimeReceivedPeerMessagePresentation>,
     /// One real original-root absence result awaiting a canonical receive.
     native_input_permit: Option<messages::durable::NativeInputPermit>,
+    /// Pauses fresh native ownership while the actor drains a validated live layout restore.
+    message_restore_pending: bool,
     /// One-shot fault after real native ACK, before its scheduler handoff.
     #[cfg(test)]
     fail_next_native_ack_continuation: bool,

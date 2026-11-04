@@ -887,6 +887,8 @@ pub struct AsyncRuntimeSessionActor {
     pub(super) message_state: Box<AsyncRuntimeMessageState>,
     /// Exact custody root and original reply, retained through graceful shutdown.
     pub(super) message_custody: Option<Box<super::actor::message_custody::ActorMessageCustody>>,
+    /// One accepted snapshot request retained while its original message owners drain.
+    pub(super) snapshot_resume: Option<Box<super::actor::snapshot_resume::PendingSnapshotResume>>,
     /// Stores the event delivery notify value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module

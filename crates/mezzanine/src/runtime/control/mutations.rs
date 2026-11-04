@@ -79,6 +79,13 @@ impl RuntimeSessionService {
             Result<super::RuntimeSubagentForkSnapshot>,
         )>,
     ) -> String {
+        if self.message_restore_pending() {
+            return runtime_json_rpc_error(
+                &request.id,
+                crate::error::MezErrorKind::Conflict,
+                "mutating control paused for layout restore",
+            );
+        }
         let params = request.params.clone().unwrap_or_else(|| "{}".to_string());
         let idempotency_key = match runtime_json_string_field(&params, "idempotency_key") {
             Some(value) => value,
@@ -1203,6 +1210,11 @@ impl RuntimeSessionService {
         capabilities: &[&str],
         now_ms: u64,
     ) -> Result<SenderIdentity> {
+        if self.message_restore_pending() {
+            return Err(MezError::conflict(
+                "native message identity paused for layout restore",
+            ));
+        }
         let agent_id = AgentId::opaque(agent_id.to_string())
             .ok_or_else(|| MezError::invalid_args("agent id is invalid for MMP"))?;
         let native_pane_id = pane_id_from_runtime_agent_id(agent_id.as_str());

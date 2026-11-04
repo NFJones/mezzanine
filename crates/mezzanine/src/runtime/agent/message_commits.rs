@@ -188,6 +188,19 @@ impl RuntimeSessionService {
         Ok(false)
     }
 
+    /// Reports the actor-owned live restore barrier. Existing original proof and
+    /// result owners continue to settle; fresh native registrations and inputs
+    /// cannot acquire a replacement occurrence during the drain.
+    pub(crate) fn message_restore_pending(&self) -> bool {
+        self.agent.message_restore_pending
+    }
+
+    /// Changes only the live admission fence, never the actual message ledger,
+    /// original root, raw socket leases or canonical proof ownership.
+    pub(crate) fn set_message_restore_pending(&mut self, pending: bool) {
+        self.agent.message_restore_pending = pending;
+    }
+
     /// Refuses replacement while any original acceptance, ACK or native metadata
     /// still owes settlement. A cancelled observer or missing current receipt is
     /// insufficient evidence; this preflight changes no identity or pane state.
@@ -226,6 +239,12 @@ impl RuntimeSessionService {
         let recipients = self
             .runtime_native_commit_recipients()
             .into_iter()
+            .chain(self.session.windows().iter().flat_map(|window| {
+                window
+                    .panes()
+                    .iter()
+                    .map(|pane| format!("agent-{}", pane.id))
+            }))
             .chain(
                 self.agent_turn_ledger()
                     .turns()

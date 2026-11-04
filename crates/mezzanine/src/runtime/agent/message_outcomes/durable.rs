@@ -68,7 +68,8 @@ impl RuntimeSessionService {
         &mut self,
         lookup: &MessageTerminalHandoffAnchor,
     ) -> Result<bool> {
-        if self.agent.terminal_handoff.is_some()
+        if self.message_restore_pending()
+            || self.agent.terminal_handoff.is_some()
             || self.terminal_handoff_preflight_blocked(lookup)
             || !self
                 .message_service()

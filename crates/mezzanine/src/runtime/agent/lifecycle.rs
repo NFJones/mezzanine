@@ -752,6 +752,9 @@ impl RuntimeSessionService {
         &mut self,
         suppressed_turn_id: Option<&str>,
     ) -> Result<usize> {
+        if self.message_restore_pending() {
+            return Ok(0);
+        }
         // Scheduler admission is new work. Once the lifecycle stops accepting
         // new work, settlement may still finish an owned turn, but it must not
         // start queued turns or reacquire blocked ones. Those turns keep their

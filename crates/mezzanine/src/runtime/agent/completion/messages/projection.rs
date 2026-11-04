@@ -207,6 +207,7 @@ impl RuntimeSessionService {
             .phase = Phase::Published;
         if current
             && !self.agent.completion_settlements.message_storage_stopping
+            && !self.message_restore_pending()
             && !self.message_completion_pending(&turn.turn_id)
         {
             let (_, mut execution) = self.completion_original_execution(&turn, &owner.group)?;
@@ -226,7 +227,10 @@ impl RuntimeSessionService {
                 },
             );
             self.retain_stored_message_continuation(&turn.turn_id)?;
-        } else if !current || self.agent.completion_settlements.message_storage_stopping {
+        } else if !current
+            || self.agent.completion_settlements.message_storage_stopping
+            || self.message_restore_pending()
+        {
             self.retain_completion_group_transcript(&turn.turn_id)?;
         }
         Ok(true)

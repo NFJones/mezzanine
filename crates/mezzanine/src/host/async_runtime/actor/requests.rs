@@ -1839,6 +1839,7 @@ impl AsyncRuntimeSessionActor {
                                 let _ = sender
                                     .send(AsyncRuntimeRequestEnvelope::new(
                                         AsyncRuntimeRequest::CompleteSnapshotControlInput {
+                                            message_restore_drained: false,
                                             consumed_prefix,
                                             output_prefix,
                                             remaining_input,
@@ -2154,16 +2155,73 @@ impl AsyncRuntimeSessionActor {
                 false
             }
             AsyncRuntimeRequest::CompleteSnapshotControlInput {
+                message_restore_drained,
                 consumed_prefix,
                 mut output_prefix,
                 remaining_input,
                 max_content_length,
                 snapshots,
                 mut connection,
-                work,
-                outcome,
+                mut work,
+                mut outcome,
                 reply,
             } => {
+                if !message_restore_drained
+                    && self.message_custody.is_some()
+                    && let super::RuntimeSnapshotControlAsyncOutcome::Resume(result) =
+                        outcome.as_mut()
+                    && let Ok((payload, _)) = result.as_ref()
+                {
+                    let validation = if self.snapshot_resume.is_some()
+                        || self.message_custody_shutdown_pending()
+                    {
+                        Err(MezError::conflict(
+                            "layout restore or shutdown already pending",
+                        ))
+                    } else {
+                        crate::control::authorize_control_request(
+                            self.service.session(),
+                            &work.caller_client_id,
+                            &work.request,
+                        )
+                        .and_then(|()| self.service.require_snapshot_resume_hooks_allow(payload))
+                        .and_then(|()| self.service.validate_runtime_snapshot_resume(payload))
+                    };
+                    match validation {
+                        Ok(()) => {
+                            if let super::RuntimeSnapshotControlAsyncWorkKind::Resume {
+                                hooks_validated,
+                                ..
+                            } = &mut work.kind
+                            {
+                                *hooks_validated = true;
+                            }
+                            self.service.set_message_restore_pending(true);
+                            self.snapshot_resume = Some(Box::new(
+                                super::snapshot_resume::PendingSnapshotResume::new(
+                                    AsyncRuntimeRequest::CompleteSnapshotControlInput {
+                                        message_restore_drained: true,
+                                        consumed_prefix,
+                                        output_prefix,
+                                        remaining_input,
+                                        max_content_length,
+                                        snapshots,
+                                        connection,
+                                        work,
+                                        outcome,
+                                        reply,
+                                    },
+                                ),
+                            ));
+                            return false;
+                        }
+                        Err(error) => {
+                            *outcome = super::RuntimeSnapshotControlAsyncOutcome::Resume(Box::new(
+                                Err(error),
+                            ));
+                        }
+                    }
+                }
                 let previous_lifecycle_state = self.service.lifecycle_state();
                 let previous_id = self.side_effect_routes.next_transcript_claim_id();
                 let (body, transition) = self

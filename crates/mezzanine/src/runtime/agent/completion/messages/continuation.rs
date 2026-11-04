@@ -40,6 +40,16 @@ impl RuntimeSessionService {
     /// Re-admits completed original sources through the existing fair scheduler.
     /// QueueFull remains owned; stale/retired groups lose only this wake metadata.
     pub(crate) fn recover_stored_message_continuations(&mut self) -> Result<()> {
+        if self.message_restore_pending() {
+            // Each wake follows canonical original result/context publication.
+            // Retire only optional future scheduling; pending storage/results
+            // remain in their existing receipts and still block restore.
+            self.agent
+                .completion_settlements
+                .message_continuations
+                .clear();
+            return Ok(());
+        }
         if self.agent.completion_settlements.message_storage_stopping {
             return Ok(());
         }

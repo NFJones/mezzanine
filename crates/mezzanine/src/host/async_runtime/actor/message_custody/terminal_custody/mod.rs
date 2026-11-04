@@ -21,6 +21,7 @@ impl AsyncRuntimeSessionActor {
             || owner.wake.is_some()
             || owner.failure.is_some()
             || owner.shutdown.is_some()
+            || self.service.message_restore_pending()
             || owner.native_result.is_some()
             || owner.native_retry.is_some()
             || owner.handoff_scan_pending

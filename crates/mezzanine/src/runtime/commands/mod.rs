@@ -1970,6 +1970,11 @@ impl RuntimeSessionService {
             Vec<crate::runtime::agent::RuntimeSteeringReceipt>,
         ),
     ) -> Result<RuntimeAgentPromptTurnStart> {
+        if self.message_restore_pending() {
+            return Err(MezError::conflict(
+                "new agent turn paused for layout restore",
+            ));
+        }
         let (history, receipts) = history;
         let crate::runtime::control::RuntimeAgentPromptContext {
             context,
