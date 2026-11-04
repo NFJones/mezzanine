@@ -180,3 +180,118 @@ fn raw_or_foreign_scope_cannot_capture_native_continuity() {
     );
     assert_eq!(service.storage_usage().unwrap().unwrap(), before);
 }
+
+/// A real native sender/recipient cannot consume sequence, idempotency, payload
+/// or metadata reservations while its registration journal is missing. Recording
+/// the exact interval opens admission; a replacement immediately closes it again.
+#[test]
+fn required_native_journal_precedes_every_new_source_reservation() {
+    let (mut service, scope, native, registration, _) = scene();
+    let raw = service.register_agent(None, None, "raw", vec![]);
+    assert!(
+        service
+            .require_native_continuity(&MessageStorageScope::default())
+            .is_err()
+    );
+    assert!(service.pending_native_continuity().is_none());
+    service.require_native_continuity(&scope).unwrap();
+    assert_eq!(service.pending_native_continuity(), Some(&native.agent_id));
+    for (sender, target) in [(&raw, &native), (&native, &raw), (&raw, &raw)] {
+        let before = service.storage_usage().unwrap().unwrap();
+        assert!(
+            service
+                .prepare_acceptance(
+                    &sender.agent_id,
+                    mail(sender, target),
+                    MessageScope::Session,
+                    1,
+                    4096,
+                    None
+                )
+                .is_err()
+        );
+        assert_eq!(service.storage_usage().unwrap().unwrap(), before);
+        assert_eq!(service.next_message_sequence(), 1);
+    }
+    let request = service
+        .prepare_native_continuity(&scope, &native.agent_id)
+        .unwrap();
+    let verified = request.write().persist(&mut Store).unwrap();
+    assert!(request.finish(&mut service, verified).unwrap());
+    assert!(service.pending_native_continuity().is_none());
+    let ticket = service
+        .prepare_acceptance(
+            &raw.agent_id,
+            mail(&raw, &native),
+            MessageScope::Session,
+            1,
+            4096,
+            None,
+        )
+        .unwrap();
+    assert_eq!(ticket.sequence(), 1);
+    service.cancel_acceptance(&ticket).unwrap();
+    service
+        .bind_native_conversation(
+            &registration,
+            "conversation",
+            &MessageNativeIncarnation::default(),
+        )
+        .unwrap();
+    assert_eq!(service.pending_native_continuity(), Some(&native.agent_id));
+    assert!(
+        service
+            .prepare_acceptance(
+                &raw.agent_id,
+                mail(&raw, &native),
+                MessageScope::Session,
+                1,
+                4096,
+                None
+            )
+            .is_err()
+    );
+    assert_eq!(service.next_message_sequence(), 2);
+}
+
+/// Barrier setup must not change the semantics of an already reserved source.
+/// It is a trusted settled-runtime transition, not a saved/configurable flag.
+#[test]
+fn native_barrier_enable_refuses_an_unsettled_original_without_mutation() {
+    let (mut service, scope, native, _, _) = scene();
+    let raw = service.register_agent(None, None, "raw", vec![]);
+    let ticket = service
+        .prepare_acceptance(
+            &raw.agent_id,
+            mail(&raw, &native),
+            MessageScope::Session,
+            1,
+            4096,
+            None,
+        )
+        .unwrap();
+    let before = service.storage_usage().unwrap().unwrap();
+    assert!(service.require_native_continuity(&scope).is_err());
+    assert!(service.pending_native_continuity().is_none());
+    assert_eq!(service.storage_usage().unwrap().unwrap(), before);
+    service.cancel_acceptance(&ticket).unwrap();
+    service.require_native_continuity(&scope).unwrap();
+    assert!(service.pending_native_continuity().is_some());
+}
+
+/// Small immutable envelope shared by both barrier admission controls.
+fn mail(sender: &SenderIdentity, target: &SenderIdentity) -> Envelope {
+    Envelope {
+        protocol: "mmp/1",
+        id: "barrier-original".into(),
+        message_type: "send".into(),
+        time: "fixture".into(),
+        sender: sender.clone(),
+        recipient: Recipient::Agent(target.agent_id.clone()),
+        correlation_id: None,
+        ttl_ms: None,
+        content_type: "text/plain".into(),
+        payload: "original".into(),
+        extension_fields: vec![],
+    }
+}

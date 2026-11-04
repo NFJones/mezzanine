@@ -26,6 +26,145 @@ impl MessagePayloadLoadStore for Store {
     }
 }
 
+/// Lower state-machine port; product controls separately prove actual SQLite
+/// persistence, root ownership and joined completion before marker publication.
+impl MessageNativeContinuityStore for Store {
+    fn commit(&mut self, write: &MessageNativeContinuityWrite) -> Result<()> {
+        write.snapshot().validate()
+    }
+}
+
+/// Enabling the product barrier with retained originals hides native input and
+/// duplicate success until exact journal adoption. An existing genuine offer
+/// can still reserve its source-bound ACK, allowing custody to free resources.
+#[test]
+fn native_barrier_withholds_input_and_duplicate_but_allows_original_ack() {
+    let mut s = Scene::new();
+    let envelope = s.mail("barrier-original", 10);
+    let write = s.write("barrier-original", 10);
+    s.publish(write);
+    assert_eq!(
+        s.service
+            .receive_subscribed(&s.target.agent_id, 11, 1)
+            .unwrap()
+            .messages
+            .len(),
+        1
+    );
+    s.service.require_native_continuity(&s.scope).unwrap();
+    assert!(
+        s.service
+            .receive_subscribed(&s.target.agent_id, 11, 1)
+            .unwrap()
+            .messages
+            .is_empty()
+    );
+    assert!(
+        s.service
+            .storage_qualified_duplicate(
+                &s.sender.agent_id,
+                &envelope,
+                &s.scope,
+                MessageScope::Session,
+                11
+            )
+            .is_err()
+    );
+    let ack = s
+        .service
+        .prepare_acknowledgement(&s.target.agent_id, 1, 512 * 1024)
+        .unwrap()
+        .unwrap();
+    s.service.cancel_acknowledgement(&ack).unwrap();
+    let request = s
+        .service
+        .prepare_native_continuity(&s.scope, &s.target.agent_id)
+        .unwrap();
+    let verified = request.write().persist(&mut s.store).unwrap();
+    assert!(request.finish(&mut s.service, verified).unwrap());
+    assert_eq!(
+        s.service
+            .receive_subscribed(&s.target.agent_id, 12, 1)
+            .unwrap()
+            .messages
+            .len(),
+        1
+    );
+    assert!(
+        s.service
+            .storage_qualified_duplicate(
+                &s.sender.agent_id,
+                &envelope,
+                &s.scope,
+                MessageScope::Session,
+                12
+            )
+            .unwrap()
+            .unwrap()
+            .accepted
+    );
+}
+
+/// Immutable identity reconciliation may retire a namespace before the product
+/// refreshes its actual shell view. A known stale native entry must stay behind
+/// the barrier, rather than temporarily becoming an unbound/raw endpoint with
+/// no pending journal work. Same epoch/CID/floor cannot repair that authority gap.
+#[test]
+fn stale_known_native_namespace_cannot_fall_back_to_unbound_admission() {
+    let mut s = Scene::new();
+    s.service.require_native_continuity(&s.scope).unwrap();
+    let original = s
+        .service
+        .prepare_native_continuity(&s.scope, &s.target.agent_id)
+        .unwrap();
+    let verified = original.write().persist(&mut s.store).unwrap();
+    assert!(original.finish(&mut s.service, verified).unwrap());
+    s.target.window_id = Some(WindowId::opaque("filled-window").unwrap());
+    s.service
+        .ensure_agent_identity(s.target.clone(), 12)
+        .unwrap();
+    let before = s.service.storage_usage().unwrap().unwrap();
+    assert_eq!(
+        s.service.pending_native_continuity(),
+        Some(&s.target.agent_id)
+    );
+    assert!(!s.service.native_delivery_is_available(&s.target.agent_id));
+    assert!(
+        s.service
+            .prepare_acceptance(
+                &s.sender.agent_id,
+                s.mail("stale-native", 10),
+                MessageScope::Session,
+                13,
+                4096,
+                None
+            )
+            .is_err()
+    );
+    assert_eq!(s.service.next_message_sequence(), 1);
+    assert_eq!(s.service.storage_usage().unwrap().unwrap(), before);
+    assert!(
+        s.service
+            .prepare_native_continuity(&s.scope, &s.target.agent_id)
+            .is_err()
+    );
+    let current = s
+        .service
+        .capture_sender_registration(&s.target.agent_id)
+        .unwrap();
+    s.service
+        .bind_native_conversation(&current, "original-conversation", &s.incarnation)
+        .unwrap();
+    let fresh = s
+        .service
+        .prepare_native_continuity(&s.scope, &s.target.agent_id)
+        .unwrap();
+    let verified = fresh.write().persist(&mut s.store).unwrap();
+    assert!(fresh.finish(&mut s.service, verified).unwrap());
+    let write = s.write("after-current-native", 10);
+    assert_eq!(write.sequence(), 1);
+}
+
 /// One fresh original storage owner with a real registration and native shell
 /// identity. Public ID/floor stay unchanged throughout independent rebindings.
 struct Scene {

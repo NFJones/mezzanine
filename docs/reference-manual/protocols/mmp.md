@@ -431,11 +431,24 @@ inherit the marker. Immutable identity reconciliation can replace a namespace
 without changing shell epoch, CID or floor, so saved labels alone remain
 insufficient. Inventory validates each fact and retains only its compact key.
 Stored observations do not restore native authority or prove current lifecycle
-availability. Publication barriers and private session/context qualification
+availability. Private context publication and session/context qualification
 remain implementation work before durable activation.
 Journal transactions also preserve a fingerprint of every non-target row from
 the original input. Trigger deletion or rechecksummed mutation of an unrelated
 source, ACK or native fact rolls the whole attempted write back.
+
+Internal actor spill setup now enables a trusted native admission barrier. The
+actor journals current native intervals before selecting queued authorized
+actions, whose original source owners retain their bodies. New reservations and
+storage-qualified duplicate replies wait while any current native interval is
+unrecorded; native input also waits for its exact interval. Direct ingress can
+receive an explicit never-accepted busy result and retry after journal progress.
+No sequence or native request generation is assigned for that refusal.
+Existing genuine ACKs remain settleable, including when a metadata capture was
+refused before issuing I/O. Actual issued workers retain their actor/root owner
+through loss, backed-off retry and shutdown. Replacements require their own
+journal adoption. Private context publication and qualified session/native
+restart restoration remain separate activation gates.
 
 The opt-in requires an actually empty original store. It is not enabled by
 normal product construction: trusted cold recovery, native restart deduplication

@@ -233,8 +233,16 @@ impl MessageService {
     /// uses the pane; suspension is neither retirement nor canonical receive.
     pub(super) fn native_delivery_is_available(&self, id: &AgentId) -> bool {
         self.native_bindings.get(id).is_none_or(|binding| {
-            !self.sender_registration_is_current(&binding.registration)
-                || binding.delivery_available
+            let current = self.sender_registration_is_current(&binding.registration);
+            if self
+                .storage_custody
+                .as_ref()
+                .is_some_and(|p| p.native_continuity_required)
+            {
+                current && binding.delivery_available && binding.continuity_recorded
+            } else {
+                !current || binding.delivery_available
+            }
         })
     }
 

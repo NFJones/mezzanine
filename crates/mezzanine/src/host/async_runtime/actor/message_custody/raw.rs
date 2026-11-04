@@ -115,7 +115,8 @@ impl AsyncRuntimeSessionActor {
             .message_custody
             .as_ref()
             .ok_or_else(|| MezError::invalid_state("MMP raw storage root unavailable"))?;
-        let yielding = request.is_acknowledgement() && owner.can_park_ack();
+        let yielding = request.is_acknowledgement()
+            && (owner.can_park_ack() || owner.can_interrupt_native_capture());
         if !yielding
             && (owner.wake.is_some()
                 || owner.pending.is_some()
@@ -152,6 +153,7 @@ impl AsyncRuntimeSessionActor {
             self.finish_raw_message_input(raw, Err(error));
             return;
         }
+        self.pump_native_message_continuity();
         let Some(owner) = self.message_custody.as_mut() else {
             self.finish_raw_message_input(
                 raw,
@@ -160,6 +162,23 @@ impl AsyncRuntimeSessionActor {
             return;
         };
         let yielding = request.is_acknowledgement() && owner.can_park_ack();
+        let capture_ack = request.is_acknowledgement() && owner.can_interrupt_native_capture();
+        if !yielding
+            && !capture_ack
+            && (owner.wake.is_some()
+                || owner.pending.is_some()
+                || owner.failure.is_some()
+                || owner.shutdown.is_some())
+        {
+            self.complete_stored_raw_message(
+                raw,
+                RawCompletion::Rejected(MessageError::new(
+                    MessageErrorKind::Capacity,
+                    "MMP storage lane busy or unavailable; message not accepted",
+                )),
+            );
+            return;
+        }
         let service = self.service.message_service_mut();
         let mut completion = None;
         match request.prepare(

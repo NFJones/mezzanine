@@ -67,6 +67,58 @@ pub trait MessageNativeContinuityStore {
 }
 
 impl MessageService {
+    /// Enables the one-way product barrier under this actual original root.
+    /// Unrecorded current native intervals then withhold all new admissions and
+    /// duplicate acceptance replies, and cannot deliver native input. Existing
+    /// source-bound ACKs remain settleable. Foreign scope or unsettled lower
+    /// reservations refuse without changing policy; saved data cannot enable it.
+    pub fn require_native_continuity(&mut self, scope: &MessageStorageScope) -> Result<()> {
+        self.require_storage_scope(Some(scope))?;
+        if self.admission.is_some() || self.acknowledgement.is_some() {
+            return Err(MessageError::conflict(
+                "MMP native barrier requires settled reservations",
+            ));
+        }
+        self.storage_custody
+            .as_mut()
+            .ok_or_else(changed)?
+            .native_continuity_required = true;
+        Ok(())
+    }
+
+    /// Borrows one known native endpoint requiring current observation/journaling.
+    /// Lexical order is stable without allocating a side list or retaining
+    /// identity copies. Primitive storage owners without the product barrier
+    /// report none; actual product composition must explicitly enable it.
+    pub fn pending_native_continuity(&self) -> Option<&AgentId> {
+        if !self
+            .storage_custody
+            .as_ref()
+            .is_some_and(|p| p.native_continuity_required)
+        {
+            return None;
+        }
+        self.native_bindings
+            .iter()
+            .filter(|(_, b)| {
+                !self.sender_registration_is_current(b.registration()) || !b.continuity_recorded
+            })
+            .map(|(id, _)| id)
+            .min_by(|left, right| left.as_str().cmp(right.as_str()))
+    }
+
+    /// Refuses before sequence/idempotency/reservation mutation. Actor-owned
+    /// source queues wait for the separate metadata lane; direct ingress can
+    /// return a never-accepted busy response without retaining another payload.
+    pub(super) fn require_native_continuity_ready(&self) -> Result<()> {
+        if self.pending_native_continuity().is_some() {
+            return Err(MessageError::conflict(
+                "MMP native registration continuity is pending",
+            ));
+        }
+        Ok(())
+    }
+
     /// Captures a current native interval from its actual live allocations.
     /// Foreign scope, stale/missing binding or exhausted metadata refuses before
     /// cloning identity fields. Raw endpoints never acquire journal facts.

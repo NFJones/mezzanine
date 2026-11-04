@@ -109,6 +109,8 @@ pub(in crate::messaging) struct StorageCustody {
     /// Captured checkpoint metadata and its serialization copies stay charged
     /// through actual snapshot publication, even after the root lane is released.
     pub(super) checkpoint_bytes: Arc<std::sync::atomic::AtomicUsize>,
+    /// Trusted product admission barrier; never selected by saved/wire data.
+    pub(super) native_continuity_required: bool,
 }
 
 /// Content-free logical usage, independent of allocator-specific RSS or wire buffers.
@@ -196,6 +198,7 @@ impl MessageService {
         }
         self.storage_custody = Some(StorageCustody {
             checkpoint_bytes: Arc::default(),
+            native_continuity_required: false,
             scope: scope.clone(),
             limits,
             cache: PayloadBudget::new(limits.cache_messages, limits.cache_payload_bytes),

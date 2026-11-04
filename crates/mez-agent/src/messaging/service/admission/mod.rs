@@ -375,6 +375,7 @@ impl MessageService {
                 "message sender does not match authenticated agent connection",
             ));
         }
+        self.require_native_continuity_ready()?;
         let audience = resolve_message_audience(identity, scope)?;
         if self
             .accepted_messages
@@ -439,6 +440,7 @@ impl MessageService {
             ));
         }
         validate_sender_identity(&envelope.sender)?;
+        self.require_native_continuity_ready()?;
         if super::auxiliary::envelope_bytes(&envelope) > self.custody_limits().auxiliary_bytes {
             return Err(admission_capacity());
         }

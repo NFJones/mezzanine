@@ -283,9 +283,22 @@ fn accepted(exited: &AsyncRuntimeActorExit, turn: &AgentTurnRecord, tracked: boo
 /// while disk is gated and retain their original result as pending. After real
 /// commit, the same source publishes success exactly once with no extra inference.
 async fn action_control(tracked: bool) {
+    action_control_with_barrier(tracked, false).await;
+}
+
+/// The same real provider-produced source also waits behind registration
+/// journaling when product spill/barrier policy is enabled.
+async fn action_control_with_barrier(tracked: bool, barrier: bool) {
     let fixture = Fixture::new(false);
-    let (handle, actor, _, turn, target, _) =
+    let (handle, mut actor, _, turn, target, _) =
         actor_fixture(&fixture, mez_agent::ApprovalPolicy::AutoAllow).await;
+    if barrier {
+        actor
+            .enable_message_payload_spill(Default::default())
+            .unwrap();
+        let sql = rusqlite::Connection::open(fixture.path.join("custody.sqlite")).unwrap();
+        sql.execute_batch("CREATE TRIGGER require_native_before_source BEFORE INSERT ON records WHEN NEW.key LIKE 'a1:%:stage' AND NOT EXISTS(SELECT 1 FROM records WHERE key LIKE 'n1:%') BEGIN SELECT RAISE(ABORT,'native observation must precede source'); END;").unwrap();
+    }
     let runner = tokio::spawn(actor.run());
     let dispatch = handle
         .claim_configured_agent_provider_task(
@@ -390,7 +403,47 @@ async fn action_control(tracked: bool) {
     accepted(&exited, &turn, tracked);
     exited.service.terminate_all_pane_processes().unwrap();
     assert_eq!(provider.calls.load(Ordering::SeqCst), 1);
-    assert_eq!(fixture.probe.attempts.load(Ordering::SeqCst), 1);
+    if barrier {
+        // Spill can add genuine payload reads or record a newly reconciled
+        // namespace. Count canonical occurrences, not unrelated physical jobs.
+        let store =
+            MmpCustodyStore::open_existing(&fixture.path, "original-session", Default::default())
+                .unwrap();
+        let limits = mez_agent::messaging::MessageAcceptanceDecodeLimits {
+            payload_bytes: 1024 * 1024,
+            auxiliary_bytes: 1024 * 1024,
+            recipient_count: 4096,
+            recipient_bytes: 1024 * 1024,
+        };
+        let inventory = store.inventory_custody(limits).unwrap();
+        assert_eq!(inventory.occurrences.len(), 1);
+        assert_eq!(inventory.native_continuity_keys.len(), 1);
+        assert_eq!(exited.service.message_service().next_message_sequence(), 2);
+        let fact = store
+            .read_native_continuity(&turn.agent_id)
+            .unwrap()
+            .unwrap();
+        let (source, _, _) = store.read_accepted_source(1, limits).unwrap();
+        assert_eq!(source.native_sender(), Some(&fact.snapshot.native.owner));
+        assert!(
+            exited
+                .service
+                .message_service()
+                .pending_native_continuity()
+                .is_none()
+        );
+    } else {
+        assert_eq!(fixture.probe.attempts.load(Ordering::SeqCst), 1);
+    }
+}
+
+/// An already-authorized model action stays in its original semantic queue while
+/// native registration metadata commits first. Both tracked and untracked sends
+/// then publish exactly once without another provider call or user resend.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn authorized_native_actions_wait_for_registration_before_source_reservation() {
+    action_control_with_barrier(true, true).await;
+    action_control_with_barrier(false, true).await;
 }
 
 /// Tracked normal policy-planned sends install their exact request receipt before

@@ -16100,6 +16100,33 @@ barriers, private session/context qualification and qualified native restore
 remain required before durable product activation. This journal component
 does not enable those paths or introduce a configuration/wire field.
 
+The internal actor spill setup now enables a one-way original-scope native
+admission barrier. While any actual current native interval is unrecorded, the
+lower owner MUST withhold fresh source reservations and storage-qualified
+duplicate acceptance replies before sequence/idempotency/resource mutation.
+Native receive MUST withhold input for that interval. Existing genuine
+source-bound ACKs MUST remain settleable. Saved/wire/config data MUST NOT select
+this trusted setup policy; primitive storage construction alone is not product
+activation or native restart qualification.
+An entry with a replaced registration token MUST remain pending until the
+actual native view is reconciled and journaled; its missing current token MUST
+NOT temporarily downgrade that known endpoint to unbound/raw admission.
+
+The actor MUST journal one current interval at a time before preparing queued
+authorized actions. Those actions MUST retain their existing source ownership
+without a second body queue, sequence or request-generation reservation. Direct
+ingress MAY return an explicit never-accepted busy result while metadata owns
+the lane. Joined loss MUST retry the exact original metadata input; late results
+for replaced bindings MUST NOT open the successor's gate. The next actor turn
+MUST reobserve actual native bindings before admitting a source.
+
+A capture refusal before issuance MUST schedule bounded fresh observation and
+MUST NOT block an original ACK from using the actually idle root to release
+capacity. Once a metadata worker is issued, shutdown MUST retain its actor/root
+continuation through actual join and adoption. These connected admission/input
+barriers do not provide private context publication or qualified session/native
+restart restoration; those and the other durability gates remain required.
+
 Immutable envelope auxiliary metadata MUST additionally fit a 16 MiB logical
 budget over the deduplicated replay/custody union after normal replay eviction.
 Charge 1,024 bytes per occurrence plus 64 bytes and four times UTF-8 length for

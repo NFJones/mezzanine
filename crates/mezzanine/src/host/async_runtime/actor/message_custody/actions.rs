@@ -17,6 +17,7 @@ impl AsyncRuntimeSessionActor {
         {
             owner.failure.get_or_insert(error);
         }
+        self.pump_native_message_continuity();
         let Some(owner) = self.message_custody.as_mut() else {
             return;
         };

@@ -61,7 +61,7 @@ pub(super) async fn actor_fixture(
 }
 
 /// Original native semantic body; caller/current discovery is trusted setup.
-fn source(
+pub(super) fn source(
     actor: &AsyncRuntimeSessionActor,
     turn: &AgentTurnRecord,
     target: &SenderIdentity,

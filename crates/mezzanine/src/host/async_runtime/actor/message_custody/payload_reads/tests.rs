@@ -128,6 +128,104 @@ impl Drop for Scene {
     }
 }
 
+/// Exhausting only captured metadata must not put an unissued native capture
+/// ahead of an original positive ACK. That ACK uses the actual idle root and
+/// reserved worker headroom; releasing the held captures then lets the actor
+/// journal the current native interval without a message-sequence allocation.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn refused_native_capture_allows_actual_ack_to_release_custody() {
+    let mut scene = Scene::new().await;
+    scene
+        .seed(scene.first.clone(), "original-before-native", 40)
+        .await;
+    scene.settle().await; // Actual idle observation clears registration wake.
+    let batch = scene
+        .actor
+        .service
+        .message_service()
+        .fanout_ready_for(&scene.first.agent_id, 20, 1)
+        .unwrap()
+        .unwrap();
+    scene
+        .actor
+        .service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let native = scene
+        .actor
+        .service
+        .ensure_runtime_message_identity(
+            "agent-%1",
+            mez_core::ids::PaneId::opaque("%1"),
+            "agent",
+            &["agent-harness"],
+            21,
+        )
+        .unwrap();
+    scene
+        .actor
+        .service
+        .refresh_native_message_bindings()
+        .unwrap();
+    let mut held = Vec::new();
+    while let Ok(request) = scene
+        .actor
+        .service
+        .message_service()
+        .prepare_native_continuity(scene.root.storage_scope(), &native.agent_id)
+    {
+        held.push(request);
+        assert!(
+            held.len() < 10_000,
+            "capture leases must enforce finite metadata"
+        );
+    }
+    assert!(!held.is_empty());
+    scene.actor.poll_message_custody();
+    let owner = scene.actor.message_custody.as_ref().unwrap();
+    assert!(owner.pending.is_none());
+    assert!(matches!(owner.wake, Some(Wake::NativeCaptureRetry(_))));
+    assert_eq!(
+        scene.root.observe().await.unwrap(),
+        CustodyWorkerStatus::Idle
+    );
+    let (reply, receive) = oneshot::channel();
+    scene.actor.acknowledge_message_fanout(batch, reply);
+    assert!(matches!(
+        scene.actor.message_custody.as_ref().unwrap().pending,
+        Some(Pending::Acknowledgement(_))
+    ));
+    scene.settle().await;
+    assert_eq!(receive.await.unwrap().unwrap().last_sequence, 1);
+    assert!(
+        !scene
+            .actor
+            .service
+            .message_service()
+            .native_continuity_is_recorded(&native.agent_id)
+    );
+    drop(held);
+    scene.settle().await; // Actual idle observation after ACK adoption.
+    scene.actor.poll_message_custody();
+    scene.settle().await;
+    assert!(
+        scene
+            .actor
+            .service
+            .message_service()
+            .native_continuity_is_recorded(&native.agent_id)
+    );
+    assert_eq!(
+        scene
+            .actor
+            .service
+            .message_service()
+            .next_message_sequence(),
+        2
+    );
+}
+
 /// Cancelling an unissued read discards only its small continuation. It neither
 /// claims a physical worker nor evicts/pins a second payload for an absent caller.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
