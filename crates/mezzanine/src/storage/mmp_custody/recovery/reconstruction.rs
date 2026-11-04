@@ -285,6 +285,15 @@ impl<'a> Port<'a> {
                     },
                 )
                 .map_err(lower_error)?;
+            target
+                .restore_raw_registration_ends(sequence, |namespace| {
+                    let key = super::super::registration_end::record_key(&namespace);
+                    self.store
+                        .read_registration_end_in_snapshot(&transaction, &key)
+                        .map(|record| record.map(|record| record.snapshot))
+                        .map_err(lower_error)
+                })
+                .map_err(lower_error)?;
         }
         if self.native_context.is_some() {
             self.transaction = Some(transaction);

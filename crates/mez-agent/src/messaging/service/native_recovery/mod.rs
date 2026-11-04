@@ -97,6 +97,7 @@ impl MessageService {
         if target.failed {
             return Err(unavailable());
         }
+        target.service.retain_cold_raw_registration_ends()?;
         let MessageNativeRecovery {
             mut service,
             bindings,
@@ -193,7 +194,7 @@ impl MessageNativeRecovery {
             admission_available,
             delivery_available,
         )?;
-        self.service.track_native_registration(&registration)?;
+        self.service.track_registration(&registration)?;
         self.service.subscribe_from_retained_start(&id)?;
         self.bindings.try_reserve(1).map_err(|_| unavailable())?;
         self.bindings.push(MessageRecoveredNativeBinding {

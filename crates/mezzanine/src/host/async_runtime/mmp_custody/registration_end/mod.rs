@@ -90,15 +90,16 @@ impl MmpCustodyRoot {
         let mut state = self.0.state.lock().map_err(|_| ownership_error())?;
         let State::RecordedRegistrationEnd {
             admission,
-            result: Ok(_),
+            result: Ok(written),
             ..
         } = &*state
         else {
             return Err(ownership_error());
         };
-        if !admission.request.belongs_to_service(service) {
-            return Err(ownership_error());
-        }
+        admission
+            .request
+            .qualify_adoption(service, &written.verified)
+            .map_err(lower_error)?;
         let previous = std::mem::replace(&mut *state, State::Unavailable(ownership_error()));
         let State::RecordedRegistrationEnd {
             admission,

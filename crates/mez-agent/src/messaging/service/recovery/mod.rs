@@ -129,6 +129,66 @@ impl MessageService {
 }
 
 impl MessageStorageRecovery {
+    /// Qualifies existing raw namespace ends after installing one actual source.
+    /// This callback runs only inside the trusted original-history port. It
+    /// preserves already committed cutoffs instead of renewing them at startup;
+    /// legacy attribution stays unknown. Any conflicting observation poisons
+    /// the whole unpublished candidate, even if a port ignores this error.
+    pub fn restore_raw_registration_ends(
+        &mut self,
+        sequence: u64,
+        mut read: impl FnMut([u8; 16]) -> Result<Option<MessageRegistrationEndSnapshot>>,
+    ) -> Result<()> {
+        if self.failed {
+            return Err(unavailable());
+        }
+        let result = (|| {
+            if sequence > self.last_sequence {
+                return Err(unavailable());
+            }
+            let Some(row) = self.service.queued_by_sequence.get(&sequence) else {
+                return Ok(());
+            };
+            let (Some(registrations), Some(native)) =
+                (&row.registration_bindings, &row.native_bindings)
+            else {
+                return Ok(());
+            };
+            if registrations.recipients.len() != row.recipient_bindings.len()
+                || native.recipients.len() != row.recipient_bindings.len()
+            {
+                return Err(unavailable());
+            }
+            for (index, ((agent, floor), binding)) in row
+                .recipient_bindings
+                .iter()
+                .zip(&registrations.recipients)
+                .enumerate()
+            {
+                if native.recipients[index].is_some() {
+                    continue;
+                }
+                let Some(end) = read(binding.namespace)? else {
+                    continue;
+                };
+                end.validate()?;
+                if end.agent_id != agent.as_str()
+                    || end.registration_namespace != binding.namespace
+                    || end.registered_after_sequence != *floor
+                    || row.sequence <= *floor
+                    || row.sequence > end.ended_after_sequence
+                    || binding.ended.get_or_init(|| end.ended_after_sequence)
+                        != &end.ended_after_sequence
+                {
+                    return Err(unavailable());
+                }
+            }
+            Ok(())
+        })();
+        self.failed |= result.is_err();
+        result
+    }
+
     /// Charges retained checkpoint/inventory/fold evidence against the candidate's
     /// own budget while it is borrowed by the product. Scratch is already held.
     pub fn hold_metadata(&self, bytes: usize) -> Result<MessageStorageSnapshotLease> {

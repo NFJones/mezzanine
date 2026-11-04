@@ -64,6 +64,7 @@ impl MessageService {
             before: vec![Some(before)],
             handoff: Some(proof.clone()),
             retirement: None,
+            raw_retirement: None,
             metadata_bytes: bytes,
             decode_payload_bytes: policy.limits.cache_payload_bytes,
             published: AtomicBool::new(false),

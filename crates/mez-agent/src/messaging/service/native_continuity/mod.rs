@@ -182,7 +182,7 @@ impl MessageService {
             registered_after_sequence: *self.registration_floors.get(id).ok_or_else(changed)?,
         };
         snapshot.validate()?;
-        self.track_native_registration(binding.registration())?;
+        self.track_registration(binding.registration())?;
         Ok(MessageNativeContinuityRequest(Arc::new(Capture {
             scope: scope.clone(),
             runtime: self.acceptance_runtime.clone(),

@@ -1,4 +1,4 @@
-//! Quarantined decoding of immutable acceptance source schemas1/2.
+//! Quarantined decoding of immutable acceptance source schemas1/2/3.
 //!
 //! Admission serializes compact JSON in a fixed, versioned order. This decoder
 //! recognizes only that original representation, charges strings and entries
@@ -37,9 +37,31 @@ pub struct MessageAcceptanceSource {
     audience: MessageAudienceSnapshot,
     recipient_bindings: Vec<MessageRecipientBindingSnapshot>,
     native_bindings: Option<super::super::native_binding::NativeBindings>,
+    registration_bindings: Option<super::super::registration_binding::RegistrationBindings>,
 }
 
 impl MessageAcceptanceSource {
+    /// Compares all frozen namespace attribution before a reload discards this
+    /// decoded wrapper. End markers and source-retention guards never come from
+    /// serialized data and are intentionally outside this immutable comparison.
+    pub(in crate::messaging) fn matches_registration_bindings(
+        &self,
+        expected: Option<&super::super::registration_binding::RegistrationBindings>,
+    ) -> bool {
+        match (self.registration_bindings.as_ref(), expected) {
+            (None, None) => true,
+            (Some(actual), Some(expected)) => {
+                actual.recipients.len() == expected.recipients.len()
+                    && actual
+                        .recipients
+                        .iter()
+                        .zip(&expected.recipients)
+                        .all(|(actual, expected)| actual.namespace == expected.namespace)
+            }
+            _ => false,
+        }
+    }
+
     /// Moves validated decoded payload bytes into an envelope without cloning them.
     /// This grants no registration, acceptance, delivery or storage authority.
     pub(in crate::messaging) fn into_envelope(self) -> Result<Envelope> {
@@ -80,6 +102,7 @@ impl MessageAcceptanceSource {
             audience,
             recipient_bindings,
             native_bindings: self.native_bindings,
+            registration_bindings: self.registration_bindings,
             accepted_at_ms: self.accepted_at_ms,
             sender_registered_after_sequence: Some(self.sender_registered_after_sequence),
             offered_at_ms: std::sync::Mutex::new(offered_at_ms),
@@ -89,6 +112,16 @@ impl MessageAcceptanceSource {
             horizon_observed_at_ms: std::sync::Mutex::new(None),
             ack_expiry_observed_at_ms: std::sync::Mutex::new(expiry_observed_at_ms),
         })
+    }
+
+    /// Borrows descriptive original registration attribution. Older schemas
+    /// remain unknown; bytes grant no live endpoint or retirement authority.
+    pub fn recipient_registration_namespace(&self, index: usize) -> Option<[u8; 16]> {
+        self.registration_bindings
+            .as_ref()?
+            .recipients
+            .get(index)
+            .map(|binding| binding.namespace)
     }
 
     /// Returns the original occurrence sequence; it is not a receipt.
@@ -229,7 +262,7 @@ pub fn decode_message_acceptance<R: Read>(
     let mut metadata = MetadataBudget::new(limits.auxiliary_bytes)?;
     reader.literal(b"{\"schema_version\":")?;
     let version = reader.unsigned()?;
-    if !matches!(version, 1 | 2) {
+    if !matches!(version, 1..=3) {
         return Err(MessageError::invalid_args(
             "unsupported MMP acceptance schema",
         ));
@@ -326,8 +359,17 @@ pub fn decode_message_acceptance<R: Read>(
         });
     }
     reader.literal(b"]")?;
-    let native_bindings = if version == 2 {
+    let native_bindings = if version >= 2 {
         Some(decode_native_bindings(
+            &mut reader,
+            &mut metadata,
+            bindings.len(),
+        )?)
+    } else {
+        None
+    };
+    let registration_bindings = if version == 3 {
+        Some(decode_registration_bindings(
             &mut reader,
             &mut metadata,
             bindings.len(),
@@ -368,9 +410,48 @@ pub fn decode_message_acceptance<R: Read>(
         },
         recipient_bindings: bindings,
         native_bindings,
+        registration_bindings,
     };
     validate(&candidate)?;
     Ok(candidate)
+}
+
+/// Reads exactly one bounded UUID per frozen recipient, without live markers.
+fn decode_registration_bindings<R: Read>(
+    reader: &mut RecordReader<R>,
+    metadata: &mut MetadataBudget,
+    count: usize,
+) -> Result<super::super::registration_binding::RegistrationBindings> {
+    reader.literal(b",\"recipient_registrations\":[")?;
+    let mut namespaces = Vec::new();
+    namespaces
+        .try_reserve_exact(count)
+        .map_err(|_| capacity())?;
+    for index in 0..count {
+        metadata.charge(16)?;
+        if index != 0 {
+            reader.literal(b",")?;
+        }
+        reader.literal(b"[")?;
+        let mut namespace = [0u8; 16];
+        for (offset, byte) in namespace.iter_mut().enumerate() {
+            if offset != 0 {
+                reader.literal(b",")?;
+            }
+            *byte = u8::try_from(reader.unsigned()?)
+                .map_err(|_| MessageError::invalid_args("invalid MMP registration namespace"))?;
+        }
+        reader.literal(b"]")?;
+        let value = uuid::Uuid::from_bytes(namespace);
+        if value.get_version_num() != 4 || value.get_variant() != uuid::Variant::RFC4122 {
+            return Err(MessageError::invalid_args(
+                "invalid MMP registration namespace",
+            ));
+        }
+        namespaces.push(namespace);
+    }
+    reader.literal(b"]")?;
+    Ok(super::super::registration_binding::RegistrationBindings::decoded(namespaces))
 }
 
 /// Reads bounded original application attribution only for explicit schema2.

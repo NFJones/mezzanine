@@ -137,6 +137,7 @@ impl MessagePayloadLoadWrite {
                 != row.sender_registered_after_sequence
             || source.envelope().payload.len() != row.envelope.payload_bytes
             || source.native_bindings() != row.native_bindings.as_ref()
+            || !source.matches_registration_bindings(row.registration_bindings.as_ref())
             || !audience_matches
             || source.recipient_bindings().len() != row.recipient_bindings.len()
             || !source
@@ -219,11 +220,17 @@ impl MessageService {
             reservation,
             limits: MessageAcceptanceDecodeLimits {
                 payload_bytes: row.envelope.payload_bytes,
-                auxiliary_bytes: auxiliary::retained_envelope_bytes(&row.envelope).saturating_add(
-                    row.native_bindings
-                        .as_ref()
-                        .map_or(0, |owners| owners.metadata_bytes()),
-                ),
+                auxiliary_bytes: auxiliary::retained_envelope_bytes(&row.envelope)
+                    .saturating_add(
+                        row.native_bindings
+                            .as_ref()
+                            .map_or(0, |owners| owners.metadata_bytes()),
+                    )
+                    .saturating_add(
+                        row.registration_bindings
+                            .as_ref()
+                            .map_or(0, |bindings| bindings.metadata_bytes()),
+                    ),
                 recipient_count: row.recipient_bindings.len(),
                 recipient_bytes: row
                     .recipient_bindings

@@ -1037,6 +1037,7 @@ mod native_actor;
 mod native_barrier;
 
 mod raw_expiry;
+mod raw_retirement;
 
 mod native_actions;
 

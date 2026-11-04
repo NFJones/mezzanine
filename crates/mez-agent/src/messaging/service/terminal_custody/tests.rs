@@ -33,6 +33,9 @@ impl MessageTerminalStore for Store {
             &bytes[..8],
             match write.kind() {
                 MessageTerminalKind::ExpiryObservation => b"MMPEXP01",
+                MessageTerminalKind::RecipientRetirement
+                    if write.raw_retired_recipient().is_some() =>
+                    b"MMPRET02",
                 MessageTerminalKind::RecipientRetirement => b"MMPRET01",
                 MessageTerminalKind::HorizonRelease => b"MMPREL01",
                 MessageTerminalKind::SenderConsumption => b"MMPCON01",
@@ -797,4 +800,5 @@ fn expiry_deadline_tracks_strict_original_boundary_and_actual_slot_protection() 
 }
 
 mod horizon;
+mod raw_retirement;
 mod retirement;

@@ -47,11 +47,18 @@ impl AsyncRuntimeSessionActor {
             .message_service_mut()
             .prepare_storage_horizon_release(scope, now_ms, 8 * 1024 * 1024)
         {
-            Ok(None) => self.service.message_service_mut().prepare_storage_expiry(
-                scope,
-                now_ms,
-                8 * 1024 * 1024,
-            ),
+            Ok(None) => match self
+                .service
+                .message_service_mut()
+                .prepare_storage_raw_retirement(scope, now_ms, 8 * 1024 * 1024)
+            {
+                Ok(None) => self.service.message_service_mut().prepare_storage_expiry(
+                    scope,
+                    now_ms,
+                    8 * 1024 * 1024,
+                ),
+                other => other,
+            },
             other => other,
         };
         match selected {

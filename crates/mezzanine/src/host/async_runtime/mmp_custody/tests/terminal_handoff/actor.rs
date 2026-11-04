@@ -1,9 +1,10 @@
 //! Live sender facts driven by genuine action acceptance and actor/root custody.
 //!
 //! A configured offline provider plans the real send under its issued claim;
-//! actual runtime persistence and the actor publish acceptance. Expiry setup
-//! sets a trusted finite TTL before actual acceptance, then uses the real
-//! original terminal port at a deterministic future observation.
+//! actual runtime persistence and the actor publish acceptance. Expiry controls
+//! set a trusted finite TTL before acceptance and use the original terminal
+//! port at a future observation. Raw-retirement controls keep the actual normal
+//! TTL-free source and drive its genuine end and terminal through the actor.
 //! The tests then drive the actual actor handoff, without fabricating action
 //! ownership, context event IDs, canonical proofs, or release bits.
 
@@ -17,6 +18,21 @@ use mez_agent::{ActionStatus, AgentTurnRecord};
 /// each owner after assertions, as in the native action acceptance tests.
 async fn accepted_scene(
     fixture: &Fixture,
+) -> (
+    AsyncRuntimeSessionHandle,
+    AsyncRuntimeSessionActor,
+    MmpCustodyRoot,
+    AgentTurnRecord,
+    SenderIdentity,
+) {
+    accepted_scene_with_terminal(fixture, false).await
+}
+
+/// Uses the same genuine action owner for either strict expiry or an actual
+/// raw recipient end; retirement keeps the action's ordinary TTL-free source.
+async fn accepted_scene_with_terminal(
+    fixture: &Fixture,
+    retired: bool,
 ) -> (
     AsyncRuntimeSessionHandle,
     AsyncRuntimeSessionActor,
@@ -39,7 +55,9 @@ async fn accepted_scene(
         actor.observe_message_custody_for_tests().await.unwrap(),
         CustodyWorkerStatus::NativeContinuityAwaitingAdoption
     );
-    actor.service.set_native_action_ttl_for_tests(60_000);
+    if !retired {
+        actor.service.set_native_action_ttl_for_tests(60_000);
+    }
     let sender = mez_core::ids::AgentId::opaque(turn.agent_id.clone()).unwrap();
     let dispatch = actor
         .service
@@ -95,6 +113,31 @@ async fn accepted_scene(
         ActionStatus::Succeeded
     );
     drain_ordinary(&mut actor).await;
+    if retired {
+        assert!(
+            actor
+                .service
+                .message_service_mut()
+                .retire_agent_identity(&target.agent_id)
+        );
+        let mut ended = false;
+        for _ in 0..16 {
+            actor.poll_message_custody_for_tests();
+            match actor.observe_message_custody_for_tests().await.unwrap() {
+                CustodyWorkerStatus::RegistrationEndAwaitingAdoption => ended = true,
+                CustodyWorkerStatus::TerminalAwaitingAdoption if ended => {
+                    return (handle, actor, root, turn, target);
+                }
+                CustodyWorkerStatus::Idle => {}
+                other => {
+                    actor.service.terminate_all_pane_processes().unwrap();
+                    panic!("unexpected genuine raw retirement: {other:?}");
+                }
+            }
+        }
+        actor.service.terminate_all_pane_processes().unwrap();
+        panic!("actual raw end did not reach terminal adoption");
+    }
     let ticket = actor
         .service
         .message_service_mut()
@@ -1043,5 +1086,61 @@ async fn actor_sender_handoff_own_preissue_backoff_keeps_its_deadline_wakeable()
     assert_eq!(journal_count(&fixture, "s1"), 1);
     assert_eq!(pending(&actor), 0);
     assert_eq!(facts(&actor, &turn), 1);
+    actor.service.terminate_all_pane_processes().unwrap();
+}
+
+/// A genuine TTL-free model action to an actual raw registration gets one
+/// neutral sender fact after that endpoint ends. Real H1 and separate S1 retain
+/// recipient_retired, release only original custody, and preserve provider/action
+/// ownership without a fabricated recipient ACK or new task.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn actor_raw_retirement_handoff_consumes_actual_ttl_free_action_once() {
+    let fixture = Fixture::new(true);
+    let (_, mut actor, _, turn, target) = accepted_scene_with_terminal(&fixture, true).await;
+    let before = actor.service.pending_agent_provider_tasks();
+    assert_eq!(facts(&actor, &turn), 0);
+    for expected in [
+        CustodyWorkerStatus::TerminalHandoffAwaitingAdoption,
+        CustodyWorkerStatus::TerminalHandoffAwaitingAdoption,
+        CustodyWorkerStatus::TerminalAwaitingAdoption,
+    ] {
+        actor.poll_message_custody_for_tests();
+        assert_eq!(
+            actor.observe_message_custody_for_tests().await.unwrap(),
+            expected
+        );
+    }
+    assert_eq!(facts(&actor, &turn), 1);
+    assert_eq!(pending(&actor), 0);
+    assert_eq!(actor.service.pending_agent_provider_tasks(), before);
+    assert!(
+        actor
+            .service
+            .message_service()
+            .registered_identity(&target.agent_id)
+            .is_none()
+    );
+    assert_eq!(journal_count(&fixture, "h1"), 1);
+    assert_eq!(journal_count(&fixture, "s1"), 1);
+    assert_eq!(journal_count(&fixture, "k1"), 0);
+    let store =
+        MmpCustodyStore::open_existing(&fixture.path, "original-session", Default::default())
+            .unwrap();
+    let limits = mez_agent::messaging::MessageAcceptanceDecodeLimits {
+        payload_bytes: 1024 * 1024,
+        auxiliary_bytes: 512 * 1024,
+        recipient_count: 4096,
+        recipient_bytes: 1024 * 1024,
+    };
+    let history = store.fold_custody_history(limits).unwrap();
+    assert_eq!(
+        history.terminal_observations[0].reason,
+        mez_agent::messaging::DeliveryTerminalReason::RecipientRetired
+    );
+    assert!(history.terminal_observations[0].sender_consumed);
+    let (source, _, _) = store
+        .read_accepted_source(history.terminal_observations[0].sequence, limits)
+        .unwrap();
+    assert_eq!(source.envelope().ttl_ms, None);
     actor.service.terminate_all_pane_processes().unwrap();
 }

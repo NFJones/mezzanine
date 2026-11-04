@@ -403,6 +403,10 @@ impl MessageService {
         row: &QueuedEnvelope,
         recipient: &AgentId,
     ) -> bool {
+        if !self.registration_recipient_is_current(row, recipient) {
+            return false;
+        }
+
         let Some(native) = &row.native_bindings else {
             return !(self
                 .storage_custody

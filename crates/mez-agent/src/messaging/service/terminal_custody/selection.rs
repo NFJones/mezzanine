@@ -71,6 +71,7 @@ impl MessageService {
                 kind: MessageTerminalKind::ExpiryObservation,
                 handoff: None,
                 retirement: None,
+                raw_retirement: None,
                 before: vec![None; indices.len()],
                 indices,
                 metadata_bytes: bytes,

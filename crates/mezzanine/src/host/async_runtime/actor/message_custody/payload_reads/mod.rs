@@ -163,6 +163,27 @@ impl AsyncRuntimeSessionActor {
             }
             return;
         }
+        // A queued obsolete reader owns no physical I/O. Retire it before a
+        // busy end/terminal lane or admission backoff can hold its reply and
+        // descriptor quota. Preserve the order of all still-current readers;
+        // an actually issued read stays with its original pending continuation.
+        let service = self.service.message_service();
+        for _ in 0..owner.payload_reads.len() {
+            let Some(read) = owner.payload_reads.pop_front() else {
+                break;
+            };
+            if read.reply.is_closed() {
+                continue;
+            }
+            if !service.sender_registration_is_current(&read.registration) {
+                let _ = read.reply.send(Ok(None));
+            } else {
+                owner.payload_reads.push_back(read);
+            }
+        }
+        if owner.payload_reads.is_empty() {
+            owner.payload_retry_at = None;
+        }
         if owner.pending.is_some()
             || owner.wake.is_some()
             || owner.failure.is_some()

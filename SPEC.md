@@ -15921,9 +15921,14 @@ This internal opt-in MUST NOT activate for existing stores without trusted
 recovery, and MUST NOT imply default product activation or native restart
 recovery. No wire or configuration option selects this policy.
 
-Storage-policy acceptance records MUST use immutable source schema2 to capture
+Storage-policy acceptance records MUST preserve immutable source schema2 native attribution and use schema3 for newly guarded sources. Schema3 MUST additionally freeze one exact registration namespace per recipient; only namespaces, never live end markers or reconnect credentials, are encoded. Legacy schemas1/2 MUST remain exact unknown for this additional attribution. This captures
 native sender and recipient conversation/incarnation attribution in the frozen
-recipient order. Native ownership MUST derive from the actual current runtime
+recipient order. Newly guarded source metadata, including namespace and native
+attribution, MUST fit the actual 512 KiB original-source decoder quantum before
+sequence reservation or I/O; conservative computed admission may stop earlier
+than the independent count ceilings. Rejected raw reservations MUST release
+source-only end-intent metadata. Native-publication and actual ended intents
+MUST retain their independent obligations. Native ownership MUST derive from the actual current runtime
 shell binding and exact MMP registration, not public pane/agent IDs or sequence
 floors. Independent durable bindings, including resume of the same conversation,
 MUST have distinct shell incarnations; exact same-runtime rollback MAY preserve
@@ -16123,7 +16128,7 @@ reserve 2 MiB recovery scratch plus bounded plan/encoding metadata before I/O,
 retaining the charge through the final worker/input owner. Linked source-slot
 terminal observations remain separate from the explicit end journal below.
 
-Before guarded native publication, the lower owner MUST reserve one bounded
+Before guarded native publication or guarded source acceptance, the lower owner MUST reserve one bounded
 registration-end intent for the actual registration allocation. The intent MUST
 retain its opaque allocation, original namespace and interval floor after live
 removal. Explicit removal or immutable authority replacement MUST freeze the
@@ -16177,7 +16182,33 @@ Later R1 release, canonical H1 handoff, S1 consumption and cold reconstruction
 MUST preserve this exact reason and first clock. A later expiry of a different
 slot MUST NOT invalidate a prior genuine d1. Metadata refusal MUST retry through
 bounded original lookup backoff; an existing canonical owner keeps precedence.
-Full native/raw lifecycle integration and generic live-restore drain remain
+Raw recipient retirement MUST use an actual source-bound allocation end, not
+public ID/floor equality or current absence. A schema3 source MUST retain its
+original registration's shared one-way marker; replacement with an equal floor
+MUST NOT receive that source. The common terminal lane MUST wait for original
+o1 adoption before selecting raw retirement, leaving the exclusive worker free
+to commit that prerequisite even after capture refusal. Its bodyless version2
+`d1` frame MUST remain exactly 168 bytes with `MMPTDR02`/`MMPRET02` framing,
+explicit source namespace, zero native-lifetime digest and a fingerprint of the
+canonical original end snapshot. It MUST qualify explicit raw classification,
+source/slot/namespace/floor/cutoff and actual o1 in the original transaction.
+Missing schema3 attribution MUST remain unknown. Native version1 d1 continues
+to require actual b1 provenance and same-source canonical absence.
+
+Trusted one-use cold native recovery MAY classify explicit original raw slots
+as unavailable because it restores no prior-process raw endpoint. It MUST NOT
+end a namespace actually restored by that native target. Existing qualified o1
+cutoffs MUST survive unchanged; otherwise the original persistent allocation
+watermark MUST bound the cold end. This selection MUST retain charged end
+intents for original-root journal adoption before raw d1, without creating a
+registration, reconnect bearer, offer, ACK or provider task. Generic decoding,
+snapshots and ordinary live absence MUST NOT acquire this authority.
+
+Actor shutdown MUST retire its actual raw leases after original ACK/application
+settlement and drain any resulting end intents before consuming its shutdown
+reply or releasing the original root. Fresh raw terminal work stays withheld
+during Stop; its accepted original and committed end remain recoverable.
+Generic live-restore drain and the remaining lifecycle/resource gates remain
 required before durable activation.
 
 The internal actor spill setup now enables a one-way original-scope native

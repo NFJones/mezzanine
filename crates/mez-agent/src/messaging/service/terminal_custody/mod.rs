@@ -34,7 +34,7 @@ const MAX_METADATA: usize = 8 * 1024 * 1024;
 pub enum MessageTerminalKind {
     /// Publish the first strict original TTL observation into unsettled slots.
     ExpiryObservation,
-    /// Publish one exact ended-native-recipient observation after canonical absence.
+    /// Publish one exact ended-recipient observation under its original evidence.
     RecipientRetirement,
     /// Release actual terminal outcomes after their finite handoff horizon.
     HorizonRelease,
@@ -54,6 +54,7 @@ struct Identity {
     before: Vec<Option<MessageDeliveryTerminalSnapshot>>,
     handoff: Option<MessageTerminalHandoffCommit>,
     retirement: Option<MessageNativeRetirementWitness>,
+    raw_retirement: Option<MessageRegistrationEndSnapshot>,
     metadata_bytes: usize,
     decode_payload_bytes: usize,
     published: AtomicBool,
@@ -194,6 +195,11 @@ impl MessageTerminalWrite {
     pub fn retired_recipient(&self) -> Option<&MessageNativeRetirementWitness> {
         self.identity.retirement.as_ref()
     }
+    /// Borrows only an actual original raw registration end captured by this
+    /// reservation. Decoded facts cannot construct this write or its source.
+    pub fn raw_retired_recipient(&self) -> Option<&MessageRegistrationEndSnapshot> {
+        self.identity.raw_retirement.as_ref()
+    }
     /// Borrows original terminal before-images for horizon release. Observation
     /// writes have none; descriptive entries alone cannot grant release rights.
     pub fn terminal_entries(
@@ -263,6 +269,9 @@ impl MessageTerminalWrite {
     pub fn write_record(&self, writer: &mut impl Write) -> io::Result<()> {
         writer.write_all(match self.kind() {
             MessageTerminalKind::ExpiryObservation => b"MMPEXP01",
+            MessageTerminalKind::RecipientRetirement if self.raw_retired_recipient().is_some() => {
+                b"MMPRET02"
+            }
             MessageTerminalKind::RecipientRetirement => b"MMPRET01",
             MessageTerminalKind::HorizonRelease => b"MMPREL01",
             MessageTerminalKind::SenderConsumption => return self.write_consumption_record(writer),
@@ -274,6 +283,12 @@ impl MessageTerminalWrite {
         for (slot, index) in self.identity.indices.iter().enumerate() {
             writer.write_all(&index.to_le_bytes())?;
             if self.kind() == MessageTerminalKind::RecipientRetirement {
+                if let Some(end) = self.raw_retired_recipient() {
+                    writer.write_all(&end.registration_namespace)?;
+                    writer.write_all(&[0; 32])?;
+                    writer.write_all(&end.fingerprint().map_err(io::Error::other)?)?;
+                    continue;
+                }
                 let record = self
                     .retired_recipient()
                     .ok_or_else(|| io::Error::other("MMP original retirement witness missing"))?

@@ -658,6 +658,24 @@ impl AsyncRuntimeSessionActor {
                     .unwrap_or(true)
         });
         if ready {
+            // Socket retirement may itself create new end intents. Perform it
+            // after original ACK/application settlement, but before consuming
+            // the shutdown reply or releasing the root. Stop permits this end
+            // drain even though fresh terminal observations are withheld.
+            if let Err(error) = self.retire_all_raw_message_identities()
+                && let Some(owner) = self.message_custody.as_mut()
+            {
+                owner.failure.get_or_insert(error);
+            }
+            if self
+                .service
+                .message_service()
+                .has_pending_registration_end()
+                .unwrap_or(true)
+            {
+                self.pump_message_registration_end();
+                return false;
+            }
             let reply = self
                 .message_custody
                 .as_mut()
@@ -1136,6 +1154,8 @@ impl AsyncRuntimeSessionActor {
                         owner.pending = None;
                         owner.wake = None;
                         owner.failure = None;
+                        owner.terminal_retry_at = None;
+                        owner.request_native_scan();
                         capacity_ready = true;
                     })
             }

@@ -155,6 +155,11 @@ pub(super) fn source_metadata_bytes(row: &QueuedEnvelope) -> usize {
             .as_ref()
             .map_or(0, |owners| owners.metadata_bytes()),
     )
+    .saturating_add(
+        row.registration_bindings
+            .as_ref()
+            .map_or(0, |bindings| bindings.metadata_bytes()),
+    )
 }
 
 impl MessageService {

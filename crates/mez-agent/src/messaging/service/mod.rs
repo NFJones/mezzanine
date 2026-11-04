@@ -76,6 +76,7 @@ pub use acceptance_proof::{MessageAcceptanceProof, MessageAcceptanceReservation}
 pub(super) mod native_binding;
 pub use native_binding::{MessageNativeIncarnation, MessageNativeOwner, MessageNativeRegistration};
 mod identity;
+pub(super) mod registration_binding;
 pub use identity::MessageSenderRegistration;
 pub(super) use identity::RegistrationIdentity;
 mod payload_budget;

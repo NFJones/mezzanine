@@ -48,10 +48,32 @@ fn accepted() -> (
     Store,
     MessageSequence,
 ) {
+    accepted_with_guard(false)
+}
+
+/// Uses real schema3 guarded admission when exercising added source metadata.
+fn accepted_with_guard(
+    guarded: bool,
+) -> (
+    MessageService,
+    SenderIdentity,
+    SenderIdentity,
+    MessageStorageScope,
+    Store,
+    MessageSequence,
+) {
     let mut service = MessageService::default();
     let sender = service.register_agent(None, None, "sender", vec![]);
     let target = service.register_agent(None, None, "target", vec![]);
     service.subscribe(&target.agent_id).unwrap();
+    let scope = MessageStorageScope::default();
+    if guarded {
+        service
+            .enable_storage_custody(&scope, Default::default())
+            .unwrap();
+        service.require_native_continuity(&scope).unwrap();
+    }
+
     let envelope = Envelope {
         protocol: MMP_PROTOCOL,
         id: "one".into(),
@@ -86,7 +108,6 @@ fn accepted() -> (
             None,
         )
         .unwrap();
-    let scope = MessageStorageScope::default();
     let mut store = Store::default();
     let write = service
         .begin_storage_acceptance_write(&ticket, &scope)
@@ -343,4 +364,73 @@ fn joined_recovery_of_removed_source_does_not_reconstruct_mail() {
             .is_none()
     );
     assert!(service.pending.is_empty());
+}
+
+/// Every frozen schema3 namespace is part of the real decoder reservation.
+/// Before the regression fix an accepted guarded source repeatedly failed its
+/// own reload, leaving actual actor readers and native recovery unable to finish.
+#[test]
+fn guarded_payload_reload_reserves_registration_namespace_metadata() {
+    let (mut service, _, _, scope, mut store, sequence) = accepted_with_guard(true);
+    service.release_stored_payload(sequence, &scope).unwrap();
+    let write = service
+        .begin_payload_load(sequence, &scope)
+        .unwrap()
+        .unwrap();
+    let mut result = write.load(&mut store);
+    assert!(
+        result.error().is_none(),
+        "actual guarded source must fit its own reserved decoder: {:?}",
+        result.error()
+    );
+    assert!(service.publish_payload_load(&mut result).unwrap());
+    assert_eq!(
+        service.pending[&sequence]
+            .envelope
+            .resident()
+            .unwrap()
+            .payload,
+        "original"
+    );
+}
+
+/// A semantically valid substituted namespace, or removal of the entire added
+/// field using legacy schema2, must fail immutable-source validation. Rebuilding
+/// the digest from the original row must not mask changed decoded attribution.
+#[test]
+fn guarded_payload_reload_checks_original_registration_namespace_before_discarding_source() {
+    let (mut service, _, _, scope, store, sequence) = accepted_with_guard(true);
+    service.release_stored_payload(sequence, &scope).unwrap();
+    let write = service
+        .begin_payload_load(sequence, &scope)
+        .unwrap()
+        .unwrap();
+    let original = String::from_utf8(store.bytes).unwrap();
+    let split = original.find(",\"recipient_registrations\":").unwrap();
+    let namespace = *uuid::Uuid::new_v4().as_bytes();
+    let changed = format!(
+        "{},\"recipient_registrations\":{}}}",
+        &original[..split],
+        serde_json::to_string(&vec![namespace]).unwrap()
+    );
+    let legacy = format!(
+        "{}}}",
+        original[..split].replacen("\"schema_version\":3", "\"schema_version\":2", 1)
+    );
+    let limits = MessageAcceptanceDecodeLimits {
+        auxiliary_bytes: 512 * 1024,
+        ..write.decode_limits()
+    };
+    for bytes in [changed, legacy] {
+        let source = decode_message_acceptance(bytes.as_bytes(), limits).unwrap();
+        assert!(
+            write.validate(source).is_err(),
+            "valid decoded metadata cannot replace original registration attribution"
+        );
+    }
+    assert!(
+        write
+            .validate(decode_message_acceptance(original.as_bytes(), limits).unwrap())
+            .is_ok()
+    );
 }

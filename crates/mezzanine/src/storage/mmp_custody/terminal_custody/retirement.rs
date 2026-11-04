@@ -1,7 +1,8 @@
-//! Exact original retired-recipient observations, linked to b1/o1 evidence.
+//! Exact retired-recipient observations linked to original lifetime/end evidence.
 //!
-//! A lower witness follows actual canonical absence and exclusive source-slot
-//! protection. This original transaction rechecks source, immutable provenance,
+//! Native witnesses follow canonical absence and exclusive source protection;
+//! raw reservations require an actual source-bound end and adopted o1. The
+//! original transaction rechecks source/classification, immutable provenance,
 //! explicit namespace end, cutoff and p1/c1/ACK exclusion before writing d1.
 //! First input/non-target state survives worker loss. Stored framing remains
 //! descriptive and cannot create a native endpoint or successful delivery.
@@ -23,6 +24,8 @@ pub(super) struct First {
 
 /// Bounded journal data; it supplies no source or terminal mutation capability.
 pub(in crate::storage::mmp_custody) struct StoredRetirement {
+    /// Raw schema2 journal links explicit source namespace to an actual end.
+    pub raw: bool,
     /// Content-addressed original frame key, used for overlap checks.
     pub key: String,
     /// Immutable accepted occurrence, never a newly allocated sequence.
@@ -33,25 +36,26 @@ pub(in crate::storage::mmp_custody) struct StoredRetirement {
     pub source_sha256: [u8; 32],
     /// Original frozen recipient slot, without membership re-resolution.
     pub binding_index: u32,
-    /// Original namespace proved by the frozen native owner and b1/o1 rows.
+    /// Original namespace proved by native b1/o1 or explicit raw source3/o1.
     pub namespace: [u8; 16],
-    /// Exact immutable original lifetime row image.
+    /// Exact native lifetime row image; zero only for explicit raw version2.
     pub lifetime_sha256: [u8; 32],
-    /// Exact immutable original namespace-end row image.
+    /// Native end-row image, or canonical end-snapshot fingerprint for raw.
     pub end_sha256: [u8; 32],
 }
 
 /// Validates exact bounded framing and original allocation before source reads.
 fn decode(bytes: &[u8], store_id: &[u8]) -> Result<StoredRetirement> {
     if bytes.len() != RECORD_BYTES
-        || &bytes[..8] != b"MMPTDR01"
+        || !((&bytes[..8] == b"MMPTDR01" && &bytes[24..32] == b"MMPRET01")
+            || (&bytes[..8] == b"MMPTDR02" && &bytes[24..32] == b"MMPRET02"))
         || &bytes[8..24] != store_id
-        || &bytes[24..32] != b"MMPRET01"
         || bytes[48..52] != 1u32.to_le_bytes()
     {
         return Err(invalid());
     }
     let frame = StoredRetirement {
+        raw: &bytes[..8] == b"MMPTDR02",
         key: record_key(bytes),
         sequence: u64::from_le_bytes(bytes[32..40].try_into().map_err(|_| invalid())?),
         observed_at_ms: u64::from_le_bytes(bytes[40..48].try_into().map_err(|_| invalid())?),
@@ -65,7 +69,7 @@ fn decode(bytes: &[u8], store_id: &[u8]) -> Result<StoredRetirement> {
         || frame.binding_index >= 4096
         || frame.source_sha256 == [0; 32]
         || frame.namespace == [0; 16]
-        || frame.lifetime_sha256 == [0; 32]
+        || (frame.raw != (frame.lifetime_sha256 == [0; 32]))
         || frame.end_sha256 == [0; 32]
     {
         return Err(invalid());
@@ -80,22 +84,39 @@ impl PlannedTerminalStore<'_, '_> {
         {
             return Err(invalid());
         }
-        let witness = write.retired_recipient().ok_or_else(invalid)?;
+        let witness = write.retired_recipient();
+        let raw = write.raw_retired_recipient();
+        if witness.is_some() == raw.is_some() {
+            return Err(invalid());
+        }
         self.owned.revalidate()?;
         let store = self.owned.store_mut();
         if store.store_id != self.plan.store_id
-            || witness.record().store_id.as_slice() != self.plan.store_id
+            || witness
+                .is_some_and(|witness| witness.record().store_id.as_slice() != self.plan.store_id)
         {
             return Err(invalid());
         }
         let mut bytes = Vec::with_capacity(RECORD_BYTES);
-        bytes.extend_from_slice(b"MMPTDR01");
+        bytes.extend_from_slice(if raw.is_some() {
+            b"MMPTDR02"
+        } else {
+            b"MMPTDR01"
+        });
         bytes.extend_from_slice(&self.plan.store_id);
         write.write_record(&mut bytes)?;
         let frame = decode(&bytes, &self.plan.store_id)?;
-        if frame.sequence != witness.anchor().sequence()
-            || frame.source_sha256 != witness.anchor().source_sha256()
-            || frame.binding_index as usize != witness.anchor().binding_index()
+        if let Some(witness) = witness
+            && (frame.sequence != witness.anchor().sequence()
+                || frame.source_sha256 != witness.anchor().source_sha256()
+                || frame.binding_index as usize != witness.anchor().binding_index())
+        {
+            return Err(invalid());
+        }
+        if let Some(raw) = raw
+            && (!frame.raw
+                || raw.fingerprint().map_err(|_| invalid())? != frame.end_sha256
+                || raw.registration_namespace != frame.namespace)
         {
             return Err(invalid());
         }
@@ -212,32 +233,48 @@ impl MmpCustodyStore {
                 self.read_accepted_source_in_snapshot(transaction, frame.sequence, limits)?;
             let index = frame.binding_index as usize;
             let binding = source.recipient_bindings().get(index).ok_or_else(invalid)?;
-            let owner = source.native_recipient(index).ok_or_else(invalid)?;
-            let lifetime_key = format!("b1:{}", owner.incarnation());
-            let lifetime = self
-                .read_native_lifetime_in_snapshot(transaction, &lifetime_key)?
-                .ok_or_else(invalid)?;
             let end_key = super::super::registration_end::record_key(&frame.namespace);
             let end = self
                 .read_registration_end_in_snapshot(transaction, &end_key)?
                 .ok_or_else(invalid)?;
-            let lifetime_bytes = self.read(&lifetime_key)?.ok_or_else(invalid)?;
-            let end_bytes = self.read(&end_key)?.ok_or_else(invalid)?;
             if digest != frame.source_sha256
                 || source.accepted_at_ms() > frame.observed_at_ms
-                || lifetime.native.owner != *owner
-                || lifetime.native.agent_id != binding.recipient
-                || lifetime.native.registration_namespace != frame.namespace
-                || lifetime.registered_after_sequence != binding.registered_after_sequence
                 || end.snapshot.agent_id != binding.recipient
                 || end.snapshot.registered_after_sequence != binding.registered_after_sequence
                 || frame.sequence <= binding.registered_after_sequence
                 || frame.sequence > end.snapshot.ended_after_sequence
-                || lifetime.publication_generation >= end.generation
-                || <[u8; 32]>::from(Sha256::digest(&lifetime_bytes)) != frame.lifetime_sha256
-                || <[u8; 32]>::from(Sha256::digest(&end_bytes)) != frame.end_sha256
+                || source
+                    .recipient_registration_namespace(index)
+                    .is_some_and(|namespace| namespace != frame.namespace)
             {
                 return Err(invalid());
+            }
+            if frame.raw {
+                if !source.has_native_binding_record()
+                    || source.native_recipient(index).is_some()
+                    || source.recipient_registration_namespace(index) != Some(frame.namespace)
+                    || end.snapshot.fingerprint().map_err(|_| invalid())? != frame.end_sha256
+                {
+                    return Err(invalid());
+                }
+            } else {
+                let owner = source.native_recipient(index).ok_or_else(invalid)?;
+                let lifetime_key = format!("b1:{}", owner.incarnation());
+                let lifetime = self
+                    .read_native_lifetime_in_snapshot(transaction, &lifetime_key)?
+                    .ok_or_else(invalid)?;
+                let lifetime_bytes = self.read(&lifetime_key)?.ok_or_else(invalid)?;
+                let end_bytes = self.read(&end_key)?.ok_or_else(invalid)?;
+                if lifetime.native.owner != *owner
+                    || lifetime.native.agent_id != binding.recipient
+                    || lifetime.native.registration_namespace != frame.namespace
+                    || lifetime.registered_after_sequence != binding.registered_after_sequence
+                    || lifetime.publication_generation >= end.generation
+                    || <[u8; 32]>::from(Sha256::digest(&lifetime_bytes)) != frame.lifetime_sha256
+                    || <[u8; 32]>::from(Sha256::digest(&end_bytes)) != frame.end_sha256
+                {
+                    return Err(invalid());
+                }
             }
         }
         let occurrence = super::super::native_input::source_occurrence(

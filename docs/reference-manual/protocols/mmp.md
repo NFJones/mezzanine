@@ -328,7 +328,7 @@ evict it. A batch waiting in a response channel still pins charged bytes.
 Stored cumulative ACKs use the original adoption-bound source digest, so an ACK
 can settle cold sources without loading an entire prefix.
 
-Storage-policy sources now use immutable schema2. Each source records the
+Storage-policy sources preserve immutable schema2 native attribution. Newly guarded sources use schema3, additionally recording one original registration namespace per recipient without a reconnect credential or live end marker. Legacy sources remain unknown for this added attribution. Each source records the
 original native sender/recipient conversation and opaque incarnation (or explicit
 raw/unbound absence) in the original recipient order. The actual native shell,
 layout and exact registration supply these facts; matching pane IDs and sequence
@@ -593,8 +593,28 @@ version1 `d1` record, preserving its first source, clock and unrelated row image
 through worker loss and joined retry. Only original adoption publishes
 `recipient_retired`; no ACK, peer input, task or provider continuation is created.
 R1 horizon release, canonical sender H1/S1 and cold folding preserve that reason.
-Metadata pressure uses bounded lookup backoff. Full raw/native lifecycle and
-generic live-restore drain still precede normal durable activation.
+Metadata pressure uses bounded lookup backoff.
+
+Raw source retirement uses schema3's exact allocation and its genuine one-way
+end marker. An equal-ID/floor replacement cannot inherit that source. Raw
+selection waits for actual o1 adoption, so terminal I/O cannot block its own
+prerequisite. A 168-byte version2 d1 binds explicit raw classification, source,
+slot, namespace and the original end snapshot fingerprint; it carries no native
+lifetime digest or canonical-input claim. New guarded source metadata must fit
+the actual 512 KiB decoder before sequence reservation/I/O, so admission may
+conservatively stop below the independent count ceilings. Failed raw source
+reservations release transient end-intent charges; native publication and actual
+ended work retain their own obligations. The same R1/H1/S1 and cold history
+preserve `recipient_retired` without fabricating an ACK.
+
+The one-use qualified cold factory restores no raw reconnect owner. It retains
+end intents for explicit old raw namespaces, preserving any original o1 cutoff
+and otherwise bounding the end by the persistent allocator. A namespace actually
+restored as native is not ended by raw absence. Generic snapshots/UUID bytes
+cannot select this path. Shutdown retires actual raw leases after original ACK
+settlement, then drains their end journals before releasing its reply/root.
+Fresh terminal work stays withheld during Stop. Generic live-restore draining
+and remaining lifecycle/resource gates still precede normal activation.
 
 Internal actor spill setup now enables a trusted native admission barrier. The
 actor journals current native intervals before selecting queued authorized

@@ -268,7 +268,7 @@ async fn deferred_reader_cannot_cross_registration_replacement() {
     let mut scene = Scene::new().await;
     scene.seed(scene.first.clone(), "old-cold", 40).await;
     scene.seed(scene.second.clone(), "other-hot", 40).await;
-    let (reply, receive) = oneshot::channel();
+    let (reply, mut receive) = oneshot::channel();
     scene
         .actor
         .message_fanout_request(scene.first.agent_id.clone(), 11, 64, reply);
@@ -282,7 +282,15 @@ async fn deferred_reader_cannot_cross_registration_replacement() {
         .seed(scene.first.clone(), "replacement-private", 8)
         .await;
     scene.actor.poll_message_custody();
-    assert!(receive.await.unwrap().unwrap().is_none());
+    assert!(
+        receive
+            .try_recv()
+            .expect(
+                "obsolete queued read must settle in this poll without awaiting the end journal"
+            )
+            .unwrap()
+            .is_none()
+    );
     let (reply, current) = oneshot::channel();
     scene
         .actor

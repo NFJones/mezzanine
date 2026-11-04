@@ -3,7 +3,7 @@
 //! Encoding visits frozen fields directly, without copying identity or payload
 //! strings. The adapter must bound its output/streaming buffers and commit the
 //! complete record before success. Schema2 freezes native application attribution;
-//! schema1 remains exact legacy unknown. No runtime ticket, live registration,
+//! schema3 adds exact recipient registration namespaces; older sources remain exact legacy unknown. No runtime ticket, live registration,
 //! native shell token or resume credential is serialized.
 
 use super::*;
@@ -63,6 +63,20 @@ struct Record<'a> {
     recipient_bindings: Bindings<'a>,
     #[serde(skip_serializing_if = "Option::is_none")]
     native_bindings: Option<&'a super::super::native_binding::NativeBindings>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    recipient_registrations: Option<RegistrationNamespaces<'a>>,
+}
+
+/// Streams bounded descriptive namespaces without copying a fanout vector.
+struct RegistrationNamespaces<'a>(&'a super::super::registration_binding::RegistrationBindings);
+impl Serialize for RegistrationNamespaces<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
+        let mut seq = serializer.serialize_seq(Some(self.0.recipients.len()))?;
+        for binding in &self.0.recipients {
+            seq.serialize_element(&binding.namespace)?;
+        }
+        seq.end()
+    }
 }
 
 impl Serialize for Extensions<'_> {
@@ -142,7 +156,9 @@ impl Serialize for FrozenRecord<'_> {
             },
         };
         Record {
-            schema_version: if self.row.native_bindings.is_some() {
+            schema_version: if self.row.registration_bindings.is_some() {
+                3
+            } else if self.row.native_bindings.is_some() {
                 2
             } else {
                 1
@@ -177,6 +193,11 @@ impl Serialize for FrozenRecord<'_> {
             audience,
             recipient_bindings: Bindings(&self.row.recipient_bindings),
             native_bindings: self.row.native_bindings.as_ref(),
+            recipient_registrations: self
+                .row
+                .registration_bindings
+                .as_ref()
+                .map(RegistrationNamespaces),
         }
         .serialize(serializer)
     }

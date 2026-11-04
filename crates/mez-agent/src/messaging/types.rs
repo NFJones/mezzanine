@@ -655,6 +655,10 @@ pub(super) struct QueuedEnvelope {
     pub(super) recipient_bindings: Vec<(AgentId, MessageSequence)>,
     /// Acceptance-time native owners; absent only for legacy/resident records.
     pub(super) native_bindings: Option<super::service::native_binding::NativeBindings>,
+    /// Exact guarded recipient namespaces and genuine runtime-only end markers.
+    /// Legacy generic snapshots never recreate these allocation observations.
+    pub(super) registration_bindings:
+        Option<super::service::registration_binding::RegistrationBindings>,
     /// Successful live selection clock high-water per accepted recipient. Slots
     /// are preallocated in immutable binding order within its metadata charge.
     /// The mutex

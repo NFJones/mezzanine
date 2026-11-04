@@ -33,6 +33,7 @@ impl MessageService {
             .get(&envelope.sender.agent_id)
             .copied();
         let queued = Arc::new(QueuedEnvelope {
+            registration_bindings: None,
             native_bindings: None,
             sequence,
             envelope: RetainedEnvelope::new(envelope),

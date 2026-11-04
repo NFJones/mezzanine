@@ -289,6 +289,7 @@ impl MessageService {
                     .map(|(_, floor)| *floor)
             };
             let queued = Arc::new(QueuedEnvelope {
+                registration_bindings: None,
                 native_bindings: None,
                 native_input_protection: super::native_input::protection_slots(
                     retained.recipient_bindings.as_deref().unwrap_or(&[]).len(),

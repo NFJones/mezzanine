@@ -62,6 +62,16 @@ fn horizon_requires_exact_positive_before_releasing_source_and_last_proof() {
             .unwrap()
             .is_none()
     );
+    // The independent pending original retains its shared raw end intent after
+    // this release's final proof disappears. Only the ticket's delta may retire.
+    let source_end_charge = scene
+        .service
+        .storage_custody
+        .as_ref()
+        .unwrap()
+        .checkpoint_bytes
+        .load(Ordering::Acquire);
+    assert!(source_end_charge > 0);
     let ticket = release(&mut scene, 600016);
     let charge = ticket.metadata_bytes();
     let write = scene.write(&ticket);
@@ -118,7 +128,7 @@ fn horizon_requires_exact_positive_before_releasing_source_and_last_proof() {
             .unwrap()
             .checkpoint_bytes
             .load(Ordering::Acquire),
-        charge
+        source_end_charge + charge
     );
     drop(ticket);
     assert!(weak.upgrade().is_some());
@@ -132,7 +142,7 @@ fn horizon_requires_exact_positive_before_releasing_source_and_last_proof() {
             .unwrap()
             .checkpoint_bytes
             .load(Ordering::Acquire),
-        0
+        source_end_charge
     );
 }
 

@@ -75,6 +75,7 @@ impl MessageService {
                 kind: MessageTerminalKind::HorizonRelease,
                 handoff: None,
                 retirement: None,
+                raw_retirement: None,
                 indices,
                 before,
                 metadata_bytes: bytes,

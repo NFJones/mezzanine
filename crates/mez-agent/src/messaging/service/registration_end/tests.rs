@@ -9,6 +9,24 @@ impl MessageNativeContinuityStore for Store {
         write.snapshot().validate()
     }
 }
+
+/// Another actual worker copy prevents adoption without consuming either the
+/// retained original request or its positive. Dropping that copy permits the
+/// same pair to finish; a refusal never strands the physical root's input.
+#[test]
+fn registration_end_adoption_preflight_retains_original_with_worker_copy() {
+    let (mut service, scope, agent, _) = scene();
+    service.retire_agent_identity(&agent.agent_id);
+    let request = service.prepare_registration_end(&scope).unwrap().unwrap();
+    let retained = request.write();
+    let verified = request.write().persist(&mut Store).unwrap();
+    assert!(request.qualify_adoption(&service, &verified).is_err());
+    assert!(service.has_pending_registration_end().unwrap());
+    drop(retained);
+    request.qualify_adoption(&service, &verified).unwrap();
+    assert!(request.finish(&mut service, verified).unwrap());
+    assert!(!service.has_pending_registration_end().unwrap());
+}
 impl MessageRegistrationEndStore for Store {
     fn commit(&mut self, write: &MessageRegistrationEndWrite) -> Result<()> {
         write.snapshot().validate()

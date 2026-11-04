@@ -11,13 +11,13 @@ use super::*;
 pub(in crate::messaging) struct RegistrationIdentity {
     pub(super) native_namespace: uuid::Uuid,
     /// First actual removal/replacement cutoff; shell displacement preserves it.
-    pub(super) ended_after_sequence: std::sync::OnceLock<u64>,
+    pub(super) ended_after_sequence: Arc<std::sync::OnceLock<u64>>,
 }
 impl Default for RegistrationIdentity {
     fn default() -> Self {
         Self {
             native_namespace: uuid::Uuid::new_v4(),
-            ended_after_sequence: std::sync::OnceLock::new(),
+            ended_after_sequence: Arc::new(std::sync::OnceLock::new()),
         }
     }
 }
