@@ -136,7 +136,7 @@ mod events;
     dead_code,
     reason = "durable MMP ingress integration continues under e048f9a8"
 )]
-mod mmp_custody;
+pub(crate) mod mmp_custody;
 /// Exposes the pane io module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this

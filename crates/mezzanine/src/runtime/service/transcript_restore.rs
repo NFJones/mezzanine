@@ -163,12 +163,24 @@ impl RuntimeSessionService {
         let Some(store) = self.persistence.cloned_transcript_store() else {
             return Ok(0);
         };
+        let session_id = self.session.id.as_str().to_string();
+        let records = store.load_agent_session_metadata(&session_id)?;
+        self.restore_agent_sessions_from_records(store, records, true)
+    }
+
+    /// Native whole-session startup reuses actual transcript hydration while
+    /// retaining the original active checkpoint until qualified epochs install.
+    pub(super) fn restore_agent_sessions_from_records(
+        &mut self,
+        store: AgentTranscriptStore,
+        records: Vec<AgentSessionMetadata>,
+        checkpoint: bool,
+    ) -> Result<usize> {
         // This restoration runs during session startup before the actor owns
         // the service. Reconcile accepted worker receipts before validating
         // counted history; missing or conflicting rows still fail closed.
         store.recover_append_receipts()?;
         let session_id = self.session.id.as_str().to_string();
-        let records = store.load_agent_session_metadata(&session_id)?;
         if let Some(notice) = store.agent_session_metadata_recovery_notice(&session_id)? {
             self.append_runtime_diagnostic_event(
                 serde_json::json!({
@@ -688,10 +700,13 @@ impl RuntimeSessionService {
             for pane in root_panes {
                 self.ensure_primary_agent_name(&pane)?;
             }
-            self.checkpoint_agent_session_metadata_for_restore(
-                Some(&installed_cleanup_bindings),
-                None,
-            )?;
+            if checkpoint {
+                self.checkpoint_agent_session_metadata_for_restore(
+                    Some(&installed_cleanup_bindings),
+                    None,
+                    None,
+                )?;
+            }
             let panes = self
                 .agent_shell_store()
                 .sessions()
@@ -776,7 +791,16 @@ impl RuntimeSessionService {
     /// which pane should point at which conversation when the same Mezzanine
     /// session is restored.
     pub(crate) fn checkpoint_agent_session_metadata(&mut self) -> Result<usize> {
-        self.checkpoint_agent_session_metadata_for_restore(None, None)
+        self.checkpoint_agent_session_metadata_for_restore(None, None, None)
+    }
+
+    /// Publishes qualified native epochs only if the original private checkpoint
+    /// still agrees under the compound writer's actual session lock.
+    pub(super) fn checkpoint_native_custody_metadata(
+        &mut self,
+        origin: &crate::storage::transcript::NativeMetadataOrigin,
+    ) -> Result<usize> {
+        self.checkpoint_agent_session_metadata_for_restore(None, None, Some(origin))
     }
 
     /// Captures the sealed real spawn's metadata after complete setup and before
@@ -787,7 +811,7 @@ impl RuntimeSessionService {
         parent: &crate::runtime::agent::RuntimePreparedCleanupParent,
         child: &str,
     ) -> Result<usize> {
-        self.checkpoint_agent_session_metadata_for_restore(None, Some((parent, child)))
+        self.checkpoint_agent_session_metadata_for_restore(None, Some((parent, child)), None)
     }
 
     /// Captures metadata without durable reads on the actor. Only complete
@@ -799,6 +823,7 @@ impl RuntimeSessionService {
         &mut self,
         restoring: Option<&std::collections::BTreeSet<(String, String)>>,
         fresh: Option<(&crate::runtime::agent::RuntimePreparedCleanupParent, &str)>,
+        native_origin: Option<&crate::storage::transcript::NativeMetadataOrigin>,
     ) -> Result<usize> {
         let Some(store) = self.persistence.cloned_transcript_store() else {
             return Ok(0);
@@ -970,6 +995,11 @@ impl RuntimeSessionService {
             })
             .collect::<Result<Vec<_>>>()?;
         if self.persistence.transcript_uses_adapter() {
+            if native_origin.is_some() {
+                return Err(MezError::invalid_state(
+                    "native startup requires synchronous private publication",
+                ));
+            }
             self.mark_steering_recovery_published();
             return Ok(self.persistence.queue_agent_session_metadata(
                 store,
@@ -977,7 +1007,11 @@ impl RuntimeSessionService {
                 records,
             ));
         }
-        let result = store.save_agent_session_metadata_checkpoint(&mezzanine_session_id, &records);
+        let result = store.save_agent_session_metadata_checkpoint_checked(
+            &mezzanine_session_id,
+            &records,
+            native_origin,
+        );
         if result.is_ok() {
             self.mark_steering_recovery_published();
         }

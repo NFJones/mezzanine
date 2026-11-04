@@ -4325,6 +4325,17 @@ impl AgentTranscriptStore {
         mezzanine_session_id: &str,
         records: &[AgentSessionMetadata],
     ) -> Result<usize> {
+        self.save_agent_session_metadata_checkpoint_checked(mezzanine_session_id, records, None)
+    }
+
+    /// Compound publication optionally fenced by the exact native startup source.
+    /// The comparison holds the same session lock as all sidecar/checkpoint writes.
+    pub(crate) fn save_agent_session_metadata_checkpoint_checked(
+        &self,
+        mezzanine_session_id: &str,
+        records: &[AgentSessionMetadata],
+        native_origin: Option<&super::active_metadata::NativeMetadataOrigin>,
+    ) -> Result<usize> {
         let ids = records
             .iter()
             .map(|record| record.conversation_id.clone())
@@ -4334,6 +4345,9 @@ impl AgentTranscriptStore {
             .map(|id| self.acquire_conversation_lock(id))
             .collect::<Result<Vec<_>>>()?;
         let _metadata_lock = self.lock_agent_session_metadata(mezzanine_session_id)?;
+        if let Some(origin) = native_origin {
+            origin.revalidate_locked(self, mezzanine_session_id)?;
+        }
         let mut changed = Vec::<(String, PathBuf, Option<Vec<u8>>)>::new();
         let mut checkpoint_published = false;
         let commit = (|| -> Result<usize> {

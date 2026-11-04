@@ -48,6 +48,7 @@ use crate::storage::snapshot::{SessionSnapshotPayload, SnapshotRepository};
 use crate::storage::token_usage::TokenUsageStore;
 use crate::storage::transcript::AgentTranscriptStore;
 
+mod native_custody;
 #[allow(
     dead_code,
     reason = "the persistent host consumes the completed supervisor in the next architecture phase"
@@ -185,6 +186,45 @@ impl SessionFactory {
         native: PaneProcessRetirementOwner,
         #[cfg(test)] native_probe: Option<NativePaneStartupProbe>,
     ) -> Result<SessionRuntime> {
+        Self::create_owned(
+            request,
+            native,
+            false,
+            #[cfg(test)]
+            native_probe,
+        )
+        .await
+    }
+
+    /// Explicit trusted whole-session cold-custody startup. This internal entry
+    /// is not selected by ordinary product construction until all durable gates
+    /// are implemented; generic snapshot startup remains fresh and refuses10.
+    #[allow(
+        dead_code,
+        reason = "durable product activation awaits complete e048f9a8 qualification"
+    )]
+    pub(crate) async fn create_with_native_custody(
+        request: SessionFactoryRequest,
+        native: PaneProcessRetirementOwner,
+        #[cfg(test)] native_probe: Option<NativePaneStartupProbe>,
+    ) -> Result<SessionRuntime> {
+        Self::create_owned(
+            request,
+            native,
+            true,
+            #[cfg(test)]
+            native_probe,
+        )
+        .await
+    }
+
+    /// Composes one runtime, delaying native recovery publication until qualified.
+    async fn create_owned(
+        request: SessionFactoryRequest,
+        native: PaneProcessRetirementOwner,
+        recover_custody: bool,
+        #[cfg(test)] native_probe: Option<NativePaneStartupProbe>,
+    ) -> Result<SessionRuntime> {
         validate_request(&request)?;
         let session_id = request.session.id.to_string();
         let registry = request
@@ -194,28 +234,16 @@ impl SessionFactory {
             .transpose()?;
         let mut artifacts = SessionRuntimeArtifacts::new(registry.clone(), session_id.clone());
 
-        let control_listener = bind_optional_listener(
-            request.sockets.publish_control,
-            &request.sockets.control_path,
-            request.owner_uid,
-        )?;
-        if control_listener.is_some() {
-            artifacts.track_path(request.sockets.control_path.clone());
-        }
-        let message_listener =
-            bind_optional_path(request.sockets.message_path.as_deref(), request.owner_uid)?;
-        if message_listener.is_some()
-            && let Some(path) = request.sockets.message_path.clone()
-        {
-            artifacts.track_path(path);
-        }
-        let event_listener =
-            bind_optional_path(request.sockets.event_path.as_deref(), request.owner_uid)?;
-        if event_listener.is_some()
-            && let Some(path) = request.sockets.event_path.clone()
-        {
-            artifacts.track_path(path);
-        }
+        let early_listeners = if recover_custody {
+            None
+        } else {
+            Some(native_custody::bind_listeners(
+                &request.sockets,
+                request.owner_uid,
+                &mut artifacts,
+            )?)
+        };
+        let mut startup = Some(request.startup);
 
         let mut service = RuntimeSessionService::with_event_log(
             request.session,
@@ -240,6 +268,30 @@ impl SessionFactory {
             request.created_at_unix_seconds,
         )
         .await?;
+        let prepared_native = if recover_custody {
+            Some(
+                native_custody::prepare(
+                    &mut service,
+                    startup
+                        .take()
+                        .ok_or_else(|| MezError::invalid_state("native startup input missing"))?,
+                    &config_root,
+                )
+                .await?,
+            )
+        } else {
+            None
+        };
+        let AsyncRuntimeDaemonListeners {
+            control: control_listener,
+            message: message_listener,
+            event: event_listener,
+        } = match early_listeners {
+            Some(listeners) => listeners,
+            None => {
+                native_custody::bind_listeners(&request.sockets, request.owner_uid, &mut artifacts)?
+            }
+        };
         #[cfg(test)]
         startup_timing.advance("session-services");
         let x11_policy = service.configured_iroh_transport_policy()?.x11;
@@ -284,7 +336,19 @@ impl SessionFactory {
 
         #[cfg(test)]
         startup_timing.advance("pane-startup");
-        if let Err(error) = start_session(&mut service, request.startup) {
+        let mut message_root = None;
+        let started = match prepared_native {
+            Some(prepared) => prepared
+                .start_panes(&mut service)
+                .map(|root| message_root = Some(root)),
+            None => start_session(
+                &mut service,
+                startup
+                    .take()
+                    .ok_or_else(|| MezError::invalid_state("session startup input missing"))?,
+            ),
+        };
+        if let Err(error) = started {
             service.release_native_panes_for_retirement();
             return Err(error);
         }
@@ -322,6 +386,9 @@ impl SessionFactory {
         let attached_client_size = service.session().authoritative_size;
         let (handle, mut actor) =
             AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default())?;
+        if let Some(root) = message_root {
+            actor.register_message_custody(root)?;
+        }
         let listeners = AsyncRuntimeDaemonListeners {
             control: control_listener,
             message: message_listener,

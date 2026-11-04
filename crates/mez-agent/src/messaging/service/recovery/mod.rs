@@ -113,6 +113,7 @@ impl MessageService {
         service.prune_accepted_messages_to_retained_queue();
         drop(_payload);
         drop(_scratch);
+        service.native_recovery_available = true;
         Ok(service)
     }
 }

@@ -103,9 +103,14 @@ mod auxiliary;
 mod fanout;
 mod native_commits;
 mod native_continuity;
+mod native_recovery;
 pub use native_continuity::{
     MessageNativeContinuityRequest, MessageNativeContinuitySnapshot, MessageNativeContinuityStore,
     MessageNativeContinuityVerified, MessageNativeContinuityWrite,
+};
+pub use native_recovery::{
+    MessageNativeRecovery, MessageNativeRecoveryRecord, MessageNativeRecoveryStore,
+    MessageRecoveredNativeBinding,
 };
 mod offers;
 mod pending;
@@ -152,6 +157,7 @@ impl MessageService {
             registration_tokens: HashMap::new(),
             native_bindings: HashMap::new(),
             acceptance_history_through: 0,
+            native_recovery_available: false,
             ids: IdFactory::default(),
             registered: HashMap::new(),
             registration_floors: HashMap::new(),

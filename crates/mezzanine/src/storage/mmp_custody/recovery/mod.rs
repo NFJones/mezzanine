@@ -15,6 +15,7 @@ use mez_agent::messaging::{MessageAcceptanceDecodeLimits, MessageServiceSnapshot
 
 use super::{history::CustodyHistory, inventory::charge, ownership::OwnedCustodyStore, *};
 
+mod native;
 mod reconstruction;
 
 /// Metadata reserved for one bounded source decode, ACK decisions and reader.

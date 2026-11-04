@@ -170,10 +170,7 @@ impl AsyncRuntimeSessionActor {
         dead_code,
         reason = "durable ingress activation continues under e048f9a8"
     )]
-    pub(in crate::host::async_runtime) fn register_message_custody(
-        &mut self,
-        root: MmpCustodyRoot,
-    ) -> Result<()> {
+    pub(in crate::host) fn register_message_custody(&mut self, root: MmpCustodyRoot) -> Result<()> {
         if self.message_custody.is_some() {
             return Err(MezError::conflict("MMP custody root already registered"));
         }

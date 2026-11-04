@@ -66,3 +66,60 @@ fn active_metadata_native_epoch_rejects_malformed_and_future_rows() {
         decode_agent_session_metadata(&encoded.replacen("metadata/8", "metadata/9", 1)).is_err()
     );
 }
+
+/// Qualification must not overwrite a cooperating writer that publishes after
+/// the last read. The compound writer compares the actual original under its
+/// session lock before touching either sidecars or the authoritative checkpoint.
+#[test]
+fn native_metadata_checkpoint_publication_requires_unchanged_original() {
+    let root = temp_root("native-metadata-publication-fence");
+    let store = AgentTranscriptStore::new(root);
+    let mut original = agent_session_metadata("$scope", "original");
+    original.native_message_incarnation =
+        Some(mez_agent::messaging::MessageNativeIncarnation::default().snapshot_identity());
+    store
+        .save_agent_session_metadata_checkpoint("$scope", &[original.clone()])
+        .unwrap();
+    let (origin, records) = store.capture_native_session_metadata("$scope").unwrap();
+    origin.revalidate().unwrap();
+    let mut successor = original.clone();
+    successor.native_message_incarnation =
+        Some(mez_agent::messaging::MessageNativeIncarnation::default().snapshot_identity());
+    store
+        .save_agent_session_metadata_checkpoint("$scope", &[successor.clone()])
+        .unwrap();
+    let path = store.agent_session_metadata_checkpoint_file("$scope");
+    let retained = fs::read(&path).unwrap();
+    assert!(
+        store
+            .save_agent_session_metadata_checkpoint_checked("$scope", &records, Some(&origin))
+            .is_err()
+    );
+    assert_eq!(fs::read(&path).unwrap(), retained);
+    assert_eq!(
+        store.load_agent_session_metadata("$scope").unwrap(),
+        vec![successor]
+    );
+    let (current, records) = store.capture_native_session_metadata("$scope").unwrap();
+    store
+        .save_agent_session_metadata_checkpoint_checked("$scope", &records, Some(&current))
+        .unwrap();
+    assert_eq!(fs::read(&path).unwrap(), retained);
+}
+
+/// Dedicated native reads cannot import a missing legacy checkpoint or allocate
+/// an oversized scoped source. Ordinary metadata APIs retain their own larger
+/// budget; native startup must preserve the source on conservative refusal.
+#[test]
+fn native_metadata_capture_refuses_missing_and_oversized_sources() {
+    let root = temp_root("native-metadata-read-limit");
+    let store = AgentTranscriptStore::new(root);
+    assert!(store.capture_native_session_metadata("$scope").is_err());
+    let path = store.agent_session_metadata_checkpoint_file("$scope");
+    assert!(!path.exists());
+    store.save_agent_session_metadata("$scope", &[]).unwrap();
+    let original = vec![b' '; 256 * 1024 + 1];
+    fs::write(&path, &original).unwrap();
+    assert!(store.capture_native_session_metadata("$scope").is_err());
+    assert_eq!(fs::read(&path).unwrap(), original);
+}

@@ -108,6 +108,10 @@ fn native_record_corruption_cannot_be_read_inventoried_or_overwritten() {
     let key = record_key(&snapshot.native.agent_id);
     for fault in [
         "version",
+        "generation-zero",
+        "generation-future",
+        "generation-absent",
+        "legacy-guard",
         "allocation",
         "agent-key",
         "floor",
@@ -118,13 +122,23 @@ fn native_record_corruption_cannot_be_read_inventoried_or_overwritten() {
         let fixture = Fixture::new();
         let mut store = fixture.open();
         let mut data = serde_json::to_value(RecordRef {
-            format_version: 1,
+            format_version: 2,
+            generation: 1,
             store_id: &store.store_id,
             snapshot,
         })
         .unwrap();
         match fault {
-            "version" => data["format_version"] = 2.into(),
+            "version" => data["format_version"] = 3.into(),
+            "generation-zero" => data["generation"] = 0.into(),
+            "generation-future" => data["generation"] = 2.into(),
+            "generation-absent" => data["generation"] = serde_json::Value::Null,
+            "legacy-guard" => {
+                data["format_version"] = 1.into();
+                data["generation"] = serde_json::Value::Null;
+                data["snapshot"]["format_version"] = 1.into();
+                data["snapshot"]["admission_guarded"] = true.into();
+            }
             "allocation" => data["store_id"][0] = ((store.store_id[0] ^ 1) as u64).into(),
             "agent-key" => {
                 data["snapshot"]["native"]["agent_id"] = "foreign-agent".into();
@@ -164,6 +178,61 @@ fn native_record_corruption_cannot_be_read_inventoried_or_overwritten() {
     }
 }
 
+/// Old descriptive framing remains readable for integrity/inventory, but neither
+/// an old observation nor a new unguarded capture can acquire publication proof.
+#[test]
+fn legacy_and_unguarded_native_records_remain_nonauthorizing() {
+    let (_, request) = capture(vec![]);
+    let write = request.write();
+    let snapshot = write.snapshot();
+    for legacy in [false, true] {
+        let fixture = Fixture::new();
+        let mut store = fixture.open();
+        let key = record_key(&snapshot.native.agent_id);
+        let mut record = serde_json::to_value(RecordRef {
+            format_version: 2,
+            generation: 1,
+            store_id: &store.store_id,
+            snapshot,
+        })
+        .unwrap();
+        assert!(!snapshot.admission_guarded);
+        if legacy {
+            record["format_version"] = 1.into();
+            record.as_object_mut().unwrap().remove("generation");
+            record["snapshot"]["format_version"] = 1.into();
+            record["snapshot"]
+                .as_object_mut()
+                .unwrap()
+                .remove("admission_guarded");
+        }
+        let bytes = serde_json::to_vec(&record).unwrap();
+        store
+            .commit(
+                0,
+                &[CustodyWrite {
+                    key: &key,
+                    previous: None,
+                    value: Some(&bytes),
+                }],
+            )
+            .unwrap();
+        let decoded = store
+            .read_native_continuity(&snapshot.native.agent_id)
+            .unwrap()
+            .unwrap();
+        assert!(decoded.publication_generation().is_none());
+        assert_eq!(
+            store
+                .inventory_custody(limits())
+                .unwrap()
+                .native_continuity_keys
+                .len(),
+            1
+        );
+    }
+}
+
 /// Many tiny JSON strings fit the encoded-row limit but exceed the conservative
 /// decoded-container budget. Structural preflight must stop before owned serde
 /// creates those entries, and a valid checksum must not hide the excess.
@@ -175,7 +244,8 @@ fn native_record_structural_metadata_is_bounded_before_owned_decode() {
     let write = request.write();
     let snapshot = write.snapshot();
     let mut data = serde_json::to_value(RecordRef {
-        format_version: 1,
+        format_version: 2,
+        generation: 1,
         store_id: &store.store_id,
         snapshot,
     })
@@ -283,7 +353,8 @@ fn native_floor_full_u64_range_survives_row_removal_and_reopen() {
     snapshot.registered_after_sequence = u64::MAX;
     let key = record_key(&snapshot.native.agent_id);
     let bytes = serde_json::to_vec(&RecordRef {
-        format_version: 1,
+        format_version: 2,
+        generation: 1,
         store_id: &store.store_id,
         snapshot: &snapshot,
     })

@@ -3,13 +3,15 @@
 //! The lower constructor owns the metadata/cache reservations. This adapter
 //! qualifies the complete original store under the existing kernel fence, keeps
 //! that evidence charged while moving one original at a time into lower custody,
-//! and commits the read transaction before returning. It creates no endpoint
-//! registrations and is not the actual session/native restoration authority.
+//! and commits the read transaction before returning. Storage-only reconstruction
+//! leaves endpoints empty; the optional private-context path qualifies native
+//! endpoints in that same read snapshot and returns unpublished opaque epochs.
 
+use crate::runtime::PreparedNativeCustodyContext;
 use mez_agent::messaging::{
-    MessageError, MessageService, MessageStorageLimits, MessageStorageRecoveredRecord,
-    MessageStorageRecovery, MessageStorageRecoveryStore, MessageStorageScope,
-    MessageStorageSnapshotLease,
+    MessageError, MessageRecoveredNativeBinding, MessageService, MessageStorageLimits,
+    MessageStorageRecoveredRecord, MessageStorageRecovery, MessageStorageRecoveryStore,
+    MessageStorageScope, MessageStorageSnapshotLease,
 };
 
 use super::*;
@@ -20,6 +22,17 @@ struct Port<'a> {
     checkpoint: Arc<MessageServiceSnapshot>,
     /// Survives the callback so owned root custody can charge retained input.
     input_lease: Option<MessageStorageSnapshotLease>,
+    native_context: Option<&'a PreparedNativeCustodyContext>,
+    native_lease: Option<MessageStorageSnapshotLease>,
+    transaction: Option<rusqlite::Transaction<'a>>,
+}
+
+/// Unpublished native/context result sharing the original cold read snapshot.
+pub(crate) struct NativeReconstruction {
+    pub service: MessageService,
+    pub input_lease: MessageStorageSnapshotLease,
+    pub native_lease: Option<MessageStorageSnapshotLease>,
+    pub bindings: Vec<MessageRecoveredNativeBinding>,
 }
 
 impl OwnedCustodyStore<'_> {
@@ -37,11 +50,56 @@ impl OwnedCustodyStore<'_> {
         retention_messages: usize,
         retention_bytes: usize,
     ) -> Result<(MessageService, MessageStorageSnapshotLease)> {
+        let result = self.reconstruct_common(
+            checkpoint,
+            scope,
+            limits,
+            retention_messages,
+            retention_bytes,
+            None,
+        )?;
+        Ok((result.service, result.input_lease))
+    }
+
+    /// Qualifies actual private native contexts before closing the same original
+    /// inventory/source/ACK read transaction. No endpoint or epoch escapes on any
+    /// failure; original input/context leases remain charged through adoption.
+    pub(crate) fn reconstruct_native_service(
+        &mut self,
+        checkpoint: Arc<MessageServiceSnapshot>,
+        scope: &MessageStorageScope,
+        limits: MessageStorageLimits,
+        retention_messages: usize,
+        retention_bytes: usize,
+        context: &PreparedNativeCustodyContext,
+    ) -> Result<NativeReconstruction> {
+        self.reconstruct_common(
+            checkpoint,
+            scope,
+            limits,
+            retention_messages,
+            retention_bytes,
+            Some(context),
+        )
+    }
+
+    fn reconstruct_common(
+        &mut self,
+        checkpoint: Arc<MessageServiceSnapshot>,
+        scope: &MessageStorageScope,
+        limits: MessageStorageLimits,
+        retention_messages: usize,
+        retention_bytes: usize,
+        native_context: Option<&PreparedNativeCustodyContext>,
+    ) -> Result<NativeReconstruction> {
         self.revalidate()?;
         let mut port = Port {
             store: self.store_mut(),
             checkpoint,
             input_lease: None,
+            native_context,
+            native_lease: None,
+            transaction: None,
         };
         let service = MessageService::recover_storage_custody(
             scope,
@@ -55,9 +113,27 @@ impl OwnedCustodyStore<'_> {
             .input_lease
             .take()
             .ok_or_else(|| invalid("missing input reservation"))?;
+        let (service, bindings) = if let Some(context) = native_context {
+            let transaction = port
+                .transaction
+                .take()
+                .ok_or_else(|| invalid("native snapshot missing"))?;
+            let recovered =
+                super::native::recover(port.store, &transaction, context, service, scope)?;
+            port.store.finish_transaction(transaction)?;
+            recovered
+        } else {
+            (service, Vec::new())
+        };
+        let native_lease = port.native_lease.take();
         drop(port);
         self.revalidate()?;
-        Ok((service, input_lease))
+        Ok(NativeReconstruction {
+            service,
+            input_lease,
+            native_lease,
+            bindings,
+        })
     }
 }
 
@@ -74,11 +150,19 @@ impl MessageStorageRecoveryStore for Port<'_> {
     }
 }
 
-impl Port<'_> {
+impl<'a> Port<'a> {
     /// Withholds the whole candidate until every source and the transaction join
     /// are qualified. Phantom headroom narrows the shared 8-MiB storage scan to
     /// the lower destination's actual policy without enlarging either budget.
     fn recover_in_snapshot(&mut self, target: &mut MessageStorageRecovery) -> Result<u64> {
+        if let Some(context) = self.native_context {
+            self.native_lease = Some(
+                target
+                    .hold_metadata(context.metadata_bytes())
+                    .map_err(lower_error)?,
+            );
+            context.revalidate()?;
+        }
         let (base, ceiling) = target.metadata_budget().map_err(lower_error)?;
         let phantom = (8 * 1024 * 1024usize)
             .checked_sub(ceiling)
@@ -87,8 +171,8 @@ impl Port<'_> {
             .checked_sub(SCRATCH_METADATA)
             .and_then(|v| v.checked_add(phantom))
             .ok_or_else(|| invalid("recovery metadata basis"))?;
-        let transaction = self
-            .store
+        let store: &'a MmpCustodyStore = self.store;
+        let transaction = store
             .connection
             .unchecked_transaction()
             .map_err(database_error)?;
@@ -162,7 +246,11 @@ impl Port<'_> {
                 )
                 .map_err(lower_error)?;
         }
-        self.store.finish_transaction(transaction)?;
+        if self.native_context.is_some() {
+            self.transaction = Some(transaction);
+        } else {
+            self.store.finish_transaction(transaction)?;
+        }
         let next_sequence = evidence.next_sequence;
         drop(evidence);
         drop(history_lease);

@@ -397,6 +397,7 @@ pub(crate) use render::{
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 mod service;
+pub(crate) use service::PreparedNativeCustodyContext;
 #[cfg(test)]
 pub(crate) use service::coalesce_config_persistence_effects;
 /// Exposes the types module boundary.

@@ -22,6 +22,11 @@ impl Default for MessageNativeIncarnation {
 }
 
 impl MessageNativeIncarnation {
+    /// Constructs only inside the one-use trusted cold-native recovery target.
+    /// Generic codecs and public callers cannot turn UUID bytes into an epoch.
+    pub(super) fn from_qualified_recovery(bytes: [u8; 16]) -> Self {
+        Self(uuid::Uuid::from_bytes(bytes))
+    }
     /// Describes this actual shell epoch for its private session checkpoint.
     /// The bytes carry no construction, registration or live restore capability.
     pub fn snapshot_identity(&self) -> [u8; 16] {
@@ -141,6 +146,34 @@ impl NativeBindings {
 }
 
 impl MessageService {
+    /// Installs availability only inside the unpublished trusted native target.
+    /// The derivation must reproduce the original owner before any result may
+    /// escape; generic binding continues to mint fresh namespaces/epochs.
+    pub(super) fn reconcile_recovered_native(
+        &mut self,
+        registration: &MessageSenderRegistration,
+        incarnation: &MessageNativeIncarnation,
+        expected: &MessageNativeOwner,
+        admission_available: bool,
+        delivery_available: bool,
+    ) -> Result<()> {
+        let owner =
+            self.bind_native_conversation(registration, &expected.conversation_id, incarnation)?;
+        if owner != *expected {
+            return Err(MessageError::invalid_state(
+                "MMP restored native owner changed",
+            ));
+        }
+        let binding = self
+            .native_bindings
+            .get_mut(registration.agent_id())
+            .ok_or_else(|| MessageError::invalid_state("MMP restored native binding missing"))?;
+        binding.admission_available = admission_available;
+        binding.delivery_available = delivery_available;
+        binding.continuity_recorded = true;
+        Ok(())
+    }
+
     /// Records an actual product-owned native conversation under storage policy.
     /// Same registration/conversation refreshes preserve its incarnation. A
     /// replacement token or conversation gets a distinct one; stale callers and
@@ -371,7 +404,11 @@ impl MessageService {
         recipient: &AgentId,
     ) -> bool {
         let Some(native) = &row.native_bindings else {
-            return true;
+            return !(self
+                .storage_custody
+                .as_ref()
+                .is_some_and(|p| p.native_continuity_required)
+                && self.current_native_owner(recipient).is_some());
         };
         row.recipient_bindings
             .iter()
@@ -382,6 +419,17 @@ impl MessageService {
 
     /// Keeps original sender terminal rights separate from later conversations.
     pub(super) fn native_sender_is_current(&self, row: &QueuedEnvelope) -> bool {
+        if row.native_bindings.is_none()
+            && self
+                .storage_custody
+                .as_ref()
+                .is_some_and(|p| p.native_continuity_required)
+            && self
+                .current_native_owner(&row.envelope.sender.agent_id)
+                .is_some()
+        {
+            return false;
+        }
         row.native_bindings.as_ref().is_none_or(|native| {
             native.sender.as_ref() == self.current_native_owner(&row.envelope.sender.agent_id)
         })

@@ -3,14 +3,17 @@
 //! A root retains its exact immutable input, first observed store position and
 //! actual worker handle through cancellation, panic and monotonic retry. Opening
 //! never creates a missing original. Positive cold service and input reservation
-//! stay unpublished until actual join/adoption. This installs no native epochs
-//! or session context; trusted whole-session qualification remains necessary.
+//! stay unpublished until actual join/adoption. The dedicated native path retains
+//! actual private context evidence and opaque results for exact runtime install;
+//! storage-only recovery leaves endpoint registrations unavailable.
 
 use std::sync::OnceLock;
 use std::task::Context;
 
+use crate::runtime::PreparedNativeCustodyContext;
 use mez_agent::messaging::{
-    MessageServiceSnapshot, MessageStorageLimits, MessageStorageSnapshotLease,
+    MessageRecoveredNativeBinding, MessageServiceSnapshot, MessageStorageLimits,
+    MessageStorageSnapshotLease,
 };
 
 use super::*;
@@ -32,7 +35,10 @@ pub(crate) struct CustodyRecoveryRequest {
 pub(crate) struct RecoveredMessageCustody {
     checkpoint: MessageServiceSnapshot,
     service: MessageService,
+    native_bindings: Vec<MessageRecoveredNativeBinding>,
+    native_context: Option<Arc<PreparedNativeCustodyContext>>,
     input_lease: MessageStorageSnapshotLease,
+    native_lease: Option<MessageStorageSnapshotLease>,
     /// Keeps the actual store fence alive through cancellable startup staging.
     /// Last field: input, service and reservation retire before the root owner.
     owner: MmpCustodyRoot,
@@ -46,6 +52,18 @@ impl RecoveredMessageCustody {
     pub fn service_mut(&mut self) -> &mut MessageService {
         &mut self.service
     }
+    /// Installs only the exact private runtime contexts qualified by this worker.
+    /// Publication compares the private source under its compound checkpoint lock;
+    /// the factory still withholds processes/listeners.
+    pub fn install_native_context(
+        &self,
+        runtime: &mut crate::runtime::RuntimeSessionService,
+    ) -> Result<()> {
+        self.native_context
+            .as_ref()
+            .ok_or_else(ownership_error)?
+            .install(runtime, &self.native_bindings)
+    }
     /// Finishes storage staging after the trusted caller's required session
     /// qualification. Empty endpoint maps remain empty unless separately bound.
     /// Input is discarded before its reservation; no bytes revive an epoch.
@@ -54,11 +72,17 @@ impl RecoveredMessageCustody {
         let Self {
             checkpoint,
             service,
+            native_bindings,
+            native_context,
             input_lease,
+            native_lease,
             owner,
         } = self;
         drop(checkpoint);
+        drop(native_bindings);
+        drop(native_context);
         drop(input_lease);
+        drop(native_lease);
         drop(owner);
         service
     }
@@ -67,6 +91,7 @@ impl RecoveredMessageCustody {
 /// Immutable original retained outside every actual recovery worker.
 struct Input {
     checkpoint: Arc<MessageServiceSnapshot>,
+    native_context: Option<Arc<PreparedNativeCustodyContext>>,
     limits: MessageStorageLimits,
     retention_messages: usize,
     retention_bytes: usize,
@@ -86,6 +111,8 @@ pub(super) struct Written {
     opened: Opened,
     pub(super) service: MessageService,
     input_lease: MessageStorageSnapshotLease,
+    native_lease: Option<MessageStorageSnapshotLease>,
+    native_bindings: Vec<MessageRecoveredNativeBinding>,
     identity: Arc<()>,
 }
 
@@ -113,6 +140,30 @@ impl MmpCustodyRoot {
         )
     }
 
+    /// Dedicated whole-session path retaining actual private context input.
+    /// Generic snapshot/recovery construction never obtains this qualification.
+    pub fn recover_native(
+        root: PathBuf,
+        owner: String,
+        limits: CustodyStoreLimits,
+        runtime: Handle,
+        request: CustodyRecoveryRequest,
+        context: PreparedNativeCustodyContext,
+    ) -> Self {
+        Self::construct_recovery_with_native(
+            Destination {
+                root,
+                owner,
+                limits,
+            },
+            runtime,
+            request,
+            Some(Arc::new(context)),
+            #[cfg(test)]
+            None,
+        )
+    }
+
     /// Registers immutable input and the actual worker before exposing observers.
     pub(super) fn construct_recovery(
         destination: Destination,
@@ -120,8 +171,27 @@ impl MmpCustodyRoot {
         request: CustodyRecoveryRequest,
         #[cfg(test)] probe: Option<Arc<super::tests::Probe>>,
     ) -> Self {
+        Self::construct_recovery_with_native(
+            destination,
+            runtime,
+            request,
+            None,
+            #[cfg(test)]
+            probe,
+        )
+    }
+
+    /// Retains optional private input alongside the immutable original worker input.
+    fn construct_recovery_with_native(
+        destination: Destination,
+        runtime: Handle,
+        request: CustodyRecoveryRequest,
+        native_context: Option<Arc<PreparedNativeCustodyContext>>,
+        #[cfg(test)] probe: Option<Arc<super::tests::Probe>>,
+    ) -> Self {
         let input = Arc::new(Input {
             checkpoint: Arc::new(request.checkpoint),
+            native_context,
             limits: request.limits,
             retention_messages: request.retention_messages,
             retention_bytes: request.retention_bytes,
@@ -192,7 +262,7 @@ impl MmpCustodyRoot {
     /// Moves the actually joined canonical cold service once. The root remains
     /// its original storage owner, ready for actual startup/native qualification.
     /// The returned staging owner keeps input and its lease together until the
-    /// trusted caller finishes session qualification; no endpoint revives here.
+    /// trusted caller finishes session qualification; no session is published here.
     pub fn adopt_recovery(&self) -> Result<super::RecoveredMessageCustody> {
         let mut state = self.0.state.lock().map_err(|_| ownership_error())?;
         let State::Recovered {
@@ -206,6 +276,11 @@ impl MmpCustodyRoot {
         if !Arc::ptr_eq(&admission.input.identity, &written.identity)
             || Arc::strong_count(&admission.input) != 1
             || Arc::strong_count(&admission.input.checkpoint) != 1
+            || admission
+                .input
+                .native_context
+                .as_ref()
+                .is_some_and(|c| Arc::strong_count(c) != 1)
         {
             return Err(ownership_error());
         }
@@ -222,6 +297,8 @@ impl MmpCustodyRoot {
             opened,
             service,
             input_lease,
+            native_lease,
+            native_bindings,
             ..
         } = *written;
         let input = Arc::try_unwrap(admission.input).map_err(|_| ownership_error())?;
@@ -230,7 +307,10 @@ impl MmpCustodyRoot {
         Ok(RecoveredMessageCustody {
             checkpoint,
             service,
+            native_bindings,
+            native_context: input.native_context,
             input_lease,
+            native_lease,
             owner: self.clone(),
         })
     }
@@ -275,7 +355,7 @@ fn spawn(
             &destination.owner,
             destination.limits,
         )?;
-        let (service, input_lease, anchor) = {
+        let (service, input_lease, native_lease, native_bindings, anchor) = {
             let mut owned = fence.bind_store(&mut store)?;
             let observed = owned.store_mut().acceptance_plan(0)?;
             let anchor = input.position.get_or_init(|| observed.clone());
@@ -286,18 +366,43 @@ fn spawn(
             if let Some(probe) = &probe {
                 probe.before_write();
             }
-            let (service, lease) = owned.reconstruct_cold_service(
-                input.checkpoint.clone(),
-                &scope,
-                input.limits,
-                input.retention_messages,
-                input.retention_bytes,
-            )?;
+            let (service, lease, native_lease, native_bindings) =
+                if let Some(context) = &input.native_context {
+                    let recovered = owned.reconstruct_native_service(
+                        input.checkpoint.clone(),
+                        &scope,
+                        input.limits,
+                        input.retention_messages,
+                        input.retention_bytes,
+                        context,
+                    )?;
+                    (
+                        recovered.service,
+                        recovered.input_lease,
+                        recovered.native_lease,
+                        recovered.bindings,
+                    )
+                } else {
+                    let (service, lease) = owned.reconstruct_cold_service(
+                        input.checkpoint.clone(),
+                        &scope,
+                        input.limits,
+                        input.retention_messages,
+                        input.retention_bytes,
+                    )?;
+                    (service, lease, None, Vec::new())
+                };
             owned.revalidate()?;
             if !owned.store_mut().acceptance_plan(0)?.same_position(anchor) {
                 return Err(ownership_error());
             }
-            (service, lease, anchor.clone())
+            (
+                service,
+                lease,
+                native_lease,
+                native_bindings,
+                anchor.clone(),
+            )
         };
         #[cfg(test)]
         if let Some(probe) = &probe {
@@ -313,6 +418,8 @@ fn spawn(
             opened: Opened { store, anchor },
             service,
             input_lease,
+            native_lease,
+            native_bindings,
             identity: input.identity.clone(),
         })
     })

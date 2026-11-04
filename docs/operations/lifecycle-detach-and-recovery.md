@@ -186,11 +186,16 @@ the original private store. Checkpoint creation can refuse at its finite metadat
 limit while retaining all accepted mail. Cancelling its administrative observer
 does not suppress the requested checkpoint write.
 
-Schema10 is currently capture-only: metadata marks these checkpoints unrestorable
-and explains the missing original-store recovery path. Generic message/session
-restore rejects them.
-Trusted original-store whole-session reconstruction and native commit deduplication
-remain unfinished, so this mode is still unavailable in normal product setup.
+Schema10 remains unavailable through generic message/session restore; public
+metadata marks it unrestorable. A dedicated internal factory now reconstructs
+original custody and qualifies native bindings using the actual private active
+checkpoint and guarded original journal before publishing sockets, processes or
+the actor. It retains the original root throughout startup. This entry requires
+the original schema10 snapshot and a scoped active checkpoint of at most 256 KiB.
+Missing, changed or corrupt evidence refuses startup.
+Independent crash startup without a manual message snapshot, canonical native
+commit deduplication and the remaining durability gates are unfinished, so this
+mode is still unavailable in normal product setup.
 A saved store identifier or matching pane/conversation label grants no recovery
 or reconnect authority.
 
@@ -218,7 +223,9 @@ columns are refused.
 
 Generic transcript and conversation restore still create a fresh live identity.
 Saved bytes cannot establish original message ownership or reconnect authority;
-trusted whole-session custody recovery remains a separate unfinished path. An
+only the dedicated internal original-store/private-context factory can qualify
+the original epoch for its exact provisional runtime. Generic restore never
+uses that capability. An
 older writer cannot safely downgrade a checkpoint containing these newer rows.
 
 The older shared `active-agent-sessions.tsv` is a read-only migration source for

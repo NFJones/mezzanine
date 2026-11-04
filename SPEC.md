@@ -16030,7 +16030,7 @@ zero distinct from an absent offer, and MUST NOT impose an acceptance-time lower
 bound. The original TTL upper boundary and exact durable ACK provenance remain
 required.
 
-Recovered transport custody MUST NOT revive raw connections, reconnect bearers,
+Storage-only reconstruction MUST NOT revive raw connections, reconnect bearers,
 native registrations or native shell epochs. Explicit original ACK slots remain
 independent of current cursors; uncommitted transient offers MUST remain unknown
 until genuine selection. The current fenced storage-only reconstruction does
@@ -16063,13 +16063,13 @@ checkpoint input metadata charged through cancellable session qualification.
 Input MUST be discarded before its metadata reservation; candidate retirement
 MUST dispose of state before releasing its root owner. Native checkpoint tuples
 remain descriptive, and empty endpoint maps MUST NOT acquire native authority
-from those bytes. The owned storage recovery worker is implemented; actual host
-session/root registration, native continuity, canonical commit deduplication and
+from those bytes. The dedicated private-context factory described below is the
+only implemented native installation path. Canonical commit deduplication and
 the other durable activation gates remain required.
 
 Native registration continuity MUST be recorded independently of an optional
 manual message checkpoint. The original root's owned lane now writes bounded
-version1 `n1:<SHA256(agent-id)>` observations in the private row store. Each fact
+version2 `n1:<SHA256(agent-id)>` observations in the private row store. Each fact
 binds the actual registration namespace, opaque shell epoch, derived native
 owner, immutable identity (excluding objective telemetry), and registration
 sequence floor to the original store allocation. The floor MUST reserve any
@@ -16095,10 +16095,10 @@ Native observations MUST fit 240 KiB encoded and a conservative 512 KiB decoded
 structural metadata budget. Inventory MUST validate framing, key, native tuple,
 allocation and allocator floor before retaining a compact reference. These
 versioned facts remain descriptive; the live marker does not establish current
-availability or replace a lifecycle publication barrier. Actual lifecycle
-barriers, private session/context qualification and qualified native restore
-remain required before durable product activation. This journal component
-does not enable those paths or introduce a configuration/wire field.
+availability or replace private session/context qualification. The dedicated
+factory below combines these observations with original allocation and actual
+private context evidence. The journal alone MUST NOT enable native restore or
+introduce a configuration/wire field.
 
 The internal actor spill setup now enables a one-way original-scope native
 admission barrier. While any actual current native interval is unrecorded, the
@@ -16124,8 +16124,43 @@ A capture refusal before issuance MUST schedule bounded fresh observation and
 MUST NOT block an original ACK from using the actually idle root to release
 capacity. Once a metadata worker is issued, shutdown MUST retain its actor/root
 continuation through actual join and adoption. These connected admission/input
-barriers do not provide private context publication or qualified session/native
-restart restoration; those and the other durability gates remain required.
+barriers remain required during qualified native startup as well as live
+operation.
+
+The dedicated internal native SessionFactory recovery path MUST qualify the
+original schema10 store and native journal in the same SQLite read snapshot.
+Version2 native records MUST carry their actual commit generation and the lower
+owner's captured native admission guard. Version1 and unguarded observations
+MUST remain unavailable for native resurrection. The current original allocator
+origin, full inventory and source-bound ACK history MUST qualify before any
+native registry construction. Unknown legacy source ownership MUST NOT acquire
+native delivery or sender rights from a current binding.
+
+Native qualification MUST read the actual existing private active-session
+checkpoint for the same session and hydrate its transcripts while preserving
+that checkpoint unchanged. Matching original epoch, CID, pane, window, project
+and native harness identity are necessary; saved availability hints MUST NOT
+establish current availability. The qualified result MUST install into the exact
+fresh provisional runtime that supplied the private evidence. Equal DTOs in a
+second runtime MUST NOT consume it. Original UUID bytes MUST NOT gain a public
+live-token constructor. Only the one-use cold reconstruction target and trusted
+original-store/private-context port MAY return opaque original epochs.
+
+The factory MUST withhold Unix listeners, pane processes and actor publication
+until qualification and installation finish. The actual recovered root and input
+reservations MUST remain owned through setup and registration with the actor.
+Final private checkpoint publication MUST compare the original under the same
+session lock as its compound sidecar/checkpoint writes; a newer checkpoint MUST
+remain intact on refusal. Generic restore MUST continue to refuse schema10 and
+use fresh native epochs.
+This internal entry currently requires the original schema10 snapshot and an
+existing scoped active metadata file of at most 256 KiB. Missing, changed,
+oversized or corrupt private evidence MUST refuse rather than fall back to an
+empty original. These conservative limits do not qualify complete admitted-state
+recovery. Independent crash startup without an optional manual checkpoint,
+canonical context commit-before-ACK deduplication, terminal journals, reclaim,
+complete resource-bound liveness and all-ingress activation remain required
+before normal durable product setup. No config or wire field enables this path.
 
 Immutable envelope auxiliary metadata MUST additionally fit a 16 MiB logical
 budget over the deduplicated replay/custody union after normal replay eviction.

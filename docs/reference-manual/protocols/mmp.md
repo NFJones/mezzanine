@@ -412,12 +412,12 @@ database, and never creates or initializes a missing/blank replacement. Last-roo
 retirement drains the actual worker before releasing its kernel fence.
 
 The joined startup candidate retains its root and checkpoint metadata reservation
-through cancellable setup, preserving native facts for later qualification.
-Those facts do not restore a native identity. Actual session/root registration,
-native continuity and the remaining durability gates still precede publication.
+through cancellable setup, preserving native facts for qualification.
+Storage-only recovery leaves endpoints absent. The dedicated factory below
+qualifies private native contexts before registration and publication.
 
 The original root also has an owned native registration journal independent of
-manual message snapshots. Its bounded version1 `n1` observations preserve the
+manual message snapshots. Its bounded version2 `n1` observations preserve the
 actual namespace, shell epoch, native owner, immutable identity and interval
 floor under the original allocation. Recording that floor reserves cancelled
 sequence gaps atomically without creating messages or acknowledgements. An
@@ -430,9 +430,9 @@ same-runtime binding as recorded. Replacement namespaces or shell epochs cannot
 inherit the marker. Immutable identity reconciliation can replace a namespace
 without changing shell epoch, CID or floor, so saved labels alone remain
 insufficient. Inventory validates each fact and retains only its compact key.
-Stored observations do not restore native authority or prove current lifecycle
-availability. Private context publication and session/context qualification
-remain implementation work before durable activation.
+Stored observations alone do not restore native authority or prove current
+lifecycle availability. The dedicated factory below additionally qualifies the
+actual private session and context.
 Journal transactions also preserve a fingerprint of every non-target row from
 the original input. Trigger deletion or rechecksummed mutation of an unrelated
 source, ACK or native fact rolls the whole attempted write back.
@@ -447,12 +447,37 @@ No sequence or native request generation is assigned for that refusal.
 Existing genuine ACKs remain settleable, including when a metadata capture was
 refused before issuing I/O. Actual issued workers retain their actor/root owner
 through loss, backed-off retry and shutdown. Replacements require their own
-journal adoption. Private context publication and qualified session/native
-restart restoration remain separate activation gates.
+journal adoption. Qualified internal session startup retains the same barrier.
 
-The opt-in requires an actually empty original store. It is not enabled by
-normal product construction: trusted cold recovery, native restart deduplication
-and all ingress remain separate integration gates. Existing stores and saved
+A dedicated internal SessionFactory path now qualifies original schema10 custody
+and native observations in the same SQLite snapshot, then registers the actual
+root with the actor before publication. Version2 journal records include their
+commit generation and the actual admission guard at capture. Legacy version1 or
+unguarded observations cannot restore a native endpoint. Unknown legacy source
+ownership also remains unavailable to a recovered native binding.
+
+This path reads the existing private active-session checkpoint and actual
+transcripts, preserving the checkpoint through qualification. Original epoch,
+CID, pane, window, project and native harness must agree. Opaque qualified epochs
+install only into the exact provisional runtime that supplied that evidence;
+a second runtime with equal labels cannot adopt them. Raw registrations remain
+absent. Unix listeners and pane processes start only after qualification, and
+startup retains the original root and metadata leases throughout installation.
+Final checkpoint publication compares the original under the compound writer's
+session lock, preserving any newer checkpoint on refusal.
+
+The entry is internal and requires the original schema10 snapshot plus a scoped
+active checkpoint no larger than 256 KiB. Changed, missing, corrupt or oversized
+private evidence refuses startup. Generic restore still refuses schema10 and
+creates fresh native epochs. Independent crash startup without a manual message
+checkpoint, canonical commit-before-ACK dedup, terminal journals, reclaim and
+complete admitted-state resource/liveness coverage remain unfinished. These
+limits keep normal durable activation gated; no public option is added.
+
+Fresh opt-in requires an actually empty original store; only qualified recovery
+can install an existing store. Normal product construction keeps durable mode
+disabled: independent crash recovery, native restart deduplication and all
+ingress remain separate integration gates. Existing stores and saved
 snapshots cannot select this policy. No configuration schema or wire field changes.
 Normal product traffic retains the existing resident limits.
 Replay limits and payload validation remain independent; a pending byte budget

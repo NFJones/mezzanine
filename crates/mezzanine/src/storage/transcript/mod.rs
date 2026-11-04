@@ -19,6 +19,7 @@ mod archive;
 
 /// Isolated, cross-process serialized active bindings and checked legacy import.
 mod active_metadata;
+pub(crate) use active_metadata::NativeMetadataOrigin;
 
 /// Versioned identity-bearing presentation source, separate from model context.
 pub(crate) mod activity;

@@ -56,8 +56,21 @@ impl NativeContinuityPlan {
 pub(crate) struct StoredNativeContinuity {
     format_version: u32,
     store_id: [u8; 16],
+    /// Original native publication generation; legacy observations lack it.
+    #[serde(default)]
+    pub generation: Option<u64>,
     /// Exact observed interval; neither these fields nor matching labels revive it.
     pub snapshot: MessageNativeContinuitySnapshot,
+}
+impl StoredNativeContinuity {
+    /// Returns a guarded publication observation only for the new framing.
+    /// The generation still needs actual original-store/private-context proof;
+    /// this method alone never returns a native registration or shell token.
+    pub(crate) fn publication_generation(&self) -> Option<u64> {
+        (self.format_version == 2 && self.snapshot.admission_guarded)
+            .then_some(self.generation)
+            .flatten()
+    }
 }
 
 /// Borrowed serializer avoids deep-copying the original captured metadata.
@@ -65,6 +78,7 @@ pub(crate) struct StoredNativeContinuity {
 struct RecordRef<'a> {
     format_version: u32,
     store_id: &'a [u8],
+    generation: u64,
     snapshot: &'a MessageNativeContinuitySnapshot,
 }
 
@@ -87,7 +101,7 @@ impl MmpCustodyStore {
         let previous = match self.read(&key)? {
             None => None,
             Some(bytes) => {
-                self.decode_native_record(&key, &bytes, state.watermark)?;
+                self.decode_native_record(&key, &bytes, state.watermark, state.generation as u64)?;
                 Some(Sha256::digest(&bytes).into())
             }
         };
@@ -137,7 +151,9 @@ impl MmpCustodyStore {
         }
         let state = self.checked_state(transaction)?;
         self.read(key)?
-            .map(|bytes| self.decode_native_record(key, &bytes, state.watermark))
+            .map(|bytes| {
+                self.decode_native_record(key, &bytes, state.watermark, state.generation as u64)
+            })
             .transpose()
     }
 
@@ -148,6 +164,7 @@ impl MmpCustodyStore {
         key: &str,
         bytes: &[u8],
         watermark: u64,
+        generation: u64,
     ) -> Result<StoredNativeContinuity> {
         preflight(bytes)?;
         let record: StoredNativeContinuity =
@@ -156,7 +173,15 @@ impl MmpCustodyStore {
             .snapshot
             .validate()
             .map_err(|_| invalid("native tuple or identity"))?;
-        if record.format_version != 1
+        if !matches!(record.format_version, 1 | 2)
+            || match record.format_version {
+                1 => record.generation.is_some() || record.snapshot.format_version != 1,
+                2 => {
+                    record.generation.is_none_or(|g| g == 0 || g > generation)
+                        || record.snapshot.format_version != 2
+                }
+                _ => true,
+            }
             || record.store_id.as_slice() != self.store_id
             || record_key(&record.snapshot.native.agent_id) != key
             || record.snapshot.registered_after_sequence > watermark
@@ -190,8 +215,13 @@ impl NativeContinuityPort<'_> {
             return Err(invalid("original plan changed"));
         }
         let record = RecordRef {
-            format_version: 1,
+            format_version: 2,
             store_id: &self.plan.store_id,
+            generation: self
+                .plan
+                .generation
+                .checked_add(1)
+                .ok_or_else(|| invalid("generation overflow"))?,
             snapshot,
         };
         let mut size = ByteCount(0);

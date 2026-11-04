@@ -179,22 +179,29 @@ impl IdFactory {
     /// on duplicated control-flow logic.
     pub fn after_existing_ids<'a>(ids: impl IntoIterator<Item = &'a StableId>) -> Self {
         let mut factory = Self::default();
+        factory.observe_existing_ids(ids);
+        factory
+    }
+
+    /// Advances allocation floors for additional restored identities without
+    /// lowering any previously observed floor. Opaque IDs have no numeric floor;
+    /// each recognized numeric prefix advances independently and saturates.
+    pub fn observe_existing_ids<'a>(&mut self, ids: impl IntoIterator<Item = &'a StableId>) {
         for id in ids {
             let Some((prefix, suffix)) = id.numeric_suffix() else {
                 continue;
             };
             let next = suffix.saturating_add(1);
             match prefix {
-                '$' => factory.next_session = factory.next_session.max(next),
-                '@' => factory.next_window = factory.next_window.max(next),
-                'g' => factory.next_window_group = factory.next_window_group.max(next),
-                '%' => factory.next_pane = factory.next_pane.max(next),
-                'c' => factory.next_client = factory.next_client.max(next),
-                'a' => factory.next_agent = factory.next_agent.max(next),
+                '$' => self.next_session = self.next_session.max(next),
+                '@' => self.next_window = self.next_window.max(next),
+                'g' => self.next_window_group = self.next_window_group.max(next),
+                '%' => self.next_pane = self.next_pane.max(next),
+                'c' => self.next_client = self.next_client.max(next),
+                'a' => self.next_agent = self.next_agent.max(next),
                 _ => {}
             }
         }
-        factory
     }
 
     /// Runs the session operation for this subsystem.
@@ -321,5 +328,22 @@ mod tests {
         assert_eq!(factory.pane().as_str(), "%10");
         assert_eq!(factory.client().as_str(), "c3");
         assert_eq!(factory.agent().as_str(), "a1");
+    }
+
+    /// Later native endpoint restoration must extend one namespace without
+    /// lowering high-waters already observed from cold or evicted source history.
+    #[test]
+    fn observing_additional_ids_preserves_all_prior_allocation_floors() {
+        let mut factory = IdFactory::after_existing_ids(&[
+            StableId::opaque("a900").unwrap(),
+            StableId::opaque("%20").unwrap(),
+        ]);
+        factory.observe_existing_ids(&[
+            StableId::opaque("a2").unwrap(),
+            StableId::opaque("%25").unwrap(),
+            StableId::opaque("native-opaque").unwrap(),
+        ]);
+        assert_eq!(factory.agent().as_str(), "a901");
+        assert_eq!(factory.pane().as_str(), "%26");
     }
 }

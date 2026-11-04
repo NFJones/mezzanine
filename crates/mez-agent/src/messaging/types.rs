@@ -716,6 +716,8 @@ pub struct MessageService {
     pub(super) native_bindings: HashMap<AgentId, super::service::native_binding::LiveNativeBinding>,
     /// Restored history is not a live acceptance event in this runtime.
     pub(super) acceptance_history_through: MessageSequence,
+    /// One-use unpublished cold-recovery capability, never serialized.
+    pub(super) native_recovery_available: bool,
     /// Stores the ids value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module

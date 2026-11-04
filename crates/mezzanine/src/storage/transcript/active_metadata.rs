@@ -164,6 +164,11 @@ fn read_snapshot(path: &Path) -> Result<Option<Vec<u8>>> {
 /// These are immutable audit bytes, checked against the expected digest, not
 /// writable checkpoint or lock ownership. No orphaned path is deleted blindly.
 fn read_snapshot_with_links(path: &Path, backup: bool) -> Result<Option<Vec<u8>>> {
+    read_snapshot_bounded(path, backup, MAX_BYTES)
+}
+
+/// A stricter reader supports native startup without enlarging its input budget.
+fn read_snapshot_bounded(path: &Path, backup: bool, limit: u64) -> Result<Option<Vec<u8>>> {
     let mut options = OpenOptions::new();
     options
         .read(true)
@@ -174,14 +179,14 @@ fn read_snapshot_with_links(path: &Path, backup: bool) -> Result<Option<Vec<u8>>
         Err(error) => return Err(error.into()),
     };
     let before = file.metadata()?;
-    if !before.is_file() || (!backup && before.nlink() != 1) || before.len() > MAX_BYTES {
+    if !before.is_file() || (!backup && before.nlink() != 1) || before.len() > limit {
         return Err(MezError::invalid_state(format!(
             "active metadata {} is not a bounded regular single-link file",
             path.display()
         )));
     }
     let mut bytes = Vec::new();
-    (&mut file).take(MAX_BYTES + 1).read_to_end(&mut bytes)?;
+    (&mut file).take(limit + 1).read_to_end(&mut bytes)?;
     let after = file.metadata()?;
     let current = fs::symlink_metadata(path)?;
     let revision = |metadata: &fs::Metadata| {
@@ -195,7 +200,7 @@ fn read_snapshot_with_links(path: &Path, backup: bool) -> Result<Option<Vec<u8>>
             metadata.ctime_nsec(),
         )
     };
-    if bytes.len() as u64 > MAX_BYTES
+    if bytes.len() as u64 > limit
         || revision(&before) != revision(&after)
         || revision(&after) != revision(&current)
         || !current.is_file()
@@ -206,6 +211,76 @@ fn read_snapshot_with_links(path: &Path, backup: bool) -> Result<Option<Vec<u8>>
         )));
     }
     Ok(Some(bytes))
+}
+
+/// Actual private checkpoint observation retained through native qualification.
+/// Fields are private so saved metadata cannot manufacture this source owner.
+pub(crate) struct NativeMetadataOrigin {
+    store: AgentTranscriptStore,
+    session: String,
+    digest: [u8; 32],
+    bytes: usize,
+}
+impl NativeMetadataOrigin {
+    /// Charges retained startup projections without retaining another file copy.
+    pub(crate) fn metadata_bytes(&self) -> usize {
+        self.bytes.saturating_mul(8).saturating_add(4096)
+    }
+    /// Rechecks the same private source. Missing/changed bytes never become an
+    /// empty replacement, a legacy import, or current native restore authority.
+    pub(crate) fn revalidate(&self) -> Result<()> {
+        let _lock = self.store.lock_agent_session_metadata(&self.session)?;
+        self.revalidate_locked(&self.store, &self.session)
+    }
+    /// Rechecks under the compound writer's already-owned session lock.
+    pub(super) fn revalidate_locked(&self, store: &AgentTranscriptStore, id: &str) -> Result<()> {
+        if store.root != self.store.root || id != self.session {
+            return Err(MezError::conflict(
+                "native metadata publication owner changed",
+            ));
+        }
+        let bytes = read_snapshot_bounded(
+            &self
+                .store
+                .agent_session_metadata_checkpoint_file(&self.session),
+            false,
+            256 * 1024,
+        )?
+        .ok_or_else(|| MezError::invalid_state("native metadata original is missing"))?;
+        if <[u8; 32]>::from(Sha256::digest(&bytes)) != self.digest {
+            return Err(MezError::conflict(
+                "native metadata original changed during startup",
+            ));
+        }
+        Ok(())
+    }
+}
+
+impl AgentTranscriptStore {
+    /// Reads an existing, bounded original active checkpoint for trusted native
+    /// startup. No legacy import or empty checkpoint creation can qualify it.
+    pub(crate) fn capture_native_session_metadata(
+        &self,
+        id: &str,
+    ) -> Result<(NativeMetadataOrigin, Vec<AgentSessionMetadata>)> {
+        validate_session_id(id)?;
+        let _lock = self.lock_agent_session_metadata(id)?;
+        let path = self.agent_session_metadata_checkpoint_file(id);
+        let bytes = read_snapshot_bounded(&path, false, 256 * 1024)?
+            .ok_or_else(|| MezError::invalid_state("native metadata original is missing"))?;
+        let checkpoint: Checkpoint = serde_json::from_slice(&bytes)
+            .map_err(|_| MezError::invalid_state("native metadata checkpoint framing"))?;
+        let records = checkpoint_records(&path, &checkpoint, id)?;
+        Ok((
+            NativeMetadataOrigin {
+                store: self.clone(),
+                session: id.to_string(),
+                digest: Sha256::digest(&bytes).into(),
+                bytes: bytes.len(),
+            },
+            records,
+        ))
+    }
 }
 
 /// Produces content-free row diagnostics, never the rejected field values.

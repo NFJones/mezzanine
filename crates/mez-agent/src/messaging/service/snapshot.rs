@@ -409,6 +409,7 @@ impl MessageService {
             registration_tokens,
             native_bindings: Default::default(),
             acceptance_history_through: snapshot.next_sequence - 1,
+            native_recovery_available: false,
             next_sequence: snapshot.next_sequence,
             retention_messages: snapshot.retention_messages,
             retention_bytes: snapshot.retention_bytes,

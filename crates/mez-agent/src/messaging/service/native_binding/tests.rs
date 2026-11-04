@@ -261,6 +261,80 @@ fn decode_limits() -> MessageAcceptanceDecodeLimits {
     }
 }
 
+/// A source predating native attribution has unknown ownership, even when a
+/// recovered current endpoint has equal public IDs. The trusted guard must keep
+/// both native input and original-sender rights closed for that legacy source.
+#[test]
+fn guarded_native_binding_cannot_authorize_unknown_legacy_source() {
+    let mut s = Scene::new();
+    let write = s.write("legacy-unknown", 10);
+    s.publish(write);
+    // Simulate the legacy row produced by the schema1 decoder, not a new send.
+    let (key, accepted) = s.service.accepted_messages.drain().next().unwrap();
+    let AcceptedMessage {
+        storage_scope,
+        source,
+        delivery,
+    } = accepted;
+    drop(source);
+    let mut row = s.service.queue.pop_front().unwrap();
+    s.service.pending.remove(&row.sequence);
+    s.service.queued_by_sequence.remove(&row.sequence);
+    Arc::get_mut(&mut row).unwrap().native_bindings = None;
+    s.service.accepted_messages.insert(
+        key,
+        AcceptedMessage {
+            storage_scope,
+            source: row.clone(),
+            delivery,
+        },
+    );
+    s.service.pending.insert(row.sequence, row.clone());
+    s.service
+        .queued_by_sequence
+        .insert(row.sequence, row.clone());
+    s.service.queue.push_front(row);
+    let row = s.service.queue.front().unwrap();
+    assert!(
+        s.service
+            .native_recipient_is_current(row, &s.target.agent_id)
+    );
+    s.service.require_native_continuity(&s.scope).unwrap();
+    let request = s
+        .service
+        .prepare_native_continuity(&s.scope, &s.target.agent_id)
+        .unwrap();
+    let verified = request.write().persist(&mut s.store).unwrap();
+    request.finish(&mut s.service, verified).unwrap();
+    let row = s.service.queue.front().unwrap();
+    assert!(
+        !s.service
+            .native_recipient_is_current(row, &s.target.agent_id)
+    );
+    assert!(
+        s.service
+            .receive_subscribed(&s.target.agent_id, 11, 1)
+            .unwrap()
+            .messages
+            .is_empty()
+    );
+    let sender = s
+        .service
+        .capture_sender_registration(&s.sender.agent_id)
+        .unwrap();
+    s.service
+        .bind_native_conversation(
+            &sender,
+            "sender-context",
+            &MessageNativeIncarnation::default(),
+        )
+        .unwrap();
+    assert!(
+        !s.service
+            .native_sender_is_current(s.service.queue.front().unwrap())
+    );
+}
+
 /// Equal public floors and conversation text do not identify an independent
 /// native binding. Exact refresh and rollback reproduce only their own owner;
 /// none of these observations allocates an MMP occurrence.

@@ -17,6 +17,10 @@ use super::*;
 pub struct MessageNativeContinuitySnapshot {
     /// Native attestation version, independent of the store row framing.
     pub format_version: u32,
+    /// Version2 records whether the actual capturing owner required the native
+    /// admission barrier. Legacy absence remains unqualified, never upgraded.
+    #[serde(default)]
+    pub admission_guarded: bool,
     /// Original native namespace, shell epoch, owner and availability facts.
     pub native: MessageNativeCheckpoint,
     /// Immutable registered identity; mutable objective telemetry is omitted.
@@ -25,10 +29,20 @@ pub struct MessageNativeContinuitySnapshot {
     pub registered_after_sequence: MessageSequence,
 }
 impl MessageNativeContinuitySnapshot {
+    /// Compares private snapshot routing data with actual trusted membership
+    /// without exposing or reconstructing a live project authority from bytes.
+    pub fn matches_project_scope(&self, scope: &Option<ProjectScopeId>) -> bool {
+        match (&self.identity.project_scope, scope) {
+            (None, None) => true,
+            (Some(saved), Some(actual)) => saved == actual.snapshot_value(),
+            _ => false,
+        }
+    }
     /// Validates descriptive framing and tuple derivation without creating any
     /// live owner. Actual store/context qualification remains a separate gate.
     pub fn validate(&self) -> Result<()> {
-        if self.format_version != 1
+        if !matches!(self.format_version, 1 | 2)
+            || (self.format_version == 1 && self.admission_guarded)
             || self.native.agent_id != self.identity.agent_id
             || self.identity.objective.is_some()
         {
@@ -153,7 +167,8 @@ impl MessageService {
         let mut identity = identity_snapshot(identity);
         identity.objective = None;
         let snapshot = MessageNativeContinuitySnapshot {
-            format_version: 1,
+            format_version: 2,
+            admission_guarded: policy.native_continuity_required,
             native,
             identity,
             registered_after_sequence: *self.registration_floors.get(id).ok_or_else(changed)?,
