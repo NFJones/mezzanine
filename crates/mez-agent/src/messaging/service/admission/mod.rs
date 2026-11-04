@@ -281,6 +281,11 @@ impl MessageAcceptanceAttempt {
 }
 
 impl MessageAcceptanceWrite {
+    /// Descriptive immutable clock domain; this is not a clock capability.
+    pub fn custody_clock_domain(&self) -> Option<[u8; 16]> {
+        self.row.custody_clock
+    }
+
     /// Retains the exact payload-free attempt before an owned worker takes input.
     /// This copies allocation evidence, not a write or publication capability.
     pub fn attempt(&self) -> MessageAcceptanceAttempt {
@@ -364,6 +369,7 @@ impl MessageService {
         scope: MessageScope,
         now_ms: u64,
     ) -> Result<Option<Delivery>> {
+        let now_ms = self.custody_now(now_ms)?;
         validate_protocol(envelope.protocol)?;
         validate_message_type(&envelope.message_type)?;
         let identity = self
@@ -428,6 +434,7 @@ impl MessageService {
         receipt_budget: usize,
         proof_budget: Option<MessageAcceptanceReservation>,
     ) -> Result<MessageAcceptanceTicket> {
+        let now_ms = self.custody_now(now_ms)?;
         validate_protocol(envelope.protocol)?;
         validate_message_type(&envelope.message_type)?;
         let identity = self
@@ -497,6 +504,11 @@ impl MessageService {
                 super::auxiliary::envelope_bytes(&envelope),
                 &bindings,
             )
+            .saturating_add(if self.custody_clock_domain().is_some() {
+                super::storage_policy::CLOCK_METADATA_BYTES
+            } else {
+                0
+            })
             .saturating_add(
                 native_bindings
                     .as_ref()
@@ -568,6 +580,11 @@ impl MessageService {
                 super::auxiliary::envelope_bytes(&envelope),
                 &bindings,
             )
+            .saturating_add(if self.custody_clock_domain().is_some() {
+                super::storage_policy::CLOCK_METADATA_BYTES
+            } else {
+                0
+            })
             .saturating_add(
                 native_bindings
                     .as_ref()
@@ -585,6 +602,7 @@ impl MessageService {
             reservation.bind(&envelope)?;
         }
         let row = Arc::new(QueuedEnvelope {
+            custody_clock: self.custody_clock_domain(),
             native_bindings,
             registration_bindings,
             sequence: self.next_sequence,

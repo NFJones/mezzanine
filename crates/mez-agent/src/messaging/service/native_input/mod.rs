@@ -240,6 +240,9 @@ impl MessageService {
     /// Tests current delivery eligibility for an original lookup without
     /// reviving a registration, renewing TTL or manufacturing a genuine offer.
     pub fn native_input_can_receive(&self, source: &MessageNativeInputAnchor, now_ms: u64) -> bool {
+        let Ok(now_ms) = self.custody_now(now_ms) else {
+            return false;
+        };
         self.native_input_anchor_is_original(source)
             && !self.terminal_protects(source.sequence(), source.recipient())
             && !self.acknowledgement_excludes(source.sequence())

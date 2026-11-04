@@ -3,7 +3,9 @@
 //! Encoding visits frozen fields directly, without copying identity or payload
 //! strings. The adapter must bound its output/streaming buffers and commit the
 //! complete record before success. Schema2 freezes native application attribution;
-//! schema3 adds exact recipient registration namespaces; older sources remain exact legacy unknown. No runtime ticket, live registration,
+//! schema3 adds exact recipient registration namespaces, and schema4 retains the
+//! original elapsed domain. Older sources remain explicit legacy unknown. No
+//! runtime ticket, live registration,
 //! native shell token or resume credential is serialized.
 
 use super::*;
@@ -65,6 +67,8 @@ struct Record<'a> {
     native_bindings: Option<&'a super::super::native_binding::NativeBindings>,
     #[serde(skip_serializing_if = "Option::is_none")]
     recipient_registrations: Option<RegistrationNamespaces<'a>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    custody_clock: Option<&'a [u8; 16]>,
 }
 
 /// Streams bounded descriptive namespaces without copying a fanout vector.
@@ -156,7 +160,9 @@ impl Serialize for FrozenRecord<'_> {
             },
         };
         Record {
-            schema_version: if self.row.registration_bindings.is_some() {
+            schema_version: if self.row.custody_clock.is_some() {
+                4
+            } else if self.row.registration_bindings.is_some() {
                 3
             } else if self.row.native_bindings.is_some() {
                 2
@@ -193,6 +199,7 @@ impl Serialize for FrozenRecord<'_> {
             audience,
             recipient_bindings: Bindings(&self.row.recipient_bindings),
             native_bindings: self.row.native_bindings.as_ref(),
+            custody_clock: self.row.custody_clock.as_ref(),
             recipient_registrations: self
                 .row
                 .registration_bindings

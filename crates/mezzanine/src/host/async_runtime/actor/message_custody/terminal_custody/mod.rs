@@ -6,7 +6,8 @@
 //! custody before new observation admission. Pre-issuance refusal backs off
 //! without excluding unrelated work; issued jobs retain real join/retry/adoption
 //! through shutdown. Canonical sender handoff runs before this selector; validated
-//! retirement, elapsed clocks and physical reclaim remain activation gates.
+//! retirement uses separate original proofs. Qualified elapsed time supplies
+//! both selection and wake deadlines; physical reclaim remains an activation gate.
 
 use super::*;
 
@@ -40,7 +41,17 @@ impl AsyncRuntimeSessionActor {
             return;
         };
         let scope = owner.root.storage_scope();
-        let now_ms = crate::runtime::current_unix_millis();
+        let now_ms = match self
+            .service
+            .message_service()
+            .storage_observation_time(scope, crate::runtime::current_unix_millis())
+        {
+            Ok(now) => now,
+            Err(_) => {
+                owner.terminal_retry_at = Some(Instant::now() + std::time::Duration::from_secs(1));
+                return;
+            }
+        };
         // Releasing actual aged outcomes can free logical custody before a
         // fresh observation needs its decoder/metadata reservation.
         let selected = match self

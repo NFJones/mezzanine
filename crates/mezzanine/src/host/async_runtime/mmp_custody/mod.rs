@@ -52,6 +52,7 @@ pub(crate) use recovery::{CustodyRecoveryRequest, RecoveredMessageCustody};
 /// Retained source chosen by trusted session setup, never by an envelope.
 #[derive(Clone)]
 struct Destination {
+    clock_source: crate::storage::mmp_custody::elapsed_clock::ClockSource,
     /// Private session-scoped store directory.
     root: PathBuf,
     /// Trusted original storage owner label.
@@ -330,6 +331,7 @@ impl MmpCustodyRoot {
     pub fn open(root: PathBuf, owner: String, limits: CustodyStoreLimits, runtime: Handle) -> Self {
         Self::construct(
             Destination {
+                clock_source: Default::default(),
                 root,
                 owner,
                 limits,
@@ -349,9 +351,11 @@ impl MmpCustodyRoot {
         owner: String,
         limits: CustodyStoreLimits,
         runtime: Handle,
+        clock_source: crate::storage::mmp_custody::elapsed_clock::ClockSource,
     ) -> Self {
         Self::construct_policy(
             Destination {
+                clock_source,
                 root,
                 owner,
                 limits,
@@ -363,6 +367,16 @@ impl MmpCustodyRoot {
             #[cfg(test)]
             None,
         )
+    }
+
+    /// Advances only an explicitly controlled fixture clock on the idle root.
+    #[cfg(test)]
+    pub(crate) fn advance_elapsed_clock_for_tests(&self, logical: u64) -> Result<()> {
+        let state = self.0.state.lock().map_err(|_| ownership_error())?;
+        let State::Idle(opened) = &*state else {
+            return Err(ownership_error());
+        };
+        opened.store.advance_elapsed_clock_for_tests(logical)
     }
 
     /// Registers the actual opening handle before observers can access the root.
@@ -980,13 +994,18 @@ fn open_destination(
     ownership: &Mutex<Option<Arc<RootOwnership>>>,
     publish_registration: bool,
 ) -> Result<Opened> {
-    let fence = Arc::new(RootOwnership::acquire(&source.root)?);
+    let fence = Arc::new(RootOwnership::acquire_with_clock_source(
+        &source.root,
+        true,
+        source.clock_source.clone(),
+    )?);
     fence.validate_root()?;
     let mut store = MmpCustodyStore::open_with_limits(&source.root, &source.owner, source.limits)?;
     {
         let mut bound = fence.bind_store(&mut store)?;
         if publish_registration {
             bound.publish_registration()?;
+            bound.initialize_elapsed_clock()?;
         }
     }
     *ownership.lock().map_err(|_| ownership_error())? = Some(fence);

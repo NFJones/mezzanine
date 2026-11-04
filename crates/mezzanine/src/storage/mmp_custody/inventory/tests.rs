@@ -343,7 +343,7 @@ fn v1_migration_preserves_rows_without_claiming_allocator_provenance() {
             .connection
             .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
             .unwrap(),
-        2
+        SCHEMA_VERSION
     );
     store
         .connection

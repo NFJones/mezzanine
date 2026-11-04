@@ -136,20 +136,37 @@ impl Fixture {
             .subscribe(&native.agent_id)
             .unwrap();
         service.checkpoint_agent_session_metadata().unwrap();
-        let open = if matches!(
+        let controlled_clock = matches!(
+            &original,
+            Original::CrashTerminal(_, true)
+                | Original::CrashRetirement(_, true)
+                | Original::CrashRawRecipient(_, raw_retirement::CrashPoint::Release)
+        );
+        let root = if matches!(
             &original,
             Original::Snapshot | Original::EndedSnapshot | Original::NativeAckSnapshot { .. }
         ) {
-            MmpCustodyRoot::open
+            MmpCustodyRoot::open(
+                root_path(&config, service.session().id.as_str()),
+                service.session().id.to_string(),
+                Default::default(),
+                tokio::runtime::Handle::current(),
+            )
         } else {
-            MmpCustodyRoot::open_registered
+            MmpCustodyRoot::open_registered(
+                root_path(&config, service.session().id.as_str()),
+                service.session().id.to_string(),
+                Default::default(),
+                tokio::runtime::Handle::current(),
+                if controlled_clock {
+                    crate::storage::mmp_custody::elapsed_clock::ClockSource::controlled_for_tests(
+                        99,
+                    )
+                } else {
+                    Default::default()
+                },
+            )
         };
-        let root = open(
-            root_path(&config, service.session().id.as_str()),
-            service.session().id.to_string(),
-            Default::default(),
-            tokio::runtime::Handle::current(),
-        );
         assert_eq!(root.observe().await.unwrap(), CustodyWorkerStatus::Idle);
         root.configure_payload_spill(service.message_service_mut(), Default::default())
             .unwrap();
@@ -211,6 +228,9 @@ impl Fixture {
             } else {
                 100
             };
+            if controlled_clock {
+                root.advance_elapsed_clock_for_tests(accepted_at).unwrap();
+            }
             let ticket = service
                 .message_service_mut()
                 .prepare_acceptance(
@@ -459,9 +479,14 @@ async fn wait_unlocked(path: &Path) {
 async fn native_startup_restores_private_binding_and_only_unacked_custody() {
     let fixture = Fixture::new(true).await;
     let mut runtime = fixture.runtime();
-    let prepared = prepare(&mut runtime, fixture.startup(), &fixture.config)
-        .await
-        .unwrap();
+    let prepared = prepare(
+        &mut runtime,
+        fixture.startup(),
+        &fixture.config,
+        Default::default(),
+    )
+    .await
+    .unwrap();
     assert_eq!(
         runtime
             .agent_shell_store()
@@ -513,9 +538,14 @@ async fn native_startup_restores_private_binding_and_only_unacked_custody() {
 async fn native_startup_keeps_unguarded_observation_unavailable() {
     let fixture = Fixture::new(false).await;
     let mut runtime = fixture.runtime();
-    let _prepared = prepare(&mut runtime, fixture.startup(), &fixture.config)
-        .await
-        .unwrap();
+    let _prepared = prepare(
+        &mut runtime,
+        fixture.startup(),
+        &fixture.config,
+        Default::default(),
+    )
+    .await
+    .unwrap();
     assert!(
         runtime
             .message_service()
@@ -594,6 +624,7 @@ async fn native_result_requires_its_original_provisional_runtime() {
             retention_bytes: 1024 * 1024,
         },
         context,
+        Default::default(),
     );
     assert_eq!(
         root.observe().await.unwrap(),

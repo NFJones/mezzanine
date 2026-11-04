@@ -48,7 +48,10 @@ impl MmpCustodyRoot {
         }
         service
             .enable_storage_custody(&self.0.storage_scope, limits)
-            .map_err(lower_error)
+            .map_err(lower_error)?;
+        opened
+            .store
+            .install_elapsed_clock(service, &self.0.storage_scope)
     }
 
     /// Issues an original-root reload after securing this root's idle lane.

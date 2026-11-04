@@ -688,6 +688,8 @@ pub(super) struct QueuedEnvelope {
     ///
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
+    /// Descriptive original elapsed domain; bytes alone never install a reader.
+    pub(super) custody_clock: Option<[u8; 16]>,
     pub(super) accepted_at_ms: u64,
 }
 

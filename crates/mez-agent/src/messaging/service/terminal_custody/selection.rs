@@ -6,14 +6,16 @@ impl MessageService {
     /// Freezes up to64 eligible slots of one accepted expired original. A source
     /// with no finite TTL, ACK/native protection or an existing disposition is
     /// skipped. None means no currently eligible work, not terminal settlement.
-    /// The caller supplies its original root scope and trusted observation clock;
-    /// bodyless storage and rollback-safe elapsed policy belong to the adapter.
+    /// The caller supplies its original root scope. A qualified elapsed reader
+    /// overrides the adapter fallback; original immutable observations survive
+    /// retries without another clock selection.
     pub fn prepare_storage_expiry(
         &mut self,
         scope: &MessageStorageScope,
         observed_at_ms: u64,
         metadata_budget: usize,
     ) -> Result<Option<MessageTerminalTicket>> {
+        let observed_at_ms = self.custody_now(observed_at_ms)?;
         let policy = self
             .storage_custody
             .as_ref()

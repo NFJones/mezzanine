@@ -29,6 +29,7 @@ use crate::error::{MezError, Result};
 pub(crate) mod acceptance;
 pub(crate) mod acknowledgement;
 mod checkpoint;
+pub(crate) mod elapsed_clock;
 mod history;
 mod integrity;
 mod inventory;
@@ -42,7 +43,7 @@ pub(crate) mod terminal_custody;
 pub(crate) mod terminal_handoff;
 
 /// Version of this private row/receipt store, independent of message snapshots.
-const SCHEMA_VERSION: i64 = 2;
+const SCHEMA_VERSION: i64 = 3;
 /// Maximum records in one off-actor transaction.
 const MAX_BATCH_RECORDS: usize = 64;
 /// Maximum measured key/preimage/value bytes plus framing in one batch.
@@ -128,6 +129,12 @@ pub(crate) struct MmpCustodyStore {
     /// Highest watermark this connection has actually committed or opened.
     /// Failed transactions never advance this cache.
     committed_watermark: Cell<u64>,
+    /// Immutable qualified clock anchor from this actual opening, if configured.
+    clock_anchor: Option<elapsed_clock::ClockState>,
+    /// High-water observed only after a real successful transaction commit.
+    committed_elapsed: Cell<u64>,
+    /// Actual runtime clock capability; decoding bytes never fills this field.
+    elapsed_clock: Option<std::sync::Arc<elapsed_clock::CustodyElapsedClock>>,
     /// Whether the watermark began with this empty v2 allocation. A migrated
     /// v1 store remains unqualified until a separate trusted restore protocol.
     watermark_origin_trusted: bool,
@@ -155,6 +162,7 @@ impl FileIdentity {
 
 /// Bounded, identity-checked state from one actual SQLite snapshot.
 struct CustodyState {
+    clock: Option<elapsed_clock::ClockState>,
     /// Persisted monotonic generation in SQLite's signed integer range.
     generation: i64,
     /// Empty only at generation zero; otherwise one exact batch digest.
@@ -281,7 +289,9 @@ impl MmpCustodyStore {
         let version: i64 = connection
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .map_err(database_error)?;
-        if (!create && version != SCHEMA_VERSION) || !matches!(version, 0 | 1 | SCHEMA_VERSION) {
+        if (!create && !matches!(version, 2 | SCHEMA_VERSION))
+            || !matches!(version, 0 | 1 | 2 | SCHEMA_VERSION)
+        {
             return Err(MezError::invalid_state(
                 "unsupported MMP custody store schema",
             ));
@@ -317,7 +327,7 @@ impl MmpCustodyStore {
         let current_version: i64 = transaction
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .map_err(database_error)?;
-        if !create && current_version != SCHEMA_VERSION {
+        if !create && !matches!(current_version, 2 | SCHEMA_VERSION) {
             return Err(MezError::invalid_state(
                 "MMP recovery store schema changed during open",
             ));
@@ -346,14 +356,17 @@ impl MmpCustodyStore {
             // Version 1 was an inactive private prototype without an allocator
             // watermark. Preserve all rows and conservatively record the highest
             // surviving namespace, but never assert this recovers lost history.
-            validate_totals(&transaction, limits)?;
+            validate_record_totals(&transaction, limits, 0)?;
             let highest = highest_occurrence_namespace(&transaction)?;
             transaction.execute_batch("ALTER TABLE state ADD COLUMN sequence_watermark BLOB NOT NULL DEFAULT X'0000000000000000'; ALTER TABLE state ADD COLUMN watermark_origin_trusted INTEGER NOT NULL DEFAULT 0; PRAGMA user_version=2;").map_err(database_error)?;
             transaction.execute("UPDATE state SET sequence_watermark=?1,watermark_origin_trusted=0 WHERE singleton=1", [highest.to_le_bytes().as_slice()]).map_err(database_error)?;
-        } else if current_version != SCHEMA_VERSION {
+        } else if !matches!(current_version, 2 | SCHEMA_VERSION) {
             return Err(MezError::invalid_state(
                 "MMP custody schema changed during open",
             ));
+        }
+        if current_version != SCHEMA_VERSION {
+            transaction.execute_batch("ALTER TABLE state ADD COLUMN elapsed_clock BLOB DEFAULT NULL; PRAGMA user_version=3;").map_err(database_error)?;
         }
         let stored_owner: Option<String> = transaction
             .query_row("SELECT CASE WHEN length(CAST(owner AS BLOB))<=256 THEN owner ELSE NULL END FROM state WHERE singleton=1", [], |r| r.get(0))
@@ -378,6 +391,8 @@ impl MmpCustodyStore {
                 "MMP occurrence exceeds sequence watermark",
             ));
         }
+        let clock_anchor = elapsed_clock::read_clock(&transaction, &store_id)?;
+        let committed_elapsed = clock_anchor.as_ref().map_or(0, |clock| clock.progress);
         transaction.commit().map_err(database_error)?;
         super::shared_sqlite::integrity_check(&connection)?;
         let store = Self {
@@ -388,6 +403,9 @@ impl MmpCustodyStore {
             directory,
             database_identity,
             committed_watermark: Cell::new(watermark),
+            committed_elapsed: Cell::new(committed_elapsed),
+            clock_anchor,
+            elapsed_clock: None,
             watermark_origin_trusted,
             #[cfg(test)]
             source_decode_probe: Default::default(),
@@ -423,8 +441,16 @@ impl MmpCustodyStore {
     /// Commits one actual same-store transaction before retaining its observed
     /// watermark. A failed or rolled-back transaction must not advance the cache.
     fn finish_transaction(&self, transaction: rusqlite::Transaction<'_>) -> Result<()> {
-        let watermark = self.checked_state(&transaction)?.watermark;
+        let state = self.checked_state(&transaction)?;
+        let watermark = state.watermark;
         transaction.commit().map_err(database_error)?;
+        if let Some(clock) = state.clock {
+            self.committed_elapsed
+                .set(self.committed_elapsed.get().max(clock.progress));
+            if let Some(reader) = &self.elapsed_clock {
+                reader.observe_commit(clock.progress);
+            }
+        }
         self.committed_watermark
             .set(self.committed_watermark.get().max(watermark));
         Ok(())
@@ -445,6 +471,15 @@ impl MmpCustodyStore {
     /// Validates trusted owner, allocation and batch framing in the caller's
     /// exact same-store snapshot before any positive fact or mutation.
     fn checked_state(&self, connection: &Connection) -> Result<CustodyState> {
+        self.checked_state_at_clock(connection, self.clock_anchor.as_ref())
+    }
+
+    /// Allows only the owned clock setup transaction to expect its new anchor.
+    fn checked_state_at_clock(
+        &self,
+        connection: &Connection,
+        expected: Option<&elapsed_clock::ClockState>,
+    ) -> Result<CustodyState> {
         if !std::ptr::eq(&self.connection, connection) {
             return Err(MezError::invalid_state(
                 "MMP custody snapshot belongs to another store",
@@ -473,7 +508,20 @@ impl MmpCustodyStore {
                 "MMP custody store identity or batch changed",
             ));
         }
+        let clock = elapsed_clock::read_clock(connection, &self.store_id)?;
+        match (clock.as_ref(), expected) {
+            (None, None) => (),
+            (Some(actual), Some(expected))
+                if actual.same_anchor(expected)
+                    && actual.progress >= self.committed_elapsed.get() => {}
+            _ => {
+                return Err(MezError::invalid_state(
+                    "MMP original elapsed clock changed",
+                ));
+            }
+        }
         Ok(CustodyState {
+            clock,
             generation,
             batch,
             watermark,
@@ -564,6 +612,11 @@ impl MmpCustodyStore {
                 "MMP occurrence exceeds sequence watermark",
             ));
         }
+        let clock_after = self.advance_clock(&state)?;
+        let encoded_clock = clock_after
+            .as_ref()
+            .map(|clock| clock.encode(&self.store_id))
+            .transpose()?;
         let next = state
             .generation
             .checked_add(1)
@@ -586,14 +639,15 @@ impl MmpCustodyStore {
         validate_totals(transaction, self.limits)?;
         transaction
             .execute(
-                "UPDATE state SET generation=?1,batch=?2,sequence_watermark=?3 WHERE singleton=1",
-                params![next, &digest, watermark.to_le_bytes().as_slice()],
+                "UPDATE state SET generation=?1,batch=?2,sequence_watermark=?3,elapsed_clock=?4 WHERE singleton=1",
+                params![next, &digest, watermark.to_le_bytes().as_slice(), encoded_clock],
             )
             .map_err(database_error)?;
         // Triggers execute inside this same transaction. Recheck both trusted
         // state and every intended postimage before any receipt can escape.
         let final_state = self.checked_state(transaction)?;
-        if final_state.generation != next
+        if final_state.clock != clock_after
+            || final_state.generation != next
             || final_state.batch != digest
             || final_state.watermark != watermark
             || final_state.watermark_origin_trusted != state.watermark_origin_trusted
@@ -812,7 +866,17 @@ fn batch_digest(writes: &[CustodyWrite<'_>]) -> Result<Vec<u8>> {
 
 /// Checks the whole canonical logical projection before publishing any batch.
 fn validate_totals(connection: &Connection, limits: CustodyStoreLimits) -> Result<()> {
-    let (count,bytes): (i64,i64) = connection.query_row("SELECT COUNT(*), COALESCE(SUM(length(CAST(key AS BLOB))+length(value)+length(digest)+64),0) FROM records", [], |r| Ok((r.get(0)?,r.get(1)?))).map_err(database_error)?;
+    let clock_bytes: i64 = connection.query_row("SELECT CASE WHEN elapsed_clock IS NULL THEN 0 ELSE length(elapsed_clock)+64 END FROM state WHERE singleton=1", [], |row| row.get(0)).map_err(database_error)?;
+    validate_record_totals(connection, limits, clock_bytes)
+}
+
+/// The v1 pre-migration check has no elapsed field and supplies zero overhead.
+fn validate_record_totals(
+    connection: &Connection,
+    limits: CustodyStoreLimits,
+    clock_bytes: i64,
+) -> Result<()> {
+    let (count,bytes): (i64,i64) = connection.query_row("SELECT COUNT(*), COALESCE(SUM(length(CAST(key AS BLOB))+length(value)+length(digest)+64),0)+?1 FROM records", [clock_bytes], |r| Ok((r.get(0)?,r.get(1)?))).map_err(database_error)?;
     if count < 0
         || bytes < 0
         || count > limits.records as i64

@@ -379,8 +379,26 @@ impl MessageStorageRecovery {
             .iter()
             .zip(&terminal)
             .any(|(ack, terminal)| !*ack && terminal.is_none_or(|value| !value.released));
+        let domain = source.custody_clock_domain();
+        let scope = policy.scope.clone();
+        if let Some(domain) = domain {
+            let policy = self
+                .service
+                .storage_custody
+                .as_mut()
+                .ok_or_else(unavailable)?;
+            if policy
+                .decoded_clock
+                .is_some_and(|previous| previous != domain)
+            {
+                return Err(MessageError::invalid_state(
+                    "MMP original elapsed domains conflict",
+                ));
+            }
+            policy.decoded_clock = Some(domain);
+        }
         let mut row = source.into_cold_occurrence(
-            &policy.scope,
+            &scope,
             record.source_sha256,
             offered,
             acknowledged,
@@ -390,7 +408,6 @@ impl MessageStorageRecovery {
         row.horizon_observed_at_ms = std::sync::Mutex::new(record.horizon_observed_at_ms);
         let row = Arc::new(row);
         let additional = self.reserve_row(&row, pending)?;
-        let scope = policy.scope.clone();
         if pending {
             self.per_recipient
                 .try_reserve(row.recipient_bindings.len())

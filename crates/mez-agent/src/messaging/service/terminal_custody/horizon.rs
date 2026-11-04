@@ -16,6 +16,7 @@ impl MessageService {
         observed_at_ms: u64,
         metadata_budget: usize,
     ) -> Result<Option<MessageTerminalTicket>> {
+        let observed_at_ms = self.custody_now(observed_at_ms)?;
         let policy = self
             .storage_custody
             .as_ref()

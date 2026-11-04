@@ -132,6 +132,7 @@ impl MmpCustodyRoot {
     ) -> Self {
         Self::construct_recovery(
             Destination {
+                clock_source: Default::default(),
                 root,
                 owner,
                 limits,
@@ -152,9 +153,11 @@ impl MmpCustodyRoot {
         runtime: Handle,
         request: CustodyRecoveryRequest,
         context: PreparedNativeCustodyContext,
+        clock_source: crate::storage::mmp_custody::elapsed_clock::ClockSource,
     ) -> Self {
         Self::construct_recovery_with_native(
             Destination {
+                clock_source,
                 root,
                 owner,
                 limits,
@@ -359,7 +362,11 @@ fn spawn(
         let fence = match existing {
             Some(fence) => fence,
             None => {
-                let fence = Arc::new(RootOwnership::acquire_existing(&destination.root)?);
+                let fence = Arc::new(RootOwnership::acquire_with_clock_source(
+                    &destination.root,
+                    false,
+                    destination.clock_source.clone(),
+                )?);
                 *ownership.lock().map_err(|_| ownership_error())? = Some(fence.clone());
                 fence
             }
@@ -370,7 +377,7 @@ fn spawn(
             &destination.owner,
             destination.limits,
         )?;
-        let (service, input_lease, native_lease, native_bindings, anchor) = {
+        let (mut service, input_lease, native_lease, native_bindings, anchor) = {
             let mut owned = fence.bind_store(&mut store)?;
             let observed = owned.store_mut().acceptance_plan(0)?;
             let anchor = input.position.get_or_init(|| observed.clone());
@@ -456,6 +463,7 @@ fn spawn(
         if !store.acceptance_plan(0)?.same_position(&anchor) {
             return Err(ownership_error());
         }
+        store.install_elapsed_clock(&mut service, &scope)?;
         Ok(Written {
             opened: Opened { store, anchor },
             service,

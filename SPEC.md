@@ -15934,7 +15934,7 @@ This internal opt-in MUST NOT activate for existing stores without trusted
 recovery, and MUST NOT imply default product activation or native restart
 recovery. No wire or configuration option selects this policy.
 
-Storage-policy acceptance records MUST preserve immutable source schema2 native attribution and use schema3 for newly guarded sources. Schema3 MUST additionally freeze one exact registration namespace per recipient; only namespaces, never live end markers or reconnect credentials, are encoded. Legacy schemas1/2 MUST remain exact unknown for this additional attribution. This captures
+Storage-policy acceptance records MUST preserve immutable source schema2 native attribution and schema3 recipient namespaces. Clock-qualified guarded sources MUST use schema4, adding the original 16-byte store allocation as a descriptive elapsed domain. Schema3 MUST additionally freeze one exact registration namespace per recipient; only namespaces, never live end markers or reconnect credentials, are encoded. Legacy schemas1/2 MUST remain exact unknown for this additional attribution. This captures
 native sender and recipient conversation/incarnation attribution in the frozen
 recipient order. Newly guarded source metadata, including namespace and native
 attribution, MUST fit the actual 512 KiB original-source decoder quantum before
@@ -16384,8 +16384,50 @@ release through actual join/retry/adoption and shutdown. Process-crash recovery
 MUST preserve terminal history without native reinjection, a fabricated ACK,
 restored raw bearer or task/provider continuation.
 
-These horizon observations currently qualify wall-clock thresholds only;
-rollback-safe elapsed TTL/horizon and reboot policy remain activation gates.
+Guarded clock-qualified custody MUST use one original-store logical elapsed domain
+for acceptance, duplicate status, receive/offers, native input eligibility,
+expiry, retirement observations, horizon release and deadline scheduling.
+Schema4 acceptance sources MUST retain that descriptive domain, their original
+acceptance clock and complete schema3 attribution. The decoder and reload owner
+MUST charge 128 bytes for clock metadata before retaining it and compare the
+actual decoded domain before discarding the wrapper. Generic snapshot capture
+MUST refuse clocked rows rather than lose their timing basis. Saved clock bytes
+alone MUST NOT install a reader, enable delivery or qualify a native owner.
+
+Private SQLite schema3 MUST add one optional fixed 116-byte allocation-bound,
+checksummed clock blob to the existing state singleton. Its 180-byte blob/framing
+charge MUST count against logical storage capacity. Migration from schema2 MUST
+preserve all original rows and allocator evidence with explicit unknown/null
+legacy timing; nonempty legacy stores MUST NOT silently acquire a fresh elapsed
+epoch. Existing unqualified internal legacy fixtures retain their wall policy
+and establish no elapsed guarantee. Future/corrupt clock framing MUST refuse.
+Clock qualification MUST preserve every unrelated row, batch, allocator and owner
+fact under the original kernel store fence, including SQL trigger effects.
+
+Fresh registered setup MUST capture the actual supported native boot clock on
+its owned worker and install it only under the actual guarded storage scope.
+Clocked cold recovery MUST qualify the native clock before installing time on
+the fully verified original sources. Same-boot time MUST include suspend and
+daemon downtime using the retained native counter anchor, independently of UTC.
+A genuinely different native boot MUST retain the last committed logical
+progress and add the new boot's uptime. Unknown time after the previous boot's
+last custody commit and powered-off time MUST be excluded, not guessed from
+wall clocks. Only elapsed progress recorded by a successful custody transaction
+is guaranteed across reboot; an uncommitted observation does not prove that
+interval. Reboot MUST NOT reset original acceptance/terminal timestamps or the
+remaining window, nor imply native death, retirement or a restored input right.
+
+Clock progress MUST commit atomically with the existing bounded custody batch;
+exact lost-reply reconciliation MUST NOT rewrite the source, generation or clock.
+The actual original reader MUST remain retained through worker/store loss; a
+retry MUST NOT replace a failed reader with a newly captured epoch. Fresh timing
+decisions MUST refuse unavailable/invalid native time. Already-issued immutable
+acceptance, ACK, canonical and terminal work MAY settle using its actual
+last-good recorded observations after native failure, without new admission,
+clock guesses, renewed lifetimes or changed first-attempt bytes. The host MUST
+schedule expiry/horizon wakeups in this logical domain, not subtract its logical
+deadlines from UTC. These clock provisions do not complete reclamation, total
+resource/headroom/liveness qualification or normal all-ingress activation.
 Original-sender handoff capture MUST freeze an actual unreleased terminal slot,
 its complete source fingerprint and original native sender under the actual
 guarded service/scope. Live capture MUST authenticate that original sender;
@@ -16474,8 +16516,9 @@ settle a wait, create peer input, change accepted action success, retry effects
 or schedule new provider work. Guarded delivery timers MUST not half-append
 volatile context and then attempt the legacy direct-consumption shortcut.
 
-Validated retirement, rollback-safe elapsed clocks, reclamation and complete
-resource/ingress qualification remain unfinished. Native send actions currently
+Validated retirement and clock-qualified elapsed custody have internal original-root
+implementations. Reclamation and complete resource/ingress qualification remain
+unfinished. Native send actions currently
 have no finite TTL; their normal terminal path still requires validated owner
 retirement. An in-memory runtime hint alone MUST NOT authorize durable sender
 consumption. Guarded volatile cleanup and direct outcome consumption MUST remain
@@ -16674,8 +16717,9 @@ competing ordinary writers through failed publication, queued/in-flight producer
 ordering, Stop bookkeeping, and preflight refusal without live mutation.
 Connected schema10 factory controls also cover out-of-order exact ACKs, an old
 private incarnation's ACK at the same CID, and missing original ACK evidence.
-Durable terminal/outcome/expiry/retirement and clock journals, reclamation,
-resource/liveness qualification and all-ingress activation remain required;
+Durable terminal/outcome/expiry/retirement and clock journals remain subject to
+whole-issue qualification. Reclamation, resource/liveness qualification and
+all-ingress activation remain required;
 normal durable activation MUST stay disabled until the remaining issue
 requirements pass.
 

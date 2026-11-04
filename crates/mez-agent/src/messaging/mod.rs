@@ -51,7 +51,7 @@ pub use service::{
     MessagePayloadLoadWrite, MessagePayloadObserver, MessagePayloadUsage,
     MessageRecoveredNativeBinding, MessageRegistrationEndRequest, MessageRegistrationEndSnapshot,
     MessageRegistrationEndStore, MessageRegistrationEndVerified, MessageRegistrationEndWrite,
-    MessageSenderRegistration, MessageStorageBinding, MessageStorageLimits,
+    MessageSenderRegistration, MessageStorageBinding, MessageStorageClock, MessageStorageLimits,
     MessageStorageRecoveredRecord, MessageStorageRecovery, MessageStorageRecoveryStore,
     MessageStorageScope, MessageStorageSnapshot, MessageStorageSnapshotLease,
     MessageStorageSnapshotRequest, MessageStorageSnapshotStore, MessageStorageSnapshotVerified,

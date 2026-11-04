@@ -84,8 +84,8 @@ pub use payload_budget::{MessagePayloadObserver, MessagePayloadUsage};
 mod storage_policy;
 pub(super) use storage_policy::StorageCustody;
 pub use storage_policy::{
-    MESSAGE_PAYLOAD_DEMAND_BYTES, MESSAGE_PAYLOAD_DEMAND_RECIPIENTS, MessageStorageLimits,
-    MessageStorageUsage,
+    MESSAGE_PAYLOAD_DEMAND_BYTES, MESSAGE_PAYLOAD_DEMAND_RECIPIENTS, MessageStorageClock,
+    MessageStorageLimits, MessageStorageUsage,
 };
 mod payload_load;
 mod recipient_binding;
@@ -517,6 +517,9 @@ impl MessageService {
     /// receive/fanout for delivery and its exact offer evidence; those paths
     /// stop at an unavailable unread payload instead of skipping it.
     pub fn receive_for(&self, recipient: &AgentId, now_ms: u64) -> Vec<Envelope> {
+        let Ok(now_ms) = self.custody_now(now_ms) else {
+            return Vec::new();
+        };
         self.queue
             .iter()
             .filter(|queued| {

@@ -110,6 +110,7 @@ impl Fixture {
     fn root(&self) -> MmpCustodyRoot {
         MmpCustodyRoot::construct(
             Destination {
+                clock_source: Default::default(),
                 root: self.path.clone(),
                 owner: "original-session".into(),
                 limits: CustodyStoreLimits::default(),
@@ -1059,6 +1060,7 @@ mod native_ordering;
 mod native_receive;
 mod retirement;
 
+mod elapsed_clock;
 mod expiry;
 
 mod horizon;

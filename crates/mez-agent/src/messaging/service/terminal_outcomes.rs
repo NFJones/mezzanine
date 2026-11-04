@@ -132,6 +132,7 @@ impl MessageService {
             // expiry/retirement. That producer still gates normal activation.
             return Ok(0);
         }
+        let now_ms = self.custody_now(now_ms)?;
         let mut guards = Vec::new();
         for queued in self.pending.values() {
             let acknowledged = queued.acknowledged.lock().map_err(|_| unavailable())?;

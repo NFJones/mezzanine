@@ -138,6 +138,7 @@ async fn exercise_capacity_ack(
     }
     let root = MmpCustodyRoot::construct(
         Destination {
+            clock_source: Default::default(),
             root: fixture.path.clone(),
             owner: "original-session".into(),
             limits: CustodyStoreLimits {

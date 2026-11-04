@@ -138,6 +138,7 @@ impl MessagePayloadLoadWrite {
             || source.envelope().payload.len() != row.envelope.payload_bytes
             || source.native_bindings() != row.native_bindings.as_ref()
             || !source.matches_registration_bindings(row.registration_bindings.as_ref())
+            || source.custody_clock_domain() != row.custody_clock
             || !audience_matches
             || source.recipient_bindings().len() != row.recipient_bindings.len()
             || !source
@@ -221,6 +222,11 @@ impl MessageService {
             limits: MessageAcceptanceDecodeLimits {
                 payload_bytes: row.envelope.payload_bytes,
                 auxiliary_bytes: auxiliary::retained_envelope_bytes(&row.envelope)
+                    .saturating_add(if row.custody_clock.is_some() {
+                        super::storage_policy::CLOCK_METADATA_BYTES
+                    } else {
+                        0
+                    })
                     .saturating_add(
                         row.native_bindings
                             .as_ref()

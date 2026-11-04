@@ -32,6 +32,9 @@ pub(crate) struct RootOwnership {
     root: PathBuf,
     /// First bound store allocation and database inode; never refreshed on retry.
     bound: OnceLock<BoundStore>,
+    /// Actual clock capability survives worker/store loss under this same root.
+    clock: OnceLock<Result<std::sync::Arc<super::elapsed_clock::CustodyElapsedClock>>>,
+    clock_source: super::elapsed_clock::ClockSource,
 }
 
 /// Original database allocation captured once under this actual lock.
@@ -52,6 +55,24 @@ pub(crate) struct OwnedCustodyStore<'a> {
 }
 
 impl OwnedCustodyStore<'_> {
+    /// Establishes actual suspend-inclusive time only on an empty original.
+    /// The live root retains both success and failure through every later worker.
+    pub(crate) fn initialize_elapsed_clock(&mut self) -> Result<()> {
+        self.revalidate()?;
+        let reader = self
+            ._owner
+            .clock
+            .get_or_init(|| {
+                self.store
+                    .qualify_elapsed_clock(self._owner.clock_source.capture()?)
+            })
+            .as_ref()
+            .map_err(Clone::clone)?
+            .clone();
+        self.store.attach_elapsed_clock(reader)?;
+        self.revalidate()
+    }
+
     /// Checks an exact original under this live owner before considering a
     /// yield. True is only a snapshot observation, not a transferable receipt;
     /// subsequent work must retain the owner and fence the same store position.
@@ -107,20 +128,42 @@ impl OwnedCustodyStore<'_> {
 }
 
 impl RootOwnership {
+    /// Retains a deterministic native-clock stand-in in this fixture's actual
+    /// kernel owner. Saved metadata never calls or constructs this test seam.
+    #[cfg(test)]
+    pub(crate) fn retain_elapsed_clock_for_tests(
+        &self,
+        clock: std::sync::Arc<super::elapsed_clock::CustodyElapsedClock>,
+    ) {
+        assert!(self.clock.set(Ok(clock)).is_ok());
+    }
+
     /// Acquires a nonblocking fence before a runtime root opens its store.
     /// Rejects unsafe lock paths and an already-owned destination.
     pub(crate) fn acquire(root: &Path) -> Result<Self> {
-        Self::acquire_policy(root, true)
+        Self::acquire_policy(root, true, Default::default())
     }
 
     /// Acquires an already existing private root/lock without creating a new
     /// destination. Missing original custody remains unavailable during recovery.
     pub(crate) fn acquire_existing(root: &Path) -> Result<Self> {
-        Self::acquire_policy(root, false)
+        Self::acquire_policy(root, false, Default::default())
     }
 
     /// Makes filesystem allocation authority explicit before touching a path.
-    fn acquire_policy(root: &Path, create: bool) -> Result<Self> {
+    pub(crate) fn acquire_with_clock_source(
+        root: &Path,
+        create: bool,
+        clock_source: super::elapsed_clock::ClockSource,
+    ) -> Result<Self> {
+        Self::acquire_policy(root, create, clock_source)
+    }
+
+    fn acquire_policy(
+        root: &Path,
+        create: bool,
+        clock_source: super::elapsed_clock::ClockSource,
+    ) -> Result<Self> {
         if create && !root.exists() {
             let mut builder = fs::DirBuilder::new();
             builder.recursive(true).mode(0o700);
@@ -165,6 +208,8 @@ impl RootOwnership {
             directory,
             root: root.to_owned(),
             bound: OnceLock::new(),
+            clock: OnceLock::new(),
+            clock_source,
         };
         owner.validate_root()?;
         Ok(owner)
@@ -219,6 +264,15 @@ impl RootOwnership {
             return Err(MezError::conflict(
                 "MMP custody original store allocation changed",
             ));
+        }
+        if store.clock_anchor.is_some() && store.elapsed_clock.is_none() {
+            let reader = self
+                .clock
+                .get_or_init(|| store.qualify_elapsed_clock(self.clock_source.capture()?))
+                .as_ref()
+                .map_err(Clone::clone)?
+                .clone();
+            store.attach_elapsed_clock(reader)?;
         }
         Ok(OwnedCustodyStore {
             _owner: self,

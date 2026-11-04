@@ -301,6 +301,28 @@ impl MmpCustodyStore {
             let source = decode_message_acceptance(reader, limits).map_err(|error| {
                 MezError::invalid_state(format!("MMP acceptance decode failed: {error}"))
             })?;
+            if source.custody_clock_domain()
+                != self
+                    .clock_anchor
+                    .as_ref()
+                    .map(|_| self.store_id.as_slice().try_into())
+                    .transpose()
+                    .map_err(|_| {
+                        MezError::invalid_state("MMP elapsed allocation framing unavailable")
+                    })?
+            {
+                return Err(MezError::invalid_state(
+                    "MMP source elapsed domain differs from original store",
+                ));
+            }
+
+            if let Some(clock) = self.checked_state(transaction)?.clock
+                && (source.accepted_at_ms() == 0 || source.accepted_at_ms() > clock.progress)
+            {
+                return Err(MezError::invalid_state(
+                    "MMP source time exceeds committed elapsed progress",
+                ));
+            }
             #[cfg(test)]
             self.source_decode_probe.maximum_payload.set(
                 self.source_decode_probe
@@ -545,6 +567,21 @@ impl MessageAcceptanceStore for PlannedAcceptanceStore<'_> {
 impl PlannedAcceptanceStore<'_> {
     /// Preflights the full finite projection, then streams and commits its marker.
     fn commit_record(&mut self, record: &MessageAcceptanceWrite) -> Result<()> {
+        if record.custody_clock_domain()
+            != self
+                .store
+                .clock_anchor
+                .as_ref()
+                .map(|_| self.store.store_id.as_slice().try_into())
+                .transpose()
+                .map_err(|_| {
+                    MezError::invalid_state("MMP elapsed allocation framing unavailable")
+                })?
+        {
+            return Err(MezError::invalid_state(
+                "MMP acceptance elapsed clock differs from original store",
+            ));
+        }
         if self.plan.store_id != self.store.store_id || self.plan.sequence != record.sequence() {
             return Err(MezError::conflict(
                 "MMP acceptance destination or occurrence changed",

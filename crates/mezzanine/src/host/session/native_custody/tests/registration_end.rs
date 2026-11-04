@@ -11,9 +11,14 @@ async fn registration_end_native_startup_does_not_revive_ended_checkpoint_bindin
     let fixture = Fixture::build(true, Original::EndedSnapshot).await;
     assert!(fixture.payload.message_state.is_some());
     let mut runtime = fixture.runtime();
-    let _prepared = prepare(&mut runtime, fixture.startup(), &fixture.config)
-        .await
-        .unwrap();
+    let _prepared = prepare(
+        &mut runtime,
+        fixture.startup(),
+        &fixture.config,
+        Default::default(),
+    )
+    .await
+    .unwrap();
     assert!(
         runtime
             .message_service()

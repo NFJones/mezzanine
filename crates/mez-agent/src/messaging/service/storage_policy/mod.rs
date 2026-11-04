@@ -9,6 +9,10 @@
 use super::payload_budget::{PayloadBudget, PayloadReservation};
 use super::*;
 
+mod clock;
+pub(in crate::messaging) use clock::CLOCK_METADATA_BYTES;
+pub use clock::MessageStorageClock;
+
 /// Always reserve the existing maximum ACK metadata/encoding quantum.
 const WORKER_HEADROOM: usize = 512 * 1024 + MESSAGE_PAYLOAD_DEMAND_BYTES;
 /// Bounded actor-owned cold-read continuation metadata, including IDs/overhead.
@@ -111,6 +115,10 @@ pub(in crate::messaging) struct StorageCustody {
     pub(super) checkpoint_bytes: Arc<std::sync::atomic::AtomicUsize>,
     /// Trusted product admission barrier; never selected by saved/wire data.
     pub(super) native_continuity_required: bool,
+    /// Actual original-root elapsed clock, never installed by saved bytes.
+    elapsed_clock: Option<clock::ElapsedClock>,
+    /// Descriptive cold lineage awaiting actual root clock installation.
+    pub(super) decoded_clock: Option<[u8; 16]>,
     /// Charged actual namespaces retained until end journal adoption.
     pub(super) registration_ends: super::registration_end::RegistrationEnds,
 }
@@ -150,6 +158,11 @@ pub(super) fn source_metadata_bytes(row: &QueuedEnvelope) -> usize {
         auxiliary::retained_envelope_bytes(&row.envelope),
         &row.recipient_bindings,
     )
+    .saturating_add(if row.custody_clock.is_some() {
+        CLOCK_METADATA_BYTES
+    } else {
+        0
+    })
     .saturating_add(
         row.native_bindings
             .as_ref()
@@ -207,6 +220,8 @@ impl MessageService {
         self.storage_custody = Some(StorageCustody {
             checkpoint_bytes: Arc::default(),
             native_continuity_required: false,
+            elapsed_clock: None,
+            decoded_clock: None,
             registration_ends: Default::default(),
             scope: scope.clone(),
             limits,

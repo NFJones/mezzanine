@@ -1,4 +1,4 @@
-//! Quarantined decoding of immutable acceptance source schemas1/2/3.
+//! Quarantined decoding of immutable acceptance source schemas1/2/3/4.
 //!
 //! Admission serializes compact JSON in a fixed, versioned order. This decoder
 //! recognizes only that original representation, charges strings and entries
@@ -32,6 +32,7 @@ pub struct MessageAcceptanceDecodeLimits {
 pub struct MessageAcceptanceSource {
     sequence: u64,
     accepted_at_ms: u64,
+    custody_clock: Option<[u8; 16]>,
     sender_registered_after_sequence: u64,
     envelope: MessageEnvelopeSnapshot,
     audience: MessageAudienceSnapshot,
@@ -97,6 +98,7 @@ impl MessageAcceptanceSource {
             })
             .collect::<Result<Vec<_>>>()?;
         Ok(QueuedEnvelope {
+            custody_clock: self.custody_clock,
             sequence: self.sequence,
             envelope: RetainedEnvelope::cold(owned_envelope(self.envelope)?, scope, digest),
             audience,
@@ -128,6 +130,11 @@ impl MessageAcceptanceSource {
     pub fn sequence(&self) -> u64 {
         self.sequence
     }
+    /// Borrows descriptive elapsed-domain attribution; this cannot install time.
+    pub fn custody_clock_domain(&self) -> Option<[u8; 16]> {
+        self.custody_clock
+    }
+
     /// Returns the original acceptance clock value, without renewing TTL.
     pub fn accepted_at_ms(&self) -> u64 {
         self.accepted_at_ms
@@ -262,7 +269,7 @@ pub fn decode_message_acceptance<R: Read>(
     let mut metadata = MetadataBudget::new(limits.auxiliary_bytes)?;
     reader.literal(b"{\"schema_version\":")?;
     let version = reader.unsigned()?;
-    if !matches!(version, 1..=3) {
+    if !matches!(version, 1..=4) {
         return Err(MessageError::invalid_args(
             "unsupported MMP acceptance schema",
         ));
@@ -368,7 +375,7 @@ pub fn decode_message_acceptance<R: Read>(
     } else {
         None
     };
-    let registration_bindings = if version == 3 {
+    let registration_bindings = if version >= 3 {
         Some(decode_registration_bindings(
             &mut reader,
             &mut metadata,
@@ -377,10 +384,30 @@ pub fn decode_message_acceptance<R: Read>(
     } else {
         None
     };
+    let custody_clock = if version >= 4 {
+        metadata.charge(16)?;
+        reader.literal(b",\"custody_clock\":[")?;
+        let mut domain = [0u8; 16];
+        for (index, byte) in domain.iter_mut().enumerate() {
+            if index != 0 {
+                reader.literal(b",")?;
+            }
+            *byte = u8::try_from(reader.unsigned()?)
+                .map_err(|_| MessageError::invalid_args("invalid MMP elapsed domain"))?;
+        }
+        reader.literal(b"]")?;
+        if domain == [0; 16] {
+            return Err(MessageError::invalid_args("invalid MMP elapsed domain"));
+        }
+        Some(domain)
+    } else {
+        None
+    };
     reader.literal(b"}")?;
     reader.finish()?;
     let candidate = MessageAcceptanceSource {
         sequence,
+        custody_clock,
         accepted_at_ms,
         sender_registered_after_sequence: sender_floor,
         envelope: MessageEnvelopeSnapshot {

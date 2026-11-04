@@ -328,7 +328,7 @@ evict it. A batch waiting in a response channel still pins charged bytes.
 Stored cumulative ACKs use the original adoption-bound source digest, so an ACK
 can settle cold sources without loading an entire prefix.
 
-Storage-policy sources preserve immutable schema2 native attribution. Newly guarded sources use schema3, additionally recording one original registration namespace per recipient without a reconnect credential or live end marker. Legacy sources remain unknown for this added attribution. Each source records the
+Storage-policy sources preserve immutable schema2 native attribution. Guarded sources retain schema3 recipient attribution; clock-qualified sources use schema4, additionally recording the original store allocation as a descriptive elapsed domain. Each source records one original registration namespace per recipient without a reconnect credential or live end marker. Legacy sources remain unknown for this added attribution. Each source records the
 original native sender/recipient conversation and opaque incarnation (or explicit
 raw/unbound absence) in the original recipient order. The actual native shell,
 layout and exact registration supply these facts; matching pane IDs and sequence
@@ -425,7 +425,7 @@ The same source-owned terminal worker now journals finite outcome-horizon
 release. It freezes up to 64 actual unreleased terminal before-images and one
 release observation; actual r1 commit and original adoption precede live release.
 Version1 r1 records fit 916 bytes and bind original allocation/source/slots/first
-clocks. Each release must match actual t1 evidence and its 600000ms wall threshold
+clocks. Each release must match actual terminal evidence and its 600000ms threshold in the original clock domain
 in the same snapshot. Conflicts, missing observations, duplicate releases or
 unrelated-row damage refuse. Lost replies reconcile the same first bytes/plan.
 
@@ -488,9 +488,33 @@ These facts never settle waits, change accepted results or create provider work.
 Native action sends remain TTL-free, so their normal terminal path still needs
 validated owner retirement. Focused expiry controls set a finite trusted TTL
 before genuine action acceptance; they do not establish retirement qualification.
-Validated owner retirement, rollback-safe elapsed/reboot clocks and reclamation
-remain unfinished. Current horizon
-thresholds are wall-clock qualification only. These internal operation bounds
+Fresh registered custody now uses the original root's suspend-inclusive elapsed
+clock for acceptance, duplicate status, offers/native selection, expiry,
+retirement, horizon release and deadline scheduling. Immutable source4 stores
+its original clock-domain allocation; decoded bytes do not install a reader or
+restore a native owner. Reload budgets and checks that domain before discarding
+the source wrapper. Generic capture refuses clocked rows rather than lose timing.
+
+SQLite schema3 adds one fixed, checksummed 116-byte clock blob in the existing
+state row, charged 180 bytes including framing. Its progress commits in the same
+transaction as custody. Exact retries do not write a newer clock. Worker loss
+retains the actual original reader, including native failure; fresh timing
+operations refuse failure while already-issued immutable work may settle using
+its actual last-good observations. No fresh epoch rescues that same root.
+
+Same-boot recovery includes suspend and daemon downtime. Across a genuinely new
+native boot, the root preserves last committed elapsed progress and adds the new
+boot's uptime. Unknown old-boot time since the last custody commit and powered-off
+time are excluded; an uncommitted clock observation cannot preserve that interval.
+This policy never guesses UTC duration, resets original acceptance or terminal
+timestamps, or treats reboot as native retirement. Original TTL and horizon
+windows keep their accrued committed progress. Schema2 migration preserves all
+rows with explicit unknown/null legacy timing; nonempty legacy stores cannot
+silently acquire a fresh elapsed epoch. Unqualified internal legacy paths retain
+their wall policy without an elapsed guarantee.
+
+Validated retirement and elapsed clocks have internal implementations;
+reclamation remains unfinished. These internal operation bounds
 do not establish complete admitted-state capacity or enable normal host/all-
 ingress activation.
 
@@ -803,8 +827,8 @@ capability label; the original guarded binding and private context must match,
 and explicit external harnesses remain excluded. A current proven native binding
 also preserves an originally absent project scope when its restored process has
 a working directory: receiving mail must not replace that registration through
-metadata enrichment. Durable terminal/outcome/expiry/retirement and clock journals,
-reclamation, resource/liveness and normal all-ingress activation
+metadata enrichment. Terminal and clock journals remain subject to whole-issue
+qualification; reclamation, resource/liveness and normal all-ingress activation
 still require implementation and qualification.
 
 Fresh opt-in requires an actually empty original store; only qualified recovery

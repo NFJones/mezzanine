@@ -38,6 +38,7 @@ impl MessageService {
         now_ms: u64,
         limit: usize,
     ) -> Result<DeliveryBatch> {
+        let now_ms = self.custody_now(now_ms)?;
         let identity = self.registered.get(&cursor.recipient).ok_or_else(|| {
             MessageError::forbidden("delivery cursor recipient is not registered")
         })?;
@@ -85,6 +86,7 @@ impl MessageService {
         recipient: &AgentId,
         now_ms: u64,
     ) -> Result<Option<MessageSequence>> {
+        let now_ms = self.custody_now(now_ms)?;
         let Some(policy) = &self.storage_custody else {
             return Ok(None);
         };

@@ -190,6 +190,7 @@ impl SessionFactory {
             request,
             native,
             false,
+            Default::default(),
             #[cfg(test)]
             native_probe,
         )
@@ -212,10 +213,22 @@ impl SessionFactory {
             request,
             native,
             true,
+            Default::default(),
             #[cfg(test)]
             native_probe,
         )
         .await
+    }
+
+    /// Runs the same complete factory with an explicit fixture clock dependency.
+    /// This seam changes no source/context qualification or publication ordering.
+    #[cfg(test)]
+    async fn create_with_custody_clock_for_tests(
+        request: SessionFactoryRequest,
+        native: PaneProcessRetirementOwner,
+        clock_source: crate::storage::mmp_custody::elapsed_clock::ClockSource,
+    ) -> Result<SessionRuntime> {
+        Self::create_owned(request, native, true, clock_source, None).await
     }
 
     /// Composes one runtime, delaying native recovery publication until qualified.
@@ -223,6 +236,7 @@ impl SessionFactory {
         request: SessionFactoryRequest,
         native: PaneProcessRetirementOwner,
         durable_custody: bool,
+        clock_source: crate::storage::mmp_custody::elapsed_clock::ClockSource,
         #[cfg(test)] native_probe: Option<NativePaneStartupProbe>,
     ) -> Result<SessionRuntime> {
         validate_request(&request)?;
@@ -279,6 +293,7 @@ impl SessionFactory {
                         .take()
                         .ok_or_else(|| MezError::invalid_state("native startup input missing"))?,
                     &config_root,
+                    clock_source,
                 )
                 .await?,
             )

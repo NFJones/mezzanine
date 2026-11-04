@@ -116,6 +116,7 @@ impl Fixture {
     fn root(&self) -> MmpCustodyRoot {
         MmpCustodyRoot::construct(
             Destination {
+                clock_source: Default::default(),
                 root: self.path.clone(),
                 owner: "session".into(),
                 limits: CustodyStoreLimits::default(),

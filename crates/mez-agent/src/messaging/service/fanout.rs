@@ -49,6 +49,9 @@ impl MessageService {
         budget: FanoutBudget,
         excluded_native_commits: &HashSet<(AgentId, MessageSequence)>,
     ) -> Vec<FanoutBatch> {
+        let Ok(now_ms) = self.custody_now(now_ms) else {
+            return Vec::new();
+        };
         self.fanout_diagnostics.cycles = self.fanout_diagnostics.cycles.saturating_add(1);
         if budget.max_recipients == 0
             || budget.max_messages == 0

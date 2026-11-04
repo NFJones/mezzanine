@@ -56,6 +56,9 @@ pub(super) async fn commit_then_crash(
     );
     let observation = root.adopt_native_input(service.message_service()).unwrap();
     drop(source);
+    if release {
+        root.advance_elapsed_clock_for_tests(first).unwrap();
+    }
     let ticket = if retired {
         let mez_agent::messaging::MessageNativeInputObservation::RecipientEnded(witness) =
             observation
@@ -87,6 +90,8 @@ pub(super) async fn commit_then_crash(
             1
         );
         drop(ticket);
+        root.advance_elapsed_clock_for_tests(crate::runtime::current_unix_millis())
+            .unwrap();
         let ticket = service
             .message_service_mut()
             .prepare_storage_horizon_release(
@@ -199,12 +204,23 @@ async fn recover(release: bool, retired: bool) {
     assert!(fixture.payload.message_state.is_none());
     let mut request = fixture.request();
     request.config.layers = vec![super::native_input::config()];
-    let mut runtime = SessionFactory::create_with_native_custody(
-        request,
-        PaneProcessRetirementOwner::default(),
-        None,
-    )
-    .await
+    let mut runtime = if release {
+        SessionFactory::create_with_custody_clock_for_tests(
+            request,
+            PaneProcessRetirementOwner::default(),
+            crate::storage::mmp_custody::elapsed_clock::ClockSource::controlled_for_tests(
+                crate::runtime::current_unix_millis() - 1,
+            ),
+        )
+        .await
+    } else {
+        SessionFactory::create_with_native_custody(
+            request,
+            PaneProcessRetirementOwner::default(),
+            None,
+        )
+        .await
+    }
     .unwrap();
     let turns = runtime.actor.as_ref().unwrap().native_turns_for_tests();
     assert_eq!(turns.len(), 1);

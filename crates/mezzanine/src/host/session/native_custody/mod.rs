@@ -68,6 +68,7 @@ pub(super) async fn prepare(
     service: &mut RuntimeSessionService,
     startup: SessionRuntimeStartup,
     config: &Path,
+    clock_source: crate::storage::mmp_custody::elapsed_clock::ClockSource,
 ) -> Result<Prepared> {
     let (mut payload, restart_command) = match startup {
         initial @ SessionRuntimeStartup::Initial { .. } => {
@@ -76,6 +77,7 @@ pub(super) async fn prepare(
                 service.session().id.to_string(),
                 CustodyStoreLimits::default(),
                 tokio::runtime::Handle::current(),
+                clock_source.clone(),
             );
             if root.observe().await? != CustodyWorkerStatus::Idle {
                 return Err(root.failure()?.unwrap_or_else(|| {
@@ -117,6 +119,7 @@ pub(super) async fn prepare(
             retention_bytes: 1024 * 1024,
         },
         context,
+        clock_source,
     );
     match root.observe().await? {
         CustodyWorkerStatus::RecoveryAwaitingAdoption => (),

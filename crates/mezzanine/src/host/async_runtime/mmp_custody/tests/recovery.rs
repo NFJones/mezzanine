@@ -72,6 +72,7 @@ fn request(checkpoint: MessageServiceSnapshot) -> CustodyRecoveryRequest {
 fn gated_root(fixture: &Fixture, checkpoint: MessageServiceSnapshot) -> MmpCustodyRoot {
     MmpCustodyRoot::construct_recovery(
         Destination {
+            clock_source: Default::default(),
             root: fixture.path.clone(),
             owner: "original-session".into(),
             limits: Default::default(),

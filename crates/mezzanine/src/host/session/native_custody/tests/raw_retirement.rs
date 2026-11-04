@@ -148,6 +148,10 @@ pub(super) async fn commit_then_crash(
             .unwrap();
         finish_crash(&fixture);
     }
+    if point == CrashPoint::Release {
+        root.advance_elapsed_clock_for_tests(first.unwrap())
+            .unwrap();
+    }
     let ticket = service
         .message_service_mut()
         .prepare_storage_raw_retirement(
@@ -166,6 +170,8 @@ pub(super) async fn commit_then_crash(
     if point == CrashPoint::Release {
         root.adopt_terminal(service.message_service_mut()).unwrap();
         drop(ticket);
+        root.advance_elapsed_clock_for_tests(crate::runtime::current_unix_millis())
+            .unwrap();
         let release = service
             .message_service_mut()
             .prepare_storage_horizon_release(
@@ -233,12 +239,23 @@ async fn recover(point: CrashPoint) {
     assert!(fixture.payload.message_state.is_none());
     let mut request = fixture.request();
     request.config.layers = vec![native_input::config()];
-    let mut runtime = SessionFactory::create_with_native_custody(
-        request,
-        PaneProcessRetirementOwner::default(),
-        None,
-    )
-    .await
+    let mut runtime = if point == CrashPoint::Release {
+        SessionFactory::create_with_custody_clock_for_tests(
+            request,
+            PaneProcessRetirementOwner::default(),
+            crate::storage::mmp_custody::elapsed_clock::ClockSource::controlled_for_tests(
+                crate::runtime::current_unix_millis() - 1,
+            ),
+        )
+        .await
+    } else {
+        SessionFactory::create_with_native_custody(
+            request,
+            PaneProcessRetirementOwner::default(),
+            None,
+        )
+        .await
+    }
     .unwrap();
     let handle = runtime.handle().actor().clone();
     let runner = tokio::spawn(runtime.actor.take().unwrap().run());

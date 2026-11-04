@@ -36,7 +36,7 @@ impl MessageService {
         if self
             .queued_by_sequence
             .values()
-            .any(|row| row.native_bindings.is_some())
+            .any(|row| row.native_bindings.is_some() || row.custody_clock.is_some())
         {
             return Err(MessageError::invalid_state(
                 "MMP native custody requires the versioned store-bound snapshot recovery path",
@@ -289,6 +289,7 @@ impl MessageService {
                     .map(|(_, floor)| *floor)
             };
             let queued = Arc::new(QueuedEnvelope {
+                custody_clock: None,
                 registration_bindings: None,
                 native_bindings: None,
                 native_input_protection: super::native_input::protection_slots(

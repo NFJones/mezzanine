@@ -7,6 +7,8 @@
 use super::super::payload_load::{MessagePayloadLoadAttempt, MessagePayloadLoadJoin};
 use super::*;
 
+mod elapsed_clock;
+
 /// Retains encoded originals and actual ACK records for the trusted unit port.
 #[derive(Default)]
 struct Store {
