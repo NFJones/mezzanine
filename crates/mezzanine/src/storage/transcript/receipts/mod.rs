@@ -387,6 +387,19 @@ impl AgentTranscriptStore {
             .is_empty())
     }
 
+    /// Checks append ownership while the caller retains the ordinary mutation
+    /// lease. Native custody spans its preparation and canonical commit journals
+    /// under that same lease and must not recursively acquire it.
+    pub(super) fn has_unsettled_append_receipts_locked(
+        &self,
+        conversation_id: &str,
+        _lease: &fs::File,
+    ) -> Result<bool> {
+        Ok(!self
+            .read_locked_append_receipts(&[conversation_id])?
+            .is_empty())
+    }
+
     /// Preserves ordinary row-only admission and its v1 recovery contract.
     pub(crate) fn accept_append_receipt(
         &self,

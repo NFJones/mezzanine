@@ -1037,3 +1037,5 @@ mod native_binding;
 mod checkpoint;
 mod native_continuity;
 mod recovery;
+
+mod native_input;

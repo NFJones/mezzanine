@@ -103,10 +103,15 @@ mod auxiliary;
 mod fanout;
 mod native_commits;
 mod native_continuity;
+mod native_input;
 mod native_recovery;
 pub use native_continuity::{
     MessageNativeContinuityRequest, MessageNativeContinuitySnapshot, MessageNativeContinuityStore,
     MessageNativeContinuityVerified, MessageNativeContinuityWrite,
+};
+pub use native_input::{
+    MessageNativeInputAnchor, MessageNativeInputCommit, MessageNativeInputRecord,
+    MessageNativeInputStore,
 };
 pub use native_recovery::{
     MessageNativeRecovery, MessageNativeRecoveryRecord, MessageNativeRecoveryStore,

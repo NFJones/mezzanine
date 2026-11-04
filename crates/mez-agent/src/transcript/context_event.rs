@@ -49,6 +49,11 @@ const EXECUTION_BLOCK_LABEL_LIMIT_BYTES: usize = 4 * 1024;
 /// Provider-independent context that is durable across conversation turns.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TranscriptContextEvent {
+    /// Canonical untrusted peer input with descriptive original-source provenance.
+    /// It is never delivery/ACK authority until the actual product port qualifies it.
+    NativePeerMessage {
+        event: Box<super::TranscriptNativeInputEvent>,
+    },
     /// One exact user-authored event with immutable chronology identity.
     UserEvent {
         /// Original non-zero chronological event sequence.
@@ -307,6 +312,11 @@ impl TranscriptContextEvent {
     /// Encodes one event as a reserved system transcript entry.
     pub fn to_transcript_content(&self) -> String {
         let payload = match self {
+            Self::NativePeerMessage { event } => serde_json::json!({
+                "version": TRANSCRIPT_CONTEXT_EVENT_VERSION,
+                "kind": "native_peer_message",
+                "event": event,
+            }),
             Self::UserEvent {
                 event_sequence,
                 label,
@@ -413,6 +423,14 @@ impl TranscriptContextEvent {
             return None;
         }
         match value.get("kind")?.as_str()? {
+            "native_peer_message" => {
+                let event: super::TranscriptNativeInputEvent =
+                    serde_json::from_value(value.get("event")?.clone()).ok()?;
+                event.validate().ok()?;
+                Some(Self::NativePeerMessage {
+                    event: Box::new(event),
+                })
+            }
             USER_EVENT_KIND => Self::user_event(
                 value.get("event_sequence")?.as_u64()?,
                 value.get("label")?.as_str()?,

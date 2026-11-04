@@ -285,6 +285,9 @@ impl MessageService {
             };
             let queued = Arc::new(QueuedEnvelope {
                 native_bindings: None,
+                native_input_protection: super::native_input::protection_slots(
+                    retained.recipient_bindings.as_deref().unwrap_or(&[]).len(),
+                ),
                 sequence: retained.sequence,
                 envelope: RetainedEnvelope::new(envelope),
                 audience: audience_from_snapshot(retained.audience.as_ref())?,

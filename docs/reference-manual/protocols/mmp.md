@@ -491,6 +491,26 @@ epochs. Native canonical commit-before-ACK dedup, terminal journals, reclaim,
 complete admitted-state resource/liveness coverage and normal host/all-ingress
 activation remain unfinished. No public option is added.
 
+The internal root worker also has a canonical native-input storage boundary.
+It retains one actual source, original transcript target and first append plan
+through cancellation or a lost worker reply. A bodyless `p1` journal freezes
+physical destination identities, prefix and exact row position before writing
+input. The conversation mutation lease spans both journals and the canonical
+append. After the exact row is read and synced, one transaction replaces `p1`
+with bodyless `c1` evidence. Each journal fits 32 KiB; non-target custody rows must
+survive every SQL effect. A changed or missing original backing refuses retry.
+Retained source metadata remains charged through the final proof owner, even
+after transport ACK and replay eviction.
+
+The archive row is typed untrusted peer-reference data. Its provenance does not
+become delivery authority through deserialization, and later bookkeeping treats
+its ordinary chronology projection as the same event. Only actual root storage
+qualification can seal a native commit proof for the exact frozen source slot.
+An existing `c1` can settle that historical source after context replacement
+without injecting it into a successor. Root-boundary tests cover these actual
+writes and ACKs; actor receive deduplication, provider gating and process-crash
+coverage of this new canonical path remain unfinished activation requirements.
+
 Fresh opt-in requires an actually empty original store; only qualified recovery
 can install an existing store. Normal product construction keeps durable mode
 disabled: complete crash recovery/liveness, native restart deduplication and

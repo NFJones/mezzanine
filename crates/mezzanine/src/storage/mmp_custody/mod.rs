@@ -33,6 +33,7 @@ mod history;
 mod integrity;
 mod inventory;
 pub(crate) mod native_continuity;
+pub(crate) mod native_input;
 pub(crate) mod ownership;
 mod recovery;
 mod registration;

@@ -567,6 +567,7 @@ impl MessageService {
             offered_at_ms: std::sync::Mutex::new(vec![None; bindings.len()]),
             acknowledged: std::sync::Mutex::new(vec![false; bindings.len()]),
             terminal: std::sync::Mutex::new(vec![None; bindings.len()]),
+            native_input_protection: super::native_input::protection_slots(bindings.len()),
             sender_registered_after_sequence: Some(sender_floor),
             ack_expiry_observed_at_ms: std::sync::Mutex::new(None),
             recipient_bindings: bindings,

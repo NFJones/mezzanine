@@ -661,6 +661,9 @@ pub(super) struct QueuedEnvelope {
     /// permits shared read APIs to record offers without mutating any payload,
     /// registration or cursor. Entries cannot outlive this bounded occurrence.
     pub(super) offered_at_ms: Mutex<Vec<Option<u64>>>,
+    /// Small weak control blocks protect exact native slots while actual input
+    /// owners retain their original source. These never serialize as authority.
+    pub(super) native_input_protection: Mutex<Vec<std::sync::Weak<()>>>,
     /// Exact recipient commits in immutable binding order, independent of a
     /// later subscription replacement or recipient retirement.
     pub(super) acknowledged: Mutex<Vec<bool>>,

@@ -43,3 +43,6 @@ pub trait TranscriptPersistence {
 
 #[cfg(test)]
 mod tests;
+
+mod native_input;
+pub use native_input::{TranscriptNativeInputEvent, TranscriptNativeInputSource};

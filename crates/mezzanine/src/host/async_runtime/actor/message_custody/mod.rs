@@ -686,6 +686,12 @@ impl AsyncRuntimeSessionActor {
             )) => Err(MezError::invalid_state(
                 "MMP native continuity requires its original metadata adopter",
             )),
+            CustodyEvent::Observed(Ok(
+                CustodyWorkerStatus::NativeInputAwaitingAdoption
+                | CustodyWorkerStatus::NativeInputRetryAt(_),
+            )) => Err(MezError::invalid_state(
+                "MMP canonical native input requires its original receive adopter",
+            )),
             CustodyEvent::Observed(Err(error)) => Err(error),
             CustodyEvent::Observed(Ok(CustodyWorkerStatus::Running)) => {
                 owner.wake = Some(Wake::Observe);

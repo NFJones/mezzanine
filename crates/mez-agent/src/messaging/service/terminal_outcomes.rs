@@ -61,6 +61,16 @@ impl MessageService {
         native_commits: &[(AgentId, MessageSequence)],
     ) -> Result<bool> {
         let protected = self.native_commit_protection(native_commits)?;
+        if self
+            .storage_custody
+            .as_ref()
+            .is_some_and(|policy| policy.native_continuity_required)
+        {
+            // The durable terminal producer owns future observation. Repeated
+            // volatile passes cannot settle this work and must not spin a timer.
+            return Ok(false);
+        }
+
         for queued in self.pending.values() {
             let acknowledged = queued.acknowledged.lock().map_err(|_| unavailable())?;
             let terminals = queued.terminal.lock().map_err(|_| unavailable())?;
@@ -111,6 +121,17 @@ impl MessageService {
         native_commits: &[(AgentId, MessageSequence)],
     ) -> Result<usize> {
         let protected = self.native_commit_protection(native_commits)?;
+        if self
+            .storage_custody
+            .as_ref()
+            .is_some_and(|policy| policy.native_continuity_required)
+        {
+            // Durable product setup cannot retire accepted evidence through an
+            // in-memory-only observation. Original native canonical proofs must
+            // stay reconcilable until explicit durable disposition journals own
+            // expiry/retirement. That producer still gates normal activation.
+            return Ok(0);
+        }
         let mut guards = Vec::new();
         for queued in self.pending.values() {
             let acknowledged = queued.acknowledged.lock().map_err(|_| unavailable())?;

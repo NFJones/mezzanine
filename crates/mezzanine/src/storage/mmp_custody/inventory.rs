@@ -112,6 +112,7 @@ enum Key<'a> {
     Commit(u64),
     Acknowledgement(&'a str),
     NativeContinuity(&'a str),
+    NativeInput(&'a str),
 }
 
 impl MmpCustodyStore {
@@ -252,6 +253,29 @@ impl MmpCustodyStore {
                 let key: Option<String> = row.get(0).map_err(database_error)?;
                 let key = key.ok_or_else(|| invalid("row key exceeds policy"))?;
                 match parse_key(&key)? {
+                    Key::NativeInput(key) => {
+                        if let Some(previous) = group.take() {
+                            self.finish_inventory_group(
+                                transaction,
+                                previous,
+                                limits,
+                                &mut metadata,
+                                &mut inventory,
+                                pending,
+                            )?;
+                        }
+                        self.read_native_input_in_snapshot(transaction, key, limits)?
+                            .ok_or_else(|| invalid("native input journal is missing"))?;
+                        let other = if let Some(rest) = key.strip_prefix("p1:") {
+                            format!("c1:{rest}")
+                        } else {
+                            format!("p1:{}", &key[3..])
+                        };
+                        if self.read(&other)?.is_some() {
+                            return Err(invalid("native input has two journal phases"));
+                        }
+                        charge(&mut metadata, ACK_CHARGE)?;
+                    }
                     Key::NativeContinuity(key) => {
                         if let Some(previous) = group.take() {
                             self.finish_inventory_group(
@@ -304,7 +328,9 @@ impl MmpCustodyStore {
                             Key::Chunk(sequence, _)
                             | Key::Stage(sequence)
                             | Key::Commit(sequence) => sequence,
-                            Key::Acknowledgement(_) | Key::NativeContinuity(_) => {
+                            Key::Acknowledgement(_)
+                            | Key::NativeContinuity(_)
+                            | Key::NativeInput(_) => {
                                 return Err(invalid("unexpected acknowledgment key"));
                             }
                         };
@@ -490,6 +516,14 @@ fn parse_key(key: &str) -> Result<Key<'_>> {
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
     {
         return Ok(Key::Acknowledgement(key));
+    }
+    if let Some(digest) = key.strip_prefix("p1:").or_else(|| key.strip_prefix("c1:"))
+        && digest.len() == 64
+        && digest
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    {
+        return Ok(Key::NativeInput(key));
     }
     if let Some(digest) = key.strip_prefix("n1:")
         && digest.len() == 64

@@ -41,6 +41,7 @@ use crate::storage::mmp_custody::{CustodyStoreLimits, MmpCustodyStore};
 mod acknowledgement;
 mod checkpoint;
 mod native_continuity;
+mod native_input;
 mod payload_load;
 mod recovery;
 pub(crate) use recovery::{CustodyRecoveryRequest, RecoveredMessageCustody};
@@ -89,6 +90,10 @@ pub(crate) enum CustodyWorkerStatus {
     NativeContinuityAwaitingAdoption,
     /// The actual native journal worker joined and can retry the same input.
     NativeContinuityRetryAt(Instant),
+    /// Original canonical input/probe joined and awaits its exact adopter.
+    NativeInputAwaitingAdoption,
+    /// Original native input worker joined unsuccessfully and retains its plan.
+    NativeInputRetryAt(Instant),
     /// Opening failed; no lower write was issued by this root.
     Unavailable,
 }
@@ -198,6 +203,17 @@ enum State {
     RecordedNative {
         admission: native_continuity::Admission,
         result: Result<Box<native_continuity::Written>>,
+        retry_at: Instant,
+    },
+    /// Original canonical input and its actual owned blocking worker.
+    WritingNativeInput {
+        admission: native_input::Admission,
+        worker: JoinHandle<Result<native_input::Written>>,
+    },
+    /// Original canonical input/probe result retained after actual join.
+    WrittenNativeInput {
+        admission: native_input::Admission,
+        result: Result<Box<native_input::Written>>,
         retry_at: Instant,
     },
     /// Bounded failed-open diagnostic; cannot imply any issued write was unsent.
@@ -373,6 +389,11 @@ impl MmpCustodyRoot {
             {
                 return Poll::Pending;
             }
+            if matches!(&*state, State::WritingNativeInput { .. })
+                && native_input::poll_join(&mut state, cx).is_pending()
+            {
+                return Poll::Pending;
+            }
             match &mut *state {
                 State::Opening(worker) => match Pin::new(worker).poll(cx) {
                     Poll::Pending => return Poll::Pending,
@@ -450,6 +471,9 @@ impl MmpCustodyRoot {
                 result: Err(error), ..
             } => Some(error.clone()),
             State::RecordedNative {
+                result: Err(error), ..
+            }
+            | State::WrittenNativeInput {
                 result: Err(error), ..
             } => Some(error.clone()),
             _ => None,
@@ -821,6 +845,12 @@ impl Drop for Inner {
                         .spawn_blocking(move || drop((admission, result)))
                         .await;
                 }
+                State::WritingNativeInput { admission, worker } => {
+                    let result = worker.await;
+                    let _ = runtime
+                        .spawn_blocking(move || drop((admission, result)))
+                        .await;
+                }
                 State::RecordingNative { admission, worker } => {
                     let result = worker.await;
                     let _ = runtime
@@ -941,6 +971,16 @@ fn status(state: &State) -> CustodyWorkerStatus {
                 CustodyWorkerStatus::NativeContinuityAwaitingAdoption
             } else {
                 CustodyWorkerStatus::NativeContinuityRetryAt(*retry_at)
+            }
+        }
+        State::WritingNativeInput { .. } => CustodyWorkerStatus::Running,
+        State::WrittenNativeInput {
+            result, retry_at, ..
+        } => {
+            if result.is_ok() {
+                CustodyWorkerStatus::NativeInputAwaitingAdoption
+            } else {
+                CustodyWorkerStatus::NativeInputRetryAt(*retry_at)
             }
         }
         State::Unavailable(_) => CustodyWorkerStatus::Unavailable,

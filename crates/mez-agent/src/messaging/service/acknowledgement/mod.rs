@@ -384,6 +384,103 @@ impl MessageService {
         Ok(Some(MessageAcknowledgementTicket { identity }))
     }
 
+    /// Reserves exactly one original native slot after trusted canonical storage
+    /// qualification. Current endpoint replacement grants no rights and cannot
+    /// receive this cursor. Other earlier uncommitted slots are never included.
+    pub fn prepare_native_input_acknowledgement(
+        &mut self,
+        commit: &MessageNativeInputCommit,
+        metadata_budget: usize,
+    ) -> Result<Option<MessageAcknowledgementTicket>> {
+        let anchor = commit.anchor();
+        let source = &anchor.0;
+        self.require_storage_scope(Some(&source.scope))?;
+        if !Arc::ptr_eq(&source.runtime, &self.acceptance_runtime) {
+            return Err(changed());
+        }
+        let acknowledged = source.row.acknowledged.lock().map_err(|_| changed())?;
+        if *acknowledged.get(source.index).ok_or_else(changed)? {
+            return Ok(None);
+        }
+        drop(acknowledged);
+        if !self.native_input_anchor_is_original(anchor)
+            || self.acknowledgement.is_some()
+            || source
+                .row
+                .terminal
+                .lock()
+                .map_err(|_| changed())?
+                .get(source.index)
+                .is_none_or(Option::is_some)
+        {
+            return Err(changed());
+        }
+        let recipient = anchor.recipient();
+        let floor = anchor.registered_after_sequence();
+        let mut offers = source.row.offered_at_ms.lock().map_err(|_| changed())?;
+        let offer = offers.get_mut(source.index).ok_or_else(changed)?;
+        let clock = offer.map_or(commit.record().offered_at_ms, |prior| {
+            prior.max(commit.record().offered_at_ms)
+        });
+        if source
+            .row
+            .envelope
+            .ttl_ms
+            .is_some_and(|ttl| source.row.accepted_at_ms.saturating_add(ttl) < clock)
+        {
+            return Err(changed());
+        }
+        let encoded = 48 + recipient.as_str().len() + RECORD_ENTRY_BYTES;
+        let metadata_bytes = std::mem::size_of::<Identity>()
+            + 1024
+            + encoded
+            + recipient.as_str().len().saturating_mul(4)
+            + source.native.conversation_id().len().saturating_mul(4)
+            + source.native.incarnation().len().saturating_mul(4);
+        if metadata_bytes > metadata_budget.min(MAX_METADATA) {
+            return Err(capacity());
+        }
+        let policy = self.storage_custody.as_ref().ok_or_else(changed)?;
+        if self
+            .storage_usage()?
+            .ok_or_else(changed)?
+            .metadata_bytes
+            .saturating_add(metadata_bytes)
+            > policy.limits.metadata_bytes
+        {
+            return Err(capacity());
+        }
+        let identity = Arc::new(Identity {
+            owner: self.acceptance_runtime.clone(),
+            cursor: DeliveryCursor {
+                recipient: recipient.clone(),
+                last_sequence: anchor.sequence(),
+            },
+            floor,
+            native_owner: Some(source.native.clone()),
+            after: anchor.sequence().checked_sub(1).ok_or_else(changed)?,
+            observed_at_ms: clock,
+            entries: vec![MessageAcknowledgementEntry {
+                sequence: anchor.sequence(),
+                binding_index: u32::try_from(source.index).map_err(|_| changed())?,
+                acknowledged: true,
+                offered_at_ms: Some(clock),
+            }],
+            metadata_bytes,
+            published: AtomicBool::new(false),
+        });
+        // The actual canonical proof requalifies the original genuine offer on
+        // cold reconstruction. Bytes alone and current labels cannot do this.
+        *offer = Some(clock);
+        drop(offers);
+        self.acknowledgement = Some(PendingAcknowledgement {
+            identity: identity.clone(),
+            attempt: None,
+            storage_scope: None,
+        });
+        Ok(Some(MessageAcknowledgementTicket { identity }))
+    }
+
     /// Issues exactly one original after reserving all metadata and prefix slots.
     pub fn begin_acknowledgement_write(
         &mut self,
@@ -528,12 +625,54 @@ impl MessageService {
                 prior.max(identity.observed_at_ms)
             }));
         }
+        // Single native commits do not claim a cumulative prefix. Advance only
+        // through actual committed current-own slots, including later original
+        // slots already ACKed out of order. Explicit expiry witnesses/terminal
+        // dispositions may bridge gaps; a new clock cannot invent those facts.
         if self.registration_floors.get(&identity.cursor.recipient) == Some(&identity.floor)
             && identity.native_owner.as_ref()
                 == self.current_native_owner(&identity.cursor.recipient)
-            && let Some(cursor) = self.subscriptions.get_mut(&identity.cursor.recipient)
+            && let Some(current) = self
+                .subscriptions
+                .get(&identity.cursor.recipient)
+                .map(|c| c.last_sequence)
         {
-            cursor.last_sequence = cursor.last_sequence.max(identity.cursor.last_sequence);
+            let mut through = current;
+            for (_, row) in self.queued_by_sequence.range((
+                std::ops::Bound::Excluded(current),
+                std::ops::Bound::Unbounded,
+            )) {
+                if !self.accepted_recipient(row, &identity.cursor.recipient) {
+                    continue;
+                }
+                let index = row
+                    .recipient_bindings
+                    .iter()
+                    .position(|(id, _)| id == &identity.cursor.recipient)
+                    .ok_or_else(changed)?;
+                if *row
+                    .acknowledged
+                    .lock()
+                    .map_err(|_| changed())?
+                    .get(index)
+                    .ok_or_else(changed)?
+                {
+                    through = row.sequence;
+                } else if self.recipient_is_terminal(row, &identity.cursor.recipient)
+                    || row
+                        .ack_expiry_observed_at_ms
+                        .lock()
+                        .map_err(|_| changed())?
+                        .is_some_and(|clock| expired(row, clock))
+                {
+                    continue;
+                } else {
+                    break;
+                }
+            }
+            if let Some(cursor) = self.subscriptions.get_mut(&identity.cursor.recipient) {
+                cursor.last_sequence = through;
+            }
         }
         identity.published.store(true, Ordering::Release);
         self.acknowledgement = None;
@@ -547,6 +686,13 @@ impl MessageService {
         sequence: MessageSequence,
         recipient: &AgentId,
     ) -> bool {
+        if self
+            .pending
+            .get(&sequence)
+            .is_some_and(|row| super::native_input::protects(row, recipient))
+        {
+            return true;
+        }
         self.acknowledgement.as_ref().is_some_and(|pending| {
             pending
                 .identity

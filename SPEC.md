@@ -16188,6 +16188,44 @@ canonical context commit-before-ACK deduplication, terminal journals, reclaim,
 complete resource-bound liveness and all-ingress integration remain required.
 No config or wire field enables this internal path.
 
+The internal original-root canonical-input worker MUST retain the actual source
+anchor, transcript target, application projection, first preparation and real
+blocking handle through observer cancellation and joined loss. A lookup without
+an application projection MUST NOT create native input. Qualified absence is
+not canonical commit proof. The actor's receive/provider integration remains a
+separate required gate before this worker can serve normal native delivery.
+The source anchor MUST keep its complete retained original metadata and copied
+attribution charged until its final owner retires, including after transport
+ACK and replay eviction remove the ledger's references.
+
+A bodyless `p1:<occurrence>` journal MUST freeze the original transcript root,
+conversation directory and archive device/inode identities, complete physical
+prefix length/digest, selected row sequence and exact encoded row length/digest
+before canonical append. Retry MUST preserve that preparation, including after
+the canonical row committed but its reply or subsequent journal write failed.
+An exact partial own append MAY finish from its retained original bytes; missing
+or changed original prefixes and replacement archives MUST refuse. The existing
+conversation mutation lease MUST span preparation, append and commit publication.
+After reading and syncing the exact original row, one transaction MUST replace
+`p1` with bounded bodyless `c1` commit evidence, preserving every non-target row
+through SQL effects. Both journal formats are bounded to 32 KiB and bind the
+original allocation, source fingerprint, frozen native owner, recipient slot and
+genuine offer clock. Inventory MUST validate them against the accepted original.
+
+Canonical native input MUST use a typed peer-reference transcript event with
+validated original-source provenance and complete projection digest. Hydration
+MUST preserve its untrusted peer provenance. Later execution bookkeeping MUST
+recognize the same chronology event without appending a duplicate projection.
+Only actual original-root qualification MAY seal native commit proof; decoded
+frames, labels and journal DTOs are not capabilities. A settled original `c1`
+MAY qualify its historical commit after legitimate archive cleanup or a current
+context replacement, without opening a replacement target or scheduling work.
+Its exact source-bound ACK MUST settle only that frozen slot; out-of-order ACK
+publication MUST NOT skip an earlier uncommitted slot in a current cursor.
+This worker does not complete actor deduplication, provider gating, crash startup
+acceptance coverage or resource/liveness qualification, and MUST NOT enable
+normal durable activation before the remaining issue requirements pass.
+
 Immutable envelope auxiliary metadata MUST additionally fit a 16 MiB logical
 budget over the deduplicated replay/custody union after normal replay eviction.
 Charge 1,024 bytes per occurrence plus 64 bytes and four times UTF-8 length for

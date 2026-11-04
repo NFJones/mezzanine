@@ -38,7 +38,9 @@ impl MessageService {
             })?;
             // A later clock rollback cannot invalidate an earlier genuine
             // selection's evidence that a preceding occurrence had expired.
-            *slot = Some(slot.map_or(now_ms, |previous| previous.max(now_ms)));
+            if slot.is_none() || !super::native_input::protects(queued, &batch.cursor.recipient) {
+                *slot = Some(slot.map_or(now_ms, |previous| previous.max(now_ms)));
+            }
         }
         Ok(())
     }

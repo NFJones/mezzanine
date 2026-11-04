@@ -79,6 +79,7 @@ impl MessageAcceptanceSource {
             offered_at_ms: std::sync::Mutex::new(offered_at_ms),
             acknowledged: std::sync::Mutex::new(acknowledged),
             terminal: std::sync::Mutex::new(vec![None; count]),
+            native_input_protection: super::super::native_input::protection_slots(count),
             ack_expiry_observed_at_ms: std::sync::Mutex::new(expiry_observed_at_ms),
         })
     }
