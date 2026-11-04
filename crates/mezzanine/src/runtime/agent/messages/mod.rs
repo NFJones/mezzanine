@@ -13,6 +13,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::runtime::runtime_effective_config_value;
 
+pub(in crate::runtime::agent) mod durable;
 mod receipts;
 
 use mez_agent::SchedulerErrorKind;
@@ -112,8 +113,15 @@ impl RuntimeSessionService {
             .message_service_mut()
             .fanout_ready_excluding_native_commits(now_ms, usize::MAX, &native_commits)?;
         let mut committed = 0usize;
-        for fanout in ready {
+        for mut fanout in ready {
             let recipient = fanout.recipient;
+            fanout
+                .batch
+                .messages
+                .retain(|message| self.native_input_is_permitted(&recipient, message));
+            if fanout.batch.messages.is_empty() {
+                continue;
+            }
             if !recipient.as_str().starts_with("agent-") {
                 continue;
             }
@@ -188,6 +196,9 @@ impl RuntimeSessionService {
                         ),
                     )?;
                 }
+                if self.native_input_pending_for_conversation(&turn.conversation_id) {
+                    continue;
+                }
                 self.record_joined_coordination_mail(
                     &turn,
                     message.sequence,
@@ -197,6 +208,9 @@ impl RuntimeSessionService {
             }
 
             let _ = self.flush_received_peer_message_presentations();
+            if self.native_input_pending_for_conversation(&turn.conversation_id) {
+                continue;
+            }
 
             if turn.state == AgentTurnState::Blocked && model_message_count > 0 {
                 self.agent
@@ -243,6 +257,9 @@ impl RuntimeSessionService {
     /// A full scheduler queue is recoverable: the wake marker remains so a
     /// later delivery sweep retries without losing the committed peer mail.
     pub(super) fn resume_parked_peer_wait(&mut self, turn: &AgentTurnRecord) -> Result<bool> {
+        if self.native_input_pending_for_conversation(&turn.conversation_id) {
+            return Ok(false);
+        }
         if self.resume_targeted_request_wait(turn)? {
             return Ok(true);
         }
@@ -441,6 +458,9 @@ impl RuntimeSessionService {
                                 .agent_shell_store()
                                 .get(&turn.pane_id)
                                 .is_some_and(|shell| shell.session_id == turn.conversation_id)
+                    })
+                    .filter(|turn| {
+                        !self.native_input_pending_for_conversation(&turn.conversation_id)
                     })
                     .filter(|turn| self.agent_turn_contexts().contains_key(&turn.turn_id))
                     .filter(|turn| self.agent_turn_model_profile(&turn.turn_id).is_some())
@@ -736,6 +756,9 @@ impl RuntimeSessionService {
         if failure.is_none() {
             self.set_agent_peer_message_turn_count(&agent_id, started_turns.saturating_add(1));
             self.clear_agent_peer_message_limit_reported(&agent_id);
+        }
+        if self.native_input_pending_for_conversation(&turn.conversation_id) {
+            return Ok(delivered_message_count);
         }
         self.admit_owned_child_failure_context_turn(&turn)?;
         let _ = self.flush_received_peer_message_presentations();

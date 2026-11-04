@@ -789,7 +789,9 @@ impl RuntimeSessionService {
         if self.agent_is_compacting(&turn.pane_id) {
             return Ok(None);
         }
-        if self.persistence.bookkeeping_pending(&turn.conversation_id) {
+        if self.persistence.bookkeeping_pending(&turn.conversation_id)
+            || self.native_input_pending_for_conversation(&turn.conversation_id)
+        {
             return Ok(None);
         }
         // A scheduler wake may leave a provider offer queued while a native
@@ -1901,6 +1903,7 @@ impl RuntimeSessionService {
                     .get(&task.pane_id)
                     .is_none_or(|session| {
                         !self.persistence.bookkeeping_pending(&session.session_id)
+                            && !self.native_input_pending_for_conversation(&session.session_id)
                     })
             })
             .filter(|task| {

@@ -11,7 +11,8 @@
 use std::sync::OnceLock;
 
 use mez_agent::messaging::{
-    MessageNativeInputAnchor, MessageNativeInputRecord, MessageNativeInputStore,
+    MessageNativeInputAnchor, MessageNativeInputCommit, MessageNativeInputRecord,
+    MessageNativeInputStore,
 };
 use mez_agent::transcript::{
     TranscriptContextEvent, TranscriptEntry, TranscriptNativeInputSource, TranscriptRole,
@@ -23,6 +24,9 @@ use crate::storage::transcript::{AgentTranscriptStore, native_input::NativeTrans
 
 /// Bounded metadata only; no native payload or transcript content is stored here.
 const MAX_JOURNAL_BYTES: usize = 32 * 1024;
+
+mod projection;
+pub(crate) use projection::NativeInputProjection;
 
 /// Descriptive source and original physical append receipt.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -54,14 +58,17 @@ struct Completion {
 /// Original target and application input owned by the serialized root worker.
 pub(crate) struct NativeInputAttempt {
     transcript: AgentTranscriptStore,
-    row: Option<TranscriptEntry>,
+    row: Option<std::sync::Arc<NativeInputProjection>>,
     first: OnceLock<Preparation>,
     completion: OnceLock<Completion>,
 }
 impl NativeInputAttempt {
     /// Captures a real post-context projection or a lookup-only request. The
     /// actual lower anchor/source and typed row are checked again at execution.
-    pub(crate) fn new(transcript: AgentTranscriptStore, row: Option<TranscriptEntry>) -> Self {
+    pub(crate) fn new(
+        transcript: AgentTranscriptStore,
+        row: Option<std::sync::Arc<NativeInputProjection>>,
+    ) -> Self {
         Self {
             transcript,
             row,
@@ -249,7 +256,12 @@ impl NativeInputPort<'_> {
             }
             None => {
                 if self.attempt.first.get().is_none() {
-                    let mut row = self.attempt.row.clone().ok_or_else(invalid)?;
+                    let mut row = self
+                        .attempt
+                        .row
+                        .as_ref()
+                        .ok_or_else(invalid)?
+                        .materialize(anchor, store_id)?;
                     let source = checked_event(&row, anchor, store_id)?;
                     if anchor.offered_at_ms() != Some(source.offered_at_ms) {
                         return Err(invalid());
@@ -321,7 +333,12 @@ impl NativeInputPort<'_> {
         // Only a retained actual application row may create missing input.
         // A cold lookup can requalify an existing row but never invent one.
         if let Some(first) = self.attempt.first.get() {
-            let mut row = self.attempt.row.clone().ok_or_else(invalid)?;
+            let mut row = self
+                .attempt
+                .row
+                .as_ref()
+                .ok_or_else(invalid)?
+                .materialize(anchor, store_id)?;
             row.sequence = first.journal.transcript.archive_sequence;
             lease.append(&pending.transcript, &row)?;
         }

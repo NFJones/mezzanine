@@ -1299,6 +1299,41 @@ impl RuntimeSessionService {
         &mut self,
         pane_id: &PaneId,
     ) -> Option<mez_agent::messaging::ProjectScopeId> {
+        // An actual native binding has already frozen this registration's
+        // membership, including a deliberately absent scope. Discovering CWD
+        // after restart must not enrich None into Some, replace its allocation
+        // and strand accepted slots. Public pane/identity labels alone cannot
+        // select this path: both the live registration and private shell epoch
+        // must still own the same conversation (or its qualified parent).
+        let frozen = self
+            .agent_shell_store()
+            .get(pane_id.as_str())
+            .and_then(|shell| {
+                let id = AgentId::opaque(format!("agent-{pane_id}"))?;
+                let service = self.control.message_service();
+                let registration = service.capture_sender_registration(&id)?;
+                let owner = service.native_owner_for_registration(
+                    &registration,
+                    &shell.native_message_incarnation,
+                )?;
+                if owner.conversation_id() != shell.session_id
+                    && (!shell.ephemeral
+                        || service
+                            .native_parent_for_registration(
+                                &registration,
+                                &shell.native_message_incarnation,
+                            )
+                            .is_none())
+                {
+                    return None;
+                }
+                service
+                    .registered_identity(&id)
+                    .map(|identity| identity.project_scope.clone())
+            });
+        if let Some(scope) = frozen {
+            return scope;
+        }
         if let Some(scope) = self
             .agent_shell_store()
             .get(pane_id.as_str())

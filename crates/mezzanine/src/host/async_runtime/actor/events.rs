@@ -92,6 +92,7 @@ impl AsyncRuntimeSessionActor {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub(super) fn notify_message_delivery(&mut self) {
+        self.reset_native_message_input_scan();
         self.metrics.message_delivery_notifications = self
             .metrics
             .message_delivery_notifications
@@ -156,6 +157,7 @@ impl AsyncRuntimeSessionActor {
         if current == previous {
             return;
         }
+        self.reset_native_message_input_scan();
         self.metrics.lifecycle_state_notifications =
             self.metrics.lifecycle_state_notifications.saturating_add(1);
         let _ = self.lifecycle_state_tx.send(current);
@@ -530,7 +532,20 @@ impl AsyncRuntimeSessionActor {
                 .apply_agent_session_title_transition(title_event),
             RuntimeEvent::Hook(hook_event) => self.apply_runtime_hook_event(hook_event),
             RuntimeEvent::Persistence(persistence_event) => {
-                self.apply_runtime_persistence_event(persistence_event)
+                // A real writer completion may release the original history
+                // prefix that deferred idle native selection. Reopen the bounded
+                // scan from actual progress, without an always-ready retry loop.
+                let transcript = matches!(
+                    &persistence_event,
+                    PersistenceEvent::TranscriptClaim { .. }
+                        | PersistenceEvent::TranscriptCompleted { .. }
+                        | PersistenceEvent::InitialTranscriptCompleted { .. }
+                );
+                let transition = self.apply_runtime_persistence_event(persistence_event)?;
+                if transition.applied && transcript {
+                    self.reset_native_message_input_scan();
+                }
+                Ok(transition)
             }
             RuntimeEvent::HostClipboard(clipboard_event) => {
                 self.service.apply_host_clipboard_event(clipboard_event)
@@ -853,6 +868,7 @@ impl AsyncRuntimeSessionActor {
                     return Ok(RuntimeTransition::default());
                 }
                 self.timers.peer_message_delivery = None;
+                self.reset_native_message_input_scan();
                 self.service
                     .apply_peer_message_delivery_timer(timer.now_ms, timer.key.generation)
             }

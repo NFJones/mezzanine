@@ -126,17 +126,10 @@ impl RuntimeSessionService {
         }
     }
 
-    /// Runs the agent transcript store operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    #[cfg(test)]
-    #[allow(
-        dead_code,
-        reason = "test-only adapter retained for focused boundary coverage"
-    )]
-    pub fn agent_transcript_store(&self) -> Option<&AgentTranscriptStore> {
+    /// Borrows the actual canonical store selected by application setup. Native
+    /// receive work captures this handle before context/namespace replacement;
+    /// callers must offload its filesystem operations to the owned root worker.
+    pub(crate) fn agent_transcript_store(&self) -> Option<&AgentTranscriptStore> {
         self.persistence.transcript_store()
     }
 

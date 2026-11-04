@@ -125,6 +125,8 @@ struct RuntimeReceivedPeerMessagePresentation {
     /// Same-runtime proof created only after canonical native context commit.
     /// Restored presentation projections never acquire this authority.
     native_commit_proven: bool,
+    /// Original durable receive custody; restored display rows never mint it.
+    durable_input: Option<messages::durable::NativeReceipt>,
     /// Authoritative MMP recipient that accepted the delivery.
     ///
     /// A pane name is only a presentation target: group and session fanout can
@@ -879,6 +881,8 @@ pub(crate) struct RuntimeAgentComponent {
         BTreeMap<String, crate::runtime::agent_state::RuntimeTurnCompactionHandoff>,
     /// Receiver-owned peer presentation receipts awaiting durable pane settlement.
     received_peer_message_presentations: BTreeMap<String, RuntimeReceivedPeerMessagePresentation>,
+    /// One real original-root absence result awaiting a canonical receive.
+    native_input_permit: Option<mez_agent::messaging::MessageNativeInputAnchor>,
     /// Highest chronology sequence owned by replayed history in each active turn.
     ///
     /// Compaction refresh replaces exactly this prefix so prompt-boundary

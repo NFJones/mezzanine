@@ -154,6 +154,96 @@ impl MessageNativeInputAnchor {
 }
 
 impl MessageService {
+    /// Reports the actual live storage policy; saved/wire values cannot select it.
+    pub fn native_input_storage_required(&self) -> bool {
+        self.storage_custody.is_some()
+    }
+
+    /// Selects one unACKed frozen native slot in stable source/slot order for
+    /// original canonical-proof lookup. No body, offer or live endpoint is
+    /// required. `after` is only bounded scan progress, never delivery authority.
+    pub fn next_native_input_lookup(
+        &self,
+        after: Option<(u64, usize)>,
+    ) -> Result<Option<MessageNativeInputAnchor>> {
+        for row in self.pending.values() {
+            for index in 0..row.recipient_bindings.len() {
+                if after.is_some_and(|cursor| (row.sequence, index) <= cursor)
+                    || row
+                        .native_bindings
+                        .as_ref()
+                        .and_then(|n| n.recipients.get(index))
+                        .is_none_or(Option::is_none)
+                    || row
+                        .acknowledged
+                        .lock()
+                        .map_err(|_| unavailable())?
+                        .get(index)
+                        .copied()
+                        .unwrap_or(true)
+                    || row
+                        .terminal
+                        .lock()
+                        .map_err(|_| unavailable())?
+                        .get(index)
+                        .is_none_or(Option::is_some)
+                {
+                    continue;
+                }
+                return self.native_input_anchor(row, index, None).map(Some);
+            }
+        }
+        Ok(None)
+    }
+
+    /// Tests current delivery eligibility for an original lookup without
+    /// reviving a registration, renewing TTL or manufacturing a genuine offer.
+    pub fn native_input_can_receive(&self, source: &MessageNativeInputAnchor, now_ms: u64) -> bool {
+        self.native_input_anchor_is_original(source)
+            && source
+                .0
+                .row
+                .acknowledged
+                .lock()
+                .is_ok_and(|slots| slots.get(source.0.index) == Some(&false))
+            && source
+                .0
+                .row
+                .terminal
+                .lock()
+                .is_ok_and(|slots| slots.get(source.0.index).is_some_and(Option::is_none))
+            && self.accepted_recipient(&source.0.row, source.recipient())
+            && self.recipient_is_available(source.recipient())
+            && self.native_delivery_is_available(source.recipient())
+            && !expired(&source.0.row, now_ms)
+            && self
+                .subscriptions
+                .get(source.recipient())
+                .is_none_or(|c| c.last_sequence < source.sequence())
+    }
+
+    /// Genuinely selects the first current source after qualified absence.
+    /// Cold payloads remain absent; the caller must use the existing owned read.
+    pub fn select_native_input(
+        &self,
+        source: &MessageNativeInputAnchor,
+        now_ms: u64,
+    ) -> Result<Option<MessageNativeInputAnchor>> {
+        if !self.native_input_can_receive(source, now_ms) || source.resident_envelope().is_err() {
+            return Ok(None);
+        }
+        let batch = self.receive_subscribed(source.recipient(), now_ms, 1)?;
+        if !batch
+            .messages
+            .iter()
+            .any(|m| m.sequence == source.sequence())
+        {
+            return Ok(None);
+        }
+        self.capture_native_input_anchor(source.recipient(), source.sequence())
+            .map(Some)
+    }
+
     /// Captures an actual offered current native source after its application
     /// owner has committed input. This source anchor alone grants no durable ACK.
     pub fn capture_native_input_anchor(

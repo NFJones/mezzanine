@@ -54,11 +54,10 @@ impl PreparedNativeCustodyContext {
                 && fact.identity.window_id.as_deref() == Some(b.window.as_str())
                 && fact.matches_project_scope(&b.project)
                 && fact.identity.role.is_some()
-                && fact
-                    .identity
-                    .capabilities
-                    .iter()
-                    .any(|c| c == "agent-harness")
+                // Built-in native classification came from the guarded actual
+                // shell binding, now matched to its original private context.
+                // Prompt-created identities legitimately advertise no optional
+                // capabilities; discovery labels cannot replace that proof.
                 && !fact
                     .identity
                     .capabilities

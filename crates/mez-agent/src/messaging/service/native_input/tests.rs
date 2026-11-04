@@ -215,6 +215,78 @@ fn native_input_proof_charges_source_metadata_after_ack_and_replay_eviction() {
     assert!(retained.saturating_sub(retired) >= source_bytes);
 }
 
+/// Metadata scan describes frozen native slots without selecting their bodies
+/// or inventing offer clocks. Current selection remains a separate real lower
+/// operation, and stable scan progress terminates after the final slot.
+#[test]
+fn native_input_scan_requires_separate_genuine_selection() {
+    let mut scene = Scene::new();
+    scene.accept("scan-original", None);
+    let lookup = scene
+        .service
+        .next_native_input_lookup(None)
+        .unwrap()
+        .unwrap();
+    assert_eq!(lookup.offered_at_ms(), None);
+    assert!(
+        scene
+            .service
+            .next_native_input_lookup(Some((lookup.sequence(), lookup.binding_index())))
+            .unwrap()
+            .is_none()
+    );
+    assert!(scene.service.native_input_can_receive(&lookup, 11));
+    let selected = scene
+        .service
+        .select_native_input(&lookup, 11)
+        .unwrap()
+        .unwrap();
+    assert_eq!(selected.sequence(), lookup.sequence());
+    assert_eq!(selected.offered_at_ms(), Some(11));
+}
+
+/// A current owner may need a cold read, but reading descriptive metadata is
+/// insufficient to select it. A successor native epoch cannot revive that
+/// original, although historical canonical-proof lookup remains possible.
+#[test]
+fn native_input_scan_preserves_cold_and_replaced_originals_without_selection() {
+    let mut scene = Scene::new();
+    let sequence = scene.accept("scan-cold-original", None);
+    scene
+        .service
+        .release_stored_payload(sequence, &scene.scope)
+        .unwrap();
+    let lookup = scene
+        .service
+        .next_native_input_lookup(None)
+        .unwrap()
+        .unwrap();
+    assert!(lookup.resident_envelope().is_err());
+    assert!(
+        scene
+            .service
+            .select_native_input(&lookup, 11)
+            .unwrap()
+            .is_none()
+    );
+    scene
+        .service
+        .bind_native_conversation(
+            &scene.registration,
+            "successor-context",
+            &MessageNativeIncarnation::default(),
+        )
+        .unwrap();
+    assert!(!scene.service.native_input_can_receive(&lookup, 11));
+    assert!(
+        scene
+            .service
+            .next_native_input_lookup(None)
+            .unwrap()
+            .is_some()
+    );
+}
+
 /// Source capture cannot invent an offer, select a replacement native epoch or
 /// turn another service into its owner. Lookup preserves old attribution but
 /// qualified absence still yields no canonical commit or ACK capability.

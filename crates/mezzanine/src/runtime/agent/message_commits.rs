@@ -94,6 +94,9 @@ impl RuntimeSessionService {
         recipient: &AgentId,
         sequence: u64,
     ) -> Result<bool> {
+        if self.native_input_storage_required() {
+            return Ok(false);
+        }
         let offered = self
             .control
             .message_service()
@@ -153,6 +156,9 @@ impl RuntimeSessionService {
     /// A ready canonical prefix needs one transport pass, while a stable
     /// blocked prefix must not keep a permanent timer or replay committed mail.
     pub(super) fn has_reconcilable_runtime_message_commits(&self) -> Result<bool> {
+        if self.native_input_storage_required() {
+            return Ok(false);
+        }
         for recipient in self.runtime_native_commit_recipients() {
             let Some(recipient) = AgentId::opaque(recipient) else {
                 continue;
@@ -186,6 +192,25 @@ impl RuntimeSessionService {
     /// still owes settlement. A cancelled observer or missing current receipt is
     /// insufficient evidence; this preflight changes no identity or pane state.
     pub(crate) fn ensure_runtime_message_transfers_settled_for_restore(&self) -> Result<()> {
+        if self.agent.native_input_permit.is_some()
+            || self
+                .agent
+                .received_peer_message_presentations
+                .values()
+                .any(|r| {
+                    matches!(
+                        r.durable_input,
+                        Some(
+                            super::messages::durable::NativeReceipt::Pending(_)
+                                | super::messages::durable::NativeReceipt::Committed { .. }
+                        )
+                    )
+                })
+        {
+            return Err(MezError::conflict(
+                "original native canonical input/ACK custody pending",
+            ));
+        }
         if self.has_pending_stored_message_actions() {
             return Err(MezError::conflict(
                 "original message action storage/result custody pending",

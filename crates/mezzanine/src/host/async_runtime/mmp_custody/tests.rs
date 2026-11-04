@@ -113,6 +113,10 @@ impl Fixture {
             None,
         )
     }
+    /// Opens only this generated private database for native storage controls.
+    fn connection(&self) -> rusqlite::Connection {
+        rusqlite::Connection::open(self.path.join("custody.sqlite")).unwrap()
+    }
     /// Reads actual SQLite row/generation facts, never observer status text.
     fn disk(&self) -> (i64, i64) {
         rusqlite::Connection::open(self.path.join("custody.sqlite"))
@@ -1039,3 +1043,5 @@ mod native_continuity;
 mod recovery;
 
 mod native_input;
+
+mod native_receive;

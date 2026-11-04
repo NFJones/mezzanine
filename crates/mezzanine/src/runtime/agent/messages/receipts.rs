@@ -203,9 +203,26 @@ impl RuntimeSessionService {
         turn: &AgentTurnRecord,
         envelope: Envelope,
     ) -> Result<()> {
-        self.record_request_reply_commit(turn, sequence, &envelope)?;
+        let durable_input = self.capture_native_input_work(&recipient_agent_id, sequence, turn)?;
+        if durable_input.is_none() {
+            self.record_request_reply_commit(turn, sequence, &envelope)?;
+        }
         let identity =
             Self::received_peer_message_presentation_id(&recipient_agent_id, sequence, &envelope);
+        if durable_input.is_some()
+            && self
+                .agent
+                .received_peer_message_presentations
+                .get(&identity)
+                .is_some_and(|receipt| !receipt.native_commit_proven)
+        {
+            // A restored display projection owns no canonical input. Replace it
+            // with this actual post-context owner rather than dropping the new
+            // root work or promoting saved turn/namespace labels to authority.
+            self.agent
+                .received_peer_message_presentations
+                .remove(&identity);
+        }
         if let Some(receipt) = self
             .agent
             .received_peer_message_presentations
@@ -233,6 +250,7 @@ impl RuntimeSessionService {
             .entry(identity)
             .or_insert(super::super::RuntimeReceivedPeerMessagePresentation {
                 native_commit_proven: true,
+                durable_input,
                 recipient_agent_id,
                 occurrence,
                 pane_id: turn.pane_id.clone(),
@@ -329,6 +347,7 @@ impl RuntimeSessionService {
                 .entry(entry.identity.clone())
                 .or_insert(super::super::RuntimeReceivedPeerMessagePresentation {
                     native_commit_proven: false,
+                    durable_input: None,
                     recipient_agent_id,
                     occurrence: entry.occurrence,
                     pane_id: entry.pane_id.clone(),
@@ -498,6 +517,7 @@ impl RuntimeSessionService {
                         identity,
                         super::super::RuntimeReceivedPeerMessagePresentation {
                             native_commit_proven: false,
+                            durable_input: None,
                             recipient_agent_id: recipient.clone(),
                             occurrence: Default::default(),
                             pane_id: pane_id.clone(),
@@ -709,6 +729,9 @@ impl RuntimeSessionService {
         &self,
         receipt: &super::super::RuntimeReceivedPeerMessagePresentation,
     ) -> bool {
+        if let Some(state) = &receipt.durable_input {
+            return matches!(state, super::durable::NativeReceipt::Acknowledged);
+        }
         self.control
             .message_service()
             .subscription(&receipt.recipient_agent_id)

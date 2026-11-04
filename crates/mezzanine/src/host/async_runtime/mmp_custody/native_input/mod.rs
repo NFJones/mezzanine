@@ -9,10 +9,9 @@
 use std::task::Context;
 
 use mez_agent::messaging::{MessageNativeInputAnchor, MessageNativeInputCommit};
-use mez_agent::transcript::TranscriptEntry;
 
 use super::*;
-use crate::storage::mmp_custody::native_input::NativeInputAttempt;
+use crate::storage::mmp_custody::native_input::{NativeInputAttempt, NativeInputProjection};
 use crate::storage::transcript::AgentTranscriptStore;
 
 /// Actual immutable input and its first root position retained through loss.
@@ -36,13 +35,15 @@ impl MmpCustodyRoot {
         service: &MessageService,
         source: MessageNativeInputAnchor,
         transcript: AgentTranscriptStore,
-        row: Option<TranscriptEntry>,
+        row: Option<Arc<NativeInputProjection>>,
     ) -> Result<()> {
         let mut state = self.0.state.lock().map_err(|_| ownership_error())?;
         let State::Idle(opened) = &*state else {
             return Err(ownership_error());
         };
-        if self.0.stopping.load(Ordering::Acquire)
+        // Closing forbids fresh selection, but an actual context-owned input
+        // must finish canonical storage and ACK before its actor can retire.
+        if (self.0.stopping.load(Ordering::Acquire) && row.is_none())
             || !source.belongs_to(&self.0.storage_scope)
             || !service.native_input_anchor_is_original(&source)
         {

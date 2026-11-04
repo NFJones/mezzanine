@@ -22,6 +22,7 @@ mod actions;
 mod checkpoint;
 mod native;
 mod native_continuity;
+mod native_input;
 mod payload_reads;
 use payload_reads::PayloadRead;
 mod raw;
@@ -56,6 +57,8 @@ pub(super) enum CustodyEvent {
     AdmissionReady,
     /// A cache-capacity poll expired; no physical input has been issued yet.
     PayloadCapacityReady,
+    /// A parked native capacity refusal may recheck the original source.
+    NativeReceiveRetry,
     /// Actual joined disposition, still requiring canonical lower adoption.
     Observed(Result<CustodyWorkerStatus>),
     /// Original job's backoff expired; no new admission may replace it.
@@ -68,6 +71,13 @@ pub(super) enum CustodyEvent {
 enum Pending {
     /// The root owns the exact native metadata input; no message is reserved.
     NativeContinuity,
+    /// Exact original canonical probe/write; receipt absence means lookup only.
+    NativeInput {
+        source: mez_agent::messaging::MessageNativeInputAnchor,
+        receipt: Option<String>,
+    },
+    /// Original qualified-absent native source awaiting its actual cold reload.
+    NativePayload(mez_agent::messaging::MessageNativeInputAnchor),
     /// Original native action permission/group and exact lower admission.
     Action(RuntimeMessageActionAdmission),
     /// Full raw body is already in the charged lower reservation, not this owner.
@@ -87,6 +97,11 @@ enum Pending {
 
 /// Exact original observer flavor, neither can cancel physical/canonical custody.
 enum AcknowledgementReply {
+    /// Original sealed native commit, never a task/replay continuation.
+    Native {
+        receipt: Option<String>,
+        _proof: mez_agent::messaging::MessageNativeInputCommit,
+    },
     /// Successful raw peer batch write awaiting canonical transport cursor.
     Fanout(oneshot::Sender<Result<DeliveryCursor>>),
     /// Explicit raw ACK frame awaiting its original connection cursor result.
@@ -103,6 +118,16 @@ pub(in crate::host::async_runtime) struct ActorMessageCustody {
     payload_retry_at: Option<Instant>,
     /// Bounded payload-free requests, each fenced to its original registration.
     payload_reads: std::collections::VecDeque<PayloadRead>,
+    /// Payload-free bounded scan progress, reset by actual delivery notification.
+    native_scan_after: Option<(u64, usize)>,
+    native_scan_pending: bool,
+    /// Coalesces real notifications behind an active cursor into one more pass.
+    native_scan_again: bool,
+    native_scan_watermark: u64,
+    /// One payload-free source retained through pre-issuance capacity backoff.
+    native_retry: Option<(Instant, mez_agent::messaging::MessageNativeInputAnchor)>,
+    /// One historical canonical positive waiting for its exact original ACK.
+    recovered_native_ack: Option<mez_agent::messaging::MessageNativeInputCommit>,
     /// Receiver cancellation cannot remove this issued original continuation.
     pending: Option<Pending>,
     /// ACK allowed while an exact, never-written acceptance remains retained.
@@ -130,6 +155,14 @@ impl std::fmt::Debug for ActorMessageCustody {
 }
 
 impl ActorMessageCustody {
+    /// Reopens source observation without discarding bounded pass progress.
+    /// A real state change behind the cursor must survive this pass's eventual
+    /// exhaustion. Coalescing into one extra pass avoids perpetual idle polls.
+    fn request_native_scan(&mut self) {
+        self.native_scan_again |= self.native_scan_after.is_some();
+        self.native_scan_pending = true;
+    }
+
     /// A refused capture issued no worker/reservation, so a real ACK may use the
     /// idle root to release capacity before the next metadata attempt.
     fn can_interrupt_native_capture(&self) -> bool {
@@ -163,6 +196,78 @@ impl ActorMessageCustody {
 }
 
 impl AsyncRuntimeSessionActor {
+    /// Exercises the actual production custody pump without dispatching a live
+    /// provider in boundary tests. No status or commit fact is manufactured.
+    #[cfg(test)]
+    pub(in crate::host) fn poll_message_custody_for_tests(&mut self) {
+        self.poll_message_custody();
+    }
+
+    /// Applies actual live presence and the production delivery notification.
+    /// No selection, native binding, worker status or commit is manufactured.
+    #[cfg(test)]
+    pub(in crate::host) fn native_presence_changed_for_tests(
+        &mut self,
+        recipient: &mez_core::ids::AgentId,
+        status: mez_agent::messaging::AgentPresenceStatus,
+    ) -> Result<()> {
+        self.service.message_service_mut().update_presence(
+            recipient,
+            status,
+            crate::runtime::current_unix_millis(),
+        )?;
+        self.notify_message_delivery();
+        Ok(())
+    }
+
+    /// Observes task records without claiming or scheduling execution. Private
+    /// restore may legitimately retain interrupted historical user turns.
+    #[cfg(test)]
+    pub(in crate::host) fn native_turns_for_tests(&self) -> Vec<mez_agent::AgentTurnRecord> {
+        self.service.agent_turn_ledger().turns().to_vec()
+    }
+
+    /// Observes startup subscription presence without offering mail, creating a
+    /// recipient or manufacturing an application/transport completion.
+    #[cfg(test)]
+    pub(in crate::host) fn native_subscription_for_tests(
+        &self,
+        recipient: &mez_core::ids::AgentId,
+    ) -> Option<mez_agent::messaging::DeliveryCursor> {
+        self.service
+            .message_service()
+            .subscription(recipient)
+            .cloned()
+    }
+
+    /// Requests the actual shutdown fence while allowing tests to observe each
+    /// retained root operation without dispatching any provider service.
+    #[cfg(test)]
+    pub(in crate::host) fn begin_message_custody_shutdown_for_tests(
+        &mut self,
+    ) -> oneshot::Receiver<Result<RuntimeLifecycleState>> {
+        let (reply, response) = oneshot::channel();
+        self.begin_message_custody_shutdown(reply);
+        response
+    }
+
+    /// Observes and applies only this actor's actual retained root handle. This
+    /// keeps fault-stage tests independent of paid/network provider dispatch.
+    #[cfg(test)]
+    pub(in crate::host) async fn observe_message_custody_for_tests(
+        &mut self,
+    ) -> Result<CustodyWorkerStatus> {
+        let root = self
+            .message_custody
+            .as_ref()
+            .ok_or_else(|| MezError::invalid_state("test actor custody missing"))?
+            .root
+            .clone();
+        let status = root.observe().await?;
+        self.apply_message_custody_event(CustodyEvent::Observed(Ok(status.clone())));
+        Ok(status)
+    }
+
     /// Transfers exclusive scheduling of one root before its first actor claim.
     /// Rejects replacing an existing root, preserving its actual handles/replies.
     /// Trusted setup must not schedule external jobs on a clone after transfer.
@@ -180,6 +285,12 @@ impl AsyncRuntimeSessionActor {
             wake: Some(Wake::Observe),
             payload_retry_at: None,
             payload_reads: std::collections::VecDeque::new(),
+            native_scan_after: None,
+            native_scan_pending: true,
+            native_scan_again: false,
+            native_scan_watermark: 0,
+            native_retry: None,
+            recovered_native_ack: None,
             pending: None,
             parked_ack: None,
             parked_retry_at: None,
@@ -217,6 +328,15 @@ impl AsyncRuntimeSessionActor {
         self.service.refresh_native_message_bindings()
     }
 
+    /// Actual delivery/native lifecycle changes make an exhausted bounded scan
+    /// eligible again. Active progress is preserved, with one further pass
+    /// retained so changes behind its cursor cannot disappear at exhaustion.
+    pub(super) fn reset_native_message_input_scan(&mut self) {
+        if let Some(owner) = self.message_custody.as_mut() {
+            owner.request_native_scan();
+        }
+    }
+
     /// True after graceful shutdown took ownership of its original reply.
     pub(super) fn message_custody_shutdown_pending(&self) -> bool {
         self.message_custody
@@ -235,6 +355,14 @@ impl AsyncRuntimeSessionActor {
             .message_custody
             .as_ref()
             .and_then(|owner| owner.payload_retry_at);
+        let native_retry = self.message_custody.as_ref().and_then(|owner| {
+            (owner.shutdown.is_none()
+                && owner.pending.is_none()
+                && owner.wake.is_none()
+                && owner.failure.is_none())
+            .then(|| owner.native_retry.as_ref().map(|(at, _)| *at))
+            .flatten()
+        });
         let reads_ready = self.message_custody.as_ref().is_some_and(|owner| {
             owner.pending.is_none()
                 && owner.wake.is_none()
@@ -249,6 +377,20 @@ impl AsyncRuntimeSessionActor {
                 && owner.failure.is_none()
                 && owner.shutdown.is_none()
         }) && !self.service.pending_stored_message_actions().is_empty();
+        let native_input_ready = self.service.native_input_storage_required()
+            && self.message_custody.as_ref().is_some_and(|o| {
+                o.pending.is_none()
+                    && o.wake.is_none()
+                    && o.failure.is_none()
+                    && ((o.native_scan_pending && o.shutdown.is_none())
+                        || (o.shutdown.is_none()
+                            && o.native_retry
+                                .as_ref()
+                                .is_some_and(|(at, _)| *at <= Instant::now()))
+                        || o.recovered_native_ack.is_some()
+                        || self.service.pending_native_input_work().is_some()
+                        || self.service.pending_native_input_ack().is_some())
+            });
         let continuation_wait = self.service.stored_message_continuation_needs_wake();
         let native_ready = self.message_custody.as_ref().is_some_and(|owner| {
             owner.pending.is_none()
@@ -271,11 +413,25 @@ impl AsyncRuntimeSessionActor {
                     tokio::time::sleep_until(at).await;
                     CustodyEvent::NativeCaptureRetry
                 }
+                None if native_input_ready => CustodyEvent::AdmissionReady,
                 None if native_ready => CustodyEvent::AdmissionReady,
                 None if reads_ready => CustodyEvent::AdmissionReady,
-                None if payload_retry.is_some() => {
-                    tokio::time::sleep_until(payload_retry.unwrap_or_else(Instant::now)).await;
-                    CustodyEvent::PayloadCapacityReady
+                None if payload_retry.is_some() || native_retry.is_some() => {
+                    match (payload_retry, native_retry) {
+                        (Some(raw), Some(native)) if raw <= native => {
+                            tokio::time::sleep_until(raw).await;
+                            CustodyEvent::PayloadCapacityReady
+                        }
+                        (_, Some(native)) => {
+                            tokio::time::sleep_until(native).await;
+                            CustodyEvent::NativeReceiveRetry
+                        }
+                        (Some(raw), None) => {
+                            tokio::time::sleep_until(raw).await;
+                            CustodyEvent::PayloadCapacityReady
+                        }
+                        (None, None) => pending().await,
+                    }
                 }
                 None if sources_ready => CustodyEvent::AdmissionReady,
                 None if continuation_wait => {
@@ -294,6 +450,7 @@ impl AsyncRuntimeSessionActor {
             self.apply_message_custody_event(event);
         }
         self.pump_native_message_continuity();
+        self.pump_native_message_input();
         self.pump_message_payload_reads();
         self.pump_stored_message_actions();
         let ready = self.message_custody.as_ref().is_some_and(|owner| {
@@ -301,6 +458,8 @@ impl AsyncRuntimeSessionActor {
                 && owner.pending.is_none()
                 && owner.parked_ack.is_none()
                 && owner.wake.is_none()
+                && owner.recovered_native_ack.is_none()
+                && !self.service.has_pending_native_input()
         });
         if ready {
             let reply = self
@@ -326,8 +485,10 @@ impl AsyncRuntimeSessionActor {
         let mut native_adopted = false;
         let mut payload_read = None;
         let mut capacity_ready = false;
+        let mut native_absence = None;
+        let mut native_ack_receipt = None;
         let result = match event {
-            CustodyEvent::AdmissionReady => Ok(()),
+            CustodyEvent::AdmissionReady | CustodyEvent::NativeReceiveRetry => Ok(()),
             CustodyEvent::NativeCaptureRetry => {
                 if owner.pending.is_none()
                     && matches!(owner.wake, Some(Wake::NativeCaptureRetry(_)))
@@ -407,7 +568,24 @@ impl AsyncRuntimeSessionActor {
                 "MMP checkpoint has no matching actor capture",
             )),
             CustodyEvent::Observed(Ok(CustodyWorkerStatus::PayloadLoadAwaitingAdoption))
-                if matches!(owner.pending, Some(Pending::PayloadLoad(_))) =>
+                if matches!(owner.pending, Some(Pending::NativePayload(_))) =>
+            {
+                owner
+                    .root
+                    .publish_payload_load(self.service.message_service_mut())
+                    .map(|_| {
+                        if let Some(Pending::NativePayload(source)) = owner.pending.take() {
+                            native_absence = Some(source);
+                        }
+                        owner.wake = None;
+                        owner.failure = None;
+                    })
+            }
+            CustodyEvent::Observed(Ok(CustodyWorkerStatus::PayloadLoadAwaitingAdoption))
+                if matches!(
+                    owner.pending,
+                    Some(Pending::PayloadLoad(_) | Pending::NativePayload(_))
+                ) =>
             {
                 owner
                     .root
@@ -422,7 +600,10 @@ impl AsyncRuntimeSessionActor {
                     })
             }
             CustodyEvent::Observed(Ok(CustodyWorkerStatus::PayloadLoadRetryAt(at)))
-                if matches!(owner.pending, Some(Pending::PayloadLoad(_))) =>
+                if matches!(
+                    owner.pending,
+                    Some(Pending::PayloadLoad(_) | Pending::NativePayload(_))
+                ) =>
             {
                 owner.wake = Some(Wake::Retry(at));
                 Ok(())
@@ -546,12 +727,16 @@ impl AsyncRuntimeSessionActor {
                                 Some(AcknowledgementReply::Fanout(reply)) => {
                                     let _ = reply.send(Ok(cursor));
                                 }
+                                Some(AcknowledgementReply::Native { receipt, .. }) => {
+                                    native_ack_receipt = receipt;
+                                }
                                 Some(AcknowledgementReply::Raw(raw)) => {
                                     completion =
                                         Some((raw, RawCompletion::Acknowledgement(cursor)));
                                 }
                                 None => (),
                             }
+                            owner.request_native_scan();
                             owner.failure = None;
                             owner.wake = owner.parked_retry_at.take().map(Wake::Retry);
                         })
@@ -566,12 +751,19 @@ impl AsyncRuntimeSessionActor {
                                 ))) => {
                                     let _ = reply.send(Ok(cursor));
                                 }
+                                Some(Pending::Acknowledgement(AcknowledgementReply::Native {
+                                    receipt,
+                                    ..
+                                })) => {
+                                    native_ack_receipt = receipt;
+                                }
                                 Some(Pending::Acknowledgement(AcknowledgementReply::Raw(raw))) => {
                                     completion =
                                         Some((raw, RawCompletion::Acknowledgement(cursor)));
                                 }
                                 _ => {}
                             }
+                            owner.request_native_scan();
                             owner.failure = None;
                             owner.wake = Some(Wake::Observe);
                         })
@@ -607,6 +799,10 @@ impl AsyncRuntimeSessionActor {
                 .retry_acknowledgement(self.service.message_service_mut(), Instant::now())
                 .map(|_| owner.wake = Some(Wake::Observe)),
             CustodyEvent::Retry => match owner.pending {
+                Some(Pending::NativeInput { .. }) => owner
+                    .root
+                    .retry_native_input(Instant::now())
+                    .map(|_| owner.wake = Some(Wake::Observe)),
                 Some(Pending::NativeContinuity) => owner
                     .root
                     .retry_native_continuity(Instant::now())
@@ -615,7 +811,7 @@ impl AsyncRuntimeSessionActor {
                     .root
                     .retry_checkpoint(Instant::now())
                     .map(|_| owner.wake = Some(Wake::Observe)),
-                Some(Pending::PayloadLoad(_)) => owner
+                Some(Pending::PayloadLoad(_) | Pending::NativePayload(_)) => owner
                     .root
                     .retry_payload_load(self.service.message_service_mut(), Instant::now())
                     .map(|_| owner.wake = Some(Wake::Observe)),
@@ -686,11 +882,44 @@ impl AsyncRuntimeSessionActor {
             )) => Err(MezError::invalid_state(
                 "MMP native continuity requires its original metadata adopter",
             )),
+            CustodyEvent::Observed(Ok(CustodyWorkerStatus::NativeInputAwaitingAdoption))
+                if matches!(owner.pending, Some(Pending::NativeInput { .. })) =>
+            {
+                owner
+                    .root
+                    .adopt_native_input(self.service.message_service())
+                    .and_then(|proof| {
+                        if let Some(Pending::NativeInput { source, receipt }) = owner.pending.take()
+                        {
+                            match (receipt, proof) {
+                                (Some(id), Some(proof)) => {
+                                    self.service.complete_native_input_commit(&id, proof)?
+                                }
+                                (None, Some(proof)) => owner.recovered_native_ack = Some(proof),
+                                (None, None) => native_absence = Some(source),
+                                (Some(_), None) => {
+                                    return Err(MezError::invalid_state(
+                                        "native canonical write returned absence",
+                                    ));
+                                }
+                            }
+                        }
+                        owner.wake = None;
+                        owner.failure = None;
+                        Ok(())
+                    })
+            }
+            CustodyEvent::Observed(Ok(CustodyWorkerStatus::NativeInputRetryAt(at)))
+                if matches!(owner.pending, Some(Pending::NativeInput { .. })) =>
+            {
+                owner.wake = Some(Wake::Retry(at));
+                Ok(())
+            }
             CustodyEvent::Observed(Ok(
                 CustodyWorkerStatus::NativeInputAwaitingAdoption
                 | CustodyWorkerStatus::NativeInputRetryAt(_),
             )) => Err(MezError::invalid_state(
-                "MMP canonical native input requires its original receive adopter",
+                "native canonical job lacks original actor continuation",
             )),
             CustodyEvent::Observed(Err(error)) => Err(error),
             CustodyEvent::Observed(Ok(CustodyWorkerStatus::Running)) => {
@@ -717,6 +946,18 @@ impl AsyncRuntimeSessionActor {
                     Instant::now() + std::time::Duration::from_secs(1),
                 ));
             }
+        }
+        if let Some(id) = native_ack_receipt {
+            let _ = self.service.complete_native_input_ack(
+                &id,
+                crate::runtime::current_unix_millis(),
+                self.message_custody
+                    .as_ref()
+                    .is_some_and(|o| o.shutdown.is_none()),
+            );
+        }
+        if let Some(source) = native_absence {
+            self.activate_absent_native_message(source);
         }
         if let Some(read) = payload_read {
             self.complete_payload_read(read);

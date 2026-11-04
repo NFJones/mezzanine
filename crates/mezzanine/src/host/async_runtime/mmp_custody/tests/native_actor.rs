@@ -23,10 +23,30 @@ pub(super) async fn actor_fixture(
 ) {
     let root = fixture.root();
     assert_eq!(root.observe().await.unwrap(), CustodyWorkerStatus::Idle);
+    let (service, turn, target) = prepared_service(fixture);
+    let (handle, mut actor) =
+        AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
+    actor.register_message_custody(root.clone()).unwrap();
+    (handle, actor, root, turn, target)
+}
+
+/// Builds a real user context before root scheduling is transferred to an actor.
+/// Shared by native send tests and cold receiver setup that admits its originals
+/// through the real lower/root boundary before actor delivery begins.
+pub(super) fn prepared_service(
+    fixture: &Fixture,
+) -> (
+    crate::runtime::RuntimeSessionService,
+    AgentTurnRecord,
+    SenderIdentity,
+) {
     let mut service = crate::test_support::runtime::RuntimeServiceFixture::new().build();
     service.replace_config_layers(vec![ConfigLayer{name:"tracked-native-storage".into(),path:None,
         format:ConfigFormat::Toml,scope:ConfigScope::Primary,trusted:true,
         text:"[agents]\ndefault_provider=\"runtime-batch\"\ndefault_model_profile=\"default\"\nshell_mode=\"native\"\n[providers.runtime-batch]\nkind=\"openai-compatible\"\nbase_url=\"http://127.0.0.1:9/v1\"\nmodels=[\"test\"]\ndefault_model=\"test\"\n[model_profiles.default]\nprovider=\"runtime-batch\"\nmodel=\"test\"\n[permissions]\napproval_policy=\"ask\"\nsandbox=\"policy-only\"\n".into()}]).unwrap();
+    service.set_agent_transcript_store(crate::storage::transcript::AgentTranscriptStore::new(
+        fixture.path.join("canonical"),
+    ));
     service
         .session_mut_for_tests()
         .set_pane_live_state("%1", false)
@@ -47,6 +67,7 @@ pub(super) async fn actor_fixture(
         .execute_agent_shell_command(&primary, "coordinate one stored native request")
         .unwrap();
     let turn = service.agent_turn_ledger().turns().last().unwrap().clone();
+    service.checkpoint_agent_session_metadata().unwrap();
     let target = service
         .message_service_mut()
         .register_agent(None, None, "target", vec![]);
@@ -54,10 +75,7 @@ pub(super) async fn actor_fixture(
         .message_service_mut()
         .subscribe(&target.agent_id)
         .unwrap();
-    let (handle, mut actor) =
-        AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default()).unwrap();
-    actor.register_message_custody(root.clone()).unwrap();
-    (handle, actor, root, turn, target)
+    (service, turn, target)
 }
 
 /// Original native semantic body; caller/current discovery is trusted setup.

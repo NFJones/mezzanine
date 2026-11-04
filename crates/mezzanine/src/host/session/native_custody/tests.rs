@@ -22,6 +22,7 @@ enum Original {
     Snapshot,
     Registered,
     CrashRegistered(PathBuf),
+    CrashNativeInput(PathBuf),
 }
 impl Fixture {
     async fn new(guarded: bool) -> Self {
@@ -34,7 +35,9 @@ impl Fixture {
             rand::random::<u64>()
         ));
         let config = match &original {
-            Original::CrashRegistered(config) => config.clone(),
+            Original::CrashRegistered(config) | Original::CrashNativeInput(config) => {
+                config.clone()
+            }
             _ => generated,
         };
         let session = Session::new_default(shell(), Size::new(80, 24).unwrap()).unwrap();
@@ -54,6 +57,9 @@ impl Fixture {
             .agent_shell_store_mut()
             .enter_or_resume("%1")
             .unwrap();
+        if matches!(&original, Original::CrashNativeInput(_)) {
+            native_input::configure_original(&mut service);
+        }
         let context = service.agent_shell_store().get("%1").unwrap().clone();
         transcripts
             .append(&TranscriptEntry {
@@ -71,15 +77,23 @@ impl Fixture {
             .agent_shell_store_mut()
             .record_transcript_entries("%1", 1)
             .unwrap();
-        let native = service
-            .ensure_runtime_message_identity(
-                "agent-%1",
-                PaneId::opaque("%1"),
-                "agent",
-                &["agent-harness"],
-                100,
-            )
-            .unwrap();
+        let native = if matches!(&original, Original::CrashNativeInput(_)) {
+            service
+                .message_service()
+                .registered_identity(&AgentId::opaque("agent-%1").unwrap())
+                .unwrap()
+                .clone()
+        } else {
+            service
+                .ensure_runtime_message_identity(
+                    "agent-%1",
+                    PaneId::opaque("%1"),
+                    "agent",
+                    &["agent-harness"],
+                    100,
+                )
+                .unwrap()
+        };
         let raw = service
             .message_service_mut()
             .register_agent(None, None, "original raw", vec![]);
@@ -187,6 +201,9 @@ impl Fixture {
             native: native.agent_id,
             raw: raw.agent_id,
         };
+        if matches!(&original, Original::CrashNativeInput(_)) {
+            native_input::commit_then_crash(service, root, fixture).await;
+        }
         if matches!(&original, Original::CrashRegistered(_)) {
             use std::os::unix::fs::OpenOptionsExt;
             let mut handoff = fs::OpenOptions::new()
@@ -464,38 +481,93 @@ async fn native_result_requires_its_original_provisional_runtime() {
 }
 
 /// The real factory installs and registers original custody before returning its
-/// actor. A genuine actor-owned payload reload serves the unACKed original; no
-/// provider service is run. External native ownership retains process cleanup.
+/// actor. Its owned cold reload, canonical receive and exact ACK serve the
+/// unACKed original; no provider service is run. External native ownership retains process cleanup.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn native_factory_registers_original_root_before_ready_actor() {
     let fixture = Fixture::new(true).await;
     assert_factory_redelivery(&fixture).await;
 }
 
-/// Exercises the actual factory and actor without running provider services.
+/// Exercises restored native delivery through the actual factory, actor and
+/// canonical ACK path. A local-only configured harness admits its one new idle
+/// receive turn; no provider service dispatches its offer. Reading native mail
+/// through the transport test API would race this now-connected receive owner.
 async fn assert_factory_redelivery(fixture: &Fixture) {
     let native = PaneProcessRetirementOwner::default();
-    let mut runtime =
-        SessionFactory::create_with_native_custody(fixture.request(), native.clone(), None)
-            .await
-            .unwrap();
+    let mut request = fixture.request();
+    request.config.layers = vec![native_input::config()];
+    let mut runtime = SessionFactory::create_with_native_custody(request, native.clone(), None)
+        .await
+        .unwrap();
     let handle = runtime.handle().actor().clone();
     let actor = runtime.actor.take().unwrap();
     let runner = tokio::spawn(actor.run());
-    let body = handle
-        .message_fanout_ready_for(fixture.native.clone(), 103, 10)
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(body.batch.batch.messages.len(), 1);
-    assert_eq!(body.batch.batch.messages[0].sequence, 2);
-    assert_eq!(
-        body.batch.batch.messages[0].envelope.payload,
-        "original body 2"
-    );
+    let database = root_path(&fixture.config, &fixture.payload.session_id).join("custody.sqlite");
+    let settled = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            handle.lifecycle_state().await.unwrap();
+            let db = rusqlite::Connection::open(&database).unwrap();
+            if db
+                .query_row(
+                    "SELECT COUNT(*) FROM records WHERE key LIKE 'k1:%'",
+                    [],
+                    |r| r.get::<_, i64>(0),
+                )
+                .unwrap()
+                == 2
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await;
     handle.shutdown().await.unwrap();
     let mut exited = runner.await.unwrap();
+    if settled.is_err() {
+        exited.service.terminate_all_pane_processes().unwrap();
+        panic!("native original did not settle through the actual canonical ACK path");
+    }
+    assert!(
+        exited
+            .service
+            .agent_shell_store()
+            .get("%1")
+            .unwrap()
+            .project_scope
+            .is_none(),
+        "receiving in a restored CWD must preserve original unscoped native membership"
+    );
+    assert!(
+        exited
+            .service
+            .message_service()
+            .registered_identity(&fixture.native)
+            .unwrap()
+            .project_scope
+            .is_none()
+    );
     assert_eq!(exited.service.message_service().next_message_sequence(), 3);
+    assert_eq!(
+        exited
+            .service
+            .message_service()
+            .subscription(&fixture.native)
+            .unwrap()
+            .last_sequence,
+        2
+    );
+    assert_eq!(
+        exited
+            .service
+            .message_service()
+            .storage_usage()
+            .unwrap()
+            .unwrap()
+            .pending_messages,
+        0
+    );
     assert!(
         exited
             .service
@@ -512,6 +584,42 @@ async fn assert_factory_redelivery(fixture: &Fixture) {
             .native_message_incarnation
             .snapshot_identity(),
         fixture.epoch
+    );
+    let received = exited
+        .service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .filter(|t| t.trigger == mez_agent::AgentTurnTrigger::LocalMessage)
+        .collect::<Vec<_>>();
+    assert_eq!(received.len(), 1);
+    assert_eq!(
+        exited
+            .service
+            .agent_turn_contexts()
+            .get(&received[0].turn_id)
+            .unwrap()
+            .blocks()
+            .iter()
+            .filter(|b| b.source == mez_agent::ContextSourceKind::PeerMessage
+                && b.content.contains("original body 2"))
+            .count(),
+        1
+    );
+    let rows = exited
+        .service
+        .agent_transcript_store()
+        .unwrap()
+        .inspect(&received[0].conversation_id)
+        .unwrap();
+    assert_eq!(
+        rows.iter()
+            .filter(|r| matches!(
+                mez_agent::transcript::TranscriptContextEvent::from_transcript_content(&r.content),
+                Some(mez_agent::transcript::TranscriptContextEvent::NativePeerMessage { .. })
+            ))
+            .count(),
+        1
     );
     exited.service.terminate_all_pane_processes().unwrap();
     drop(runtime);
@@ -747,3 +855,5 @@ async fn native_factory_recovers_after_process_crash_without_message_checkpoint(
     assert!(fixture.payload.message_state.is_none());
     assert_factory_redelivery(&fixture).await;
 }
+
+mod native_input;

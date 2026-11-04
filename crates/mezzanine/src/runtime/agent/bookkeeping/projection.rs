@@ -11,6 +11,8 @@ use crate::runtime::agent_state::RuntimeTurnCompactionHandoff;
 
 /// Non-context metadata needed to project the same original canonical source.
 pub(in crate::runtime::agent) struct RuntimeTranscriptProjectionMetadata {
+    /// Exact native peer occurrences retained by the original canonical owner.
+    native_owned_peers: std::collections::BTreeSet<u64>,
     /// Imported occurrences are restored for ordinal assignment, not reappended.
     imported_history_high_water: u64,
     /// Exact accepted witnesses and prior epoch, independent of later live maps.
@@ -24,6 +26,8 @@ pub(in crate::runtime::agent) struct RuntimeTranscriptProjectionMetadata {
 
 /// Borrowed immutable canonical source; absence never adopts another context.
 pub(in crate::runtime::agent) struct RuntimeTranscriptProjection<'a> {
+    /// Excludes only actual root-owned peer rows, independent of later cleanup.
+    native_owned_peers: std::collections::BTreeSet<u64>,
     /// Completion requires actual context; legacy interrupted projections may lack it.
     pub(super) context: Option<&'a mez_agent::AgentContext>,
     /// Imported boundary from the same actual original source.
@@ -45,6 +49,7 @@ impl RuntimeSessionService {
     ) -> RuntimeTranscriptProjectionMetadata {
         let routed_presentation = self.routed_presentation_turn(turn_id);
         RuntimeTranscriptProjectionMetadata {
+            native_owned_peers: self.native_owned_peer_events(turn_id),
             imported_history_high_water: self
                 .agent
                 .agent_turn_imported_history_sequence_high_water
@@ -65,6 +70,7 @@ impl<'a> RuntimeTranscriptProjection<'a> {
     ) -> Self {
         Self {
             context,
+            native_owned_peers: metadata.native_owned_peers.clone(),
             imported_history_high_water: metadata.imported_history_high_water,
             compaction: metadata.compaction.as_ref(),
             routed_presentation: metadata.routed_presentation,
@@ -77,6 +83,7 @@ impl<'a> RuntimeTranscriptProjection<'a> {
     pub(super) fn live(service: &'a RuntimeSessionService, turn_id: &str) -> Self {
         Self {
             context: service.agent_turn_contexts().get(turn_id),
+            native_owned_peers: service.native_owned_peer_events(turn_id),
             imported_history_high_water: service
                 .agent_turn_imported_history_sequence_high_water(turn_id),
             compaction: service.agent.agent_turn_compaction_handoffs.get(turn_id),
@@ -251,6 +258,11 @@ impl<'a> RuntimeTranscriptProjection<'a> {
             .filter(|event| event.sequence().get() > imported_history_sequence_high_water)
         {
             let block = event.block();
+            if block.source == ContextSourceKind::PeerMessage
+                && self.native_owned_peers.contains(&event.sequence().get())
+            {
+                continue;
+            }
             if block.source == ContextSourceKind::UserInstruction && block.label == "user prompt" {
                 break;
             }
@@ -337,6 +349,11 @@ impl<'a> RuntimeTranscriptProjection<'a> {
             .filter(|event| event.sequence().get() > imported_history_sequence_high_water)
         {
             let block = event.block();
+            if block.source == ContextSourceKind::PeerMessage
+                && self.native_owned_peers.contains(&event.sequence().get())
+            {
+                continue;
+            }
             if block.source == ContextSourceKind::UserInstruction {
                 active_user_seen = true;
                 if block.label == "user prompt" {

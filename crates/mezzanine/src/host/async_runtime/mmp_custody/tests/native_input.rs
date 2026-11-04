@@ -122,12 +122,25 @@ impl Scene {
     /// Starts the actual original worker; statuses below are checked only after
     /// its retained handle has actually joined.
     fn start(&self) {
+        let Some(TranscriptContextEvent::NativePeerMessage { event }) =
+            TranscriptContextEvent::from_transcript_content(&self.row.content)
+        else {
+            panic!("actual canonical projection required");
+        };
+        let mut row = self.row.clone();
+        row.content = event.content;
+        let projection = crate::storage::mmp_custody::native_input::NativeInputProjection::new(
+            row,
+            event.event_sequence,
+            event.label,
+        )
+        .unwrap();
         self.root
             .start_native_input(
                 &self.service,
                 self.anchor.clone(),
                 self.transcript.clone(),
-                Some(self.row.clone()),
+                Some(Arc::new(projection)),
             )
             .unwrap();
     }
@@ -437,29 +450,13 @@ async fn native_input_sealed_commit_settles_original_after_context_replacement()
     );
 }
 
-/// A typed frame's public fields do not grant source authority. A mismatching
-/// acceptance hash is rejected before a preparation or transcript append.
+/// A projection for a different application recipient cannot borrow an actual
+/// source anchor. It refuses before preparation or canonical archive mutation.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn native_input_rejects_typed_frame_for_another_source() {
+async fn native_input_rejects_projection_for_another_recipient() {
     let fixture = Fixture::new(true);
     let mut scene = Scene::new(&fixture).await;
-    let Some(TranscriptContextEvent::NativePeerMessage { mut event }) =
-        TranscriptContextEvent::from_transcript_content(&scene.row.content)
-    else {
-        panic!("actual native frame required");
-    };
-    event.source.source_sha256 = [7; 32];
-    let event = TranscriptNativeInputEvent::new(
-        event.source,
-        event.event_sequence,
-        event.label,
-        event.content,
-    )
-    .unwrap();
-    scene.row.content = TranscriptContextEvent::NativePeerMessage {
-        event: Box::new(event),
-    }
-    .to_transcript_content();
+    scene.row.agent_id = "another-recipient".into();
     let before = fixture.disk();
     scene.start();
     assert!(matches!(
@@ -614,11 +611,4 @@ async fn native_input_final_root_drop_drains_actual_worker_before_releasing_fenc
             .last_sequence,
         0
     );
-}
-
-/// Fault injection and assertions access only this generated private database.
-impl Fixture {
-    fn connection(&self) -> rusqlite::Connection {
-        rusqlite::Connection::open(self.path.join("custody.sqlite")).unwrap()
-    }
 }

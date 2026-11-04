@@ -16,6 +16,11 @@ impl RuntimeSessionService {
         &mut self,
         turn: &AgentTurnRecord,
     ) -> Result<bool> {
+        // Direct action handoff and sweep recovery share the exact native ACK
+        // fence; a canonical reply awaiting transport cannot wake either path.
+        if self.native_input_pending_for_conversation(&turn.conversation_id) {
+            return Ok(false);
+        }
         let Some(edge) = self.agent.request_waits.edges.get(&turn.turn_id).cloned() else {
             return Ok(false);
         };

@@ -487,7 +487,7 @@ existing conversation bindings on refusal. This entry still needs trusted
 whole-session layout input on restart and a scoped active checkpoint no larger
 than 256 KiB. Changed, missing, corrupt or oversized private evidence refuses
 startup. Generic message restore still refuses schema10 and creates fresh native
-epochs. Native canonical commit-before-ACK dedup, terminal journals, reclaim,
+epochs. Complete native canonical commit recovery, terminal journals, reclaim,
 complete admitted-state resource/liveness coverage and normal host/all-ingress
 activation remain unfinished. No public option is added.
 
@@ -508,8 +508,29 @@ its ordinary chronology projection as the same event. Only actual root storage
 qualification can seal a native commit proof for the exact frozen source slot.
 An existing `c1` can settle that historical source after context replacement
 without injecting it into a successor. Root-boundary tests cover these actual
-writes and ACKs; actor receive deduplication, provider gating and process-crash
-coverage of this new canonical path remain unfinished activation requirements.
+writes and ACKs. The guarded internal actor probes the original root before live
+receive or unread-prompt injection, retains each selected canonical projection
+through storage and ACK, and holds its provider/scheduler/peer continuations.
+Interrupted bookkeeping excludes that root-owned peer occurrence. Shutdown
+drains selected input without opening a provider continuation; a successor
+context cannot inherit an old completion. Cold-read capacity refusal retains
+one payload-free source with a monotonic retry deadline while other actor work
+continues. A delivery or eligibility notification received behind an active scan
+cursor preserves one further pass, so earlier cold sources are revisited. The
+scan stops when exhausted without another notification.
+
+A process-exit test stops after canonical commit but before native ACK. The real
+factory and actor then qualify the original binding, deduplicate the canonical
+row and ACK its historical slot without creating a task or provider request.
+Historical lookup itself does not add a subscription; qualified startup may
+already have restored one for the original native binding. Built-in native continuity does not depend on an optional discovery
+capability label; the original guarded binding and private context must match,
+and explicit external harnesses remain excluded. A current proven native binding
+also preserves an originally absent project scope when its restored process has
+a working directory: receiving mail must not replace that registration through
+metadata enrichment. Complete cold preparation
+recovery, canonical prefix ownership, resource/liveness and normal all-ingress
+activation still require implementation and qualification.
 
 Fresh opt-in requires an actually empty original store; only qualified recovery
 can install an existing store. Normal product construction keeps durable mode

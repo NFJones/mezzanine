@@ -16183,8 +16183,8 @@ overwriting existing conversation bindings. Recovery still requires trusted
 whole-session layout input and an existing scoped active metadata file of at
 most 256 KiB. Missing, changed, oversized or corrupt private evidence MUST refuse
 rather than fall back to an empty original. These conservative limits do not
-qualify complete admitted-state recovery. Normal host/default activation,
-canonical context commit-before-ACK deduplication, terminal journals, reclaim,
+qualify complete admitted-state recovery. Normal host/default activation, complete
+canonical context commit-before-ACK recovery, terminal journals, reclaim,
 complete resource-bound liveness and all-ingress integration remain required.
 No config or wire field enables this internal path.
 
@@ -16192,8 +16192,11 @@ The internal original-root canonical-input worker MUST retain the actual source
 anchor, transcript target, application projection, first preparation and real
 blocking handle through observer cancellation and joined loss. A lookup without
 an application projection MUST NOT create native input. Qualified absence is
-not canonical commit proof. The actor's receive/provider integration remains a
-separate required gate before this worker can serve normal native delivery.
+not canonical commit proof. In guarded internal storage mode the actual actor
+MUST perform this probe before either live receive or unread-prompt injection.
+Only qualified absence for a still-current source MAY permit genuine native
+selection. Historical commit evidence MUST settle its original slot without
+creating a subscription, context, task or provider continuation.
 The source anchor MUST keep its complete retained original metadata and copied
 attribution charged until its final owner retires, including after transport
 ACK and replay eviction remove the ledger's references.
@@ -16222,9 +16225,37 @@ MAY qualify its historical commit after legitimate archive cleanup or a current
 context replacement, without opening a replacement target or scheduling work.
 Its exact source-bound ACK MUST settle only that frozen slot; out-of-order ACK
 publication MUST NOT skip an earlier uncommitted slot in a current cursor.
-This worker does not complete actor deduplication, provider gating, crash startup
-acceptance coverage or resource/liveness qualification, and MUST NOT enable
-normal durable activation before the remaining issue requirements pass.
+After actual context insertion the runtime MUST retain its original source,
+transcript target and immutable chronology projection until canonical commit
+and exact native ACK. Provider offers, scheduler recovery, peer waits and joined
+coordination MUST hold their affected conversation through that interval.
+Interrupted bookkeeping MUST exclude peer projections already owned by this
+root. An old context's completion MUST NOT feed or advance a replacement.
+Shutdown MUST finish already selected canonical input and its ACK while
+suppressing new selection and provider continuation. A cold-read capacity
+refusal MUST retain bounded payload-free retry state and use monotonic backoff,
+without blocking unrelated actor work or spinning an idle source scan.
+A real delivery/eligibility notification received during an active source pass
+MUST survive that pass's exhaustion and revisit earlier deferred cold slots.
+Notifications MAY coalesce into one further bounded pass; absent new progress,
+an exhausted scan MUST stop rather than become a permanent polling source.
+
+Qualified private-context recovery MUST match the original guarded native
+binding and actual private pane, conversation, window, project and epoch.
+Optional discovery capabilities are not positive continuity proof: built-in
+prompt-created identities may advertise none. Explicit external-harness
+classification MUST continue to refuse native ownership recovery.
+A current actual native binding MUST preserve its original project membership,
+including an absent scope. Later CWD discovery during receive MUST NOT enrich
+that membership, replace the registration allocation or strand accepted slots.
+Only matching live registration/private epoch and conversation ownership MAY
+select this preservation; public labels or stale independent contexts MUST NOT.
+
+Connected internal tests cover canonical commit-before-ACK process exit and
+original-root factory/actor deduplication. Complete cold preparation recovery,
+canonical prefix ownership, resource/liveness qualification and all-ingress
+activation remain required; normal durable activation MUST stay disabled until
+the remaining issue requirements pass.
 
 Immutable envelope auxiliary metadata MUST additionally fit a 16 MiB logical
 budget over the deduplicated replay/custody union after normal replay eviction.
