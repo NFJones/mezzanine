@@ -29,6 +29,7 @@ use native_input::NativeInputResult;
 mod payload_reads;
 use payload_reads::PayloadRead;
 mod raw;
+mod registration_end;
 use crate::runtime::{RuntimeMessageActionAdmission, RuntimePreparedTrackedMessage};
 use raw::RawCompletion;
 pub(super) use raw::RawMessageContinuation;
@@ -50,8 +51,8 @@ enum Wake {
     Observe,
     /// Wait until the original monotonic retry is eligible.
     Retry(Instant),
-    /// No physical input was issued; try capturing current metadata after delay.
-    NativeCaptureRetry(Instant),
+    /// No physical input was issued; try current native/end metadata after delay.
+    MetadataCaptureRetry(Instant),
 }
 
 /// Content-free callback from the root owned by this actor allocation.
@@ -70,8 +71,8 @@ pub(super) enum CustodyEvent {
     Observed(Result<CustodyWorkerStatus>),
     /// Original job's backoff expired; no new admission may replace it.
     Retry,
-    /// A pre-issuance native capture refusal can recheck current bounded state.
-    NativeCaptureRetry,
+    /// A pre-issuance metadata refusal can recheck current bounded state.
+    MetadataCaptureRetry,
 }
 
 /// Original actor continuation paired with the root's one exclusive job.
@@ -87,6 +88,8 @@ enum Pending {
     },
     /// The root owns the exact native metadata input; no message is reserved.
     NativeContinuity,
+    /// Pre-reserved original ended allocation retained by the lower owner/root.
+    RegistrationEnd,
     /// Exact original canonical probe/write; receipt absence means lookup only.
     NativeInput {
         source: mez_agent::messaging::MessageNativeInputAnchor,
@@ -212,8 +215,8 @@ impl ActorMessageCustody {
 
     /// A refused capture issued no worker/reservation, so a real ACK may use the
     /// idle root to release capacity before the next metadata attempt.
-    fn can_interrupt_native_capture(&self) -> bool {
-        matches!(self.wake, Some(Wake::NativeCaptureRetry(_)))
+    fn can_interrupt_metadata_capture(&self) -> bool {
+        matches!(self.wake, Some(Wake::MetadataCaptureRetry(_)))
             && self.pending.is_none()
             && self.failure.is_none()
             && self.shutdown.is_none()
@@ -557,6 +560,12 @@ impl AsyncRuntimeSessionActor {
                 .then_some(owner.terminal_retry_at)
                 .flatten()
         });
+        let registration_end_ready = root_idle
+            && self
+                .service
+                .message_service()
+                .has_pending_registration_end()
+                .unwrap_or(true);
         let physical = async move {
             match next {
                 Some((root, Wake::Observe)) => CustodyEvent::Observed(root.observe().await),
@@ -564,10 +573,11 @@ impl AsyncRuntimeSessionActor {
                     tokio::time::sleep_until(at).await;
                     CustodyEvent::Retry
                 }
-                Some((_, Wake::NativeCaptureRetry(at))) => {
+                Some((_, Wake::MetadataCaptureRetry(at))) => {
                     tokio::time::sleep_until(at).await;
-                    CustodyEvent::NativeCaptureRetry
+                    CustodyEvent::MetadataCaptureRetry
                 }
+                None if registration_end_ready => CustodyEvent::AdmissionReady,
                 None if handoff_ready => CustodyEvent::AdmissionReady,
                 None if native_input_ready => CustodyEvent::AdmissionReady,
                 None if native_ready => CustodyEvent::AdmissionReady,
@@ -626,6 +636,7 @@ impl AsyncRuntimeSessionActor {
         }
         self.pump_native_message_applications();
         self.pump_terminal_handoff_application();
+        self.pump_message_registration_end();
         self.pump_native_message_continuity();
         self.pump_terminal_handoff();
         self.pump_native_message_input();
@@ -640,6 +651,11 @@ impl AsyncRuntimeSessionActor {
                 && owner.native_result.is_none()
                 && !self.service.has_pending_native_input()
                 && !self.service.has_pending_terminal_handoff()
+                && !self
+                    .service
+                    .message_service()
+                    .has_pending_registration_end()
+                    .unwrap_or(true)
         });
         if ready {
             let reply = self
@@ -678,9 +694,9 @@ impl AsyncRuntimeSessionActor {
                 owner.request_handoff_scan();
                 Ok(())
             }
-            CustodyEvent::NativeCaptureRetry => {
+            CustodyEvent::MetadataCaptureRetry => {
                 if owner.pending.is_none()
-                    && matches!(owner.wake, Some(Wake::NativeCaptureRetry(_)))
+                    && matches!(owner.wake, Some(Wake::MetadataCaptureRetry(_)))
                 {
                     owner.wake = None;
                 }
@@ -704,7 +720,10 @@ impl AsyncRuntimeSessionActor {
                     Err(MezError::invalid_state(
                         "MMP expiry lost its original worker state",
                     ))
-                } else if matches!(owner.pending, Some(Pending::NativeContinuity)) {
+                } else if matches!(
+                    owner.pending,
+                    Some(Pending::NativeContinuity | Pending::RegistrationEnd)
+                ) {
                     Err(MezError::invalid_state(
                         "MMP native journal lost its original worker state",
                     ))
@@ -1017,6 +1036,10 @@ impl AsyncRuntimeSessionActor {
                     .root
                     .retry_native_continuity(Instant::now())
                     .map(|_| owner.wake = Some(Wake::Observe)),
+                Some(Pending::RegistrationEnd) => owner
+                    .root
+                    .retry_registration_end(Instant::now())
+                    .map(|_| owner.wake = Some(Wake::Observe)),
                 Some(Pending::Checkpoint(_)) => owner
                     .root
                     .retry_checkpoint(Instant::now())
@@ -1101,6 +1124,31 @@ impl AsyncRuntimeSessionActor {
                 | CustodyWorkerStatus::TerminalRetryAt(_),
             )) => Err(MezError::invalid_state(
                 "MMP expiry has no original actor continuation",
+            )),
+            CustodyEvent::Observed(Ok(CustodyWorkerStatus::RegistrationEndAwaitingAdoption))
+                if matches!(owner.pending, Some(Pending::RegistrationEnd)) =>
+            {
+                owner
+                    .root
+                    .adopt_registration_end(self.service.message_service_mut())
+                    .map(|_| {
+                        owner.pending = None;
+                        owner.wake = None;
+                        owner.failure = None;
+                        capacity_ready = true;
+                    })
+            }
+            CustodyEvent::Observed(Ok(CustodyWorkerStatus::RegistrationEndRetryAt(at)))
+                if matches!(owner.pending, Some(Pending::RegistrationEnd)) =>
+            {
+                owner.wake = Some(Wake::Retry(at));
+                Ok(())
+            }
+            CustodyEvent::Observed(Ok(
+                CustodyWorkerStatus::RegistrationEndAwaitingAdoption
+                | CustodyWorkerStatus::RegistrationEndRetryAt(_),
+            )) => Err(MezError::invalid_state(
+                "MMP registration end requires its original metadata adopter",
             )),
             CustodyEvent::Observed(Ok(CustodyWorkerStatus::NativeContinuityAwaitingAdoption))
                 if matches!(owner.pending, Some(Pending::NativeContinuity)) =>
@@ -1273,7 +1321,7 @@ impl AsyncRuntimeSessionActor {
         };
         let yielding = owner.can_park_ack();
         if !yielding
-            && !owner.can_interrupt_native_capture()
+            && !owner.can_interrupt_metadata_capture()
             && (owner.wake.is_some() || owner.pending.is_some() || owner.failure.is_some())
         {
             let _ = reply.send(Err(MezError::conflict(

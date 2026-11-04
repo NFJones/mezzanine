@@ -62,6 +62,14 @@ impl MessageNativeRecoveryStore for Port<'_, '_> {
                 if generation > state.generation as u64 {
                     return Err(invalid("native publication is in the future"));
                 }
+                if self.store.native_registration_has_ended(
+                    self.transaction,
+                    &record.snapshot.native,
+                    record.snapshot.registered_after_sequence,
+                    Some(generation),
+                )? {
+                    continue;
+                }
                 if !self.context.matches(&record.snapshot) {
                     continue;
                 }

@@ -20,6 +20,8 @@ struct Fixture {
 /// abruptly after durable journal/acceptance/ACK, without root/service Drop.
 enum Original {
     Snapshot,
+    /// Old optional checkpoint precedes an actual journaled native namespace end.
+    EndedSnapshot,
     /// Exact later-slot native ACK; optionally replace the actual private epoch.
     NativeAckSnapshot {
         replace_incarnation: bool,
@@ -126,7 +128,7 @@ impl Fixture {
         service.checkpoint_agent_session_metadata().unwrap();
         let open = if matches!(
             &original,
-            Original::Snapshot | Original::NativeAckSnapshot { .. }
+            Original::Snapshot | Original::EndedSnapshot | Original::NativeAckSnapshot { .. }
         ) {
             MmpCustodyRoot::open
         } else {
@@ -246,7 +248,7 @@ impl Fixture {
         let mut payload = SessionSnapshotPayload::from_session(service.session());
         if matches!(
             &original,
-            Original::Snapshot | Original::NativeAckSnapshot { .. }
+            Original::Snapshot | Original::EndedSnapshot | Original::NativeAckSnapshot { .. }
         ) {
             root.start_checkpoint(service.message_service()).unwrap();
             assert_eq!(
@@ -256,6 +258,25 @@ impl Fixture {
             let (checkpoint, lease) = root.adopt_checkpoint().unwrap();
             payload.message_state = Some(checkpoint);
             drop(lease);
+        }
+        if matches!(&original, Original::EndedSnapshot) {
+            assert!(
+                service
+                    .message_service_mut()
+                    .retire_agent_identity(&native.agent_id)
+            );
+            assert!(
+                root.start_registration_end(service.message_service())
+                    .unwrap()
+            );
+            assert_eq!(
+                root.observe().await.unwrap(),
+                CustodyWorkerStatus::RegistrationEndAwaitingAdoption
+            );
+            assert!(
+                root.adopt_registration_end(service.message_service_mut())
+                    .unwrap()
+            );
         }
         let epoch = service
             .agent_shell_store()
@@ -956,4 +977,5 @@ async fn native_factory_recovers_after_process_crash_without_message_checkpoint(
 mod native_ack_snapshot;
 mod native_input;
 
+mod registration_end;
 mod terminal;

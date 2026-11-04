@@ -75,7 +75,8 @@ async fn accepted_scene(
         actor.poll_message_custody_for_tests();
         let status = actor.observe_message_custody_for_tests().await.unwrap();
         match status {
-            CustodyWorkerStatus::NativeContinuityAwaitingAdoption => continue,
+            CustodyWorkerStatus::NativeContinuityAwaitingAdoption
+            | CustodyWorkerStatus::RegistrationEndAwaitingAdoption => continue,
             CustodyWorkerStatus::AwaitingAdoption => break,
             other => {
                 actor.service.terminate_all_pane_processes().unwrap();

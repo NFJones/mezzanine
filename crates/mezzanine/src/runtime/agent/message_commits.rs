@@ -207,6 +207,7 @@ impl RuntimeSessionService {
         if messages.has_unpublished_acceptance()
             || messages.has_unpublished_acknowledgement()
             || messages.has_unpublished_terminal()
+            || messages.has_pending_registration_end()?
         {
             Err(MezError::conflict(
                 "original MMP storage work must settle before restore",

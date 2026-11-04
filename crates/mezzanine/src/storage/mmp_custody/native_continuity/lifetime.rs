@@ -256,7 +256,19 @@ impl MmpCustodyStore {
         let state = self.checked_state(transaction)?;
         self.read(key)?
             .map(|bytes| {
-                self.decode_native_lifetime(key, &bytes, state.watermark, state.generation as u64)
+                let lifetime = self.decode_native_lifetime(
+                    key,
+                    &bytes,
+                    state.watermark,
+                    state.generation as u64,
+                )?;
+                self.native_registration_has_ended(
+                    transaction,
+                    &lifetime.native,
+                    lifetime.registered_after_sequence,
+                    Some(lifetime.publication_generation),
+                )?;
+                Ok(lifetime)
             })
             .transpose()
     }
@@ -268,6 +280,12 @@ impl MmpCustodyStore {
         transaction: &rusqlite::Transaction<'_>,
         observation: &StoredNativeContinuity,
     ) -> Result<()> {
+        self.native_registration_has_ended(
+            transaction,
+            &observation.snapshot.native,
+            observation.snapshot.registered_after_sequence,
+            observation.generation,
+        )?;
         let Some(generation) = observation.publication_generation() else {
             return Ok(());
         };

@@ -10,11 +10,14 @@ use super::*;
 #[derive(Debug)]
 pub(in crate::messaging) struct RegistrationIdentity {
     pub(super) native_namespace: uuid::Uuid,
+    /// First actual removal/replacement cutoff; shell displacement preserves it.
+    pub(super) ended_after_sequence: std::sync::OnceLock<u64>,
 }
 impl Default for RegistrationIdentity {
     fn default() -> Self {
         Self {
             native_namespace: uuid::Uuid::new_v4(),
+            ended_after_sequence: std::sync::OnceLock::new(),
         }
     }
 }
@@ -149,6 +152,9 @@ impl MessageService {
         identity: SenderIdentity,
         updated_at_ms: u64,
     ) -> SenderIdentity {
+        if let Some(previous) = self.registration_tokens.get(&identity.agent_id) {
+            previous.end_at(self.next_sequence.saturating_sub(1));
+        }
         self.registration_tokens.insert(
             identity.agent_id.clone(),
             Arc::new(RegistrationIdentity::default()),
@@ -202,6 +208,9 @@ impl MessageService {
             reconcile_capabilities(&mut reconciled.capabilities, &identity.capabilities)?;
 
             if !same_immutable_sender(existing, &reconciled) {
+                if let Some(previous) = self.registration_tokens.get(&identity.agent_id) {
+                    previous.end_at(self.next_sequence.saturating_sub(1));
+                }
                 self.registration_tokens.insert(
                     identity.agent_id.clone(),
                     Arc::new(RegistrationIdentity::default()),
@@ -227,6 +236,9 @@ impl MessageService {
             MessageError::not_found("project-scope rebind requires a registered agent")
         })?;
         if identity.project_scope != project_scope {
+            if let Some(previous) = self.registration_tokens.get(agent_id) {
+                previous.end_at(self.next_sequence.saturating_sub(1));
+            }
             self.registration_tokens
                 .insert(agent_id.clone(), Arc::new(RegistrationIdentity::default()));
         }

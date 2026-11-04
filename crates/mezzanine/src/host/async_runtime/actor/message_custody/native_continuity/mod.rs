@@ -30,7 +30,7 @@ impl AsyncRuntimeSessionActor {
             return;
         };
         if refreshed.is_err() {
-            owner.wake = Some(Wake::NativeCaptureRetry(
+            owner.wake = Some(Wake::MetadataCaptureRetry(
                 Instant::now() + std::time::Duration::from_secs(1),
             ));
             return;
@@ -53,7 +53,7 @@ impl AsyncRuntimeSessionActor {
             .is_err()
         {
             owner.pending.take();
-            owner.wake = Some(Wake::NativeCaptureRetry(
+            owner.wake = Some(Wake::MetadataCaptureRetry(
                 Instant::now() + std::time::Duration::from_secs(1),
             ));
         }

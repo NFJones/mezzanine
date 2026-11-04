@@ -72,13 +72,16 @@ impl Scene {
     }
 
     /// Persists the original acceptance-time TTL before any read can be queued.
+    /// Finite-TTL cases return a current clock basis so idle actor maintenance
+    /// cannot expire the original before the specific read under test is issued.
     async fn seed_with_ttl(
         &mut self,
         target: SenderIdentity,
         id: &str,
         bytes: usize,
         ttl_ms: Option<u64>,
-    ) {
+    ) -> u64 {
+        let accepted_at_ms = ttl_ms.map_or(10, |_| crate::runtime::current_unix_millis());
         let messages = self.actor.service.message_service_mut();
         let envelope = Envelope {
             protocol: "mmp/1",
@@ -98,7 +101,7 @@ impl Scene {
                 &self.sender.agent_id,
                 envelope,
                 MessageScope::Session,
-                10,
+                accepted_at_ms,
                 4096,
                 None,
             )
@@ -109,6 +112,7 @@ impl Scene {
             CustodyWorkerStatus::AwaitingAdoption
         );
         self.root.adopt(messages, None).unwrap();
+        accepted_at_ms
     }
 
     /// Observes a real registered job then applies that exact root event.
@@ -185,7 +189,7 @@ async fn refused_native_capture_allows_actual_ack_to_release_custody() {
     scene.actor.poll_message_custody();
     let owner = scene.actor.message_custody.as_ref().unwrap();
     assert!(owner.pending.is_none());
-    assert!(matches!(owner.wake, Some(Wake::NativeCaptureRetry(_))));
+    assert!(matches!(owner.wake, Some(Wake::MetadataCaptureRetry(_))));
     assert_eq!(
         scene.root.observe().await.unwrap(),
         CustodyWorkerStatus::Idle
@@ -454,20 +458,21 @@ async fn cancelled_issued_reader_joins_without_creating_an_offer() {
 }
 
 /// The original wall-clock selection plus monotonic elapsed I/O time controls
-/// TTL at completion. Advancing only the retained clock origin models a long
-/// physical read without sleeping; qualified loaded bytes cannot renew expiry
-/// or create an offer after the original acceptance-time deadline.
+/// TTL at completion. A current acceptance and 60-second TTL keep independent
+/// idle expiry from preempting the actual read. Advancing only its retained
+/// monotonic origin models long I/O without sleeping; loaded bytes cannot renew
+/// expiry or create an offer after the original acceptance-time deadline.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn payload_read_completion_does_not_renew_original_ttl() {
     let mut scene = Scene::new().await;
-    scene
-        .seed_with_ttl(scene.first.clone(), "expiring-cold", 40, Some(100))
+    let accepted_at = scene
+        .seed_with_ttl(scene.first.clone(), "expiring-cold", 40, Some(60_000))
         .await;
     scene.seed(scene.second.clone(), "hot", 40).await;
     let (reply, receive) = oneshot::channel();
     scene
         .actor
-        .message_fanout_request(scene.first.agent_id.clone(), 11, 64, reply);
+        .message_fanout_request(scene.first.agent_id.clone(), accepted_at + 1, 64, reply);
     scene.actor.poll_message_custody();
     let Some(Pending::PayloadLoad(read)) = scene
         .actor
@@ -479,7 +484,7 @@ async fn payload_read_completion_does_not_renew_original_ttl() {
     else {
         panic!("original actual load must be issued")
     };
-    read.queued_at = Some(Instant::now() - std::time::Duration::from_secs(1));
+    read.queued_at = Some(Instant::now() - std::time::Duration::from_secs(61));
     scene.settle().await;
     assert!(receive.await.unwrap().unwrap().is_none());
     assert_eq!(

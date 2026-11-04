@@ -16120,8 +16120,40 @@ MUST NOT acquire this provenance. Inventory MUST validate tuple-derived keys,
 allocation, publication generation and allocator floors with bounded key metadata;
 existing history MUST agree with a matching current guarded n1. Capture MUST
 reserve 2 MiB recovery scratch plus bounded plan/encoding metadata before I/O,
-retaining the charge through the final worker/input owner. Explicit validated
-registration-end authority and linked terminal observations remain required.
+retaining the charge through the final worker/input owner. Linked source-slot
+terminal observations remain separate from the explicit end journal below.
+
+Before guarded native publication, the lower owner MUST reserve one bounded
+registration-end intent for the actual registration allocation. The intent MUST
+retain its opaque allocation, original namespace and interval floor after live
+removal. Explicit removal or immutable authority replacement MUST freeze the
+first last-allocated sequence cutoff without allocating after removal. Objective
+or presence refresh and temporary shell displacement MUST NOT end a namespace.
+Repeated captures MUST share the intent charge of 4096 bytes plus bounded agent
+attribution; retained registry nodes MUST remain charged until journal adoption.
+Qualified cold native construction MUST reserve the same lifecycle intent.
+
+The original root MUST journal one immutable version1 `o1:<namespace>` end record
+of at most 4096 bytes, binding the original store allocation, publication
+generation, agent, namespace, original floor and first end cutoff. Its first
+input, store position, absent target and all non-target rows MUST remain fixed
+through lost replies. End publication MUST atomically reserve its cutoff in the
+allocator watermark and verify exact target/non-target postimages after SQL.
+The request MUST reserve 2 MiB scratch plus bounded encoding/plan metadata through
+the final actual worker and adopter. Errors MUST retain the original intent and
+use actual join with existing monotonic backoff before retry. Stop MUST permit
+and retain this drain; foreign adopters MUST leave the positive input retained.
+Pre-issuance capture refusal MUST back off without spinning or issuing I/O.
+
+Inventory MUST validate end framing, allocation, namespace key, generation and
+cutoff and cross-check related n1/b1 agent, floor and strictly earlier publication. An actual
+end MUST refuse late n1 publication for that namespace. Qualified cold recovery
+MUST NOT restore an ended namespace merely because an old optional checkpoint
+and private context still match. Live restore preflight MUST refuse already-pending
+actual end intents. An o1 fact alone MUST NOT mutate a source slot, supply
+an ACK or release an accepted original. Source-bound retired-recipient
+observations, canonical input precedence, full native/raw lifecycle integration
+and generic live-restore drain remain required before durable activation.
 
 The internal actor spill setup now enables a one-way original-scope native
 admission barrier. While any actual current native interval is unrecorded, the

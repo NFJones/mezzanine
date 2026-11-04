@@ -260,6 +260,14 @@ impl NativeContinuityPort<'_> {
             .unchecked_transaction()
             .map_err(database_error)?;
         let state = self.store.checked_state(&transaction)?;
+        if self.store.native_registration_has_ended(
+            &transaction,
+            &snapshot.native,
+            snapshot.registered_after_sequence,
+            None,
+        )? {
+            return Err(invalid("captured native registration has ended"));
+        }
         if self.plan.lifetime.get().is_none() {
             let captured = lifetime::LifetimePlan::capture(
                 self.store,

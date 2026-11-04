@@ -111,6 +111,8 @@ pub(in crate::messaging) struct StorageCustody {
     pub(super) checkpoint_bytes: Arc<std::sync::atomic::AtomicUsize>,
     /// Trusted product admission barrier; never selected by saved/wire data.
     pub(super) native_continuity_required: bool,
+    /// Charged actual namespaces retained until end journal adoption.
+    pub(super) registration_ends: super::registration_end::RegistrationEnds,
 }
 
 /// Content-free logical usage, independent of allocator-specific RSS or wire buffers.
@@ -200,6 +202,7 @@ impl MessageService {
         self.storage_custody = Some(StorageCustody {
             checkpoint_bytes: Arc::default(),
             native_continuity_required: false,
+            registration_ends: Default::default(),
             scope: scope.clone(),
             limits,
             cache: PayloadBudget::new(limits.cache_messages, limits.cache_payload_bytes),

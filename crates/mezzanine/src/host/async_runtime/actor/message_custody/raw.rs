@@ -116,7 +116,7 @@ impl AsyncRuntimeSessionActor {
             .as_ref()
             .ok_or_else(|| MezError::invalid_state("MMP raw storage root unavailable"))?;
         let yielding = request.is_acknowledgement()
-            && (owner.can_park_ack() || owner.can_interrupt_native_capture());
+            && (owner.can_park_ack() || owner.can_interrupt_metadata_capture());
         if !yielding
             && (owner.wake.is_some()
                 || owner.pending.is_some()
@@ -162,7 +162,7 @@ impl AsyncRuntimeSessionActor {
             return;
         };
         let yielding = request.is_acknowledgement() && owner.can_park_ack();
-        let capture_ack = request.is_acknowledgement() && owner.can_interrupt_native_capture();
+        let capture_ack = request.is_acknowledgement() && owner.can_interrupt_metadata_capture();
         if !yielding
             && !capture_ack
             && (owner.wake.is_some()

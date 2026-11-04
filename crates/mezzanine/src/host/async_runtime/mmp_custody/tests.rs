@@ -1048,6 +1048,7 @@ mod checkpoint;
 mod native_continuity;
 mod native_lifetime;
 mod recovery;
+mod registration_end;
 
 mod native_input;
 

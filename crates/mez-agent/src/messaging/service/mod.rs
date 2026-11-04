@@ -117,6 +117,7 @@ mod native_commits;
 mod native_continuity;
 mod native_input;
 mod native_recovery;
+mod registration_end;
 pub use native_continuity::{
     MessageNativeContinuityRequest, MessageNativeContinuitySnapshot, MessageNativeContinuityStore,
     MessageNativeContinuityVerified, MessageNativeContinuityWrite,
@@ -128,6 +129,10 @@ pub use native_input::{
 pub use native_recovery::{
     MessageNativeRecovery, MessageNativeRecoveryRecord, MessageNativeRecoveryStore,
     MessageRecoveredNativeBinding,
+};
+pub use registration_end::{
+    MessageRegistrationEndRequest, MessageRegistrationEndSnapshot, MessageRegistrationEndStore,
+    MessageRegistrationEndVerified, MessageRegistrationEndWrite,
 };
 mod offers;
 mod pending;
@@ -411,7 +416,9 @@ impl MessageService {
         let original_floor = self.registration_floors.get(agent_id).copied();
         self.mark_admission_sender_retired(agent_id, false, original_floor);
         let identity = self.registered.remove(agent_id);
-        self.registration_tokens.remove(agent_id);
+        if let Some(registration) = self.registration_tokens.remove(agent_id) {
+            registration.end_at(self.next_sequence.saturating_sub(1));
+        }
         self.native_bindings.remove(agent_id);
         self.registration_floors.remove(agent_id);
         self.presence.remove(agent_id);

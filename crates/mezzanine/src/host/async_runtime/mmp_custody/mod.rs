@@ -44,6 +44,7 @@ mod native_continuity;
 mod native_input;
 mod payload_load;
 mod recovery;
+mod registration_end;
 mod terminal_custody;
 mod terminal_handoff;
 pub(crate) use recovery::{CustodyRecoveryRequest, RecoveredMessageCustody};
@@ -92,6 +93,10 @@ pub(crate) enum CustodyWorkerStatus {
     NativeContinuityAwaitingAdoption,
     /// The actual native journal worker joined and can retry the same input.
     NativeContinuityRetryAt(Instant),
+    /// Original explicit namespace end joined and awaits its retained adopter.
+    RegistrationEndAwaitingAdoption,
+    /// Same ended allocation may retry after actual join and monotonic backoff.
+    RegistrationEndRetryAt(Instant),
     /// Original canonical input/probe joined and awaits its exact adopter.
     NativeInputAwaitingAdoption,
     /// Original native input worker joined unsuccessfully and retains its plan.
@@ -213,6 +218,17 @@ enum State {
     RecordedNative {
         admission: native_continuity::Admission,
         result: Result<Box<native_continuity::Written>>,
+        retry_at: Instant,
+    },
+    /// Actual ended-registration input shares the original exclusive store lane.
+    RecordingRegistrationEnd {
+        admission: registration_end::Admission,
+        worker: JoinHandle<Result<registration_end::Written>>,
+    },
+    /// Joined original end input/positive retained until canonical adoption.
+    RecordedRegistrationEnd {
+        admission: registration_end::Admission,
+        result: Result<Box<registration_end::Written>>,
         retry_at: Instant,
     },
     /// Original canonical input and its actual owned blocking worker.
@@ -436,6 +452,11 @@ impl MmpCustodyRoot {
             {
                 return Poll::Pending;
             }
+            if matches!(&*state, State::RecordingRegistrationEnd { .. })
+                && registration_end::poll_join(&mut state, cx).is_pending()
+            {
+                return Poll::Pending;
+            }
             if matches!(&*state, State::WritingNativeInput { .. })
                 && native_input::poll_join(&mut state, cx).is_pending()
             {
@@ -529,6 +550,9 @@ impl MmpCustodyRoot {
                 result: Err(error), ..
             } => Some(error.clone()),
             State::RecordedNative {
+                result: Err(error), ..
+            }
+            | State::RecordedRegistrationEnd {
                 result: Err(error), ..
             }
             | State::WrittenNativeInput {
@@ -924,6 +948,12 @@ impl Drop for Inner {
                         .spawn_blocking(move || drop((admission, result)))
                         .await;
                 }
+                State::RecordingRegistrationEnd { admission, worker } => {
+                    let result = worker.await;
+                    let _ = runtime
+                        .spawn_blocking(move || drop((admission, result)))
+                        .await;
+                }
                 State::WritingTerminal { admission, worker } => {
                     let result = worker.await;
                     let _ = runtime
@@ -1044,6 +1074,16 @@ fn status(state: &State) -> CustodyWorkerStatus {
                 CustodyWorkerStatus::NativeContinuityAwaitingAdoption
             } else {
                 CustodyWorkerStatus::NativeContinuityRetryAt(*retry_at)
+            }
+        }
+        State::RecordingRegistrationEnd { .. } => CustodyWorkerStatus::Running,
+        State::RecordedRegistrationEnd {
+            result, retry_at, ..
+        } => {
+            if result.is_ok() {
+                CustodyWorkerStatus::RegistrationEndAwaitingAdoption
+            } else {
+                CustodyWorkerStatus::RegistrationEndRetryAt(*retry_at)
             }
         }
         State::WritingNativeInput { .. } => CustodyWorkerStatus::Running,

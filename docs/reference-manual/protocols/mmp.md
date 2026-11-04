@@ -557,8 +557,33 @@ publication; backfill uses only an actual present guarded prior n1 and never
 invents missing/overwritten legacy history. Inventory validates bounded history
 keys and cross-checks matching current observations. Native capture now reserves
 2 MiB of recovery scratch and bounded plan metadata through actual join and last
-input ownership. Explicit registration-end journals and linked retired-recipient
-observations remain required before durable retirement can be advertised.
+input ownership. Linked retired-recipient observations remain separate from
+the explicit registration-end journal.
+
+Guarded native publication now pre-reserves a bounded intent retaining the actual
+registration allocation and original floor. Explicit removal and immutable
+authority replacement freeze its first last-allocated cutoff without allocating
+after removal; shell displacement and objective/presence refresh do not end it.
+Repeated captures share one charge of 4096 bytes plus bounded agent attribution;
+qualified cold bindings reserve the same lifecycle owner.
+
+The actor drains actual ended allocations through immutable version1
+`o1:<namespace>` records on the original root, including during Stop. Each record
+is at most 4096 bytes and binds the original allocation, generation, namespace,
+agent, floor and end cutoff. The first input/position and all unrelated rows stay
+fixed through worker loss; retries require actual join/backoff and exact target
+checks. The cutoff reserves allocator gaps atomically, without accepting mail.
+Worker scratch and encoding metadata stay charged through original adoption.
+Capture refusal backs off without issuing I/O or spinning. A foreign service
+cannot consume the original positive.
+
+Inventory cross-checks related native facts against ends. An ended namespace
+cannot publish a late n1 or return through an older optional checkpoint and
+matching private context. Live restore preflight refuses already-pending end intents. An o1 record
+itself changes no message slot, ACK or terminal outcome. Exact source-bound
+retired-recipient observation, canonical input precedence, full raw/native
+lifecycle handling and generic live-restore drain remain required before durable
+retirement and normal activation can be advertised.
 
 Internal actor spill setup now enables a trusted native admission barrier. The
 actor journals current native intervals before selecting queued authorized

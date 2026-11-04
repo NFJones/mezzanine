@@ -167,6 +167,7 @@ impl MessageNativeRecovery {
             id.clone(),
             Arc::new(RegistrationIdentity {
                 native_namespace: uuid::Uuid::from_bytes(snapshot.native.registration_namespace),
+                ended_after_sequence: Default::default(),
             }),
         );
         self.service
@@ -192,6 +193,7 @@ impl MessageNativeRecovery {
             admission_available,
             delivery_available,
         )?;
+        self.service.track_native_registration(&registration)?;
         self.service.subscribe_from_retained_start(&id)?;
         self.bindings.try_reserve(1).map_err(|_| unavailable())?;
         self.bindings.push(MessageRecoveredNativeBinding {
