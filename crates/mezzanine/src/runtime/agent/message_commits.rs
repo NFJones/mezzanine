@@ -192,9 +192,9 @@ impl RuntimeSessionService {
     /// still owes settlement. A cancelled observer or missing current receipt is
     /// insufficient evidence; this preflight changes no identity or pane state.
     pub(crate) fn ensure_runtime_message_transfers_settled_for_restore(&self) -> Result<()> {
-        if self.has_pending_native_input() {
+        if self.has_pending_native_input() || self.has_pending_terminal_handoff() {
             return Err(MezError::conflict(
-                "original native canonical input/ACK custody pending",
+                "original canonical message custody pending",
             ));
         }
         if self.has_pending_stored_message_actions() {

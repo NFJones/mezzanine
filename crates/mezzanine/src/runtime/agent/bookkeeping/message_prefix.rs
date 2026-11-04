@@ -1,23 +1,23 @@
-//! Pure canonical chronology preceding a newly received native peer input.
+//! Pure canonical chronology preceding an original MMP canonical occurrence.
 //!
 //! Projection runs against the actual planned context before its live commit.
 //! It preserves source order and execution occurrences, including witnessed
 //! compaction sources, without creating terminal witnesses or execution work.
 //! The original transcript lease later removes already committed identities and
-//! selects physical positions. Neither projection nor dedup grants ACK rights.
+//! selects physical positions. Neither projection nor dedup grants ACK or sender-consumption rights.
 
 use super::*;
 
 impl RuntimeSessionService {
-    /// Encodes the exact new chronology before `before_peer_sequence`. Imported
+    /// Encodes the exact new chronology before `before_event_sequence`. Imported
     /// history already belongs to its archive; runtime-only hints have no row.
     /// Invalid canonical events fail before the caller changes its live context.
-    pub(in crate::runtime) fn project_native_input_prefix(
+    pub(in crate::runtime) fn project_canonical_message_prefix(
         &self,
         turn: &AgentTurnRecord,
         context: &mez_agent::AgentContext,
         imported_high_water: u64,
-        before_peer_sequence: u64,
+        before_event_sequence: u64,
     ) -> Result<Vec<TranscriptEntry>> {
         let chronology = Self::terminal_compaction_source_chronology_from_source(
             context,
@@ -28,7 +28,7 @@ impl RuntimeSessionService {
         let mut rows = Vec::new();
         for event in chronology.iter().filter(|event| {
             event.sequence().get() > imported_high_water
-                && event.sequence().get() < before_peer_sequence
+                && event.sequence().get() < before_event_sequence
         }) {
             let block = event.block();
             if block.source == ContextSourceKind::PeerMessage
@@ -83,12 +83,10 @@ impl RuntimeSessionService {
                 _ => continue,
             }
             .ok_or_else(|| {
-                MezError::invalid_state("native input preceding canonical event cannot be encoded")
+                MezError::invalid_state("MMP preceding canonical event cannot be encoded")
             })?;
             if rows.len() >= crate::storage::transcript::custody::MAX_CUSTODY_APPEND_ROWS - 1 {
-                return Err(MezError::invalid_state(
-                    "native input canonical prefix row capacity",
-                ));
+                return Err(MezError::invalid_state("MMP canonical prefix row capacity"));
             }
             rows.push(TranscriptEntry {
                 conversation_id: turn.conversation_id.clone(),

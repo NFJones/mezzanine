@@ -239,7 +239,7 @@ impl RuntimeSessionService {
             pane_id: turn.pane_id.clone(),
             content: event.block().content.clone(),
         };
-        let prefix = self.project_native_input_prefix(
+        let prefix = self.project_canonical_message_prefix(
             turn,
             context,
             imported_high_water,

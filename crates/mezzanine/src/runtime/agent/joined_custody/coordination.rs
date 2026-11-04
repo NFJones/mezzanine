@@ -671,11 +671,9 @@ impl RuntimeSessionService {
         &mut self,
         turn_id: &str,
     ) -> Result<bool> {
-        if self
-            .agent_turn_ledger()
-            .turn(turn_id)
-            .is_some_and(|turn| self.native_input_pending_for_conversation(&turn.conversation_id))
-            || !self.joined_coordination_offer_ready(turn_id)
+        if self.agent_turn_ledger().turn(turn_id).is_some_and(|turn| {
+            self.canonical_message_pending_for_conversation(&turn.conversation_id)
+        }) || !self.joined_coordination_offer_ready(turn_id)
             || self
                 .agent_turn_ledger()
                 .turn(turn_id)
@@ -708,11 +706,9 @@ impl RuntimeSessionService {
             .chain(self.agent.joined_coordination.keys().cloned())
             .collect::<std::collections::BTreeSet<_>>();
         for parent in parents {
-            if self
-                .agent_turn_ledger()
-                .turn(&parent)
-                .is_some_and(|t| self.native_input_pending_for_conversation(&t.conversation_id))
-            {
+            if self.agent_turn_ledger().turn(&parent).is_some_and(|t| {
+                self.canonical_message_pending_for_conversation(&t.conversation_id)
+            }) {
                 continue;
             }
             self.park_joined_coordination_after_settlement(&parent)?;

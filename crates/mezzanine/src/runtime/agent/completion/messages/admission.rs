@@ -9,6 +9,14 @@ use super::*;
 use mez_agent::messaging::{MessageRequests, MessageService};
 
 impl RuntimeSessionService {
+    /// Exercises actual finite-TTL action acceptance without fabricating a
+    /// terminal slot, action owner, context event or canonical proof. The TTL is
+    /// frozen in the real lower source and revalidated by the original port.
+    #[cfg(test)]
+    pub(crate) fn set_native_action_ttl_for_tests(&mut self, ttl_ms: u64) {
+        self.agent.native_action_test_ttl_ms = Some(ttl_ms);
+    }
+
     /// Selects current telemetry for an original authorized source and reserves
     /// its exact tracked/untracked lower owner. No provider or storage I/O runs.
     pub(crate) fn prepare_stored_message_action(
@@ -95,6 +103,11 @@ impl RuntimeSessionService {
             content_type: runtime_maap_message_content_type(&content_type),
             payload,
             extension_fields: vec![],
+        };
+        #[cfg(test)]
+        let envelope = Envelope {
+            ttl_ms: self.agent.native_action_test_ttl_ms,
+            ..envelope
         };
         let scope = runtime_message_scope(scope.as_deref())?;
         let lower = if expect_reply {

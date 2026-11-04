@@ -22,7 +22,7 @@ mod physical_source;
 pub(crate) use physical_source::RuntimeTranscriptPrefixReceipt;
 mod completion_archive;
 pub(crate) use checked_source::RuntimeCompletionCheckedSource;
-mod native_prefix;
+mod message_prefix;
 mod projection;
 use crate::runtime::persistence::RuntimeBookkeepingClaimIdentity;
 use completion_archive::RuntimeCompletionArchiveRead;
@@ -289,7 +289,7 @@ impl RuntimeBookkeepingCandidateWork {
 impl RuntimeSessionService {
     /// Claims ordered chronology candidates using current accepted pending rows.
     pub(crate) fn claim_bookkeeping_candidates(&mut self) -> Vec<RuntimeBookkeepingCandidateWork> {
-        let canonical_writers = self.native_input_writing_conversations();
+        let canonical_writers = self.canonical_message_writing_conversations();
         self.persistence
             .claim_bookkeeping_candidates(&canonical_writers)
             .into_iter()
@@ -355,7 +355,7 @@ impl RuntimeSessionService {
             ));
         }
         if self
-            .native_input_writing_conversations()
+            .canonical_message_writing_conversations()
             .iter()
             .any(|conversation| {
                 self.persistence
@@ -364,7 +364,7 @@ impl RuntimeSessionService {
             })
         {
             return Err(MezError::conflict(
-                "original native canonical producer must finish before bookkeeping read",
+                "original canonical message producer must finish before bookkeeping read",
             ));
         }
         let candidate = self

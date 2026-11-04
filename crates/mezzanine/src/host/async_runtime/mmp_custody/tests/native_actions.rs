@@ -15,7 +15,7 @@ use mez_agent::{
 };
 
 /// One offline response through the actual provider runner and captured policy.
-struct OfflineMessage {
+pub(super) struct OfflineMessage {
     response: ModelResponse,
     calls: AtomicUsize,
 }
@@ -61,7 +61,7 @@ async fn actor_fixture(
 
 /// Installs optional transcript ownership before creating the actual turn, as
 /// the product does, so provider completion sees the original archive binding.
-async fn actor_fixture_with_transcript(
+pub(super) async fn actor_fixture_with_transcript(
     fixture: &Fixture,
     policy: mez_agent::ApprovalPolicy,
     transcript: bool,
@@ -137,7 +137,7 @@ async fn actor_fixture_with_transcript(
 }
 
 /// Plans the original send using an actual actor-issued dispatch and policy.
-async fn plan(
+pub(super) async fn plan(
     dispatch: crate::runtime::RuntimeAgentProviderDispatch,
     target: &SenderIdentity,
     tracked: bool,

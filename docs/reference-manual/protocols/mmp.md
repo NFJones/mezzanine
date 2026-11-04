@@ -437,8 +437,8 @@ retaining issued work through shutdown. All recipient slots must ACK or release
 before logical pending custody ends; physical reclamation is separate. These
 journals do not consume a sender outcome or grant another owner its handoff.
 
-Guarded volatile cleanup and direct sender consumption remain withheld. The
-current runtime hint is in-memory context, not durable canonical handoff proof.
+Guarded volatile cleanup and direct sender consumption remain withheld. A
+volatile runtime hint alone is not durable canonical handoff proof.
 The internal handoff capability now freezes the actual original native sender
 and unreleased terminal before-image. Live capture checks the original sender;
 historical lookup retains attribution without recreating a task or provider.
@@ -459,18 +459,37 @@ can finish u1 or retire an orphan h1 image without a live sender, task or anothe
 archive position. Historical proof after legitimate archive cleanup grants no
 fresh target or archive observation. The root retains actual positives and I/O
 ownership through lost replies, retry and Stop. These internal journal/root
-boundaries remain unavailable to normal durable ingress until their live
-actor/runtime ownership and continuation are connected.
+boundaries remain internal until all durable lifecycle and ingress gates pass.
 The internal terminal lane now also supports separate canonical-proof-only s1
 consumption. Its 157-byte frame binds the original first terminal and source to
 the actual h1 row/digest. Commit and original adoption precede release; neither
 changes ACKs, cursors, first clocks or another recipient's horizon. Cold recovery
 distinguishes consumed slots from actual r1 horizon observations and checks the
 original h1/source/t1/ACK evidence. Issued consumption can drain through Stop and
-exact retry. Live actor/runtime ownership, preflight and continuation still need
-to be connected before normal durable mode can use this complete handoff path.
-Validated owner retirement, actual original-sender canonical handoff, rollback-
-safe elapsed/reboot clocks and reclamation remain unfinished. Current horizon
+exact retry.
+
+The internal actor now probes terminal slots before horizon release. Historical
+positives settle only original custody; they never reconstruct an action or task.
+After qualified absence, the runtime checks its actual accepted-action owner,
+turn incarnation and conversation before preflighting one neutral context event
+and canonical prefix. Earlier ordinary producers, native input and active
+inference defer preflight. The original projection and target survive canonical
+write, Stop and consumption. Provider, peer and restore gates wait; ordinary
+bookkeeping cannot race an issued canonical writer. Actual proof attaches before
+fallible frontier application, and local backoff retains it through application
+or consumption-admission failure. Only actual S1 adoption removes that owner.
+Guarded timers no longer append a volatile fact and attempt direct consumption.
+A parked lookup's expired timer waits while another retained handoff owns
+application/consumption backoff; its original source resumes after settlement.
+The current work's own pre-issuance retry remains wakeable. Native input
+admission timers also wait while that handoff excludes their pump, avoiding
+immediate ready loops over an unavailable continuation.
+These facts never settle waits, change accepted results or create provider work.
+Native action sends remain TTL-free, so their normal terminal path still needs
+validated owner retirement. Focused expiry controls set a finite trusted TTL
+before genuine action acceptance; they do not establish retirement qualification.
+Validated owner retirement, rollback-safe elapsed/reboot clocks and reclamation
+remain unfinished. Current horizon
 thresholds are wall-clock qualification only. These internal operation bounds
 do not establish complete admitted-state capacity or enable normal host/all-
 ingress activation.

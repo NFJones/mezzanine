@@ -16286,11 +16286,39 @@ bits. A process crash after s1 but before adoption MUST recover settlement from
 original journals without a second canonical row, orphan receipt or revived
 sender, raw bearer, task or provider. Generic decoding MUST NOT mint those rights.
 
-Validated retirement, live original-sender handoff/consumption and reclaim
-remain unfinished. An in-memory runtime hint alone MUST NOT authorize durable
-sender consumption. Guarded volatile cleanup and direct outcome consumption
-MUST remain withheld. Normal activation MUST remain unavailable until the
-complete lifecycle, resource and ingress gates are qualified.
+The internal actor MUST probe original terminal slots before horizon release.
+A historical positive MUST settle only its original slot without reconstructing
+an action, context, task or provider offer. Qualified absence MAY preflight a
+neutral fact only for the actual same-runtime accepted action, original sender
+interval, turn incarnation, pane and conversation. Earlier ordinary transcript
+producers, native input and already issued inference MUST settle first. Context
+chronology and the complete canonical prefix MUST pass preflight before the
+real candidate context is installed; reused labels alone MUST NOT create proof.
+
+One runtime handoff owner MUST retain the original source, allocated occurrence,
+projection and target through canonical issuance, joined uncertainty, Stop and
+consumption. Provider, peer and conversation replacement gates MUST retain that
+ownership; ordinary bookkeeping MUST not race an issued canonical producer.
+Actual root proof MUST attach before fallible private-frontier application.
+Application or consumption admission refusal MUST retain that proof with local
+monotonic backoff, not replay physical storage on an idle root. A parked lookup's
+expired deadline MUST remain withheld while another runtime handoff owns
+application/consumption; its source MUST resume afterward. The current work's own
+pre-issuance admission deadline MUST remain wakeable. Native input admission
+clocks MUST likewise wait while their pump is excluded by that handoff owner.
+A historical or replaced native owner MUST NOT receive fresh task effects. Actual
+S1 adoption MUST precede removal of the runtime handoff owner. None of these local facts MAY
+settle a wait, create peer input, change accepted action success, retry effects
+or schedule new provider work. Guarded delivery timers MUST not half-append
+volatile context and then attempt the legacy direct-consumption shortcut.
+
+Validated retirement, rollback-safe elapsed clocks, reclamation and complete
+resource/ingress qualification remain unfinished. Native send actions currently
+have no finite TTL; their normal terminal path still requires validated owner
+retirement. An in-memory runtime hint alone MUST NOT authorize durable sender
+consumption. Guarded volatile cleanup and direct outcome consumption MUST remain
+withheld. Normal activation MUST remain unavailable until the complete lifecycle,
+resource and ingress gates are qualified.
 
 Native qualification MUST read the actual existing private active-session
 checkpoint for the same session and hydrate its transcripts while preserving

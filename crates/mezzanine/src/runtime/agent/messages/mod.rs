@@ -197,7 +197,7 @@ impl RuntimeSessionService {
                         ),
                     )?;
                 }
-                if self.native_input_pending_for_conversation(&turn.conversation_id) {
+                if self.canonical_message_pending_for_conversation(&turn.conversation_id) {
                     continue;
                 }
                 self.record_joined_coordination_mail(
@@ -209,7 +209,7 @@ impl RuntimeSessionService {
             }
 
             let _ = self.flush_received_peer_message_presentations();
-            if self.native_input_pending_for_conversation(&turn.conversation_id) {
+            if self.canonical_message_pending_for_conversation(&turn.conversation_id) {
                 continue;
             }
 
@@ -258,7 +258,7 @@ impl RuntimeSessionService {
     /// A full scheduler queue is recoverable: the wake marker remains so a
     /// later delivery sweep retries without losing the committed peer mail.
     pub(super) fn resume_parked_peer_wait(&mut self, turn: &AgentTurnRecord) -> Result<bool> {
-        if self.native_input_pending_for_conversation(&turn.conversation_id) {
+        if self.canonical_message_pending_for_conversation(&turn.conversation_id) {
             return Ok(false);
         }
         if self.resume_targeted_request_wait(turn)? {
@@ -461,7 +461,7 @@ impl RuntimeSessionService {
                                 .is_some_and(|shell| shell.session_id == turn.conversation_id)
                     })
                     .filter(|turn| {
-                        !self.native_input_pending_for_conversation(&turn.conversation_id)
+                        !self.canonical_message_pending_for_conversation(&turn.conversation_id)
                     })
                     .filter(|turn| self.agent_turn_contexts().contains_key(&turn.turn_id))
                     .filter(|turn| self.agent_turn_model_profile(&turn.turn_id).is_some())
@@ -767,7 +767,7 @@ impl RuntimeSessionService {
             self.set_agent_peer_message_turn_count(&agent_id, started_turns.saturating_add(1));
             self.clear_agent_peer_message_limit_reported(&agent_id);
         }
-        if self.native_input_pending_for_conversation(&turn.conversation_id) {
+        if self.canonical_message_pending_for_conversation(&turn.conversation_id) {
             return Ok(delivered_message_count);
         }
         self.admit_owned_child_failure_context_turn(&turn)?;

@@ -10,6 +10,7 @@ use mez_agent::transcript::{
     TranscriptTerminalHandoffSource,
 };
 
+mod actor;
 mod canonical;
 mod consumption;
 mod crash;

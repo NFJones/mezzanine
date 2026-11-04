@@ -5,8 +5,8 @@
 //! scans before selection. Actual horizon release can free logical pending
 //! custody before new observation admission. Pre-issuance refusal backs off
 //! without excluding unrelated work; issued jobs retain real join/retry/adoption
-//! through shutdown. Durable sender consumption, validated retirement, elapsed
-//! clocks and physical reclaim remain separate activation gates.
+//! through shutdown. Canonical sender handoff runs before this selector; validated
+//! retirement, elapsed clocks and physical reclaim remain activation gates.
 
 use super::*;
 
@@ -23,6 +23,9 @@ impl AsyncRuntimeSessionActor {
             || owner.shutdown.is_some()
             || owner.native_result.is_some()
             || owner.native_retry.is_some()
+            || owner.handoff_scan_pending
+            || owner.handoff_retry.is_some()
+            || self.service.has_pending_terminal_handoff()
             || self.service.has_pending_native_input()
             || (self.service.native_input_storage_required() && owner.native_scan_pending)
             || owner

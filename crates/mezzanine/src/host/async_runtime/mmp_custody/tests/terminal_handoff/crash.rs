@@ -148,6 +148,8 @@ async fn sender_consumption_root_recovers_s1_after_process_crash_before_adoption
 /// reconstruction and historical lookup finish the original image/journal,
 /// retire its receipt and yield canonical proof without a live sender/task.
 /// h1 alone never releases the outcome, and no duplicate archive row appears.
+/// The recovered original is then installed into a fresh actor: historical
+/// lookup and actual S1 settle it without creating any sender task or provider.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn terminal_handoff_root_recovers_u1_and_orphan_h1_after_actual_process_crash() {
     for phase in ["u1", "h1"] {
@@ -231,5 +233,57 @@ async fn terminal_handoff_root_recovers_u1_and_orphan_h1_after_actual_process_cr
         );
         assert!(service.discover_agents().is_empty());
         assert!(!source.terminal().released);
+        drop(proof);
+        drop(source);
+        let mut runtime = crate::test_support::runtime::RuntimeServiceFixture::new().build();
+        *runtime.message_service_mut() = service;
+        runtime.set_agent_transcript_store(transcript.clone());
+        let turns = runtime.agent_turn_ledger().turns().len();
+        let (_, mut actor) =
+            crate::host::async_runtime::AsyncRuntimeSessionActor::new(runtime, Default::default())
+                .unwrap();
+        actor.register_message_custody(root).unwrap();
+        actor.poll_message_custody_for_tests();
+        assert_eq!(
+            actor.observe_message_custody_for_tests().await.unwrap(),
+            CustodyWorkerStatus::TerminalHandoffAwaitingAdoption
+        );
+        assert!(actor.service.has_pending_terminal_handoff());
+        actor.poll_message_custody_for_tests();
+        assert_eq!(
+            actor.observe_message_custody_for_tests().await.unwrap(),
+            CustodyWorkerStatus::TerminalAwaitingAdoption
+        );
+        assert!(!actor.service.has_pending_terminal_handoff());
+        assert_eq!(
+            actor
+                .service
+                .message_service()
+                .storage_usage()
+                .unwrap()
+                .unwrap()
+                .pending_messages,
+            0
+        );
+        assert_eq!(actor.service.agent_turn_ledger().turns().len(), turns);
+        assert!(actor.service.pending_agent_provider_tasks().is_empty());
+        assert!(actor.service.message_service().discover_agents().is_empty());
+        assert_eq!(transcript.inspect("native-sender").unwrap().len(), 2);
+        assert!(
+            !transcript
+                .has_unsettled_append_receipts("native-sender")
+                .unwrap()
+        );
+        assert_eq!(
+            fixture
+                .connection()
+                .query_row(
+                    "SELECT count(*) FROM records WHERE key LIKE 's1:%'",
+                    [],
+                    |r| r.get::<_, i64>(0)
+                )
+                .unwrap(),
+            1
+        );
     }
 }

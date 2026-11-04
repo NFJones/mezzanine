@@ -457,6 +457,13 @@ pub(crate) struct RuntimeAgentComponent {
     /// Original native send owners bounded by canonical pending occurrences,
     /// retained across provider batches but never restored as task authority.
     outbound_delivery_owners: BTreeMap<u64, message_outcomes::OutboundDeliveryOwner>,
+    /// One original sender fact retained from context preflight through actual
+    /// canonical write and lower consumption, independently of task replacement.
+    terminal_handoff: Option<message_outcomes::TerminalHandoffReceipt>,
+    /// Trusted test-only finite TTL at actual native action admission. Normal
+    /// native sends remain TTL-free until validated retirement is integrated.
+    #[cfg(test)]
+    native_action_test_ttl_ms: Option<u64>,
     /// Explicit tracked requests and exact same-runtime wait/lifecycle ownership.
     request_waits: request_waits::RuntimeRequestWaits,
     /// Per-failure-signature correction attempts keyed by turn/signature.

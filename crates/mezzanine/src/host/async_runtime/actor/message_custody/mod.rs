@@ -24,6 +24,7 @@ mod native;
 mod native_continuity;
 mod native_input;
 mod terminal_custody;
+mod terminal_handoff;
 use native_input::NativeInputResult;
 mod payload_reads;
 use payload_reads::PayloadRead;
@@ -77,6 +78,13 @@ pub(super) enum CustodyEvent {
 enum Pending {
     /// The root owns exact original expiry source/slot/clock and worker escrow.
     TerminalWrite,
+    /// Exact canonical sender proof remains in the runtime through lower adoption.
+    TerminalConsumption,
+    /// Original sender lookup/write, with no reconstructed application owner.
+    TerminalHandoff {
+        source: mez_agent::messaging::MessageTerminalHandoffAnchor,
+        live: bool,
+    },
     /// The root owns the exact native metadata input; no message is reserved.
     NativeContinuity,
     /// Exact original canonical probe/write; receipt absence means lookup only.
@@ -138,6 +146,16 @@ pub(in crate::host::async_runtime) struct ActorMessageCustody {
     native_retry: Option<(Instant, mez_agent::messaging::MessageNativeInputAnchor)>,
     /// One joined original reply before application/ACK handoff completes.
     native_result: Option<NativeInputResult>,
+    /// Payload-free stable scan over original terminal slots; real changes
+    /// coalesce into one further pass without discarding an active cursor.
+    handoff_scan_after: Option<(u64, usize)>,
+    handoff_scan_pending: bool,
+    handoff_scan_again: bool,
+    /// Unissued lookup/capture refusal, independent of physical root retries.
+    handoff_retry: Option<(
+        Instant,
+        Option<mez_agent::messaging::MessageTerminalHandoffAnchor>,
+    )>,
     /// Receiver cancellation cannot remove this issued original continuation.
     pending: Option<Pending>,
     /// ACK allowed while an exact, never-written acceptance remains retained.
@@ -172,6 +190,24 @@ impl ActorMessageCustody {
     fn request_native_scan(&mut self) {
         self.native_scan_again |= self.native_scan_after.is_some();
         self.native_scan_pending = true;
+    }
+
+    /// Reopens terminal lookup while preserving bounded current pass progress.
+    fn request_handoff_scan(&mut self) {
+        self.handoff_scan_again |= self.handoff_scan_after.is_some();
+        self.handoff_scan_pending = true;
+    }
+
+    /// Keeps one parked lookup source without replacing its retry deadline.
+    /// Later deferred slots remain in lower custody until the due retry reopens
+    /// one pass. This avoids an endless immediate scan over two busy owners.
+    fn park_handoff_source(&mut self, source: mez_agent::messaging::MessageTerminalHandoffAnchor) {
+        if self.handoff_retry.is_none() {
+            self.handoff_retry = Some((
+                Instant::now() + std::time::Duration::from_secs(1),
+                Some(source),
+            ));
+        }
     }
 
     /// A refused capture issued no worker/reservation, so a real ACK may use the
@@ -212,6 +248,14 @@ impl AsyncRuntimeSessionActor {
     #[cfg(test)]
     pub(in crate::host) fn poll_message_custody_for_tests(&mut self) {
         self.poll_message_custody();
+    }
+
+    /// Polls the real custody wake without applying it. Combined retry controls
+    /// use this to detect immediate ready loops without inventing timer status
+    /// or waiting for CPU load to make a regression externally observable.
+    #[cfg(test)]
+    pub(in crate::host) fn message_custody_wake_is_ready_for_tests(&self) -> bool {
+        self.message_custody_wakeup().now_or_never().is_some()
     }
 
     /// Injects a failure at the actual canonical append boundary after original
@@ -326,6 +370,10 @@ impl AsyncRuntimeSessionActor {
             native_scan_watermark: 0,
             native_retry: None,
             native_result: None,
+            handoff_scan_after: None,
+            handoff_scan_pending: true,
+            handoff_scan_again: false,
+            handoff_retry: None,
             pending: None,
             parked_ack: None,
             parked_retry_at: None,
@@ -369,6 +417,7 @@ impl AsyncRuntimeSessionActor {
     pub(super) fn reset_native_message_input_scan(&mut self) {
         if let Some(owner) = self.message_custody.as_mut() {
             owner.request_native_scan();
+            owner.request_handoff_scan();
             owner.terminal_retry_at = None;
         }
     }
@@ -383,6 +432,7 @@ impl AsyncRuntimeSessionActor {
     /// Builds an abortable observation without borrowing the actor across await.
     /// An idle/absent root is pending forever until another request issues work.
     pub(super) fn message_custody_wakeup(&self) -> impl Future<Output = CustodyEvent> + use<> {
+        let handoff_owned = self.service.has_pending_terminal_handoff();
         let next = self
             .message_custody
             .as_ref()
@@ -395,9 +445,10 @@ impl AsyncRuntimeSessionActor {
             (owner.shutdown.is_none()
                 && owner.pending.is_none()
                 && owner.wake.is_none()
-                && owner.failure.is_none())
-            .then(|| owner.native_retry.as_ref().map(|(at, _)| *at))
-            .flatten()
+                && owner.failure.is_none()
+                && !handoff_owned)
+                .then(|| owner.native_retry.as_ref().map(|(at, _)| *at))
+                .flatten()
         });
         let reads_ready = self.message_custody.as_ref().is_some_and(|owner| {
             owner.pending.is_none()
@@ -414,6 +465,7 @@ impl AsyncRuntimeSessionActor {
                 && owner.shutdown.is_none()
         }) && !self.service.pending_stored_message_actions().is_empty();
         let native_input_ready = self.service.native_input_storage_required()
+            && !handoff_owned
             && self.message_custody.as_ref().is_some_and(|o| {
                 o.pending.is_none()
                     && o.wake.is_none()
@@ -433,14 +485,48 @@ impl AsyncRuntimeSessionActor {
                             && self.service.pending_native_input_work().is_some())
                         || self.service.pending_native_input_ack().is_some())
             });
+        let handoff_ready = self.service.native_input_storage_required()
+            && self.message_custody.as_ref().is_some_and(|owner| {
+                owner.pending.is_none()
+                    && owner.wake.is_none()
+                    && owner.failure.is_none()
+                    && owner.native_result.is_none()
+                    && owner
+                        .handoff_retry
+                        .as_ref()
+                        .is_none_or(|(at, source)| source.is_some() || *at <= Instant::now())
+                    && (self.service.pending_terminal_handoff_work().is_some()
+                        || self
+                            .service
+                            .pending_terminal_handoff_consumption()
+                            .is_some()
+                        || (!handoff_owned
+                            && owner.shutdown.is_none()
+                            && owner.handoff_scan_pending))
+            });
         let root_idle = self.message_custody.as_ref().is_some_and(|owner| {
             owner.pending.is_none() && owner.wake.is_none() && owner.failure.is_none()
         });
         let application_at = self.message_custody.as_ref().and_then(|owner| {
             self.service
-                .native_input_completion_at(root_idle)
+                .native_input_completion_at(root_idle && !handoff_owned)
                 .map(Instant::from_std)
                 .into_iter()
+                .chain(
+                    self.service
+                        .terminal_handoff_completion_at(root_idle)
+                        .map(Instant::from_std),
+                )
+                .chain(
+                    // A parked lookup cannot use the one handoff slot while
+                    // application/consumption owns it. Its expired deadline
+                    // must not defeat that owner's future admission backoff.
+                    // None is the current work's own pre-issue retry and must
+                    // still wake; Some retains an independent parked source.
+                    owner.handoff_retry.as_ref().and_then(|(at, source)| {
+                        (root_idle && (source.is_none() || !handoff_owned)).then_some(*at)
+                    }),
+                )
                 .chain(
                     owner
                         .native_result
@@ -466,9 +552,10 @@ impl AsyncRuntimeSessionActor {
                 && owner.failure.is_none()
                 && owner.shutdown.is_none()
                 && owner.native_result.is_none()
-                && owner.native_retry.is_none())
-            .then_some(owner.terminal_retry_at)
-            .flatten()
+                && owner.native_retry.is_none()
+                && !handoff_owned)
+                .then_some(owner.terminal_retry_at)
+                .flatten()
         });
         let physical = async move {
             match next {
@@ -481,6 +568,7 @@ impl AsyncRuntimeSessionActor {
                     tokio::time::sleep_until(at).await;
                     CustodyEvent::NativeCaptureRetry
                 }
+                None if handoff_ready => CustodyEvent::AdmissionReady,
                 None if native_input_ready => CustodyEvent::AdmissionReady,
                 None if native_ready => CustodyEvent::AdmissionReady,
                 None if reads_ready => CustodyEvent::AdmissionReady,
@@ -537,7 +625,9 @@ impl AsyncRuntimeSessionActor {
             self.apply_message_custody_event(event);
         }
         self.pump_native_message_applications();
+        self.pump_terminal_handoff_application();
         self.pump_native_message_continuity();
+        self.pump_terminal_handoff();
         self.pump_native_message_input();
         self.pump_message_terminal();
         self.pump_message_payload_reads();
@@ -549,6 +639,7 @@ impl AsyncRuntimeSessionActor {
                 && owner.wake.is_none()
                 && owner.native_result.is_none()
                 && !self.service.has_pending_native_input()
+                && !self.service.has_pending_terminal_handoff()
         });
         if ready {
             let reply = self
@@ -575,6 +666,7 @@ impl AsyncRuntimeSessionActor {
         let mut payload_read = None;
         let mut capacity_ready = false;
         let mut native_absence = None;
+        let mut handoff_absence = None;
         let mut native_ack_receipt = None;
         let result = match event {
             CustodyEvent::AdmissionReady
@@ -583,6 +675,7 @@ impl AsyncRuntimeSessionActor {
             CustodyEvent::TerminalMaintenanceReady => {
                 owner.terminal_retry_at = None;
                 owner.request_native_scan();
+                owner.request_handoff_scan();
                 Ok(())
             }
             CustodyEvent::NativeCaptureRetry => {
@@ -600,7 +693,14 @@ impl AsyncRuntimeSessionActor {
             }
             CustodyEvent::Observed(Ok(CustodyWorkerStatus::Idle)) => {
                 owner.payload_retry_at = None;
-                if matches!(owner.pending, Some(Pending::TerminalWrite)) {
+                if matches!(
+                    owner.pending,
+                    Some(
+                        Pending::TerminalWrite
+                            | Pending::TerminalConsumption
+                            | Pending::TerminalHandoff { .. }
+                    )
+                ) {
                     Err(MezError::invalid_state(
                         "MMP expiry lost its original worker state",
                     ))
@@ -837,6 +937,7 @@ impl AsyncRuntimeSessionActor {
                                 None => (),
                             }
                             owner.request_native_scan();
+                            owner.request_handoff_scan();
                             owner.failure = None;
                             owner.wake = owner.parked_retry_at.take().map(Wake::Retry);
                         })
@@ -864,6 +965,7 @@ impl AsyncRuntimeSessionActor {
                                 _ => {}
                             }
                             owner.request_native_scan();
+                            owner.request_handoff_scan();
                             owner.failure = None;
                             owner.wake = Some(Wake::Observe);
                         })
@@ -899,9 +1001,13 @@ impl AsyncRuntimeSessionActor {
                 .retry_acknowledgement(self.service.message_service_mut(), Instant::now())
                 .map(|_| owner.wake = Some(Wake::Observe)),
             CustodyEvent::Retry => match owner.pending {
-                Some(Pending::TerminalWrite) => owner
+                Some(Pending::TerminalWrite | Pending::TerminalConsumption) => owner
                     .root
                     .retry_terminal(self.service.message_service_mut(), Instant::now())
+                    .map(|_| owner.wake = Some(Wake::Observe)),
+                Some(Pending::TerminalHandoff { .. }) => owner
+                    .root
+                    .retry_terminal_handoff(Instant::now())
                     .map(|_| owner.wake = Some(Wake::Observe)),
                 Some(Pending::NativeInput { .. }) => owner
                     .root
@@ -962,20 +1068,30 @@ impl AsyncRuntimeSessionActor {
                 "MMP recovery must finish before root actor registration",
             )),
             CustodyEvent::Observed(Ok(CustodyWorkerStatus::TerminalAwaitingAdoption))
-                if matches!(owner.pending, Some(Pending::TerminalWrite)) =>
+                if matches!(
+                    owner.pending,
+                    Some(Pending::TerminalWrite | Pending::TerminalConsumption)
+                ) =>
             {
                 owner
                     .root
                     .adopt_terminal(self.service.message_service_mut())
                     .map(|_| {
+                        if matches!(owner.pending, Some(Pending::TerminalConsumption)) {
+                            self.service.complete_terminal_handoff_consumption();
+                        }
                         owner.pending = None;
                         owner.wake = None;
                         owner.failure = None;
                         owner.terminal_retry_at = None;
+                        owner.request_handoff_scan();
                     })
             }
             CustodyEvent::Observed(Ok(CustodyWorkerStatus::TerminalRetryAt(at)))
-                if matches!(owner.pending, Some(Pending::TerminalWrite)) =>
+                if matches!(
+                    owner.pending,
+                    Some(Pending::TerminalWrite | Pending::TerminalConsumption)
+                ) =>
             {
                 owner.wake = Some(Wake::Retry(at));
                 Ok(())
@@ -1046,6 +1162,37 @@ impl AsyncRuntimeSessionActor {
                 owner.wake = Some(Wake::Retry(at));
                 Ok(())
             }
+            CustodyEvent::Observed(Ok(CustodyWorkerStatus::TerminalHandoffAwaitingAdoption))
+                if matches!(owner.pending, Some(Pending::TerminalHandoff { .. })) =>
+            {
+                owner
+                    .root
+                    .adopt_terminal_handoff(self.service.message_service())
+                    .and_then(|proof| {
+                        if let Some(Pending::TerminalHandoff { source, live }) =
+                            owner.pending.take()
+                        {
+                            if let Some(proof) = proof {
+                                self.service.retain_terminal_handoff_commit(proof);
+                            } else if live {
+                                return Err(MezError::invalid_state(
+                                    "original terminal canonical write returned absence",
+                                ));
+                            } else {
+                                handoff_absence = Some(source);
+                            }
+                        }
+                        owner.wake = None;
+                        owner.failure = None;
+                        Ok(())
+                    })
+            }
+            CustodyEvent::Observed(Ok(CustodyWorkerStatus::TerminalHandoffRetryAt(at)))
+                if matches!(owner.pending, Some(Pending::TerminalHandoff { .. })) =>
+            {
+                owner.wake = Some(Wake::Retry(at));
+                Ok(())
+            }
             CustodyEvent::Observed(Ok(
                 CustodyWorkerStatus::NativeInputAwaitingAdoption
                 | CustodyWorkerStatus::NativeInputRetryAt(_)
@@ -1084,6 +1231,10 @@ impl AsyncRuntimeSessionActor {
             self.finish_native_message_ack(&id);
         }
         self.pump_native_message_applications();
+        self.pump_terminal_handoff_application();
+        if let Some(source) = handoff_absence {
+            self.activate_absent_terminal_handoff(source);
+        }
         if let Some(source) = native_absence {
             self.activate_absent_native_message(source);
         }

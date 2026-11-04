@@ -14,6 +14,9 @@ use mez_agent::ContextSourceKind;
 use mez_agent::messaging::MessageErrorKind;
 use sha2::{Digest, Sha256};
 
+mod durable;
+pub(super) use durable::TerminalHandoffReceipt;
+
 /// Private same-runtime ownership captured only after native send acceptance.
 /// One row references one canonical pending occurrence, never a new mailbox.
 #[derive(Debug, Clone)]
@@ -38,7 +41,7 @@ pub(super) struct OutboundDeliveryOwner {
 
 impl RuntimeSessionService {
     /// Prunes same-runtime owner metadata to canonical custody. The lower
-    /// pending bound (at most 1000 occurrences) also bounds this map. No model
+    /// configured pending bound also bounds this map. No model
     /// result, mutable presentation identity or current batch can create rows.
     fn prune_outbound_delivery_owners(&mut self) {
         let service = self.control.message_service();
@@ -164,6 +167,11 @@ impl RuntimeSessionService {
     /// custody; invalid context/receipt evidence fails without consuming it.
     pub(crate) fn handoff_runtime_message_delivery_outcomes(&mut self) -> Result<usize> {
         self.prune_outbound_delivery_owners();
+        // Guarded custody is driven by qualified original-root probes. Only
+        // that actor can authorize a canonical write and subsequent consumption.
+        if self.native_input_storage_required() {
+            return Ok(0);
+        }
         let owners = self
             .agent
             .outbound_delivery_owners
@@ -173,6 +181,7 @@ impl RuntimeSessionService {
                     .turn(&owner.turn_id)
                     .is_some_and(|current| {
                         current.agent_id == owner.agent_id
+                            && current.started_at_unix_seconds == owner.started_at_unix_seconds
                             && current.conversation_id == owner.conversation_id
                             && current.pane_id == owner.pane_id
                             && matches!(

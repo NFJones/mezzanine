@@ -57,7 +57,9 @@ impl AsyncRuntimeSessionActor {
         if owner.pending.is_some() || owner.wake.is_some() || owner.failure.is_some() {
             return;
         }
-        if !self.service.native_input_storage_required() {
+        if self.service.has_pending_terminal_handoff()
+            || !self.service.native_input_storage_required()
+        {
             return;
         }
         if let Some((id, proof)) = self.service.pending_native_input_ack() {

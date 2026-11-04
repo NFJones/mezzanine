@@ -748,7 +748,7 @@ impl RuntimeSessionService {
             .get(pane_id)
             .is_some_and(|session| {
                 self.persistence.bookkeeping_pending(&session.session_id)
-                    || self.native_input_receipt_pending_for_conversation(&session.session_id)
+                    || self.canonical_message_receipt_pending_for_conversation(&session.session_id)
                     || session
                         .ephemeral_transcript_source_conversation_id
                         .as_deref()

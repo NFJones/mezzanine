@@ -790,7 +790,7 @@ impl RuntimeSessionService {
             return Ok(None);
         }
         if self.persistence.bookkeeping_pending(&turn.conversation_id)
-            || self.native_input_pending_for_conversation(&turn.conversation_id)
+            || self.canonical_message_pending_for_conversation(&turn.conversation_id)
         {
             return Ok(None);
         }
@@ -1903,7 +1903,7 @@ impl RuntimeSessionService {
                     .get(&task.pane_id)
                     .is_none_or(|session| {
                         !self.persistence.bookkeeping_pending(&session.session_id)
-                            && !self.native_input_pending_for_conversation(&session.session_id)
+                            && !self.canonical_message_pending_for_conversation(&session.session_id)
                     })
             })
             .filter(|task| {
