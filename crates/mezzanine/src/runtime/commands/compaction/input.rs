@@ -6,6 +6,8 @@
 //! Accounted system rows contribute only their semantic event. Their occurrence,
 //! costs and stable snapshots remain in the physical proof; malformed reserved
 //! records abort request construction instead of becoming model-visible text.
+//! Terminal handoff certificates are audit proof, including nested original
+//! records, and never contribute semantic compactor input.
 //! This is an ephemeral request projection, not a new durable transcript codec.
 
 use std::borrow::Cow;
@@ -118,6 +120,16 @@ impl<'a> CompactionTranscriptSource<'a> {
             }) {
                 continue;
             }
+            if entry.role == TranscriptRole::System
+                && (entry
+                    .content
+                    .starts_with("[mez-terminal-compaction-handoff/")
+                    || entry
+                        .content
+                        .starts_with("[mez-inherited-compaction-audit/"))
+            {
+                continue;
+            }
             let content = if entry.role == TranscriptRole::System {
                 mez_agent::transcript::TranscriptContextRecord::from_transcript_content(
                     &entry.content,
@@ -150,6 +162,105 @@ impl<'a> CompactionTranscriptSource<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Actual terminal certificates embed accounted source records for exact
+    /// publication proof. Neither those records nor the certificate's own
+    /// summary may leak into a later auxiliary body. Inherited audit is equally
+    /// inert, while a user quoting the reserved marker remains authored text.
+    #[test]
+    fn compactor_request_excludes_terminal_and_inherited_accounting_audit() {
+        use crate::storage::transcript::compaction_handoff::{
+            INHERITED_MARKER, MARKER, TerminalCompactionHandoff, TerminalCompactionReplacement,
+        };
+        let block = ContextBlock::assistant_event("audit source", "AUDIT_ONLY_SOURCE");
+        let record = mez_agent::ContextBlockRecord::allocate(&block).unwrap();
+        let event = mez_agent::TranscriptContextEvent::execution_block_with_metadata(
+            block.source,
+            block.label,
+            block.content,
+            mez_agent::ContextExecutionGroupId::new("audit-source").unwrap(),
+            1,
+            None,
+        )
+        .unwrap();
+        let encoded = mez_agent::transcript::TranscriptContextRecord::new(event, record, None)
+            .unwrap()
+            .to_transcript_content()
+            .unwrap();
+        let certificate = TerminalCompactionHandoff {
+            baseline: None,
+            replacements: vec![TerminalCompactionReplacement {
+                sources: vec![encoded],
+                summary: "AUDIT_ONLY_SUMMARY".to_string(),
+            }],
+        }
+        .to_content()
+        .unwrap();
+        let occurrence: String = record.occurrence_id().into();
+        assert!(certificate.contains(&occurrence));
+        let profile = ModelProfile {
+            provider: "test".to_string(),
+            model: "test".to_string(),
+            ..Default::default()
+        };
+        let context = AgentContext::new_durable(vec![ContextBlock {
+            source: ContextSourceKind::System,
+            placement: mez_agent::ContextPlacement::StablePrefix,
+            label: "compactor guidance".to_string(),
+            content: "Summarize supplied semantic source.".to_string(),
+        }])
+        .unwrap();
+        let visible = TranscriptEntry {
+            conversation_id: "audit-source".to_string(),
+            sequence: 1,
+            created_at_unix_seconds: 1,
+            role: TranscriptRole::Assistant,
+            turn_id: "source-turn".to_string(),
+            agent_id: "agent-%1".to_string(),
+            pane_id: "%1".to_string(),
+            content: "VISIBLE_COMPACTOR_SOURCE".to_string(),
+        };
+        for content in [
+            certificate.clone(),
+            certificate.replacen(MARKER, INHERITED_MARKER, 1),
+        ] {
+            let mut rows = vec![
+                visible.clone(),
+                TranscriptEntry {
+                    sequence: 2,
+                    role: TranscriptRole::System,
+                    content,
+                    ..visible.clone()
+                },
+            ];
+            let build = |rows: &[TranscriptEntry]| {
+                let request = runtime_model_compaction_request(
+                    &profile,
+                    "%1",
+                    "audit-source",
+                    rows.len() as u64,
+                    CompactionTranscriptSource::raw(rows),
+                    &context,
+                    AllowedActionSet::from_actions([mez_agent::AllowedAction::Say]),
+                )
+                .unwrap();
+                mez_agent::openai_responses_request_body(&request).unwrap()
+            };
+            let body = build(&rows);
+            assert!(body.contains("VISIBLE_COMPACTOR_SOURCE"));
+            for hidden in [
+                occurrence.as_str(),
+                "AUDIT_ONLY_SOURCE",
+                "AUDIT_ONLY_SUMMARY",
+                "rendered_sha256",
+                "mez-transcript-context-record/",
+            ] {
+                assert!(!body.contains(hidden), "{hidden}");
+            }
+            rows[1].role = TranscriptRole::User;
+            assert!(build(&rows).contains(rows[1].content.lines().next().unwrap()));
+        }
+    }
 
     /// A malformed or future reserved system record must prevent construction
     /// of the entire auxiliary request. The identical bytes in an ordinary

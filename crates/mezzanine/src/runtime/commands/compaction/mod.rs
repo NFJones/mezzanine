@@ -1668,7 +1668,7 @@ impl RuntimeSessionService {
                     &context,
                     plan.as_ref(),
                     &final_summary,
-                );
+                )?;
                 let model_profile = self
                     .agent_turn_model_profile(&turn_id)
                     .cloned()

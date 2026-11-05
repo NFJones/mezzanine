@@ -819,6 +819,11 @@ pub(crate) struct RuntimeCompactionWitness {
     pub(crate) anchor: u64,
     /// Original source, expanded through earlier witnessed local summaries.
     pub(crate) source: Vec<mez_agent::ConversationEvent>,
+    /// Exact imported archive images keyed by their original occurrence, kept
+    /// across summary expansion. None identifies an actual ordinary legacy row
+    /// without certificate ownership; live source uses the canonical encoder.
+    pub(crate) archived_sources:
+        std::collections::BTreeMap<mez_agent::ContextBlockOccurrenceId, Option<String>>,
     /// Accepted bounded model-authored summary.
     pub(crate) summary: String,
 }

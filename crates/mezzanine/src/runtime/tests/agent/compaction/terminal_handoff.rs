@@ -37,10 +37,11 @@ fn mixed_staged_recovery_publishes_only_at_distinct_terminal_handoff() {
     )
     .unwrap();
     let mut profile = service.agent_turn_model_profile(&turn_id).unwrap().clone();
-    profile
-        .provider_options
-        .insert("max_input_tokens".into(), "17000".into());
-    assert_eq!(profile.max_input_tokens(), Some(17000));
+    profile.provider_options.insert(
+        "max_input_tokens".into(),
+        STAGED_COMPACTION_INPUT_LIMIT.into(),
+    );
+    assert_eq!(profile.max_input_tokens(), Some(20_000));
     service.set_agent_turn_model_profile(turn_id.clone(), profile.clone());
     assert!(service.queue_agent_active_turn_compaction(&turn_id, "live".into(), profile,
         crate::runtime::agent_state::RuntimeActiveTurnCompactionTrigger::ObservedInputLimit { observed_input_tokens: 20_000, max_input_tokens: 20_000 }, plan).unwrap());
@@ -133,6 +134,16 @@ fn live_fixture_with_source(
     words: usize,
     durable_first: bool,
 ) -> (RuntimeSessionService, AgentTranscriptStore, String) {
+    live_fixture_with_source_codec(words, durable_first, false)
+}
+
+/// Chooses the actual persisted import format before the real prompt replay.
+/// Both formats retain their original source bytes when terminalized later.
+fn live_fixture_with_source_codec(
+    words: usize,
+    durable_first: bool,
+    accounted_history: bool,
+) -> (RuntimeSessionService, AgentTranscriptStore, String) {
     let mut service = test_runtime_service();
     let store = AgentTranscriptStore::new(temp_root("terminal-live-handoff"));
     service.set_agent_transcript_store(store.clone());
@@ -165,15 +176,8 @@ fn live_fixture_with_source(
         let rows = blocks
             .iter()
             .enumerate()
-            .map(|(index, block)| TranscriptEntry {
-                conversation_id: conversation.clone(),
-                sequence: index as u64 + 1,
-                created_at_unix_seconds: 1,
-                role: TranscriptRole::System,
-                turn_id: "historical-first".into(),
-                agent_id: "agent-%1".into(),
-                pane_id: "%1".into(),
-                content: mez_agent::TranscriptContextEvent::execution_block_with_metadata(
+            .map(|(index, block)| {
+                let event = mez_agent::TranscriptContextEvent::execution_block_with_metadata(
                     block.source,
                     block.label.clone(),
                     block.content.clone(),
@@ -181,8 +185,29 @@ fn live_fixture_with_source(
                     index as u64 + 1,
                     None,
                 )
-                .unwrap()
-                .to_transcript_content(),
+                .unwrap();
+                let content = if accounted_history {
+                    mez_agent::transcript::TranscriptContextRecord::new(
+                        event,
+                        mez_agent::ContextBlockRecord::allocate(block).unwrap(),
+                        None,
+                    )
+                    .unwrap()
+                    .to_transcript_content()
+                    .unwrap()
+                } else {
+                    event.to_transcript_content()
+                };
+                TranscriptEntry {
+                    conversation_id: conversation.clone(),
+                    sequence: index as u64 + 1,
+                    created_at_unix_seconds: 1,
+                    role: TranscriptRole::System,
+                    turn_id: "historical-first".into(),
+                    agent_id: "agent-%1".into(),
+                    pane_id: "%1".into(),
+                    content,
+                }
             })
             .collect::<Vec<_>>();
         store.append_many(&rows).unwrap();
@@ -303,6 +328,158 @@ fn complete_turn(service: &mut RuntimeSessionService, turn_id: &str) {
             "terminal_handoff_regression",
         )
         .unwrap();
+}
+
+/// Imported legacy and accounted groups must retain their exact physical row
+/// images in a later terminal certificate. Live successors use the original
+/// accounted records; publication and reopened replay must accept both without
+/// rewriting imported history or replacing exact proofs with text matching.
+#[test]
+fn terminal_handoff_preserves_exact_imported_and_live_accounted_sources() {
+    for accounted in [false, true] {
+        let (mut service, store, turn_id) = live_fixture_with_source_codec(200, true, accounted);
+        let conversation = service
+            .agent_turn_ledger()
+            .turn(&turn_id)
+            .unwrap()
+            .conversation_id
+            .clone();
+        let original = store.inspect(&conversation).unwrap();
+        let imported = original[..2]
+            .iter()
+            .map(|row| row.content.clone())
+            .collect::<Vec<_>>();
+        compact_live(&mut service, &turn_id, "IMPORTED_SUMMARY", false);
+        compact_live(&mut service, &turn_id, "LIVE_SUMMARY", false);
+        let certificate = service
+            .terminal_compaction_handoff_content(&turn_id)
+            .unwrap()
+            .unwrap();
+        let proof: crate::storage::transcript::compaction_handoff::TerminalCompactionHandoff =
+            serde_json::from_str(
+                certificate
+                    .strip_prefix(crate::storage::transcript::compaction_handoff::MARKER)
+                    .unwrap(),
+            )
+            .unwrap();
+        assert_eq!(proof.replacements[0].sources, imported);
+        assert!(proof.replacements[1].sources.iter().all(|content| {
+            mez_agent::transcript::TranscriptContextRecord::from_transcript_content(content)
+                .unwrap()
+                .is_some()
+        }));
+        complete_turn(&mut service, &turn_id);
+        assert!(store.inspect(&conversation).unwrap().starts_with(&original));
+        assert_eq!(
+            store
+                .compaction_epoch(&conversation)
+                .unwrap()
+                .unwrap()
+                .ranges
+                .len(),
+            2
+        );
+        service.set_agent_transcript_store(AgentTranscriptStore::new(store.root()));
+        let replay = service.runtime_agent_history_epoch_context("%1").unwrap();
+        for summary in ["IMPORTED_SUMMARY", "LIVE_SUMMARY"] {
+            assert_eq!(
+                replay
+                    .blocks
+                    .iter()
+                    .filter(|block| block.content == summary)
+                    .count(),
+                1
+            );
+        }
+        assert!(
+            !replay
+                .blocks
+                .iter()
+                .any(|block| block.content.contains("LIVE_ORIGINAL_SOURCE"))
+        );
+    }
+}
+
+/// A valid source edit after summary acceptance must not be adopted by a later
+/// terminal certificate. Both legacy and accounted imported rows retain their
+/// frozen images; exact admission rejects the edited archive and publishes no
+/// epoch, even when an accounted edit preserves the original occurrence ID.
+#[test]
+fn terminal_handoff_rejects_imported_source_edit_after_summary_acceptance() {
+    for accounted in [false, true] {
+        let (mut service, store, turn_id) = live_fixture_with_source_codec(200, true, accounted);
+        let conversation = service
+            .agent_turn_ledger()
+            .turn(&turn_id)
+            .unwrap()
+            .conversation_id
+            .clone();
+        let original = store.inspect(&conversation).unwrap()[0].clone();
+        compact_live(&mut service, &turn_id, "IMPORTED_SUMMARY", false);
+        compact_live(&mut service, &turn_id, "LIVE_SUMMARY", false);
+        let block = ContextBlock::assistant_event("same decision", "EDITED_IMPORTED_SOURCE");
+        let event = mez_agent::TranscriptContextEvent::execution_block_with_metadata(
+            block.source,
+            block.label.clone(),
+            block.content.clone(),
+            mez_agent::ContextExecutionGroupId::new("live-group-0").unwrap(),
+            1,
+            None,
+        )
+        .unwrap();
+        let changed = match mez_agent::transcript::TranscriptContextRecord::from_transcript_content(
+            &original.content,
+        )
+        .unwrap()
+        {
+            Some(record) => mez_agent::transcript::TranscriptContextRecord::new(
+                event,
+                record.record().revised(&block).unwrap(),
+                None,
+            )
+            .unwrap()
+            .to_transcript_content()
+            .unwrap(),
+            None => event.to_transcript_content(),
+        };
+        let revision = store.transcript_entry_revision(&original).unwrap();
+        assert!(matches!(
+            store
+                .compare_and_swap_entry_content(
+                    &conversation,
+                    original.sequence,
+                    &original.pane_id,
+                    &revision,
+                    changed,
+                )
+                .unwrap(),
+            crate::storage::transcript::CompareAndSwapTranscriptEntryResult::Updated(_)
+        ));
+        let certificate = service
+            .terminal_compaction_handoff_content(&turn_id)
+            .unwrap()
+            .unwrap();
+        let proof: crate::storage::transcript::compaction_handoff::TerminalCompactionHandoff =
+            serde_json::from_str(
+                certificate
+                    .strip_prefix(crate::storage::transcript::compaction_handoff::MARKER)
+                    .unwrap(),
+            )
+            .unwrap();
+        assert_eq!(proof.replacements[0].sources[0], original.content);
+        let error =
+            crate::storage::transcript::compaction_handoff::terminal_handoff_source_is_contiguous(
+                &certificate,
+                &store.inspect(&conversation).unwrap(),
+            )
+            .unwrap_err();
+        assert!(
+            error
+                .message()
+                .contains("source occurrence is missing or ambiguous")
+        );
+        assert!(store.compaction_epoch(&conversation).unwrap().is_none());
+    }
 }
 
 /// Two accepted live summaries survive completed turn A, fresh turns B/C and
@@ -471,16 +648,22 @@ fn interleaved_approval_history_remains_usable_after_terminalization() {
             turn_id: turn_id.clone(),
             agent_id: "agent-%1".into(),
             pane_id: "%1".into(),
-            content: mez_agent::TranscriptContextEvent::execution_block_with_metadata(
-                block.source,
-                block.label.clone(),
-                block.content.clone(),
-                event.execution_group_id().unwrap().clone(),
-                (index % 2) as u64 + 1,
-                event.provider_owner().cloned(),
+            content: mez_agent::transcript::TranscriptContextRecord::new(
+                mez_agent::TranscriptContextEvent::execution_block_with_metadata(
+                    block.source,
+                    block.label.clone(),
+                    block.content.clone(),
+                    event.execution_group_id().unwrap().clone(),
+                    (index % 2) as u64 + 1,
+                    event.provider_owner().cloned(),
+                )
+                .unwrap(),
+                event.record(),
+                None,
             )
             .unwrap()
-            .to_transcript_content(),
+            .to_transcript_content()
+            .unwrap(),
         });
     }
     store.append_many(&rows).unwrap();

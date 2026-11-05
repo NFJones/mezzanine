@@ -6,7 +6,7 @@ use mez_agent::messaging::{Envelope, MessageScope};
 
 /// Leaves room for the current system prompt and both summaries while still
 /// requiring the two large historical groups to be compacted separately.
-const STAGED_COMPACTION_INPUT_LIMIT: &str = "18000";
+const STAGED_COMPACTION_INPUT_LIMIT: &str = "20000";
 
 mod preparation;
 mod summary_correction;
@@ -233,6 +233,8 @@ fn runtime_staged_compaction_live_range_recovers_turn_locally() {
             true,
         )
         .unwrap();
+    // The synthetic provider has consumed the closed live group. Freeze that
+    // full frontier, while keeping the first selected source in older history.
     let plan = mez_agent::plan_model_context_compaction_for_provider_tokens(
         context,
         20_000,
@@ -250,6 +252,11 @@ fn runtime_staged_compaction_live_range_recovers_turn_locally() {
         panic!("expected observed-input compaction");
     };
     assert!(
+        plan.replacement_blocks()
+            .iter()
+            .all(|block| { !block.content.contains("LIVE_RANGE_SOURCE") })
+    );
+    assert!(
         service
             .queue_agent_active_turn_compaction(
                 &turn_id,
@@ -263,7 +270,7 @@ fn runtime_staged_compaction_live_range_recovers_turn_locally() {
     let mut profile = service.agent_turn_model_profile(&turn_id).unwrap().clone();
     profile
         .provider_options
-        .insert("max_input_tokens".to_string(), "17000".to_string());
+        .insert("max_input_tokens".to_string(), "19000".to_string());
     service.set_agent_turn_model_profile(turn_id.clone(), profile);
     complete_runtime_test_compaction(&mut service, "%1", "first summary");
     assert!(
@@ -273,9 +280,9 @@ fn runtime_staged_compaction_live_range_recovers_turn_locally() {
     );
     assert!(store.compaction_epoch(&conversation_id).unwrap().is_none());
     assert!(!service.agent_provider_task_is_pending(&turn_id));
-    complete_runtime_test_compaction(&mut service, "%1", "second summary");
     let mut last_selection = None;
     let mut summarized_live = false;
+    let mut accepted_summaries = vec!["first summary".to_string()];
     for index in 0..8 {
         let Some(retry) = service.pending_agent_compaction_task_for_tests("%1") else {
             break;
@@ -288,7 +295,9 @@ fn runtime_staged_compaction_live_range_recovers_turn_locally() {
         else {
             panic!("expected private recovery stage");
         };
-        assert!(staged.projection.is_none());
+        if summarized_live {
+            assert!(staged.projection.is_none());
+        }
         let first = *plan.replacement_event_sequences().first().unwrap();
         assert!(last_selection.is_none_or(|previous| first > previous));
         last_selection = Some(*plan.replacement_event_sequences().last().unwrap());
@@ -296,28 +305,47 @@ fn runtime_staged_compaction_live_range_recovers_turn_locally() {
             .replacement_blocks()
             .iter()
             .any(|block| block.content.contains("LIVE_RANGE_SOURCE"));
-        summarized_live |= is_live;
         assert!(!service.agent_provider_task_is_pending(&turn_id));
-        complete_runtime_test_compaction(
-            &mut service,
-            "%1",
-            &if is_live {
-                "live summary".to_string()
-            } else {
-                format!("older summary {index}")
-            },
+        let summary = if is_live {
+            "live summary".to_string()
+        } else {
+            format!("older summary {index}")
+        };
+        complete_runtime_test_compaction(&mut service, "%1", &summary);
+        assert!(
+            service.agent_turn_is_running(&turn_id),
+            "{}",
+            service
+                .pane_screen("%1")
+                .unwrap()
+                .normal_content_lines()
+                .join("\n")
         );
+        summarized_live |= is_live;
+        accepted_summaries.push(summary);
+        assert!(store.compaction_epoch(&conversation_id).unwrap().is_none());
     }
-    assert!(summarized_live);
+    assert!(
+        summarized_live,
+        "live source was never selected; accepted={accepted_summaries:?} retained_live={}",
+        service
+            .agent_turn_contexts()
+            .get(&turn_id)
+            .is_some_and(|context| {
+                context
+                    .blocks()
+                    .iter()
+                    .any(|block| block.content.contains("LIVE_RANGE_SOURCE"))
+            })
+    );
     assert!(service.agent_provider_task_is_pending(&turn_id));
     assert!(store.compaction_epoch(&conversation_id).unwrap().is_none());
     let context = service.agent_turn_contexts().get(&turn_id).unwrap();
-    for source in [
-        "first summary",
-        "second summary",
-        "live summary",
-        "Keep this instruction exact",
-    ] {
+    for source in accepted_summaries
+        .iter()
+        .map(String::as_str)
+        .chain(std::iter::once("Keep this instruction exact"))
+    {
         assert!(context.blocks().iter().any(|block| block.content == source));
     }
 }
@@ -799,6 +827,9 @@ fn runtime_provider_compaction_does_not_summarize_byte_heavy_exact_history() {
             ContextBlock::user_event("exact retained instruction", "x".repeat(200_000)),
         ])
         .unwrap();
+    // Whole-context fixture replacement creates new live occurrences. The old
+    // archive import boundary cannot describe this new synthetic chronology.
+    service.set_agent_turn_imported_history_sequence_high_water(turn_id.clone(), 0);
     let context = service.agent_turn_contexts().get(&turn_id).unwrap();
     let plan = mez_agent::plan_model_context_compaction_for_provider(
         context,
@@ -2453,9 +2484,10 @@ fn runtime_observed_compaction_stages_repeated_content_by_group_identity() {
         .session_id
         .clone();
     let mut profile = service.agent_turn_model_profile(&turn_id).unwrap().clone();
-    profile
-        .provider_options
-        .insert("max_input_tokens".to_string(), "18000".to_string());
+    profile.provider_options.insert(
+        "max_input_tokens".to_string(),
+        STAGED_COMPACTION_INPUT_LIMIT.to_string(),
+    );
     service.set_agent_turn_model_profile(turn_id.clone(), profile);
     complete_runtime_test_compaction(&mut service, "%1", "first summary");
     assert!(store.compaction_epoch(&conversation_id).unwrap().is_none());

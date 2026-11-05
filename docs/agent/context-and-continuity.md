@@ -332,6 +332,13 @@ execution groups have committed through transcript receipts. Following prompts
 wait for that handoff's bookkeeping and receipt settlement. Its summaries then
 survive subsequent turns and reopen once, without restoring covered raw groups
 or re-executing their actions. The archive itself is never truncated.
+Imported source keeps its exact frozen archive encoding, whether legacy or
+accounted, bound to the original occurrence. Live source uses the same accounted
+encoding as terminal bookkeeping. Recompacting a summary preserves those source
+images; an edit after acceptance fails the original proof rather than updating
+the certificate to match changed history.
+Terminal certificates and inherited audit remain inspectable proof and are
+excluded from later compactor requests, including their nested accounting data.
 
 Legacy/unowned source and archive layouts that cannot be represented safely by
 the selective epoch contract remain turn-local. Certificates and terminal rows

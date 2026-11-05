@@ -6,6 +6,9 @@
 //! group identity is invented for legacy or unowned context. Certificates and
 //! transcript rows share a full-chronology occurrence map across witnesses;
 //! a consumed group frontier does not permanently seal later canonical events.
+//! Imported source keeps its exact frozen archive image, including legacy
+//! framing; live source uses the same accounted encoding as bookkeeping. No
+//! semantic/text equivalence replaces exact physical publication proof.
 
 use super::*;
 use crate::runtime::agent_state::{RuntimeCompactionWitness, RuntimeTurnCompactionHandoff};
@@ -16,6 +19,8 @@ use crate::storage::transcript::compaction_handoff::{
 impl RuntimeSessionService {
     /// Builds prospective witnesses and expands previously accepted local
     /// summaries by anchor and exact content, never by repeated text alone.
+    /// Captures imported source by original occurrence before acceptance;
+    /// missing, duplicate or malformed archive occurrences fail the proposal.
     pub(super) fn compaction_handoff_witnesses(
         &self,
         task: &RuntimeAgentCompactionTask,
@@ -23,7 +28,7 @@ impl RuntimeSessionService {
         context: &AgentContext,
         plan: &mez_agent::ModelContextCompactionPlan,
         summary: &str,
-    ) -> Vec<RuntimeCompactionWitness> {
+    ) -> Result<Vec<RuntimeCompactionWitness>> {
         let mut witnesses = self
             .agent
             .agent_turn_compaction_handoffs
@@ -37,6 +42,7 @@ impl RuntimeSessionService {
             witnesses = staged.handoff_witnesses.clone();
         }
         let mut source = Vec::new();
+        let mut archived_sources = std::collections::BTreeMap::new();
         for sequence in plan.replacement_event_sequences() {
             let Some(event) = context
                 .chronology()
@@ -52,20 +58,98 @@ impl RuntimeSessionService {
                             && event.block().label == "context compaction summary"))
                     && event.block().content == witness.summary
             }) {
-                source.extend(witnesses.remove(index).source);
+                let previous = witnesses.remove(index);
+                source.extend(previous.source);
+                archived_sources.extend(previous.archived_sources);
             } else {
                 source.push(event.clone());
             }
         }
         if let Some(first) = source.first() {
+            let imported_high_water = self.agent_turn_imported_history_sequence_high_water(turn_id);
+            let needed = source
+                .iter()
+                .filter(|event| {
+                    event.sequence().get() <= imported_high_water
+                        && event.execution_group_id().is_some()
+                        && !archived_sources.contains_key(&event.record().occurrence_id())
+                })
+                .map(|event| event.record().occurrence_id())
+                .collect::<std::collections::BTreeSet<_>>();
+            if !needed.is_empty() {
+                archived_sources.extend(self.capture_imported_compaction_sources(task, &needed)?);
+            }
             witnesses.push(RuntimeCompactionWitness {
                 anchor: first.sequence().get(),
                 source,
+                archived_sources,
                 summary: summary.to_string(),
             });
         }
         witnesses.sort_by_key(|witness| witness.anchor);
-        witnesses
+        Ok(witnesses)
+    }
+
+    /// Freezes only selected imported rows from their original conversation.
+    /// Accounted IDs are explicit; legacy IDs use the same actual archive-row
+    /// import boundary as replay. Equal content, labels and group names cannot
+    /// substitute for an occurrence. No cache count or current pane is authority.
+    /// An ordinary legacy row is present but explicitly lacks typed certificate
+    /// ownership; it remains turn-local rather than becoming a missing-source error.
+    fn capture_imported_compaction_sources(
+        &self,
+        task: &RuntimeAgentCompactionTask,
+        needed: &std::collections::BTreeSet<mez_agent::ContextBlockOccurrenceId>,
+    ) -> Result<std::collections::BTreeMap<mez_agent::ContextBlockOccurrenceId, Option<String>>>
+    {
+        let store = self.persistence.cloned_transcript_store().ok_or_else(|| {
+            MezError::invalid_state("imported compaction source archive is unavailable")
+        })?;
+        let pending = self
+            .persistence
+            .pending_transcript_entries(&task.conversation_id);
+        let view = store.conversation_transcript_view(
+            &task.conversation_id,
+            crate::storage::transcript::ConversationTranscriptRead::All,
+            task.transcript_entries > pending.len() as u64,
+            &pending,
+        )?;
+        let mut captured = std::collections::BTreeMap::new();
+        for row in &view.logical {
+            let record = if row.role == TranscriptRole::System {
+                mez_agent::transcript::TranscriptContextRecord::from_transcript_content(
+                    &row.content,
+                )?
+            } else {
+                None
+            };
+            let origin = match record {
+                Some(record) => record.record().occurrence_id(),
+                None => mez_agent::ContextBlockOccurrenceId::for_legacy_archive_row(
+                    &row.conversation_id,
+                    row.sequence,
+                    0,
+                )?,
+            };
+            if needed.contains(&origin)
+                && captured
+                    .insert(
+                        origin,
+                        (row.role == TranscriptRole::System).then(|| row.content.clone()),
+                    )
+                    .is_some()
+            {
+                return Err(MezError::conflict(
+                    "imported compaction source occurrence is duplicated",
+                ));
+            }
+        }
+        if captured.len() != needed.len() {
+            return Err(MezError::conflict(
+                "imported compaction source occurrence is unavailable",
+            ));
+        }
+        Ok(captured)
     }
 
     /// Accepts a distinct terminal witness only after the ordinary retry fits.
@@ -88,6 +172,7 @@ impl RuntimeSessionService {
                 .source
                 .iter()
                 .all(|event| event.execution_group_id().is_some())
+                && witness.archived_sources.values().all(Option::is_some)
         });
         self.agent.agent_turn_compaction_handoffs.insert(
             turn_id.to_string(),
@@ -238,7 +323,30 @@ impl RuntimeSessionService {
                 }
                 let source = occurrences.get(&event.sequence().get()).ok_or_else(||
                     MezError::conflict("terminal compaction source occurrence is unavailable in canonical chronology"))?;
-                sources.push(source.to_transcript_content());
+                let content = match witness
+                    .archived_sources
+                    .get(&event.record().occurrence_id())
+                {
+                    Some(Some(content)) => {
+                        if mez_agent::TranscriptContextEvent::from_transcript_content(content)
+                            .as_ref()
+                            != Some(source)
+                        {
+                            return Err(MezError::conflict(
+                                "imported terminal compaction source projection changed",
+                            ));
+                        }
+                        content.clone()
+                    }
+                    Some(None) => return Ok(None),
+                    None => mez_agent::transcript::TranscriptContextRecord::new(
+                        source.clone(),
+                        event.record(),
+                        None,
+                    )?
+                    .to_transcript_content()?,
+                };
+                sources.push(content);
             }
             replacements.push(TerminalCompactionReplacement {
                 sources,

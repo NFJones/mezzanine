@@ -11143,9 +11143,17 @@ durability through a distinct terminal handoff. That handoff MUST retain the
 accepted summary's chronological anchor and original source occurrences,
 including immutable execution-group identity and provider ownership. Certificate
 source and terminal rows MUST use one occurrence map over the restored full
-chronology; witness boundaries MUST NOT reset per-group ordinals. A group closed
-at a consumed compaction frontier is not permanently sealed against later
-canonical occurrences. A sound group split across exact barriers or separate
+chronology; witness boundaries MUST NOT reset per-group ordinals.
+Imported source proofs MUST retain the exact accepted archive row images,
+including legacy framing, selected by their original occurrence identities.
+Live source proofs MUST use the same accounted row encoding as bookkeeping.
+Recompacting a prior summary MUST preserve those frozen source images; later
+source edits MUST fail exact admission rather than refresh the certificate.
+No accounting cache or equal-text search may replace the original occurrence.
+Terminal and inherited handoff audit rows MUST remain in physical proof while
+being excluded from auxiliary compactor input, including their nested records.
+A group closed at a consumed compaction frontier is not permanently sealed
+against later canonical occurrences. A sound group split across exact barriers or separate
 summary ranges is unsupported by the complete-group selective epoch contract;
 it MUST retain raw authority before certificate append. Missing, duplicate,
 changed, or noncontiguous ordinal evidence remains an integrity conflict.
