@@ -9,6 +9,7 @@ use mez_agent::messaging::{Envelope, MessageScope};
 const STAGED_COMPACTION_INPUT_LIMIT: &str = "20000";
 
 mod preparation;
+mod single_head;
 mod summary_correction;
 mod terminal_handoff;
 mod transport_retries;

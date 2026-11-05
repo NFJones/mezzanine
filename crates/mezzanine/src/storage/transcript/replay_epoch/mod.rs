@@ -9,8 +9,10 @@
 //! dispatches model work nor asserts ordinary transcript append commitment.
 //! Immutable source/proposal receipts also preserve covered live evidence until
 //! ordinary audit settlement; they are never an alternative replay selection.
-//! Actor adoption, legacy migration and lifecycle cleanup are separate consumers
-//! of this boundary; until connected, legacy readers refuse the new format.
+//! The shared runtime reader captures an immutable identity/checkpoint snapshot
+//! from this boundary. Live actor publication, archive-arrival qualification,
+//! legacy migration and lifecycle cleanup remain separate consumers; legacy-only
+//! APIs continue to refuse this format instead of selecting an old projection.
 
 use super::AgentTranscriptStore;
 use crate::{MezError, Result};
@@ -46,6 +48,27 @@ pub(crate) struct ReplayEpochIdentity {
     revision: u64,
     publication: ContextBlockOccurrenceId,
     sha256: String,
+}
+
+/// Coherent committed identity and checked source from one mutation lease.
+/// It is immutable history, not a live owner or an execution capability.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ReplayEpochSnapshot {
+    identity: ReplayEpochIdentity,
+    checkpoint: ReplayEpochCheckpoint,
+}
+
+impl ReplayEpochSnapshot {
+    /// Borrows the exact committed identity captured with this checked source.
+    pub(crate) fn identity(&self) -> &ReplayEpochIdentity {
+        &self.identity
+    }
+
+    /// Borrows immutable checked source without exposing mutation of the
+    /// identity/source association to prompt projection or control adapters.
+    pub(crate) fn checkpoint(&self) -> &ReplayEpochCheckpoint {
+        &self.checkpoint
+    }
 }
 
 /// Complete current authority; old covered source is not a replay membership.
@@ -277,6 +300,61 @@ impl ReplayEpochPublication {
 }
 
 impl AgentTranscriptStore {
+    /// Identifies the one-head format under the caller's existing mutation
+    /// lease. This probe neither resolves source nor grants adoption; the typed
+    /// loader still validates the complete authority and required backing.
+    pub(super) fn has_replay_manifest_locked(&self, conversation_id: &str) -> Result<bool> {
+        mez_agent::transcript::validate_conversation_id(conversation_id)?;
+        let bytes = match bounded_read(
+            &self.root.join(conversation_id).join(MANIFEST_NAME),
+            MANIFEST_LIMIT,
+        ) {
+            Ok(bytes) => bytes,
+            Err(error) if error.io_kind() == Some(std::io::ErrorKind::NotFound) => {
+                return Ok(false);
+            }
+            Err(error) => return Err(error),
+        };
+        #[derive(Deserialize)]
+        struct Probe {
+            manifest: Option<serde::de::IgnoredAny>,
+        }
+        let probe: Probe =
+            serde_json::from_slice(&bytes).map_err(|_| invalid("invalid epoch authority"))?;
+        Ok(probe.manifest.is_some())
+    }
+
+    /// Captures a checked current checkpoint without copying saved instructions.
+    /// Only called with the existing conversation lease; source resolution and
+    /// marker recovery use that same lease and never recursively acquire flock.
+    pub(super) fn replay_epoch_snapshot_locked(
+        &self,
+        conversation_id: &str,
+    ) -> Result<Option<ReplayEpochSnapshot>> {
+        if !self.has_replay_manifest_locked(conversation_id)? {
+            return Ok(None);
+        }
+        let envelope = self
+            .read_replay_envelope_locked(conversation_id)?
+            .ok_or_else(|| invalid("required replay authority disappeared"))?;
+        let directory = self.root.join(conversation_id);
+        envelope.verify_receipt(&directory)?;
+        let owner = envelope.restore(AgentContext::empty(), |reference| {
+            payload::read(&directory, &reference)
+        })?;
+        let checkpoint = owner
+            .checkpoint()
+            .map_err(context_error)?
+            .with_stable_records(envelope.manifest.checkpoint.stable_records().to_vec())
+            .map_err(context_error)?;
+        self.require_compaction_epoch_locked(conversation_id)?;
+        sync_directory(&directory)?;
+        Ok(Some(ReplayEpochSnapshot {
+            identity: envelope.identity(),
+            checkpoint,
+        }))
+    }
+
     /// Publishes a retained proposal synchronously on a persistence worker. All
     /// helpers share this single held conversation lease. Retry settles only an
     /// exact already-committed identity; competing parents or equal-text new

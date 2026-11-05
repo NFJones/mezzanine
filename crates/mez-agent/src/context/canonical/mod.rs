@@ -1496,6 +1496,7 @@ impl AgentContext {
             .filter(|(_, event)| {
                 event.block.source == ContextSourceKind::UserInstruction
                     && event.semantic_kind == ContextSemanticKind::UserEvent
+                    && event.retention == ContextRetention::Exact
             })
             .map(|(index, _)| index)
             .collect::<Vec<_>>();

@@ -10906,6 +10906,25 @@ Product loader/migration adoption follows storage qualification: legacy authorit
 requires an explicit transition, and old readers/writers MUST refuse version
 four rather than silently treating it as raw-history absence.
 
+The frozen version-four runtime reader MUST capture the committed identity and
+checked checkpoint under the same conversation lease. Pane display counts MUST
+NOT trim its canonical membership. Prompt composition MUST preserve the head and
+raw occurrences, including original ordering, accounting and pending native
+ownership; its flat history is a read-only projection, not replacement source.
+Current trusted instructions and request metadata MUST be assembled separately.
+An explicit new user task MAY supersede prior task instructions without changing
+their source bytes or occurrence identities. A peer-triggered turn MUST preserve
+those instructions. Late task preludes MUST target the current exact user prompt,
+not historical user instructions. Execution metadata for newly assembled suffix
+events MUST NOT rewrite frozen native ownership.
+
+This frozen-reader stage does not yet qualify ordinary archive arrivals or a
+bounded ephemeral source against version-four authority. Until the original
+source frontier and custody bridge are connected, those combinations MUST refuse
+the affected context read rather than flatten covered source, guess a frontier
+from pane counts, or silently choose a newer parent checkpoint. This restriction
+is an implementation gap, not completion of arrival, fork or migration support.
+
 Canonical blocks MUST own an immutable occurrence ID separately from their
 ordering sequence and execution group. Equal bytes committed twice MUST receive
 distinct IDs; importing a typed occurrence or revising its content MUST preserve

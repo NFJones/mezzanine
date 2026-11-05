@@ -4,4 +4,5 @@
 //! tree. Single-owner fixtures stay beside their subsystem tests.
 #![allow(dead_code)]
 
+pub(crate) mod replay_epoch;
 pub(crate) mod runtime;

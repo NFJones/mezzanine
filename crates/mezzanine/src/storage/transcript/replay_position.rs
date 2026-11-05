@@ -9,6 +9,11 @@
 //! Legacy summary accounting may be imported atomically under that same lease;
 //! this never changes replay coverage or raw source. Returned snapshots own
 //! their payload but do not retain the mutation lane beyond the coherent read.
+//!
+//! A frozen one-head source carries its own checked identity and membership;
+//! pane row counts cannot select a different projection. Until archive-arrival
+//! custody and pinned ephemeral checkpoints are connected, the typed branch
+//! rejects those unqualified combinations instead of reconstructing raw history.
 
 use super::store::{ConversationTranscriptRead, ConversationTranscriptView};
 use super::{AgentCompactionEpoch, AgentPresentationEntry, AgentTranscriptStore};
@@ -31,6 +36,8 @@ pub(crate) struct ResumeReplaySnapshot {
 pub(crate) struct ConversationReplaySnapshot {
     /// Validated durable prefix/selective projection from this exact read.
     pub(crate) epoch: Option<AgentCompactionEpoch>,
+    /// Checked one-head source; mutually exclusive with a legacy projection.
+    pub(crate) replay: Option<super::replay_epoch::ReplayEpochSnapshot>,
     /// Checked archive and logical rows selected using the captured epoch.
     pub(crate) view: ConversationTranscriptView,
     /// Legacy origins captured with the same physical/logical row window.
@@ -135,9 +142,23 @@ impl AgentTranscriptStore {
     ) -> Result<(ConversationReplaySnapshot, T)> {
         let lease = self.acquire_conversation_lock(conversation_id)?;
         self.recover_accounted_appends_for_replay_locked(conversation_id, &lease)?;
-        let epoch = self.compaction_epoch_locked(conversation_id)?;
+        let replay = self.replay_epoch_snapshot_locked(conversation_id)?;
+        let epoch = if replay.is_some() {
+            None
+        } else {
+            self.compaction_epoch_locked(conversation_id)?
+        };
         let mut stable = super::stable_records::StableRecordCapture::new(frontier);
-        let read = select(epoch.as_ref());
+        let read = if replay.is_some() {
+            if frontier.is_some() {
+                return Err(MezError::conflict(
+                    "frozen source requires its original replay checkpoint",
+                ));
+            }
+            Some((ConversationTranscriptRead::All, true))
+        } else {
+            select(epoch.as_ref())
+        };
         let mut view = match read {
             Some((read, required)) => self
                 .conversation_transcript_view_with_stable_records_locked(
@@ -156,6 +177,14 @@ impl AgentTranscriptStore {
         if let Some(frontier) = frontier {
             view.committed.retain(|row| row.sequence <= frontier);
             view.logical.retain(|row| row.sequence <= frontier);
+        }
+        if replay.is_some() && !view.logical.is_empty() {
+            // The existing v4 storage checkpoint does not yet contain an archive
+            // arrival frontier. Never flatten/resubmit covered rows as fallback;
+            // the original source/custody bridge must qualify those arrivals.
+            return Err(MezError::conflict(
+                "replay archive arrivals lack their original source frontier",
+            ));
         }
         let initial_stable_records = if read.is_some() {
             self.initial_row_accounting_locked(conversation_id)?
@@ -181,6 +210,7 @@ impl AgentTranscriptStore {
         let row_records = self.transcript_row_records_locked(conversation_id, &row_origins)?;
         let snapshot = ConversationReplaySnapshot {
             epoch,
+            replay,
             view,
             row_origins,
             row_records,

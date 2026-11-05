@@ -8,6 +8,13 @@
 //! Repaired authored costs use the same occurrence-bound row projection as
 //! legacy costs; stale raw envelopes remain immutable source, not a reason to
 //! repeat estimation after each cold replay.
+//!
+//! Frozen one-head checkpoints use their typed chronology as source throughout
+//! composition. The flat projection is checked for exact preservation around a
+//! freshly assembled stable prefix and task suffix. Only explicit user admission
+//! supersedes prior task instructions; peer admission preserves their protection.
+//! Newly supplied execution metadata is confined to the new suffix. This adapter
+//! returns model context, not a durable publication owner or transition receipt.
 
 use crate::error::{MezError, Result};
 use mez_agent::transcript::{TranscriptContextEvent, TranscriptContextRecord, TranscriptEntry};
@@ -29,8 +36,19 @@ pub(in crate::runtime) struct RuntimeContextRecords {
     row_origins: crate::storage::transcript::TranscriptRowOrigins,
     row_cache: crate::storage::transcript::TranscriptRowRecords,
     rendered_rows: crate::storage::transcript::TranscriptRowRecords,
+    /// Frozen typed history; never rebuilt from its read-only flat projection.
+    replay: Option<ReplayHistory>,
     #[cfg(test)]
     estimate_recomputations: usize,
+}
+
+/// Immutable transport for one checked epoch. Current instructions, input and
+/// request metadata are composed by the actual turn-admission owner separately.
+#[derive(Debug, Clone)]
+struct ReplayHistory {
+    conversation: mez_agent::ReplayConversationId,
+    snapshot: std::sync::Arc<crate::storage::transcript::replay_epoch::ReplayEpochSnapshot>,
+    blocks: usize,
 }
 
 /// One semantic row decoded exactly once before execution-group validation.
@@ -41,6 +59,47 @@ pub(super) struct DecodedContextRow {
 }
 
 impl RuntimeContextRecords {
+    /// Validates a frozen one-head epoch and exposes its exact read-only flat
+    /// projection to existing prompt composition. The checked checkpoint remains
+    /// the source of sequences, lifecycle and ownership during final import.
+    pub(super) fn from_replay_snapshot(
+        conversation_id: &str,
+        snapshot: crate::storage::transcript::replay_epoch::ReplayEpochSnapshot,
+    ) -> Result<(Self, Vec<ContextBlock>)> {
+        let conversation = mez_agent::ReplayConversationId::new(conversation_id)?;
+        let owner = mez_agent::ReplayEpochContext::from_checkpoint(
+            conversation.clone(),
+            snapshot.checkpoint().clone(),
+            AgentContext::empty(),
+        )?;
+        let blocks = owner.context().blocks().to_vec();
+        let records = blocks
+            .iter()
+            .enumerate()
+            .zip(owner.context().chronology())
+            .map(|((index, _), event)| (index, event.record()))
+            .collect();
+        Ok((
+            Self {
+                records,
+                replay: Some(ReplayHistory {
+                    conversation,
+                    snapshot: std::sync::Arc::new(snapshot),
+                    blocks: blocks.len(),
+                }),
+                ..Self::default()
+            },
+            blocks,
+        ))
+    }
+
+    /// Shares the original coherent identity/source with frozen history owners.
+    pub(super) fn replay_snapshot(
+        &self,
+    ) -> Option<std::sync::Arc<crate::storage::transcript::replay_epoch::ReplayEpochSnapshot>> {
+        self.replay.as_ref().map(|history| history.snapshot.clone())
+    }
+
     /// Captures original placement and descriptive costs before rendering any
     /// blocks. Structural row positions select caches; actual rendering restores
     /// them before use, so no temporary estimated records are constructed.
@@ -174,6 +233,12 @@ impl RuntimeContextRecords {
         self.invalid = true;
     }
 
+    /// Retains the actual source failure through infallible projection helpers.
+    pub(super) fn reject_source(&mut self, error: &MezError) {
+        self.invalid = true;
+        self.source_rejection = Some((error.kind(), error.message().to_owned()));
+    }
+
     /// Captures malformed reserved envelopes as an explicit pending failure.
     /// Unrelated/legacy rows remain readable and supply no authored cost claim.
     pub(super) fn decode_row(&mut self, entry: &TranscriptEntry) -> DecodedContextRow {
@@ -287,6 +352,10 @@ impl RuntimeContextRecords {
     /// Shifts history indices when a real memory/head prefix is prepended.
     /// Overflow withholds later adoption instead of wrapping an association.
     pub(super) fn prepend_blocks(&mut self, count: usize) {
+        if count != 0 && self.replay.is_some() {
+            self.invalid = true;
+            return;
+        }
         for (index, _) in &mut self.records {
             match index.checked_add(count) {
                 Some(value) => *index = value,
@@ -330,17 +399,133 @@ impl RuntimeContextRecords {
         blocks: Vec<ContextBlock>,
         sources: &[(usize, mez_agent::StableContextSlotId)],
     ) -> Result<AgentContext> {
+        self.import_composed_context(blocks, sources, &[], false)
+    }
+
+    /// Builds a new user task over frozen history. Only this explicit user
+    /// boundary retires prior exact task instructions; history-only import keeps
+    /// their original protection. Imported execution metadata is applied solely
+    /// to the newly composed suffix, never to frozen native history.
+    pub(in crate::runtime) fn import_context_for_new_task(
+        &self,
+        blocks: Vec<ContextBlock>,
+        sources: &[(usize, mez_agent::StableContextSlotId)],
+        execution: &[mez_agent::ImportedExecutionEvent],
+    ) -> Result<AgentContext> {
+        self.import_composed_context(blocks, sources, execution, true)
+    }
+
+    /// Composes a peer-triggered turn without retiring the user's protected
+    /// instructions. Receiving lower-priority peer data is not task completion
+    /// or authority to supersede user intent. Execution ownership stays scoped
+    /// to the new suffix just as at ordinary user admission.
+    pub(in crate::runtime) fn import_context_for_peer_task(
+        &self,
+        blocks: Vec<ContextBlock>,
+        sources: &[(usize, mez_agent::StableContextSlotId)],
+        execution: &[mez_agent::ImportedExecutionEvent],
+    ) -> Result<AgentContext> {
+        self.import_composed_context(blocks, sources, execution, false)
+    }
+
+    /// Composes trusted current prefix and suffix around the immutable canonical
+    /// snapshot. An edited/dropped/reordered flat history is a source conflict,
+    /// never a request to import a replacement chronology.
+    fn import_composed_context(
+        &self,
+        mut blocks: Vec<ContextBlock>,
+        sources: &[(usize, mez_agent::StableContextSlotId)],
+        execution: &[mez_agent::ImportedExecutionEvent],
+        new_task: bool,
+    ) -> Result<AgentContext> {
+        self.ensure_valid()?;
         let prefix = blocks
             .iter()
             .take_while(|block| block.placement == mez_agent::ContextPlacement::StablePrefix)
             .count();
+        if let Some(replay) = &self.replay {
+            let history_end = prefix
+                .checked_add(replay.blocks)
+                .filter(|end| *end <= blocks.len())
+                .ok_or_else(|| MezError::conflict("frozen replay history is missing"))?;
+            let suffix = blocks.split_off(history_end);
+            let frozen = blocks.split_off(prefix);
+            let stable = self
+                .stable
+                .as_deref()
+                .unwrap_or_else(|| replay.snapshot.checkpoint().stable_records());
+            let checkpoint = replay
+                .snapshot
+                .checkpoint()
+                .clone()
+                .with_stable_records(stable.to_vec())?;
+            let current_prefix = AgentContext::import_durable_blocks_with_stable_sources(
+                blocks,
+                &[],
+                stable,
+                sources,
+            )?;
+            let mut owner = mez_agent::ReplayEpochContext::from_checkpoint(
+                replay.conversation.clone(),
+                checkpoint,
+                current_prefix,
+            )?;
+            if !owner
+                .context()
+                .chronology()
+                .iter()
+                .map(|event| event.block())
+                .eq(frozen.iter())
+            {
+                return Err(MezError::conflict(
+                    "frozen replay history changed during prompt composition",
+                ));
+            }
+            if new_task {
+                let instructions = owner
+                    .context()
+                    .chronology()
+                    .iter()
+                    .filter(|event| {
+                        event.retention() == mez_agent::ContextRetention::Exact
+                            && matches!(
+                                event.block().source,
+                                mez_agent::ContextSourceKind::UserInstruction
+                                    | mez_agent::ContextSourceKind::SkillInstruction
+                                    | mez_agent::ContextSourceKind::PersistedContextDocument
+                                    | mez_agent::ContextSourceKind::LocalMessage
+                            )
+                    })
+                    .map(|event| event.sequence())
+                    .collect::<Vec<_>>();
+                if !instructions.is_empty() {
+                    let task = owner.begin_instruction_task()?;
+                    owner.bind_instruction_occurrences(&task, &instructions)?;
+                    owner.complete_instruction_task(&task)?;
+                }
+            }
+            let suffix_records = self
+                .records
+                .iter()
+                .filter(|(index, _)| *index >= replay.blocks)
+                .map(|(index, record)| (index - replay.blocks, *record))
+                .collect::<Vec<_>>();
+            let mut appended =
+                AgentContext::import_durable_blocks_with_records(suffix, &suffix_records, &[])?;
+            appended.restore_imported_execution_events(execution)?;
+            let mut context = owner.context().clone();
+            context.append_imported_history(&appended)?;
+            return Ok(context);
+        }
         let records = self.indices_with_offset(prefix)?;
-        Ok(AgentContext::import_durable_blocks_with_stable_sources(
+        let mut context = AgentContext::import_durable_blocks_with_stable_sources(
             blocks,
             &records,
             self.stable.as_deref().unwrap_or_default(),
             sources,
-        )?)
+        )?;
+        context.restore_imported_execution_events(execution)?;
+        Ok(context)
     }
 
     /// Rejects malformed/future reserved records before a source is published.

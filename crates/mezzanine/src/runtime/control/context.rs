@@ -156,6 +156,11 @@ pub(crate) fn execute_runtime_agent_history_epoch_with_projection(
         work.inputs.ephemeral_source_entries,
         |_| runtime_agent_history_read(&work.inputs, epoch.as_ref()),
         |snapshot| {
+            if snapshot.replay.is_some() {
+                return Err(crate::MezError::conflict(
+                    "legacy compaction projection cannot replace a typed replay epoch",
+                ));
+            }
             let history = runtime_agent_history_epoch_from_snapshot(
                 work.inputs.clone(),
                 epoch.clone(),
@@ -213,6 +218,31 @@ pub(in crate::runtime) fn runtime_agent_history_epoch_from_snapshot(
     mut entries: Vec<TranscriptEntry>,
     accounting: Option<&crate::storage::transcript::ConversationReplaySnapshot>,
 ) -> RuntimeAgentTranscriptContext {
+    if let Some(snapshot) = accounting.and_then(|snapshot| snapshot.replay.as_ref()) {
+        return match RuntimeContextRecords::from_replay_snapshot(
+            &inputs.conversation_id,
+            snapshot.clone(),
+        ) {
+            Ok((records, blocks)) => RuntimeAgentTranscriptContext {
+                source: None,
+                blocks,
+                records,
+                execution_events: Vec::new(),
+                provider_history_repair_identity: None,
+            },
+            Err(error) => {
+                let mut records = RuntimeContextRecords::default();
+                records.reject_source(&error);
+                RuntimeAgentTranscriptContext {
+                    source: None,
+                    blocks: Vec::new(),
+                    records,
+                    execution_events: Vec::new(),
+                    provider_history_repair_identity: None,
+                }
+            }
+        };
+    }
     if let Some(epoch) = epoch
         && inputs
             .ephemeral_source_entries
@@ -439,9 +469,13 @@ fn runtime_agent_prompt_history_from_transcript(
     transcript: RuntimeAgentTranscriptContext,
 ) -> RuntimeAgentTranscriptContext {
     if transcript
-        .blocks
-        .iter()
-        .any(mez_agent::context_block_is_compaction_summary)
+        .source
+        .as_ref()
+        .is_some_and(|source| source.replay.is_some())
+        || transcript
+            .blocks
+            .iter()
+            .any(mez_agent::context_block_is_compaction_summary)
     {
         blocks.clear();
     }

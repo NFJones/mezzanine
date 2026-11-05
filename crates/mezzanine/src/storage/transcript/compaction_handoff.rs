@@ -301,6 +301,11 @@ impl AgentTranscriptStore {
         &self,
         conversation_id: &str,
     ) -> Result<()> {
+        if self.has_replay_manifest_locked(conversation_id)? {
+            // Legacy witnesses cannot publish another authority over a typed
+            // epoch. The shared typed reader verifies the current source next.
+            return Ok(());
+        }
         let entries = match self.inspect(conversation_id) {
             Ok(entries) => entries,
             Err(error) if error.kind() == crate::error::MezErrorKind::NotFound => return Ok(()),

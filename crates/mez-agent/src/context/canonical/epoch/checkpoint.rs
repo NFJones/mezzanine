@@ -71,6 +71,23 @@ struct Block<P> {
 }
 
 impl<P> ReplayEpochCheckpoint<P> {
+    /// Borrows descriptive producer-keyed stable accounting, never instructions.
+    pub fn stable_records(&self) -> &[StableContextBlockRecord] {
+        &self.stable_records
+    }
+
+    /// Selects an explicitly later checked stable snapshot at the persistence
+    /// boundary. Actual live source still supplies all instruction bytes; empty
+    /// records retire the earlier snapshot. Malformed/duplicate records refuse.
+    pub fn with_stable_records(
+        mut self,
+        records: Vec<StableContextBlockRecord>,
+    ) -> AgentContextResult<Self> {
+        super::super::block_record::validated_stable_records(&records)?;
+        self.stable_records = records;
+        Ok(self)
+    }
+
     /// Returns the descriptive append reservation carried by this snapshot.
     /// It grants no admission rights; checked restoration validates it against
     /// actual canonical chronology before the owner may allocate new events.
@@ -210,7 +227,12 @@ impl ReplayEpochContext {
             super::super::block_record::validated_stable_records(&checkpoint.stable_records)?;
         for slot in &mut current_prefix.stable_slots {
             if let Some(record) = saved.get(slot.slot_id.as_str()) {
-                slot.record = record.restored(&slot.block)?;
+                // A prefix constructed with this same occurrence already owns
+                // a checked estimate for its current bytes. Do not replace it
+                // with stale saved costs only to recompute them a second time.
+                if slot.record.occurrence_id() != record.occurrence_id() {
+                    slot.record = record.restored(&slot.block)?;
+                }
             }
         }
         current_prefix.chronology = checkpoint

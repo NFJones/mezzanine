@@ -21,6 +21,9 @@ pub(crate) struct RuntimeAgentHistorySource {
     pub(super) work: Option<RuntimeAgentHistoryEpochWork>,
     /// Exact authoritative epoch read with these rows, including absence.
     pub(in crate::runtime) epoch: Option<crate::storage::transcript::AgentCompactionEpoch>,
+    /// Typed source and committed parent captured in the same actual read.
+    pub(in crate::runtime) replay:
+        Option<Arc<crate::storage::transcript::replay_epoch::ReplayEpochSnapshot>>,
     /// Original checked logical window, shared through retries/interruption.
     rows: Arc<[mez_agent::TranscriptEntry]>,
     /// Original legacy positions from the same leased row read.
@@ -67,6 +70,7 @@ impl RuntimeAgentHistorySource {
         Arc::new(Self {
             work: None,
             epoch: None,
+            replay: None,
             rows: Arc::from([]),
             row_origins: BTreeMap::new(),
             target_ephemeral: None,
@@ -81,9 +85,11 @@ impl RuntimeAgentHistorySource {
         rows: Vec<mez_agent::TranscriptEntry>,
     ) {
         let row_origins = history.records.source_row_origins().clone();
+        let replay = history.records.replay_snapshot();
         history.source = Some(Arc::new(Self {
             work: Some(work),
             epoch,
+            replay,
             rows: rows.into(),
             row_origins,
             target_ephemeral: None,

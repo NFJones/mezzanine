@@ -78,7 +78,7 @@ pub(crate) use receipts::custody::CustodyReceiptPublicationFault;
     dead_code,
     reason = "single-head publication is qualified before the active aec1b788 loader and actor cutover phase"
 )]
-mod replay_epoch;
+pub(crate) mod replay_epoch;
 /// Leased, validated sequence frontiers and raw replay counts.
 mod replay_position;
 mod stable_records;

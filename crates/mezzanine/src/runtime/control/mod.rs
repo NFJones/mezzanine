@@ -528,12 +528,9 @@ impl RuntimeSessionService {
                 )
             })
             .unwrap_or_default();
-        let mut context = imported_records
-            .import_context_with_stable_sources(blocks, &stable_sources)?
+        let context = imported_records
+            .import_context_for_new_task(blocks, &stable_sources, &imported_execution_events)?
             .with_metadata(metadata);
-        context
-            .restore_imported_execution_events(&imported_execution_events)
-            .map_err(|error| MezError::invalid_state(error.to_string()))?;
         let imported_history_sequence_high_water = imported_history_block_count
             .checked_sub(1)
             .and_then(|index| context.chronology().get(index))
@@ -648,12 +645,9 @@ impl RuntimeSessionService {
                 )
             })
             .unwrap_or_default();
-        let mut context = imported_records
-            .import_context_with_stable_sources(blocks, &stable_sources)?
+        let context = imported_records
+            .import_context_for_peer_task(blocks, &stable_sources, &imported_execution_events)?
             .with_metadata(metadata);
-        context
-            .restore_imported_execution_events(&imported_execution_events)
-            .map_err(|error| MezError::invalid_state(error.to_string()))?;
         let imported_history_sequence_high_water = imported_history_block_count
             .checked_sub(1)
             .and_then(|index| context.chronology().get(index))

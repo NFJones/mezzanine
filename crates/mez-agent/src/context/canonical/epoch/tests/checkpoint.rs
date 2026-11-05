@@ -421,3 +421,96 @@ fn checkpoint_external_payload_mapping_preserves_canonical_state() {
     assert_eq!(calls, 2);
     assert_eq!(source, unchanged);
 }
+
+/// A later explicit stable snapshot selects producer occurrence identity and
+/// empty snapshots retire old claims. Neither can import saved instruction bytes
+/// or accept duplicate producer keys in otherwise valid descriptive metadata.
+#[test]
+fn checkpoint_stable_snapshot_override_is_explicit_and_validated() {
+    let source = owner();
+    let original = source.context().stable_slots()[0].record().occurrence_id();
+    let current = AgentContext::new(vec![ContextBlock::stable_instruction(
+        ContextSourceKind::System,
+        "policy",
+        "current trusted policy",
+    )])
+    .unwrap();
+    let chosen = current.stable_slots()[0].record();
+    let records = current.stable_block_records();
+    let checkpoint = source
+        .checkpoint()
+        .unwrap()
+        .with_stable_records(records.clone())
+        .unwrap();
+    let restored = ReplayEpochContext::from_checkpoint(
+        ReplayConversationId::new("conversation-a").unwrap(),
+        checkpoint,
+        current.clone(),
+    )
+    .unwrap();
+    assert_eq!(restored.context().stable_slots()[0].record(), chosen);
+    assert_ne!(chosen.occurrence_id(), original);
+    assert_eq!(
+        restored.context().stable_slots()[0].block().content,
+        "current trusted policy"
+    );
+    assert!(
+        source
+            .checkpoint()
+            .unwrap()
+            .with_stable_records(vec![records[0].clone(), records[0].clone()])
+            .is_err()
+    );
+    let cleared = source
+        .checkpoint()
+        .unwrap()
+        .with_stable_records(Vec::new())
+        .unwrap();
+    let restored = ReplayEpochContext::from_checkpoint(
+        ReplayConversationId::new("conversation-a").unwrap(),
+        cleared,
+        current,
+    )
+    .unwrap();
+    assert_eq!(restored.context().stable_slots()[0].record(), chosen);
+}
+
+/// Late skill/prelude insertion must target the current exact prompt when a
+/// restored epoch also retains a completed original user instruction. Historical
+/// authorship/bytes stay intact and neither original sequence is reassigned.
+#[test]
+fn historical_instruction_does_not_occupy_current_prompt_prelude_boundary() {
+    let mut owner = owner();
+    let old = owner.begin_instruction_task().unwrap();
+    owner
+        .append_instruction(
+            &old,
+            ContextBlock::user_event("user prompt", "historical instruction"),
+        )
+        .unwrap();
+    owner.complete_instruction_task(&old).unwrap();
+    let task = owner.begin_instruction_task().unwrap();
+    owner
+        .append_instruction(
+            &task,
+            ContextBlock::user_event("user prompt", "current instruction"),
+        )
+        .unwrap();
+    let original = owner.context().chronology().to_vec();
+    let mut context = owner.context().clone();
+    context
+        .insert_task_preludes_before_active_user(vec![ContextBlock::task_prelude(
+            ContextSourceKind::SkillInstruction,
+            "late skill",
+            "current exact skill",
+        )])
+        .unwrap();
+    context.validate_durable().unwrap();
+    assert_eq!(context.chronology()[0], original[0]);
+    assert_eq!(context.chronology()[2], original[1]);
+    assert_eq!(
+        context.chronology()[1].block().content,
+        "current exact skill"
+    );
+    assert_eq!(context.chronology()[1].retention(), ContextRetention::Exact);
+}
