@@ -7,6 +7,79 @@
 use super::*;
 use crate::ContextPlacement;
 
+/// Actual producer keys survive reorder/removal and preserve original costs
+/// without estimates; legacy positional snapshots migrate only at their exact
+/// source position, and ambiguous explicit associations fail before allocation.
+#[test]
+fn producer_keyed_stable_import_preserves_reordered_slots_without_recount() {
+    let sources = vec![
+        (0, StableContextSlotId::new("producer/first").unwrap()),
+        (1, StableContextSlotId::new("producer/second").unwrap()),
+    ];
+    let blocks = vec![
+        guidance("first", "equal 雪"),
+        guidance("second", "equal 雪"),
+    ];
+    let original =
+        AgentContext::import_durable_blocks_with_stable_sources(blocks.clone(), &[], &[], &sources)
+            .unwrap();
+    let saved = original.stable_block_records();
+    let before = ESTIMATE_COMPUTATIONS.with(|count| count.get());
+    let reversed = AgentContext::import_durable_blocks_with_stable_sources(
+        vec![blocks[1].clone(), blocks[0].clone()],
+        &[],
+        &saved,
+        &[(0, sources[1].1.clone()), (1, sources[0].1.clone())],
+    )
+    .unwrap();
+    assert_eq!(reversed.stable_slots()[0], original.stable_slots()[1]);
+    assert_eq!(reversed.stable_slots()[1], original.stable_slots()[0]);
+    let survivor = AgentContext::import_durable_blocks_with_stable_sources(
+        vec![blocks[1].clone()],
+        &[],
+        &saved,
+        &[(0, sources[1].1.clone())],
+    )
+    .unwrap();
+    assert_eq!(survivor.stable_slots()[0], original.stable_slots()[1]);
+    assert_eq!(ESTIMATE_COMPUTATIONS.with(|count| count.get()), before);
+    for invalid in [
+        vec![(2, sources[0].1.clone())],
+        vec![(0, sources[0].1.clone()), (0, sources[1].1.clone())],
+        vec![(0, sources[0].1.clone()), (1, sources[0].1.clone())],
+    ] {
+        assert!(
+            AgentContext::import_durable_blocks_with_stable_sources(
+                blocks.clone(),
+                &[],
+                &saved,
+                &invalid
+            )
+            .is_err()
+        );
+    }
+    assert_eq!(ESTIMATE_COMPUTATIONS.with(|count| count.get()), before);
+    let legacy = AgentContext::import_durable_blocks(blocks.clone()).unwrap();
+    let before = ESTIMATE_COMPUTATIONS.with(|count| count.get());
+    let migrated = AgentContext::import_durable_blocks_with_stable_sources(
+        blocks,
+        &[],
+        &legacy.stable_block_records(),
+        &sources,
+    )
+    .unwrap();
+    assert_eq!(
+        migrated.stable_slots()[0].record(),
+        legacy.stable_slots()[0].record()
+    );
+    assert_eq!(
+        migrated.stable_slots()[1].record(),
+        legacy.stable_slots()[1].record()
+    );
+    assert_eq!(ESTIMATE_COMPUTATIONS.with(|count| count.get()), before);
+    assert_eq!(migrated.stable_slots()[0].slot_id(), &sources[0].1);
+}
+
 /// Builds current trusted guidance with a stable structural slot identity.
 fn guidance(label: &str, content: &str) -> ContextBlock {
     ContextBlock {

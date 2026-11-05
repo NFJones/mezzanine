@@ -140,6 +140,31 @@ impl AgentTranscriptStore {
         Ok(origins)
     }
 
+    /// A covered carrier still belongs to its original authored occurrence.
+    /// Validate the selected claim even when no carrier row is rendered; never
+    /// manufacture an entry to reuse the ordinary projection API.
+    pub(super) fn validate_stable_carrier_origin_locked(
+        &self,
+        conversation: &str,
+        sequence: u64,
+        expected: ContextBlockOccurrenceId,
+    ) -> Result<()> {
+        let connection = self.open_row_origins_locked(conversation)?;
+        let stored: Option<String> = connection
+            .query_row(
+                "SELECT origin FROM origins WHERE sequence=?1",
+                [sequence.to_string()],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if let Some(stored) = stored
+            && ContextBlockOccurrenceId::try_from(stored)? != expected
+        {
+            return Err(MezError::conflict("stable snapshot carrier origin changed"));
+        }
+        self.require_row_origins_locked(conversation)
+    }
+
     /// Pins the original occurrence before a semantic edit replaces its source.
     /// Losing/revising a cache cannot lose identity, and a replacement typed
     /// record cannot claim a different occurrence at this existing row position.

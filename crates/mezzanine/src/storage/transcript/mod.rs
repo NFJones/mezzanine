@@ -76,6 +76,8 @@ pub(crate) use receipts::CustodyAppendReceipt;
 pub(crate) use receipts::custody::CustodyReceiptPublicationFault;
 /// Leased, validated sequence frontiers and raw replay counts.
 mod replay_position;
+mod stable_records;
+pub(crate) use stable_records::TranscriptStableSnapshot;
 /// Original legacy row placement, retained as conversation state across copies.
 mod row_origins;
 pub(crate) use replay_position::ConversationReplaySnapshot;

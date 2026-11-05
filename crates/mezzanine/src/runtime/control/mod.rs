@@ -281,6 +281,7 @@ impl RuntimeSessionService {
         let history_source = history.source;
         let imported_records = history.records;
         let mut blocks = history.blocks;
+        let mut stable_sources = Vec::new();
         let imported_execution_events = history.execution_events;
         let imported_history_block_count = blocks.len();
         let mut delivered_message_sequence = None;
@@ -416,6 +417,12 @@ impl RuntimeSessionService {
                 instruction_files,
                 self.agent_instruction_context_max_bytes(),
             )?;
+            if block.placement == mez_agent::ContextPlacement::StablePrefix {
+                stable_sources.push((
+                    mez_agent::context_placement_insertion_index(&blocks, block.placement),
+                    mez_agent::StableContextSlotId::new("runtime/project-guidance")?,
+                ));
+            }
             insert_context_block_by_placement(&mut blocks, block);
         }
         if let Some(invocation) = parse_skill_prompt_invocation(prompt) {
@@ -490,7 +497,11 @@ impl RuntimeSessionService {
                 },
             );
         }
-        for block in self.agent_shell_preference_context_blocks(pane_id) {
+        for (key, block) in self.agent_shell_preference_context_blocks(pane_id)? {
+            stable_sources.push((
+                mez_agent::context_placement_insertion_index(&blocks, block.placement),
+                key,
+            ));
             insert_context_block_by_placement(&mut blocks, block);
         }
         let prompt_index = mez_agent::context_placement_insertion_index(
@@ -518,7 +529,7 @@ impl RuntimeSessionService {
             })
             .unwrap_or_default();
         let mut context = imported_records
-            .import_context(blocks)?
+            .import_context_with_stable_sources(blocks, &stable_sources)?
             .with_metadata(metadata);
         context
             .restore_imported_execution_events(&imported_execution_events)
@@ -562,6 +573,7 @@ impl RuntimeSessionService {
         let history_source = history.source;
         let imported_records = history.records;
         let mut blocks = history.blocks;
+        let mut stable_sources = Vec::new();
         let imported_execution_events = history.execution_events;
         let imported_history_block_count = blocks.len();
         let identity = self.ensure_runtime_message_identity(
@@ -619,7 +631,11 @@ impl RuntimeSessionService {
                 PEER_MESSAGE_TURN_CONTEXT_HINT,
             ),
         );
-        for block in self.agent_shell_preference_context_blocks(pane_id) {
+        for (key, block) in self.agent_shell_preference_context_blocks(pane_id)? {
+            stable_sources.push((
+                mez_agent::context_placement_insertion_index(&blocks, block.placement),
+                key,
+            ));
             insert_context_block_by_placement(&mut blocks, block);
         }
         let metadata = self
@@ -633,7 +649,7 @@ impl RuntimeSessionService {
             })
             .unwrap_or_default();
         let mut context = imported_records
-            .import_context(blocks)?
+            .import_context_with_stable_sources(blocks, &stable_sources)?
             .with_metadata(metadata);
         context
             .restore_imported_execution_events(&imported_execution_events)

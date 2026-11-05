@@ -21,9 +21,11 @@ use mez_agent::{
 pub(in crate::runtime) struct RuntimeContextRecords {
     records: Vec<(usize, ContextBlockRecord)>,
     stable: Option<Vec<StableContextBlockRecord>>,
+    /// Physical precedence of the original carrier, independent of block order.
+    stable_sequence: u64,
     invalid: bool,
-    /// Content-free rejection from the original pending source qualification.
-    pending_rejection: Option<(crate::MezErrorKind, String)>,
+    /// Content-free rejection from original pending or stable source qualification.
+    source_rejection: Option<(crate::MezErrorKind, String)>,
     row_origins: crate::storage::transcript::TranscriptRowOrigins,
     row_cache: crate::storage::transcript::TranscriptRowRecords,
     rendered_rows: crate::storage::transcript::TranscriptRowRecords,
@@ -55,16 +57,51 @@ impl RuntimeContextRecords {
                 },
                 Err(error) => Self {
                     invalid: true,
-                    pending_rejection: Some((error.kind(), error.message().to_owned())),
+                    source_rejection: Some((error.kind(), error.message().to_owned())),
                     ..Self::default()
                 },
-            };
+            }
+            .with_stable_snapshot(snapshot.stable_records.as_ref());
         }
-        accounting.map_or_else(Self::default, |snapshot| Self {
-            row_origins: snapshot.row_origins.clone(),
-            row_cache: snapshot.row_records.clone(),
-            ..Self::default()
-        })
+        accounting
+            .map_or_else(Self::default, |snapshot| Self {
+                row_origins: snapshot.row_origins.clone(),
+                row_cache: snapshot.row_records.clone(),
+                ..Self::default()
+            })
+            .with_stable_snapshot(accounting.and_then(|snapshot| snapshot.stable_records.as_ref()))
+    }
+
+    /// Seeds the same checked archive scope, including covered carriers. Unknown
+    /// reserved provenance withholds adoption instead of borrowing older IDs.
+    fn with_stable_snapshot(
+        mut self,
+        snapshot: Option<&crate::storage::transcript::TranscriptStableSnapshot>,
+    ) -> Self {
+        if let Some(snapshot) = snapshot {
+            self.stable_sequence = snapshot.sequence();
+            match snapshot.records() {
+                Ok(records) => self.stable = Some(records.to_vec()),
+                Err(error) => {
+                    self.invalid = true;
+                    if self.source_rejection.is_none() {
+                        self.source_rejection = Some((error.kind(), error.message().to_owned()));
+                    }
+                }
+            }
+        }
+        self
+    }
+
+    /// Complete later snapshots replace earlier ones; an empty list explicitly
+    /// retires slots. Selected older rows cannot rewind a checked source capture.
+    fn observe_stable(&mut self, sequence: u64, stable: Option<&[StableContextBlockRecord]>) {
+        if sequence > self.stable_sequence
+            && let Some(stable) = stable
+        {
+            self.stable_sequence = sequence;
+            self.stable = Some(stable.to_vec());
+        }
     }
 
     /// Returns row records needing publication or retaining an existing cache.
@@ -150,6 +187,7 @@ impl RuntimeContextRecords {
         match TranscriptContextRecord::from_transcript_content(&entry.content) {
             Ok(Some(record)) => {
                 let (event, record, stable) = record.into_parts();
+                self.observe_stable(entry.sequence, stable.as_deref());
                 DecodedContextRow {
                     event: Some(event),
                     record: Some(record),
@@ -183,9 +221,7 @@ impl RuntimeContextRecords {
         stable: Option<&[StableContextBlockRecord]>,
     ) -> Option<ContextBlockRecord> {
         let record = self.restore_row_record(&block, entry, record);
-        if let Some(stable) = stable {
-            self.stable = Some(stable.to_vec());
-        }
+        self.observe_stable(entry.sequence, stable);
         let record = match record {
             Ok(record) => {
                 self.records.push((blocks.len(), record));
@@ -284,24 +320,35 @@ impl RuntimeContextRecords {
         &self,
         blocks: Vec<ContextBlock>,
     ) -> Result<AgentContext> {
+        self.import_context_with_stable_sources(blocks, &[])
+    }
+
+    /// Uses actual producer keys for current live stable slots. Bare ordered
+    /// imports remain an explicit legacy/history boundary, never label matching.
+    pub(in crate::runtime) fn import_context_with_stable_sources(
+        &self,
+        blocks: Vec<ContextBlock>,
+        sources: &[(usize, mez_agent::StableContextSlotId)],
+    ) -> Result<AgentContext> {
         let prefix = blocks
             .iter()
             .take_while(|block| block.placement == mez_agent::ContextPlacement::StablePrefix)
             .count();
         let records = self.indices_with_offset(prefix)?;
-        Ok(AgentContext::import_durable_blocks_with_records(
+        Ok(AgentContext::import_durable_blocks_with_stable_sources(
             blocks,
             &records,
             self.stable.as_deref().unwrap_or_default(),
+            sources,
         )?)
     }
 
     /// Rejects malformed/future reserved records before a source is published.
     pub(in crate::runtime) fn ensure_valid(&self) -> Result<()> {
-        if let Some((kind, message)) = &self.pending_rejection {
+        if let Some((kind, message)) = &self.source_rejection {
             return Err(MezError::new(
                 *kind,
-                format!("pending transcript accounting: {message}"),
+                format!("transcript accounting: {message}"),
             ));
         }
         if self.invalid {

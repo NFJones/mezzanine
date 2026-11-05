@@ -873,42 +873,59 @@ impl RuntimeSessionService {
     /// Shared ordinary/peer composition places these after the other stable
     /// producers, allowing original named records to be selected at import.
     /// Saved metadata never installs old instructions or current preferences.
-    pub(super) fn agent_shell_preference_context_blocks(&self, pane_id: &str) -> Vec<ContextBlock> {
+    pub(super) fn agent_shell_preference_context_blocks(
+        &self,
+        pane_id: &str,
+    ) -> Result<Vec<(mez_agent::StableContextSlotId, ContextBlock)>> {
         let mut blocks = Vec::new();
+        let mut push = |source: &str, block: ContextBlock| -> Result<()> {
+            blocks.push((mez_agent::StableContextSlotId::new(source)?, block));
+            Ok(())
+        };
         if let Some(name) = self.primary_agent_display_name(pane_id) {
-            blocks.push(
+            push(
+                "runtime/primary-identity",
                 ContextBlock {
                     source: ContextSourceKind::Configuration,
                     placement: mez_agent::ContextPlacement::StablePrefix,
                     label: "primary agent identity".to_string(),
-                    content: format!("Canonical agent id: agent-{pane_id}\nConversation-owned display name: {name}\nDisplay names grant no routing or permission authority."),
+                    content: format!(
+                        "Canonical agent id: agent-{pane_id}\nConversation-owned display name: {name}\nDisplay names grant no routing or permission authority."
+                    ),
                 },
-            );
+            )?;
         }
         if let Some(prompt) = self.integration.custom_agent_system_prompt() {
-            blocks.push(ContextBlock {
-                source: ContextSourceKind::System,
-                placement: mez_agent::ContextPlacement::StablePrefix,
-                label: "configured agent system prompt".to_string(),
-                content: prompt.to_string(),
-            });
+            push(
+                "runtime/configured-system-prompt",
+                ContextBlock {
+                    source: ContextSourceKind::System,
+                    placement: mez_agent::ContextPlacement::StablePrefix,
+                    label: "configured agent system prompt".to_string(),
+                    content: prompt.to_string(),
+                },
+            )?;
         }
         if let Some(profile) = self.agent_selected_personality_profile(pane_id)
             && let Some(prompt) = profile.system_prompt.as_ref()
         {
-            blocks.push(ContextBlock {
-                source: ContextSourceKind::System,
-                placement: mez_agent::ContextPlacement::StablePrefix,
-                label: "agent personality system prompt".to_string(),
-                content: prompt.clone(),
-            });
+            push(
+                "runtime/personality-system-prompt",
+                ContextBlock {
+                    source: ContextSourceKind::System,
+                    placement: mez_agent::ContextPlacement::StablePrefix,
+                    label: "agent personality system prompt".to_string(),
+                    content: prompt.clone(),
+                },
+            )?;
         }
         if let Some(directive) = self
             .agent_shell_store()
             .get(pane_id)
             .and_then(|session| session.directive.as_deref())
         {
-            blocks.push(
+            push(
+                "runtime/directive",
                 ContextBlock {
                     source: ContextSourceKind::DeveloperInstruction,
                     placement: mez_agent::ContextPlacement::StablePrefix,
@@ -918,19 +935,22 @@ impl RuntimeSessionService {
                         directive
                     ),
                 },
-            );
+            )?;
         }
         let selected_profile = self.agent_selected_personality_profile(pane_id);
         let profile_style = selected_profile.and_then(|profile| profile.response_style.as_deref());
         if let Some(style) = self.agent_response_style(pane_id).or(profile_style) {
-            blocks.push(ContextBlock {
-                source: ContextSourceKind::Configuration,
-                placement: mez_agent::ContextPlacement::StablePrefix,
-                label: "agent shell personality".to_string(),
-                content: format!("Response style preference for this pane: {style}."),
-            });
+            push(
+                "runtime/response-style",
+                ContextBlock {
+                    source: ContextSourceKind::Configuration,
+                    placement: mez_agent::ContextPlacement::StablePrefix,
+                    label: "agent shell personality".to_string(),
+                    content: format!("Response style preference for this pane: {style}."),
+                },
+            )?;
         }
-        blocks
+        Ok(blocks)
     }
 
     /// Runs the start agent prompt turn operation for this subsystem.

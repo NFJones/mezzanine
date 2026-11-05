@@ -438,6 +438,17 @@ impl StableContextBlock {
         record: Option<ContextBlockRecord>,
         stable_records: &BTreeMap<&str, ContextBlockRecord>,
     ) -> AgentContextResult<Self> {
+        let (slot_id, source_fingerprint) = Self::compatibility_identity(&block, index)?;
+        let record =
+            Self::select_import_record(record, stable_records.get(slot_id.as_str()).copied())?;
+        Self::with_record(slot_id, source_fingerprint, block, record)
+    }
+
+    /// Computes the genuine old positional import key without allocating costs.
+    fn compatibility_identity(
+        block: &ContextBlock,
+        index: usize,
+    ) -> AgentContextResult<(StableContextSlotId, StableContextSourceFingerprint)> {
         let mut identity_material = format!("{index}:{:?}:{}", block.source, block.label);
         let identity_digest = Sha256::digest(identity_material.as_bytes())
             .iter()
@@ -450,22 +461,81 @@ impl StableContextBlock {
             .map(|byte| format!("{byte:02x}"))
             .collect::<String>();
         let slot_id = StableContextSlotId::new(format!("compat-{identity_digest}"))?;
-        let record = if let Some(saved) = stable_records.get(slot_id.as_str()) {
-            if record.is_some_and(|indexed| indexed != *saved) {
+        Ok((
+            slot_id,
+            StableContextSourceFingerprint::new(source_fingerprint)?,
+        ))
+    }
+
+    /// Computes only the old structural key when migration actually needs it.
+    fn compatibility_slot_id(
+        block: &ContextBlock,
+        index: usize,
+    ) -> AgentContextResult<StableContextSlotId> {
+        let material = format!("{index}:{:?}:{}", block.source, block.label);
+        let digest = Sha256::digest(material.as_bytes())
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        StableContextSlotId::new(format!("compat-{digest}"))
+    }
+
+    /// Selects an actual producer key before construction, with an explicit
+    /// same-position legacy import fallback. Saved fingerprints are not source.
+    fn from_producer_block(
+        block: ContextBlock,
+        index: usize,
+        slot_id: StableContextSlotId,
+        record: Option<ContextBlockRecord>,
+        stable_records: &BTreeMap<&str, ContextBlockRecord>,
+    ) -> AgentContextResult<Self> {
+        let saved = if let Some(record) = stable_records.get(slot_id.as_str()) {
+            Some(*record)
+        } else {
+            let legacy = Self::compatibility_slot_id(&block, index)?;
+            stable_records.get(legacy.as_str()).copied()
+        };
+        let record = Self::select_import_record(record, saved)?;
+        let source = format!("{:?}", block.source);
+        let mut fingerprint = Sha256::new();
+        fingerprint.update(b"mez-stable-producer-v1\0");
+        for field in [
+            slot_id.as_str(),
+            source.as_str(),
+            block.label.as_str(),
+            block.content.as_str(),
+        ] {
+            fingerprint.update((field.len() as u64).to_le_bytes());
+            fingerprint.update(field.as_bytes());
+        }
+        let fingerprint = fingerprint
+            .finalize()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        Self::with_record(
+            slot_id,
+            StableContextSourceFingerprint::new(fingerprint)?,
+            block,
+            record,
+        )
+    }
+
+    /// Refuses contradictory indexed/named claims before selecting an estimate.
+    fn select_import_record(
+        indexed: Option<ContextBlockRecord>,
+        saved: Option<ContextBlockRecord>,
+    ) -> AgentContextResult<Option<ContextBlockRecord>> {
+        if let Some(saved) = saved {
+            if indexed.is_some_and(|indexed| indexed != saved) {
                 return Err(AgentContextError::new(
                     "conflicting indexed and named stable records",
                 ));
             }
-            Some(*saved)
+            Ok(Some(saved))
         } else {
-            record
-        };
-        Self::with_record(
-            slot_id,
-            StableContextSourceFingerprint::new(source_fingerprint)?,
-            block,
-            record,
-        )
+            Ok(indexed)
+        }
     }
 
     /// Builds the adapter-facing metadata projection for this stable slot.
@@ -1917,7 +1987,7 @@ impl AgentContext {
 
         let mut imported = Self::empty();
         if !blocks.is_empty() {
-            imported.initialize_typed_storage_with_records(blocks, records, &[])?;
+            imported.initialize_typed_storage_with_records(blocks, records, &[], &[])?;
         }
         if !imported.stable_slots.is_empty() {
             return Err(AgentContextError::new(
@@ -1975,7 +2045,7 @@ impl AgentContext {
         &mut self,
         blocks: Vec<ContextBlock>,
     ) -> AgentContextResult<()> {
-        self.initialize_typed_storage_with_records(blocks, &[], &[])
+        self.initialize_typed_storage_with_records(blocks, &[], &[], &[])
     }
 
     /// Imports checked occurrence records directly, avoiding an initial recount
@@ -1985,11 +2055,13 @@ impl AgentContext {
         blocks: Vec<ContextBlock>,
         records: &[(usize, ContextBlockRecord)],
         stable_records: &[StableContextBlockRecord],
+        stable_sources: &[(usize, StableContextSlotId)],
     ) -> AgentContextResult<()> {
         validate_context_placement_order(&blocks)?;
         validate_context_semantics(&blocks)?;
         let compatibility_group_ids = compatibility_execution_group_ids(&blocks)?;
         let stable_records = block_record::validated_stable_records(stable_records)?;
+        let stable_sources = block_record::validate_stable_sources(&blocks, stable_sources)?;
         let mut conversation_index = 0usize;
         self.stable_slots.clear();
         self.chronology.clear();
@@ -2002,14 +2074,25 @@ impl AgentContext {
                 .ok()
                 .map(|found| records[found].1);
             match block.placement {
-                ContextPlacement::StablePrefix => self.stable_slots.push(
-                    StableContextBlock::from_compatibility_block_with_record(
-                        block,
-                        index,
-                        record,
-                        &stable_records,
-                    )?,
-                ),
+                ContextPlacement::StablePrefix => {
+                    let slot = if let Some(key) = stable_sources.get(&index) {
+                        StableContextBlock::from_producer_block(
+                            block,
+                            index,
+                            key.clone(),
+                            record,
+                            &stable_records,
+                        )?
+                    } else {
+                        StableContextBlock::from_compatibility_block_with_record(
+                            block,
+                            index,
+                            record,
+                            &stable_records,
+                        )?
+                    };
+                    self.stable_slots.push(slot);
+                }
                 ContextPlacement::ConversationAppend => {
                     let execution_group_id = compatibility_group_ids[conversation_index].clone();
                     let (semantic_kind, retention, recoverable_for_compaction) =

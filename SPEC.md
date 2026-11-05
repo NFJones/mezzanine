@@ -10885,6 +10885,16 @@ before restoration. Current identity, custom prompt, personality, directive and
 style blocks MUST participate in this same import, including ordinary and peer
 turns. Removed preferences MUST remain absent; changed trusted content MUST
 retain its occurrence and revise only its own estimate and live fingerprint.
+Current stable producers MUST supply keys independent of prefix ordering and
+text. Positional legacy snapshots may migrate only at the same established
+structural slot; a moved unqualified legacy key MUST NOT select a nearby label.
+Stable snapshot adoption MUST use the latest visible original carrier captured
+during the checked archive read, even when raw replay windows or compaction
+exclude that carrier. Historical and ephemeral frontiers MUST exclude later
+rows from frozen source images as well as metadata adoption. Later reserved
+metadata MUST NOT deny an older bounded view. Covered carriers MUST still match
+published original row placement;
+invalid reserved provenance MUST refuse adoption rather than invent origins.
 Stopped-turn hints MUST retain their actual stable snapshot and their own
 occurrence/cost record through the existing accounted envelope; this MUST NOT
 change their visible reference text or borrow the original user's occurrence.

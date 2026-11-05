@@ -3140,6 +3140,16 @@ impl AgentTranscriptStore {
     /// Validates the complete durable chronology at restart without retaining
     /// the archive in memory. Returns the number of contiguous committed rows.
     pub(crate) fn validate_restored_transcript(&self, conversation_id: &str) -> Result<u64> {
+        self.validate_restored_transcript_with_stable_records(conversation_id, None)
+    }
+
+    /// Validates raw chronology and optionally observes original stable claims
+    /// in that same pass. This never acquires another conversation lease.
+    fn validate_restored_transcript_with_stable_records(
+        &self,
+        conversation_id: &str,
+        mut stable: Option<&mut super::stable_records::StableRecordCapture>,
+    ) -> Result<u64> {
         let path = self.existing_transcript_path_for(conversation_id)?;
         let mut reader = BufReader::new(std_fs::File::open(path)?);
         let mut count = 0u64;
@@ -3158,6 +3168,9 @@ impl AgentTranscriptStore {
                 return Err(MezError::invalid_state(
                     "restored transcript contains missing, reordered, or foreign rows",
                 ));
+            }
+            if let Some(stable) = stable.as_deref_mut() {
+                stable.observe(&entry);
             }
             line.clear();
         }
@@ -3373,6 +3386,32 @@ impl AgentTranscriptStore {
         pending: &[TranscriptEntry],
         _conversation_lock: &std::fs::File,
     ) -> Result<ConversationTranscriptView> {
+        self.conversation_transcript_view_with_stable_records_locked(
+            conversation_id,
+            read,
+            committed_prefix_required,
+            pending,
+            _conversation_lock,
+            None,
+        )
+    }
+
+    /// Adds a source observer to existing validation/merge without extra I/O.
+    /// Ordinary bookkeeping callers keep the raw-only locked projection above.
+    pub(super) fn conversation_transcript_view_with_stable_records_locked(
+        &self,
+        conversation_id: &str,
+        read: ConversationTranscriptRead,
+        committed_prefix_required: bool,
+        pending: &[TranscriptEntry],
+        _conversation_lock: &std::fs::File,
+        mut stable: Option<&mut super::stable_records::StableRecordCapture>,
+    ) -> Result<ConversationTranscriptView> {
+        if let ConversationTranscriptRead::Through(through) = read
+            && let Some(stable) = stable.as_deref_mut()
+        {
+            stable.restrict(through);
+        }
         if self.active_delete_pending(conversation_id)? {
             return Err(MezError::invalid_state(
                 "conversation publication or deletion is incomplete",
@@ -3387,7 +3426,10 @@ impl AgentTranscriptStore {
                     ));
                 }
             } else {
-                self.validate_restored_transcript(conversation_id)?;
+                self.validate_restored_transcript_with_stable_records(
+                    conversation_id,
+                    stable.as_deref_mut(),
+                )?;
             }
         }
         if let ConversationTranscriptRead::After(through_sequence) = read
@@ -3401,19 +3443,28 @@ impl AgentTranscriptStore {
         if matches!(read, ConversationTranscriptRead::After(_))
             && self.existing_transcript_path_for(conversation_id)?.exists()
         {
-            self.validate_restored_transcript(conversation_id)?;
+            self.validate_restored_transcript_with_stable_records(
+                conversation_id,
+                stable.as_deref_mut(),
+            )?;
         }
         // Pending receipts may fill a logical gap but cannot repair missing
         // committed history. The full read validates and collects in one pass.
         let committed = match read {
             ConversationTranscriptRead::All => self.inspect_validated_transcript(conversation_id),
             ConversationTranscriptRead::ForTurn(turn_id) => {
-                return self.inspect_validated_transcript_for_turn(
+                let view = self.inspect_validated_transcript_for_turn(
                     conversation_id,
                     turn_id,
                     committed_prefix_required,
                     pending,
-                );
+                )?;
+                if let Some(stable) = stable.as_deref_mut() {
+                    for row in &view.logical {
+                        stable.observe(row);
+                    }
+                }
+                return Ok(view);
             }
             ConversationTranscriptRead::Through(sequence) => {
                 self.inspect_validated_transcript_through(conversation_id, sequence)
@@ -3508,6 +3559,11 @@ impl AgentTranscriptStore {
         if let ConversationTranscriptRead::Latest(count) = read {
             let first = logical.len().saturating_sub(count);
             logical.drain(..first);
+        }
+        if let Some(stable) = stable {
+            for row in &logical {
+                stable.observe(row);
+            }
         }
         Ok(ConversationTranscriptView { committed, logical })
     }

@@ -551,6 +551,14 @@ their validated records during construction, including after cold replay. A
 changed preference keeps its occurrence while refreshing its estimate against
 current text; removing it does not resurrect saved instructions. Unchanged slots
 do not create temporary estimates before applying their saved records.
+Current producers identify these slots independently of prefix order, so
+removing an earlier preference does not replace another slot's identity. The
+checked archive read retains the latest visible snapshot even when a raw window
+or compaction covers its carrier. Ephemeral and historical bounds exclude later
+rows from frozen source images and metadata adoption; malformed future metadata
+does not deny an older bounded view. Covered carriers still pass their original
+placement checks. Empty snapshots retire old claims. This adds no archive scan
+or persistent cache.
 These estimates are not provider usage or billing, and their metadata is not
 part of the semantic source supplied to the model.
 

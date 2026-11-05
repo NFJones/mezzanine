@@ -25,6 +25,7 @@ mod replay_snapshot;
 mod selective_edit_fence;
 /// Held sequence lookups and competing appends preserve mutation ownership.
 mod sequence_coherence;
+mod stable_records;
 /// Durable summary origins, atomic legacy imports and descriptive cache repair.
 mod summary_records;
 

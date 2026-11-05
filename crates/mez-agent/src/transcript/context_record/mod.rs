@@ -41,6 +41,18 @@ struct WireRecord {
     stable: Option<Vec<StableContextBlockRecord>>,
 }
 
+/// Bounded framing probe that skips semantic payload allocation when no stable
+/// claim exists. It is not a semantic replay decoder.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StableProbe {
+    version: String,
+    #[serde(rename = "event")]
+    _event: serde::de::IgnoredAny,
+    record: ContextBlockRecord,
+    stable: Option<serde::de::IgnoredAny>,
+}
+
 impl TranscriptContextRecord {
     /// Captures an actual producer's semantic event and accounting snapshot.
     /// Only current bounded metadata formats are accepted. Semantic constructors
@@ -140,9 +152,52 @@ impl TranscriptContextRecord {
         if wire.version != VERSION {
             return Err(invalid());
         }
+        #[cfg(test)]
+        SEMANTIC_DECODES.with(|count| count.set(count.get() + 1));
         let event = TranscriptContextEvent::from_record_value(&wire.event).ok_or_else(invalid)?;
         Self::new(event, wire.record, wire.stable).map(Some)
     }
+
+    /// Reads only stable carriers without reconstructing covered semantic
+    /// payloads that explicitly have no snapshot. Carrier events still pass the
+    /// full decoder, including empty-slot tombstones. Unsupported framing and
+    /// record formats fail. A `None` is no stable claim, not semantic validity:
+    /// every selected model source must still use the full decoder above.
+    pub fn stable_snapshot_from_transcript_content(
+        content: &str,
+    ) -> Result<Option<Self>, TranscriptContractError> {
+        if !Self::has_stable_snapshot(content)? {
+            return Ok(None);
+        }
+        Self::from_transcript_content(content)
+    }
+
+    /// Probes supported accounting framing without reconstructing semantic
+    /// payloads or snapshots. True identifies a candidate requiring full decode;
+    /// false proves no stable claim, never that the model source is valid.
+    pub fn has_stable_snapshot(content: &str) -> Result<bool, TranscriptContractError> {
+        if !is_accounted_context_record(content) {
+            return Ok(false);
+        }
+        if content.len() > MAX_RECORD_BYTES {
+            return Err(invalid());
+        }
+        let payload = content
+            .strip_prefix(ACCOUNTED_CONTEXT_RECORD_MARKER)
+            .ok_or_else(invalid)?;
+        let probe: StableProbe = serde_json::from_str(payload).map_err(|_| invalid())?;
+        if probe.version != VERSION {
+            return Err(invalid());
+        }
+        probe.record.validate_format().map_err(|_| invalid())?;
+        Ok(probe.stable.is_some())
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Counts actual semantic deserialization, independently of lookup callers.
+    static SEMANTIC_DECODES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 impl std::fmt::Debug for TranscriptContextRecord {

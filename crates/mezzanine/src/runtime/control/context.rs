@@ -119,9 +119,10 @@ pub(crate) fn execute_runtime_agent_history_epoch_work(
     work.validate_pending_capture()?;
     work.store
         .publish_terminal_compaction_handoffs(&work.inputs.conversation_id)?;
-    let (snapshot, mut history) = work.store.conversation_replay_projection(
+    let (snapshot, mut history) = work.store.conversation_replay_projection_with_frontier(
         &work.inputs.conversation_id,
         work.inputs.pending_entries.entries(),
+        work.inputs.ephemeral_source_entries,
         |epoch| runtime_agent_history_read(&work.inputs, epoch),
         |snapshot| {
             let history = runtime_agent_history_epoch_from_snapshot(
@@ -149,9 +150,10 @@ pub(crate) fn execute_runtime_agent_history_epoch_with_projection(
     epoch: Option<crate::storage::transcript::AgentCompactionEpoch>,
 ) -> Result<RuntimeAgentTranscriptContext> {
     work.validate_pending_capture()?;
-    let (snapshot, mut history) = work.store.conversation_replay_projection(
+    let (snapshot, mut history) = work.store.conversation_replay_projection_with_frontier(
         &work.inputs.conversation_id,
         work.inputs.pending_entries.entries(),
+        work.inputs.ephemeral_source_entries,
         |_| runtime_agent_history_read(&work.inputs, epoch.as_ref()),
         |snapshot| {
             let history = runtime_agent_history_epoch_from_snapshot(
@@ -175,6 +177,9 @@ fn runtime_agent_history_read(
     inputs: &RuntimeAgentHistoryEpochInputs,
     epoch: Option<&crate::storage::transcript::AgentCompactionEpoch>,
 ) -> Option<(ConversationTranscriptRead<'static>, bool)> {
+    if inputs.ephemeral_source_entries == Some(0) {
+        return None;
+    }
     if epoch.is_none() && inputs.active_entries == Some(0) && inputs.pending_entries.is_empty() {
         return None;
     }
@@ -187,6 +192,9 @@ fn runtime_agent_history_read(
             ConversationTranscriptRead::After(epoch.through_sequence),
             true,
         ));
+    }
+    if let Some(limit) = inputs.ephemeral_source_entries {
+        return Some((ConversationTranscriptRead::Through(limit), limit > 0));
     }
     let read = inputs.active_entries.map_or(
         ConversationTranscriptRead::All,

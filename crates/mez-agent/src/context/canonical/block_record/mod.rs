@@ -234,9 +234,28 @@ impl AgentContext {
         records: &[(usize, ContextBlockRecord)],
         stable_records: &[StableContextBlockRecord],
     ) -> AgentContextResult<Self> {
+        Self::import_durable_blocks_with_stable_sources(blocks, records, stable_records, &[])
+    }
+
+    /// Imports current producer-keyed stable slots alongside indexed history.
+    /// Keys come from the actual producer, independently of prefix position or
+    /// text. Legacy positional snapshots migrate only at the same provable
+    /// structural slot; missing provenance never selects a nearest text match.
+    /// Duplicate, out-of-prefix or conflicting input associations fail adoption.
+    pub fn import_durable_blocks_with_stable_sources(
+        blocks: Vec<ContextBlock>,
+        records: &[(usize, ContextBlockRecord)],
+        stable_records: &[StableContextBlockRecord],
+        stable_sources: &[(usize, StableContextSlotId)],
+    ) -> AgentContextResult<Self> {
         validate_record_indices(blocks.len(), records)?;
         let mut context = Self::empty();
-        context.initialize_typed_storage_with_records(blocks, records, stable_records)?;
+        context.initialize_typed_storage_with_records(
+            blocks,
+            records,
+            stable_records,
+            stable_sources,
+        )?;
         context.validate_durable()?;
         Ok(context)
     }
@@ -329,6 +348,26 @@ pub(super) fn validated_stable_records(
             .is_some()
         {
             return Err(invalid("duplicate stable slot accounting"));
+        }
+    }
+    Ok(selected)
+}
+
+/// Requires an unambiguous structural association before any input is adopted.
+pub(super) fn validate_stable_sources(
+    blocks: &[ContextBlock],
+    sources: &[(usize, StableContextSlotId)],
+) -> AgentContextResult<std::collections::BTreeMap<usize, StableContextSlotId>> {
+    let mut selected = std::collections::BTreeMap::new();
+    let mut keys = std::collections::BTreeSet::new();
+    for (index, key) in sources {
+        if !blocks
+            .get(*index)
+            .is_some_and(|block| block.placement == super::ContextPlacement::StablePrefix)
+            || !keys.insert(key.as_str())
+            || selected.insert(*index, key.clone()).is_some()
+        {
+            return Err(invalid("invalid stable producer source association"));
         }
     }
     Ok(selected)

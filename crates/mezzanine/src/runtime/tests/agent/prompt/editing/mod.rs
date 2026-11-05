@@ -9,3 +9,4 @@ mod interrupt;
 mod layout;
 mod navigation;
 mod personality;
+mod stable_lifetime;
