@@ -19,6 +19,11 @@ pub(in crate::runtime) struct RuntimeContextRecords {
     records: Vec<(usize, ContextBlockRecord)>,
     stable: Option<Vec<StableContextBlockRecord>>,
     invalid: bool,
+    row_origins: crate::storage::transcript::TranscriptRowOrigins,
+    row_cache: crate::storage::transcript::TranscriptRowRecords,
+    rendered_rows: crate::storage::transcript::TranscriptRowRecords,
+    #[cfg(test)]
+    legacy_recounts: usize,
 }
 
 /// One semantic row decoded exactly once before execution-group validation.
@@ -29,51 +34,37 @@ pub(super) struct DecodedContextRow {
 }
 
 impl RuntimeContextRecords {
-    /// Rebinds explicit legacy import slots to their persisted original row
-    /// placement. The renderer already associated these IDs structurally with
-    /// exact block indices; neither content equality nor labels select a row.
-    /// Typed authored records are excluded and keep their original identity.
-    pub(in crate::runtime) fn restore_row_origins(
-        &mut self,
-        blocks: &[ContextBlock],
-        execution_events: &mut [mez_agent::ImportedExecutionEvent],
-        rows: &[TranscriptEntry],
-        origins: &crate::storage::transcript::TranscriptRowOrigins,
-    ) -> Result<()> {
-        let mut replacements = std::collections::BTreeMap::new();
-        for row in rows {
-            if row.role == mez_agent::TranscriptRole::System
-                && TranscriptContextRecord::from_transcript_content(&row.content)?.is_some()
-            {
-                continue;
-            }
-            if let Some(origin) = origins.get(&row.sequence) {
-                let imported = ContextBlockOccurrenceId::for_legacy_archive_row(
-                    &row.conversation_id,
-                    row.sequence,
-                    0,
-                )?;
-                replacements.insert(imported, *origin);
-            }
-        }
-        for (index, record) in &mut self.records {
-            if let Some(origin) = replacements.get(&record.occurrence_id())
-                && *origin != record.occurrence_id()
-            {
-                let block = blocks.get(*index).ok_or_else(invalid)?;
-                *record = ContextBlockRecord::for_occurrence(*origin, block)?;
-            }
-        }
-        for event in execution_events {
-            if let Some(record) = event.record()
-                && let Some(origin) = replacements.get(&record.occurrence_id())
-                && *origin != record.occurrence_id()
-            {
-                let record = ContextBlockRecord::for_occurrence(*origin, event.block())?;
-                *event = event.clone().with_record(record)?;
-            }
-        }
-        Ok(())
+    /// Captures original placement and descriptive costs before rendering any
+    /// blocks. Structural row positions select caches; actual rendering restores
+    /// them before use, so no temporary estimated records are constructed.
+    pub(super) fn for_rows(
+        accounting: Option<&crate::storage::transcript::ConversationReplaySnapshot>,
+    ) -> Self {
+        accounting.map_or_else(Self::default, |snapshot| Self {
+            row_origins: snapshot.row_origins.clone(),
+            row_cache: snapshot.row_records.clone(),
+            ..Self::default()
+        })
+    }
+
+    /// Returns exact emitted legacy-row records after full projection validation.
+    /// The storage owner separately filters committed versus pending membership.
+    pub(in crate::runtime) fn rendered_row_records(
+        &self,
+    ) -> Result<Vec<(u64, ContextBlockRecord)>> {
+        self.ensure_valid()?;
+        Ok(self
+            .rendered_rows
+            .iter()
+            .map(|(sequence, record)| (*sequence, *record))
+            .collect())
+    }
+
+    /// Counts actual missing/stale legacy estimate constructions in one renderer.
+    /// Test-only state does not affect production caching or source authority.
+    #[cfg(test)]
+    pub(in crate::runtime) fn legacy_recounts(&self) -> usize {
+        self.legacy_recounts
     }
 
     /// Associates an actual summary record with its exact emitted block slot.
@@ -142,20 +133,48 @@ impl RuntimeContextRecords {
         record: Option<ContextBlockRecord>,
         stable: Option<&[StableContextBlockRecord]>,
     ) -> Option<ContextBlockRecord> {
+        let authored = record.is_some();
         let record = match record {
-            Some(record) => Ok(record),
-            None => ContextBlockOccurrenceId::for_legacy_archive_row(
-                &entry.conversation_id,
-                entry.sequence,
-                0,
-            )
-            .and_then(|origin| ContextBlockRecord::for_occurrence(origin, &block)),
+            Some(record) => record.restored(&block),
+            None => {
+                let origin = match self.row_origins.get(&entry.sequence) {
+                    Some(origin) => Ok(*origin),
+                    None => ContextBlockOccurrenceId::for_legacy_archive_row(
+                        &entry.conversation_id,
+                        entry.sequence,
+                        0,
+                    ),
+                };
+                origin.and_then(|origin| {
+                    let cached = self.row_cache.get(&entry.sequence).copied();
+                    let restored = match cached {
+                        Some(record) if record.occurrence_id() == origin => record.restored(&block),
+                        Some(_) => {
+                            return Err(mez_agent::AgentContextError::new(
+                                "legacy row cache origin mismatch",
+                            ));
+                        }
+                        None => ContextBlockRecord::for_occurrence(origin, &block),
+                    };
+                    #[cfg(test)]
+                    if restored
+                        .as_ref()
+                        .is_ok_and(|record| Some(*record) != cached)
+                    {
+                        self.legacy_recounts += 1;
+                    }
+                    restored
+                })
+            }
         };
         if let Some(stable) = stable {
             self.stable = Some(stable.to_vec());
         }
         let record = match record {
             Ok(record) => {
+                if !authored {
+                    self.rendered_rows.insert(entry.sequence, record);
+                }
                 self.records.push((blocks.len(), record));
                 Some(record)
             }

@@ -73,7 +73,8 @@ pub(crate) use receipts::custody::CustodyReceiptPublicationFault;
 mod replay_position;
 /// Original legacy row placement, retained as conversation state across copies.
 mod row_origins;
-pub(crate) use row_origins::TranscriptRowOrigins;
+pub(crate) use replay_position::ConversationReplaySnapshot;
+pub(crate) use row_origins::{TranscriptRowOrigins, TranscriptRowRecords};
 /// Exposes the store module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this

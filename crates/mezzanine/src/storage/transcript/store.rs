@@ -4717,6 +4717,8 @@ impl AgentTranscriptStore {
         }
         let epoch = self.compaction_epoch_locked(source_conversation_id)?;
         let row_origins = self.transcript_row_origins_locked(source_conversation_id, &entries)?;
+        let row_records =
+            self.transcript_row_records_locked(source_conversation_id, &row_origins)?;
         let presentations = self.inspect_presentation_unlocked(source_conversation_id)?;
         let fallback_source = if presentations.is_empty() {
             Some(super::fallback::Source::from_records(&entries)?.encode()?)
@@ -4765,6 +4767,7 @@ impl AgentTranscriptStore {
                 }
             }
             self.install_fork_row_origins_locked(target_conversation_id, &row_origins)?;
+            self.copy_fork_row_records_locked(target_conversation_id, &row_records)?;
             // Transcript creation time remains fork-local. Only a genuinely
             // transcript-only source needs original bounded record evidence in
             // the existing presentation channel; later forks copy it unchanged.

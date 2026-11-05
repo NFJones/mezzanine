@@ -19,6 +19,9 @@ use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use sha2::{Digest, Sha256};
 use std::{collections::BTreeMap, fs, io::Read, path::Path};
 
+mod costs;
+pub(crate) use costs::TranscriptRowRecords;
+
 /// Exact archive sequence to original legacy occurrence for one frozen read.
 pub(crate) type TranscriptRowOrigins = BTreeMap<u64, ContextBlockOccurrenceId>;
 
@@ -57,9 +60,10 @@ impl AgentTranscriptStore {
             connection.execute_batch(
                 "PRAGMA synchronous=FULL;
                  BEGIN IMMEDIATE;
-                 PRAGMA user_version=1;
+                 PRAGMA user_version=2;
                  CREATE TABLE origin_meta (singleton INTEGER PRIMARY KEY CHECK(singleton=1), namespace TEXT NOT NULL);
                  CREATE TABLE origins (sequence TEXT PRIMARY KEY, origin TEXT NOT NULL);
+                 CREATE TABLE row_costs (origin TEXT PRIMARY KEY, record TEXT NOT NULL);
                  CREATE TABLE rewrite_intent (singleton INTEGER PRIMARY KEY CHECK(singleton=1), old_digest BLOB NOT NULL, new_digest BLOB NOT NULL, namespace TEXT NOT NULL);
                  CREATE TABLE rewrite_origins (sequence TEXT PRIMARY KEY, origin TEXT NOT NULL);",
             )?;
@@ -74,7 +78,7 @@ impl AgentTranscriptStore {
             OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
         )?;
         let version: u32 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-        if version != 1 {
+        if !matches!(version, 1 | 2) {
             return Err(MezError::invalid_state(
                 "unsupported transcript row origins version",
             ));
@@ -269,6 +273,14 @@ impl AgentTranscriptStore {
                 "UPDATE origin_meta SET namespace=?1 WHERE singleton=1",
                 [namespace],
             )?;
+            let version: u32 =
+                transaction.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+            if version == 2 {
+                transaction.execute(
+                    "DELETE FROM row_costs WHERE origin NOT IN (SELECT origin FROM origins)",
+                    [],
+                )?;
+            }
         }
         transaction.execute_batch("DELETE FROM rewrite_origins; DELETE FROM rewrite_intent;")?;
         transaction.commit()?;

@@ -427,6 +427,7 @@ pub(super) fn child_history(
         inputs.clone(),
         batch.initial_compaction_epoch().cloned(),
         batch.entries().to_vec(),
+        None,
     );
     if let Some(store) = store {
         super::super::RuntimeAgentHistorySource::attach(

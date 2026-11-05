@@ -551,6 +551,14 @@ conversation data. Once metadata marks it required, missing or corrupt state
 fails the affected operation visibly instead of inventing replacement IDs.
 Interrupted resequencing recovers only against the exact old or new transcript.
 
+The version-2 projection also saves each original row's local cost estimate.
+Cold replay, saved forks and survivor resequencing reuse valid records. Editing
+one row or detecting a stale estimate repairs that row's cache against its actual
+rendering; the original occurrence stays the same. Cost publication uses the
+same source lease as the successful replay, and pending rows receive durable
+caches only after their original rows commit. A failed projection publishes no
+costs. These records remain descriptive metadata outside model-visible source.
+
 The pure epoch API tracks stable, summary, raw and eligible raw estimates as
 membership changes. Its frozen selection keeps the previous head, selected raw
 source and retained tail separate; later arrivals do not change those frozen

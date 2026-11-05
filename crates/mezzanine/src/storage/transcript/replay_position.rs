@@ -35,6 +35,8 @@ pub(crate) struct ConversationReplaySnapshot {
     pub(crate) view: ConversationTranscriptView,
     /// Legacy origins captured with the same physical/logical row window.
     pub(crate) row_origins: super::TranscriptRowOrigins,
+    /// Descriptive costs loaded for the exact original selected occurrences.
+    pub(crate) row_records: super::TranscriptRowRecords,
 }
 
 impl AgentTranscriptStore {
@@ -48,6 +50,27 @@ impl AgentTranscriptStore {
         pending: &[mez_agent::TranscriptEntry],
         select: impl FnOnce(Option<&AgentCompactionEpoch>) -> Option<(ConversationTranscriptRead, bool)>,
     ) -> Result<ConversationReplaySnapshot> {
+        let (snapshot, ()) =
+            self.conversation_replay_projection(conversation_id, pending, select, |_| {
+                Ok(((), Vec::new()))
+            })?;
+        Ok(snapshot)
+    }
+
+    /// Projects checked source once under its original mutation lease and
+    /// persists only successful rendered committed-row accounting. The callback
+    /// must be pure: it may not reenter storage or acquire another owner lease.
+    /// Returned data owns its payload, never the mutation lane. Errors withhold
+    /// cache publication; costs grant no semantic or execution authority.
+    pub(crate) fn conversation_replay_projection<T>(
+        &self,
+        conversation_id: &str,
+        pending: &[mez_agent::TranscriptEntry],
+        select: impl FnOnce(Option<&AgentCompactionEpoch>) -> Option<(ConversationTranscriptRead, bool)>,
+        project: impl FnOnce(
+            &ConversationReplaySnapshot,
+        ) -> Result<(T, Vec<(u64, mez_agent::ContextBlockRecord)>)>,
+    ) -> Result<(ConversationReplaySnapshot, T)> {
         let lease = self.acquire_conversation_lock(conversation_id)?;
         let epoch = self.compaction_epoch_locked(conversation_id)?;
         let view = match select(epoch.as_ref()) {
@@ -64,11 +87,16 @@ impl AgentTranscriptStore {
             },
         };
         let row_origins = self.transcript_row_origins_locked(conversation_id, &view.logical)?;
-        Ok(ConversationReplaySnapshot {
+        let row_records = self.transcript_row_records_locked(conversation_id, &row_origins)?;
+        let snapshot = ConversationReplaySnapshot {
             epoch,
             view,
             row_origins,
-        })
+            row_records,
+        };
+        let (value, records) = project(&snapshot)?;
+        self.save_rendered_row_records_locked(conversation_id, &snapshot, &records)?;
+        Ok((snapshot, value))
     }
 
     /// Captures presentation and replay position without racing a transcript

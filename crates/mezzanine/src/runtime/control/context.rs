@@ -94,21 +94,20 @@ pub(crate) fn execute_runtime_agent_history_epoch_work(
     work.validate_pending_capture()?;
     work.store
         .publish_terminal_compaction_handoffs(&work.inputs.conversation_id)?;
-    let snapshot = work.store.conversation_replay_snapshot(
+    let (snapshot, mut history) = work.store.conversation_replay_projection(
         &work.inputs.conversation_id,
         &work.inputs.pending_entries,
         |epoch| runtime_agent_history_read(&work.inputs, epoch),
-    )?;
-    let mut history = runtime_agent_history_epoch_from_snapshot(
-        work.inputs.clone(),
-        snapshot.epoch.clone(),
-        snapshot.view.logical.clone(),
-    );
-    history.records.restore_row_origins(
-        &history.blocks,
-        &mut history.execution_events,
-        &snapshot.view.logical,
-        &snapshot.row_origins,
+        |snapshot| {
+            let history = runtime_agent_history_epoch_from_snapshot(
+                work.inputs.clone(),
+                snapshot.epoch.clone(),
+                snapshot.view.logical.clone(),
+                Some(snapshot),
+            );
+            let records = history.records.rendered_row_records()?;
+            Ok((history, records))
+        },
     )?;
     super::RuntimeAgentHistorySource::attach(
         &mut history,
@@ -126,23 +125,22 @@ pub(crate) fn execute_runtime_agent_history_epoch_with_projection(
     epoch: Option<crate::storage::transcript::AgentCompactionEpoch>,
 ) -> Result<RuntimeAgentTranscriptContext> {
     work.validate_pending_capture()?;
-    let snapshot = work.store.conversation_replay_snapshot(
+    let (snapshot, mut history) = work.store.conversation_replay_projection(
         &work.inputs.conversation_id,
         &work.inputs.pending_entries,
         |_| runtime_agent_history_read(&work.inputs, epoch.as_ref()),
+        |snapshot| {
+            let history = runtime_agent_history_epoch_from_snapshot(
+                work.inputs.clone(),
+                epoch.clone(),
+                snapshot.view.logical.clone(),
+                Some(snapshot),
+            );
+            let records = history.records.rendered_row_records()?;
+            Ok((history, records))
+        },
     )?;
     let entries = snapshot.view.logical;
-    let mut history = runtime_agent_history_epoch_from_snapshot(
-        work.inputs.clone(),
-        epoch.clone(),
-        entries.clone(),
-    );
-    history.records.restore_row_origins(
-        &history.blocks,
-        &mut history.execution_events,
-        &entries,
-        &snapshot.row_origins,
-    )?;
     super::RuntimeAgentHistorySource::attach(
         &mut history,
         work,
@@ -187,6 +185,7 @@ pub(in crate::runtime) fn runtime_agent_history_epoch_from_snapshot(
     mut inputs: RuntimeAgentHistoryEpochInputs,
     epoch: Option<crate::storage::transcript::AgentCompactionEpoch>,
     mut entries: Vec<TranscriptEntry>,
+    accounting: Option<&crate::storage::transcript::ConversationReplaySnapshot>,
 ) -> RuntimeAgentTranscriptContext {
     if let Some(epoch) = epoch
         && inputs
@@ -229,6 +228,7 @@ pub(in crate::runtime) fn runtime_agent_history_epoch_from_snapshot(
             &applicable_ranges,
             applicable_records.as_deref(),
             false,
+            accounting,
         );
         if epoch.version == 3 && epoch.summary_records.is_none() {
             history.records.mark_invalid();
@@ -262,7 +262,7 @@ pub(in crate::runtime) fn runtime_agent_history_epoch_from_snapshot(
         return history;
     }
     inputs.pending_entries.clear();
-    runtime_agent_history_epoch_from_entries(inputs, entries)
+    runtime_agent_history_epoch_from_entries(inputs, entries, accounting)
 }
 
 /// Immutable compact-memory and durable-transcript inputs for one prompt epoch.
@@ -335,7 +335,7 @@ impl RuntimeAgentPromptHistoryWork {
             .map(|row| row.sequence)
             .collect::<BTreeSet<_>>()
             .len() as u64;
-        let snapshot = store.conversation_replay_snapshot(
+        let (snapshot, (rows, epoch, mut transcript)) = store.conversation_replay_projection(
             conversation_id,
             &work.inputs.pending_entries,
             |_| {
@@ -344,33 +344,32 @@ impl RuntimeAgentPromptHistoryWork {
                     high_water > pending_count,
                 ))
             },
-        )?;
-        let mut rows = snapshot.view.logical;
-        rows.retain(|row| row.sequence <= high_water);
-        if high_water > 0 && rows.last().is_none_or(|row| row.sequence != high_water) {
-            return Err(crate::MezError::invalid_state(
-                "manual source is missing its captured high-water row",
-            ));
-        }
-        let mut epoch = snapshot.epoch;
-        if let Some(epoch) = epoch.as_mut() {
-            if epoch.through_sequence > high_water {
-                return Err(crate::MezError::conflict(
-                    "manual source epoch advanced beyond its captured frontier",
-                ));
-            }
-            epoch.retain_summary_ranges(|range| range.through_sequence <= high_water)?;
-        }
-        let mut transcript = runtime_agent_history_epoch_from_snapshot(
-            work.inputs.clone(),
-            epoch.clone(),
-            rows.clone(),
-        );
-        transcript.records.restore_row_origins(
-            &transcript.blocks,
-            &mut transcript.execution_events,
-            &rows,
-            &snapshot.row_origins,
+            |snapshot| {
+                let mut rows = snapshot.view.logical.clone();
+                rows.retain(|row| row.sequence <= high_water);
+                if high_water > 0 && rows.last().is_none_or(|row| row.sequence != high_water) {
+                    return Err(crate::MezError::invalid_state(
+                        "manual source is missing its captured high-water row",
+                    ));
+                }
+                let mut epoch = snapshot.epoch.clone();
+                if let Some(epoch) = epoch.as_mut() {
+                    if epoch.through_sequence > high_water {
+                        return Err(crate::MezError::conflict(
+                            "manual source epoch advanced beyond its captured frontier",
+                        ));
+                    }
+                    epoch.retain_summary_ranges(|range| range.through_sequence <= high_water)?;
+                }
+                let transcript = runtime_agent_history_epoch_from_snapshot(
+                    work.inputs.clone(),
+                    epoch.clone(),
+                    rows.clone(),
+                    Some(snapshot),
+                );
+                let records = transcript.records.rendered_row_records()?;
+                Ok(((rows, epoch, transcript), records))
+            },
         )?;
         super::RuntimeAgentHistorySource::attach(
             &mut transcript,
@@ -439,6 +438,7 @@ fn runtime_agent_prompt_history_from_transcript(
 pub(super) fn runtime_agent_history_epoch_from_entries(
     inputs: RuntimeAgentHistoryEpochInputs,
     mut entries: Vec<TranscriptEntry>,
+    accounting: Option<&crate::storage::transcript::ConversationReplaySnapshot>,
 ) -> RuntimeAgentTranscriptContext {
     entries.extend(inputs.pending_entries);
     entries.retain(|entry| entry.conversation_id == inputs.conversation_id);
@@ -459,10 +459,18 @@ pub(super) fn runtime_agent_history_epoch_from_entries(
             provider_history_repair_identity: None,
         };
     }
-    runtime_agent_transcript_context(&inputs.pane_id, &entries)
+    runtime_agent_transcript_context_with_ranges_and_mcp_epoch(
+        &inputs.pane_id,
+        &entries,
+        &[],
+        None,
+        false,
+        accounting,
+    )
 }
 
 /// Builds exact model context and typed execution ownership from transcripts.
+#[cfg(test)]
 pub(in crate::runtime) fn runtime_agent_transcript_context(
     pane_id: &str,
     entries: &[TranscriptEntry],
@@ -471,13 +479,31 @@ pub(in crate::runtime) fn runtime_agent_transcript_context(
 }
 
 /// Projects ordered selective summaries without splitting the canonical transcript scan.
+#[cfg(test)]
 pub(super) fn runtime_agent_transcript_context_with_ranges(
     pane_id: &str,
     entries: &[TranscriptEntry],
     ranges: &[crate::storage::transcript::AgentCompactionRange],
 ) -> RuntimeAgentTranscriptContext {
     runtime_agent_transcript_context_with_ranges_and_mcp_epoch(
-        pane_id, entries, ranges, None, false,
+        pane_id, entries, ranges, None, false, None,
+    )
+}
+
+/// Projects an explicitly selected raw window using the original leased
+/// snapshot's identities and costs, without imposing a prospective MCP reset.
+pub(super) fn runtime_agent_transcript_context_from_snapshot(
+    pane_id: &str,
+    entries: &[TranscriptEntry],
+    snapshot: &crate::storage::transcript::ConversationReplaySnapshot,
+) -> RuntimeAgentTranscriptContext {
+    runtime_agent_transcript_context_with_ranges_and_mcp_epoch(
+        pane_id,
+        entries,
+        &[],
+        None,
+        false,
+        Some(snapshot),
     )
 }
 
@@ -488,6 +514,7 @@ pub(crate) fn runtime_agent_compaction_replay_context(
     entries: &[TranscriptEntry],
     ranges: &[crate::storage::transcript::AgentCompactionRange],
     summary_records: Option<&[mez_agent::ContextBlockRecord]>,
+    accounting: Option<&crate::storage::transcript::ConversationReplaySnapshot>,
 ) -> RuntimeAgentTranscriptContext {
     runtime_agent_transcript_context_with_ranges_and_mcp_epoch(
         pane_id,
@@ -495,6 +522,7 @@ pub(crate) fn runtime_agent_compaction_replay_context(
         ranges,
         summary_records,
         true,
+        accounting,
     )
 }
 
@@ -505,10 +533,11 @@ fn runtime_agent_transcript_context_with_ranges_and_mcp_epoch(
     ranges: &[crate::storage::transcript::AgentCompactionRange],
     summary_records: Option<&[mez_agent::ContextBlockRecord]>,
     prospective_mcp_epoch: bool,
+    accounting: Option<&crate::storage::transcript::ConversationReplaySnapshot>,
 ) -> RuntimeAgentTranscriptContext {
     let mut blocks = Vec::new();
     let mut execution_events = Vec::new();
-    let mut records = RuntimeContextRecords::default();
+    let mut records = RuntimeContextRecords::for_rows(accounting);
     if summary_records.is_some_and(|records| records.len() != ranges.len()) {
         records.mark_invalid();
     }

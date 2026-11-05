@@ -9,6 +9,8 @@ use mez_agent::{ContextPlacement, ContextSourceKind};
 use std::os::unix::fs::DirBuilderExt;
 use std::path::PathBuf;
 
+mod cache;
+
 /// Owns only a generated private fixture directory.
 struct Directory(PathBuf);
 impl Directory {

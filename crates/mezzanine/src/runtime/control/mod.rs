@@ -996,18 +996,32 @@ impl RuntimeSessionService {
             return Ok(candidate);
         };
         let pending = self.compaction_pending_entries(task)?;
-        let view = store.conversation_transcript_view(
+        let (_, history) = store.conversation_replay_projection(
             &task.conversation_id,
-            crate::storage::transcript::ConversationTranscriptRead::All,
-            task.transcript_entries > pending.len() as u64,
             &pending,
+            |_| {
+                Some((
+                    crate::storage::transcript::ConversationTranscriptRead::All,
+                    task.transcript_entries > pending.len() as u64,
+                ))
+            },
+            |snapshot| {
+                let arrivals = snapshot
+                    .view
+                    .logical
+                    .iter()
+                    .filter(|row| row.sequence > task.transcript_entries && row.turn_id != turn_id)
+                    .cloned()
+                    .collect::<Vec<_>>();
+                let history = context::runtime_agent_transcript_context_from_snapshot(
+                    &task.pane_id,
+                    &arrivals,
+                    snapshot,
+                );
+                let records = history.records.rendered_row_records()?;
+                Ok((history, records))
+            },
         )?;
-        let arrivals = view
-            .logical
-            .into_iter()
-            .filter(|row| row.sequence > task.transcript_entries && row.turn_id != turn_id)
-            .collect::<Vec<_>>();
-        let history = context::runtime_agent_transcript_context(&task.pane_id, &arrivals);
         history.records.ensure_valid()?;
         if history.blocks.is_empty() {
             return Ok(candidate);

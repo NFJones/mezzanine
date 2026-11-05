@@ -375,8 +375,13 @@ fn runtime_compaction_candidate_mcp_epoch_matches_published_projection() {
             content,
         })
         .collect::<Vec<_>>();
-    let prospective =
-        crate::runtime::control::runtime_agent_compaction_replay_context("%1", &rows, &[], None);
+    let prospective = crate::runtime::control::runtime_agent_compaction_replay_context(
+        "%1",
+        &rows,
+        &[],
+        None,
+        None,
+    );
     rows.push(TranscriptEntry {
         conversation_id: "projection-parity".to_string(),
         sequence: 5,

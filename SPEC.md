@@ -10882,7 +10882,7 @@ Saved stable metadata MUST NOT install instructions or overwrite current source
 fingerprints. Ordinary semantic decoding, display and model projection MUST
 unwrap only semantic source, keeping accounting metadata out of that content.
 
-Legacy raw-row placement is retained in the conversation-owned version-1
+Legacy raw-row placement is retained in the conversation-owned version-2
 `row-origins.sqlite3` projection without embedding metadata in raw source text.
 First import preserves original conversation/sequence origins. Saved forks,
 content edits and surviving rows after deletion MUST preserve those origins;
@@ -10895,6 +10895,18 @@ image before another mutation or model-history read. Unexpected source retains
 its recovery evidence and fails only the affected conversation. The projection
 is durable conversation state and MUST travel with saved archives and forks;
 it is not a rebuildable discovery index or execution-authority witness.
+
+Projection version 2 adds descriptive local cost records keyed by original row
+occurrence. Version-1 placement imports this schema under an actual accounting
+lease without changing origins or source bytes. Ordinary mutation-lock validation
+MUST NOT migrate unrelated metadata before admission. Replay and prospective
+requests MUST restore valid costs before constructing blocks, without creating
+and discarding temporary estimates. Changed content/method/framing MUST repair
+only the affected record while retaining its ID. The pure renderer and successful
+committed-row cost publication share the original source lease; pending rows and
+failed projections MUST NOT publish durable costs. Unchanged reads MUST NOT
+rewrite valid costs. Saved forks and survivor resequencing retain original
+records, and deleting a row retires its unused cost cache.
 
 Canonical replay membership and its summary head MUST retain those occurrence
 IDs independently of local ordering and birth revision. The pure epoch owner

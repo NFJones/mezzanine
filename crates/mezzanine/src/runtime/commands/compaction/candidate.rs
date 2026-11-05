@@ -56,15 +56,39 @@ impl RuntimeSessionService {
             MezError::invalid_state("manual compaction candidate requires transcript storage")
         })?;
         let pending = self.compaction_pending_entries(task)?;
-        let snapshot =
-            store.conversation_replay_snapshot(&task.conversation_id, &pending, |_| {
+        let (_, candidate) = store.conversation_replay_projection(
+            &task.conversation_id,
+            &pending,
+            |_| {
                 Some((
                     crate::storage::transcript::ConversationTranscriptRead::All,
                     task.transcript_entries > pending.len() as u64,
                 ))
-            })?;
-        let entries = snapshot.view.logical;
-        let previous_epoch = snapshot.epoch;
+            },
+            |snapshot| {
+                self.manual_compaction_candidate_from_snapshot(
+                    task,
+                    summary,
+                    base_context,
+                    snapshot,
+                )
+            },
+        )?;
+        Ok(candidate)
+    }
+
+    /// Builds the complete prospective request from one leased immutable image.
+    /// This callback performs no storage I/O; its returned descriptive records
+    /// are published by the original owner only after all validation succeeds.
+    fn manual_compaction_candidate_from_snapshot(
+        &self,
+        task: &RuntimeAgentCompactionTask,
+        summary: &str,
+        base_context: &AgentContext,
+        snapshot: &crate::storage::transcript::ConversationReplaySnapshot,
+    ) -> Result<(AgentContext, Vec<(u64, mez_agent::ContextBlockRecord)>)> {
+        let entries = &snapshot.view.logical;
+        let previous_epoch = snapshot.epoch.clone();
         if task
             .frozen_compaction_epoch
             .as_ref()
@@ -100,7 +124,7 @@ impl RuntimeSessionService {
         )?;
         if task.frozen_compaction_epoch.is_some() {
             crate::storage::transcript::validate_compaction_prefix_source(
-                &entries,
+                entries,
                 previous_epoch
                     .as_ref()
                     .map_or(0, |epoch| epoch.through_sequence),
@@ -120,7 +144,7 @@ impl RuntimeSessionService {
                 ));
             }
         }
-        let mut replay = runtime_agent_compaction_replay_context(
+        let replay = runtime_agent_compaction_replay_context(
             &task.pane_id,
             retained_entries,
             &projection.ranges,
@@ -128,13 +152,9 @@ impl RuntimeSessionService {
                 .summary_records
                 .as_ref()
                 .map(|records| records.ranges.as_slice()),
+            Some(snapshot),
         );
-        replay.records.restore_row_origins(
-            &replay.blocks,
-            &mut replay.execution_events,
-            retained_entries,
-            &snapshot.row_origins,
-        )?;
+        let row_records = replay.records.rendered_row_records()?;
         let compact_memory_id =
             mez_agent::memory::canonical_memory_uuid(&format!("compact-{}", task.conversation_id));
         let mut base_context =
@@ -222,7 +242,7 @@ impl RuntimeSessionService {
             &mcp_summary,
             &configured_servers,
         )?;
-        Ok(candidate_context)
+        Ok((candidate_context, row_records))
     }
 
     /// Exposes the actual runtime request estimator to focused fit regressions.
