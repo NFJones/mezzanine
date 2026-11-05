@@ -180,6 +180,7 @@ impl AgentTranscriptStore {
     pub(super) fn acquire_conversation_lock(&self, conversation_id: &str) -> Result<File> {
         let file = self.open_conversation_lock(conversation_id)?;
         flock(&file, FlockOperation::LockExclusive).map_err(std::io::Error::from)?;
+        self.recover_row_origins_rewrite_locked(conversation_id)?;
         Ok(file)
     }
 
@@ -203,7 +204,10 @@ impl AgentTranscriptStore {
             match flock(&file, FlockOperation::NonBlockingLockExclusive)
                 .map_err(std::io::Error::from)
             {
-                Ok(()) => return Ok(file),
+                Ok(()) => {
+                    self.recover_row_origins_rewrite_locked(conversation_id)?;
+                    return Ok(file);
+                }
                 Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                     std::thread::sleep(std::time::Duration::from_millis(10));
                 }

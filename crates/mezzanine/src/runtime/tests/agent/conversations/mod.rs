@@ -10,6 +10,7 @@ mod fork_fixtures;
 mod fork_inheritance;
 /// Immutable compacted-parent source and cutoff qualification.
 mod fork_source;
+mod legacy_identity;
 mod lifecycle;
 mod metadata;
 mod native_binding;

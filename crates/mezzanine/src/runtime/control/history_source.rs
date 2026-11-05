@@ -23,6 +23,8 @@ pub(crate) struct RuntimeAgentHistorySource {
     pub(in crate::runtime) epoch: Option<crate::storage::transcript::AgentCompactionEpoch>,
     /// Original checked logical window, shared through retries/interruption.
     rows: Arc<[mez_agent::TranscriptEntry]>,
+    /// Original legacy positions from the same leased row read.
+    row_origins: crate::storage::transcript::TranscriptRowOrigins,
     /// Target policy captured at turn admission, independent of source window.
     target_ephemeral: Option<bool>,
 }
@@ -66,6 +68,7 @@ impl RuntimeAgentHistorySource {
             work: None,
             epoch: None,
             rows: Arc::from([]),
+            row_origins: BTreeMap::new(),
             target_ephemeral: None,
         })
     }
@@ -76,11 +79,13 @@ impl RuntimeAgentHistorySource {
         work: RuntimeAgentHistoryEpochWork,
         epoch: Option<crate::storage::transcript::AgentCompactionEpoch>,
         rows: Vec<mez_agent::TranscriptEntry>,
+        row_origins: crate::storage::transcript::TranscriptRowOrigins,
     ) {
         history.source = Some(Arc::new(Self {
             work: Some(work),
             epoch,
             rows: rows.into(),
+            row_origins,
             target_ephemeral: None,
         }));
     }
@@ -104,11 +109,14 @@ impl RuntimeAgentHistorySource {
             };
             let origin = match record {
                 Some(record) => record.record().occurrence_id(),
-                None => ContextBlockOccurrenceId::for_legacy_archive_row(
-                    &row.conversation_id,
-                    row.sequence,
-                    0,
-                )?,
+                None => match self.row_origins.get(&row.sequence) {
+                    Some(origin) => *origin,
+                    None => ContextBlockOccurrenceId::for_legacy_archive_row(
+                        &row.conversation_id,
+                        row.sequence,
+                        0,
+                    )?,
+                },
             };
             if needed.contains(&origin)
                 && captured

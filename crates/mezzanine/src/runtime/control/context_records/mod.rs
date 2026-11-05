@@ -29,6 +29,53 @@ pub(super) struct DecodedContextRow {
 }
 
 impl RuntimeContextRecords {
+    /// Rebinds explicit legacy import slots to their persisted original row
+    /// placement. The renderer already associated these IDs structurally with
+    /// exact block indices; neither content equality nor labels select a row.
+    /// Typed authored records are excluded and keep their original identity.
+    pub(in crate::runtime) fn restore_row_origins(
+        &mut self,
+        blocks: &[ContextBlock],
+        execution_events: &mut [mez_agent::ImportedExecutionEvent],
+        rows: &[TranscriptEntry],
+        origins: &crate::storage::transcript::TranscriptRowOrigins,
+    ) -> Result<()> {
+        let mut replacements = std::collections::BTreeMap::new();
+        for row in rows {
+            if row.role == mez_agent::TranscriptRole::System
+                && TranscriptContextRecord::from_transcript_content(&row.content)?.is_some()
+            {
+                continue;
+            }
+            if let Some(origin) = origins.get(&row.sequence) {
+                let imported = ContextBlockOccurrenceId::for_legacy_archive_row(
+                    &row.conversation_id,
+                    row.sequence,
+                    0,
+                )?;
+                replacements.insert(imported, *origin);
+            }
+        }
+        for (index, record) in &mut self.records {
+            if let Some(origin) = replacements.get(&record.occurrence_id())
+                && *origin != record.occurrence_id()
+            {
+                let block = blocks.get(*index).ok_or_else(invalid)?;
+                *record = ContextBlockRecord::for_occurrence(*origin, block)?;
+            }
+        }
+        for event in execution_events {
+            if let Some(record) = event.record()
+                && let Some(origin) = replacements.get(&record.occurrence_id())
+                && *origin != record.occurrence_id()
+            {
+                let record = ContextBlockRecord::for_occurrence(*origin, event.block())?;
+                *event = event.clone().with_record(record)?;
+            }
+        }
+        Ok(())
+    }
+
     /// Associates an actual summary record with its exact emitted block slot.
     pub(super) fn push_indexed_record(&mut self, index: usize, record: ContextBlockRecord) {
         let position = self

@@ -104,11 +104,18 @@ pub(crate) fn execute_runtime_agent_history_epoch_work(
         snapshot.epoch.clone(),
         snapshot.view.logical.clone(),
     );
+    history.records.restore_row_origins(
+        &history.blocks,
+        &mut history.execution_events,
+        &snapshot.view.logical,
+        &snapshot.row_origins,
+    )?;
     super::RuntimeAgentHistorySource::attach(
         &mut history,
         work,
         snapshot.epoch,
         snapshot.view.logical,
+        snapshot.row_origins,
     );
     Ok(history)
 }
@@ -119,25 +126,30 @@ pub(crate) fn execute_runtime_agent_history_epoch_with_projection(
     epoch: Option<crate::storage::transcript::AgentCompactionEpoch>,
 ) -> Result<RuntimeAgentTranscriptContext> {
     work.validate_pending_capture()?;
-    let entries = match runtime_agent_history_read(&work.inputs, epoch.as_ref()) {
-        Some((read, required)) => {
-            work.store
-                .conversation_transcript_view(
-                    &work.inputs.conversation_id,
-                    read,
-                    required,
-                    &work.inputs.pending_entries,
-                )?
-                .logical
-        }
-        None => Vec::new(),
-    };
+    let snapshot = work.store.conversation_replay_snapshot(
+        &work.inputs.conversation_id,
+        &work.inputs.pending_entries,
+        |_| runtime_agent_history_read(&work.inputs, epoch.as_ref()),
+    )?;
+    let entries = snapshot.view.logical;
     let mut history = runtime_agent_history_epoch_from_snapshot(
         work.inputs.clone(),
         epoch.clone(),
         entries.clone(),
     );
-    super::RuntimeAgentHistorySource::attach(&mut history, work, epoch, entries);
+    history.records.restore_row_origins(
+        &history.blocks,
+        &mut history.execution_events,
+        &entries,
+        &snapshot.row_origins,
+    )?;
+    super::RuntimeAgentHistorySource::attach(
+        &mut history,
+        work,
+        epoch,
+        entries,
+        snapshot.row_origins,
+    );
     Ok(history)
 }
 
@@ -354,11 +366,18 @@ impl RuntimeAgentPromptHistoryWork {
             epoch.clone(),
             rows.clone(),
         );
+        transcript.records.restore_row_origins(
+            &transcript.blocks,
+            &mut transcript.execution_events,
+            &rows,
+            &snapshot.row_origins,
+        )?;
         super::RuntimeAgentHistorySource::attach(
             &mut transcript,
             work,
             epoch.clone(),
             rows.clone(),
+            snapshot.row_origins,
         );
         let history = runtime_agent_prompt_history_from_transcript(self.memory_blocks, transcript);
         Ok(RuntimeAgentTranscriptSnapshot {

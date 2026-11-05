@@ -1807,6 +1807,10 @@ fn transcript_store_rolls_back_subagent_contract_when_catalog_upsert_fails() {
         .append(&entry("new-child", 1, TranscriptRole::User))
         .unwrap();
     let new_metadata_path = root.join("new-child").join("metadata.json");
+    // Preserve the original absent-metadata rollback case using a genuine
+    // pre-projection fixture, rather than the current append producer's marker.
+    fs::remove_file(&new_metadata_path).unwrap();
+    fs::remove_file(root.join("new-child").join("row-origins.sqlite3")).unwrap();
     assert!(!new_metadata_path.exists());
     store.fail_next_subagent_contract_catalog_upsert();
     assert!(
@@ -1872,6 +1876,10 @@ fn transcript_store_rejects_terminal_spawn_contract_without_durable_mutation() {
         .append(&entry("terminal-child", 1, TranscriptRole::User))
         .unwrap();
     let metadata_path = root.join("terminal-child").join("metadata.json");
+    // Model a genuinely old raw archive with neither placement state nor its
+    // marker. Invalid contract admission must not import state as a side effect.
+    fs::remove_file(&metadata_path).unwrap();
+    fs::remove_file(root.join("terminal-child").join("row-origins.sqlite3")).unwrap();
     assert!(!metadata_path.exists());
 
     let error = store
@@ -2051,7 +2059,7 @@ fn transcript_store_persists_user_objective_without_overwriting_kind() {
             .unwrap()
     );
     let metadata = fs::read_to_string(root.join("source").join("metadata.json")).unwrap();
-    assert!(metadata.contains("\"version\":4"));
+    assert!(metadata.contains("\"version\":5"));
     assert!(metadata.contains("\"conversation_kind\":\"root\""));
     assert!(store.delete("source").unwrap());
     assert!(!root.join("source").join("metadata.json").exists());

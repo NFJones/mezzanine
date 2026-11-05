@@ -645,6 +645,12 @@ impl ImportedExecutionEvent {
         Ok(self)
     }
 
+    /// Returns the structurally associated imported occurrence, when present.
+    /// This descriptive record grants no execution or provider authority.
+    pub fn record(&self) -> Option<ContextBlockRecord> {
+        self.record
+    }
+
     /// Returns the exact model-visible block matched during import.
     pub fn block(&self) -> &ContextBlock {
         &self.block

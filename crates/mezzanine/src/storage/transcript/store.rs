@@ -123,7 +123,7 @@ const SESSION_SUMMARY_FILE_NAME: &str = "summary.json";
 /// Defines the versioned durable conversation classification sidecar.
 const SESSION_METADATA_FILE_NAME: &str = "metadata.json";
 /// Current per-conversation metadata schema version.
-const SESSION_METADATA_VERSION: u64 = 4;
+const SESSION_METADATA_VERSION: u64 = 5;
 /// Versioned authoritative summary and replay-boundary sidecar.
 const COMPACTION_EPOCH_FILE_NAME: &str = "compaction-epoch.json";
 /// Maximum encoded size accepted for one durable compaction epoch.
@@ -282,6 +282,9 @@ struct ConversationMetadata {
     /// A committed compaction requires its summary/boundary sidecar for replay.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     compaction_epoch_required: bool,
+    /// Original row placement is durable user state once imported or copied.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    row_origins_required: bool,
 }
 
 /// Provider, model, and reasoning selection for one agent-scoped profile.
@@ -2655,6 +2658,7 @@ impl AgentTranscriptStore {
     fn append_one_locked(&self, entry: &TranscriptEntry) -> Result<usize> {
         self.retire_stale_active_delete_journal(&entry.conversation_id)?;
         self.ensure_session_dir(&entry.conversation_id)?;
+        self.ensure_row_origins_locked(&entry.conversation_id)?;
         let path = self.transcript_path_for(&entry.conversation_id)?;
         let encoded = encode_transcript_entry(entry)?;
         let mut file = OpenOptions::new().create(true).append(true).open(&path)?;
@@ -3568,10 +3572,14 @@ impl AgentTranscriptStore {
         if current_revision != expected_revision {
             return Ok(CompareAndSwapTranscriptEntryResult::Stale { current_revision });
         }
+        let original = entry.clone();
         entry.content = content;
         entry.validate()?;
         let updated = entry.clone();
-        self.rewrite_transcript_locked(conversation_id, &existing_path, &entries)?;
+        self.ensure_custody_receipts_settled_locked(conversation_id)?;
+        self.preserve_edited_row_origin_locked(&original, &updated)?;
+        let existing_path = self.existing_transcript_path_for(conversation_id)?;
+        self.rewrite_transcript_locked(conversation_id, &existing_path, &entries, None)?;
         Ok(CompareAndSwapTranscriptEntryResult::Updated(updated))
     }
 
@@ -3594,18 +3602,31 @@ impl AgentTranscriptStore {
                 "cannot renumber transcript sequences while a compaction epoch is committed",
             ));
         }
-        let existing_path = self.existing_transcript_path_for(conversation_id)?;
         let mut entries = self.inspect(conversation_id)?;
         let Some(index) = entries.iter().position(|entry| entry.sequence == sequence) else {
             return Ok(false);
         };
+        if self.has_unsettled_append_receipts_locked(conversation_id, &_conversation_lock)? {
+            return Err(MezError::conflict(
+                "transcript resequence requires append receipts to settle",
+            ));
+        }
+        self.ensure_custody_receipts_settled_locked(conversation_id)?;
+        let old_origins = self.transcript_row_origins_locked(conversation_id, &entries)?;
+        // First import may promote the legacy root path without changing bytes.
+        let existing_path = self.existing_transcript_path_for(conversation_id)?;
         entries.remove(index);
+        let mut origins = super::TranscriptRowOrigins::new();
         for (index, entry) in entries.iter_mut().enumerate() {
+            let origin = old_origins.get(&entry.sequence).copied().ok_or_else(|| {
+                MezError::invalid_state("surviving transcript row origin is missing")
+            })?;
             entry.sequence = u64::try_from(index).unwrap_or(u64::MAX).saturating_add(1);
+            origins.insert(entry.sequence, origin);
             entry.validate()?;
         }
 
-        self.rewrite_transcript_locked(conversation_id, &existing_path, &entries)?;
+        self.rewrite_transcript_locked(conversation_id, &existing_path, &entries, Some(&origins))?;
         Ok(true)
     }
 
@@ -3616,6 +3637,7 @@ impl AgentTranscriptStore {
         conversation_id: &str,
         existing_path: &Path,
         entries: &[TranscriptEntry],
+        origins: Option<&super::TranscriptRowOrigins>,
     ) -> Result<()> {
         self.ensure_custody_receipts_settled_locked(conversation_id)?;
         let session_dir = self.ensure_session_dir(conversation_id)?;
@@ -3634,7 +3656,19 @@ impl AgentTranscriptStore {
             file.sync_all()?;
         }
         set_private_file_permissions(&temp_path)?;
+        if let Some(origins) = origins {
+            self.prepare_row_origins_rewrite_locked(
+                conversation_id,
+                existing_path,
+                entries,
+                origins,
+            )?;
+        }
         std_fs::rename(&temp_path, &path)?;
+        std_fs::File::open(&session_dir)?.sync_all()?;
+        if origins.is_some() {
+            self.recover_row_origins_rewrite_locked(conversation_id)?;
+        }
         set_private_file_permissions(&path)?;
         if existing_path != path && existing_path.exists() {
             std_fs::remove_file(existing_path)?;
@@ -4682,6 +4716,7 @@ impl AgentTranscriptStore {
             ));
         }
         let epoch = self.compaction_epoch_locked(source_conversation_id)?;
+        let row_origins = self.transcript_row_origins_locked(source_conversation_id, &entries)?;
         let presentations = self.inspect_presentation_unlocked(source_conversation_id)?;
         let fallback_source = if presentations.is_empty() {
             Some(super::fallback::Source::from_records(&entries)?.encode()?)
@@ -4729,6 +4764,7 @@ impl AgentTranscriptStore {
                     frozen_rows.push(forked);
                 }
             }
+            self.install_fork_row_origins_locked(target_conversation_id, &row_origins)?;
             // Transcript creation time remains fork-local. Only a genuinely
             // transcript-only source needs original bounded record evidence in
             // the existing presentation channel; later forks copy it unchanged.
@@ -5540,6 +5576,7 @@ impl AgentTranscriptStore {
                 agent_model_profile: None,
                 agent_model_profile_selection: None,
                 compaction_epoch_required: false,
+                row_origins_required: false,
             });
         }
         let data = std_fs::read(&path)?;
@@ -5547,7 +5584,7 @@ impl AgentTranscriptStore {
             MezError::invalid_args(format!("conversation metadata decode failed: {error}"))
         })?;
         match metadata.version {
-            1 | 2 | 3 | SESSION_METADATA_VERSION => {}
+            1 | 2 | 3 | 4 | SESSION_METADATA_VERSION => {}
             _ => {
                 return Err(MezError::invalid_args(
                     "unsupported conversation metadata version",
@@ -5583,6 +5620,29 @@ impl AgentTranscriptStore {
         Ok(self
             .read_conversation_metadata_locked(conversation_id)?
             .compaction_epoch_required)
+    }
+
+    /// Creates the private payload directory for row-origin state only under
+    /// existing mutation ownership. No source transcript content is rewritten.
+    pub(super) fn row_origins_directory_locked(&self, conversation_id: &str) -> Result<PathBuf> {
+        self.ensure_session_dir(conversation_id)
+    }
+
+    /// Refuses loss of identity state rather than deriving replacement origins.
+    pub(super) fn row_origins_required_locked(&self, conversation_id: &str) -> Result<bool> {
+        Ok(self
+            .read_conversation_metadata_locked(conversation_id)?
+            .row_origins_required)
+    }
+
+    /// Marks a synced origin database required before its IDs are exposed.
+    pub(super) fn require_row_origins_locked(&self, conversation_id: &str) -> Result<()> {
+        let mut metadata = self.read_conversation_metadata_locked(conversation_id)?;
+        if !metadata.row_origins_required {
+            metadata.row_origins_required = true;
+            self.write_conversation_metadata_locked(conversation_id, &metadata)?;
+        }
+        Ok(())
     }
 
     /// Reads metadata while the caller owns the conversation mutation lock.

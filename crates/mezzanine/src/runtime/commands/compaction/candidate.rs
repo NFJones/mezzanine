@@ -120,7 +120,7 @@ impl RuntimeSessionService {
                 ));
             }
         }
-        let replay = runtime_agent_compaction_replay_context(
+        let mut replay = runtime_agent_compaction_replay_context(
             &task.pane_id,
             retained_entries,
             &projection.ranges,
@@ -129,6 +129,12 @@ impl RuntimeSessionService {
                 .as_ref()
                 .map(|records| records.ranges.as_slice()),
         );
+        replay.records.restore_row_origins(
+            &replay.blocks,
+            &mut replay.execution_events,
+            retained_entries,
+            &snapshot.row_origins,
+        )?;
         let compact_memory_id =
             mez_agent::memory::canonical_memory_uuid(&format!("compact-{}", task.conversation_id));
         let mut base_context =

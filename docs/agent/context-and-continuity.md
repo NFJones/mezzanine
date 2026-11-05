@@ -42,7 +42,8 @@ archive remains inspectable; covered raw rows do not reappear as active context.
 Missing or corrupt required compaction state fails visibly rather than creating
 a raw-history fork. Fork publication and eligible saved terminal-handoff
 reconciliation change only the new target's replay authority. Source capture
-may atomically import or repair descriptive summary accounting under the
+may atomically import or repair descriptive summary accounting and legacy row
+placement under the
 parent's lock, preserving its summary text, coverage, raw archive and pane
 bindings. Parent and child keep the same assigned summary occurrences.
 An archived terminal handoff may still contain an older baseline. Fork translates
@@ -541,6 +542,14 @@ records refuse context reconstruction instead of silently dropping history.
 Saved guidance metadata does not restore old instructions over current guidance.
 These estimates are not provider usage or billing, and their metadata is not
 part of the semantic source supplied to the model.
+
+Legacy raw rows also retain their original occurrence through saved forks,
+content edits and deletion of preceding rows. Their private conversation-owned
+`row-origins.sqlite3` file keeps placement separate from the raw transcript;
+importing it does not change source text or roles. Keep this file with saved
+conversation data. Once metadata marks it required, missing or corrupt state
+fails the affected operation visibly instead of inventing replacement IDs.
+Interrupted resequencing recovers only against the exact old or new transcript.
 
 The pure epoch API tracks stable, summary, raw and eligible raw estimates as
 membership changes. Its frozen selection keeps the previous head, selected raw

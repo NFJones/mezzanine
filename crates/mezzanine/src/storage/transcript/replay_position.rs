@@ -33,6 +33,8 @@ pub(crate) struct ConversationReplaySnapshot {
     pub(crate) epoch: Option<AgentCompactionEpoch>,
     /// Checked archive and logical rows selected using the captured epoch.
     pub(crate) view: ConversationTranscriptView,
+    /// Legacy origins captured with the same physical/logical row window.
+    pub(crate) row_origins: super::TranscriptRowOrigins,
 }
 
 impl AgentTranscriptStore {
@@ -61,7 +63,12 @@ impl AgentTranscriptStore {
                 logical: Vec::new(),
             },
         };
-        Ok(ConversationReplaySnapshot { epoch, view })
+        let row_origins = self.transcript_row_origins_locked(conversation_id, &view.logical)?;
+        Ok(ConversationReplaySnapshot {
+            epoch,
+            view,
+            row_origins,
+        })
     }
 
     /// Captures presentation and replay position without racing a transcript

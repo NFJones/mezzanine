@@ -10882,6 +10882,20 @@ Saved stable metadata MUST NOT install instructions or overwrite current source
 fingerprints. Ordinary semantic decoding, display and model projection MUST
 unwrap only semantic source, keeping accounting metadata out of that content.
 
+Legacy raw-row placement is retained in the conversation-owned version-1
+`row-origins.sqlite3` projection without embedding metadata in raw source text.
+First import preserves original conversation/sequence origins. Saved forks,
+content edits and surviving rows after deletion MUST preserve those origins;
+new rows after resequencing MUST NOT reuse deleted or moved occurrences.
+Metadata version 5 marks the projection required; versions 1–4 import it under
+the existing conversation mutation lease. Missing, malformed or unsupported
+required state MUST refuse the affected operation rather than assign new IDs.
+An interrupted resequence MUST recover against its exact old or new raw byte
+image before another mutation or model-history read. Unexpected source retains
+its recovery evidence and fails only the affected conversation. The projection
+is durable conversation state and MUST travel with saved archives and forks;
+it is not a rebuildable discovery index or execution-authority witness.
+
 Canonical replay membership and its summary head MUST retain those occurrence
 IDs independently of local ordering and birth revision. The pure epoch owner
 MUST update disjoint stable/head/raw and eligible-raw estimate totals at actual

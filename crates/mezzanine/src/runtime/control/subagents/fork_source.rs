@@ -438,6 +438,7 @@ pub(super) fn child_history(
             },
             batch.initial_compaction_epoch().cloned(),
             batch.entries().to_vec(),
+            std::collections::BTreeMap::new(),
         );
     }
     history
