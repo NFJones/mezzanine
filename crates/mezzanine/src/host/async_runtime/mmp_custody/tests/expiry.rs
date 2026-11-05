@@ -112,10 +112,7 @@ async fn expiry_root_lost_positive_keeps_original_through_stop_and_exact_join() 
             .unwrap()
             .is_empty()
     );
-    assert_eq!(
-        observer.snapshot().unwrap().reserved_payload_bytes,
-        1024 * 1024
-    );
+    assert_eq!(observer.snapshot().unwrap().reserved_payload_bytes, 0);
     root.request_stop();
     probe.release();
     let CustodyWorkerStatus::TerminalRetryAt(due) = root.observe().await.unwrap() else {
@@ -152,7 +149,7 @@ async fn expiry_root_lost_positive_keeps_original_through_stop_and_exact_join() 
     );
 }
 
-/// Last-root retirement retains both the real kernel fence and lower decoder
+/// Last-root retirement retains both the real kernel fence and lower metadata
 /// escrow until its actual blocked worker joins. It grants no live adoption;
 /// the committed observation remains available to subsequent original recovery.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -167,10 +164,7 @@ async fn expiry_last_root_drop_drains_worker_before_releasing_physical_owner() {
     probe.started.notified().await;
     drop(root);
     assert!(RootOwnership::acquire_existing(&fixture.path).is_err());
-    assert_eq!(
-        observer.snapshot().unwrap().reserved_payload_bytes,
-        1024 * 1024
-    );
+    assert_eq!(observer.snapshot().unwrap().reserved_payload_bytes, 0);
     probe.release();
     wait_until_unlocked(&fixture.path).await;
     assert_eq!(observer.snapshot().unwrap().reserved_payload_bytes, 0);

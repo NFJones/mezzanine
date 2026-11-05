@@ -77,7 +77,7 @@ impl MessageService {
                 before: vec![None; indices.len()],
                 indices,
                 metadata_bytes: bytes,
-                decode_payload_bytes: policy.limits.cache_payload_bytes,
+                payload_validation_limit: policy.limits.cache_payload_bytes,
                 published: AtomicBool::new(false),
                 _lease: lease,
             });

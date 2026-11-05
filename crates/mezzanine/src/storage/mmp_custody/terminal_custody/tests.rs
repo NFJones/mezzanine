@@ -40,13 +40,22 @@ struct Scene {
 }
 impl Scene {
     fn new() -> Self {
+        Self::with_cache_payload_bytes(1024 * 1024)
+    }
+    fn with_cache_payload_bytes(bytes: usize) -> Self {
         let mut service = MessageService::default();
         let sender = service.register_agent(None, None, "sender", vec![]);
         let target = service.register_agent(None, None, "worker", vec![]);
         service.subscribe(&target.agent_id).unwrap();
         let scope = MessageStorageScope::default();
         service
-            .enable_storage_custody(&scope, Default::default())
+            .enable_storage_custody(
+                &scope,
+                mez_agent::messaging::MessageStorageLimits {
+                    cache_payload_bytes: bytes,
+                    ..Default::default()
+                },
+            )
             .unwrap();
         service.require_native_continuity(&scope).unwrap();
         Self {
@@ -167,7 +176,7 @@ impl<S: MessageTerminalStore> MessageTerminalStore for LostReply<S> {
 
 /// A real postcommit lost reply leaves physical t1 but no live outcome. Retry
 /// preserves exact bytes/generation and only the actual positive allows adoption.
-/// The decoder quantum is charged before I/O, without warming a second cache.
+/// Descriptor validation retains metadata without reserving another body.
 #[test]
 fn expiry_real_commit_lost_reply_reconciles_before_outcome_publication() {
     let fixture = Fixture::new();
@@ -184,7 +193,7 @@ fn expiry_real_commit_lost_reply_reconciles_before_outcome_publication() {
             .snapshot()
             .unwrap()
             .reserved_payload_bytes,
-        1024 * 1024
+        0
     );
     let plan = fence
         .bind_store(&mut store)
@@ -547,3 +556,83 @@ fn expiry_actual_slot_guard_preserves_independent_fanout_ack() {
 }
 
 mod horizon;
+
+/// A genuine offered delivery fills the narrowed cache and stays externally
+/// pinned across t1/r1 commits, an actual postcommit lost reply and exact retry.
+/// Metadata verification must hash the escaped original without allocating or
+/// reserving another body; the retained pin remains visible and unchanged.
+#[test]
+fn terminal_settlement_streams_original_with_entire_cache_externally_pinned() {
+    let fixture = Fixture::new();
+    let fence = RootOwnership::acquire(&fixture.0).unwrap();
+    let mut store = MmpCustodyStore::open(&fixture.0, "expiry-session").unwrap();
+    let mut scene = Scene::with_cache_payload_bytes(90_000);
+    scene.direct(&mut store);
+    let delivery = scene
+        .service
+        .receive_subscribed(&scene.target.agent_id, 11, 1)
+        .unwrap();
+    assert_eq!(delivery.messages.len(), 1);
+    let observer = scene.service.payload_observer().unwrap();
+    let pinned = observer.snapshot().unwrap();
+    assert_eq!(pinned.live_payload_bytes, 90_000);
+    assert_eq!(pinned.reserved_payload_bytes, 0);
+    store.source_decode_probe.maximum_payload.set(0);
+    store.source_decode_probe.maximum_streamed_payload.set(0);
+    let (ticket, write) = scene.reserve();
+    let plan = fence
+        .bind_store(&mut store)
+        .unwrap()
+        .terminal_plan()
+        .unwrap();
+    let unknown = {
+        let mut owned = fence.bind_store(&mut store).unwrap();
+        uncertain(write.persist(&mut LostReply(owned.terminal_port(&plan, &scene.scope))))
+    };
+    assert_eq!(observer.snapshot().unwrap(), pinned);
+    let generation = store.current_state().unwrap().generation;
+    assert!(scene.service.cancel_storage_terminal(&ticket).is_err());
+    let write = scene.service.retry_terminal_write(unknown).unwrap();
+    let commit = {
+        let mut owned = fence.bind_store(&mut store).unwrap();
+        positive(write.persist(&mut owned.terminal_port(&plan, &scene.scope)))
+    };
+    assert_eq!(store.current_state().unwrap().generation, generation);
+    assert_eq!(scene.service.publish_terminal(&commit).unwrap(), 1);
+    assert_eq!(observer.snapshot().unwrap(), pinned);
+    let ticket = scene
+        .service
+        .prepare_storage_horizon_release(&scene.scope, 600016, usize::MAX)
+        .unwrap()
+        .unwrap();
+    let write = scene
+        .service
+        .begin_storage_terminal_write(&ticket, &scene.scope)
+        .unwrap();
+    let plan = fence
+        .bind_store(&mut store)
+        .unwrap()
+        .terminal_plan()
+        .unwrap();
+    let commit = {
+        let mut owned = fence.bind_store(&mut store).unwrap();
+        positive(write.persist(&mut owned.terminal_port(&plan, &scene.scope)))
+    };
+    assert_eq!(scene.service.publish_terminal(&commit).unwrap(), 1);
+    assert_eq!(
+        scene
+            .service
+            .storage_usage()
+            .unwrap()
+            .unwrap()
+            .pending_messages,
+        0
+    );
+    assert_eq!(observer.snapshot().unwrap(), pinned);
+    assert_eq!(store.source_decode_probe.maximum_payload.get(), 0);
+    assert_eq!(
+        store.source_decode_probe.maximum_streamed_payload.get(),
+        90_000
+    );
+    assert_eq!(delivery.messages[0].envelope.payload.len(), 90_000);
+}

@@ -56,7 +56,7 @@ struct Identity {
     retirement: Option<MessageNativeRetirementWitness>,
     raw_retirement: Option<MessageRegistrationEndSnapshot>,
     metadata_bytes: usize,
-    decode_payload_bytes: usize,
+    payload_validation_limit: usize,
     published: AtomicBool,
     _lease: MessageStorageSnapshotLease,
 }
@@ -87,7 +87,6 @@ pub struct MessageTerminalTicket {
 pub struct MessageTerminalWrite {
     identity: Arc<Identity>,
     attempt: Arc<()>,
-    payload: super::payload_budget::PayloadReservation,
 }
 impl std::fmt::Debug for MessageTerminalWrite {
     /// Decoder reservations and source/private metadata stay out of diagnostics.
@@ -103,7 +102,6 @@ impl std::fmt::Debug for MessageTerminalWrite {
 pub struct MessageTerminalAttempt {
     identity: Arc<Identity>,
     attempt: Arc<()>,
-    payload: super::payload_budget::PayloadReservation,
 }
 impl std::fmt::Debug for MessageTerminalAttempt {
     /// A nonce comparison is the only observer of private actual-worker escrow.
@@ -138,6 +136,8 @@ pub enum MessageTerminalWriteOutcome {
 /// Trusted synchronous original-store boundary, invoked off the actor.
 pub trait MessageTerminalStore {
     /// Commits/reconciles exact immutable bytes and source/TTL/slot qualification.
+    /// Source payload validation must stream under the metadata reservation;
+    /// this write grants no full-body cache allocation.
     /// Success must not mean merely that a record was queued or decoded.
     fn commit(&mut self, write: &MessageTerminalWrite) -> Result<()>;
 }
@@ -175,7 +175,6 @@ impl MessageTerminalWrite {
         MessageTerminalAttempt {
             identity: self.identity.clone(),
             attempt: self.attempt.clone(),
-            payload: self.payload.clone(),
         }
     }
     /// Requires the original live storage-root scope, not equal source labels.
@@ -233,7 +232,7 @@ impl MessageTerminalWrite {
     pub fn binding_indices(&self) -> impl Iterator<Item = u32> + '_ {
         self.identity.indices.iter().copied()
     }
-    /// Bounds a concrete decoder to the exact original's already reserved body.
+    /// Returns the exact decoded length of the immutable original payload.
     pub fn payload_bytes(&self) -> usize {
         self.identity.source.envelope.payload_bytes
     }
@@ -241,11 +240,11 @@ impl MessageTerminalWrite {
     pub fn recipient_count(&self) -> usize {
         self.identity.source.recipient_bindings.len()
     }
-    /// Supplies the reserved one-source quantum for physical source/ACK checks.
-    /// The adapter must decode sources one at a time and release each body.
+    /// Bounds streamed source/ACK validation, without a body allocation right.
+    /// The adapter must retain only bounded metadata and fixed reader buffers.
     pub fn decode_limits(&self) -> MessageAcceptanceDecodeLimits {
         MessageAcceptanceDecodeLimits {
-            payload_bytes: self.identity.decode_payload_bytes,
+            payload_bytes: self.identity.payload_validation_limit,
             auxiliary_bytes: 512 * 1024,
             recipient_count: 4096,
             recipient_bytes: 1024 * 1024,

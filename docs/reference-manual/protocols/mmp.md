@@ -393,8 +393,14 @@ An internal expiry journal boundary now freezes up to 64 original slots from
 one accepted source. It preserves the first strict TTL observation through
 uncertain writes without publishing outcomes before actual commit/adoption.
 Fresh receive remains excluded through clock rollback, while genuinely offered
-unselected fanout slots retain their ACK rights. Original source metadata and a
-full reserved decoder quantum remain accounted through their actual owners.
+unselected fanout slots retain their ACK rights. Original source metadata and
+bounded reader scratch remain accounted through their actual owners. Expiry,
+recipient retirement, horizon release and sender consumption stream original
+payload validation without reserving a second payload-cache allocation. A
+retained delivery filling the cache therefore cannot block those dispositions;
+actual worker/nonce/source metadata still survives cancellation, loss and retry.
+Actual reload/cold construction and canonical handoff retain their separate
+reservation contracts.
 
 The concrete fenced SQLite port writes bodyless `t1` records of at most 340 bytes,
 bound to the original allocation, source fingerprint, first clock and exact

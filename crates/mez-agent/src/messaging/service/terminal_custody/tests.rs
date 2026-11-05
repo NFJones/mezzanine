@@ -671,12 +671,12 @@ fn committed_ack_expiry_exclusion_survives_rollback_for_other_recipient() {
     assert_eq!(write.binding_indices().count(), 2);
 }
 
-/// An externally retained real delivery cannot disappear from cache accounting
-/// when the worker needs its full decoder quantum. Pre-issuance refusal leaves
-/// the reservation cancellable; a genuine retry can issue after the pin retires.
-/// Worker escrow retains that quantum until its final owner is actually dropped.
+/// A real delivery pin remains charged while descriptor-only expiry issues and
+/// publishes without reserving another body. Foreign-scope refusal preserves
+/// cancellation, and the exact worker nonce plus metadata lease survive until
+/// their final escrow owner leaves even after positive adoption.
 #[test]
-fn expiry_decoder_capacity_refusal_preserves_unissued_owner_and_escrow_charge() {
+fn expiry_streaming_validation_preserves_external_pin_and_metadata_escrow() {
     let mut scene = Scene::new(true, false);
     scene.direct();
     let delivery = scene
@@ -684,17 +684,18 @@ fn expiry_decoder_capacity_refusal_preserves_unissued_owner_and_escrow_charge() 
         .receive_subscribed(&scene.target.agent_id, 11, 1)
         .unwrap();
     let observer = scene.service.payload_observer().unwrap();
+    let pinned = observer.snapshot().unwrap();
+    assert!(pinned.live_payload_bytes > 0);
     let ticket = scene.reserve();
     assert!(
         scene
             .service
-            .begin_storage_terminal_write(&ticket, &scene.scope)
+            .begin_storage_terminal_write(&ticket, &MessageStorageScope::default())
             .is_err()
     );
-    assert_eq!(observer.snapshot().unwrap().reserved_payload_bytes, 0);
+    assert_eq!(observer.snapshot().unwrap(), pinned);
     scene.service.cancel_storage_terminal(&ticket).unwrap();
     drop(ticket);
-    drop(delivery);
     let baseline = scene
         .service
         .storage_usage()
@@ -705,10 +706,8 @@ fn expiry_decoder_capacity_refusal_preserves_unissued_owner_and_escrow_charge() 
     let charge = ticket.metadata_bytes();
     let write = scene.write(&ticket);
     let escrow = write.attempt();
-    assert_eq!(
-        observer.snapshot().unwrap().reserved_payload_bytes,
-        1024 * 1024
-    );
+    assert_eq!(observer.snapshot().unwrap(), pinned);
+    assert!(scene.service.cancel_storage_terminal(&ticket).is_err());
     let MessageTerminalWriteOutcome::Committed(commit) = write.persist(&mut Store::default())
     else {
         panic!("actual lower expiry callback required");
@@ -716,10 +715,7 @@ fn expiry_decoder_capacity_refusal_preserves_unissued_owner_and_escrow_charge() 
     scene.service.publish_terminal(&commit).unwrap();
     drop(ticket);
     drop(commit);
-    assert_eq!(
-        observer.snapshot().unwrap().reserved_payload_bytes,
-        1024 * 1024
-    );
+    assert_eq!(observer.snapshot().unwrap(), pinned);
     assert!(
         scene
             .service
@@ -730,7 +726,6 @@ fn expiry_decoder_capacity_refusal_preserves_unissued_owner_and_escrow_charge() 
             >= baseline + charge
     );
     drop(escrow);
-    assert_eq!(observer.snapshot().unwrap().reserved_payload_bytes, 0);
     assert_eq!(
         scene
             .service
@@ -740,6 +735,8 @@ fn expiry_decoder_capacity_refusal_preserves_unissued_owner_and_escrow_charge() 
             .metadata_bytes,
         baseline
     );
+    assert_eq!(observer.snapshot().unwrap(), pinned);
+    assert_eq!(delivery.messages.len(), 1);
 }
 
 /// Idle expiry scheduling uses the strict original deadline, never a renewed

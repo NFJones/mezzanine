@@ -15803,6 +15803,14 @@ it MUST NOT be converted to an empty envelope, a payload-load completion or a
 live delivery. Actual payload reload/cold construction retains its separately
 reserved full-body path. These readers do not themselves authorize reclamation
 or remove original source/receipt/proof/allocator evidence.
+Terminal disposition writes (expiry, recipient retirement, horizon release and
+sender consumption) MUST NOT reserve a second payload-cache allocation for
+metadata-only source qualification. An externally pinned delivery filling the
+cache MUST NOT prevent these writes merely because a full decoder quantum is
+unavailable. Original source/slot metadata, first observation, attempt nonce and
+actual-worker escrow MUST remain retained through join, retry and adoption.
+This does not waive the reservations required for actual body reload or cold
+construction, or the separate canonical-handoff I/O contract below.
 
 Raw caller loss/lease retirement MUST preserve issued acceptance through original
 join/adoption without reviving the sender registration. Active storage retries

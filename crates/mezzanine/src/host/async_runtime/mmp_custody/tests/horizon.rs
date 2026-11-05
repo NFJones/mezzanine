@@ -38,7 +38,7 @@ fn releases(fixture: &Fixture) -> i64 {
 }
 
 /// A real worker lost after r1 commit cannot erase the original outcome or
-/// release decoder escrow. Exact observed-join retry while stopping reconciles
+/// release metadata escrow. Exact observed-join retry while stopping reconciles
 /// once without advancing generation, injecting input or fabricating any ACK.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn horizon_root_postcommit_loss_reconciles_original_release_during_stop() {
@@ -71,7 +71,7 @@ async fn horizon_root_postcommit_loss_reconciles_original_release_during_stop() 
             .snapshot()
             .unwrap()
             .reserved_payload_bytes,
-        1024 * 1024
+        0
     );
     root.request_stop();
     assert!(root.retry_terminal(&mut service, due).unwrap());

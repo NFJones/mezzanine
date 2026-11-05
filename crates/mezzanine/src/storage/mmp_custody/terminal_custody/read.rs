@@ -159,7 +159,7 @@ impl MmpCustodyStore {
         Ok(())
     }
     /// Checks original positive ACKs while retaining at most one decoded source
-    /// at a time. The caller reserves a complete decoder quantum before I/O.
+    /// at a time. The caller retains metadata scratch; payload bytes are streamed.
     pub(super) fn check_expiry_ack_conflicts_in_snapshot(
         &self,
         transaction: &rusqlite::Transaction<'_>,

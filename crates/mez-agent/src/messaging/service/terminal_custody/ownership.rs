@@ -14,15 +14,11 @@ impl MessageService {
         if &pending.identity.scope != scope || pending.attempt.is_some() {
             return Err(changed());
         }
-        // The actual worker may decode this one source to validate original TTL
-        // and slots. Existing backed cache pins can be evicted, while external
-        // live pins and this real decoder reservation remain fully charged.
-        let payload = self
-            .reserve_storage_payload(0, pending.identity.decode_payload_bytes, 0, None)?
-            .ok_or_else(changed)?;
+        // Source qualification streams/hash-validates the body under the
+        // retained metadata lease. A delivery pin must not block disposition
+        // by requiring a second, unused payload-cache allocation.
         Ok(Self::replace_terminal_attempt(
             self.terminal_commit.as_mut().ok_or_else(changed)?,
-            payload,
         ))
     }
     /// Validates the exact issued nonce without interpreting a status or clock.
@@ -38,7 +34,6 @@ impl MessageService {
         self.require_terminal_attempt(&uncertain.write.identity, &uncertain.write.attempt)?;
         Ok(Self::replace_terminal_attempt(
             self.terminal_commit.as_mut().ok_or_else(changed)?,
-            uncertain.write.payload,
         ))
     }
     /// Reconstructs lost linear input only after the trusted actual join port
@@ -52,7 +47,6 @@ impl MessageService {
         joined.qualify_joined(attempt)?;
         Ok(Self::replace_terminal_attempt(
             self.terminal_commit.as_mut().ok_or_else(changed)?,
-            attempt.payload.clone(),
         ))
     }
     /// Cancels only an original that never issued physical work. Issued error,
@@ -160,16 +154,12 @@ impl MessageService {
         Ok(commit.identity.indices.len())
     }
     /// Replaces only a validated current nonce; immutable source data is shared.
-    fn replace_terminal_attempt(
-        pending: &mut PendingTerminal,
-        payload: super::super::payload_budget::PayloadReservation,
-    ) -> MessageTerminalWrite {
+    fn replace_terminal_attempt(pending: &mut PendingTerminal) -> MessageTerminalWrite {
         let attempt = Arc::new(());
         pending.attempt = Some(attempt.clone());
         MessageTerminalWrite {
             identity: pending.identity.clone(),
             attempt,
-            payload,
         }
     }
     /// Requires the actual live service, original scope and existing reservation.

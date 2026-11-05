@@ -894,7 +894,7 @@ async fn actor_sender_handoff_multiple_deferrals_do_not_spin_root_lookups() {
     assert_eq!(journal_count(&fixture, "s1"), 0);
 }
 
-/// A real decoder reservation makes B's S1 admission refuse while A's parked
+/// Real retained snapshot captures exhaust metadata for B's S1 admission while A's parked
 /// lookup deadline is already expired. Only B's retained application/admission
 /// timer may wake the actor during that ownership interval; A resumes after B
 /// actually consumes, then its qualified absence can age out normally.
@@ -929,6 +929,7 @@ async fn actor_sender_handoff_positive_backoff_suppresses_older_parked_lookup_wa
         entries: vec![row],
     });
     let (handle, mut actor) = AsyncRuntimeSessionActor::new(runtime, Default::default()).unwrap();
+    let scope = root.storage_scope().clone();
     actor.register_message_custody(root).unwrap();
     actor.poll_message_custody_for_tests();
     assert_eq!(
@@ -961,6 +962,39 @@ async fn actor_sender_handoff_positive_backoff_suppresses_older_parked_lookup_wa
         .message_service_mut()
         .reserve_terminal_handoff_io(&held_source)
         .unwrap();
+    // S1 streams source validation and no longer needs a second cache body.
+    // Hold actual immutable snapshot captures until their shared metadata cap
+    // refuses another one, establishing genuine independent resource pressure.
+    let mut captures = Vec::new();
+    let mut refused = false;
+    for _ in 0..256 {
+        match actor
+            .service
+            .message_service()
+            .prepare_storage_snapshot(&scope)
+        {
+            Ok(request) => captures.push(request),
+            Err(error) => {
+                assert_eq!(
+                    error.kind(),
+                    mez_agent::messaging::MessageErrorKind::Capacity
+                );
+                refused = true;
+                break;
+            }
+        }
+    }
+    assert!(refused && !captures.is_empty());
+    assert!(
+        actor
+            .service
+            .message_service()
+            .storage_usage()
+            .unwrap()
+            .unwrap()
+            .metadata_bytes
+            <= 8 * 1024 * 1024
+    );
     tokio::time::sleep(Duration::from_millis(1100)).await;
     actor.poll_message_custody_for_tests();
     assert!(actor.service.has_pending_terminal_handoff());
@@ -969,7 +1003,7 @@ async fn actor_sender_handoff_positive_backoff_suppresses_older_parked_lookup_wa
             .service
             .pending_terminal_handoff_consumption()
             .is_none(),
-        "actual cache refusal installed B's future admission retry"
+        "actual metadata refusal installed B's future admission retry"
     );
     assert_eq!(journal_count(&fixture, "s1"), 0);
     assert!(
@@ -981,6 +1015,7 @@ async fn actor_sender_handoff_positive_backoff_suppresses_older_parked_lookup_wa
     }
     assert!(!actor.message_custody_wake_is_ready_for_tests());
     assert_eq!(journal_count(&fixture, "s1"), 0);
+    drop(captures);
     drop(io);
     drop(held_source);
     tokio::time::sleep(Duration::from_millis(1100)).await;
