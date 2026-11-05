@@ -196,7 +196,13 @@ impl<'a> RuntimeTranscriptProjection<'a> {
             turn_id: turn.turn_id.clone(),
             agent_id: turn.agent_id.clone(),
             pane_id: turn.pane_id.clone(),
-            content: transcript_event.to_transcript_content(),
+            content: mez_agent::transcript::TranscriptContextRecord::new(
+                transcript_event,
+                event.record(),
+                self.context
+                    .map(mez_agent::AgentContext::stable_block_records),
+            )?
+            .to_transcript_content()?,
         };
         entry.validate()?;
         entries.insert(0, entry);
@@ -266,7 +272,7 @@ impl<'a> RuntimeTranscriptProjection<'a> {
             if block.source == ContextSourceKind::UserInstruction && block.label == "user prompt" {
                 break;
             }
-            let event = if block.source == ContextSourceKind::Configuration
+            let transcript_event = if block.source == ContextSourceKind::Configuration
                 && block.label == "task environment snapshot"
             {
                 TranscriptContextEvent::environment_snapshot(block.content.clone()).ok_or_else(
@@ -312,7 +318,12 @@ impl<'a> RuntimeTranscriptProjection<'a> {
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 pane_id: turn.pane_id.clone(),
-                content: event.to_transcript_content(),
+                content: mez_agent::transcript::TranscriptContextRecord::new(
+                    transcript_event,
+                    event.record(),
+                    None,
+                )?
+                .to_transcript_content()?,
             };
             entry.validate()?;
             entries.push(entry);
@@ -375,7 +386,12 @@ impl<'a> RuntimeTranscriptProjection<'a> {
                     turn_id: turn.turn_id.clone(),
                     agent_id: turn.agent_id.clone(),
                     pane_id: turn.pane_id.clone(),
-                    content: transcript_event.to_transcript_content(),
+                    content: mez_agent::transcript::TranscriptContextRecord::new(
+                        transcript_event,
+                        event.record(),
+                        Some(context.stable_block_records()),
+                    )?
+                    .to_transcript_content()?,
                 };
                 entry.validate()?;
                 entries.push(entry);
@@ -435,7 +451,12 @@ impl<'a> RuntimeTranscriptProjection<'a> {
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 pane_id: turn.pane_id.clone(),
-                content: transcript_event.to_transcript_content(),
+                content: mez_agent::transcript::TranscriptContextRecord::new(
+                    transcript_event,
+                    event.record(),
+                    None,
+                )?
+                .to_transcript_content()?,
             };
             entry.validate()?;
             entries.push(entry);
@@ -487,17 +508,18 @@ impl<'a> RuntimeTranscriptProjection<'a> {
     /// The exact worker output and presentation-only instructions use different
     /// labels and are deliberately excluded. The summary block exists only on
     /// the parent presentation turn while transcript persistence is running.
-    fn routed_handoff_transcript_content(&self) -> Option<String> {
+    fn routed_handoff_transcript_content(&self) -> Option<(String, mez_agent::ContextBlockRecord)> {
         self.context?
-            .blocks()
+            .chronology()
             .iter()
             .rev()
-            .find(|block| {
+            .find(|event| {
+                let block = event.block();
                 block.source == ContextSourceKind::RoutedHandoff
                     && block.label == "routed worker handoff context"
                     && !block.content.trim().is_empty()
             })
-            .map(|block| block.content.clone())
+            .map(|event| (event.block().content.clone(), event.record()))
     }
 
     /// Inserts one typed routed-handoff event immediately before the visible
@@ -507,7 +529,7 @@ impl<'a> RuntimeTranscriptProjection<'a> {
         conversation_id: &str,
         created_at_unix_seconds: u64,
         turn: &AgentTurnRecord,
-        content: String,
+        content: (String, mez_agent::ContextBlockRecord),
     ) -> Result<()> {
         let assistant_index = entries
             .iter()
@@ -529,7 +551,12 @@ impl<'a> RuntimeTranscriptProjection<'a> {
             turn_id: turn.turn_id.clone(),
             agent_id: turn.agent_id.clone(),
             pane_id: turn.pane_id.clone(),
-            content: TranscriptContextEvent::RoutedHandoff { content }.to_transcript_content(),
+            content: mez_agent::transcript::TranscriptContextRecord::new(
+                TranscriptContextEvent::RoutedHandoff { content: content.0 },
+                content.1,
+                None,
+            )?
+            .to_transcript_content()?,
         };
         entry.validate()?;
         entries.insert(assistant_index, entry);

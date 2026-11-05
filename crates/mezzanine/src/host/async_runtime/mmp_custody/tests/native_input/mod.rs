@@ -117,10 +117,16 @@ impl Scene {
             turn_id: "actual-receive-turn".into(),
             agent_id: target.agent_id.to_string(),
             pane_id: "pane-original".into(),
-            content: TranscriptContextEvent::NativePeerMessage {
-                event: Box::new(event),
-            }
-            .to_transcript_content(),
+            content: mez_agent::transcript::TranscriptContextRecord::new(
+                TranscriptContextEvent::NativePeerMessage {
+                    event: Box::new(event),
+                },
+                context.chronology().last().unwrap().record(),
+                None,
+            )
+            .unwrap()
+            .to_transcript_content()
+            .unwrap(),
         };
         let mut initial = row.clone();
         initial.content = "existing canonical context".into();
@@ -143,12 +149,44 @@ impl Scene {
         else {
             panic!("actual canonical projection required");
         };
+        let accounting = mez_agent::transcript::TranscriptContextRecord::from_transcript_content(
+            &self.row.content,
+        )
+        .unwrap()
+        .unwrap()
+        .record();
+        let mut ordinary = self.row.clone();
+        ordinary.content = mez_agent::transcript::TranscriptContextRecord::new(
+            TranscriptContextEvent::prompt_boundary_with_event_sequence(
+                mez_agent::ContextSourceKind::PeerMessage,
+                event.event_sequence + 10,
+                event.label.clone(),
+                event.content.clone(),
+            )
+            .unwrap(),
+            accounting,
+            None,
+        )
+        .unwrap()
+        .to_transcript_content()
+        .unwrap();
+        assert_eq!(
+            crate::storage::transcript::canonical_transcript_entry_identity(&self.row),
+            crate::storage::transcript::canonical_transcript_entry_identity(&ordinary),
+            "actual native and ordinary projections preserve one canonical occurrence",
+        );
         let mut row = self.row.clone();
         row.content = event.content;
         let projection = crate::storage::mmp_custody::native_input::NativeInputProjection::new(
             row,
             event.event_sequence,
             event.label,
+            mez_agent::transcript::TranscriptContextRecord::from_transcript_content(
+                &self.row.content,
+            )
+            .unwrap()
+            .unwrap()
+            .record(),
         )
         .unwrap();
         self.root

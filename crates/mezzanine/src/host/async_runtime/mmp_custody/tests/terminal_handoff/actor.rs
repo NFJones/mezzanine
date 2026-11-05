@@ -834,12 +834,20 @@ async fn scene_with_second_source(fixture: &Fixture, canonical: bool) -> Scene {
         pane_id: "original-pane".into(),
         content,
     };
+    let record =
+        mez_agent::ContextBlockRecord::allocate(&mez_agent::ContextBlock::reference_event(
+            mez_agent::ContextSourceKind::RuntimeHint,
+            label.clone(),
+            row.content.clone(),
+        ))
+        .unwrap();
     let projection = Arc::new(
         crate::storage::mmp_custody::terminal_handoff::TerminalHandoffProjection::new(
             row,
             12,
             label,
             vec![],
+            record,
         )
         .unwrap(),
     );

@@ -69,6 +69,7 @@ impl ReplayEpochContext {
         let sequences = candidate
             .context
             .append_conversation_events([ContextConversationAppend {
+                record: None,
                 semantic_kind: block.semantic_kind(),
                 block,
                 retention: ContextRetention::Exact,

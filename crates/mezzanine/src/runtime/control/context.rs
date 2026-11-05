@@ -9,6 +9,7 @@
 //! pure renderer and never publish merely to inspect a candidate context.
 
 use super::super::{ContextBlock, ContextSourceKind, Envelope, TranscriptEntry, TranscriptRole};
+use super::context_records::RuntimeContextRecords;
 use crate::error::Result;
 use crate::storage::transcript::ConversationTranscriptRead;
 use mez_agent::{
@@ -28,6 +29,8 @@ pub(crate) struct RuntimeAgentTranscriptContext {
     pub(in crate::runtime) blocks: Vec<ContextBlock>,
     /// Typed causal metadata for exact execution blocks.
     pub(in crate::runtime) execution_events: Vec<mez_agent::ImportedExecutionEvent>,
+    /// Exact structural origin/cost projection, never model-visible source.
+    pub(in crate::runtime) records: RuntimeContextRecords,
     /// Stable identity of malformed typed execution groups excluded from replay.
     pub(super) provider_history_repair_identity: Option<String>,
 }
@@ -174,6 +177,7 @@ pub(in crate::runtime) fn runtime_agent_history_epoch_from_snapshot(
             &applicable_ranges,
         );
         if !epoch.summary.is_empty() {
+            history.records.prepend_blocks(1);
             history.blocks.insert(
                 0,
                 ContextBlock::reference_event(
@@ -236,6 +240,7 @@ impl RuntimeAgentPromptHistoryWork {
         let empty = |blocks| RuntimeAgentTranscriptContext {
             blocks,
             execution_events: Vec::new(),
+            records: RuntimeContextRecords::default(),
             provider_history_repair_identity: None,
         };
         let Some(store) = store else {
@@ -310,6 +315,7 @@ pub(crate) fn execute_runtime_agent_prompt_history_work(
         return Ok(RuntimeAgentTranscriptContext {
             blocks,
             execution_events: Vec::new(),
+            records: RuntimeContextRecords::default(),
             provider_history_repair_identity: None,
         });
     };
@@ -332,10 +338,13 @@ fn runtime_agent_prompt_history_from_transcript(
     {
         blocks.clear();
     }
+    let mut records = transcript.records;
+    records.prepend_blocks(blocks.len());
     blocks.extend(transcript.blocks);
     RuntimeAgentTranscriptContext {
         blocks,
         execution_events: transcript.execution_events,
+        records,
         provider_history_repair_identity: transcript.provider_history_repair_identity,
     }
 }
@@ -361,6 +370,7 @@ pub(super) fn runtime_agent_history_epoch_from_entries(
         return RuntimeAgentTranscriptContext {
             blocks: Vec::new(),
             execution_events: Vec::new(),
+            records: RuntimeContextRecords::default(),
             provider_history_repair_identity: None,
         };
     }
@@ -403,14 +413,16 @@ fn runtime_agent_transcript_context_with_ranges_and_mcp_epoch(
 ) -> RuntimeAgentTranscriptContext {
     let mut blocks = Vec::new();
     let mut execution_events = Vec::new();
-    let transcript_events = entries
-        .iter()
-        .map(|entry| {
-            (entry.role == TranscriptRole::System)
-                .then(|| TranscriptContextEvent::from_transcript_content(&entry.content))
-                .flatten()
-        })
-        .collect::<Vec<_>>();
+    let mut records = RuntimeContextRecords::default();
+    let mut transcript_events = Vec::with_capacity(entries.len());
+    let mut row_records = Vec::with_capacity(entries.len());
+    let mut row_stable_records = Vec::with_capacity(entries.len());
+    for entry in entries {
+        let decoded = records.decode_row(entry);
+        transcript_events.push(decoded.event);
+        row_records.push(decoded.record);
+        row_stable_records.push(decoded.stable);
+    }
     let latest_mcp_compaction_epoch = if prospective_mcp_epoch {
         Some(entries.len())
     } else {
@@ -503,42 +515,30 @@ fn runtime_agent_transcript_context_with_ranges_and_mcp_epoch(
         }) {
             continue;
         }
-        if entry.role == TranscriptRole::System
-            && let Some(TranscriptContextEvent::TerminalHandoff { event }) =
-                TranscriptContextEvent::from_transcript_content(&entry.content)
-        {
-            blocks.push(ContextBlock::reference_event(
-                ContextSourceKind::RuntimeHint,
-                event.label,
-                event.content,
-            ));
-            continue;
-        }
-        if entry.role == TranscriptRole::System
-            && let Some(TranscriptContextEvent::NativePeerMessage { event }) =
-                TranscriptContextEvent::from_transcript_content(&entry.content)
-        {
-            blocks.push(ContextBlock::reference_event(
-                ContextSourceKind::PeerMessage,
-                event.label,
-                event.content,
-            ));
-            continue;
-        }
-        if entry.role == TranscriptRole::System
-            && let Some(TranscriptContextEvent::UserEvent { label, content, .. }) =
-                TranscriptContextEvent::from_transcript_content(&entry.content)
-        {
-            blocks.push(ContextBlock {
+        let source_record = row_records[index];
+        let stable = row_stable_records[index].as_deref();
+        let block = match &transcript_events[index] {
+            Some(TranscriptContextEvent::TerminalHandoff { event }) => {
+                Some(ContextBlock::reference_event(
+                    ContextSourceKind::RuntimeHint,
+                    event.label.clone(),
+                    event.content.clone(),
+                ))
+            }
+            Some(TranscriptContextEvent::NativePeerMessage { event }) => {
+                Some(ContextBlock::reference_event(
+                    ContextSourceKind::PeerMessage,
+                    event.label.clone(),
+                    event.content.clone(),
+                ))
+            }
+            Some(TranscriptContextEvent::UserEvent { label, content, .. }) => Some(ContextBlock {
                 source: ContextSourceKind::TranscriptUser,
                 placement: mez_agent::ContextPlacement::ConversationAppend,
-                label,
-                content,
-            });
-            continue;
-        }
-        if entry.role == TranscriptRole::System
-            && let Some(TranscriptContextEvent::ExecutionBlock {
+                label: label.clone(),
+                content: content.clone(),
+            }),
+            Some(TranscriptContextEvent::ExecutionBlock {
                 source,
                 execution_group_id,
                 ordinal,
@@ -546,121 +546,100 @@ fn runtime_agent_transcript_context_with_ranges_and_mcp_epoch(
                 label,
                 content,
                 ..
-            }) = TranscriptContextEvent::from_transcript_content(&entry.content)
-        {
-            if execution_group_id
-                .as_ref()
-                .is_some_and(|group| excluded_execution_groups.contains(group))
-            {
+            }) => {
+                if execution_group_id
+                    .as_ref()
+                    .is_some_and(|group| excluded_execution_groups.contains(group))
+                    || *source == ContextSourceKind::McpRetrievedManifest
+                        && latest_mcp_compaction_epoch.is_some_and(|epoch| index <= epoch)
+                {
+                    continue;
+                }
+                let block = ContextBlock {
+                    source: *source,
+                    placement: mez_agent::ContextPlacement::ConversationAppend,
+                    label: label.clone(),
+                    content: content.clone(),
+                };
+                let record =
+                    records.push_block(&mut blocks, block.clone(), entry, source_record, stable);
+                if let (Some(group), Some(ordinal)) = (execution_group_id, ordinal) {
+                    let imported = mez_agent::ImportedExecutionEvent::new(
+                        block,
+                        group.clone(),
+                        *ordinal,
+                        provider_owner.clone(),
+                    )
+                    .and_then(|event| match record {
+                        Some(record) => event.with_record(record),
+                        None => Ok(event),
+                    });
+                    if let Ok(imported) = imported {
+                        execution_events.push(imported);
+                    }
+                }
                 continue;
             }
-            if source == ContextSourceKind::McpRetrievedManifest
-                && latest_mcp_compaction_epoch.is_some_and(|epoch| index <= epoch)
-            {
-                continue;
+            Some(TranscriptContextEvent::McpCompactionEpoch) => continue,
+            Some(TranscriptContextEvent::EnvironmentSnapshot { content, .. }) => {
+                Some(ContextBlock {
+                    source: ContextSourceKind::Configuration,
+                    placement: mez_agent::ContextPlacement::ConversationAppend,
+                    label: "task environment snapshot".to_owned(),
+                    content: content.clone(),
+                })
             }
-            let block = ContextBlock {
-                source,
-                placement: mez_agent::ContextPlacement::ConversationAppend,
-                label,
-                content,
-            };
-            if let (Some(execution_group_id), Some(ordinal)) = (execution_group_id, ordinal)
-                && let Ok(imported) = mez_agent::ImportedExecutionEvent::new(
-                    block.clone(),
-                    execution_group_id,
-                    ordinal,
-                    provider_owner,
-                )
-            {
-                execution_events.push(imported);
+            Some(TranscriptContextEvent::McpCatalogSnapshot { content, .. }) => {
+                if latest_mcp_compaction_epoch.is_some_and(|epoch| index <= epoch) {
+                    continue;
+                }
+                Some(ContextBlock {
+                    source: ContextSourceKind::McpCatalogSnapshot,
+                    placement: mez_agent::ContextPlacement::ConversationAppend,
+                    label: mez_agent::MCP_CATALOG_SNAPSHOT_CONTEXT_LABEL.to_owned(),
+                    content: content.clone(),
+                })
             }
-            blocks.push(block);
-            continue;
-        }
-        if entry.role == TranscriptRole::System
-            && matches!(
-                TranscriptContextEvent::from_transcript_content(&entry.content),
-                Some(TranscriptContextEvent::McpCompactionEpoch)
-            )
-        {
-            continue;
-        }
-        if entry.role == TranscriptRole::System
-            && let Some(TranscriptContextEvent::EnvironmentSnapshot { content, .. }) =
-                TranscriptContextEvent::from_transcript_content(&entry.content)
-        {
-            blocks.push(ContextBlock {
-                source: ContextSourceKind::Configuration,
-                placement: mez_agent::ContextPlacement::ConversationAppend,
-                label: "task environment snapshot".to_string(),
-                content,
-            });
-            continue;
-        }
-        if entry.role == TranscriptRole::System
-            && let Some(TranscriptContextEvent::McpCatalogSnapshot { content, .. }) =
-                TranscriptContextEvent::from_transcript_content(&entry.content)
-        {
-            if latest_mcp_compaction_epoch.is_some_and(|epoch| index <= epoch) {
-                continue;
-            }
-            blocks.push(ContextBlock {
-                source: ContextSourceKind::McpCatalogSnapshot,
-                placement: mez_agent::ContextPlacement::ConversationAppend,
-                label: mez_agent::MCP_CATALOG_SNAPSHOT_CONTEXT_LABEL.to_string(),
-                content,
-            });
-            continue;
-        }
-        if entry.role == TranscriptRole::System
-            && let Some(TranscriptContextEvent::PromptBoundary {
+            Some(TranscriptContextEvent::PromptBoundary {
                 source,
                 label,
                 content,
                 ..
-            }) = TranscriptContextEvent::from_transcript_content(&entry.content)
-        {
-            blocks.push(ContextBlock {
-                source,
+            }) => Some(ContextBlock {
+                source: *source,
                 placement: mez_agent::ContextPlacement::ConversationAppend,
-                label,
-                content,
-            });
-            continue;
-        }
-        if entry.role == TranscriptRole::System
-            && let Some(TranscriptContextEvent::RoutedHandoff { content }) =
-                TranscriptContextEvent::from_transcript_content(&entry.content)
-        {
-            blocks.push(ContextBlock {
+                label: label.clone(),
+                content: content.clone(),
+            }),
+            Some(TranscriptContextEvent::RoutedHandoff { content }) => Some(ContextBlock {
                 source: ContextSourceKind::RoutedHandoff,
                 placement: mez_agent::ContextPlacement::ConversationAppend,
-                label: "routed worker handoff context".to_string(),
-                content,
-            });
-            continue;
-        }
-        if entry.role == TranscriptRole::System
-            && let Some(TranscriptContextEvent::InterruptedTurn {
+                label: "routed worker handoff context".to_owned(),
+                content: content.clone(),
+            }),
+            Some(TranscriptContextEvent::InterruptedTurn {
                 prompt,
                 reason,
                 evidence,
-            }) = TranscriptContextEvent::from_transcript_content(&entry.content)
-        {
-            let evidence = if evidence.is_empty() {
-                "no action result was available when the turn stopped".to_string()
-            } else {
-                evidence.join("\n")
-            };
-            blocks.push(ContextBlock {
-                source: ContextSourceKind::RuntimeHint,
-                placement: mez_agent::ContextPlacement::ConversationAppend,
-                label: "interrupted turn context".to_string(),
-                content: format!(
-                    "The prior turn was interrupted before completion. Continue or redirect that work using its original user intent:\n{prompt}\n\nreason={reason}\nobserved action state:\n{evidence}"
-                ),
-            });
+            }) => {
+                let evidence = if evidence.is_empty() {
+                    "no action result was available when the turn stopped".to_owned()
+                } else {
+                    evidence.join("\n")
+                };
+                Some(ContextBlock {
+                    source: ContextSourceKind::RuntimeHint,
+                    placement: mez_agent::ContextPlacement::ConversationAppend,
+                    label: "interrupted turn context".to_owned(),
+                    content: format!(
+                        "The prior turn was interrupted before completion. Continue or redirect that work using its original user intent:\n{prompt}\n\nreason={reason}\nobserved action state:\n{evidence}"
+                    ),
+                })
+            }
+            None => None,
+        };
+        if let Some(block) = block {
+            records.push_block(&mut blocks, block, entry, source_record, stable);
             continue;
         }
         if (suppressed_display_entries.contains(&index)
@@ -674,19 +653,26 @@ fn runtime_agent_transcript_context_with_ranges_and_mcp_epoch(
         let Some(content) = runtime_transcript_entry_context_content(entry) else {
             continue;
         };
-        blocks.push(ContextBlock {
-            source: runtime_transcript_context_source_kind(entry),
-            placement: mez_agent::ContextPlacement::ConversationAppend,
-            label: format!(
-                "previous {} message for pane {pane_id}",
-                runtime_context_transcript_role_name(entry.role)
-            ),
-            content,
-        });
+        records.push_block(
+            &mut blocks,
+            ContextBlock {
+                source: runtime_transcript_context_source_kind(entry),
+                placement: mez_agent::ContextPlacement::ConversationAppend,
+                label: format!(
+                    "previous {} message for pane {pane_id}",
+                    runtime_context_transcript_role_name(entry.role)
+                ),
+                content,
+            },
+            entry,
+            source_record,
+            stable,
+        );
     }
     RuntimeAgentTranscriptContext {
         blocks,
         execution_events,
+        records,
         provider_history_repair_identity: (!repaired_execution_groups.is_empty()).then(|| {
             repaired_execution_groups
                 .iter()

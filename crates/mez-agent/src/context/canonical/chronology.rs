@@ -5,9 +5,9 @@
 
 use super::{
     AgentContext, AgentContextError, AgentContextResult, CONTEXT_EVENT_SEQUENCE_STRIDE,
-    ContextBlock, ContextConversationAppend, ContextEventSequence, ContextExecutionGroupId,
-    ContextPlacement, ContextRetention, ContextSemanticKind, ContextSourceKind, ConversationEvent,
-    ProviderContinuityOwner, validate_context_block_metadata,
+    ContextBlock, ContextBlockRecord, ContextConversationAppend, ContextEventSequence,
+    ContextExecutionGroupId, ContextPlacement, ContextRetention, ContextSemanticKind,
+    ContextSourceKind, ConversationEvent, ProviderContinuityOwner, validate_context_block_metadata,
 };
 
 impl AgentContext {
@@ -194,6 +194,7 @@ impl AgentContext {
         recoverable_for_compaction: bool,
     ) -> AgentContextResult<ContextEventSequence> {
         let mut sequences = self.append_conversation_events([ContextConversationAppend {
+            record: None,
             block,
             semantic_kind,
             retention,
@@ -227,6 +228,10 @@ impl AgentContext {
             }
             let sequence = candidate.allocate_event_sequence()?;
             let event = ConversationEvent {
+                record: match event.record {
+                    Some(record) => record.restored(&event.block)?,
+                    None => ContextBlockRecord::allocate(&event.block)?,
+                },
                 block: event.block,
                 semantic_kind: event.semantic_kind,
                 retention: event.retention,

@@ -6,8 +6,10 @@
 
 use super::*;
 use mez_agent::transcript::{
-    TranscriptTerminalHandoffEvent, TranscriptTerminalHandoffSource, terminal_outcome_reference,
+    TranscriptContextRecord, TranscriptTerminalHandoffEvent, TranscriptTerminalHandoffSource,
+    terminal_outcome_reference,
 };
+use mez_agent::{ContextBlock, ContextBlockRecord, ContextSourceKind};
 
 /// Original neutral fact and preceding chronology captured before context commit.
 #[derive(Debug)]
@@ -15,6 +17,7 @@ pub(crate) struct TerminalHandoffProjection {
     row: TranscriptEntry,
     event_sequence: u64,
     label: String,
+    record: ContextBlockRecord,
     prefix: Vec<TranscriptEntry>,
 }
 impl TerminalHandoffProjection {
@@ -24,6 +27,7 @@ impl TerminalHandoffProjection {
         event_sequence: u64,
         label: String,
         prefix: Vec<TranscriptEntry>,
+        record: ContextBlockRecord,
     ) -> Result<Self> {
         row.validate()?;
         if row.role != TranscriptRole::System
@@ -55,7 +59,13 @@ impl TerminalHandoffProjection {
             }
         }
         crate::storage::transcript::custody::validate_custody_append_prefix(&prefix)?;
+        let record = record.restored(&ContextBlock::reference_event(
+            ContextSourceKind::RuntimeHint,
+            label.clone(),
+            row.content.clone(),
+        ))?;
         Ok(Self {
+            record,
             row,
             event_sequence,
             label,
@@ -80,10 +90,14 @@ impl TerminalHandoffProjection {
         )
         .map_err(|_| invalid())?;
         let mut row = self.row.clone();
-        row.content = TranscriptContextEvent::TerminalHandoff {
-            event: Box::new(event),
-        }
-        .to_transcript_content();
+        row.content = TranscriptContextRecord::new(
+            TranscriptContextEvent::TerminalHandoff {
+                event: Box::new(event),
+            },
+            self.record,
+            None,
+        )?
+        .to_transcript_content()?;
         checked_row(&row, source, store_id)?;
         Ok((self.prefix.clone(), row))
     }

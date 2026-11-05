@@ -6,7 +6,8 @@
 //! imported transcript frame can manufacture this storage attribution.
 
 use super::*;
-use mez_agent::transcript::TranscriptNativeInputEvent;
+use mez_agent::transcript::{TranscriptContextRecord, TranscriptNativeInputEvent};
+use mez_agent::{ContextBlock, ContextBlockRecord, ContextSourceKind};
 
 /// Immutable application event, without a claimed transport storage identity.
 #[derive(Debug, Clone)]
@@ -14,6 +15,7 @@ pub(crate) struct NativeInputProjection {
     row: TranscriptEntry,
     event_sequence: u64,
     label: String,
+    record: ContextBlockRecord,
     /// Actual preceding canonical chronology, captured with this application input.
     prefix: Vec<TranscriptEntry>,
 }
@@ -36,7 +38,12 @@ impl NativeInputProjection {
 
     /// Captures an actual peer reference event. `row.content` is its plain
     /// canonical content; the worker constructs the typed archive framing.
-    pub(crate) fn new(row: TranscriptEntry, event_sequence: u64, label: String) -> Result<Self> {
+    pub(crate) fn new(
+        row: TranscriptEntry,
+        event_sequence: u64,
+        label: String,
+        record: ContextBlockRecord,
+    ) -> Result<Self> {
         row.validate()?;
         if row.conversation_id.len() > 256
             || row.agent_id.len() > 256
@@ -61,7 +68,13 @@ impl NativeInputProjection {
         {
             return Err(invalid());
         }
+        let record = record.restored(&ContextBlock::reference_event(
+            ContextSourceKind::PeerMessage,
+            label.clone(),
+            row.content.clone(),
+        ))?;
         Ok(Self {
+            record,
             row,
             event_sequence,
             label,
@@ -88,8 +101,17 @@ impl NativeInputProjection {
 
     /// Checks the exact event that was prepared before the live context changed.
     /// Matching descriptive data alone does not create application ownership.
-    pub(crate) fn matches_event(&self, sequence: u64, label: &str, content: &str) -> bool {
-        self.event_sequence == sequence && self.label == label && self.row.content == content
+    pub(crate) fn matches_event(
+        &self,
+        sequence: u64,
+        label: &str,
+        content: &str,
+        record: ContextBlockRecord,
+    ) -> bool {
+        self.event_sequence == sequence
+            && self.label == label
+            && self.row.content == content
+            && self.record.occurrence_id() == record.occurrence_id()
     }
 
     /// Borrows actual preceding chronology without another runtime lookup.
@@ -113,10 +135,14 @@ impl NativeInputProjection {
         )
         .map_err(|_| invalid())?;
         let mut row = self.row.clone();
-        row.content = TranscriptContextEvent::NativePeerMessage {
-            event: Box::new(event),
-        }
-        .to_transcript_content();
+        row.content = TranscriptContextRecord::new(
+            TranscriptContextEvent::NativePeerMessage {
+                event: Box::new(event),
+            },
+            self.record,
+            None,
+        )?
+        .to_transcript_content()?;
         checked_event(&row, anchor, store_id)?;
         Ok(row)
     }

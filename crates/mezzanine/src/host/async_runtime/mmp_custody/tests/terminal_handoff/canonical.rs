@@ -59,6 +59,11 @@ async fn terminal_handoff_root_journals_original_fact_without_consuming_outcome(
             .source
             .matches_anchor(&scene.source, &proof.record().store_id)
     );
+    let accounted =
+        mez_agent::transcript::TranscriptContextRecord::from_transcript_content(&rows[1].content)
+            .unwrap()
+            .unwrap();
+    assert_eq!(accounted.record(), scene.record);
     assert_eq!(event.event_sequence, 11);
     assert_eq!(rows[1].sequence, proof.record().archive_sequence);
     assert_eq!(

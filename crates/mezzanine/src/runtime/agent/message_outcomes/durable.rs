@@ -149,6 +149,7 @@ impl RuntimeSessionService {
             event.sequence().get(),
             label,
             prefix,
+            event.record(),
         )?);
         let target = self.agent_transcript_store().cloned().ok_or_else(|| {
             MezError::invalid_state("MMP terminal canonical transcript target missing")

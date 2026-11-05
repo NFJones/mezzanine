@@ -268,10 +268,16 @@ impl super::AgentContext {
         }
         let mut last_sequence = 0u64;
         let mut stable_slot_ids = std::collections::BTreeSet::new();
+        let mut occurrence_ids = std::collections::BTreeSet::new();
         let mut active_prompt_count = 0usize;
         let mut assistant_execution_groups = std::collections::BTreeSet::new();
         for (index, (block, metadata)) in self.blocks.iter().zip(&self.block_metadata).enumerate() {
             validate_context_block_metadata(index, block, metadata)?;
+            if !occurrence_ids.insert(metadata.record().occurrence_id()) {
+                return Err(AgentContextError::new(
+                    "context block occurrences must be unique",
+                ));
+            }
             if block.source == ContextSourceKind::UserInstruction
                 && metadata.retention != ContextRetention::Exact
                 && !metadata

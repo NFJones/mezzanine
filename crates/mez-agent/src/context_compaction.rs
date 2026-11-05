@@ -843,7 +843,7 @@ pub fn projected_context_block_input_tokens(
                 return 0;
             }
             if metadata.provider_owner().is_some() {
-                crate::provider_text_input_token_estimate(&context.blocks()[index].content)
+                metadata.estimated_native_input_tokens()
             } else {
                 metadata.estimated_input_tokens()
             }

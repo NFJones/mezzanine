@@ -10859,6 +10859,29 @@ skip protected prefix events to gather later ranges. Equal text MUST retain
 separate original occurrence identities. A summary's chronological anchor is an
 ordering slot, not a claim to the original identity of covered source.
 
+Canonical blocks MUST own an immutable occurrence ID separately from their
+ordering sequence and execution group. Equal bytes committed twice MUST receive
+distinct IDs; importing a typed occurrence or revising its content MUST preserve
+its ID. A newly created summary MUST receive its own ID even when it reuses an
+older ordering anchor. Canonical projections MUST reuse owned, versioned local
+input estimates rather than recounting unchanged blocks. The estimate records
+associate their counting method and ordinary/native framing with a rendered
+content digest. These UTF-8-quarter estimates are unmeasured input sizes, not
+provider usage, billing, a task lifecycle witness or execution authority.
+
+The typed `mez-transcript-context-record/v1` envelope carries an existing
+semantic context event, its occurrence/accounting record and an optional stable
+slot snapshot without instruction bytes. Replay MUST associate records by their
+actual structural positions, validate them against current semantic source, and
+recompute stale method/content/count associations while preserving occurrence
+identity. Unknown record formats and malformed reserved envelopes MUST fail
+context adoption rather than silently omit source. Existing unaccounted records
+use an explicit legacy archive-occurrence import boundary; content equality,
+current pane and newly allocated context sequences MUST NOT establish identity.
+Saved stable metadata MUST NOT install instructions or overwrite current source
+fingerprints. Ordinary semantic decoding, display and model projection MUST
+unwrap only semantic source, keeping accounting metadata out of that content.
+
 Manual, observed-input and provider-limit adapters MUST use the same configured
 raw-tail selection contract. Token retention rounds upward and complete
 execution groups remain indivisible. Once compaction is requested, fitting the

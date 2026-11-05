@@ -323,7 +323,17 @@ impl TranscriptContextEvent {
 
     /// Encodes one event as a reserved system transcript entry.
     pub fn to_transcript_content(&self) -> String {
-        let payload = match self {
+        format!(
+            "{}{}",
+            TRANSCRIPT_CONTEXT_EVENT_MARKER,
+            serde_json::to_string(&self.to_record_value())
+                .expect("transcript context event payload contains only JSON values")
+        )
+    }
+
+    /// Shares the exact semantic event with the versioned accounting wrapper.
+    pub(super) fn to_record_value(&self) -> Value {
+        match self {
             Self::TerminalHandoff { event } => serde_json::json!({
                 "version": TRANSCRIPT_CONTEXT_EVENT_VERSION,
                 "kind": "terminal_handoff",
@@ -419,13 +429,7 @@ impl TranscriptContextEvent {
                 "reason": reason,
                 "evidence": evidence,
             }),
-        };
-        format!(
-            "{}{}",
-            TRANSCRIPT_CONTEXT_EVENT_MARKER,
-            serde_json::to_string(&payload)
-                .expect("transcript context event payload contains only JSON values")
-        )
+        }
     }
 
     /// Decodes a supported reserved transcript context event.
@@ -434,8 +438,19 @@ impl TranscriptContextEvent {
     /// routed handoffs return `None` so callers never inject them into model
     /// context.
     pub fn from_transcript_content(content: &str) -> Option<Self> {
+        if super::is_accounted_context_record(content) {
+            return super::TranscriptContextRecord::from_transcript_content(content)
+                .ok()
+                .flatten()
+                .map(super::TranscriptContextRecord::into_event);
+        }
         let payload = content.strip_prefix(TRANSCRIPT_CONTEXT_EVENT_MARKER)?;
         let value: Value = serde_json::from_str(payload.trim()).ok()?;
+        Self::from_record_value(&value)
+    }
+
+    /// Decodes only the semantic payload, never recursively another wrapper.
+    pub(super) fn from_record_value(value: &Value) -> Option<Self> {
         if value.get("version")?.as_str()? != TRANSCRIPT_CONTEXT_EVENT_VERSION {
             return None;
         }

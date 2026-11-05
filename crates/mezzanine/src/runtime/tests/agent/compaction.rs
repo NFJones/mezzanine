@@ -951,7 +951,7 @@ fn runtime_saved_history_compaction_replans_retained_byte_heavy_evidence() {
     let entries = store.inspect(conversation_id).unwrap();
     let history = crate::runtime::control::runtime_agent_transcript_context("%1", &entries);
     assert_eq!(history.execution_events.len(), 4);
-    let mut context = mez_agent::AgentContext::import_durable_blocks(history.blocks).unwrap();
+    let mut context = history.records.import_context(history.blocks).unwrap();
     context
         .restore_imported_execution_events(&history.execution_events)
         .unwrap();

@@ -25,6 +25,7 @@ struct Scene {
     registration: mez_agent::messaging::MessageSenderRegistration,
     source: mez_agent::messaging::MessageTerminalHandoffAnchor,
     transcript: AgentTranscriptStore,
+    record: mez_agent::ContextBlockRecord,
     projection: Arc<crate::storage::mmp_custody::terminal_handoff::TerminalHandoffProjection>,
 }
 impl Scene {
@@ -166,12 +167,20 @@ impl Scene {
         row.role = TranscriptRole::System;
         let (label, content) = mez_agent::transcript::terminal_outcome_reference(&outcome).unwrap();
         row.content = content;
+        let record =
+            mez_agent::ContextBlockRecord::allocate(&mez_agent::ContextBlock::reference_event(
+                mez_agent::ContextSourceKind::RuntimeHint,
+                label.clone(),
+                row.content.clone(),
+            ))
+            .unwrap();
         let projection = Arc::new(
             crate::storage::mmp_custody::terminal_handoff::TerminalHandoffProjection::new(
                 row,
                 11,
                 label,
                 Vec::new(),
+                record,
             )
             .unwrap(),
         );
@@ -182,6 +191,7 @@ impl Scene {
             registration,
             source,
             transcript,
+            record,
             projection,
         }
     }

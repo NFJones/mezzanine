@@ -16,6 +16,7 @@ mod approval;
 mod component;
 mod configuration;
 mod context;
+mod context_records;
 mod external_agents;
 mod external_enrollment;
 mod external_presentation;
@@ -270,6 +271,7 @@ impl RuntimeSessionService {
                     .prompt_cache_lineage_id = Self::runtime_new_agent_conversation_id();
             }
         }
+        let imported_records = history.records;
         let mut blocks = history.blocks;
         let imported_execution_events = history.execution_events;
         let imported_history_block_count = blocks.len();
@@ -504,7 +506,9 @@ impl RuntimeSessionService {
                 )
             })
             .unwrap_or_default();
-        let mut context = AgentContext::import_durable_blocks(blocks)?.with_metadata(metadata);
+        let mut context = imported_records
+            .import_context(blocks)?
+            .with_metadata(metadata);
         context
             .restore_imported_execution_events(&imported_execution_events)
             .map_err(|error| MezError::invalid_state(error.to_string()))?;
@@ -542,6 +546,7 @@ impl RuntimeSessionService {
         self.refresh_project_config_layers_for_pane(pane_id)?;
         self.settle_recoverable_pane_readiness_for_agent_prompt(pane_id)?;
         let history = self.runtime_agent_history_epoch_context(pane_id)?;
+        let imported_records = history.records;
         let mut blocks = history.blocks;
         let imported_execution_events = history.execution_events;
         let imported_history_block_count = blocks.len();
@@ -610,7 +615,9 @@ impl RuntimeSessionService {
                 )
             })
             .unwrap_or_default();
-        let mut context = AgentContext::import_durable_blocks(blocks)?.with_metadata(metadata);
+        let mut context = imported_records
+            .import_context(blocks)?
+            .with_metadata(metadata);
         context
             .restore_imported_execution_events(&imported_execution_events)
             .map_err(|error| MezError::invalid_state(error.to_string()))?;
@@ -864,6 +871,7 @@ impl RuntimeSessionService {
         }
 
         let refreshed_history = self.runtime_agent_history_epoch_context(&turn.pane_id)?;
+        let refreshed_records = refreshed_history.records;
         let mut refreshed_blocks = refreshed_history.blocks;
         let refreshed_execution_events = refreshed_history.execution_events;
         let imported_history_sequence_high_water =
@@ -897,9 +905,10 @@ impl RuntimeSessionService {
             return Ok(false);
         }
         let replacement_count = refreshed_context
-            .replace_imported_history_prefix_through_sequence(
+            .replace_imported_history_prefix_through_sequence_with_records(
                 imported_history_sequence_high_water,
                 refreshed_blocks,
+                &refreshed_records.indices_with_offset(0)?,
             )?;
         refreshed_context
             .restore_imported_execution_events(&refreshed_execution_events)
@@ -953,11 +962,11 @@ impl RuntimeSessionService {
             .filter(|row| row.sequence > task.transcript_entries && row.turn_id != turn_id)
             .collect::<Vec<_>>();
         let history = context::runtime_agent_transcript_context(&task.pane_id, &arrivals);
+        history.records.ensure_valid()?;
         if history.blocks.is_empty() {
             return Ok(candidate);
         }
-        let mut imported = AgentContext::import_durable_blocks(history.blocks)
-            .map_err(|error| MezError::invalid_state(error.message()))?;
+        let mut imported = history.records.import_context(history.blocks)?;
         imported
             .restore_imported_execution_events(&history.execution_events)
             .map_err(|error| MezError::invalid_state(error.message()))?;
@@ -1013,10 +1022,13 @@ impl RuntimeSessionService {
             {
                 blocks.clear();
             }
+            let mut records = transcript.records;
+            records.prepend_blocks(blocks.len());
             blocks.extend(transcript.blocks);
             RuntimeAgentTranscriptContext {
                 blocks,
                 execution_events: transcript.execution_events,
+                records,
                 provider_history_repair_identity: transcript.provider_history_repair_identity,
             }
         } else {
@@ -1029,6 +1041,7 @@ impl RuntimeSessionService {
         }
         let compact_memory_id =
             mez_agent::memory::canonical_memory_uuid(&format!("compact-{}", session.session_id));
+        let mut refreshed_records = history.records;
         let mut refreshed_blocks = history.blocks;
         refreshed_blocks.retain(|block| {
             !(!projected_history
@@ -1041,6 +1054,7 @@ impl RuntimeSessionService {
                 && block.source != ContextSourceKind::McpCatalogSnapshot
         });
         if !projected_history {
+            refreshed_records.prepend_blocks(1);
             refreshed_blocks.insert(0, compact_summary);
         }
         refreshed_blocks.extend(mcp_epoch_blocks);
@@ -1066,9 +1080,10 @@ impl RuntimeSessionService {
             });
         }
 
-        candidate_context.replace_imported_history_prefix_through_sequence(
+        candidate_context.replace_imported_history_prefix_through_sequence_with_records(
             imported_history_sequence_high_water,
             refreshed_blocks,
+            &refreshed_records.indices_with_offset(0)?,
         )?;
         candidate_context
             .restore_imported_execution_events(&history.execution_events)
@@ -1965,7 +1980,7 @@ fn runtime_mutating_response_is_cacheable(_method: &str) -> bool {
 mod tests {
     use super::runtime_agent_transcript_context;
     use mez_agent::transcript::{TranscriptEntry, TranscriptRole};
-    use mez_agent::{AgentContext, ProviderTranscriptEvent, TranscriptContextEvent};
+    use mez_agent::{ProviderTranscriptEvent, TranscriptContextEvent};
 
     /// Verifies typed provider events and canonical assistant rationale survive
     /// transcript restoration into model context.
@@ -2161,7 +2176,10 @@ mod tests {
             .collect::<Vec<_>>();
 
         let transcript = runtime_agent_transcript_context("%1", &entries);
-        let mut context = AgentContext::import_durable_blocks(transcript.blocks).unwrap();
+        let mut context = transcript
+            .records
+            .import_context(transcript.blocks)
+            .unwrap();
         context
             .restore_imported_execution_events(&transcript.execution_events)
             .unwrap();
@@ -2293,7 +2311,7 @@ mod tests {
                 .iter()
                 .all(|block| { !block.content.contains("display-oriented assistant row") })
         );
-        let mut context = AgentContext::import_durable_blocks(blocks).unwrap();
+        let mut context = transcript.records.import_context(blocks).unwrap();
         context
             .restore_imported_execution_events(&transcript.execution_events)
             .unwrap();
@@ -2348,7 +2366,10 @@ mod tests {
                 mez_agent::ContextSourceKind::McpServerSearchResult,
             ]
         );
-        let context = AgentContext::import_durable_blocks(transcript.blocks).unwrap();
+        let context = transcript
+            .records
+            .import_context(transcript.blocks)
+            .unwrap();
         assert!(mez_agent::mcp_server_is_referencable(&context, "fs"));
         assert!(
             mez_agent::invoked_mcp_tools_for_context(
@@ -2424,7 +2445,10 @@ mod tests {
                 ),
             ]
         );
-        let context = AgentContext::import_durable_blocks(transcript.blocks).unwrap();
+        let context = transcript
+            .records
+            .import_context(transcript.blocks)
+            .unwrap();
         assert!(mez_agent::mcp_server_is_referencable(&context, "fs"));
         let tools = mez_agent::invoked_mcp_tools_for_context(
             &context,
@@ -2585,7 +2609,10 @@ mod tests {
         assert!(transcript.execution_events.iter().all(|event| {
             event.execution_group_id() == &fresh_group && matches!(event.ordinal(), 1 | 2)
         }));
-        let mut context = AgentContext::import_durable_blocks(transcript.blocks).unwrap();
+        let mut context = transcript
+            .records
+            .import_context(transcript.blocks)
+            .unwrap();
         context
             .restore_imported_execution_events(&transcript.execution_events)
             .unwrap();
@@ -2659,7 +2686,10 @@ mod tests {
             transcript.blocks[0].content,
             "display fallback for partial execution"
         );
-        let mut context = AgentContext::import_durable_blocks(transcript.blocks).unwrap();
+        let mut context = transcript
+            .records
+            .import_context(transcript.blocks)
+            .unwrap();
         context
             .restore_imported_execution_events(&transcript.execution_events)
             .unwrap();
@@ -2759,7 +2789,10 @@ mod tests {
         assert!(transcript.blocks.iter().all(|block| {
             ProviderTranscriptEvent::from_transcript_content(&block.content).is_none()
         }));
-        let mut context = AgentContext::import_durable_blocks(transcript.blocks).unwrap();
+        let mut context = transcript
+            .records
+            .import_context(transcript.blocks)
+            .unwrap();
         context
             .restore_imported_execution_events(&transcript.execution_events)
             .unwrap();
@@ -2860,7 +2893,10 @@ mod tests {
             .collect::<Vec<_>>();
 
         let transcript = runtime_agent_transcript_context("%1", &entries);
-        let mut context = AgentContext::import_durable_blocks(transcript.blocks).unwrap();
+        let mut context = transcript
+            .records
+            .import_context(transcript.blocks)
+            .unwrap();
         context
             .restore_imported_execution_events(&transcript.execution_events)
             .unwrap();

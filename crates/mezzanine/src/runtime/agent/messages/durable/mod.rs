@@ -246,7 +246,8 @@ impl RuntimeSessionService {
             event.sequence().get(),
         )?;
         let projection = Arc::new(
-            NativeInputProjection::new(row, event.sequence().get(), label)?.with_prefix(prefix)?,
+            NativeInputProjection::new(row, event.sequence().get(), label, event.record())?
+                .with_prefix(prefix)?,
         );
         let target = self
             .agent_transcript_store()
@@ -336,6 +337,7 @@ impl RuntimeSessionService {
                             event.sequence().get(),
                             &event.block().label,
                             &event.block().content,
+                            event.record(),
                         )
                     })
                 })

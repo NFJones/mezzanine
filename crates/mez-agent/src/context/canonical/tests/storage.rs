@@ -92,7 +92,9 @@ fn agent_context_projects_typed_stable_and_event_storage_in_order() {
 }
 
 /// Verifies atomic chronological appends preserve the same projection and
-/// sequence order as the existing one-event mutation APIs.
+/// sequence order as the existing one-event mutation APIs. Both paths import
+/// the same committed occurrence records; independent appends deliberately
+/// allocate different IDs even when their bytes and ordering match.
 #[test]
 fn agent_context_batch_append_matches_sequential_events() {
     let group = ContextExecutionGroupId::new("batch-execution").unwrap();
@@ -117,7 +119,9 @@ fn agent_context_batch_append_matches_sequential_events() {
         .unwrap();
     let sequences = batched
         .append_conversation_events([
-            ContextConversationAppend::assistant("assistant", "inspect files", group.clone()),
+            ContextConversationAppend::assistant("assistant", "inspect files", group.clone())
+                .with_record(sequential.chronology()[1].record())
+                .unwrap(),
             ContextConversationAppend::evidence(
                 ContextSourceKind::ActionResult,
                 "action result inspect",
@@ -125,7 +129,9 @@ fn agent_context_batch_append_matches_sequential_events() {
                 group,
                 None,
                 true,
-            ),
+            )
+            .with_record(sequential.chronology()[2].record())
+            .unwrap(),
         ])
         .unwrap();
     assert_eq!(sequences.len(), 2);
@@ -149,6 +155,7 @@ fn agent_context_batch_append_is_atomic_when_later_event_is_invalid() {
         .append_conversation_events([
             ContextConversationAppend::assistant("assistant", "valid first event", group),
             ContextConversationAppend {
+                record: None,
                 block: ContextBlock::user_event("user prompt", "duplicate active prompt"),
                 semantic_kind: ContextSemanticKind::UserEvent,
                 retention: ContextRetention::Exact,

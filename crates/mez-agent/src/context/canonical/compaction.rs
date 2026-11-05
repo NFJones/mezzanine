@@ -5,8 +5,9 @@
 //! candidate before committing to the existing context state.
 
 use super::{
-    AgentContext, AgentContextError, AgentContextResult, ContextBlock, ContextPlacement,
-    ContextRetention, ContextSemanticKind, ConversationEvent, context_block_is_compaction_summary,
+    AgentContext, AgentContextError, AgentContextResult, ContextBlock, ContextBlockRecord,
+    ContextPlacement, ContextRetention, ContextSemanticKind, ConversationEvent,
+    context_block_is_compaction_summary,
 };
 use std::ops::Range;
 
@@ -96,6 +97,7 @@ impl AgentContext {
         self.chronology.insert(
             insertion_index,
             ConversationEvent {
+                record: ContextBlockRecord::allocate(&summary)?,
                 block: summary,
                 semantic_kind: ContextSemanticKind::ReferenceEvent,
                 retention: ContextRetention::Summarizable,
@@ -151,6 +153,7 @@ impl AgentContext {
         for (range, summary) in replacements.into_iter().rev() {
             let sequence = self.chronology[range.start].sequence;
             let summary_event = ConversationEvent {
+                record: ContextBlockRecord::allocate(&summary)?,
                 block: summary,
                 semantic_kind: ContextSemanticKind::ReferenceEvent,
                 retention: ContextRetention::Summarizable,

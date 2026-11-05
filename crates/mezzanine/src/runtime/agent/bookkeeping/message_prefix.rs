@@ -96,7 +96,13 @@ impl RuntimeSessionService {
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
                 pane_id: turn.pane_id.clone(),
-                content: canonical.to_transcript_content(),
+                content: mez_agent::transcript::TranscriptContextRecord::new(
+                    canonical,
+                    event.record(),
+                    (block.source == ContextSourceKind::UserInstruction)
+                        .then(|| context.stable_block_records()),
+                )?
+                .to_transcript_content()?,
             });
         }
         Ok(rows)

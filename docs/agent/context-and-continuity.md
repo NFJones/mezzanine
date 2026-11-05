@@ -479,6 +479,15 @@ runtime policy does not remove sensitive data from prompts or action output.
 
 ## Canonical epoch boundary
 
+Canonical blocks retain occurrence identities and cached local input estimates
+separately from their source text. Equal text at separate occurrences stays
+distinct. Accounted typed records preserve this metadata through replay, validate
+it against the actual source, and recompute stale estimates. Malformed reserved
+records refuse context reconstruction instead of silently dropping history.
+Saved guidance metadata does not restore old instructions over current guidance.
+These estimates are not provider usage or billing, and their metadata is not
+part of the semantic source supplied to the model.
+
 The shared canonical API defines one summary head and explicit retained raw
 membership. Summaries are reference material: they cannot enable tools or grant
 access. Current controlling instructions and unresolved call/result groups stay

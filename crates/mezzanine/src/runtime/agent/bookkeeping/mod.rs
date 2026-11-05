@@ -896,6 +896,12 @@ impl RuntimeSessionService {
             .unwrap_or(0)
             .checked_add(1)
             .ok_or_else(|| MezError::invalid_state("completion evidence ordinal exhausted"))?;
+        let record =
+            mez_agent::ContextBlockRecord::allocate(&mez_agent::ContextBlock::evidence_event(
+                ContextSourceKind::CommittedEvidence,
+                "completion settlement evidence v1",
+                content.clone(),
+            ))?;
         let event = TranscriptContextEvent::execution_block_with_metadata(
             ContextSourceKind::CommittedEvidence,
             "completion settlement evidence v1",
@@ -917,7 +923,8 @@ impl RuntimeSessionService {
             turn_id: candidate.turn.turn_id.clone(),
             agent_id: candidate.turn.agent_id.clone(),
             pane_id: candidate.turn.pane_id.clone(),
-            content: event.to_transcript_content(),
+            content: mez_agent::transcript::TranscriptContextRecord::new(event, record, None)?
+                .to_transcript_content()?,
         };
         entry.validate()?;
         candidate.entries.push(entry);

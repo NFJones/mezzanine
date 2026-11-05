@@ -76,15 +76,3 @@ pub fn model_context_block_header(block: &ContextBlock) -> String {
     };
     format!("[{}{}]\n", block.label, domain_annotation)
 }
-
-/// Estimates the framed token cost of one context block for accounting only.
-///
-/// This is not provider-reported usage: providers report whole-request totals,
-/// and wire-level role and schema overhead must be accounted for separately.
-pub(super) fn context_block_input_token_estimate(block: &ContextBlock) -> usize {
-    crate::provider_text_input_token_estimate(&format!(
-        "{}{}",
-        model_context_block_header(block),
-        block.content
-    ))
-}

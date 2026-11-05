@@ -24,6 +24,8 @@ use sha2::{Digest, Sha256};
 use crate::action_result::ActionResult;
 use crate::{ProviderApiCompatibility, ProviderTranscriptEvent};
 
+mod block_record;
+pub use block_record::{ContextBlockOccurrenceId, ContextBlockRecord, StableContextBlockRecord};
 mod chronology;
 mod compaction;
 mod epoch;
@@ -48,7 +50,6 @@ pub use messages::{
     ContextEpochComponent, ContextEpochIdentity, ContextEpochTransition, ModelMessage,
     ModelMessageRole, ModelMessages, ModelMessagesIter,
 };
-use projection::context_block_input_token_estimate;
 pub use projection::{PreparedModelContext, model_context_block_header};
 pub use request::ModelRequest;
 mod summary;
@@ -363,6 +364,7 @@ impl StableContextSourceFingerprint {
 /// One producer-classified reusable-prefix block with replacement identity.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StableContextBlock {
+    record: ContextBlockRecord,
     slot_id: StableContextSlotId,
     source_fingerprint: StableContextSourceFingerprint,
     block: ContextBlock,
@@ -375,6 +377,16 @@ impl StableContextBlock {
         source_fingerprint: StableContextSourceFingerprint,
         block: ContextBlock,
     ) -> AgentContextResult<Self> {
+        Self::with_record(slot_id, source_fingerprint, block, None)
+    }
+
+    /// Validates one new or restored slot against its actual live source.
+    fn with_record(
+        slot_id: StableContextSlotId,
+        source_fingerprint: StableContextSourceFingerprint,
+        block: ContextBlock,
+        record: Option<ContextBlockRecord>,
+    ) -> AgentContextResult<Self> {
         if block.placement != ContextPlacement::StablePrefix
             || block.semantic_kind() != ContextSemanticKind::AmbientInstruction
         {
@@ -385,6 +397,10 @@ impl StableContextBlock {
         Ok(Self {
             slot_id,
             source_fingerprint,
+            record: match record {
+                Some(record) => record.restored(&block)?,
+                None => ContextBlockRecord::allocate(&block)?,
+            },
             block,
         })
     }
@@ -399,6 +415,11 @@ impl StableContextBlock {
         &self.source_fingerprint
     }
 
+    /// Returns durable occurrence and its owned, non-model-visible accounting.
+    pub fn record(&self) -> ContextBlockRecord {
+        self.record
+    }
+
     /// Returns the exact model-visible stable block.
     pub fn block(&self) -> &ContextBlock {
         &self.block
@@ -407,6 +428,15 @@ impl StableContextBlock {
     /// Builds a deterministic compatibility slot for an already ordered block
     /// vector at a legacy/test construction boundary.
     fn from_compatibility_block(block: ContextBlock, index: usize) -> AgentContextResult<Self> {
+        Self::from_compatibility_block_with_record(block, index, None)
+    }
+
+    /// Restores an explicitly associated record at the compatibility boundary.
+    fn from_compatibility_block_with_record(
+        block: ContextBlock,
+        index: usize,
+        record: Option<ContextBlockRecord>,
+    ) -> AgentContextResult<Self> {
         let mut identity_material = format!("{index}:{:?}:{}", block.source, block.label);
         let identity_digest = Sha256::digest(identity_material.as_bytes())
             .iter()
@@ -418,10 +448,11 @@ impl StableContextBlock {
             .iter()
             .map(|byte| format!("{byte:02x}"))
             .collect::<String>();
-        Self::new(
+        Self::with_record(
             StableContextSlotId::new(format!("compat-{identity_digest}"))?,
             StableContextSourceFingerprint::new(source_fingerprint)?,
             block,
+            record,
         )
     }
 
@@ -436,7 +467,7 @@ impl StableContextBlock {
             recoverable_for_compaction: false,
             stable_slot_id: Some(self.slot_id.clone()),
             stable_source_fingerprint: Some(self.source_fingerprint.clone()),
-            estimated_input_tokens: context_block_input_token_estimate(&self.block),
+            record: self.record,
         }
     }
 }
@@ -560,6 +591,7 @@ impl ProviderContinuityOwner {
 /// projection and compacts the same atomic group.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImportedExecutionEvent {
+    record: Option<ContextBlockRecord>,
     block: ContextBlock,
     execution_group_id: ContextExecutionGroupId,
     ordinal: u64,
@@ -598,11 +630,19 @@ impl ImportedExecutionEvent {
             ));
         }
         Ok(Self {
+            record: None,
             block,
             execution_group_id,
             ordinal,
             provider_owner,
         })
+    }
+
+    /// Associates exact persistent origin rather than searching by equal text.
+    /// Cost validation uses the real imported source without granting ownership.
+    pub fn with_record(mut self, record: ContextBlockRecord) -> AgentContextResult<Self> {
+        self.record = Some(record.restored(&self.block)?);
+        Ok(self)
     }
 
     /// Returns the exact model-visible block matched during import.
@@ -641,7 +681,7 @@ pub struct ContextBlockMetadata {
     recoverable_for_compaction: bool,
     stable_slot_id: Option<StableContextSlotId>,
     stable_source_fingerprint: Option<StableContextSourceFingerprint>,
-    estimated_input_tokens: usize,
+    record: ContextBlockRecord,
 }
 
 impl ContextBlockMetadata {
@@ -690,7 +730,17 @@ impl ContextBlockMetadata {
     /// Provider-reported usage covers whole requests, not individual blocks.
     /// This value is accounting-only and never enters provider messages.
     pub fn estimated_input_tokens(&self) -> usize {
-        self.estimated_input_tokens
+        self.record.estimated_input_tokens()
+    }
+
+    /// Returns the cached content-only estimate for native provider projection.
+    pub fn estimated_native_input_tokens(&self) -> usize {
+        self.record.estimated_native_input_tokens()
+    }
+
+    /// Returns the immutable block origin and its versioned accounting snapshot.
+    pub fn record(&self) -> ContextBlockRecord {
+        self.record
     }
 }
 
@@ -702,6 +752,7 @@ impl ContextBlockMetadata {
 /// infer that transition from labels, newer text or a summary's presence.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConversationEvent {
+    record: ContextBlockRecord,
     block: ContextBlock,
     semantic_kind: ContextSemanticKind,
     retention: ContextRetention,
@@ -717,6 +768,7 @@ pub struct ConversationEvent {
 /// rebuilding the adapter projections only once for the complete batch.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ContextConversationAppend {
+    record: Option<ContextBlockRecord>,
     block: ContextBlock,
     semantic_kind: ContextSemanticKind,
     retention: ContextRetention,
@@ -726,6 +778,34 @@ pub struct ContextConversationAppend {
 }
 
 impl ContextConversationAppend {
+    /// Builds an untrusted peer reference; it grants no delivery or ACK rights.
+    pub fn peer_message(label: impl Into<String>, content: impl Into<String>) -> Self {
+        Self {
+            record: None,
+            block: ContextBlock::reference_event(ContextSourceKind::PeerMessage, label, content),
+            semantic_kind: ContextSemanticKind::ReferenceEvent,
+            retention: ContextRetention::Summarizable,
+            execution_group_id: None,
+            provider_owner: None,
+            recoverable_for_compaction: true,
+        }
+    }
+
+    /// Builds a neutral summarizable runtime fact without task or input rights.
+    pub fn runtime_fact(label: impl Into<String>, content: impl Into<String>) -> Self {
+        let mut event = Self::peer_message(label, content);
+        event.block.source = ContextSourceKind::RuntimeHint;
+        event
+    }
+
+    /// Restores accounting at the explicit source boundary. The record changes
+    /// neither source bytes nor causal/retention ownership; append still checks
+    /// canonical semantics and duplicate occurrences atomically.
+    pub fn with_record(mut self, record: ContextBlockRecord) -> AgentContextResult<Self> {
+        self.record = Some(record.restored(&self.block)?);
+        Ok(self)
+    }
+
     /// Builds one assistant event owned by an execution group.
     pub fn assistant(
         label: impl Into<String>,
@@ -733,6 +813,7 @@ impl ContextConversationAppend {
         execution_group_id: ContextExecutionGroupId,
     ) -> Self {
         Self {
+            record: None,
             block: ContextBlock::assistant_event(label, content),
             semantic_kind: ContextSemanticKind::AssistantEvent,
             retention: ContextRetention::ExecutionGroup,
@@ -752,6 +833,7 @@ impl ContextConversationAppend {
         provider_owner: ProviderContinuityOwner,
     ) -> Self {
         Self {
+            record: None,
             block: ContextBlock::assistant_event(label, content),
             semantic_kind: ContextSemanticKind::AssistantEvent,
             retention: ContextRetention::ExecutionGroup,
@@ -771,6 +853,7 @@ impl ContextConversationAppend {
         recoverable_for_compaction: bool,
     ) -> Self {
         Self {
+            record: None,
             block: ContextBlock::evidence_event(source, label, content),
             semantic_kind: ContextSemanticKind::EvidenceEvent,
             retention: ContextRetention::ExecutionGroup,
@@ -782,6 +865,12 @@ impl ContextConversationAppend {
 }
 
 impl ConversationEvent {
+    /// Returns the durable occurrence and its owned accounting, independently
+    /// of the local ordering sequence or current epoch membership.
+    pub fn record(&self) -> ContextBlockRecord {
+        self.record
+    }
+
     /// Returns the exact chronological model-context block.
     pub fn block(&self) -> &ContextBlock {
         &self.block
@@ -828,7 +917,7 @@ impl ConversationEvent {
             recoverable_for_compaction: self.recoverable_for_compaction,
             stable_slot_id: None,
             stable_source_fingerprint: None,
-            estimated_input_tokens: context_block_input_token_estimate(&self.block),
+            record: self.record,
         }
     }
 }
@@ -1192,9 +1281,15 @@ impl AgentContext {
                     "imported execution-group ordinals must be contiguous and start at one",
                 ));
             }
-            let Some(relative_index) = candidate.chronology[search_start..]
-                .iter()
-                .position(|event| event.block == record.block)
+            let Some(relative_index) =
+                candidate.chronology[search_start..]
+                    .iter()
+                    .position(|event| {
+                        event.block == record.block
+                            && record.record.is_none_or(|stored| {
+                                stored.occurrence_id() == event.record.occurrence_id()
+                            })
+                    })
             else {
                 return Err(AgentContextError::new(
                     "imported execution metadata has no matching chronological block",
@@ -1354,6 +1449,7 @@ impl AgentContext {
                         AgentContextError::new("prompt-boundary prelude sequence overflow")
                     })?;
                 Ok(ConversationEvent {
+                    record: ContextBlockRecord::allocate(&block)?,
                     block,
                     semantic_kind: ContextSemanticKind::TaskPrelude,
                     retention: ContextRetention::Exact,
@@ -1429,6 +1525,7 @@ impl AgentContext {
         let event = &mut candidate.chronology[matching[0]];
         event.block.source = ContextSourceKind::TranscriptUser;
         event.block.label = "interrupted user prompt".to_string();
+        event.record = event.record.revised(&event.block)?;
         candidate.rebuild_projections();
         candidate.validate_stored_metadata()?;
         *self = candidate;
@@ -1442,9 +1539,10 @@ impl AgentContext {
     /// interrupted conversation events remain byte-for-byte intact.
     pub fn replace_stable_slots(
         &mut self,
-        slots: Vec<StableContextBlock>,
+        mut slots: Vec<StableContextBlock>,
     ) -> AgentContextResult<()> {
         let mut candidate = self.clone();
+        candidate.preserve_stable_record_origins(&mut slots)?;
         candidate.stable_slots = slots;
         candidate.rebuild_projections();
         candidate.validate_stored_metadata()?;
@@ -1482,6 +1580,7 @@ impl AgentContext {
         let replacement = ContextBlock::reference_event(source, label, content);
         let event = &mut self.chronology[index];
         event.block = replacement;
+        event.record = event.record.revised(&event.block)?;
         event.semantic_kind = ContextSemanticKind::ReferenceEvent;
         event.retention = ContextRetention::Exact;
         event.execution_group_id = None;
@@ -1546,7 +1645,7 @@ impl AgentContext {
     fn replace_stable_source_slots_candidate(
         &mut self,
         source: ContextSourceKind,
-        slots: Vec<StableContextBlock>,
+        mut slots: Vec<StableContextBlock>,
     ) -> AgentContextResult<bool> {
         let mut slot_ids = BTreeSet::new();
         for slot in &slots {
@@ -1587,6 +1686,7 @@ impl AgentContext {
             ));
         }
 
+        self.preserve_stable_record_origins(&mut slots)?;
         let unchanged = existing_indices.len() == slots.len()
             && existing_indices
                 .iter()
@@ -1686,6 +1786,7 @@ impl AgentContext {
                     None
                 };
                 let event = ConversationEvent {
+                    record: ContextBlockRecord::allocate(&block)?,
                     block,
                     semantic_kind,
                     retention,
@@ -1741,7 +1842,7 @@ impl AgentContext {
         mut owns: impl FnMut(&ContextBlock) -> bool,
         blocks: Vec<ContextBlock>,
     ) -> AgentContextResult<usize> {
-        self.replace_imported_history_prefix_events(|event| owns(event.block()), blocks)
+        self.replace_imported_history_prefix_events(|event| owns(event.block()), blocks, &[])
     }
 
     /// Replaces all imported historical events through a stable sequence boundary.
@@ -1758,6 +1859,7 @@ impl AgentContext {
         self.replace_imported_history_prefix_events(
             |event| event.sequence().get() <= sequence_high_water,
             blocks,
+            &[],
         )
     }
 
@@ -1766,6 +1868,7 @@ impl AgentContext {
         &mut self,
         mut owns: impl FnMut(&ConversationEvent) -> bool,
         blocks: Vec<ContextBlock>,
+        records: &[(usize, ContextBlockRecord)],
     ) -> AgentContextResult<usize> {
         if blocks
             .iter()
@@ -1796,7 +1899,7 @@ impl AgentContext {
 
         let mut imported = Self::empty();
         if !blocks.is_empty() {
-            imported.initialize_typed_storage_from_blocks(blocks)?;
+            imported.initialize_typed_storage_with_records(blocks, records)?;
         }
         if !imported.stable_slots.is_empty() {
             return Err(AgentContextError::new(
@@ -1854,6 +1957,16 @@ impl AgentContext {
         &mut self,
         blocks: Vec<ContextBlock>,
     ) -> AgentContextResult<()> {
+        self.initialize_typed_storage_with_records(blocks, &[])
+    }
+
+    /// Imports checked occurrence records directly, avoiding an initial recount
+    /// that would immediately be discarded when valid cached data is restored.
+    fn initialize_typed_storage_with_records(
+        &mut self,
+        blocks: Vec<ContextBlock>,
+        records: &[(usize, ContextBlockRecord)],
+    ) -> AgentContextResult<()> {
         validate_context_placement_order(&blocks)?;
         validate_context_semantics(&blocks)?;
         let compatibility_group_ids = compatibility_execution_group_ids(&blocks)?;
@@ -1864,10 +1977,14 @@ impl AgentContext {
         self.blocks.clear();
         self.next_event_sequence = CONTEXT_EVENT_SEQUENCE_STRIDE;
         for (index, block) in blocks.into_iter().enumerate() {
+            let record = records
+                .binary_search_by_key(&index, |(index, _)| *index)
+                .ok()
+                .map(|found| records[found].1);
             match block.placement {
-                ContextPlacement::StablePrefix => self
-                    .stable_slots
-                    .push(StableContextBlock::from_compatibility_block(block, index)?),
+                ContextPlacement::StablePrefix => self.stable_slots.push(
+                    StableContextBlock::from_compatibility_block_with_record(block, index, record)?,
+                ),
                 ContextPlacement::ConversationAppend => {
                     let execution_group_id = compatibility_group_ids[conversation_index].clone();
                     let (semantic_kind, retention, recoverable_for_compaction) =
@@ -1875,6 +1992,10 @@ impl AgentContext {
                     let provider_owner = provider_owner_for_block(&block);
                     let sequence = self.allocate_event_sequence()?;
                     self.chronology.push(ConversationEvent {
+                        record: match record {
+                            Some(record) => record.restored(&block)?,
+                            None => ContextBlockRecord::allocate(&block)?,
+                        },
                         block,
                         semantic_kind,
                         retention,

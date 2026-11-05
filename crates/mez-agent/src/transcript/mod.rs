@@ -6,6 +6,7 @@
 
 mod checkpoint;
 mod context_event;
+mod context_record;
 mod error;
 mod records;
 mod steering;
@@ -14,6 +15,9 @@ mod terminal_handoff;
 
 pub use checkpoint::{AgentSessionMetadata, PaneModelProfileSelection};
 pub use context_event::{TRANSCRIPT_CONTEXT_EVENT_MARKER, TranscriptContextEvent};
+pub use context_record::{
+    ACCOUNTED_CONTEXT_RECORD_MARKER, TranscriptContextRecord, is_accounted_context_record,
+};
 pub use error::TranscriptContractError;
 pub use records::{TranscriptEntry, TranscriptRole, validate_conversation_id};
 pub use steering::{
