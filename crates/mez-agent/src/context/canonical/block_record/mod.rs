@@ -108,6 +108,12 @@ pub struct StableContextBlockRecord {
 }
 
 impl StableContextBlockRecord {
+    /// Returns the immutable occurrence carried by this descriptive snapshot.
+    /// It grants no instruction or source authority.
+    pub fn occurrence_id(&self) -> ContextBlockOccurrenceId {
+        self.record.occurrence_id()
+    }
+
     /// Returns the explicit producer slot, never an inferred text match.
     pub fn slot_id(&self) -> &str {
         &self.slot_id

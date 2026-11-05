@@ -27,6 +27,8 @@ pub(crate) struct RuntimeSubagentForkSnapshot {
     /// Original raw placement and available validated costs from that same lease.
     pub(crate) row_origins: crate::storage::transcript::TranscriptRowOrigins,
     pub(crate) row_records: crate::storage::transcript::TranscriptRowRecords,
+    /// Original stable baseline before the physically copied tail, without text.
+    stable_records: Option<Vec<mez_agent::StableContextBlockRecord>>,
 }
 
 /// Immutable parent-history read input captured before child pane allocation.
@@ -117,9 +119,10 @@ impl RuntimeSubagentForkReadWork {
             .len() as u64;
         let (_, source) = self
             .store
-            .conversation_replay_projection(
+            .conversation_replay_projection_with_frontier(
                 &self.source_conversation_id,
                 self.pending.entries(),
+                Some(self.source_high_water),
                 |epoch| {
                     if self.source_high_water > 0 {
                         Some((
@@ -229,6 +232,14 @@ impl RuntimeSubagentForkReadWork {
             logical.len().saturating_sub(retained_entries)
         };
         let entries = logical[first_retained..].to_vec();
+        let prefix = compaction_epoch
+            .as_ref()
+            .map_or(0, |epoch| epoch.through_sequence);
+        let baseline = entries
+            .iter()
+            .find(|row| row.sequence > prefix)
+            .map_or(self.source_high_water, |row| row.sequence - 1);
+        let stable_records = source.stable_records_through(baseline)?;
         let history = super::super::context::runtime_agent_history_epoch_from_snapshot(
             super::super::context::RuntimeAgentHistoryEpochInputs {
                 pane_id: self.parent_pane_id.clone(),
@@ -271,6 +282,7 @@ impl RuntimeSubagentForkReadWork {
                 source_high_water: self.source_high_water,
                 row_origins,
                 row_records,
+                stable_records,
             },
             updates
                 .into_iter()
@@ -318,6 +330,7 @@ impl RuntimeSessionService {
                     source_high_water: 0,
                     row_origins: Default::default(),
                     row_records: Default::default(),
+                    stable_records: None,
                 })
             }
         }
@@ -503,7 +516,8 @@ impl RuntimeSubagentForkSnapshot {
                     crate::storage::transcript::InitialTranscriptRowAccounting::new(
                         row_origins,
                         row_records,
-                    ),
+                    )
+                    .with_stable_records(self.stable_records.clone())?,
                 )?;
                 let history = child_history(child_pane, &batch, None)?;
                 let accounting = batch

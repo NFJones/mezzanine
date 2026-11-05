@@ -23,6 +23,16 @@ pub(crate) struct TranscriptStableSnapshot {
 }
 
 impl TranscriptStableSnapshot {
+    /// Establishes a validated receipt-owned baseline before child row one.
+    /// It has no physical child carrier and conveys no semantic authority.
+    pub(super) fn from_initial(records: &[StableContextBlockRecord]) -> Self {
+        Self {
+            sequence: 0,
+            occurrence: None,
+            records: Some(Arc::from(records)),
+        }
+    }
+
     /// Physical carrier position qualifies chronological precedence only.
     pub(crate) fn sequence(&self) -> u64 {
         self.sequence

@@ -10953,7 +10953,7 @@ child's own admitted save policy remains independent of the source window.
 
 Inherited child batches MUST carry complete original raw placement and available
 cost records independently of an optional summary. Version-5 append receipts bind
-that version-1 initial accounting proposal, its once-allocated future namespace,
+the versioned initial accounting proposal, its once-allocated future namespace,
 exact physical rows and optional epoch in a separate digest domain; versions 1–4
 retain their original validation/digests for genuine persisted recovery. Initial
 accounting publishes atomically in projection schema 3 with an immutable proposal
@@ -10967,6 +10967,16 @@ those states without publishing repairs. Missing costs and incomplete required
 markers remain recoverable by the original owner. The exact receipt retains ownership through raw, ledger, epoch
 and required-marker failure windows. Valid later cache revisions MUST NOT be
 overwritten by a retry of an older initial proposal.
+
+Version-2 initial accounting additionally retains the original stable snapshot
+preceding the child's physically copied tail. It is a descriptive baseline
+before child row one, never instruction bytes or an invented physical carrier.
+Later visible raw carriers MUST supersede it, including complete empty snapshots;
+future or invalid carriers MUST NOT silently supply or revive an older claim.
+Bounded child/fork views MUST select their preceding baseline without adopting a
+later retained carrier as earlier state. Genuine version-1 proposals retain their
+original serialized fields/digests and explicitly supply no baseline. Missing or
+malformed required immutable initial markers MUST refuse the affected source.
 
 Fork source capture MUST retain its original store path, checked logical cutoff,
 roles, original occurrence IDs and source caches. Pending same-CID work owned by a

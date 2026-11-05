@@ -39,6 +39,43 @@ pub(crate) struct ConversationReplaySnapshot {
     pub(crate) row_records: super::TranscriptRowRecords,
     /// Latest original stable carrier within the same checked visible source.
     pub(crate) stable_records: Option<super::TranscriptStableSnapshot>,
+    /// Receipt-owned baseline before row one, retained for bounded fork copies.
+    pub(crate) initial_stable_records: Option<super::TranscriptStableSnapshot>,
+}
+
+impl ConversationReplaySnapshot {
+    /// Selects the baseline preceding the physical tail from already checked
+    /// rows. Reuses the latest capture when possible; otherwise probes only the
+    /// omitted in-memory prefix, never rereading the archive or recounting costs.
+    /// A later retained carrier must not become an earlier child's baseline.
+    pub(crate) fn stable_records_through(
+        &self,
+        through: u64,
+    ) -> Result<Option<Vec<mez_agent::StableContextBlockRecord>>> {
+        let selected = if self
+            .stable_records
+            .as_ref()
+            .is_some_and(|snapshot| snapshot.sequence() <= through)
+        {
+            self.stable_records.clone()
+        } else {
+            let mut capture = super::stable_records::StableRecordCapture::new(Some(through));
+            for row in self
+                .view
+                .logical
+                .iter()
+                .take_while(|row| row.sequence <= through)
+            {
+                capture.observe(row);
+            }
+            capture
+                .finish()
+                .or_else(|| self.initial_stable_records.clone())
+        };
+        selected
+            .map(|snapshot| snapshot.records().map(Vec::from))
+            .transpose()
+    }
 }
 
 impl AgentTranscriptStore {
@@ -100,7 +137,8 @@ impl AgentTranscriptStore {
         self.recover_accounted_appends_for_replay_locked(conversation_id, &lease)?;
         let epoch = self.compaction_epoch_locked(conversation_id)?;
         let mut stable = super::stable_records::StableRecordCapture::new(frontier);
-        let mut view = match select(epoch.as_ref()) {
+        let read = select(epoch.as_ref());
+        let mut view = match read {
             Some((read, required)) => self
                 .conversation_transcript_view_with_stable_records_locked(
                     conversation_id,
@@ -119,7 +157,17 @@ impl AgentTranscriptStore {
             view.committed.retain(|row| row.sequence <= frontier);
             view.logical.retain(|row| row.sequence <= frontier);
         }
-        let stable_records = stable.finish();
+        let initial_stable_records = if read.is_some() {
+            self.initial_row_accounting_locked(conversation_id)?
+                .and_then(|accounting| {
+                    accounting
+                        .stable_records()
+                        .map(super::TranscriptStableSnapshot::from_initial)
+                })
+        } else {
+            None
+        };
+        let stable_records = stable.finish().or_else(|| initial_stable_records.clone());
         let row_origins = self.transcript_row_origins_locked(conversation_id, &view.logical)?;
         if let Some(snapshot) = &stable_records
             && let Some(origin) = snapshot.occurrence
@@ -137,6 +185,7 @@ impl AgentTranscriptStore {
             row_origins,
             row_records,
             stable_records,
+            initial_stable_records,
         };
         let (value, records) = project(&snapshot)?;
         self.save_rendered_row_records_locked(conversation_id, &snapshot, &records)?;

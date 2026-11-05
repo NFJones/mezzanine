@@ -200,7 +200,12 @@ impl TranscriptAppendBatch {
         self.initial_row_accounting
             .as_ref()
             .map(|accounting| super::ConversationReplaySnapshot {
-                stable_records: None,
+                stable_records: accounting
+                    .stable_records()
+                    .map(super::TranscriptStableSnapshot::from_initial),
+                initial_stable_records: accounting
+                    .stable_records()
+                    .map(super::TranscriptStableSnapshot::from_initial),
                 epoch: self.initial_compaction_epoch.clone(),
                 view: super::store::ConversationTranscriptView {
                     committed: Vec::new(),

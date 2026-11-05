@@ -10,6 +10,8 @@ use crate::runtime::PersistenceEvent;
 use crate::storage::transcript::{AgentCompactionRange, TranscriptAppendBatch};
 use std::fs;
 
+mod stable_records;
+
 /// Builds the same restricted child request for successful and failed admission.
 fn fork_request(skip: bool) -> SubagentSpawnRequest {
     SubagentSpawnRequest {

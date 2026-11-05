@@ -5,6 +5,8 @@
 //! descriptive costs commit atomically before initial readiness. The immutable
 //! marker distinguishes that proposal from equal bytes with different origins.
 //! Later cache revisions remain descriptive and never grant replay authority.
+//! Version two also owns the stable snapshot preceding the copied raw tail;
+//! it contains no instructions and later physical carriers supersede it.
 
 use super::{AgentTranscriptStore, TranscriptRowOrigins, TranscriptRowRecords};
 use crate::{MezError, Result};
@@ -22,6 +24,9 @@ pub(crate) struct InitialTranscriptRowAccounting {
     namespace: ContextBlockOccurrenceId,
     origins: TranscriptRowOrigins,
     records: TranscriptRowRecords,
+    /// Version-two baseline before child row one; None preserves genuine v1.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    stable: Option<Vec<mez_agent::StableContextBlockRecord>>,
 }
 
 impl InitialTranscriptRowAccounting {
@@ -33,7 +38,25 @@ impl InitialTranscriptRowAccounting {
             namespace: ContextBlockOccurrenceId::allocate(),
             origins,
             records,
+            stable: None,
         }
+    }
+
+    /// Couples an original preceding-tail snapshot to this exact proposal.
+    /// Empty snapshots retire claims; None means no inherited baseline exists.
+    pub(crate) fn with_stable_records(
+        mut self,
+        stable: Option<Vec<mez_agent::StableContextBlockRecord>>,
+    ) -> Result<Self> {
+        self.version = if stable.is_some() { 2 } else { 1 };
+        self.stable = stable;
+        self.validate_format()?;
+        Ok(self)
+    }
+
+    /// Borrows only descriptive original records, never instruction bytes.
+    pub(crate) fn stable_records(&self) -> Option<&[mez_agent::StableContextBlockRecord]> {
+        self.stable.as_deref()
     }
 
     /// Borrows original placements indexed by the child's actual row positions.
@@ -59,10 +82,31 @@ impl InitialTranscriptRowAccounting {
 
     /// Validates framing independently of current replay membership or rows.
     fn validate_format(&self) -> Result<()> {
-        if self.version != 1 || self.origins.keys().any(|sequence| *sequence == 0) {
+        if !matches!(
+            (self.version, self.stable.is_some()),
+            (1, false) | (2, true)
+        ) || self.origins.keys().any(|sequence| *sequence == 0)
+        {
             return Err(MezError::invalid_state(
                 "unsupported initial row accounting",
             ));
+        }
+        if let Some(stable) = &self.stable {
+            // Match the existing typed snapshot's bounded metadata contract.
+            if stable.len() > 1024 {
+                return Err(MezError::invalid_state("oversized initial stable snapshot"));
+            }
+            let mut slots = std::collections::BTreeSet::new();
+            let mut occurrences = std::collections::BTreeSet::new();
+            for slot in stable {
+                slot.validate_format()?;
+                if slot.slot_id().len() > 4096
+                    || !slots.insert(slot.slot_id())
+                    || !occurrences.insert(slot.occurrence_id())
+                {
+                    return Err(MezError::invalid_state("invalid initial stable snapshot"));
+                }
+            }
         }
         for (sequence, record) in &self.records {
             record.validate_format()?;
@@ -195,6 +239,11 @@ impl AgentTranscriptStore {
                 |row| row.get(0),
             )
             .optional()?;
+        if encoded.is_none() {
+            return Err(MezError::invalid_state(
+                "required initial row accounting marker is missing",
+            ));
+        }
         encoded
             .map(|encoded| {
                 let payload: InitialTranscriptRowAccounting = serde_json::from_str(&encoded)

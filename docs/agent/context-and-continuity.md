@@ -559,6 +559,12 @@ rows from frozen source images and metadata adoption; malformed future metadata
 does not deny an older bounded view. Covered carriers still pass their original
 placement checks. Empty snapshots retire old claims. This adds no archive scan
 or persistent cache.
+When a fork omits the raw carrier, its version-2 initial accounting payload
+retains the snapshot preceding the copied tail. The same receipt publishes it
+with the original row records before readiness. It survives cold replay without
+copying old instructions; later visible carriers replace it. Historical child
+views do not borrow later retained snapshots. Older version-1 initial payloads
+explicitly have no stable baseline and keep their original recovery encoding.
 These estimates are not provider usage or billing, and their metadata is not
 part of the semantic source supplied to the model.
 

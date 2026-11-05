@@ -9,6 +9,8 @@ use crate::storage::transcript::{
 };
 use mez_agent::{ContextBlock, ContextBlockRecord, ContextPlacement, ContextSourceKind};
 
+mod stable_records;
+
 /// Builds equal bodies with distinct original records and optional summary.
 fn batch(summary: bool, empty: bool) -> TranscriptAppendBatch {
     let rows = if empty {
