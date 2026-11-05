@@ -309,6 +309,7 @@ impl RuntimeSessionService {
         &mut self,
         turn_id: &str,
     ) -> Result<()> {
+        self.retain_routed_context_before_cleanup(turn_id);
         if self.provider_refusal_is_armed(turn_id) {
             self.validate_provider_refusal_cleanup_before_cancellation(turn_id)?;
         }

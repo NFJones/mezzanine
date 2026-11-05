@@ -108,6 +108,7 @@ impl RuntimeSessionService {
                 .agent_shell_store_mut()
                 .finish_turn(&turn.pane_id, &turn.turn_id);
         }
+        self.retain_routed_context_before_cleanup(&turn.turn_id);
         self.agent_turn_contexts_mut().remove(&turn.turn_id);
         self.agent_turn_executions_mut().remove(&turn.turn_id);
         self.agent

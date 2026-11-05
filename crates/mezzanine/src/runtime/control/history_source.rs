@@ -63,7 +63,7 @@ impl RuntimeAgentHistorySource {
     }
 
     /// Freezes genuine source absence at the original prompt boundary.
-    pub(super) fn absent() -> Arc<Self> {
+    pub(in crate::runtime) fn absent() -> Arc<Self> {
         Arc::new(Self {
             work: None,
             epoch: None,

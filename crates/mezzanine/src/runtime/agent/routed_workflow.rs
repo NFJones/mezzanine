@@ -14,6 +14,7 @@ use super::{
     ScheduledWork, current_unix_seconds, runtime_spawn_json_agent_and_turn,
     runtime_subagent_placement_mode, runtime_subagent_spawn_request,
 };
+use crate::runtime::control::RuntimeAgentHistorySource;
 use mez_agent::routed_workflow::{
     RoutedFailurePlan, RoutedPresentationCompletionPlan, RoutedWorkerCompletionPlan,
     RoutedWorkerHandoff, RoutedWorkflowEvent, RoutedWorkflowPhase, RoutedWorkflowState,
@@ -21,6 +22,20 @@ use mez_agent::routed_workflow::{
     routed_failure_context_blocks, routed_presentation_context_blocks, routed_worker_seed_context,
 };
 use mez_agent::{ModelProfile, ScheduledWorkKind};
+use std::sync::Arc;
+
+/// One canonical routed context and the source metadata admitted with it.
+///
+/// The original archive (including genuine absence) and imported boundary
+/// travel through worker, handoff and repair turns. The owning turn prevents
+/// a stale admission snapshot from replacing a later worker's execution.
+#[derive(Debug, Clone)]
+pub(super) struct RuntimeRoutedContextSeed {
+    turn_id: String,
+    context: AgentContext,
+    source: Arc<RuntimeAgentHistorySource>,
+    imported_history_high_water: u64,
+}
 
 /// Inputs for one runtime-owned child turn in a routed workflow.
 struct RoutedChildTurnRequest<'a> {
@@ -30,12 +45,52 @@ struct RoutedChildTurnRequest<'a> {
     prompt: &'a str,
     model_profile: mez_agent::ModelProfile,
     configured_model_profile_name: String,
-    seed_context: Option<AgentContext>,
+    seed_context: RuntimeRoutedContextSeed,
     initial_capability: Option<mez_agent::AgentCapability>,
     reason: &'a str,
 }
 
 impl RuntimeSessionService {
+    /// Captures only a complete admitted trio. Missing retired metadata must
+    /// use its retained snapshot, never a default boundary or current store.
+    fn routed_context_seed(&self, turn_id: &str) -> Option<RuntimeRoutedContextSeed> {
+        Some(RuntimeRoutedContextSeed {
+            turn_id: turn_id.to_string(),
+            context: self.agent_turn_contexts().get(turn_id)?.clone(),
+            source: self.agent_turn_history_source(turn_id)?.clone(),
+            imported_history_high_water: *self
+                .agent
+                .agent_turn_imported_history_sequence_high_water
+                .get(turn_id)?,
+        })
+    }
+
+    /// Retains the latest owned child before retirement removes any member of
+    /// its canonical trio. Repeated cleanup cannot overwrite it with defaults.
+    pub(in crate::runtime::agent) fn retain_routed_context_before_cleanup(
+        &mut self,
+        turn_id: &str,
+    ) {
+        if let Some(parent) = self.routed_parent_turn_id_for_child(turn_id)
+            && let Some(seed) = self.routed_context_seed(turn_id)
+        {
+            self.agent
+                .routed_child_contexts_by_parent_turn
+                .insert(parent, seed);
+        }
+    }
+
+    /// Selects one actual current child, either live or already retired.
+    fn routed_child_seed(&self, parent: &str, child: &str) -> Option<RuntimeRoutedContextSeed> {
+        self.routed_context_seed(child).or_else(|| {
+            self.agent
+                .routed_child_contexts_by_parent_turn
+                .get(parent)
+                .filter(|seed| seed.turn_id == child)
+                .cloned()
+        })
+    }
+
     /// Returns the active parent workflow that authoritatively owns one child.
     ///
     /// The reverse index is accepted only when it agrees with workflow state;
@@ -335,8 +390,19 @@ impl RuntimeSessionService {
             })
             .map(|block| block.content.clone())
             .ok_or_else(|| MezError::invalid_state("routed parent prompt is unavailable"))?;
-        let worker_seed_context =
-            routed_worker_seed_context(&parent_context, &original_user_prompt);
+        let mut worker_seed_context = self.routed_context_seed(turn_id).ok_or_else(|| {
+            MezError::invalid_state("routed parent source metadata is unavailable")
+        })?;
+        worker_seed_context.context =
+            routed_worker_seed_context(&parent_context, &original_user_prompt)?;
+        worker_seed_context.imported_history_high_water = worker_seed_context
+            .context
+            .chronology()
+            .iter()
+            .map(|event| event.sequence().get())
+            .filter(|sequence| *sequence <= worker_seed_context.imported_history_high_water)
+            .max()
+            .unwrap_or(0);
         let params = serde_json::json!({
             "parent_agent": { "agent_id": turn.agent_id },
             "placement": "new-window",
@@ -412,7 +478,7 @@ impl RuntimeSessionService {
                 prompt: &original_user_prompt,
                 model_profile: selection.selected_profile.clone(),
                 configured_model_profile_name: selection.selected_profile_name.clone(),
-                seed_context: Some(worker_seed_context),
+                seed_context: worker_seed_context,
                 initial_capability: None,
                 reason: "routed_worker_execute",
             })?;
@@ -420,14 +486,6 @@ impl RuntimeSessionService {
             self.agent
                 .routed_workflow_by_child_turn
                 .insert(child_turn.turn_id.clone(), turn.turn_id.clone());
-            let child_context = self
-                .agent_turn_contexts()
-                .get(&child_turn.turn_id)
-                .cloned()
-                .ok_or_else(|| MezError::invalid_state("routed child context was not recorded"))?;
-            self.agent
-                .routed_child_contexts_by_parent_turn
-                .insert(turn.turn_id.clone(), child_context);
             self.agent
                 .routed_child_profiles_by_parent_turn
                 .insert(turn.turn_id.clone(), selection.selected_profile.clone());
@@ -792,16 +850,8 @@ impl RuntimeSessionService {
                 prompt,
                 exact_result_block,
             } => {
-                let Some(mut handoff_context) = self
-                    .agent_turn_contexts()
-                    .get(&turn.turn_id)
-                    .cloned()
-                    .or_else(|| {
-                        self.agent
-                            .routed_child_contexts_by_parent_turn
-                            .get(&parent_turn_id)
-                            .cloned()
-                    })
+                let Some(mut handoff_context) =
+                    self.routed_child_seed(&parent_turn_id, &turn.turn_id)
                 else {
                     self.ready_routed_parent_for_error_explanation(
                         &parent_turn,
@@ -827,10 +877,10 @@ impl RuntimeSessionService {
                     self.agent.subagent_task_routes.remove(&turn.turn_id);
                     return Ok(true);
                 };
-                insert_routed_context_blocks(&mut handoff_context, vec![exact_result_block])?;
-                self.agent
-                    .routed_child_contexts_by_parent_turn
-                    .insert(parent_turn_id.clone(), handoff_context.clone());
+                insert_routed_context_blocks(
+                    &mut handoff_context.context,
+                    vec![exact_result_block],
+                )?;
                 let handoff_turn = match self.queue_routed_child_turn(RoutedChildTurnRequest {
                     parent_turn: &parent_turn,
                     child_agent_id: &child_agent_id,
@@ -847,7 +897,7 @@ impl RuntimeSessionService {
                                 "routed worker configured profile provenance is unavailable",
                             )
                         })?,
-                    seed_context: Some(handoff_context),
+                    seed_context: handoff_context,
                     initial_capability: Some(mez_agent::AgentCapability::RespondOnly),
                     reason: "routed_worker_handoff",
                 }) {
@@ -897,22 +947,18 @@ impl RuntimeSessionService {
                     self.agent.subagent_task_routes.remove(&turn.turn_id);
                     return Ok(true);
                 };
-                let existing_repair_context = self
-                    .agent_turn_contexts()
-                    .get(&turn.turn_id)
-                    .cloned()
-                    .or_else(|| {
-                        self.agent
-                            .routed_child_contexts_by_parent_turn
-                            .get(&parent_turn_id)
-                            .cloned()
-                    });
+                let existing_repair_context =
+                    self.routed_child_seed(&parent_turn_id, &turn.turn_id);
                 let repair_context = if let Some(mut context) = existing_repair_context {
-                    insert_routed_context_blocks(&mut context, context_blocks)?;
+                    insert_routed_context_blocks(&mut context.context, context_blocks)?;
                     context
                 } else {
-                    AgentContext::import_durable_blocks(context_blocks)
-                        .map_err(|error| MezError::invalid_state(error.to_string()))?
+                    RuntimeRoutedContextSeed {
+                        turn_id: turn.turn_id.clone(),
+                        context: AgentContext::import_durable_blocks(context_blocks)?,
+                        source: RuntimeAgentHistorySource::absent(),
+                        imported_history_high_water: 0,
+                    }
                 };
                 let repair_turn = match self.queue_routed_child_turn(RoutedChildTurnRequest {
                     parent_turn: &parent_turn,
@@ -930,7 +976,7 @@ impl RuntimeSessionService {
                                 "routed worker configured profile provenance is unavailable",
                             )
                         })?,
-                    seed_context: Some(repair_context),
+                    seed_context: repair_context,
                     initial_capability: Some(mez_agent::AgentCapability::RespondOnly),
                     reason: "routed_worker_handoff_repair",
                 }) {
@@ -1556,25 +1602,17 @@ impl RuntimeSessionService {
             child_agent_id,
             Self::runtime_agent_objective_from_prompt(prompt).as_deref(),
         );
-        let mut context = match seed_context {
-            Some(mut context) => {
-                context.append_reference_event(
-                    ContextSourceKind::LocalMessage,
-                    "routed controller task",
-                    prompt,
-                )?;
-                context
-            }
-            None => {
-                let mut context = self.agent_context_for_pane_prompt(child_pane_id, prompt, 100)?;
-                context.reclassify_user_event_as_reference(
-                    prompt,
-                    ContextSourceKind::LocalMessage,
-                    "routed controller task",
-                )?;
-                self.apply_agent_shell_preference_context(child_pane_id, context)?
-            }
-        };
+        let RuntimeRoutedContextSeed {
+            mut context,
+            source,
+            imported_history_high_water,
+            ..
+        } = seed_context;
+        context.append_reference_event(
+            ContextSourceKind::LocalMessage,
+            "routed controller task",
+            prompt,
+        )?;
         context.set_metadata(
             self.agent_shell_store()
                 .get(child_pane_id)
@@ -1614,6 +1652,16 @@ impl RuntimeSessionService {
         self.snapshot_agent_native_shell_timeout_for_turn(&turn_id);
         self.agent_turn_contexts_mut()
             .insert(turn_id.clone(), context);
+        self.set_agent_turn_history_source(turn_id.clone(), Some(source));
+        self.set_agent_turn_imported_history_sequence_high_water(
+            turn_id.clone(),
+            imported_history_high_water,
+        );
+        if let Some(seed) = self.routed_context_seed(&turn_id) {
+            self.agent
+                .routed_child_contexts_by_parent_turn
+                .insert(parent_turn.turn_id.clone(), seed);
+        }
         if let Some(interaction_kind) = match reason {
             "routed_worker_handoff" => Some(mez_agent::ModelInteractionKind::RoutedHandoff),
             "routed_worker_handoff_repair" => {

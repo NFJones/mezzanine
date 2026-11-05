@@ -4,6 +4,7 @@ use super::*;
 
 mod catalog;
 mod frame_context;
+mod routed_seed_records;
 mod routing;
 mod routing_policy;
 mod selectors;

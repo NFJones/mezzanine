@@ -10908,6 +10908,13 @@ failed projections MUST NOT publish durable costs. Unchanged reads MUST NOT
 rewrite valid costs. Saved forks and survivor resequencing retain original
 records, and deleting a row retires its unused cost cache.
 
+Routed seed filtering MUST preserve surviving canonical occurrence records,
+ordering anchors and native ownership. Managed worker, handoff and repair turns
+MUST carry that context's original history source and imported-history boundary,
+including through terminal retirement. Replacing the installed archive MUST NOT
+rebind inherited history or turn borrowed rows into newly authored events. The
+child's own admitted save policy remains independent of the source window.
+
 Inherited child batches MUST carry complete original raw placement and available
 cost records independently of an optional summary. Version-5 append receipts bind
 that version-1 initial accounting proposal, its once-allocated future namespace,

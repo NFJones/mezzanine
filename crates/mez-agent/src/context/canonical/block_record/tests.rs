@@ -66,6 +66,8 @@ fn unchanged_canonical_projections_and_record_import_do_not_recount_source() {
     for _ in 0..8 {
         context.retain_blocks(|_| true).unwrap();
         context.validate_durable().unwrap();
+        let seed = crate::routed_workflow::routed_worker_seed_context(&context, "route").unwrap();
+        assert_eq!(seed.block_records(), records);
     }
     let restored =
         AgentContext::import_durable_blocks_with_records(context.blocks().to_vec(), &records)

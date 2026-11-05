@@ -370,38 +370,31 @@ pub fn routed_child_output_for_execution(execution: &AgentTurnExecution) -> Stri
 /// Product/system/project policy is rebuilt for the child, the active prompt is
 /// appended by the queue adapter exactly once, and prior routed handoffs never
 /// leak into a new routed job.
+/// Surviving occurrences retain their records, ordering anchors and native
+/// ownership. Invalid retained ownership returns a context error.
 pub fn routed_worker_seed_context(
     parent_context: &AgentContext,
     original_user_prompt: &str,
-) -> AgentContext {
-    let blocks = parent_context
-        .blocks()
-        .iter()
-        .filter(|block| {
-            if block.source == ContextSourceKind::UserInstruction
-                && block.label == "user prompt"
-                && block.content == original_user_prompt
-            {
-                return false;
-            }
-            !matches!(
-                block.source,
-                ContextSourceKind::System
-                    | ContextSourceKind::DeveloperInstruction
-                    | ContextSourceKind::Policy
-                    | ContextSourceKind::Configuration
-                    | ContextSourceKind::ProjectGuidance
-                    | ContextSourceKind::RoutedHandoff
-            )
-        })
-        .cloned()
-        .collect::<Vec<_>>();
-    if blocks.is_empty() {
-        AgentContext::empty()
-    } else {
-        AgentContext::import_durable_blocks(blocks)
-            .expect("routed worker seed context remains durable")
-    }
+) -> crate::AgentContextResult<AgentContext> {
+    let mut seed = parent_context.clone();
+    seed.retain_blocks_with_metadata(|block, _| {
+        if block.source == ContextSourceKind::UserInstruction
+            && block.label == "user prompt"
+            && block.content == original_user_prompt
+        {
+            return false;
+        }
+        !matches!(
+            block.source,
+            ContextSourceKind::System
+                | ContextSourceKind::DeveloperInstruction
+                | ContextSourceKind::Policy
+                | ContextSourceKind::Configuration
+                | ContextSourceKind::ProjectGuidance
+                | ContextSourceKind::RoutedHandoff
+        )
+    })?;
+    Ok(seed)
 }
 
 /// Parses and validates one structured routed-worker handoff.
@@ -829,6 +822,62 @@ mod tests {
         assert_eq!(blocks[1].content, "invalid JSON");
     }
 
+    /// Duplicate visible rows and provider-native evidence retain occurrence,
+    /// cost and causal metadata through the actual routed filter. The new
+    /// controller task appends after the original ordering high-water mark.
+    #[test]
+    fn routed_worker_seed_preserves_native_ownership_and_duplicate_occurrences() {
+        use crate::{
+            ContextExecutionGroupId, ProviderApiCompatibility, ProviderContinuityOwner,
+            ProviderTranscriptEvent,
+        };
+        let mut parent = AgentContext::empty();
+        let group = ContextExecutionGroupId::new("original-execution").unwrap();
+        parent
+            .append_assistant_event("answer", "equal 雪", group.clone())
+            .unwrap();
+        let owner = ProviderContinuityOwner::new(
+            ProviderApiCompatibility::OpenAiResponses,
+            "original-provider",
+        )
+        .unwrap();
+        let native = ProviderTranscriptEvent::validated_openai_response_output(vec![
+            serde_json::json!({"type":"reasoning","id":"original-native"}),
+        ])
+        .unwrap()
+        .to_transcript_content();
+        parent
+            .append_evidence_event(
+                ContextSourceKind::TranscriptTool,
+                "native",
+                native,
+                group,
+                Some(owner.clone()),
+                false,
+            )
+            .unwrap();
+        parent
+            .append_assistant_event(
+                "answer",
+                "equal 雪",
+                ContextExecutionGroupId::new("second-execution").unwrap(),
+            )
+            .unwrap();
+        parent.append_user_event("user prompt", "route me").unwrap();
+        let original = parent.chronology()[..3].to_vec();
+        assert_ne!(
+            original[0].record().occurrence_id(),
+            original[2].record().occurrence_id()
+        );
+        let mut seed = routed_worker_seed_context(&parent, "route me").unwrap();
+        assert_eq!(seed.chronology(), original.as_slice());
+        assert_eq!(seed.chronology()[1].provider_owner(), Some(&owner));
+        let old_high_water = parent.chronology().last().unwrap().sequence();
+        seed.append_reference_event(ContextSourceKind::LocalMessage, "controller", "route me")
+            .unwrap();
+        assert!(seed.chronology().last().unwrap().sequence() > old_high_water);
+    }
+
     /// Verifies worker seed projection keeps conversational evidence while
     /// removing rebuilt policy, the active prompt, and prior routed context.
     #[test]
@@ -867,7 +916,26 @@ mod tests {
         ])
         .unwrap();
 
-        let seed = routed_worker_seed_context(&parent, "fix routing");
+        let seed = routed_worker_seed_context(&parent, "fix routing").unwrap();
+        let original_records = parent
+            .chronology()
+            .iter()
+            .filter(|event| {
+                matches!(
+                    event.block().source,
+                    ContextSourceKind::SkillInstruction | ContextSourceKind::TranscriptAssistant
+                )
+            })
+            .map(|event| event.record())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            seed.chronology()
+                .iter()
+                .map(|event| event.record())
+                .collect::<Vec<_>>(),
+            original_records,
+            "seed filtering must preserve original records instead of bare reimport"
+        );
         assert_eq!(
             seed.blocks(),
             vec![

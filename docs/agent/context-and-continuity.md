@@ -259,6 +259,12 @@ with the retained projection metadata. Rebuilding the same completion evidence
 for a failed handoff reuses its occurrence and local estimate; a changed proposal
 or a new group receives its own record.
 
+Routed workers retain the surviving seed records and chronology anchors instead
+of importing bare block text again. Their original history source and imported
+boundary travel with the context through retirement, handoff and repair. A later
+store installation cannot supply that history, and each child retains its own
+save policy independently of its inherited source.
+
 A manual prefix retry retains the original proposal occurrence. If its epoch
 reached disk before a later write failed, retry checks the same frozen source
 rows and exact proposal before settling the required-state marker. An equal-text

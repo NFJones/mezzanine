@@ -53,6 +53,7 @@ impl RuntimeSessionService {
         &mut self,
         turn_id: &str,
     ) -> RuntimeTranscriptProjectionMetadata {
+        self.retain_routed_context_before_cleanup(turn_id);
         let routed_presentation = self.routed_presentation_turn(turn_id);
         RuntimeTranscriptProjectionMetadata {
             history_source: self.agent.agent_turn_history_sources.remove(turn_id),
