@@ -5,6 +5,9 @@
 //! records preserve their committed origin and cached estimates. Neither path
 //! changes source roles or restores instructions. Malformed reserved records
 //! retain an error through preparation so partial source cannot reach a model.
+//! Repaired authored costs use the same occurrence-bound row projection as
+//! legacy costs; stale raw envelopes remain immutable source, not a reason to
+//! repeat estimation after each cold replay.
 
 use crate::error::{MezError, Result};
 use mez_agent::transcript::{TranscriptContextEvent, TranscriptContextRecord, TranscriptEntry};
@@ -23,7 +26,7 @@ pub(in crate::runtime) struct RuntimeContextRecords {
     row_cache: crate::storage::transcript::TranscriptRowRecords,
     rendered_rows: crate::storage::transcript::TranscriptRowRecords,
     #[cfg(test)]
-    legacy_recounts: usize,
+    estimate_recomputations: usize,
 }
 
 /// One semantic row decoded exactly once before execution-group validation.
@@ -47,7 +50,7 @@ impl RuntimeContextRecords {
         })
     }
 
-    /// Returns exact emitted legacy-row records after full projection validation.
+    /// Returns row records needing publication or retaining an existing cache.
     /// The storage owner separately filters committed versus pending membership.
     pub(in crate::runtime) fn rendered_row_records(
         &self,
@@ -60,11 +63,11 @@ impl RuntimeContextRecords {
             .collect())
     }
 
-    /// Counts actual missing/stale legacy estimate constructions in one renderer.
+    /// Counts actual missing/stale row estimate constructions in one renderer.
     /// Test-only state does not affect production caching or source authority.
     #[cfg(test)]
-    pub(in crate::runtime) fn legacy_recounts(&self) -> usize {
-        self.legacy_recounts
+    pub(in crate::runtime) fn estimate_recomputations(&self) -> usize {
+        self.estimate_recomputations
     }
 
     /// Associates an actual summary record with its exact emitted block slot.
@@ -133,48 +136,12 @@ impl RuntimeContextRecords {
         record: Option<ContextBlockRecord>,
         stable: Option<&[StableContextBlockRecord]>,
     ) -> Option<ContextBlockRecord> {
-        let authored = record.is_some();
-        let record = match record {
-            Some(record) => record.restored(&block),
-            None => {
-                let origin = match self.row_origins.get(&entry.sequence) {
-                    Some(origin) => Ok(*origin),
-                    None => ContextBlockOccurrenceId::for_legacy_archive_row(
-                        &entry.conversation_id,
-                        entry.sequence,
-                        0,
-                    ),
-                };
-                origin.and_then(|origin| {
-                    let cached = self.row_cache.get(&entry.sequence).copied();
-                    let restored = match cached {
-                        Some(record) if record.occurrence_id() == origin => record.restored(&block),
-                        Some(_) => {
-                            return Err(mez_agent::AgentContextError::new(
-                                "legacy row cache origin mismatch",
-                            ));
-                        }
-                        None => ContextBlockRecord::for_occurrence(origin, &block),
-                    };
-                    #[cfg(test)]
-                    if restored
-                        .as_ref()
-                        .is_ok_and(|record| Some(*record) != cached)
-                    {
-                        self.legacy_recounts += 1;
-                    }
-                    restored
-                })
-            }
-        };
+        let record = self.restore_row_record(&block, entry, record);
         if let Some(stable) = stable {
             self.stable = Some(stable.to_vec());
         }
         let record = match record {
             Ok(record) => {
-                if !authored {
-                    self.rendered_rows.insert(entry.sequence, record);
-                }
                 self.records.push((blocks.len(), record));
                 Some(record)
             }
@@ -185,6 +152,54 @@ impl RuntimeContextRecords {
         };
         blocks.push(block);
         record
+    }
+
+    /// Validates source identity before consulting descriptive cached costs.
+    /// A valid raw authored record needs no duplicate cache; a repaired one is
+    /// retained by the leased publisher without rewriting its original bytes.
+    fn restore_row_record(
+        &mut self,
+        block: &ContextBlock,
+        entry: &TranscriptEntry,
+        authored: Option<ContextBlockRecord>,
+    ) -> mez_agent::AgentContextResult<ContextBlockRecord> {
+        let placement = self.row_origins.get(&entry.sequence).copied();
+        let origin = if let Some(record) = authored {
+            record.validate_format()?;
+            record.occurrence_id()
+        } else if let Some(origin) = placement {
+            origin
+        } else {
+            ContextBlockOccurrenceId::for_legacy_archive_row(
+                &entry.conversation_id,
+                entry.sequence,
+                0,
+            )?
+        };
+        if placement.is_some_and(|placed| placed != origin) {
+            return Err(mez_agent::AgentContextError::new(
+                "authored row placement origin mismatch",
+            ));
+        }
+        let cached = self.row_cache.get(&entry.sequence).copied();
+        let prior = cached.or(authored);
+        let restored = match prior {
+            Some(record) if record.occurrence_id() == origin => record.restored(block)?,
+            Some(_) => {
+                return Err(mez_agent::AgentContextError::new(
+                    "transcript row cache origin mismatch",
+                ));
+            }
+            None => ContextBlockRecord::for_occurrence(origin, block)?,
+        };
+        #[cfg(test)]
+        if Some(restored) != prior {
+            self.estimate_recomputations += 1;
+        }
+        if authored.is_none() || cached.is_some() || Some(restored) != authored {
+            self.rendered_rows.insert(entry.sequence, restored);
+        }
+        Ok(restored)
     }
 
     /// Shifts history indices when a real memory/head prefix is prepended.

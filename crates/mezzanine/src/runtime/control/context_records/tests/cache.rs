@@ -54,7 +54,7 @@ fn legacy_history_worker_persists_estimates_for_cold_replay() {
     let path = store.transcript_path("legacy-costs").unwrap();
     let raw = std::fs::read(&path).unwrap();
     let first = execute_runtime_agent_history_epoch_work(work.clone()).unwrap();
-    assert_eq!(first.records.legacy_recounts(), 3);
+    assert_eq!(first.records.estimate_recomputations(), 3);
     let original = first.records.indices_with_offset(0).unwrap();
     assert_eq!(original.len(), 3);
     let database =
@@ -79,7 +79,7 @@ fn legacy_history_worker_persists_estimates_for_cold_replay() {
     })
     .unwrap();
     assert_eq!(second.records.indices_with_offset(0).unwrap(), original);
-    assert_eq!(second.records.legacy_recounts(), 0);
+    assert_eq!(second.records.estimate_recomputations(), 0);
     assert_eq!(
         std::fs::read(store.root().join("legacy-costs/row-origins.sqlite3")).unwrap(),
         before
@@ -110,12 +110,12 @@ fn legacy_cost_revision_recounts_only_edited_occurrence_once() {
         .unwrap();
     let changed = execute_runtime_agent_history_epoch_work(work.clone()).unwrap();
     let records = changed.records.indices_with_offset(0).unwrap();
-    assert_eq!(changed.records.legacy_recounts(), 1);
+    assert_eq!(changed.records.estimate_recomputations(), 1);
     assert_eq!(records[0].1.occurrence_id(), original[0].1.occurrence_id());
     assert_ne!(records[0], original[0]);
     assert_eq!(&records[1..], &original[1..]);
     let repeated = execute_runtime_agent_history_epoch_work(work).unwrap();
-    assert_eq!(repeated.records.legacy_recounts(), 0);
+    assert_eq!(repeated.records.estimate_recomputations(), 0);
     assert_eq!(repeated.records.indices_with_offset(0).unwrap(), records);
 }
 
@@ -144,10 +144,10 @@ fn stale_legacy_cost_claim_is_repaired_against_actual_source() {
         .unwrap();
     drop(connection);
     let repaired = execute_runtime_agent_history_epoch_work(work.clone()).unwrap();
-    assert_eq!(repaired.records.legacy_recounts(), 1);
+    assert_eq!(repaired.records.estimate_recomputations(), 1);
     assert_eq!(repaired.records.indices_with_offset(0).unwrap(), original);
     let repeated = execute_runtime_agent_history_epoch_work(work).unwrap();
-    assert_eq!(repeated.records.legacy_recounts(), 0);
+    assert_eq!(repeated.records.estimate_recomputations(), 0);
 }
 
 /// A pending slot is not committed membership. Cache only the durable rows,
@@ -161,7 +161,7 @@ fn legacy_pending_cost_is_not_persisted_before_original_row_commit() {
     work.inputs.pending_entries.push(pending.clone());
     work.inputs.active_entries = Some(4);
     let first = execute_runtime_agent_history_epoch_work(work.clone()).unwrap();
-    assert_eq!(first.records.legacy_recounts(), 4);
+    assert_eq!(first.records.estimate_recomputations(), 4);
     let connection =
         rusqlite::Connection::open(store.root().join("legacy-costs/row-origins.sqlite3")).unwrap();
     let count: i64 = connection
@@ -171,13 +171,13 @@ fn legacy_pending_cost_is_not_persisted_before_original_row_commit() {
     drop(connection);
     store.append(&pending).unwrap();
     let settled = execute_runtime_agent_history_epoch_work(work.clone()).unwrap();
-    assert_eq!(settled.records.legacy_recounts(), 1);
+    assert_eq!(settled.records.estimate_recomputations(), 1);
     assert_eq!(
         settled.records.indices_with_offset(0).unwrap(),
         first.records.indices_with_offset(0).unwrap()
     );
     let repeated = execute_runtime_agent_history_epoch_work(work).unwrap();
-    assert_eq!(repeated.records.legacy_recounts(), 0);
+    assert_eq!(repeated.records.estimate_recomputations(), 0);
 }
 
 /// Saved copies and survivor resequencing preserve caches by original ID. Only
@@ -193,12 +193,12 @@ fn saved_fork_and_resequence_reuse_original_legacy_costs() {
     store.fork("legacy-costs", "child-costs", 2).unwrap();
     work.inputs.conversation_id = "child-costs".into();
     let child = execute_runtime_agent_history_epoch_work(work.clone()).unwrap();
-    assert_eq!(child.records.legacy_recounts(), 0);
+    assert_eq!(child.records.estimate_recomputations(), 0);
     assert_eq!(child.records.indices_with_offset(0).unwrap(), original);
     store.delete_entry("child-costs", 1).unwrap();
     work.inputs.active_entries = Some(2);
     let retained = execute_runtime_agent_history_epoch_work(work.clone()).unwrap();
-    assert_eq!(retained.records.legacy_recounts(), 0);
+    assert_eq!(retained.records.estimate_recomputations(), 0);
     let expected = original[1..]
         .iter()
         .enumerate()
@@ -210,7 +210,7 @@ fn saved_fork_and_resequence_reuse_original_legacy_costs() {
     store.append(&appended).unwrap();
     work.inputs.active_entries = Some(3);
     let after = execute_runtime_agent_history_epoch_work(work).unwrap();
-    assert_eq!(after.records.legacy_recounts(), 1);
+    assert_eq!(after.records.estimate_recomputations(), 1);
     assert_eq!(
         &after.records.indices_with_offset(0).unwrap()[..2],
         &expected
@@ -263,9 +263,9 @@ fn legacy_cost_schema_import_and_failed_projection_preserve_source() {
     assert_eq!(count, 0);
     drop(connection);
     let recovered = execute_runtime_agent_history_epoch_work(work.clone()).unwrap();
-    assert_eq!(recovered.records.legacy_recounts(), 3);
+    assert_eq!(recovered.records.estimate_recomputations(), 3);
     let repeated = execute_runtime_agent_history_epoch_work(work).unwrap();
-    assert_eq!(repeated.records.legacy_recounts(), 0);
+    assert_eq!(repeated.records.estimate_recomputations(), 0);
     assert_eq!(
         std::fs::read(store.transcript_path("legacy-costs").unwrap()).unwrap(),
         raw
@@ -323,7 +323,7 @@ fn invalid_legacy_cache_refuses_only_its_original_conversation() {
             execute_runtime_agent_history_epoch_work(unaffected)
                 .unwrap()
                 .records
-                .legacy_recounts(),
+                .estimate_recomputations(),
             1
         );
     }

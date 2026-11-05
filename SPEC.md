@@ -10908,6 +10908,12 @@ failed projections MUST NOT publish durable costs. Unchanged reads MUST NOT
 rewrite valid costs. Saved forks and survivor resequencing retain original
 records, and deleting a row retires its unused cost cache.
 
+Repaired authored estimates MUST use that same occurrence-bound cost projection
+on subsequent replay. The raw envelope's format and occurrence remain validated
+before cache selection; cached costs MUST be checked against actual rendering.
+Repair MUST NOT rewrite the raw envelope or weaken physical-source proofs.
+An unchanged valid authored record need not create a duplicate cost cache.
+
 Routed seed filtering MUST preserve surviving canonical occurrence records,
 ordering anchors and native ownership. Managed worker, handoff and repair turns
 MUST carry that context's original history source and imported-history boundary,

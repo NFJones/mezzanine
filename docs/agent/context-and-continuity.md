@@ -565,6 +565,12 @@ same source lease as the successful replay, and pending rows receive durable
 caches only after their original rows commit. A failed projection publishes no
 costs. These records remain descriptive metadata outside model-visible source.
 
+This includes stale estimates inside authored context records: their repaired
+costs are saved beside the original occurrence and reused on cold replay. The
+original envelope stays intact, including its old descriptive claim. Current
+format, identity and rendered content are still validated before costs are used;
+an already valid authored record needs no duplicate cache entry.
+
 Forked children carry these original row records through their initial append
 receipt even when the parent has no summary. The child gets independent row
 positions and a future-row namespace while inherited occurrences keep their IDs.
