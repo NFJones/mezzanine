@@ -240,27 +240,35 @@ pub(crate) fn provider_native_execution_groups(
     grouped
         .into_iter()
         .filter(|(group, _)| !interleaved_groups.contains(group))
-        .filter(|(_, events)| {
-            events.iter().any(|(_, metadata)| {
-                metadata.provider_owner().is_some_and(|owner| {
-                    api.is_some_and(|api| owner.matches_provider(api, provider_id))
-                })
-            })
-        })
-        .filter(|(_, events)| match api {
-            Some(ProviderApiCompatibility::OpenAiChatCompletions) => {
-                openai_chat_completions_native_group_is_complete(events, provider_id)
-            }
-            Some(ProviderApiCompatibility::OpenAiResponses) => {
-                openai_responses_native_group_is_complete(events, provider_id)
-            }
-            Some(ProviderApiCompatibility::DeepSeekChatCompletions) => {
-                deepseek_native_group_is_complete(events, provider_id)
-            }
-            _ => true,
-        })
+        .filter(|(_, events)| provider_native_group_is_complete(events, api, provider_id))
         .map(|(group, _)| group)
         .collect()
+}
+
+/// Applies the shared native-pair/owner policy to one already contiguous group.
+/// The caller proves chronological adjacency; neither cached accounting nor
+/// provider selection can waive ownership, ordering or complete-pair checks.
+pub(crate) fn provider_native_group_is_complete(
+    events: &[(&ContextBlock, &crate::ContextBlockMetadata)],
+    api: Option<ProviderApiCompatibility>,
+    provider_id: &str,
+) -> bool {
+    events.iter().any(|(_, metadata)| {
+        metadata
+            .provider_owner()
+            .is_some_and(|owner| api.is_some_and(|api| owner.matches_provider(api, provider_id)))
+    }) && match api {
+        Some(ProviderApiCompatibility::OpenAiChatCompletions) => {
+            openai_chat_completions_native_group_is_complete(events, provider_id)
+        }
+        Some(ProviderApiCompatibility::OpenAiResponses) => {
+            openai_responses_native_group_is_complete(events, provider_id)
+        }
+        Some(ProviderApiCompatibility::DeepSeekChatCompletions) => {
+            deepseek_native_group_is_complete(events, provider_id)
+        }
+        _ => true,
+    }
 }
 
 /// Requires one exact DeepSeek assistant declaration and its ordered results.

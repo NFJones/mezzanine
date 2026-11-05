@@ -222,9 +222,16 @@ pub struct ReplayCompactionPlan {
     pub(super) prefix_members: usize,
     pub(super) prefix_events: usize,
     pub(super) input_estimates: ReplayCompactionInputEstimates,
+    /// Keeps the preparation enum compact while freezing an owned descriptor.
+    pub(super) provider_projection: Option<Box<ReplayProviderProjection>>,
 }
 
 impl ReplayCompactionPlan {
+    /// Returns the exact budget projection frozen for this source selection.
+    /// None denotes ordinary framing; switching after planning rejects publication.
+    pub fn provider_projection(&self) -> Option<&ReplayProviderProjection> {
+        self.provider_projection.as_deref()
+    }
     /// Returns frozen source/tail estimates, excluding stable and fixed overhead.
     pub fn input_estimates(&self) -> ReplayCompactionInputEstimates {
         self.input_estimates

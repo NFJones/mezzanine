@@ -823,32 +823,53 @@ pub fn projected_context_block_input_tokens(
         .iter()
         .enumerate()
         .map(|(index, metadata)| {
-            if !provider_renders_context_block(context, index, provider_projection)
-                || metadata.execution_group_id().is_some_and(|group| {
-                    metadata.provider_owner().is_some()
-                        && native_groups
-                            .as_ref()
-                            .is_some_and(|groups| !groups.contains(group))
-                        || metadata.provider_owner().is_none()
-                            && native_groups
-                                .as_ref()
-                                .is_some_and(|groups| groups.contains(group))
-                            && matches!(
-                                context.blocks()[index].source,
-                                ContextSourceKind::TranscriptAssistant
-                                    | ContextSourceKind::ActionResult
-                            )
-                })
-            {
-                return 0;
-            }
-            if metadata.provider_owner().is_some() {
-                metadata.estimated_native_input_tokens()
-            } else {
-                metadata.estimated_input_tokens()
-            }
+            projected_context_metadata_input_tokens(
+                context.blocks()[index].source,
+                metadata,
+                provider_projection,
+                metadata.execution_group_id().is_some_and(|group| {
+                    native_groups
+                        .as_ref()
+                        .is_some_and(|groups| groups.contains(group))
+                }),
+            )
         })
         .collect()
+}
+
+/// Applies exactly the request projection's visibility/neutral-dedup rule to
+/// one owned cached record. Complete-group qualification is supplied separately;
+/// this arithmetic helper never parses, hashes or recounts source content.
+pub(crate) fn projected_context_metadata_input_tokens(
+    source: ContextSourceKind,
+    metadata: &crate::ContextBlockMetadata,
+    provider_projection: Option<ProviderBudgetProjection<'_>>,
+    native_group_complete: bool,
+) -> usize {
+    if let Some(projection) = provider_projection {
+        if metadata
+            .provider_owner()
+            .is_some_and(|owner| !owner.matches_provider(projection.api, projection.provider_id))
+        {
+            return 0;
+        }
+        if metadata.execution_group_id().is_some()
+            && (metadata.provider_owner().is_some() && !native_group_complete
+                || metadata.provider_owner().is_none()
+                    && native_group_complete
+                    && matches!(
+                        source,
+                        ContextSourceKind::TranscriptAssistant | ContextSourceKind::ActionResult
+                    ))
+        {
+            return 0;
+        }
+    }
+    if metadata.provider_owner().is_some() {
+        metadata.estimated_native_input_tokens()
+    } else {
+        metadata.estimated_input_tokens()
+    }
 }
 
 /// Returns the retained raw-tail word budget.

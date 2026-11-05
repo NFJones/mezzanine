@@ -279,7 +279,8 @@ pub use context::{
     ReplayCompactionInputEstimates, ReplayCompactionNoWork, ReplayCompactionPlan,
     ReplayCompactionPreparation, ReplayConversationId, ReplayEpochContext,
     ReplayEpochInputEstimates, ReplayEpochMember, ReplayEpochRevision, ReplayExecutionOwner,
-    ReplayHeadPolicy, ReplayHeadPublication, ReplayInstructionOwner, ReplaySummaryIdentity,
+    ReplayHeadPolicy, ReplayHeadPublication, ReplayInstructionOwner, ReplayProviderProjection,
+    ReplaySummaryIdentity,
 };
 pub use context_appenders::{
     EMPTY_PROJECT_GUIDANCE_CONTEXT, MCP_CATALOG_REMOVED_CONTEXT,

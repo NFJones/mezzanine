@@ -10894,6 +10894,18 @@ framing estimates are distinct from the provider-specific native visibility
 projection and MUST NOT become billing or a compaction trigger. Invalid or
 exhausted arithmetic MUST reject adoption atomically, without saturated totals.
 
+An epoch's selected provider/API/model estimate view MUST use the same native
+ownership, completeness and adjacency policy as request projection. Invisible
+native rows cost zero; complete native groups MUST NOT also charge their neutral
+assistant/action-result duplicates. New source MUST refresh its affected groups,
+including earlier representations whose visibility changes, while lifecycle-only
+retirement updates eligibility without requalifying native source. Provider/API
+switches MUST establish a valid separate view from owned block caches. With the
+current model-independent UTF-8 counting/native policy, a model-only change MAY
+reuse those scalar costs, but MUST change the frozen projection descriptor.
+Changing that descriptor after planning MUST reject stale publication atomically.
+This view MUST NOT change incurred usage, execution ownership or trigger policy.
+
 Manual, observed-input and provider-limit adapters MUST use the same configured
 raw-tail selection contract. Token retention rounds upward and complete
 execution groups remain indivisible. Once compaction is requested, fitting the

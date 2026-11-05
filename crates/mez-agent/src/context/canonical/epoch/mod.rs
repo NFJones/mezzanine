@@ -26,7 +26,9 @@ mod types;
 pub use types::*;
 mod accounting;
 use accounting::ReplayAccounting;
-pub use accounting::{ReplayCompactionInputEstimates, ReplayEpochInputEstimates};
+pub use accounting::{
+    ReplayCompactionInputEstimates, ReplayEpochInputEstimates, ReplayProviderProjection,
+};
 mod lifecycle;
 mod native_groups;
 mod planning;

@@ -8,9 +8,12 @@
 
 use super::*;
 
-/// Cached ordinary-framing estimates for the current epoch, excluding request
-/// instructions/schemas/wrappers. Eligible source is a subset of raw membership,
-/// not an additional charge. Provider-native visibility requires its own view.
+mod provider;
+pub use provider::ReplayProviderProjection;
+
+/// Cached disjoint estimates excluding fixed request instructions/schemas/wrappers.
+/// The owning accessor identifies ordinary framing or a selected provider-native
+/// view. Eligible source is a subset of raw membership, not another charge.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ReplayEpochInputEstimates {
     stable: usize,
@@ -67,7 +70,8 @@ impl ReplayCompactionInputEstimates {
     pub fn retained_raw_input_tokens(self) -> usize {
         self.retained_raw
     }
-    /// Returns the summary source estimate, failing instead of overflowing.
+    /// Returns the selected source's replay-view estimate, failing on overflow.
+    /// Auxiliary semantic rendering and fixed request overhead are separate.
     pub fn source_input_tokens(self) -> AgentContextResult<usize> {
         self.selected_raw
             .checked_add(self.prior_summary)
@@ -92,6 +96,7 @@ pub(super) struct ReplayAccounting {
     raw: BTreeMap<ContextBlockOccurrenceId, RawEntry>,
     groups: BTreeMap<ContextExecutionGroupId, BTreeSet<ContextBlockOccurrenceId>>,
     totals: ReplayEpochInputEstimates,
+    provider: Option<provider::ReplayProviderAccounting>,
 }
 impl ReplayAccounting {
     /// Adds exactly one actual committed raw occurrence. Duplicate origin or any
@@ -246,7 +251,7 @@ impl ReplayEpochContext {
                 born_in: self.revision,
             });
         }
-        Ok(())
+        self.refresh_provider_arrivals(sequences)
     }
 
     /// Refreshes only exact task/peer source positions after actual retirement.
@@ -265,6 +270,9 @@ impl ReplayEpochContext {
             let eligible = self.event_is_replaceable(event);
             self.accounting
                 .set_eligible(event.record().occurrence_id(), eligible)?;
+            if let Some(provider) = self.accounting.provider.as_mut() {
+                provider.set_eligible(event.record().occurrence_id(), eligible)?;
+            }
         }
         Ok(())
     }
@@ -293,7 +301,10 @@ impl ReplayEpochContext {
 
     /// Refreshes stable totals after the actual trusted slot replacement.
     pub(super) fn refresh_accounting_stable(&mut self) -> AgentContextResult<()> {
-        self.accounting.replace_stable(self.context.stable_slots())
+        let old_ids = self.accounting.stable.keys().copied().collect::<Vec<_>>();
+        self.accounting
+            .replace_stable(self.context.stable_slots())?;
+        self.refresh_provider_stable(&old_ids)
     }
 
     /// Removes selected originals and exchanges the sole head in one candidate.
@@ -301,6 +312,7 @@ impl ReplayEpochContext {
         &mut self,
         plan: &ReplayCompactionPlan,
     ) -> AgentContextResult<()> {
+        let old_head = self.accounting.summary.map(|(id, _)| id);
         for member in &plan.members[..plan.prefix_members] {
             self.accounting.remove_raw(member)?;
         }
@@ -308,7 +320,8 @@ impl ReplayEpochContext {
             self.head
                 .as_ref()
                 .and_then(|_| self.context.chronology().first()),
-        )
+        )?;
+        self.publish_provider_accounting(plan, old_head)
     }
 
     /// Checks cached association/index integrity using immutable metadata only.
@@ -374,7 +387,7 @@ impl ReplayEpochContext {
             return Err(invalid());
         }
         self.accounting.totals.total_input_tokens()?;
-        Ok(())
+        self.validate_provider_accounting()
     }
 }
 

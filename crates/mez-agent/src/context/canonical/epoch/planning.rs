@@ -7,6 +7,8 @@ impl ReplayEpochContext {
     /// Freezes one eligible closed prefix and the configured raw tail. Exact
     /// instructions, pending peer/native groups and unrecoverable evidence push
     /// the boundary earlier; complete groups are never split or skipped around.
+    /// A selected provider view supplies cached visibility-aware costs and is
+    /// frozen with the plan; ordinary framing is used when no view is selected.
     /// Empty/irreducible source returns NoWork without creating model activity.
     /// A tail reservation that covers all closed source still permits one oldest
     /// complete prefix unit, so requested progress needs no trigger-specific bypass.
@@ -35,7 +37,7 @@ impl ReplayEpochContext {
         unit_totals.push(0usize);
         for unit in &units {
             let cost = raw[unit.clone()].iter().try_fold(0usize, |sum, event| {
-                sum.checked_add(event.record().estimated_input_tokens())
+                sum.checked_add(self.planning_input_tokens(event)?)
                     .ok_or_else(|| AgentContextError::new("replay unit estimate exhausted"))
             })?;
             let total = unit_totals
@@ -46,7 +48,10 @@ impl ReplayEpochContext {
                 .ok_or_else(|| AgentContextError::new("replay source estimate exhausted"))?;
             unit_totals.push(total);
         }
-        if unit_totals.last().copied() != Some(self.input_estimates().raw_input_tokens()) {
+        let estimates = self
+            .provider_input_estimates()
+            .unwrap_or(self.input_estimates());
+        if unit_totals.last().copied() != Some(estimates.raw_input_tokens()) {
             return Err(AgentContextError::new("replay source aggregate drifted"));
         }
         let target = policy.retained_raw_tokens();
@@ -83,14 +88,13 @@ impl ReplayEpochContext {
             .ok_or_else(|| AgentContextError::new("replay unit selection is inconsistent"))?
             .end;
         let selected_raw = unit_totals[selected];
-        let retained_raw = self
-            .input_estimates()
+        let retained_raw = estimates
             .raw_input_tokens()
             .checked_sub(selected_raw)
             .ok_or_else(|| AgentContextError::new("replay selected estimate drifted"))?;
         let input_estimates = ReplayCompactionInputEstimates {
             selected_raw,
-            prior_summary: self.input_estimates().summary_input_tokens(),
+            prior_summary: estimates.summary_input_tokens(),
             retained_raw,
         };
         input_estimates.source_input_tokens()?;
@@ -105,6 +109,7 @@ impl ReplayEpochContext {
             prefix_members: cut,
             prefix_events: offset + cut,
             input_estimates,
+            provider_projection: self.provider_projection().cloned().map(Box::new),
         }))
     }
 

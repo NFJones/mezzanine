@@ -19,6 +19,7 @@ impl ReplayEpochContext {
             || plan.parent != self.revision
             || plan.head != self.head
             || plan.policy != self.policy
+            || plan.provider_projection.as_deref() != self.provider_projection()
             || !self.context.chronology().starts_with(&plan.frozen)
             || !self.members.starts_with(&plan.members)
             || plan.prefix_members == 0

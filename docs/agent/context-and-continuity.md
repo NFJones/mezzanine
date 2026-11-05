@@ -495,6 +495,13 @@ estimates. Group reopening and explicit retirement change eligibility without
 rewriting original source. These ordinary-framing totals exclude fixed request
 overhead and require a separate provider-native visibility projection.
 
+The epoch API can select a provider/API/model view that follows request replay:
+incomplete, foreign or interleaved native groups retain neutral history, while
+complete native groups avoid charging their neutral duplicates. New source
+updates its affected groups; explicit retirement changes eligibility. Provider
+changes reuse validated block estimates, and a changed provider/model descriptor
+invalidates an earlier frozen publication plan without changing source or usage.
+
 The shared canonical API defines one summary head and explicit retained raw
 membership. Summaries are reference material: they cannot enable tools or grant
 access. Current controlling instructions and unresolved call/result groups stay
