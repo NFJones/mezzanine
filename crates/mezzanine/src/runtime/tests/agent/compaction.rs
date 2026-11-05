@@ -1843,7 +1843,7 @@ fn runtime_observed_compaction_refresh_preserves_current_user_prompt() {
         .unwrap();
     assert_eq!(
         epoch.version,
-        2,
+        3,
         "epoch={epoch:?}; pane={}",
         service
             .pane_screen("%1")

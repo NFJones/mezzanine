@@ -33,6 +33,12 @@ pub(crate) mod fallback;
 mod append_batch;
 /// Source-proven terminal handoffs for accepted turn-local model summaries.
 pub(crate) mod compaction_handoff;
+/// Versioned summary occurrence records and qualified legacy epoch imports.
+mod compaction_records;
+pub(crate) use compaction_records::{
+    CompactionSummary, CompactionSummaryRecords, compaction_epochs_match, prefix_summary_block,
+    selective_summary_block,
+};
 /// Exposes the encoding module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this

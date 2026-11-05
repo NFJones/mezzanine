@@ -40,8 +40,15 @@ later resumes retain the same model-written summary and exact uncovered history,
 including selective summaries at their original positions. The full source
 archive remains inspectable; covered raw rows do not reappear as active context.
 Missing or corrupt required compaction state fails visibly rather than creating
-a raw-history fork. Fork publication and any eligible saved terminal-handoff
-reconciliation affect only the new target, never the parent's stored bytes.
+a raw-history fork. Fork publication and eligible saved terminal-handoff
+reconciliation change only the new target's replay authority. Source capture
+may atomically import or repair descriptive summary accounting under the
+parent's lock, preserving its summary text, coverage, raw archive and pane
+bindings. Parent and child keep the same assigned summary occurrences.
+An archived terminal handoff may still contain an older baseline. Fork translates
+that baseline using the frozen source epoch's original records only when the
+legacy import witness verifies it; equal text from a new publication cannot
+substitute. The parent's certificate and source rows stay unchanged.
 If source persistence or terminal bookkeeping has not settled, the fork fails
 visibly instead of cloning a shorter archive. Retry after the original storage
 owner settles; retained append receipts reserve target identities as well.
@@ -222,6 +229,22 @@ model-visible summary bytes are unchanged, and known legacy summary labels
 remain recognized. A restored summary alone does not mean a new compactor ran.
 A summary-only segment before exact steering stays anchored while the next
 compaction selects later eligible raw work.
+
+Each accepted summary also owns a separate occurrence UUID and cached local
+input estimate. Version-3 epoch files store those records atomically with the
+prefix and selective summaries. Publication, receipt retries and reopened
+replay reuse them; equal text from a new compaction receives a new occurrence.
+Older epoch files import once under the conversation lock before exposing
+their assigned records. Stale estimates are repaired against actual rendering
+without replacing identities or rewriting raw history. Invalid typed record
+slots fail visibly. Existing summary text limits stay at one MiB; the v3 file
+allows sixteen MiB to accommodate accounting metadata during migration.
+Accounting remains outside model messages and billed usage.
+
+A manual prefix retry retains the original proposal occurrence. If its epoch
+reached disk before a later write failed, retry checks the same frozen source
+rows and exact proposal before settling the required-state marker. An equal-text
+proposal with a different occurrence cannot take over that publication.
 
 Manual candidate sizing and publication share the same prefix/range projection.
 Absorbed ranges disappear; surviving ranges retain their anchors exactly once.

@@ -25,6 +25,7 @@ fn terminal_handoff_inserts_before_prior_selective_range() {
     let content = TerminalCompactionHandoff {
         baseline,
         replacements: vec![TerminalCompactionReplacement {
+            summary_record: None,
             sources: vec![rows[0].content.clone()],
             summary: "new earlier summary".into(),
         }],
@@ -72,6 +73,7 @@ fn fixture() -> (AgentTranscriptStore, Vec<TranscriptEntry>) {
             .iter()
             .enumerate()
             .map(|(index, source)| TerminalCompactionReplacement {
+                summary_record: None,
                 sources: vec![source.clone()],
                 summary: format!("summary-{index}"),
             })
@@ -208,6 +210,7 @@ fn admission_rejects_interleaved_source_without_guessing_rows() {
     let joined = TerminalCompactionHandoff {
         baseline: None,
         replacements: vec![TerminalCompactionReplacement {
+            summary_record: None,
             sources: rows[..2].iter().map(|row| row.content.clone()).collect(),
             summary: "joined".into(),
         }],

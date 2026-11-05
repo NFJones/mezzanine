@@ -84,6 +84,7 @@ impl RuntimeSessionService {
                 source,
                 archived_sources,
                 summary: summary.to_string(),
+                summary_record: task.selective_summary_record_for_preview(plan, summary)?,
             });
         }
         witnesses.sort_by_key(|witness| witness.anchor);
@@ -349,6 +350,7 @@ impl RuntimeSessionService {
                 sources.push(content);
             }
             replacements.push(TerminalCompactionReplacement {
+                summary_record: Some(witness.summary_record),
                 sources,
                 summary: witness.summary.clone(),
             });

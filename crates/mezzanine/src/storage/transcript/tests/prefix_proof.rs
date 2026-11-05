@@ -6,6 +6,17 @@
 
 use super::*;
 
+/// Creates one explicit prefix proposal at the fixture's producer boundary.
+fn prefix_summary(content: &str) -> crate::storage::transcript::CompactionSummary<'_> {
+    crate::storage::transcript::CompactionSummary {
+        content,
+        record: mez_agent::ContextBlockRecord::allocate(
+            &crate::storage::transcript::prefix_summary_block("source", content),
+        )
+        .unwrap(),
+    }
+}
+
 /// Qualified absence permits the first prefix publication, and the resulting
 /// epoch permits a later matching prefix. Appends beyond the frozen boundary
 /// remain exact and do not force a guess or recharge of the selected source.
@@ -18,7 +29,14 @@ fn prefix_proof_accepts_matching_epoch_and_preserves_later_rows() {
         .collect::<Vec<_>>();
     store.append_many(&rows[..3]).unwrap();
     store
-        .save_compaction_prefix_with_proof("source", 1, "first summary", &rows[..1], &None, &[])
+        .save_compaction_prefix_with_proof(
+            "source",
+            1,
+            prefix_summary("first summary"),
+            &rows[..1],
+            &None,
+            &[],
+        )
         .unwrap();
     let baseline = store.compaction_epoch("source").unwrap();
     store.append(&rows[3]).unwrap();
@@ -26,7 +44,7 @@ fn prefix_proof_accepts_matching_epoch_and_preserves_later_rows() {
         .save_compaction_prefix_with_proof(
             "source",
             3,
-            "later summary",
+            prefix_summary("later summary"),
             &rows[1..3],
             &baseline,
             &[],
@@ -71,7 +89,7 @@ fn prefix_proof_rejects_changed_epoch_and_qualified_absence() {
                 .save_compaction_prefix_with_proof(
                     "source",
                     3,
-                    "stale result",
+                    prefix_summary("stale result"),
                     &rows[1..],
                     &baseline,
                     &[],
@@ -97,7 +115,14 @@ fn prefix_proof_rejects_changed_physical_source() {
     stale.content = "different captured row".into();
     assert!(
         store
-            .save_compaction_prefix_with_proof("source", 1, "summary", &[stale], &None, &[])
+            .save_compaction_prefix_with_proof(
+                "source",
+                1,
+                prefix_summary("summary"),
+                &[stale],
+                &None,
+                &[]
+            )
             .is_err()
     );
     assert!(store.compaction_epoch("source").unwrap().is_none());
@@ -121,7 +146,7 @@ fn prefix_proof_returns_checked_pending_frontier_and_rejects_conflicts() {
             .save_compaction_prefix_with_proof(
                 "source",
                 1,
-                "summary",
+                prefix_summary("summary"),
                 &rows[..1],
                 &None,
                 &rows[1..3],
@@ -138,7 +163,7 @@ fn prefix_proof_returns_checked_pending_frontier_and_rejects_conflicts() {
                 .save_compaction_prefix_with_proof(
                     "source",
                     2,
-                    "rejected summary",
+                    prefix_summary("rejected summary"),
                     &rows[1..2],
                     &baseline,
                     &pending,
@@ -148,5 +173,171 @@ fn prefix_proof_returns_checked_pending_frontier_and_rejects_conflicts() {
         assert_eq!(store.compaction_epoch("source").unwrap(), baseline);
         assert_eq!(store.inspect("source").unwrap(), rows[..2]);
     }
+    fs::remove_dir_all(root).unwrap();
+}
+
+/// Uncertain prefix publication retains one producer-owned proposal through
+/// pre-rename failure, durable rename without marker, and cold-store retry.
+/// Both initial and extending prefixes recover, while equal-text new proposals
+/// and changed physical proofs fail without replacing the accepted occurrence.
+/// An unrelated conversation stays usable throughout the failed operation.
+#[test]
+fn prefix_proof_retries_original_proposal_after_uncertain_publication() {
+    for existing in [false, true] {
+        let root = temp_root("prefix-proof-proposal-retry");
+        let store = AgentTranscriptStore::new(root.clone());
+        let rows = (1..=4)
+            .map(|sequence| entry("source", sequence, TranscriptRole::Assistant))
+            .collect::<Vec<_>>();
+        store.append_many(&rows).unwrap();
+        if existing {
+            store
+                .save_compaction_epoch("source", 1, "earlier prefix")
+                .unwrap();
+        }
+        let baseline = store.compaction_epoch("source").unwrap();
+        let first = usize::from(existing);
+        let frozen = &rows[first..3];
+        let proposal = prefix_summary("retained accepted proposal");
+        store.fail_next_compaction_epoch_before_rename();
+        assert!(
+            store
+                .save_compaction_prefix_with_proof("source", 3, proposal, frozen, &baseline, &[],)
+                .is_err()
+        );
+        assert_eq!(store.compaction_epoch("source").unwrap(), baseline);
+        store.fail_next_compaction_epoch_before_marker();
+        assert!(
+            store
+                .save_compaction_prefix_with_proof("source", 3, proposal, frozen, &baseline, &[],)
+                .is_err()
+        );
+        let published = store.compaction_epoch("source").unwrap();
+        assert_eq!(
+            published
+                .as_ref()
+                .unwrap()
+                .summary_records
+                .as_ref()
+                .unwrap()
+                .prefix,
+            Some(proposal.record),
+        );
+        store
+            .append(&entry("unaffected", 1, TranscriptRole::User))
+            .unwrap();
+        let reopened = AgentTranscriptStore::new(root.clone());
+        assert!(
+            reopened
+                .save_compaction_prefix_with_proof(
+                    "source",
+                    3,
+                    prefix_summary(proposal.content),
+                    frozen,
+                    &baseline,
+                    &[],
+                )
+                .is_err()
+        );
+        let mut changed = frozen.to_vec();
+        changed[0].content = "different captured source".into();
+        assert!(
+            reopened
+                .save_compaction_prefix_with_proof("source", 3, proposal, &changed, &baseline, &[],)
+                .is_err()
+        );
+        assert_eq!(reopened.compaction_epoch("source").unwrap(), published);
+        assert_eq!(
+            reopened
+                .save_compaction_prefix_with_proof("source", 3, proposal, frozen, &baseline, &[],)
+                .unwrap(),
+            5,
+        );
+        assert!(
+            reopened
+                .compaction_epoch_marker_is_committed("source")
+                .unwrap()
+        );
+        assert_eq!(reopened.compaction_epoch("source").unwrap(), published);
+        assert_eq!(reopened.inspect("source").unwrap(), rows);
+        assert_eq!(reopened.inspect("unaffected").unwrap().len(), 1);
+        fs::remove_dir_all(root).unwrap();
+    }
+}
+
+/// Retained selective slots remain part of the exact retry authority. A forged
+/// baseline with equal summary bytes and a fresh retained occurrence cannot
+/// settle a prefix that already reached disk. The original typed baseline can
+/// settle it without changing either the new prefix or inherited range record.
+#[test]
+fn prefix_retry_requires_original_retained_selective_records() {
+    let root = temp_root("prefix-proof-retained-record-retry");
+    let store = AgentTranscriptStore::new(root.clone());
+    let mut rows = (1..=4)
+        .map(|sequence| entry("source", sequence, TranscriptRole::Assistant))
+        .collect::<Vec<_>>();
+    for (index, row) in rows[2..].iter_mut().enumerate() {
+        row.role = TranscriptRole::System;
+        row.turn_id = "retained-turn".into();
+        row.content = mez_agent::TranscriptContextEvent::execution_block_with_metadata(
+            mez_agent::ContextSourceKind::TranscriptAssistant,
+            "assistant",
+            "retained execution",
+            mez_agent::ContextExecutionGroupId::new("retained-group").unwrap(),
+            index as u64 + 1,
+            None,
+        )
+        .unwrap()
+        .to_transcript_content();
+    }
+    store.append_many(&rows).unwrap();
+    store
+        .save_compaction_ranges(
+            "source",
+            1,
+            "earlier prefix",
+            vec![crate::storage::transcript::AgentCompactionRange {
+                first_sequence: 3,
+                through_sequence: 4,
+                summary: "retained range summary".into(),
+            }],
+        )
+        .unwrap();
+    let baseline = store.compaction_epoch("source").unwrap();
+    let proposal = prefix_summary("new prefix");
+    store.fail_next_compaction_epoch_before_marker();
+    assert!(
+        store
+            .save_compaction_prefix_with_proof("source", 2, proposal, &rows[1..2], &baseline, &[],)
+            .is_err()
+    );
+    let published = store.compaction_epoch("source").unwrap();
+    let mut forged = baseline.clone().unwrap();
+    let replacement = mez_agent::ContextBlockRecord::allocate(
+        &crate::storage::transcript::selective_summary_block(&forged.ranges[0].summary),
+    )
+    .unwrap();
+    forged.summary_records.as_mut().unwrap().ranges[0] = replacement;
+    assert!(
+        store
+            .save_compaction_prefix_with_proof(
+                "source",
+                2,
+                proposal,
+                &rows[1..2],
+                &Some(forged),
+                &[],
+            )
+            .is_err()
+    );
+    store
+        .save_compaction_prefix_with_proof("source", 2, proposal, &rows[1..2], &baseline, &[])
+        .unwrap();
+    assert_eq!(store.compaction_epoch("source").unwrap(), published);
+    assert_eq!(
+        published.unwrap().summary_records.unwrap().ranges,
+        baseline.unwrap().summary_records.unwrap().ranges,
+    );
+    assert_eq!(store.inspect("source").unwrap(), rows);
     fs::remove_dir_all(root).unwrap();
 }

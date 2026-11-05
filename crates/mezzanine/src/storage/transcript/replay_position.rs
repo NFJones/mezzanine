@@ -6,8 +6,9 @@
 //! remove physical tail rows; canonical replay applies their coverage later.
 //! Replay readers also capture the epoch and checked row projection under one
 //! lease, so policy cannot combine an old summary with a separately read tail.
-//! This module reads only and writes no metadata. Returned snapshots own their
-//! payload but do not retain the mutation lane beyond the coherent read.
+//! Legacy summary accounting may be imported atomically under that same lease;
+//! this never changes replay coverage or raw source. Returned snapshots own
+//! their payload but do not retain the mutation lane beyond the coherent read.
 
 use super::store::{ConversationTranscriptRead, ConversationTranscriptView};
 use super::{AgentCompactionEpoch, AgentPresentationEntry, AgentTranscriptStore};
@@ -46,7 +47,7 @@ impl AgentTranscriptStore {
         select: impl FnOnce(Option<&AgentCompactionEpoch>) -> Option<(ConversationTranscriptRead, bool)>,
     ) -> Result<ConversationReplaySnapshot> {
         let lease = self.acquire_conversation_lock(conversation_id)?;
-        let epoch = self.compaction_epoch(conversation_id)?;
+        let epoch = self.compaction_epoch_locked(conversation_id)?;
         let view = match select(epoch.as_ref()) {
             Some((read, required)) => self.conversation_transcript_view_locked(
                 conversation_id,
@@ -84,7 +85,7 @@ impl AgentTranscriptStore {
             Err(error) => return Err(error),
         };
         let prefix = self
-            .compaction_epoch(conversation_id)?
+            .compaction_epoch_locked(conversation_id)?
             .map_or(0, |epoch| epoch.through_sequence);
         let active_raw_entries = logical_high_water.checked_sub(prefix).ok_or_else(|| {
             MezError::invalid_state("compaction prefix exceeds checked transcript frontier")

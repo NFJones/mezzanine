@@ -1131,6 +1131,7 @@ mod transcript_claim_tests {
         ));
         let store = crate::storage::transcript::AgentTranscriptStore::new(root.clone());
         let epoch = crate::storage::transcript::AgentCompactionEpoch {
+            summary_records: None,
             version: 1,
             conversation_id: "initial-child".into(),
             through_sequence: 0,

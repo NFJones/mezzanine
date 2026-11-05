@@ -78,13 +78,16 @@ impl TranscriptAppendBatch {
         if let Some(epoch) = initial_compaction_epoch.as_ref() {
             if epoch.conversation_id != conversation_id
                 || epoch.through_sequence != 0
-                || !matches!(epoch.version, 1 | 2)
+                || !matches!(epoch.version, 1..=3)
                 || (epoch.version == 1
                     && (epoch.summary.trim().is_empty() || !epoch.ranges.is_empty()))
-                || (epoch.version == 2
+                || (epoch.version != 1
                     && epoch.summary.trim().is_empty()
                     && epoch.ranges.is_empty())
                 || entries.first().is_some_and(|row| row.sequence != 1)
+                || epoch.summary.len() as u64 > COMPACTION_EPOCH_MAX_BYTES
+                || (epoch.version != 3 && epoch.summary_records.is_some())
+                || (epoch.version == 3 && epoch.summary_records.is_none())
             {
                 return Err(MezError::invalid_args(
                     "initial transcript projection has invalid identity, shape or row origin",
@@ -95,7 +98,12 @@ impl TranscriptAppendBatch {
                     "initial transcript projection encode failed: {error}"
                 ))
             })?;
-            if encoded.len().saturating_add(1) as u64 > COMPACTION_EPOCH_MAX_BYTES {
+            let encoded_limit = if epoch.version == 3 {
+                super::store::ACCOUNTED_COMPACTION_EPOCH_MAX_BYTES
+            } else {
+                COMPACTION_EPOCH_MAX_BYTES
+            };
+            if encoded.len().saturating_add(1) as u64 > encoded_limit {
                 return Err(MezError::invalid_args(
                     "initial transcript projection exceeds its accepted size limit",
                 ));
@@ -105,6 +113,12 @@ impl TranscriptAppendBatch {
             })?;
             validate_compaction_ranges(&epoch.ranges, 0, next)?;
             validate_compaction_range_sources(&epoch.ranges, &entries)?;
+            epoch.validate_summary_payload_size()?;
+            if epoch.version == 3 {
+                // Validate descriptive data against source without changing the
+                // exact journal payload whose digest owns this append receipt.
+                epoch.clone().restore_summary_records()?;
+            }
         } else if entries.is_empty() {
             return Err(MezError::invalid_args(
                 "empty transcript append has no projection",

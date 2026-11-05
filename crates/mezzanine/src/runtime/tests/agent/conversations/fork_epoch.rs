@@ -910,6 +910,7 @@ fn runtime_saved_fork_selective_epoch_encoded_anchors_and_native_ownership() {
             .collect::<Vec<_>>();
         store.append_many(&rows).unwrap();
         let epoch = AgentCompactionEpoch {
+            summary_records: None,
             version: 2,
             conversation_id: "fork-source".into(),
             through_sequence: prefix,

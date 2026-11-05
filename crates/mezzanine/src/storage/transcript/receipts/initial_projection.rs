@@ -28,8 +28,11 @@ impl AgentTranscriptStore {
         let Some(epoch) = batch.initial_compaction_epoch() else {
             return Ok(());
         };
-        let current = self.compaction_epoch(batch.conversation_id())?;
-        if current.as_ref().is_some_and(|existing| existing != epoch) {
+        let current = self.compaction_epoch_locked(batch.conversation_id())?;
+        if current
+            .as_ref()
+            .is_some_and(|existing| !existing.matches_expected(epoch))
+        {
             return Err(MezError::conflict(
                 "initial transcript projection differs from existing authority",
             ));
@@ -75,8 +78,11 @@ impl AgentTranscriptStore {
         let Some(epoch) = batch.initial_compaction_epoch() else {
             return Ok(());
         };
-        let previous = self.compaction_epoch(batch.conversation_id())?;
-        if previous.as_ref().is_some_and(|existing| existing != epoch) {
+        let previous = self.compaction_epoch_locked(batch.conversation_id())?;
+        if previous
+            .as_ref()
+            .is_some_and(|existing| !existing.matches_expected(epoch))
+        {
             return Err(MezError::conflict(
                 "initial transcript projection changed before publication",
             ));
@@ -86,7 +92,16 @@ impl AgentTranscriptStore {
         // The immutable batch and checked archive already match. The writer
         // validates range groups again and repairs a sidecar-before-marker
         // failure even when the exact sidecar is already present.
-        self.save_compaction_projection_locked(epoch.clone(), None, Some(&previous))
+        let projection = if let Some(previous) = &previous {
+            previous.clone()
+        } else {
+            let mut projection = epoch.clone();
+            if matches!(projection.version, 1 | 2) {
+                projection.import_legacy_summary_records()?;
+            }
+            projection
+        };
+        self.save_compaction_projection_locked(projection, None, Some(&previous))
     }
 
     /// Requires both exact replay bytes and the durable required-state marker
@@ -96,7 +111,10 @@ impl AgentTranscriptStore {
         batch: &TranscriptAppendBatch,
     ) -> Result<()> {
         if let Some(epoch) = batch.initial_compaction_epoch()
-            && (self.compaction_epoch(batch.conversation_id())?.as_ref() != Some(epoch)
+            && (self
+                .compaction_epoch_locked(batch.conversation_id())?
+                .as_ref()
+                .is_none_or(|current| !current.matches_expected(epoch))
                 || !self.compaction_epoch_marker_is_committed(batch.conversation_id())?)
         {
             return Err(MezError::invalid_state(
@@ -127,9 +145,9 @@ impl AgentTranscriptStore {
         for (conversation_id, (epoch, _)) in projections {
             let _lease = self.acquire_conversation_lock(conversation_id)?;
             if self
-                .compaction_epoch(conversation_id)?
+                .compaction_epoch_locked(conversation_id)?
                 .as_ref()
-                .is_some_and(|current| current != epoch)
+                .is_some_and(|current| !current.matches_expected(epoch))
             {
                 return Err(MezError::conflict(
                     "transcript recovery initial projection conflicts with durable authority",

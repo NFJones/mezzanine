@@ -148,6 +148,9 @@ fn source_occurrence_conflict(
 /// Accepted model replacement and its exact, occurrence-bearing source rows.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct TerminalCompactionReplacement {
+    /// Versioned accepted summary record; absent only in explicit legacy proof.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) summary_record: Option<mez_agent::ContextBlockRecord>,
     /// Canonical typed execution payloads, including group and ordinal.
     pub(crate) sources: Vec<String>,
     /// Bounded accepted model summary, anchored at the first covered row.
@@ -168,10 +171,13 @@ impl TerminalCompactionHandoff {
     /// Typed occurrence payloads and model summaries remain byte-for-byte
     /// identical. Foreign baselines are errors, not evidence to launder into
     /// target ownership; publication still independently validates copied rows.
+    /// An exact imported legacy baseline may adopt records only from the
+    /// caller's immutable source epoch captured under the original lease.
     pub(super) fn fork_content(
         content: &str,
         source_conversation_id: &str,
         target_conversation_id: &str,
+        source_epoch: Option<&AgentCompactionEpoch>,
     ) -> Result<Option<String>> {
         let Some(json) = content.strip_prefix(MARKER) else {
             return Ok(None);
@@ -193,7 +199,18 @@ impl TerminalCompactionHandoff {
                     "terminal compaction handoff has foreign baseline identity",
                 ));
             }
-            baseline.conversation_id = target_conversation_id.to_string();
+            if matches!(baseline.version, 1 | 2)
+                && baseline.summary_records.is_none()
+                && let Some(imported) = source_epoch
+                && imported.conversation_id == source_conversation_id
+                && imported.matches_expected(baseline)
+            {
+                // The archived old witness predates descriptive migration.
+                // Preserve its qualified source's actual assigned records,
+                // rather than allocating unrelated child baseline identities.
+                *baseline = imported.clone();
+            }
+            baseline.retarget_summary_records(target_conversation_id)?;
         }
         handoff.to_content().map(Some)
     }
@@ -238,6 +255,9 @@ impl TerminalCompactionHandoff {
         if self.replacements.is_empty()
             || self.replacements.iter().any(|replacement| {
                 replacement.summary.trim().is_empty()
+                    || replacement
+                        .summary_record
+                        .is_some_and(|record| record.validate_format().is_err())
                     || replacement.summary.len()
                         > mez_agent::http::DEFAULT_PROVIDER_MAX_RESPONSE_BYTES
                     || replacement.sources.is_empty()
@@ -324,7 +344,7 @@ impl AgentTranscriptStore {
         entries: &[TranscriptEntry],
         handoff: TerminalCompactionHandoff,
     ) -> Result<()> {
-        let previous = self.compaction_epoch(conversation_id)?;
+        let previous = self.compaction_epoch_locked(conversation_id)?;
         if let Some((epoch, frozen)) = project_terminal_handoff(
             conversation_id,
             terminal_sequence,
@@ -395,27 +415,67 @@ fn project_terminal_handoff(
         }) {
             continue;
         }
-        additions.push(range);
+        let block = super::selective_summary_block(&range.summary);
+        let record = match replacement.summary_record {
+            Some(record) => record.restored(&block)?,
+            None => {
+                // Old certificates own a real archived occurrence. Import its
+                // structural replacement slot, never the covered-row anchor.
+                let ordinal = u32::try_from(witness_index)
+                    .ok()
+                    .and_then(|index| index.checked_add(1))
+                    .ok_or_else(|| {
+                        MezError::invalid_state("legacy terminal summary slot exhausted")
+                    })?;
+                let origin = mez_agent::ContextBlockOccurrenceId::for_legacy_archive_row(
+                    conversation_id,
+                    terminal_sequence,
+                    ordinal,
+                )?;
+                mez_agent::ContextBlockRecord::for_occurrence(origin, &block)?
+            }
+        };
+        additions.push((range, record));
         frozen.extend_from_slice(rows);
     }
     if additions.is_empty() {
         return Ok(None);
     }
-    if previous != handoff.baseline {
+    if !super::compaction_epochs_match(&previous, &handoff.baseline) {
         return Err(MezError::conflict(
             "terminal compaction epoch baseline changed",
         ));
     }
     let mut epoch = previous.clone().unwrap_or_else(|| AgentCompactionEpoch {
+        summary_records: None,
         version: 2,
         conversation_id: conversation_id.to_string(),
         through_sequence: 0,
         summary: String::new(),
         ranges: Vec::new(),
     });
-    epoch.version = 2;
-    epoch.ranges.extend(additions);
-    epoch.ranges.sort_by_key(|range| range.first_sequence);
+    let records = epoch
+        .summary_records
+        .take()
+        .unwrap_or_else(|| super::CompactionSummaryRecords::new(None, Vec::new()));
+    if records.ranges.len() != epoch.ranges.len() {
+        return Err(MezError::invalid_state(
+            "terminal compaction prior range records are unavailable",
+        ));
+    }
+    let mut indexed = std::mem::take(&mut epoch.ranges)
+        .into_iter()
+        .zip(records.ranges)
+        .collect::<Vec<_>>();
+    indexed.extend(additions);
+    indexed.sort_by_key(|(range, _)| range.first_sequence);
+    let (ranges, range_records) = indexed.into_iter().unzip();
+    epoch.version = 3;
+    epoch.ranges = ranges;
+    epoch.summary_records = Some(super::CompactionSummaryRecords::new(
+        records.prefix,
+        range_records,
+    ));
     frozen.sort_by_key(|row| row.sequence);
     Ok(Some((epoch, frozen)))
 }

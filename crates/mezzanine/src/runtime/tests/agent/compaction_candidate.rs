@@ -193,6 +193,29 @@ fn runtime_manual_compaction_candidate_retains_native_execution_ownership() {
         .agent_context_for_pane_prompt("%1", "Continue after conversation compaction.", 100)
         .unwrap()
         .with_metadata(candidate.metadata().clone());
+    let saved_epoch = store.compaction_epoch("candidate-native").unwrap().unwrap();
+    let saved_prefix = saved_epoch
+        .summary_records
+        .as_ref()
+        .unwrap()
+        .prefix
+        .unwrap();
+    assert_eq!(saved_epoch.version, 3);
+    assert_eq!(
+        complete_published
+            .chronology()
+            .iter()
+            .find(|event| event.block().source == ContextSourceKind::CompactionPrefix)
+            .unwrap()
+            .record(),
+        saved_prefix
+    );
+    assert_eq!(
+        AgentTranscriptStore::new(store.root())
+            .compaction_epoch("candidate-native")
+            .unwrap(),
+        Some(saved_epoch)
+    );
     assert_eq!(
         candidate.blocks(),
         complete_published.blocks(),
@@ -238,7 +261,10 @@ fn runtime_manual_compaction_candidate_retains_native_execution_ownership() {
         let before_body = mez_agent::openai_responses_request_body(&before).unwrap();
         let after_body = mez_agent::openai_responses_request_body(&after).unwrap();
         assert_eq!(before_body, after_body, "replay wire parity for {provider}");
-        for record in &retained_records {
+        for record in retained_records
+            .iter()
+            .chain(std::iter::once(&saved_prefix))
+        {
             let occurrence: String = record.occurrence_id().into();
             assert!(!before_body.contains(&occurrence));
         }
@@ -350,7 +376,7 @@ fn runtime_compaction_candidate_mcp_epoch_matches_published_projection() {
         })
         .collect::<Vec<_>>();
     let prospective =
-        crate::runtime::control::runtime_agent_compaction_replay_context("%1", &rows, &[]);
+        crate::runtime::control::runtime_agent_compaction_replay_context("%1", &rows, &[], None);
     rows.push(TranscriptEntry {
         conversation_id: "projection-parity".to_string(),
         sequence: 5,

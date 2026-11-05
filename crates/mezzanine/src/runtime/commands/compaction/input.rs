@@ -190,6 +190,7 @@ mod tests {
         let certificate = TerminalCompactionHandoff {
             baseline: None,
             replacements: vec![TerminalCompactionReplacement {
+                summary_record: None,
                 sources: vec![encoded],
                 summary: "AUDIT_ONLY_SUMMARY".to_string(),
             }],

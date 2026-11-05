@@ -128,6 +128,9 @@ const SESSION_METADATA_VERSION: u64 = 4;
 const COMPACTION_EPOCH_FILE_NAME: &str = "compaction-epoch.json";
 /// Maximum encoded size accepted for one durable compaction epoch.
 pub(super) const COMPACTION_EPOCH_MAX_BYTES: u64 = 1024 * 1024;
+/// V3 keeps the existing summary bounds while allowing structural record
+/// overhead for any previously bounded legacy epoch during one-time import.
+pub(super) const ACCOUNTED_COMPACTION_EPOCH_MAX_BYTES: u64 = 16 * 1024 * 1024;
 
 /// Checks the ordering and bounds of selective replay ranges before publication or use.
 pub(super) fn validate_compaction_ranges(
@@ -1452,6 +1455,63 @@ impl AgentTranscriptStore {
         conversation_id: &str,
     ) -> Result<Option<super::types::AgentCompactionEpoch>> {
         validate_conversation_id(conversation_id)?;
+        if !self
+            .session_dir_for(conversation_id)?
+            .join(COMPACTION_EPOCH_FILE_NAME)
+            .exists()
+            && self
+                .read_compaction_epoch_unmigrated(conversation_id)?
+                .is_none()
+        {
+            return Ok(None);
+        }
+        let _lease = self.acquire_conversation_lock(conversation_id)?;
+        self.compaction_epoch_locked(conversation_id)
+    }
+
+    /// Reads or imports summary accounting while the caller already owns this
+    /// conversation's mutation lease. Never recursively acquires `flock`.
+    pub(super) fn compaction_epoch_locked(
+        &self,
+        conversation_id: &str,
+    ) -> Result<Option<AgentCompactionEpoch>> {
+        let Some(mut epoch) = self.read_compaction_epoch_unmigrated(conversation_id)? else {
+            return Ok(None);
+        };
+        let changed = if matches!(epoch.version, 1 | 2) {
+            epoch.import_legacy_summary_records()?;
+            true
+        } else {
+            epoch.restore_summary_records()?
+        };
+        if changed {
+            let path = self
+                .session_dir_for(conversation_id)?
+                .join(COMPACTION_EPOCH_FILE_NAME);
+            super::compaction_records::replace_summary_record_epoch(&path, &epoch, || {
+                #[cfg(test)]
+                if self
+                    .fail_compaction_epoch_before_rename
+                    .swap(false, Ordering::SeqCst)
+                {
+                    return Err(MezError::invalid_state(
+                        "injected compaction accounting failure before rename",
+                    ));
+                }
+                Ok(())
+            })?;
+        }
+        Ok(Some(epoch))
+    }
+
+    /// Decodes semantic authority without mutation. Discovery needs no summary
+    /// cache and may already hold a publication lease through catalog upkeep;
+    /// canonical replay must use the leased accounting import above instead.
+    fn read_compaction_epoch_unmigrated(
+        &self,
+        conversation_id: &str,
+    ) -> Result<Option<AgentCompactionEpoch>> {
+        validate_conversation_id(conversation_id)?;
         let path = self
             .session_dir_for(conversation_id)?
             .join(COMPACTION_EPOCH_FILE_NAME);
@@ -1472,7 +1532,8 @@ impl AgentTranscriptStore {
             }
             return Ok(None);
         }
-        if path.metadata()?.len() > COMPACTION_EPOCH_MAX_BYTES {
+        let encoded_bytes = path.metadata()?.len();
+        if encoded_bytes > ACCOUNTED_COMPACTION_EPOCH_MAX_BYTES {
             return Err(MezError::invalid_args(
                 "compaction epoch sidecar exceeds the accepted size limit",
             ));
@@ -1482,12 +1543,15 @@ impl AgentTranscriptStore {
             serde_json::from_slice(&bytes).map_err(|error| {
                 MezError::invalid_args(format!("compaction epoch decode failed: {error}"))
             })?;
-        if !matches!(epoch.version, 1 | 2)
+        if !matches!(epoch.version, 1..=3)
+            || (epoch.version != 3 && encoded_bytes > COMPACTION_EPOCH_MAX_BYTES)
             || epoch.conversation_id != conversation_id
             || (epoch.version == 1 && epoch.summary.trim().is_empty())
-            || (epoch.version == 2 && epoch.summary.trim().is_empty() && epoch.ranges.is_empty())
+            || (epoch.version != 1 && epoch.summary.trim().is_empty() && epoch.ranges.is_empty())
             || epoch.summary.len() as u64 > COMPACTION_EPOCH_MAX_BYTES
             || (epoch.version == 1 && !epoch.ranges.is_empty())
+            || (epoch.version != 3 && epoch.summary_records.is_some())
+            || (epoch.version == 3 && epoch.summary_records.is_none())
         {
             return Err(MezError::invalid_args(
                 "compaction epoch sidecar has invalid identity, version, or summary",
@@ -1500,6 +1564,7 @@ impl AgentTranscriptStore {
             ));
         }
         validate_compaction_ranges(&epoch.ranges, epoch.through_sequence, next_sequence)?;
+        epoch.validate_summary_payload_size()?;
         if !epoch.ranges.is_empty() {
             validate_compaction_range_sources(&epoch.ranges, &self.inspect(conversation_id)?)?;
         }
@@ -1510,7 +1575,8 @@ impl AgentTranscriptStore {
     ///
     /// The append-only transcript is not rewritten. The conversation lock
     /// serializes this boundary with transcript appends and other sidecar updates.
-    pub fn save_compaction_epoch(
+    #[cfg(test)]
+    pub(crate) fn save_compaction_epoch(
         &self,
         conversation_id: &str,
         through_sequence: u64,
@@ -1518,6 +1584,7 @@ impl AgentTranscriptStore {
     ) -> Result<()> {
         self.save_compaction_projection(
             AgentCompactionEpoch {
+                summary_records: None,
                 version: 1,
                 conversation_id: conversation_id.to_string(),
                 through_sequence,
@@ -1530,7 +1597,8 @@ impl AgentTranscriptStore {
     }
 
     /// Atomically publishes ordered selective replacements without altering the archive.
-    pub fn save_compaction_ranges(
+    #[cfg(test)]
+    pub(crate) fn save_compaction_ranges(
         &self,
         conversation_id: &str,
         through_sequence: u64,
@@ -1539,6 +1607,7 @@ impl AgentTranscriptStore {
     ) -> Result<()> {
         self.save_compaction_projection(
             AgentCompactionEpoch {
+                summary_records: None,
                 version: 2,
                 conversation_id: conversation_id.to_string(),
                 through_sequence,
@@ -1571,8 +1640,10 @@ impl AgentTranscriptStore {
         self.save_compaction_projection_locked(epoch, Some(frozen_rows), Some(baseline))
     }
 
-    /// Shares the crash-safe v1 and v2 publication boundary.
-    fn save_compaction_projection(
+    /// Shares the crash-safe accounted publication boundary. Unaccounted direct
+    /// producers establish their new records here; actual runtime proposals
+    /// already carry their original accepted records.
+    pub(crate) fn save_compaction_projection(
         &self,
         epoch: AgentCompactionEpoch,
         frozen_rows: Option<&[TranscriptEntry]>,
@@ -1587,17 +1658,22 @@ impl AgentTranscriptStore {
     /// contract without recursively acquiring an independent `flock` descriptor.
     pub(super) fn save_compaction_projection_locked(
         &self,
-        epoch: AgentCompactionEpoch,
+        mut epoch: AgentCompactionEpoch,
         frozen_rows: Option<&[TranscriptEntry]>,
         baseline: Option<&Option<AgentCompactionEpoch>>,
     ) -> Result<()> {
+        if matches!(epoch.version, 1 | 2) && epoch.summary_records.is_none() {
+            epoch.allocate_summary_records()?;
+        }
+        epoch.restore_summary_records()?;
+        epoch.validate_summary_payload_size()?;
         let conversation_id = epoch.conversation_id.as_str();
         self.ensure_custody_receipts_settled_locked(conversation_id)?;
         let through_sequence = epoch.through_sequence;
         let summary = epoch.summary.as_str();
         validate_conversation_id(conversation_id)?;
         if (epoch.version == 1 && summary.trim().is_empty())
-            || (epoch.version == 2 && summary.trim().is_empty() && epoch.ranges.is_empty())
+            || (epoch.version != 1 && summary.trim().is_empty() && epoch.ranges.is_empty())
             || summary.len() as u64 > COMPACTION_EPOCH_MAX_BYTES
         {
             return Err(MezError::invalid_args(
@@ -1631,8 +1707,10 @@ impl AgentTranscriptStore {
             through_sequence,
             latest_sequence.unwrap_or(0).saturating_add(1),
         )?;
-        let previous = self.compaction_epoch(conversation_id)?;
-        if baseline.is_some_and(|baseline| *baseline != previous) {
+        let previous = self.compaction_epoch_locked(conversation_id)?;
+        if baseline.is_some_and(|baseline| {
+            !super::compaction_records::compaction_epochs_match(&previous, baseline)
+        }) {
             return Err(MezError::conflict(
                 "terminal compaction epoch changed before publication",
             ));
@@ -1645,9 +1723,14 @@ impl AgentTranscriptStore {
                     .as_ref()
                     .map_or(&[][..], |old| old.ranges.as_slice());
                 let retains_prior_ranges = if baseline.is_some() {
-                    prior_ranges
-                        .iter()
-                        .all(|range| epoch.ranges.contains(range))
+                    prior_ranges.iter().all(|range| {
+                        epoch
+                            .ranges
+                            .binary_search_by_key(&range.first_sequence, |range| {
+                                range.first_sequence
+                            })
+                            .is_ok_and(|index| epoch.ranges[index] == *range)
+                    })
                 } else {
                     epoch.ranges.starts_with(prior_ranges)
                 };
@@ -1655,6 +1738,9 @@ impl AgentTranscriptStore {
                     return Err(MezError::conflict(
                         "compaction publication no longer extends its prior ranges",
                     ));
+                }
+                if let Some(previous) = &previous {
+                    epoch.validate_retained_summary_records(previous)?;
                 }
                 let selected = committed
                     .into_iter()
@@ -1690,7 +1776,7 @@ impl AgentTranscriptStore {
             let encoded = serde_json::to_vec(&epoch).map_err(|error| {
                 MezError::invalid_args(format!("compaction epoch encode failed: {error}"))
             })?;
-            if encoded.len().saturating_add(1) as u64 > COMPACTION_EPOCH_MAX_BYTES {
+            if encoded.len().saturating_add(1) as u64 > ACCOUNTED_COMPACTION_EPOCH_MAX_BYTES {
                 return Err(MezError::invalid_args(
                     "encoded compaction epoch exceeds the accepted size limit",
                 ));
@@ -3459,7 +3545,7 @@ impl AgentTranscriptStore {
             return Ok(CompareAndSwapTranscriptEntryResult::Deleted);
         }
         if self
-            .compaction_epoch(conversation_id)?
+            .compaction_epoch_locked(conversation_id)?
             .is_some_and(|epoch| {
                 sequence <= epoch.through_sequence
                     || epoch.ranges.iter().any(|range| {
@@ -3503,7 +3589,7 @@ impl AgentTranscriptStore {
             ));
         }
         let _conversation_lock = self.acquire_conversation_lock(conversation_id)?;
-        if self.compaction_epoch(conversation_id)?.is_some() {
+        if self.compaction_epoch_locked(conversation_id)?.is_some() {
             return Err(MezError::invalid_state(
                 "cannot renumber transcript sequences while a compaction epoch is committed",
             ));
@@ -4276,7 +4362,7 @@ impl AgentTranscriptStore {
         if !archive.is_file() || archive.metadata()?.len() != 0 {
             return Ok(None);
         }
-        let Some(epoch) = self.compaction_epoch(conversation_id)? else {
+        let Some(epoch) = self.read_compaction_epoch_unmigrated(conversation_id)? else {
             return Ok(None);
         };
         if epoch.through_sequence != 0 {
@@ -4595,7 +4681,7 @@ impl AgentTranscriptStore {
                 "source conversation has no entries",
             ));
         }
-        let epoch = self.compaction_epoch(source_conversation_id)?;
+        let epoch = self.compaction_epoch_locked(source_conversation_id)?;
         let presentations = self.inspect_presentation_unlocked(source_conversation_id)?;
         let fallback_source = if presentations.is_empty() {
             Some(super::fallback::Source::from_records(&entries)?.encode()?)
@@ -4628,6 +4714,7 @@ impl AgentTranscriptStore {
                             &forked.content,
                             source_conversation_id,
                             target_conversation_id,
+                            epoch.as_ref(),
                         )?
                 {
                     forked.content = content;
@@ -4689,7 +4776,7 @@ impl AgentTranscriptStore {
                 self.append_presentation_locked(&forked)?;
             }
             if let Some(mut epoch) = epoch {
-                epoch.conversation_id = target_conversation_id.to_string();
+                epoch.retarget_summary_records(target_conversation_id)?;
                 self.save_compaction_projection_locked(epoch, Some(&frozen_rows), Some(&None))?;
             }
             // Reconcile only the new target. The existing owner validates the

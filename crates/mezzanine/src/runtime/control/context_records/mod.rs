@@ -29,6 +29,27 @@ pub(super) struct DecodedContextRow {
 }
 
 impl RuntimeContextRecords {
+    /// Associates an actual summary record with its exact emitted block slot.
+    pub(super) fn push_indexed_record(&mut self, index: usize, record: ContextBlockRecord) {
+        let position = self
+            .records
+            .partition_point(|(existing, _)| *existing < index);
+        if self
+            .records
+            .get(position)
+            .is_some_and(|(existing, _)| *existing == index)
+        {
+            self.invalid = true;
+        } else {
+            self.records.insert(position, (index, record));
+        }
+    }
+
+    /// Withholds adoption when a required typed summary slot is absent.
+    pub(super) fn mark_invalid(&mut self) {
+        self.invalid = true;
+    }
+
     /// Captures malformed reserved envelopes as an explicit pending failure.
     /// Unrelated/legacy rows remain readable and supply no authored cost claim.
     pub(super) fn decode_row(&mut self, entry: &TranscriptEntry) -> DecodedContextRow {

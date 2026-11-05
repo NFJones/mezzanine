@@ -7,7 +7,7 @@
 //! The existing crash-safe sidecar writer owns persistence and version policy.
 
 use super::{
-    AgentCompactionEpoch, AgentTranscriptStore, ConversationTranscriptRead,
+    AgentCompactionEpoch, AgentTranscriptStore, CompactionSummary, ConversationTranscriptRead,
     project_compaction_prefix, validate_compaction_prefix_source,
 };
 use crate::{MezError, Result};
@@ -18,6 +18,8 @@ impl AgentTranscriptStore {
     /// and matching physical prefix. Missing/corrupt history, changed summaries,
     /// changed rows and a split range fail before metadata or archive mutation.
     /// A baseline of `None` qualifies absence, rather than skipping the check.
+    /// After an uncertain write, only the exact retained proposal can settle
+    /// its own publication; frozen physical rows are checked again on retry.
     /// Returns the next checked logical sequence from this publication lane,
     /// including deduplicated pending reservations. Conflicting pending rows or
     /// exhausted sequences fail before publication; no second read is needed.
@@ -25,19 +27,37 @@ impl AgentTranscriptStore {
         &self,
         conversation_id: &str,
         through_sequence: u64,
-        summary: &str,
+        summary: CompactionSummary<'_>,
         frozen_rows: &[TranscriptEntry],
         baseline: &Option<AgentCompactionEpoch>,
         pending: &[TranscriptEntry],
     ) -> Result<u64> {
         let lease = self.acquire_conversation_lock(conversation_id)?;
-        let previous = self.compaction_epoch(conversation_id)?;
-        if &previous != baseline {
+        let previous = self.compaction_epoch_locked(conversation_id)?;
+        let matches_baseline =
+            super::compaction_records::compaction_epochs_match(&previous, baseline);
+        // The immutable proposal includes its original occurrence and retained
+        // range records. Equal text alone cannot establish a completed write.
+        // An old unaccounted baseline with retained ranges cannot establish
+        // those records and therefore remains a conflict after uncertain I/O.
+        let source = if matches_baseline {
+            &previous
+        } else {
+            baseline
+        };
+        let mut projection =
+            project_compaction_prefix(conversation_id, source.as_ref(), through_sequence, summary)?;
+        projection.restore_summary_records()?;
+        if !matches_baseline
+            && !previous
+                .as_ref()
+                .is_some_and(|current| current.matches_expected(&projection))
+        {
             return Err(MezError::conflict(
                 "manual compaction source epoch changed before publication",
             ));
         }
-        let previous_boundary = previous.as_ref().map_or(0, |epoch| epoch.through_sequence);
+        let previous_boundary = baseline.as_ref().map_or(0, |epoch| epoch.through_sequence);
         let view = self.conversation_transcript_view_locked(
             conversation_id,
             ConversationTranscriptRead::All,
@@ -56,13 +76,7 @@ impl AgentTranscriptStore {
             through_sequence,
             frozen_rows,
         )?;
-        let projection = project_compaction_prefix(
-            conversation_id,
-            previous.as_ref(),
-            through_sequence,
-            summary,
-        )?;
-        self.save_compaction_projection_locked(projection, None, Some(baseline))?;
+        self.save_compaction_projection_locked(projection, None, Some(&previous))?;
         Ok(next_sequence)
     }
 }

@@ -155,8 +155,7 @@ impl RuntimeSubagentForkReadWork {
                 ));
             }
             epoch
-                .ranges
-                .retain(|range| range.through_sequence <= self.source_high_water);
+                .retain_summary_ranges(|range| range.through_sequence <= self.source_high_water)?;
             if epoch.summary.trim().is_empty() && epoch.ranges.is_empty() {
                 compaction_epoch = None;
             }
@@ -388,7 +387,7 @@ impl RuntimeSubagentForkSnapshot {
             rows.push(child);
         }
         if let Some(mut epoch) = self.compaction_epoch.clone() {
-            epoch.conversation_id = child_cid.into();
+            epoch.retarget_summary_records(child_cid)?;
             epoch.through_sequence = 0;
             for range in &mut epoch.ranges {
                 range.first_sequence =

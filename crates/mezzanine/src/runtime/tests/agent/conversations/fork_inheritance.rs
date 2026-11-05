@@ -308,6 +308,7 @@ fn runtime_fork_inheritance_projects_terminal_witness_without_replaying_it() {
         baseline: baseline.clone(),
         replacements: vec![
             crate::storage::transcript::compaction_handoff::TerminalCompactionReplacement {
+                summary_record: None,
                 sources: vec![row(2).content, row(3).content],
                 summary: "TERMINAL_ACCEPTED_SUMMARY".into(),
             },
@@ -506,6 +507,7 @@ fn runtime_fork_inheritance_ephemeral_zero_source_keeps_captured_summary() {
         baseline: store.compaction_epoch(&cid).unwrap(),
         replacements: vec![
             crate::storage::transcript::compaction_handoff::TerminalCompactionReplacement {
+                summary_record: None,
                 sources: later_sources
                     .iter()
                     .map(|row| row.content.clone())

@@ -301,6 +301,10 @@ pub struct AgentCompactionEpoch {
     /// Ordered selective replacements in a v2 epoch; absent for v1 prefixes.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub ranges: Vec<AgentCompactionRange>,
+    /// Structural summary occurrence/cost records in the v3 sidecar. Legacy
+    /// epochs omit this until their explicit, atomically persisted import.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary_records: Option<super::compaction_records::CompactionSummaryRecords>,
 }
 
 /// Filesystem-backed transcript store.

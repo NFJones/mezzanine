@@ -87,15 +87,18 @@ impl RuntimeSessionService {
             &task.conversation_id,
             previous_epoch.as_ref(),
             boundary,
-            &runtime_model_compact_memory_content(
-                &task.pane_id,
-                &task.conversation_id,
-                task.transcript_entries,
-                task.summarized_entries,
-                &task.model_profile_name,
-                &task.model_profile,
-                summary,
-            ),
+            crate::storage::transcript::CompactionSummary {
+                content: &runtime_model_compact_memory_content(
+                    &task.pane_id,
+                    &task.conversation_id,
+                    task.transcript_entries,
+                    task.summarized_entries,
+                    &task.model_profile_name,
+                    &task.model_profile,
+                    summary,
+                ),
+                record: task.prefix_summary_record_for_preview(summary)?,
+            },
         )?;
         if task.frozen_compaction_epoch.is_some() {
             crate::storage::transcript::validate_compaction_prefix_source(
@@ -123,6 +126,10 @@ impl RuntimeSessionService {
             &task.pane_id,
             retained_entries,
             &projection.ranges,
+            projection
+                .summary_records
+                .as_ref()
+                .map(|records| records.ranges.as_slice()),
         );
         let compact_memory_id =
             mez_agent::memory::canonical_memory_uuid(&format!("compact-{}", task.conversation_id));
@@ -188,7 +195,15 @@ impl RuntimeSessionService {
         // The proposed prefix occupies one chronological slot before history.
         // Restore exact indexed records before execution ownership: importing
         // bare blocks would allocate different occurrence IDs for that source.
-        let records = replay.records.indices_with_offset(1)?;
+        let mut records = replay.records.indices_with_offset(1)?;
+        let prefix_record = projection
+            .summary_records
+            .as_ref()
+            .and_then(|records| records.prefix)
+            .ok_or_else(|| {
+                MezError::invalid_state("candidate prefix summary record is unavailable")
+            })?;
+        records.insert(0, (0, prefix_record));
         let mut history_context =
             AgentContext::import_durable_blocks_with_records(blocks, &records)?;
         history_context

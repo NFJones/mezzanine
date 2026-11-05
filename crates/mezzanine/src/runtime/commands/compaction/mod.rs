@@ -47,6 +47,8 @@ mod handoff;
 mod input;
 pub(super) use input::CompactionTranscriptSource;
 mod preparation;
+/// Original accepted summary records retained across previews and publication.
+mod records;
 mod selection;
 mod source;
 mod summary_correction;
@@ -525,8 +527,23 @@ impl RuntimeSessionService {
             return Ok(None);
         }
         ranges.push(range);
+        let previous_records = staged
+            .or(previous.as_ref())
+            .map(|epoch| {
+                epoch.summary_records.as_ref().ok_or_else(|| {
+                    MezError::invalid_state("prior compaction summary records are unavailable")
+                })
+            })
+            .transpose()?;
+        let mut range_records =
+            previous_records.map_or_else(Vec::new, |records| records.ranges.clone());
+        range_records.push(task.selective_summary_record_for_preview(plan, summary)?);
         Ok(Some(AgentCompactionEpoch {
-            version: 2,
+            summary_records: Some(crate::storage::transcript::CompactionSummaryRecords::new(
+                previous_records.and_then(|records| records.prefix),
+                range_records,
+            )),
+            version: 3,
             conversation_id: task.conversation_id.clone(),
             through_sequence: boundary,
             summary: previous.map_or_else(String::new, |epoch| epoch.summary),
@@ -883,6 +900,7 @@ impl RuntimeSessionService {
             .last()
             .map(|message| message.content.clone());
         self.queue_agent_compaction_task(RuntimeAgentCompactionTask {
+            summary_proposal: None,
             frozen_compaction_epoch: (source == "manual").then(|| projection.clone()),
             task_generation: 0,
             compaction_epoch: prepared_epoch,
@@ -1061,6 +1079,7 @@ impl RuntimeSessionService {
         }
         self.refresh_project_trust_store_from_disk_if_changed()?;
         self.queue_agent_compaction_task(RuntimeAgentCompactionTask {
+            summary_proposal: None,
             frozen_compaction_epoch: None,
             task_generation: 0,
             compaction_epoch: 0,
@@ -1662,6 +1681,7 @@ impl RuntimeSessionService {
                     &final_summary,
                 )
                 .map_err(|error| MezError::invalid_state(error.message()))?;
+                task.retain_selective_summary_record(&compacted, plan.as_ref(), &final_summary)?;
                 let handoff_witnesses = self.compaction_handoff_witnesses(
                     &task,
                     &turn_id,
@@ -2336,6 +2356,7 @@ impl RuntimeSessionService {
                 self.append_agent_trace_turn_event(pane_id, &turn_id, trace)?;
                 return Ok(());
             }
+            task.retain_prefix_summary_record(&summary)?;
             if matches!(task.target, RuntimeAgentCompactionTarget::Conversation)
                 && task.candidate_context.is_some()
             {
@@ -2522,7 +2543,10 @@ impl RuntimeSessionService {
                     &task.conversation_id,
                     previous.as_ref(),
                     boundary,
-                    &summary_block.content,
+                    crate::storage::transcript::CompactionSummary {
+                        content: &summary_block.content,
+                        record: task.prefix_summary_record_for_preview(summary)?,
+                    },
                 )?)
             }
             (None, _, _) => None,
@@ -2619,7 +2643,10 @@ impl RuntimeSessionService {
                 checked_next_sequence = Some(store.save_compaction_prefix_with_proof(
                     &task.conversation_id,
                     boundary,
-                    &content,
+                    crate::storage::transcript::CompactionSummary {
+                        content: &content,
+                        record: task.accepted_prefix_summary_record(summary)?,
+                    },
                     &task.frozen_compaction_rows,
                     baseline,
                     &pending,
@@ -2651,18 +2678,12 @@ impl RuntimeSessionService {
                     &task.conversation_id,
                     previous.as_ref(),
                     boundary,
-                    &content,
+                    crate::storage::transcript::CompactionSummary {
+                        content: &content,
+                        record: task.accepted_prefix_summary_record(summary)?,
+                    },
                 )?;
-                if proposed.ranges.is_empty() {
-                    store.save_compaction_epoch(&task.conversation_id, boundary, &content)?;
-                } else {
-                    store.save_compaction_ranges(
-                        &task.conversation_id,
-                        boundary,
-                        &content,
-                        proposed.ranges,
-                    )?;
-                }
+                store.save_compaction_projection(proposed, None, None)?;
             }
             published_boundary = Some(boundary);
         } else if task.compacted_through_sequence.is_some() {

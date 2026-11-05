@@ -949,6 +949,7 @@ fn interleaved_handoff_entries(candidate: &RuntimeBookkeepingCandidate) -> Vec<T
     let content = TerminalCompactionHandoff {
         baseline: None,
         replacements: vec![TerminalCompactionReplacement {
+            summary_record: None,
             sources: sources.clone(),
             summary: "accepted local summary".to_string(),
         }],

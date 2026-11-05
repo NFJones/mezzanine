@@ -437,6 +437,7 @@ fn fork_epoch_terminal_handoffs_translate_and_reconcile_only_target() {
         witness.content = TerminalCompactionHandoff {
             baseline,
             replacements: vec![TerminalCompactionReplacement {
+                summary_record: None,
                 sources: rows[1..3].iter().map(|row| row.content.clone()).collect(),
                 summary: "accepted model handoff summary".into(),
             }],
@@ -482,6 +483,114 @@ fn fork_epoch_terminal_handoffs_translate_and_reconcile_only_target() {
         }
         assert_eq!(source_bytes(&root), before, "{state}");
         fs::remove_dir_all(root).unwrap();
+    }
+}
+
+/// An archived legacy terminal certificate keeps its original v1/v2 baseline
+/// even after descriptive migration assigns the current sidecar's records.
+/// Fork must translate a matching old baseline using those captured records,
+/// reconcile only the child, and remain idempotent for already covered work.
+/// A later equal-text publication with new records must still invalidate the
+/// historical baseline instead of acquiring authority from matching bytes.
+#[test]
+fn fork_epoch_preserves_legacy_terminal_baselines_after_summary_import() {
+    use crate::storage::transcript::compaction_handoff::{
+        TerminalCompactionHandoff, TerminalCompactionReplacement,
+    };
+    for version in [1, 2] {
+        for state in ["pending", "covered", "replaced", "foreign"] {
+            let root = temp_root("fork-legacy-terminal-baseline");
+            let store = AgentTranscriptStore::new(root.clone());
+            let rows = rows();
+            store.append_many(&rows).unwrap();
+            let legacy = AgentCompactionEpoch {
+                version,
+                conversation_id: "source".into(),
+                through_sequence: 1,
+                summary: "original legacy prefix".into(),
+                ranges: if version == 2 {
+                    vec![AgentCompactionRange {
+                        first_sequence: 6,
+                        through_sequence: 7,
+                        summary: "original legacy selective summary".into(),
+                    }]
+                } else {
+                    Vec::new()
+                },
+                summary_records: None,
+            };
+            fs::write(
+                root.join("source/compaction-epoch.json"),
+                serde_json::to_vec(&legacy).unwrap(),
+            )
+            .unwrap();
+            let mut baseline = legacy.clone();
+            if state == "foreign" {
+                baseline.conversation_id = "foreign".into();
+            }
+            let mut witness = entry("source", 10, TranscriptRole::System);
+            witness.content = TerminalCompactionHandoff {
+                baseline: Some(baseline),
+                replacements: vec![TerminalCompactionReplacement {
+                    summary_record: None,
+                    sources: rows[1..3].iter().map(|row| row.content.clone()).collect(),
+                    summary: "legacy terminal summary".into(),
+                }],
+            }
+            .to_content()
+            .unwrap();
+            store.append(&witness).unwrap();
+            let imported = store.compaction_epoch("source").unwrap().unwrap();
+            assert!(imported.matches_expected(&legacy));
+            if state == "covered" {
+                store
+                    .publish_terminal_compaction_handoffs("source")
+                    .unwrap();
+            } else if state == "replaced" {
+                let mut replacement = imported.clone();
+                replacement.allocate_summary_records().unwrap();
+                store
+                    .save_compaction_projection(replacement, None, None)
+                    .unwrap();
+            }
+            let source_epoch = store.compaction_epoch("source").unwrap().unwrap();
+            let before = source_bytes(&root);
+            let result = store.fork("source", "target", 99);
+            if matches!(state, "replaced" | "foreign") {
+                assert!(result.is_err(), "v{version} {state}");
+                assert!(!root.join("target").exists());
+            } else {
+                result.unwrap();
+                let child = store.compaction_epoch("target").unwrap().unwrap();
+                assert_eq!(child.summary, legacy.summary);
+                assert_eq!(child.ranges.len(), if version == 2 { 2 } else { 1 });
+                assert_eq!(child.ranges[0].summary, "legacy terminal summary");
+                assert_eq!(
+                    child
+                        .summary_records
+                        .as_ref()
+                        .unwrap()
+                        .prefix
+                        .unwrap()
+                        .occurrence_id(),
+                    source_epoch
+                        .summary_records
+                        .as_ref()
+                        .unwrap()
+                        .prefix
+                        .unwrap()
+                        .occurrence_id(),
+                );
+                store
+                    .publish_terminal_compaction_handoffs("target")
+                    .unwrap();
+                assert_eq!(store.compaction_epoch("target").unwrap(), Some(child));
+                assert_eq!(store.inspect("target").unwrap()[1].content, rows[1].content);
+            }
+            assert_eq!(source_bytes(&root), before, "v{version} {state}");
+            assert_eq!(store.inspect("source").unwrap().last(), Some(&witness));
+            fs::remove_dir_all(root).unwrap();
+        }
     }
 }
 
@@ -577,7 +686,8 @@ fn fork_epoch_preserves_selective_projection_and_independent_append() {
         let store = AgentTranscriptStore::new(root.clone());
         let rows = rows();
         store.append_many(&rows).unwrap();
-        let epoch = AgentCompactionEpoch {
+        let mut epoch = AgentCompactionEpoch {
+            summary_records: None,
             version: 2,
             conversation_id: "source".into(),
             through_sequence: prefix,
@@ -599,6 +709,7 @@ fn fork_epoch_preserves_selective_projection_and_independent_append() {
                 },
             ],
         };
+        epoch.allocate_summary_records().unwrap();
         let proof = rows
             .iter()
             .filter(|row| matches!(row.sequence, 2..=3 | 6..=7))
@@ -611,7 +722,7 @@ fn fork_epoch_preserves_selective_projection_and_independent_append() {
         store.fork("source", "target", 99).unwrap();
         let reopened = AgentTranscriptStore::new(root.clone());
         let mut expected = epoch;
-        expected.conversation_id = "target".into();
+        expected.retarget_summary_records("target").unwrap();
         assert_eq!(reopened.compaction_epoch("target").unwrap(), Some(expected));
         let copied = reopened.inspect("target").unwrap();
         for (original, copied) in rows.iter().zip(&copied) {

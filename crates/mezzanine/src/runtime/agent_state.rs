@@ -646,6 +646,8 @@ pub enum RuntimeAgentLoopSettlement {
 /// metadata needed to finish compaction once a model response returns.
 #[derive(Debug, Clone)]
 pub struct RuntimeAgentCompactionTask {
+    /// Original accepted summary record, retained through sizing and I/O retry.
+    pub(crate) summary_proposal: Option<RuntimeCompactionSummaryProposal>,
     /// Unique queued/claimed task generation used to reject stale worker outcomes.
     pub task_generation: u64,
     /// Transport retries consumed by this logical auxiliary operation.
@@ -826,6 +828,19 @@ pub(crate) struct RuntimeCompactionWitness {
         std::collections::BTreeMap<mez_agent::ContextBlockOccurrenceId, Option<String>>,
     /// Accepted bounded model-authored summary.
     pub(crate) summary: String,
+    /// Actual accepted canonical summary, independent of its ordering anchor.
+    pub(crate) summary_record: mez_agent::ContextBlockRecord,
+}
+
+/// One accepted auxiliary result and its exact frozen replacement owner.
+#[derive(Debug, Clone)]
+pub(crate) struct RuntimeCompactionSummaryProposal {
+    /// Exact model-authored output, before prefix explanatory framing.
+    pub(crate) summary: String,
+    /// Frozen active selection; empty for a conversation prefix proposal.
+    pub(crate) source_sequences: Vec<mez_agent::ContextEventSequence>,
+    /// Original record for the actual rendered prefix or selective block.
+    pub(crate) record: mez_agent::ContextBlockRecord,
 }
 
 /// Independent terminal handoff evidence retained until bookkeeping captures it.

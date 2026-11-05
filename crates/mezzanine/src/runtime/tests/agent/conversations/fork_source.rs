@@ -55,9 +55,19 @@ fn runtime_fork_source_freezes_selective_authority_at_captured_cutoff() {
     store
         .save_compaction_ranges(CONVERSATION, 1, "FROZEN_PREFIX", ranges.clone())
         .unwrap();
+    let original_records = store
+        .compaction_epoch(CONVERSATION)
+        .unwrap()
+        .unwrap()
+        .summary_records
+        .unwrap();
     let snapshot = work.execute().unwrap();
     let expected = AgentCompactionEpoch {
-        version: 2,
+        summary_records: Some(crate::storage::transcript::CompactionSummaryRecords::new(
+            original_records.prefix,
+            vec![original_records.ranges[0]],
+        )),
+        version: 3,
         conversation_id: CONVERSATION.into(),
         through_sequence: 1,
         summary: "FROZEN_PREFIX".into(),

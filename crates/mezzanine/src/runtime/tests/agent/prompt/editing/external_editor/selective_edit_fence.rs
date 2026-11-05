@@ -70,6 +70,7 @@ fn runtime_transcript_editor_save_rechecks_selective_epoch_published_after_open(
     store
         .save_compaction_ranges_with_proof(
             crate::storage::transcript::AgentCompactionEpoch {
+                summary_records: None,
                 version: 2,
                 conversation_id: conversation_id.to_string(),
                 through_sequence: 0,

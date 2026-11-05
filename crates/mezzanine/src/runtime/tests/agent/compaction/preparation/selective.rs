@@ -403,13 +403,14 @@ fn runtime_manual_compaction_selective_epoch_edit_survives_old_completion() {
     );
     let mut replacement = store.compaction_epoch("selective-manual").unwrap().unwrap();
     replacement.ranges[0].summary = "NEW_AUTHORITATIVE_RANGE_SUMMARY".into();
+    let records = replacement.summary_records.as_mut().unwrap();
+    records.ranges[0] = records.ranges[0]
+        .revised(&crate::storage::transcript::selective_summary_block(
+            &replacement.ranges[0].summary,
+        ))
+        .unwrap();
     store
-        .save_compaction_ranges(
-            "selective-manual",
-            replacement.through_sequence,
-            &replacement.summary,
-            replacement.ranges.clone(),
-        )
+        .save_compaction_projection(replacement.clone(), None, None)
         .unwrap();
     let task = service.take_pending_agent_compaction_task("%1").unwrap();
     service.claim_agent_compaction_task_state("%1", task);

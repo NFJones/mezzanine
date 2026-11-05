@@ -14766,6 +14766,35 @@ The baseline command capabilities are:
   storage, optionally project it as pane-scoped memory, and retain only a
   bounded raw recent transcript tail plus the compacted summary for model
   context. The first epoch sidecar MUST be durable before metadata requires it.
+  New compaction epochs MUST use version 3 and atomically store the original
+  accepted occurrence and versioned estimated-cost record for each nonempty
+  prefix and each ordered selective summary. Candidate sizing, terminal
+  handoff, publication, receipt recovery and reopened replay MUST preserve
+  those records; repeated projection MUST NOT mint replacement identities.
+  A manual prefix retry after uncertain publication MUST preserve its original
+  proposal, recheck the frozen physical source, and require the exact published
+  proposal before settling a missing required-state marker. Equal text with a
+  different occurrence MUST NOT authorize that retry.
+  Existing version-1/2 sidecars MUST acquire records at one explicit import
+  boundary under the conversation mutation lease, persisted before exposure.
+  A qualified original-projection witness MAY preserve genuine old receipt
+  baselines across this import; a later equal-text publication with new
+  occurrences MUST NOT satisfy an old expectation. Legacy terminal summary
+  import MUST use its actual archived certificate occurrence and replacement
+  slot, independently of the covered raw-row anchor.
+  Summary text remains bounded to one MiB per summary. Legacy sidecars remain
+  bounded to one MiB encoded; version-3 sidecars MAY use up to sixteen MiB for
+  structural accounting overhead without truncating a valid legacy summary.
+  The encoded semantic projection MUST still fit the one-MiB legacy bound;
+  the extra allowance MUST NOT expand escaped summary content limits.
+  Saved estimates MUST be checked against actual rendering and recomputed
+  when stale while preserving origin.
+  Descriptive import/repair MUST preserve the epoch's recorded modification
+  time so a cache update does not invent new conversation activity.
+  Missing, duplicate or unsupported typed
+  record slots MUST fail rather than silently allocate new occurrences.
+  These records MUST remain outside ordinary/auxiliary model message content
+  and MUST NOT supply billed usage, instruction or execution authority.
   An interruption before first sidecar publication MUST leave the original
   append-only transcript replayable; an interruption after publication MUST
   leave the complete sidecar readable. Once metadata requires an epoch, a
@@ -20129,8 +20158,19 @@ The `/fork` command MUST clone the current conversation into a new thread with
 a fresh identity while preserving the original transcript and any presentation
 log associated with that transcript. The fork MUST capture a validated complete
 archive, its authoritative compaction epoch, and presentation under the source
-conversation's existing mutation ownership. A fork MUST NOT capture a shorter
-materialized archive while accepted
+conversation's existing mutation ownership.
+Before copying an unaccounted legacy epoch, source capture MAY atomically
+persist its descriptive summary-record migration under that same lease.
+Existing summary origins MUST be preserved when stale caches are repaired.
+This accounting-only replacement MUST preserve original summary text, coverage,
+raw archive and pane bindings; parent and child MUST share the assigned origins.
+It MUST NOT publish a terminal handoff or acknowledge source receipts.
+When copying an archived terminal certificate with a legacy baseline, the fork
+MAY translate that baseline using the same captured source epoch's assigned
+records only if its original legacy projection witness qualifies the baseline.
+Equal summary text from a later publication MUST NOT qualify that translation;
+the source certificate and its frozen physical payloads MUST remain unchanged.
+A fork MUST NOT capture a shorter materialized archive while accepted
 source chronology or terminal bookkeeping remains unsettled. Fork admission
 MUST fail closed until the existing persistence owner settles that work; retained
 append receipts also reserve a target identity before its archive exists. No

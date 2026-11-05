@@ -363,6 +363,26 @@ fn terminal_handoff_preserves_exact_imported_and_live_accounted_sources() {
             )
             .unwrap();
         assert_eq!(proof.replacements[0].sources, imported);
+        let summary_records = service
+            .agent_turn_contexts()
+            .get(&turn_id)
+            .unwrap()
+            .chronology()
+            .iter()
+            .filter(|event| event.block().source == ContextSourceKind::CompactionSelective)
+            .map(|event| event.record())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            proof
+                .replacements
+                .iter()
+                .map(|replacement| replacement.summary_record.unwrap())
+                .collect::<Vec<_>>(),
+            summary_records,
+            "certificate must retain actual accepted canonical summary records"
+        );
+        let turn = service.agent_turn_ledger().turn(&turn_id).unwrap().clone();
+        let profile = service.agent_turn_model_profile(&turn_id).unwrap().clone();
         assert!(proof.replacements[1].sources.iter().all(|content| {
             mez_agent::transcript::TranscriptContextRecord::from_transcript_content(content)
                 .unwrap()
@@ -375,11 +395,48 @@ fn terminal_handoff_preserves_exact_imported_and_live_accounted_sources() {
                 .compaction_epoch(&conversation)
                 .unwrap()
                 .unwrap()
+                .summary_records
+                .as_ref()
+                .unwrap()
+                .ranges,
+            summary_records
+        );
+        assert_eq!(
+            store
+                .compaction_epoch(&conversation)
+                .unwrap()
+                .unwrap()
                 .ranges
                 .len(),
             2
         );
         service.set_agent_transcript_store(AgentTranscriptStore::new(store.root()));
+        let context = service
+            .agent_context_for_pane_prompt("%1", "reopen summary records", 100)
+            .unwrap();
+        assert_eq!(
+            context
+                .chronology()
+                .iter()
+                .filter(|event| event.block().source == ContextSourceKind::CompactionSelective)
+                .map(|event| event.record())
+                .collect::<Vec<_>>(),
+            summary_records
+        );
+        let request = crate::integrations::agent::context::assemble_model_request(
+            &profile,
+            mez_agent::ProviderApiCompatibility::OpenAiResponses,
+            &turn,
+            &context,
+        )
+        .unwrap();
+        let wire = mez_agent::openai_responses_request_body(&request).unwrap();
+        for record in &summary_records {
+            let origin: String = record.occurrence_id().into();
+            assert!(!wire.contains(&origin));
+        }
+        assert!(!wire.contains("rendered_sha256"));
+        assert!(!wire.contains("framed_input_tokens"));
         let replay = service.runtime_agent_history_epoch_context("%1").unwrap();
         for summary in ["IMPORTED_SUMMARY", "LIVE_SUMMARY"] {
             assert_eq!(

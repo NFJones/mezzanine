@@ -123,6 +123,7 @@ impl RuntimeManualCompactionRequestWork {
             .last()
             .map(|message| message.content.clone());
         Ok(RuntimeAgentCompactionTask {
+            summary_proposal: None,
             frozen_compaction_epoch: Some(self.source_epoch.clone()),
             task_generation: 0,
             compaction_epoch: self.owner.compaction_epoch,

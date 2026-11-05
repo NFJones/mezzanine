@@ -65,6 +65,7 @@ fn selective_epoch_rejects_content_only_edit_before_any_persisted_change() {
     store
         .save_compaction_ranges_with_proof(
             super::super::AgentCompactionEpoch {
+                summary_records: None,
                 version: 2,
                 conversation_id: "selective-edit".to_string(),
                 through_sequence: 0,
@@ -119,6 +120,7 @@ fn publish_disjoint_epoch(store: &AgentTranscriptStore, prefix: u64) -> Vec<Tran
     store
         .save_compaction_ranges_with_proof(
             super::super::AgentCompactionEpoch {
+                summary_records: None,
                 version: 2,
                 conversation_id: "selective-edit".to_string(),
                 through_sequence: prefix,
@@ -299,7 +301,7 @@ fn selective_epoch_content_cas_preserves_conflicts_and_legacy_prefix() {
             .unwrap()
             .unwrap()
             .version,
-        1
+        3
     );
     let before = persisted_bytes(&root);
     assert!(

@@ -6,19 +6,19 @@
 //! retry or source authority. Publication still validates frozen rows and epoch
 //! under the existing conversation mutation lane before persisting the result.
 
-use super::AgentCompactionEpoch;
+use super::{AgentCompactionEpoch, CompactionSummary, CompactionSummaryRecords};
 use crate::{MezError, Result};
 use mez_agent::TranscriptEntry;
 
 /// Projects a replacement prefix over one already validated conversation epoch.
-/// Preserves all ranges strictly after `through_sequence`, chooses the existing
-/// v1/v2 representation, and leaves `previous` unchanged. Foreign ownership,
+/// Preserves ranges and original records strictly after `through_sequence`,
+/// carries the producer's prefix record into v3, and leaves `previous` unchanged. Foreign ownership,
 /// backwards progress and a prefix cutting through a selective range fail.
 pub(crate) fn project_compaction_prefix(
     conversation_id: &str,
     previous: Option<&AgentCompactionEpoch>,
     through_sequence: u64,
-    summary: &str,
+    summary: CompactionSummary<'_>,
 ) -> Result<AgentCompactionEpoch> {
     if let Some(previous) = previous {
         if previous.conversation_id != conversation_id {
@@ -39,17 +39,35 @@ pub(crate) fn project_compaction_prefix(
             ));
         }
     }
-    let ranges = previous
+    let retained = previous
         .into_iter()
-        .flat_map(|epoch| &epoch.ranges)
-        .filter(|range| range.first_sequence > through_sequence)
-        .cloned()
-        .collect::<Vec<_>>();
+        .flat_map(|epoch| {
+            epoch
+                .ranges
+                .iter()
+                .enumerate()
+                .map(move |(index, range)| (epoch, index, range))
+        })
+        .filter(|(_, _, range)| range.first_sequence > through_sequence);
+    let mut ranges = Vec::new();
+    let mut records = Vec::new();
+    for (epoch, index, range) in retained {
+        let record = epoch
+            .summary_records
+            .as_ref()
+            .and_then(|records| records.ranges.get(index))
+            .ok_or_else(|| {
+                MezError::invalid_state("retained compaction range record is unavailable")
+            })?;
+        ranges.push(range.clone());
+        records.push(*record);
+    }
     Ok(AgentCompactionEpoch {
-        version: if ranges.is_empty() { 1 } else { 2 },
+        summary_records: Some(CompactionSummaryRecords::new(Some(summary.record), records)),
+        version: 3,
         conversation_id: conversation_id.to_string(),
         through_sequence,
-        summary: summary.to_string(),
+        summary: summary.content.to_string(),
         ranges,
     })
 }

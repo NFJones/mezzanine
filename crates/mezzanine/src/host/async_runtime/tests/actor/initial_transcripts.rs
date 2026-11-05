@@ -51,13 +51,15 @@ async fn async_actor_initial_transcript_admission_publishes_empty_owner_before_w
         crate::storage::token_usage::new_token_usage_event_id()
     ));
     let store = AgentTranscriptStore::new(root.clone());
-    let epoch = AgentCompactionEpoch {
+    let mut epoch = AgentCompactionEpoch {
+        summary_records: None,
         version: 1,
         conversation_id: "initial-child".into(),
         through_sequence: 0,
         summary: "INITIAL_OWNER_SUMMARY".into(),
         ranges: vec![],
     };
+    epoch.allocate_summary_records().unwrap();
     let batch = TranscriptAppendBatch::initial_projection(epoch.clone(), vec![]).unwrap();
     let path = store.transcript_path(batch.conversation_id()).unwrap();
     let service = initial_owner_service(&store, &batch);
@@ -171,13 +173,15 @@ async fn async_actor_initial_transcript_conflict_keeps_owner_without_retry_loop(
         crate::storage::token_usage::new_token_usage_event_id()
     ));
     let store = AgentTranscriptStore::new(root.clone());
-    let epoch = AgentCompactionEpoch {
+    let mut epoch = AgentCompactionEpoch {
+        summary_records: None,
         version: 1,
         conversation_id: "initial-child".into(),
         through_sequence: 0,
         summary: "INITIAL_OWNER_SUMMARY".into(),
         ranges: vec![],
     };
+    epoch.allocate_summary_records().unwrap();
     let batch = TranscriptAppendBatch::initial_projection(epoch, vec![]).unwrap();
     let service = initial_owner_service(&store, &batch);
     let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)

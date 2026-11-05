@@ -161,23 +161,48 @@ pub(in crate::runtime) fn runtime_agent_history_epoch_from_snapshot(
         });
         entries.sort_by_key(|entry| entry.sequence);
         entries.dedup_by_key(|entry| entry.sequence);
-        let applicable_ranges = epoch
+        let applicable_indices = epoch
             .ranges
             .iter()
-            .filter(|range| {
+            .enumerate()
+            .filter(|(_, range)| {
                 inputs
                     .ephemeral_source_entries
                     .is_none_or(|limit| range.through_sequence <= limit)
             })
-            .cloned()
+            .map(|(index, _)| index)
             .collect::<Vec<_>>();
-        let mut history = runtime_agent_transcript_context_with_ranges(
+        let applicable_ranges = applicable_indices
+            .iter()
+            .map(|index| epoch.ranges[*index].clone())
+            .collect::<Vec<_>>();
+        let applicable_records = epoch.summary_records.as_ref().map(|records| {
+            applicable_indices
+                .iter()
+                .filter_map(|index| records.ranges.get(*index).copied())
+                .collect::<Vec<_>>()
+        });
+        let mut history = runtime_agent_transcript_context_with_ranges_and_mcp_epoch(
             &inputs.pane_id,
             &entries,
             &applicable_ranges,
+            applicable_records.as_deref(),
+            false,
         );
-        if !epoch.summary.is_empty() {
+        if epoch.version == 3 && epoch.summary_records.is_none() {
+            history.records.mark_invalid();
+        }
+        if !epoch.summary.trim().is_empty() {
             history.records.prepend_blocks(1);
+            if let Some(record) = epoch
+                .summary_records
+                .as_ref()
+                .and_then(|records| records.prefix)
+            {
+                history.records.push_indexed_record(0, record);
+            } else if epoch.version == 3 {
+                history.records.mark_invalid();
+            }
             history.blocks.insert(
                 0,
                 ContextBlock::reference_event(
@@ -391,7 +416,9 @@ pub(super) fn runtime_agent_transcript_context_with_ranges(
     entries: &[TranscriptEntry],
     ranges: &[crate::storage::transcript::AgentCompactionRange],
 ) -> RuntimeAgentTranscriptContext {
-    runtime_agent_transcript_context_with_ranges_and_mcp_epoch(pane_id, entries, ranges, false)
+    runtime_agent_transcript_context_with_ranges_and_mcp_epoch(
+        pane_id, entries, ranges, None, false,
+    )
 }
 
 /// Projects a prospective compaction with the same MCP invalidation as a stored epoch.
@@ -400,8 +427,15 @@ pub(crate) fn runtime_agent_compaction_replay_context(
     pane_id: &str,
     entries: &[TranscriptEntry],
     ranges: &[crate::storage::transcript::AgentCompactionRange],
+    summary_records: Option<&[mez_agent::ContextBlockRecord]>,
 ) -> RuntimeAgentTranscriptContext {
-    runtime_agent_transcript_context_with_ranges_and_mcp_epoch(pane_id, entries, ranges, true)
+    runtime_agent_transcript_context_with_ranges_and_mcp_epoch(
+        pane_id,
+        entries,
+        ranges,
+        summary_records,
+        true,
+    )
 }
 
 /// Owns canonical block and execution projection for real and prospective epochs.
@@ -409,11 +443,15 @@ fn runtime_agent_transcript_context_with_ranges_and_mcp_epoch(
     pane_id: &str,
     entries: &[TranscriptEntry],
     ranges: &[crate::storage::transcript::AgentCompactionRange],
+    summary_records: Option<&[mez_agent::ContextBlockRecord]>,
     prospective_mcp_epoch: bool,
 ) -> RuntimeAgentTranscriptContext {
     let mut blocks = Vec::new();
     let mut execution_events = Vec::new();
     let mut records = RuntimeContextRecords::default();
+    if summary_records.is_some_and(|records| records.len() != ranges.len()) {
+        records.mark_invalid();
+    }
     let mut transcript_events = Vec::with_capacity(entries.len());
     let mut row_records = Vec::with_capacity(entries.len());
     let mut row_stable_records = Vec::with_capacity(entries.len());
@@ -500,10 +538,14 @@ fn runtime_agent_transcript_context_with_ranges_and_mcp_epoch(
         last_execution_by_turn.insert(entry.turn_id.as_str(), index);
     }
     for (index, entry) in entries.iter().enumerate() {
-        if let Some(range) = ranges
+        if let Some((range_index, range)) = ranges
             .iter()
-            .find(|range| range.first_sequence == entry.sequence)
+            .enumerate()
+            .find(|(_, range)| range.first_sequence == entry.sequence)
         {
+            if let Some(record) = summary_records.and_then(|records| records.get(range_index)) {
+                records.push_indexed_record(blocks.len(), *record);
+            }
             blocks.push(ContextBlock::reference_event(
                 ContextSourceKind::CompactionSelective,
                 "context compaction summary",

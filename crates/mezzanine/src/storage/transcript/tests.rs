@@ -22,6 +22,8 @@ mod replay_snapshot;
 mod selective_edit_fence;
 /// Held sequence lookups and competing appends preserve mutation ownership.
 mod sequence_coherence;
+/// Durable summary origins, atomic legacy imports and descriptive cache repair.
+mod summary_records;
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -924,6 +926,7 @@ fn selective_publication_rejects_changed_frozen_source() {
         .unwrap();
     let prior = store.compaction_epoch("frozen-source").unwrap();
     let epoch = super::AgentCompactionEpoch {
+        summary_records: None,
         version: 2,
         conversation_id: "frozen-source".to_string(),
         through_sequence: 0,
@@ -983,6 +986,7 @@ fn selective_publication_rejects_receipt_only_source() {
         .accept_append_receipt(std::slice::from_ref(&row), 1)
         .unwrap();
     let epoch = super::AgentCompactionEpoch {
+        summary_records: None,
         version: 2,
         conversation_id: row.conversation_id.clone(),
         through_sequence: 0,
@@ -1030,6 +1034,7 @@ fn selective_publication_rejects_gapped_committed_archive() {
     .to_transcript_content();
     store.append(&selected).unwrap();
     let epoch = super::AgentCompactionEpoch {
+        summary_records: None,
         version: 2,
         conversation_id: "selective-gap".to_string(),
         through_sequence: 0,
@@ -1078,6 +1083,7 @@ fn selective_publication_extends_prior_range_with_new_source_proof() {
         rows.push(row);
     }
     let mut epoch = super::AgentCompactionEpoch {
+        summary_records: None,
         version: 2,
         conversation_id: "successive-source".to_string(),
         through_sequence: 0,
@@ -1088,6 +1094,7 @@ fn selective_publication_extends_prior_range_with_new_source_proof() {
             summary: "first summary".to_string(),
         }],
     };
+    epoch.allocate_summary_records().unwrap();
     store
         .save_compaction_ranges_with_proof(epoch.clone(), &rows[..1])
         .unwrap();
@@ -1096,6 +1103,20 @@ fn selective_publication_extends_prior_range_with_new_source_proof() {
         through_sequence: 3,
         summary: "second summary".to_string(),
     });
+    epoch.summary_records.as_mut().unwrap().ranges.push(
+        mez_agent::ContextBlockRecord::allocate(&super::selective_summary_block("second summary"))
+            .unwrap(),
+    );
+    let mut wrong = epoch.clone();
+    wrong.summary_records.as_mut().unwrap().ranges[0] =
+        mez_agent::ContextBlockRecord::allocate(&super::selective_summary_block("first summary"))
+            .unwrap();
+    assert!(
+        store
+            .save_compaction_ranges_with_proof(wrong, &rows[1..])
+            .is_err(),
+        "a new-range proof cannot replace an unchanged older summary occurrence"
+    );
     store
         .save_compaction_ranges_with_proof(epoch.clone(), &rows[1..])
         .unwrap();

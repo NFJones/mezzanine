@@ -8,13 +8,16 @@ use crate::storage::transcript::{AgentCompactionEpoch, TranscriptAppendBatch};
 
 /// Builds one independently owned initial prefix for an uncompacted child tail.
 fn epoch(conversation_id: &str) -> AgentCompactionEpoch {
-    AgentCompactionEpoch {
+    let mut epoch = AgentCompactionEpoch {
+        summary_records: None,
         version: 1,
         conversation_id: conversation_id.into(),
         through_sequence: 0,
         summary: "INHERITED_PREFIX".into(),
         ranges: vec![],
-    }
+    };
+    epoch.allocate_summary_records().unwrap();
+    epoch
 }
 
 /// A producer may return success only after its initial projection and rows are
@@ -71,12 +74,17 @@ fn selective_batch() -> TranscriptAppendBatch {
         })
         .collect();
     let mut expected = epoch("selective-child");
-    expected.version = 2;
     expected.ranges = vec![crate::storage::transcript::AgentCompactionRange {
         first_sequence: 1,
         through_sequence: 2,
         summary: "SELECTIVE_AT_ORIGINAL_POSITION".into(),
     }];
+    expected.summary_records.as_mut().unwrap().ranges.push(
+        mez_agent::ContextBlockRecord::allocate(
+            &crate::storage::transcript::selective_summary_block(&expected.ranges[0].summary),
+        )
+        .unwrap(),
+    );
     TranscriptAppendBatch::initial_projection(expected, rows).unwrap()
 }
 
@@ -197,7 +205,7 @@ fn initial_projection_empty_receipt_survives_restart_and_reserves_identity() {
     assert!(reopened.inspect("empty-child").unwrap().is_empty());
     assert_eq!(
         reopened.compaction_epoch("empty-child").unwrap(),
-        Some(epoch("empty-child"))
+        batch.initial_compaction_epoch().cloned()
     );
     let snapshot = reopened
         .lock_resume_replay_snapshot("empty-child", true)
@@ -346,7 +354,7 @@ fn initial_projection_recovery_preserves_ordinary_v1_receipts() {
     assert!(reopened.inspect("empty-child").unwrap().is_empty());
     assert_eq!(
         reopened.compaction_epoch("empty-child").unwrap(),
-        Some(epoch("empty-child"))
+        batch.initial_compaction_epoch().cloned()
     );
     assert!(reopened.pending_append_receipts().unwrap().is_empty());
     fs::remove_dir_all(root).unwrap();
@@ -384,12 +392,17 @@ fn initial_projection_batch_validation_rejects_invalid_complete_payloads() {
     oversized.summary = "x".repeat(1024 * 1024);
     assert!(TranscriptAppendBatch::initial_projection(oversized, vec![]).is_err());
     let mut protected = epoch("child");
-    protected.version = 2;
     protected.ranges = vec![crate::storage::transcript::AgentCompactionRange {
         first_sequence: 1,
         through_sequence: 1,
         summary: "cannot hide user".into(),
     }];
+    protected.summary_records.as_mut().unwrap().ranges.push(
+        mez_agent::ContextBlockRecord::allocate(
+            &crate::storage::transcript::selective_summary_block(&protected.ranges[0].summary),
+        )
+        .unwrap(),
+    );
     assert!(
         TranscriptAppendBatch::initial_projection(
             protected,
@@ -509,7 +522,7 @@ fn initial_projection_receipt_version_shape_mismatch_fails_closed() {
         assert!(path.exists());
         assert_eq!(
             store.compaction_epoch("empty-child").unwrap(),
-            Some(epoch("empty-child"))
+            batch.initial_compaction_epoch().cloned()
         );
         fs::remove_dir_all(root).unwrap();
     }
