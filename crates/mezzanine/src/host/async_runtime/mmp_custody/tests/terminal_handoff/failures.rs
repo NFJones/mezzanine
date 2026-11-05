@@ -11,7 +11,7 @@ impl Drop for Gate {
     }
 }
 
-/// Cancelling an observer leaves its actual worker, source/decoder reservation
+/// Cancelling an observer leaves its actual worker, source/metadata reservation
 /// and kernel fence owned by the root. Other executor work remains runnable;
 /// Stop still drains the issued canonical job and preserves its exact proof.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -20,6 +20,12 @@ async fn terminal_handoff_root_observer_cancellation_retains_actual_worker_and_s
     let probe = Probe::new(false);
     let _gate = Gate(probe.clone());
     let mut scene = Scene::new(&fixture, probe.clone()).await;
+    let before_metadata = scene
+        .service
+        .storage_usage()
+        .unwrap()
+        .unwrap()
+        .metadata_bytes;
     scene.start();
     probe.started.notified().await;
     let observer = {
@@ -30,15 +36,24 @@ async fn terminal_handoff_root_observer_cancellation_retains_actual_worker_and_s
     observer.abort();
     let _ = observer.await;
     assert!(RootOwnership::acquire_existing(&fixture.path).is_err());
-    assert!(
+    assert_eq!(
         scene
             .service
             .payload_observer()
             .unwrap()
             .snapshot()
             .unwrap()
-            .reserved_payload_bytes
-            > 0
+            .reserved_payload_bytes,
+        0
+    );
+    assert!(
+        scene
+            .service
+            .storage_usage()
+            .unwrap()
+            .unwrap()
+            .metadata_bytes
+            >= before_metadata + mez_agent::messaging::MESSAGE_STORAGE_RECOVERY_SCRATCH_METADATA
     );
     assert!(
         scene
@@ -112,7 +127,7 @@ async fn terminal_handoff_root_lost_positive_preserves_original_proof_through_st
 }
 
 /// The first physical lease/plan/image survives failure before u1, preserving
-/// its original final position and source decoder reservation through backoff.
+/// its original final position and source metadata reservation through backoff.
 /// Completed stages are reconciled from actual bytes rather than replaced.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn terminal_handoff_root_stage_failure_keeps_first_plan_and_decoder_owner() {
@@ -129,13 +144,29 @@ async fn terminal_handoff_root_stage_failure_keeps_first_plan_and_decoder_owner(
             .fail_custody_receipt_publication_for_tests(fault);
         let before = Scene::phases(&fixture);
         let observer = scene.service.payload_observer().unwrap();
+        let before_metadata = scene
+            .service
+            .storage_usage()
+            .unwrap()
+            .unwrap()
+            .metadata_bytes;
         scene.start();
         let CustodyWorkerStatus::TerminalHandoffRetryAt(due) = scene.root.observe().await.unwrap()
         else {
             panic!("actual publication failure required");
         };
         assert_eq!(Scene::phases(&fixture), before);
-        assert!(observer.snapshot().unwrap().reserved_payload_bytes > 0);
+        assert_eq!(observer.snapshot().unwrap().reserved_payload_bytes, 0);
+        assert!(
+            scene
+                .service
+                .storage_usage()
+                .unwrap()
+                .unwrap()
+                .metadata_bytes
+                >= before_metadata
+                    + mez_agent::messaging::MESSAGE_STORAGE_RECOVERY_SCRATCH_METADATA
+        );
         assert!(scene.root.retry_terminal_handoff(due).unwrap());
         assert_eq!(
             scene.root.observe().await.unwrap(),

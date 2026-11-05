@@ -13,6 +13,33 @@ use crate::host::async_runtime::{AsyncRuntimeSessionActor, AsyncRuntimeSessionHa
 use crate::runtime::{PersistenceEvent, RuntimeSideEffect};
 use mez_agent::{ActionStatus, AgentTurnRecord};
 
+/// Retains actual immutable captures to force pre-issuance metadata pressure.
+/// The two scheduling controls release these genuine owners at their retry
+/// boundary; no counter is manufactured and the shared ceiling is unchanged.
+fn hold_snapshot_metadata_until_capacity(
+    service: &MessageService,
+    scope: &mez_agent::messaging::MessageStorageScope,
+) -> Vec<mez_agent::messaging::MessageStorageSnapshotRequest> {
+    let mut captures = Vec::new();
+    let mut refused = false;
+    for _ in 0..256 {
+        match service.prepare_storage_snapshot(scope) {
+            Ok(request) => captures.push(request),
+            Err(error) => {
+                assert_eq!(
+                    error.kind(),
+                    mez_agent::messaging::MessageErrorKind::Capacity
+                );
+                refused = true;
+                break;
+            }
+        }
+    }
+    assert!(refused && !captures.is_empty());
+    assert!(service.storage_usage().unwrap().unwrap().metadata_bytes <= 8 * 1024 * 1024);
+    captures
+}
+
 /// A genuine accepted action and canonical terminal observation, still pending
 /// its sender handoff. The fixture's native process is explicitly retired by
 /// each owner after assertions, as in the native action acceptance tests.
@@ -962,39 +989,7 @@ async fn actor_sender_handoff_positive_backoff_suppresses_older_parked_lookup_wa
         .message_service_mut()
         .reserve_terminal_handoff_io(&held_source)
         .unwrap();
-    // S1 streams source validation and no longer needs a second cache body.
-    // Hold actual immutable snapshot captures until their shared metadata cap
-    // refuses another one, establishing genuine independent resource pressure.
-    let mut captures = Vec::new();
-    let mut refused = false;
-    for _ in 0..256 {
-        match actor
-            .service
-            .message_service()
-            .prepare_storage_snapshot(&scope)
-        {
-            Ok(request) => captures.push(request),
-            Err(error) => {
-                assert_eq!(
-                    error.kind(),
-                    mez_agent::messaging::MessageErrorKind::Capacity
-                );
-                refused = true;
-                break;
-            }
-        }
-    }
-    assert!(refused && !captures.is_empty());
-    assert!(
-        actor
-            .service
-            .message_service()
-            .storage_usage()
-            .unwrap()
-            .unwrap()
-            .metadata_bytes
-            <= 8 * 1024 * 1024
-    );
+    let captures = hold_snapshot_metadata_until_capacity(actor.service.message_service(), &scope);
     tokio::time::sleep(Duration::from_millis(1100)).await;
     actor.poll_message_custody_for_tests();
     assert!(actor.service.has_pending_terminal_handoff());
@@ -1067,12 +1062,12 @@ async fn actor_sender_handoff_positive_backoff_suppresses_older_parked_lookup_wa
 }
 
 /// Suppressing another source's lookup clock must preserve this actual work's
-/// own pre-issuance retry. A real held decoder quantum refuses canonical start;
+/// own pre-issuance retry. Real retained metadata captures refuse canonical start;
 /// its due wake later admits the same projection, then actual H1/S1 settle once.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn actor_sender_handoff_own_preissue_backoff_keeps_its_deadline_wakeable() {
     let fixture = Fixture::new(true);
-    let (_, mut actor, _, turn, _) = accepted_scene(&fixture).await;
+    let (_, mut actor, root, turn, _) = accepted_scene(&fixture).await;
     actor.poll_message_custody_for_tests();
     assert_eq!(
         actor.observe_message_custody_for_tests().await.unwrap(),
@@ -1091,11 +1086,10 @@ async fn actor_sender_handoff_own_preissue_backoff_keeps_its_deadline_wakeable()
         .message_service()
         .capture_terminal_handoff_lookup(outcome.sequence, 0)
         .unwrap();
-    let io = actor
-        .service
-        .message_service_mut()
-        .reserve_terminal_handoff_io(&held_source)
-        .unwrap();
+    let captures = hold_snapshot_metadata_until_capacity(
+        actor.service.message_service(),
+        root.storage_scope(),
+    );
     actor.poll_message_custody_for_tests();
     assert!(actor.service.pending_terminal_handoff_work().is_some());
     assert_eq!(journal_count(&fixture, "h1"), 0);
@@ -1105,7 +1099,7 @@ async fn actor_sender_handoff_own_preissue_backoff_keeps_its_deadline_wakeable()
         actor.message_custody_wake_is_ready_for_tests(),
         "the current work's own due preissue retry must remain wakeable"
     );
-    drop(io);
+    drop(captures);
     drop(held_source);
     actor.poll_message_custody_for_tests();
     assert_eq!(

@@ -32,12 +32,11 @@ struct Source {
 #[derive(Clone)]
 pub struct MessageTerminalHandoffAnchor(Arc<Source>);
 
-/// One charged source decoder/scratch owner retained outside the physical worker.
+/// One charged metadata decoder/scratch owner retained outside the physical worker.
 /// It is not a canonical result, disposition or permission to consume an outcome.
 #[derive(Clone)]
 pub struct MessageTerminalHandoffIo {
     source: MessageTerminalHandoffAnchor,
-    _payload: super::payload_budget::PayloadReservation,
     _metadata: Arc<MessageStorageSnapshotLease>,
     limits: MessageAcceptanceDecodeLimits,
 }
@@ -49,7 +48,7 @@ impl std::fmt::Debug for MessageTerminalHandoffIo {
     }
 }
 impl MessageTerminalHandoffIo {
-    /// Borrows only the actual source whose decoder reservation this owns.
+    /// Borrows only the actual source whose metadata reservation this owns.
     pub fn source(&self) -> &MessageTerminalHandoffAnchor {
         &self.source
     }
@@ -212,8 +211,9 @@ impl MessageTerminalHandoffAnchor {
 }
 
 impl MessageService {
-    /// Reserves a complete decoder quantum and bounded recovery scratch before
-    /// issuing canonical I/O. The root must retain this owner through actual
+    /// Reserves bounded metadata decoding and recovery scratch before canonical
+    /// I/O. Source payload qualification streams without a body-cache allocation.
+    /// The root must retain this owner through actual
     /// join/retry, independently of observer cancellation or source replacement.
     pub fn reserve_terminal_handoff_io(
         &mut self,
@@ -235,12 +235,8 @@ impl MessageService {
             self.storage_metadata_base_usage()?,
             policy.limits.metadata_bytes,
         )?;
-        let payload = self
-            .reserve_storage_payload(0, limits.payload_bytes, 0, None)?
-            .ok_or_else(unavailable)?;
         Ok(MessageTerminalHandoffIo {
             source: source.clone(),
-            _payload: payload,
             _metadata: Arc::new(metadata),
             limits,
         })

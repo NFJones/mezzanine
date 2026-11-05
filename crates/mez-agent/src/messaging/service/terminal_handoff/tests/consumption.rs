@@ -151,7 +151,7 @@ fn canonical_sender_consumption_refuses_foreign_scope_and_preserves_historical_r
 
 /// Uncertainty and failed cancellation keep the same original proof, source and
 /// slot protection. A retry can never become a refreshed terminal observation
-/// or release its decoder lease before actual write ownership ends.
+/// or release its metadata decoder lease before actual write ownership ends.
 #[test]
 fn canonical_sender_consumption_unknown_keeps_original_proof_and_decoder() {
     struct Failed;
@@ -162,10 +162,19 @@ fn canonical_sender_consumption_unknown_keeps_original_proof_and_decoder() {
     }
     let mut scene = Scene::new(true, true);
     let proof = proof(&scene);
+    let metadata = scene
+        .service
+        .storage_custody
+        .as_ref()
+        .unwrap()
+        .checkpoint_bytes
+        .clone();
+    let before = metadata.load(Ordering::Acquire);
     let ticket = scene
         .service
         .prepare_storage_sender_consumption(&scene.scope, &proof, usize::MAX)
         .unwrap();
+    let charge = ticket.metadata_bytes();
     let write = scene
         .service
         .begin_storage_terminal_write(&ticket, &scene.scope)
@@ -178,9 +187,11 @@ fn canonical_sender_consumption_unknown_keeps_original_proof_and_decoder() {
     drop(proof);
     assert!(scene.service.cancel_storage_terminal(&ticket).is_err());
     let observer = scene.service.payload_observer().unwrap();
-    assert!(observer.snapshot().unwrap().reserved_payload_bytes > 0);
+    assert_eq!(observer.snapshot().unwrap().reserved_payload_bytes, 0);
+    assert!(metadata.load(Ordering::Acquire) >= before + charge);
     let retry = scene.service.retry_terminal_write(uncertain).unwrap();
     assert!(retry.canonical_handoff().is_some());
+    assert!(metadata.load(Ordering::Acquire) >= before + charge);
     let mut repeated = Vec::new();
     retry.write_record(&mut repeated).unwrap();
     assert_eq!(first, repeated);

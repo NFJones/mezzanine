@@ -15810,7 +15810,7 @@ cache MUST NOT prevent these writes merely because a full decoder quantum is
 unavailable. Original source/slot metadata, first observation, attempt nonce and
 actual-worker escrow MUST remain retained through join, retry and adoption.
 This does not waive the reservations required for actual body reload or cold
-construction, or the separate canonical-handoff I/O contract below.
+construction. Canonical handoff retains the metadata I/O contract below.
 
 Raw caller loss/lease retirement MUST preserve issued acceptance through original
 join/adoption without reviving the sender registration. Active storage retries
@@ -16469,9 +16469,11 @@ prefix, immutable row image and same-lease checks apply to both source roles.
 Canonical proof MUST precede a separate durable consumption transaction; the
 source MUST remain pending until canonical receipt retirement has completed.
 
-The original root MUST reserve a complete source decoder quantum and bounded
-recovery scratch before canonical handoff I/O and retain those reservations
-through actual worker join and retry. Its bodyless `u1` preparation and `h1`
+The original root MUST reserve bounded source-metadata decoding and recovery
+scratch before canonical handoff I/O and retain that reservation through actual
+worker join and retry. Original payload qualification MUST stream and verify the
+complete body without reserving a second payload-cache allocation; an externally
+pinned full cache MUST NOT block canonical handoff or later sender consumption. Its bodyless `u1` preparation and `h1`
 canonical journals MUST fit 4096 bytes each, binding original allocation/source,
 exact slot/first terminal reason and clock, and the first physical transcript
 plan. Variable message IDs and payloads MUST NOT be duplicated into those

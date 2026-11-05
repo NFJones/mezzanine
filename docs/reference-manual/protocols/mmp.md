@@ -399,8 +399,11 @@ recipient retirement, horizon release and sender consumption stream original
 payload validation without reserving a second payload-cache allocation. A
 retained delivery filling the cache therefore cannot block those dispositions;
 actual worker/nonce/source metadata still survives cancellation, loss and retry.
-Actual reload/cold construction and canonical handoff retain their separate
-reservation contracts.
+Actual reload/cold construction retains its separate full-body reservation.
+Canonical handoff reserves metadata decoding/recovery scratch through actual
+worker join and retry; its source validation streams without a second cache body.
+A pinned delivery filling the cache cannot block original canonical handoff or
+its later sender consumption.
 
 The concrete fenced SQLite port writes bodyless `t1` records of at most 340 bytes,
 bound to the original allocation, source fingerprint, first clock and exact

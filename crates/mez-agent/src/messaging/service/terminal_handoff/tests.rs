@@ -442,9 +442,10 @@ fn terminal_handoff_canonical_callback_rejects_wrong_original_occurrence() {
     );
 }
 
-/// The actual root must reserve a complete source decoder and metadata scratch
-/// before I/O. Clones share that one charge through final worker ownership;
-/// refusal of a competing reservation must release only its temporary charge.
+/// Streamed source validation reserves metadata scratch without a second body.
+/// Clones share that charge through final worker ownership. Concurrent genuine
+/// I/O reservations are bounded by the shared metadata cap; refusal and dropping
+/// temporary owners cannot release another actual worker's reservation.
 #[test]
 fn terminal_handoff_io_keeps_decoder_and_scratch_through_last_worker_owner() {
     let mut scene = Scene::new(true, true);
@@ -466,11 +467,30 @@ fn terminal_handoff_io_keeps_decoder_and_scratch_through_last_worker_owner() {
         .checkpoint_bytes
         .load(Ordering::Acquire);
     assert!(charged >= before + MESSAGE_STORAGE_RECOVERY_SCRATCH_METADATA);
-    assert_eq!(
-        observer.snapshot().unwrap().reserved_payload_bytes,
-        io.decode_limits().payload_bytes
+    assert_eq!(observer.snapshot().unwrap().reserved_payload_bytes, 0);
+    let mut competitors = Vec::new();
+    let mut refused = false;
+    for _ in 0..4 {
+        match scene.service.reserve_terminal_handoff_io(&source) {
+            Ok(other) => competitors.push(other),
+            Err(error) => {
+                assert_eq!(error.kind(), MessageErrorKind::Capacity);
+                refused = true;
+                break;
+            }
+        }
+    }
+    assert!(refused && !competitors.is_empty());
+    assert!(
+        scene
+            .service
+            .storage_usage()
+            .unwrap()
+            .unwrap()
+            .metadata_bytes
+            <= 8 * 1024 * 1024
     );
-    assert!(scene.service.reserve_terminal_handoff_io(&source).is_err());
+    drop(competitors);
     assert_eq!(
         scene
             .service
@@ -483,10 +503,7 @@ fn terminal_handoff_io_keeps_decoder_and_scratch_through_last_worker_owner() {
     );
     let retained = io.clone();
     drop(io);
-    assert_eq!(
-        observer.snapshot().unwrap().reserved_payload_bytes,
-        retained.decode_limits().payload_bytes
-    );
+    assert_eq!(observer.snapshot().unwrap().reserved_payload_bytes, 0);
     let mut foreign = Scene::new(true, true);
     assert!(
         foreign
