@@ -8,6 +8,8 @@ use crate::integrations::agent::context::assemble_model_request;
 
 /// A post-plan native call/result group in the pending append lane must keep
 /// its provider ownership and ordinals in the prospective candidate context.
+/// The same saved occurrence and cost records must survive candidate sizing and
+/// published replay without appearing in the actual serialized provider body.
 #[test]
 fn runtime_manual_compaction_candidate_retains_native_execution_ownership() {
     let mut service = test_runtime_service();
@@ -69,6 +71,7 @@ fn runtime_manual_compaction_candidate_retains_native_execution_ownership() {
     }
     .to_transcript_content();
     let mut rows = Vec::new();
+    let mut retained_records = Vec::new();
     for (index, (source, label, content, provider_owner)) in [
         (
             ContextSourceKind::TranscriptAssistant,
@@ -101,7 +104,14 @@ fn runtime_manual_compaction_candidate_retains_native_execution_ownership() {
         row.sequence = index as u64 + 2;
         row.role = TranscriptRole::System;
         row.turn_id = "retained-turn".to_string();
-        row.content = mez_agent::TranscriptContextEvent::execution_block_with_metadata(
+        let record = mez_agent::ContextBlockRecord::allocate(&ContextBlock {
+            source,
+            placement: mez_agent::ContextPlacement::ConversationAppend,
+            label: label.to_string(),
+            content: content.clone(),
+        })
+        .unwrap();
+        let event = mez_agent::TranscriptContextEvent::execution_block_with_metadata(
             source,
             label,
             content,
@@ -109,21 +119,31 @@ fn runtime_manual_compaction_candidate_retains_native_execution_ownership() {
             index as u64 + 1,
             provider_owner,
         )
-        .unwrap()
-        .to_transcript_content();
+        .unwrap();
+        row.content = mez_agent::transcript::TranscriptContextRecord::new(event, record, None)
+            .unwrap()
+            .to_transcript_content()
+            .unwrap();
+        retained_records.push(record);
         rows.push(row.clone());
     }
+    // Manual source selection requires an actual completed assistant row for
+    // this turn; descriptive native group metadata alone cannot close it.
+    row.sequence = 6;
+    row.role = TranscriptRole::Assistant;
+    row.content = "retained turn completed".to_string();
+    rows.push(row.clone());
     service.persistence.enable_transcript_adapter();
     service
         .persistence
         .queue_transcript(RuntimeSideEffect::PersistTranscriptEntries {
             path: store.transcript_path("candidate-native").unwrap(),
             store: store.clone(),
-            entries: rows,
+            entries: rows.clone(),
         });
     service
         .agent_shell_store_mut()
-        .record_transcript_entries("%1", 4)
+        .record_transcript_entries("%1", rows.len())
         .unwrap();
     let candidate = service
         .manual_compaction_candidate_context(&task, "short summary")
@@ -137,6 +157,14 @@ fn runtime_manual_compaction_candidate_retains_native_execution_ownership() {
         events.len(),
         4,
         "candidate must retain canonical execution ownership"
+    );
+    assert_eq!(
+        events
+            .iter()
+            .map(|event| event.record())
+            .collect::<Vec<_>>(),
+        retained_records,
+        "candidate must reuse the exact committed occurrence and cost records"
     );
     assert_eq!(
         events
@@ -170,6 +198,16 @@ fn runtime_manual_compaction_candidate_retains_native_execution_ownership() {
         complete_published.blocks(),
         "complete candidate context must match ordinary post-publication assembly"
     );
+    assert_eq!(
+        complete_published
+            .chronology()
+            .iter()
+            .filter(|event| event.execution_group_id() == Some(&group))
+            .map(|event| event.record())
+            .collect::<Vec<_>>(),
+        retained_records,
+        "published replay must preserve the same retained records"
+    );
     let turn = AgentTurnRecord {
         turn_id: "parity-turn".to_string(),
         conversation_id: "candidate-native".to_string(),
@@ -185,20 +223,69 @@ fn runtime_manual_compaction_candidate_retains_native_execution_ownership() {
         cooperation_mode: None,
         initial_capability: None,
     };
-    for provider in ["openai", "switched-openai"] {
+    for (provider, model) in [
+        ("openai", "test"),
+        ("openai", "switched-model"),
+        ("switched-openai", "test"),
+        ("switched-openai", "switched-model"),
+    ] {
         let mut profile = task.model_profile.clone();
         profile.provider = provider.to_string();
+        profile.model = model.to_string();
         let api = mez_agent::ProviderApiCompatibility::OpenAiResponses;
         let before = assemble_model_request(&profile, api, &turn, &candidate).unwrap();
         let after = assemble_model_request(&profile, api, &turn, &complete_published).unwrap();
         let before_body = mez_agent::openai_responses_request_body(&before).unwrap();
         let after_body = mez_agent::openai_responses_request_body(&after).unwrap();
         assert_eq!(before_body, after_body, "replay wire parity for {provider}");
+        for record in &retained_records {
+            let occurrence: String = record.occurrence_id().into();
+            assert!(!before_body.contains(&occurrence));
+        }
+        for metadata in [
+            "mez-transcript-context-record/",
+            "rendered_sha256",
+            "framed_input_tokens",
+        ] {
+            assert!(!before_body.contains(metadata), "{metadata}");
+        }
         assert_eq!(
             mez_agent::provider_request_input_estimate_from_body(&before_body),
             mez_agent::provider_request_input_estimate_from_body(&after_body)
         );
         assert_eq!(before_body.contains("call_retained"), provider == "openai");
+    }
+    // Commit the same pending occurrences, then capture a real next auxiliary
+    // task. Its frozen publication proof must retain the wrapper, while its
+    // actual provider request contains only the original semantic event.
+    store.append_many(&rows).unwrap();
+    let response = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"candidate-native-next","method":"agent/shell/command","params":{"idempotency_key":"candidate-native-next","input":"/compact"}}"#,
+        &primary,
+    );
+    assert!(response.contains("state=queued"), "{response}");
+    let auxiliary = service
+        .pending_agent_compaction_task_for_tests("%1")
+        .unwrap();
+    let body = mez_agent::openai_responses_request_body(&auxiliary.request).unwrap();
+    assert!(body.contains("exact action result"));
+    for record in &retained_records {
+        let occurrence: String = record.occurrence_id().into();
+        assert!(
+            auxiliary
+                .frozen_compaction_rows
+                .iter()
+                .any(|entry| entry.content.contains(&occurrence)),
+            "physical publication proof must retain each original record"
+        );
+        assert!(!body.contains(&occurrence), "auxiliary leaked {occurrence}");
+    }
+    for metadata in [
+        "mez-transcript-context-record/",
+        "rendered_sha256",
+        "framed_input_tokens",
+    ] {
+        assert!(!body.contains(metadata), "auxiliary leaked {metadata}");
     }
 }
 

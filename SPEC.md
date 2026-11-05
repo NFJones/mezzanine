@@ -11245,6 +11245,15 @@ the frozen authoritative chronology remains unchanged; genuine source rewrites
 MUST fail closed. Accepted mail MUST NOT be relabeled as direct-user input,
 acknowledged twice, or summarized before consumption. The complete request
 budget check MUST include the retained arrivals before any epoch publishes.
+Prospective manual candidates MUST import retained structural occurrence and
+accounting records before restoring execution ownership. Reconstructing the
+same bytes with fresh IDs MUST NOT break a valid retained native group or leak
+accounting envelopes into the serialized provider request.
+Auxiliary compactor source MUST unwrap valid accounted system rows to their
+semantic event before redaction and serialization, preserving the original
+physical rows for publication proof. Malformed or unsupported reserved system
+records MUST fail request construction; literal non-system source text retains
+its existing authored meaning.
 An additional eligible closed range is not required when the complete refreshed
 request already fits and satisfies the triggering request's reduction rule.
 Before requesting the first summary, a zero allowance for one segment MUST NOT

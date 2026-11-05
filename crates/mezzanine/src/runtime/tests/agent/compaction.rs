@@ -6914,10 +6914,8 @@ fn runtime_manual_compaction_rejects_non_reducing_final_retry() {
 /// a repeated candidate; both cases preserve the original archive until fit.
 fn qualify_manual_final_fit_retry(repeat: bool) {
     let mut service = test_runtime_service();
-    // Keep room for current static guidance and MAAP schema so the final-fit
-    // owner can request a shorter summary. The long candidate must still be
-    // oversized; this fixture tests retry/no-progress, not irreducible overhead.
-
+    // Derive the final-fit cap from real complete requests below. Static prompt
+    // and schema growth must not turn this retry test into irreducible overhead.
     service.replace_config_layers(vec![ConfigLayer {
         name: "manual-final-retry".to_string(), path: None,
         format: ConfigFormat::Toml, scope: ConfigScope::Primary, trusted: true,
@@ -6953,12 +6951,39 @@ fn qualify_manual_final_fit_retry(repeat: bool) {
         &primary,
     );
     assert!(queued.contains("state=queued"), "{queued}");
-    let frozen_words = service
+    let mut task = service
         .pending_agent_compaction_task_for_tests("%1")
         .expect("initial manual source")
-        .summary_correction
-        .manual_words;
+        .clone();
+    let frozen_words = task.summary_correction.manual_words;
     assert!(frozen_words.is_some());
+    let estimate = |summary| {
+        let context = service
+            .manual_compaction_candidate_context(&task, summary)
+            .unwrap();
+        service
+            .manual_compaction_candidate_size_for_tests(&task, context)
+            .unwrap()
+            .0
+    };
+    let short_estimate = estimate("short manual summary");
+    let long_estimate = estimate(&"long summary ".repeat(700));
+    assert!(long_estimate > short_estimate);
+    let desired_safe_limit = short_estimate + (long_estimate - short_estimate) / 2;
+    let input_cap = (desired_safe_limit * 20).div_ceil(19);
+    task.model_profile
+        .provider_options
+        .insert("max_input_tokens".to_string(), input_cap.to_string());
+    let context = service
+        .manual_compaction_candidate_context(&task, "short manual summary")
+        .unwrap();
+    let (_, safe_limit, _) = service
+        .manual_compaction_candidate_size_for_tests(&task, context)
+        .unwrap();
+    assert!(short_estimate <= safe_limit && safe_limit < long_estimate);
+    *service
+        .pending_agent_compaction_task_mut_for_tests("%1")
+        .unwrap() = task;
     complete_runtime_test_compaction(&mut service, "%1", &"long summary ".repeat(700));
     assert!(
         store
@@ -6980,7 +7005,7 @@ fn qualify_manual_final_fit_retry(repeat: bool) {
         });
     let (oversized_estimate, attempts) = retry.manual_final_retry.expect("actual final-fit retry");
     assert!(
-        oversized_estimate > 15_200,
+        oversized_estimate > safe_limit,
         "the long candidate must exceed this fixture's safe cap"
     );
     assert_eq!(attempts, 1);

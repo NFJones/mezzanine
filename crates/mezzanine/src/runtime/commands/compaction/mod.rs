@@ -3227,7 +3227,7 @@ pub(super) fn runtime_model_compaction_request(
                     transcript_entries,
                     source,
                     context,
-                ),
+                )?,
             },
         ].into(),
     })
@@ -3485,14 +3485,16 @@ fn runtime_compaction_summary_blocks(summaries: Vec<String>) -> Vec<ContextBlock
         .collect()
 }
 
-/// Formats bounded transcript source material for a model compaction request.
+/// Formats bounded semantic transcript source for a model compaction request.
+/// Malformed reserved accounting records abort construction; physical source
+/// proofs remain unchanged and accounting never enters credential redaction.
 pub(super) fn runtime_model_compaction_source(
     pane_id: &str,
     conversation_id: &str,
     transcript_entries: u64,
     source: CompactionTranscriptSource<'_>,
     context: &AgentContext,
-) -> String {
+) -> Result<String> {
     let mut lines = vec![
         format!("Pane: {pane_id}"),
         format!("Conversation: {conversation_id}"),
@@ -3515,8 +3517,8 @@ pub(super) fn runtime_model_compaction_source(
             runtime_model_compaction_entry_content(&block.content)
         ));
     }
-    source.append_lines(&mut lines);
-    lines.join("\n")
+    source.append_lines(&mut lines)?;
+    Ok(lines.join("\n"))
 }
 
 /// Returns a stable source label for context included in compaction input.

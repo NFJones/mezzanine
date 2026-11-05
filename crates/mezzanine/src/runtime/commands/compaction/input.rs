@@ -3,7 +3,12 @@
 //! Selected selective ranges render once at their original sequence anchors.
 //! Covered raw content and unselected range summaries never enter that request;
 //! physical rows remain available to the caller for count and publication proof.
+//! Accounted system rows contribute only their semantic event. Their occurrence,
+//! costs and stable snapshots remain in the physical proof; malformed reserved
+//! records abort request construction instead of becoming model-visible text.
 //! This is an ephemeral request projection, not a new durable transcript codec.
+
+use std::borrow::Cow;
 
 use super::*;
 use crate::storage::transcript::AgentCompactionRange;
@@ -76,7 +81,9 @@ impl<'a> CompactionTranscriptSource<'a> {
 
     /// Appends ordered source lines with summaries replacing covered raw rows.
     /// Summary bytes use the same credential redaction as ordinary source text.
-    pub(super) fn append_lines(self, lines: &mut Vec<String>) {
+    /// Invalid accounted system records fail before a request can be returned;
+    /// non-system marker text remains literal user or assistant source.
+    pub(super) fn append_lines(self, lines: &mut Vec<String>) -> Result<()> {
         if self.selective_history {
             let raw = self
                 .rows
@@ -111,14 +118,82 @@ impl<'a> CompactionTranscriptSource<'a> {
             }) {
                 continue;
             }
+            let content = if entry.role == TranscriptRole::System {
+                mez_agent::transcript::TranscriptContextRecord::from_transcript_content(
+                    &entry.content,
+                )
+                .map_err(|error| {
+                    MezError::invalid_state(format!(
+                        "invalid compactor input at transcript sequence {}: {error}",
+                        entry.sequence
+                    ))
+                })?
+                .map_or(Cow::Borrowed(entry.content.as_str()), |record| {
+                    Cow::Owned(record.into_event().to_transcript_content())
+                })
+            } else {
+                Cow::Borrowed(entry.content.as_str())
+            };
             lines.push(format!(
                 "entry={} role={} turn={} pane={} content={}",
                 entry.sequence,
                 runtime_transcript_role_name(entry.role),
                 entry.turn_id,
                 entry.pane_id,
-                runtime_model_compaction_entry_content(&entry.content)
+                runtime_model_compaction_entry_content(&content)
             ));
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A malformed or future reserved system record must prevent construction
+    /// of the entire auxiliary request. The identical bytes in an ordinary
+    /// user row are authored text and must survive with no metadata authority.
+    #[test]
+    fn compactor_request_rejects_invalid_accounting_and_preserves_literal_user_text() {
+        let profile = ModelProfile::default();
+        let context = AgentContext::new_durable(vec![ContextBlock {
+            source: ContextSourceKind::System,
+            placement: mez_agent::ContextPlacement::StablePrefix,
+            label: "compactor guidance".to_string(),
+            content: "Summarize the supplied source.".to_string(),
+        }])
+        .unwrap();
+        for content in [
+            "[mez-transcript-context-record/v1]\n{}",
+            "[mez-transcript-context-record/v999]\n{}",
+        ] {
+            let mut entry = TranscriptEntry {
+                conversation_id: "invalid-accounting".to_string(),
+                sequence: 1,
+                created_at_unix_seconds: 1,
+                role: TranscriptRole::System,
+                turn_id: "source-turn".to_string(),
+                agent_id: "agent-%1".to_string(),
+                pane_id: "%1".to_string(),
+                content: content.to_string(),
+            };
+            let build = |entry: &TranscriptEntry| {
+                runtime_model_compaction_request(
+                    &profile,
+                    "%1",
+                    "invalid-accounting",
+                    1,
+                    CompactionTranscriptSource::raw(std::slice::from_ref(entry)),
+                    &context,
+                    AllowedActionSet::from_actions([mez_agent::AllowedAction::Say]),
+                )
+            };
+            let error = build(&entry).unwrap_err();
+            assert!(error.message().contains("invalid compactor input"));
+            entry.role = TranscriptRole::User;
+            let request = build(&entry).unwrap();
+            assert!(request.messages.last().unwrap().content.contains(content));
         }
     }
 }

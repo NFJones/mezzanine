@@ -185,7 +185,12 @@ impl RuntimeSessionService {
         // Restore native ownership only within newly rendered history. Matching
         // against the base could steal an unrelated exact reference with the
         // same bytes; appending the typed result preserves all base metadata.
-        let mut history_context = AgentContext::import_durable_blocks(blocks)?;
+        // The proposed prefix occupies one chronological slot before history.
+        // Restore exact indexed records before execution ownership: importing
+        // bare blocks would allocate different occurrence IDs for that source.
+        let records = replay.records.indices_with_offset(1)?;
+        let mut history_context =
+            AgentContext::import_durable_blocks_with_records(blocks, &records)?;
         history_context
             .restore_imported_execution_events(&replay.execution_events)
             .map_err(|error| MezError::invalid_state(error.to_string()))?;

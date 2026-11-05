@@ -225,6 +225,13 @@ compaction selects later eligible raw work.
 
 Manual candidate sizing and publication share the same prefix/range projection.
 Absorbed ranges disappear; surviving ranges retain their anchors exactly once.
+Retained history carries its saved occurrence identities and local estimates
+through candidate reconstruction before native execution ownership is restored.
+Those accounting records do not become provider message content.
+Auxiliary compactor requests also unwrap accounted system rows before redaction;
+their frozen physical publication proofs retain the original records. Invalid
+accounting envelopes stop request construction instead of entering the summary
+source. Literal marker text in user or assistant rows remains authored content.
 The candidate rebuilds owned history rather than retaining a cached summary
 beside the same replayed range, and preserves unrelated optional memory, exact
 references and native group metadata. A split range or backwards boundary is
