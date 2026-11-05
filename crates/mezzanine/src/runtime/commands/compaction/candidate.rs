@@ -232,7 +232,7 @@ impl RuntimeSessionService {
             })?;
         records.insert(0, (0, prefix_record));
         let mut history_context =
-            AgentContext::import_durable_blocks_with_records(blocks, &records)?;
+            AgentContext::import_durable_blocks_with_records(blocks, &records, &[])?;
         history_context
             .restore_imported_execution_events(&replay.execution_events)
             .map_err(|error| MezError::invalid_state(error.to_string()))?;

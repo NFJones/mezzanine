@@ -283,7 +283,7 @@ impl RuntimeSessionService {
             false,
             true,
         )?;
-        let context = self.apply_agent_shell_preference_context(child_pane_id, prepared.context)?;
+        let context = prepared.context;
         let turn_id = self.next_agent_turn_id();
         let conversation_id = self
             .agent_shell_store()

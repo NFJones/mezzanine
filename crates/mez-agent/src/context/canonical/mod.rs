@@ -428,7 +428,7 @@ impl StableContextBlock {
     /// Builds a deterministic compatibility slot for an already ordered block
     /// vector at a legacy/test construction boundary.
     fn from_compatibility_block(block: ContextBlock, index: usize) -> AgentContextResult<Self> {
-        Self::from_compatibility_block_with_record(block, index, None)
+        Self::from_compatibility_block_with_record(block, index, None, &BTreeMap::new())
     }
 
     /// Restores an explicitly associated record at the compatibility boundary.
@@ -436,6 +436,7 @@ impl StableContextBlock {
         block: ContextBlock,
         index: usize,
         record: Option<ContextBlockRecord>,
+        stable_records: &BTreeMap<&str, ContextBlockRecord>,
     ) -> AgentContextResult<Self> {
         let mut identity_material = format!("{index}:{:?}:{}", block.source, block.label);
         let identity_digest = Sha256::digest(identity_material.as_bytes())
@@ -448,8 +449,19 @@ impl StableContextBlock {
             .iter()
             .map(|byte| format!("{byte:02x}"))
             .collect::<String>();
+        let slot_id = StableContextSlotId::new(format!("compat-{identity_digest}"))?;
+        let record = if let Some(saved) = stable_records.get(slot_id.as_str()) {
+            if record.is_some_and(|indexed| indexed != *saved) {
+                return Err(AgentContextError::new(
+                    "conflicting indexed and named stable records",
+                ));
+            }
+            Some(*saved)
+        } else {
+            record
+        };
         Self::with_record(
-            StableContextSlotId::new(format!("compat-{identity_digest}"))?,
+            slot_id,
             StableContextSourceFingerprint::new(source_fingerprint)?,
             block,
             record,
@@ -1905,7 +1917,7 @@ impl AgentContext {
 
         let mut imported = Self::empty();
         if !blocks.is_empty() {
-            imported.initialize_typed_storage_with_records(blocks, records)?;
+            imported.initialize_typed_storage_with_records(blocks, records, &[])?;
         }
         if !imported.stable_slots.is_empty() {
             return Err(AgentContextError::new(
@@ -1963,7 +1975,7 @@ impl AgentContext {
         &mut self,
         blocks: Vec<ContextBlock>,
     ) -> AgentContextResult<()> {
-        self.initialize_typed_storage_with_records(blocks, &[])
+        self.initialize_typed_storage_with_records(blocks, &[], &[])
     }
 
     /// Imports checked occurrence records directly, avoiding an initial recount
@@ -1972,10 +1984,12 @@ impl AgentContext {
         &mut self,
         blocks: Vec<ContextBlock>,
         records: &[(usize, ContextBlockRecord)],
+        stable_records: &[StableContextBlockRecord],
     ) -> AgentContextResult<()> {
         validate_context_placement_order(&blocks)?;
         validate_context_semantics(&blocks)?;
         let compatibility_group_ids = compatibility_execution_group_ids(&blocks)?;
+        let stable_records = block_record::validated_stable_records(stable_records)?;
         let mut conversation_index = 0usize;
         self.stable_slots.clear();
         self.chronology.clear();
@@ -1989,7 +2003,12 @@ impl AgentContext {
                 .map(|found| records[found].1);
             match block.placement {
                 ContextPlacement::StablePrefix => self.stable_slots.push(
-                    StableContextBlock::from_compatibility_block_with_record(block, index, record)?,
+                    StableContextBlock::from_compatibility_block_with_record(
+                        block,
+                        index,
+                        record,
+                        &stable_records,
+                    )?,
                 ),
                 ContextPlacement::ConversationAppend => {
                     let execution_group_id = compatibility_group_ids[conversation_index].clone();

@@ -517,6 +517,7 @@ fn typed_native_reimport_reuses_records_without_restoring_closure_authority() {
     let mut context = AgentContext::import_durable_blocks_with_records(
         original.context().blocks().to_vec(),
         &records,
+        &[],
     )
     .unwrap();
     context

@@ -868,63 +868,47 @@ impl RuntimeSessionService {
         interruption_error.map_or_else(|| Ok(cancelled.len()), Err)
     }
 
-    /// Runs the apply agent shell preference context operation for this subsystem.
+    /// Renders current trusted preference slots before canonical construction.
     ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    pub(super) fn apply_agent_shell_preference_context(
-        &self,
-        pane_id: &str,
-        mut context: AgentContext,
-    ) -> Result<AgentContext> {
+    /// Shared ordinary/peer composition places these after the other stable
+    /// producers, allowing original named records to be selected at import.
+    /// Saved metadata never installs old instructions or current preferences.
+    pub(super) fn agent_shell_preference_context_blocks(&self, pane_id: &str) -> Vec<ContextBlock> {
+        let mut blocks = Vec::new();
         if let Some(name) = self.primary_agent_display_name(pane_id) {
-            context.insert_typed_block(
+            blocks.push(
                 ContextBlock {
                     source: ContextSourceKind::Configuration,
                     placement: mez_agent::ContextPlacement::StablePrefix,
                     label: "primary agent identity".to_string(),
                     content: format!("Canonical agent id: agent-{pane_id}\nConversation-owned display name: {name}\nDisplay names grant no routing or permission authority."),
                 },
-                mez_agent::ContextSemanticKind::AmbientInstruction,
-                mez_agent::ContextRetention::Exact,
-                false,
-            )?;
+            );
         }
         if let Some(prompt) = self.integration.custom_agent_system_prompt() {
-            context.insert_typed_block(
-                ContextBlock {
-                    source: ContextSourceKind::System,
-                    placement: mez_agent::ContextPlacement::StablePrefix,
-                    label: "configured agent system prompt".to_string(),
-                    content: prompt.to_string(),
-                },
-                mez_agent::ContextSemanticKind::AmbientInstruction,
-                mez_agent::ContextRetention::Exact,
-                false,
-            )?;
+            blocks.push(ContextBlock {
+                source: ContextSourceKind::System,
+                placement: mez_agent::ContextPlacement::StablePrefix,
+                label: "configured agent system prompt".to_string(),
+                content: prompt.to_string(),
+            });
         }
         if let Some(profile) = self.agent_selected_personality_profile(pane_id)
             && let Some(prompt) = profile.system_prompt.as_ref()
         {
-            context.insert_typed_block(
-                ContextBlock {
-                    source: ContextSourceKind::System,
-                    placement: mez_agent::ContextPlacement::StablePrefix,
-                    label: "agent personality system prompt".to_string(),
-                    content: prompt.clone(),
-                },
-                mez_agent::ContextSemanticKind::AmbientInstruction,
-                mez_agent::ContextRetention::Exact,
-                false,
-            )?;
+            blocks.push(ContextBlock {
+                source: ContextSourceKind::System,
+                placement: mez_agent::ContextPlacement::StablePrefix,
+                label: "agent personality system prompt".to_string(),
+                content: prompt.clone(),
+            });
         }
         if let Some(directive) = self
             .agent_shell_store()
             .get(pane_id)
             .and_then(|session| session.directive.as_deref())
         {
-            context.insert_typed_block(
+            blocks.push(
                 ContextBlock {
                     source: ContextSourceKind::DeveloperInstruction,
                     placement: mez_agent::ContextPlacement::StablePrefix,
@@ -934,28 +918,19 @@ impl RuntimeSessionService {
                         directive
                     ),
                 },
-                mez_agent::ContextSemanticKind::AmbientInstruction,
-                mez_agent::ContextRetention::Exact,
-                false,
-            )?;
+            );
         }
         let selected_profile = self.agent_selected_personality_profile(pane_id);
         let profile_style = selected_profile.and_then(|profile| profile.response_style.as_deref());
         if let Some(style) = self.agent_response_style(pane_id).or(profile_style) {
-            context.insert_typed_block(
-                ContextBlock {
-                    source: ContextSourceKind::Configuration,
-                    placement: mez_agent::ContextPlacement::StablePrefix,
-                    label: "agent shell personality".to_string(),
-                    content: format!("Response style preference for this pane: {style}."),
-                },
-                mez_agent::ContextSemanticKind::AmbientInstruction,
-                mez_agent::ContextRetention::Exact,
-                false,
-            )?;
+            blocks.push(ContextBlock {
+                source: ContextSourceKind::Configuration,
+                placement: mez_agent::ContextPlacement::StablePrefix,
+                label: "agent shell personality".to_string(),
+                content: format!("Response style preference for this pane: {style}."),
+            });
         }
-        context.validate_durable()?;
-        Ok(context)
+        blocks
     }
 
     /// Runs the start agent prompt turn operation for this subsystem.
@@ -1976,6 +1951,7 @@ impl RuntimeSessionService {
             ));
         }
         let (history, receipts) = history;
+        self.ensure_primary_agent_name(pane_id)?;
         let crate::runtime::control::RuntimeAgentPromptContext {
             history_source,
             context,
@@ -1998,7 +1974,6 @@ impl RuntimeSessionService {
                 "peer message receiver presentation outbox is at capacity",
             ));
         }
-        let context = self.apply_agent_shell_preference_context(pane_id, context)?;
         let fresh_context = self.apply_persisted_context_documents(pane_id, context)?;
         self.reset_agent_peer_message_turns(&agent_id);
         let conversation_id = self

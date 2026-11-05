@@ -10879,7 +10879,17 @@ context adoption rather than silently omit source. Existing unaccounted records
 use an explicit legacy archive-occurrence import boundary; content equality,
 current pane and newly allocated context sequences MUST NOT establish identity.
 Saved stable metadata MUST NOT install instructions or overwrite current source
-fingerprints. Ordinary semantic decoding, display and model projection MUST
+fingerprints. Stable snapshots MUST select occurrence/cost records before slot
+construction; valid unchanged slots MUST NOT construct and discard estimates
+before restoration. Current identity, custom prompt, personality, directive and
+style blocks MUST participate in this same import, including ordinary and peer
+turns. Removed preferences MUST remain absent; changed trusted content MUST
+retain its occurrence and revise only its own estimate and live fingerprint.
+Stopped-turn hints MUST retain their actual stable snapshot and their own
+occurrence/cost record through the existing accounted envelope; this MUST NOT
+change their visible reference text or borrow the original user's occurrence.
+Duplicate named slots, unsupported snapshots and conflicting indexed/named
+claims MUST refuse adoption. Ordinary semantic decoding, display and model projection MUST
 unwrap only semantic source, keeping accounting metadata out of that content.
 
 New ordinary pending appends MUST allocate each unaccounted occurrence once at

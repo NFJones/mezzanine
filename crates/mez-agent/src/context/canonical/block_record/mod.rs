@@ -6,6 +6,8 @@
 //! are descriptive input: restoration validates their rendered association and
 //! recomputes stale estimates before adopting them. Neither IDs nor costs grant
 //! source, instruction, provider or execution authority.
+//! Named stable snapshots select records before slot construction; current
+//! producer blocks still supply all instructions and source fingerprints.
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -219,47 +221,22 @@ impl AgentContext {
             .collect()
     }
 
-    /// Reuses a known slot's occurrence while validating costs against its
-    /// current trusted source. Removed slots stay removed. Changed guidance
-    /// recomputes its own estimate; saved bytes cannot install instructions or
-    /// overwrite the active fingerprint. Malformed/duplicate records are atomic
-    /// failures, including when two records alias an existing occurrence.
-    pub fn restore_stable_block_records(
-        &mut self,
-        records: &[StableContextBlockRecord],
-    ) -> AgentContextResult<()> {
-        let mut seen = std::collections::BTreeSet::new();
-        let mut candidate = self.clone();
-        for record in records {
-            record.validate_format()?;
-            if !seen.insert(record.slot_id.as_str()) {
-                return Err(invalid("duplicate stable slot accounting"));
-            }
-            if let Some(slot) = candidate
-                .stable_slots
-                .iter_mut()
-                .find(|slot| slot.slot_id.as_str() == record.slot_id)
-            {
-                slot.record = record.record.restored(&slot.block)?;
-            }
-        }
-        candidate.rebuild_projections();
-        candidate.validate_durable()?;
-        *self = candidate;
-        Ok(())
-    }
     /// Imports an ordered source with structurally associated persistent records.
     /// Indices must be unique, increasing and in bounds. Missing records denote
     /// an explicit unaccounted import; valid records are reused at construction,
     /// stale costs recompute, and duplicate occurrences refuse the whole owner.
+    /// Named stable snapshots are selected before construction against the live
+    /// structural slot; their saved fingerprints never replace current source.
+    /// Removed slots remain absent. Overlapping indexed/named records must agree.
     /// Source, retention and execution validation remains canonical policy.
     pub fn import_durable_blocks_with_records(
         blocks: Vec<ContextBlock>,
         records: &[(usize, ContextBlockRecord)],
+        stable_records: &[StableContextBlockRecord],
     ) -> AgentContextResult<Self> {
         validate_record_indices(blocks.len(), records)?;
         let mut context = Self::empty();
-        context.initialize_typed_storage_with_records(blocks, records)?;
+        context.initialize_typed_storage_with_records(blocks, records, stable_records)?;
         context.validate_durable()?;
         Ok(context)
     }
@@ -337,6 +314,24 @@ impl AgentContext {
         }
         Ok(())
     }
+}
+
+/// Validates all named snapshots before constructing any estimates, including
+/// snapshots whose slots were removed. Only current live slots select records.
+pub(super) fn validated_stable_records(
+    records: &[StableContextBlockRecord],
+) -> AgentContextResult<std::collections::BTreeMap<&str, ContextBlockRecord>> {
+    let mut selected = std::collections::BTreeMap::new();
+    for record in records {
+        record.validate_format()?;
+        if selected
+            .insert(record.slot_id.as_str(), record.record)
+            .is_some()
+        {
+            return Err(invalid("duplicate stable slot accounting"));
+        }
+    }
+    Ok(selected)
 }
 
 /// Requires an unambiguous structural association before any input is adopted.

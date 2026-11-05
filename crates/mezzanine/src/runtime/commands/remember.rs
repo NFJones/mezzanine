@@ -408,7 +408,6 @@ impl RuntimeSessionService {
                 "[durable memory generation requested]",
                 100,
             )?;
-            let context = self.apply_agent_shell_preference_context(pane_id, context)?;
             runtime_remember_context_source(pane_id, &context)
         } else {
             format!(

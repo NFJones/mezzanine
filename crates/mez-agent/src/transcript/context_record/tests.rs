@@ -38,6 +38,7 @@ fn accounted_context_record_round_trip_keeps_semantic_content_separate() {
     let imported = AgentContext::import_durable_blocks_with_records(
         context.blocks().to_vec(),
         &[(0, restored.record())],
+        &[],
     )
     .unwrap();
     assert_eq!(context.block_records(), imported.block_records());

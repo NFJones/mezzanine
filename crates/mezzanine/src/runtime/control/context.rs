@@ -7,6 +7,8 @@
 //! Durable replay captures its epoch and checked row window under one mutation
 //! lease, then renders without further storage reads. Proposed epochs share that
 //! pure renderer and never publish merely to inspect a candidate context.
+//! Stopped-turn hint rendering is shared with its producer so the original
+//! estimate and replay validate against identical semantic bytes.
 
 use super::super::{ContextBlock, ContextSourceKind, Envelope, TranscriptEntry, TranscriptRole};
 use super::context_records::RuntimeContextRecords;
@@ -21,6 +23,29 @@ use std::collections::{BTreeMap, BTreeSet};
 const AGENT_TRANSCRIPT_TOOL_CONTEXT_LIMIT_BYTES: usize = 256 * 1024;
 const LEGACY_MAAP_ASSISTANT_CONTEXT: &str =
     "[legacy MAAP assistant execution omitted from transcript replay]";
+
+/// Renders one stopped-turn reference for both its original accounting producer
+/// and replay. It preserves the existing text and priority; the new hint owns
+/// its own occurrence rather than borrowing the original user's identity.
+pub(in crate::runtime) fn runtime_interrupted_turn_context_block(
+    prompt: &str,
+    reason: &str,
+    evidence: &[String],
+) -> ContextBlock {
+    let evidence = if evidence.is_empty() {
+        "no action result was available when the turn stopped".to_owned()
+    } else {
+        evidence.join("\n")
+    };
+    ContextBlock {
+        source: ContextSourceKind::RuntimeHint,
+        placement: mez_agent::ContextPlacement::ConversationAppend,
+        label: "interrupted turn context".to_owned(),
+        content: format!(
+            "The prior turn was interrupted before completion. Continue or redirect that work using its original user intent:\n{prompt}\n\nreason={reason}\nobserved action state:\n{evidence}"
+        ),
+    }
+}
 
 /// Exact transcript projection plus non-model-visible execution ownership.
 #[derive(Debug, Clone)]
@@ -757,21 +782,9 @@ fn runtime_agent_transcript_context_with_ranges_and_mcp_epoch(
                 prompt,
                 reason,
                 evidence,
-            }) => {
-                let evidence = if evidence.is_empty() {
-                    "no action result was available when the turn stopped".to_owned()
-                } else {
-                    evidence.join("\n")
-                };
-                Some(ContextBlock {
-                    source: ContextSourceKind::RuntimeHint,
-                    placement: mez_agent::ContextPlacement::ConversationAppend,
-                    label: "interrupted turn context".to_owned(),
-                    content: format!(
-                        "The prior turn was interrupted before completion. Continue or redirect that work using its original user intent:\n{prompt}\n\nreason={reason}\nobserved action state:\n{evidence}"
-                    ),
-                })
-            }
+            }) => Some(runtime_interrupted_turn_context_block(
+                prompt, reason, evidence,
+            )),
             None => None,
         };
         if let Some(block) = block {

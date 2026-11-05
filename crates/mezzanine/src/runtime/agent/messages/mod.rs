@@ -675,7 +675,6 @@ impl RuntimeSessionService {
         {
             return Ok(0);
         }
-        let context = self.apply_agent_shell_preference_context(pane_id, context)?;
         let context = self.apply_persisted_context_documents(pane_id, context)?;
         let conversation_id = self
             .agent_shell_store()

@@ -546,6 +546,11 @@ distinct. Accounted typed records preserve this metadata through replay, validat
 it against the actual source, and recompute stale estimates. Malformed reserved
 records refuse context reconstruction instead of silently dropping history.
 Saved guidance metadata does not restore old instructions over current guidance.
+Stable guidance and current prompt/personality/directive/style preferences reuse
+their validated records during construction, including after cold replay. A
+changed preference keeps its occurrence while refreshing its estimate against
+current text; removing it does not resurrect saved instructions. Unchanged slots
+do not create temporary estimates before applying their saved records.
 These estimates are not provider usage or billing, and their metadata is not
 part of the semantic source supplied to the model.
 

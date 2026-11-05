@@ -1216,8 +1216,9 @@ fn runtime_local_transcript_failure_retains_accepted_execution() {
         .queue_transcript(RuntimeSideEffect::PersistTranscriptEntries {
             path: store.transcript_path(&turn.conversation_id).unwrap(),
             store: store.clone(),
+            // Even a valid retained pending copy cannot replace a required
+            // archive that disappeared after the execution was accepted.
             batch: crate::storage::transcript::TranscriptAppendBatch::owned_rows(vec![
-                entries[0].clone(),
                 entries[0].clone(),
             ])
             .unwrap(),
@@ -1896,6 +1897,7 @@ fn runtime_status_reports_provider_context_continuity_diagnostics() {
         "{initial_status}"
     );
 
+    let baseline_blocks = context.blocks().len();
     let mut appended = context;
     insert_test_context_block(
         &mut appended,
@@ -1924,7 +1926,9 @@ fn runtime_status_reports_provider_context_continuity_diagnostics() {
     );
     assert!(status.contains("sha256="), "{status}");
     assert!(
-        status.contains("| Common immutable prefix | blocks=1 tokens~"),
+        status.contains(&format!(
+            "| Common immutable prefix | blocks={baseline_blocks} tokens~"
+        )),
         "{status}"
     );
     let request = crate::integrations::agent::context::assemble_model_request(

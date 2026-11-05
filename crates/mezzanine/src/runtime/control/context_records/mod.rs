@@ -289,11 +289,11 @@ impl RuntimeContextRecords {
             .take_while(|block| block.placement == mez_agent::ContextPlacement::StablePrefix)
             .count();
         let records = self.indices_with_offset(prefix)?;
-        let mut context = AgentContext::import_durable_blocks_with_records(blocks, &records)?;
-        if let Some(stable) = &self.stable {
-            context.restore_stable_block_records(stable)?;
-        }
-        Ok(context)
+        Ok(AgentContext::import_durable_blocks_with_records(
+            blocks,
+            &records,
+            self.stable.as_deref().unwrap_or_default(),
+        )?)
     }
 
     /// Rejects malformed/future reserved records before a source is published.

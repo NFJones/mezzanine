@@ -829,6 +829,7 @@ impl RuntimeSessionService {
             })
             .cloned()
             .collect::<Vec<_>>();
+        self.ensure_primary_agent_name(pane_id)?;
         let compaction_context = if let Some(history) = prepared_history {
             self.agent_context_for_pane_prompt_with_history(
                 pane_id,
@@ -840,8 +841,6 @@ impl RuntimeSessionService {
         } else {
             self.agent_context_for_pane_prompt(pane_id, "[context compaction requested]", 100)?
         };
-        let compaction_context =
-            self.apply_agent_shell_preference_context(pane_id, compaction_context)?;
         let mcp_summary = self.mcp_registry().prompt_summary();
         let summarized_entries = compactable_transcript_records.len();
         let compacted_through_sequence = compactable_transcript_records

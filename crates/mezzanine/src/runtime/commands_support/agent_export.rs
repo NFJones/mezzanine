@@ -226,7 +226,6 @@ fn runtime_idle_agent_context_dump_for_pane(
         "[idle dump placeholder: next user prompt will be inserted here]",
         100,
     )?;
-    let context = service.apply_agent_shell_preference_context(pane_id, context)?;
     let mcp_summary = service.mcp_registry().prompt_summary();
     let turn_id = format!("idle-context-preview-{pane_id}");
     let conversation_id = service

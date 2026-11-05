@@ -16,6 +16,7 @@ mod approval;
 mod component;
 mod configuration;
 mod context;
+pub(in crate::runtime) use context::runtime_interrupted_turn_context_block;
 mod context_records;
 mod external_agents;
 mod external_enrollment;
@@ -489,6 +490,9 @@ impl RuntimeSessionService {
                 },
             );
         }
+        for block in self.agent_shell_preference_context_blocks(pane_id) {
+            insert_context_block_by_placement(&mut blocks, block);
+        }
         let prompt_index = mez_agent::context_placement_insertion_index(
             &blocks,
             mez_agent::ContextPlacement::ConversationAppend,
@@ -553,6 +557,7 @@ impl RuntimeSessionService {
     ) -> Result<RuntimePeerMessageTurnContext> {
         self.refresh_project_config_layers_for_pane(pane_id)?;
         self.settle_recoverable_pane_readiness_for_agent_prompt(pane_id)?;
+        self.ensure_primary_agent_name(pane_id)?;
         let history = self.runtime_agent_history_epoch_context(pane_id)?;
         let history_source = history.source;
         let imported_records = history.records;
@@ -614,6 +619,9 @@ impl RuntimeSessionService {
                 PEER_MESSAGE_TURN_CONTEXT_HINT,
             ),
         );
+        for block in self.agent_shell_preference_context_blocks(pane_id) {
+            insert_context_block_by_placement(&mut blocks, block);
+        }
         let metadata = self
             .agent_shell_store()
             .get(pane_id)

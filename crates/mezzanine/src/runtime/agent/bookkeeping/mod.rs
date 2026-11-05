@@ -3,6 +3,8 @@
 //! This module owns durable transcript entry construction, retained patch
 //! records, copyable assistant output, and provider token/quota accounting. It
 //! keeps persistence and accounting details out of execution-state code.
+//! A stopped turn's existing hint carries its own original estimate and stable
+//! snapshot without changing semantic text, row count or source authority.
 
 use super::{
     ActionResult, ActionStatus, AgentActionPayload, AgentTurnExecution, AgentTurnRecord, BTreeMap,
@@ -1373,7 +1375,7 @@ impl RuntimeSessionService {
         else {
             return Ok(0);
         };
-        let evidence = self
+        let evidence: Vec<String> = self
             .agent_turn_executions()
             .get(&turn.turn_id)
             .map(|execution| {
@@ -1413,6 +1415,15 @@ impl RuntimeSessionService {
             created_at_unix_seconds,
             turn,
         )?;
+        let interrupted_block = crate::runtime::control::runtime_interrupted_turn_context_block(
+            &prompt, reason, &evidence,
+        );
+        let interrupted_record = mez_agent::ContextBlockRecord::allocate(&interrupted_block)?;
+        let interrupted_event = TranscriptContextEvent::InterruptedTurn {
+            prompt,
+            reason: reason.to_string(),
+            evidence,
+        };
         let interrupted_entry = TranscriptEntry {
             conversation_id: turn.conversation_id.clone(),
             sequence: first_sequence.saturating_add(entries.len() as u64),
@@ -1421,12 +1432,14 @@ impl RuntimeSessionService {
             turn_id: turn.turn_id.clone(),
             agent_id: turn.agent_id.clone(),
             pane_id: turn.pane_id.clone(),
-            content: TranscriptContextEvent::InterruptedTurn {
-                prompt,
-                reason: reason.to_string(),
-                evidence,
-            }
-            .to_transcript_content(),
+            content: mez_agent::transcript::TranscriptContextRecord::new(
+                interrupted_event,
+                interrupted_record,
+                projection
+                    .context
+                    .map(mez_agent::AgentContext::stable_block_records),
+            )?
+            .to_transcript_content()?,
         };
         interrupted_entry.validate()?;
         entries.push(interrupted_entry);

@@ -4,6 +4,8 @@
 use super::*;
 use crate::{ContextSourceKind, provider_text_input_token_estimate};
 
+mod stable_import;
+
 /// Equal content is two occurrences. A content revision preserves the original
 /// identity and refreshes estimates; valid serialized caches restore without a
 /// counting call, while modified costs or methods recompute from real source.
@@ -70,7 +72,7 @@ fn unchanged_canonical_projections_and_record_import_do_not_recount_source() {
         assert_eq!(seed.block_records(), records);
     }
     let restored =
-        AgentContext::import_durable_blocks_with_records(context.blocks().to_vec(), &records)
+        AgentContext::import_durable_blocks_with_records(context.blocks().to_vec(), &records, &[])
             .unwrap();
     assert_eq!(restored.block_records(), records);
     assert_eq!(ESTIMATE_COMPUTATIONS.with(|count| count.get()), before);

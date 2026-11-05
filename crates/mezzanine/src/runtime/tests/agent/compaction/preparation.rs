@@ -450,6 +450,10 @@ fn runtime_manual_compaction_status_preserves_human_pause() {
 #[test]
 fn runtime_manual_compaction_request_matches_synchronous_task() {
     let (mut sync, primary, _) = fixture_with_adapter("manual-request-sync", false);
+    // Match the actual current identity source as well as model/history input;
+    // two independent activations legitimately allocate different display names.
+    sync.install_primary_agent_name("%1", Some("prepared-owner".into()))
+        .unwrap();
     assert!(
         sync.execute_agent_shell_command(&primary, "/compact")
             .unwrap()
@@ -457,6 +461,9 @@ fn runtime_manual_compaction_request_matches_synchronous_task() {
     );
     let expected = sync.take_pending_agent_compaction_task("%1").unwrap();
     let (mut asynchronous, primary, _) = fixture("manual-request-worker");
+    asynchronous
+        .install_primary_agent_name("%1", Some("prepared-owner".into()))
+        .unwrap();
     let work = request_work(&mut asynchronous, &primary);
     let actual = work.execute_request().unwrap();
     assert_eq!(
