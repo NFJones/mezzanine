@@ -80,7 +80,8 @@ fn openai_responses_request_body_maps_context_to_responses_api_shape() {
     assert!(capability_description.contains("transport envelope"));
     assert!(capability_description.contains("not a prerequisite task step"));
     assert!(capability_description.contains("required-function-call"));
-    assert!(capability_description.contains("Choose the smallest action"));
+    assert!(capability_description.contains("substantive progress toward verified completion"));
+    assert!(!capability_description.contains("Choose the smallest action"));
     assert!(
         capability_description.contains("Safely discover task-local facts before asking the user")
     );

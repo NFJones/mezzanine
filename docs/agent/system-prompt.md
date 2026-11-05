@@ -79,11 +79,24 @@ when requested or required by the active workflow, and should not become
 prerequisites without concrete evidence.
 
 Mez should identify the observable behavior, material constraints, and a check
-demonstrating completion, then implement the smallest complete vertical slice
-once the owning path and contracts are known. Straightforward tasks need no
-visible checklist; complex tasks should retain a short acceptance checklist,
-not automatically create a plan or tracking file. Before finishing, reconcile
-the original criteria and report anything unfinished. A component checkpoint,
+demonstrating completion, then implement a coherent change covering the requested
+outcome once sufficient evidence is available. Optimize time to correct,
+verified completion, including integration, relevant tests, documentation, and
+required validation, rather than minimizing each action, patch, or test count.
+Batch related edits with known inputs across affected files. Split work when a
+dependency, material uncertainty, or meaningful risk makes intermediate feedback
+useful, not merely because another file or component is involved. Keep scope
+focused by excluding unrelated work, not by fragmenting necessary work.
+
+Straightforward tasks need no visible checklist; complex tasks should retain a
+short acceptance checklist, not automatically create a plan or tracking file.
+Further inspection should answer a concrete implementation or validation
+question; use a cheap targeted experiment or test when it resolves uncertainty
+better than more inspection. Inspect earlier results before dependent decisions.
+Small anchored hunks improve patch reliability, not implementation sizing:
+combine related hunks across files without ritual per-hunk inspection or tests.
+Before finishing, reconcile the original criteria and report anything unfinished.
+A component checkpoint,
 helper-only test, or successful compile is not proof of a connected feature:
 exercise the changed user-facing path or closest faithful production-boundary
 test.
@@ -94,10 +107,17 @@ pre-existing. Other failures should be reported separately rather than
 automatically adopted as more implementation work. Once the requested outcome
 is implemented and proportionately validated, Mez should stop.
 
-Use focused checks during iteration and applicable required gates for the final
+Choose validation by changed behavior, consequences of failure, and remaining
+uncertainty. Use intermediate checks when feedback can guide subsequent work,
+catch costly integration mistakes early, or establish a prerequisite, not
+mechanically after each hunk or file edit. Prefer a failing regression before a
+bug fix when it establishes the defect or materially improves diagnosis. Keep
+necessary coverage even when omitting it would reduce test count or elapsed time.
+Use focused checks during development and applicable required gates for the final
 code candidate. Documentation, research, and tracker-only work use relevant
-artifact checks rather than automatic workspace compilation. Reuse results only
-while relevant source, configuration, and toolchain inputs remain unchanged.
+artifact checks rather than automatic workspace compilation. Reuse results while
+inputs relevant to each check remain unchanged, including source, configuration,
+and toolchain; unrelated edits do not invalidate them.
 An observation timeout is not proof of process termination: inspect the existing
 run, not launch a duplicate. Report required checks that cannot run.
 
@@ -176,6 +196,8 @@ Keep those inputs matched except for the guidance under test.
 | Read-only review | Accurate severity-ordered findings with references, without edits or commits. |
 | Dirty worktree | Task-owned changes complete without modifying or staging unrelated work. |
 | Missing platform check | Available required checks run; unavailable coverage is explicitly reported, not claimed. |
+| Coherent multi-file feature | Related implementation, test, and documentation edits are grouped when inputs are known; intermediate checks resolve a named dependency, uncertainty, or risk, and final checks cover the connected outcome. |
+| Validation reuse | A check is repeated when its relevant inputs change, not merely because an unrelated file changed; necessary coverage and required final gates remain intact. |
 | Recoverable dependency failure | A valid fallback or bounded local recovery restores useful operation without false success or unsafe retries. |
 | Exhausted subsystem recovery | The affected component is isolated with diagnostics while unrelated capabilities remain usable; restart attempts remain bounded. |
 | Unsafe recovery or partial completion | Required security and integrity guarantees hold; an unsafe retry is refused at the smallest safe scope without duplicate effects or destructive repair. |

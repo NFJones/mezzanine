@@ -90,13 +90,20 @@ fn openai_available_mcp_keeps_memory_on_default_surface() {
         "{description}"
     );
     assert!(
-        description.contains("Choose the smallest action that makes concrete progress"),
+        description.contains("substantive progress toward verified completion without unnecessary setup or fragmentation"),
         "{description}"
     );
     assert!(
-        description.contains("direct inspection or execution beats placeholder setup"),
+        description.contains("Prefer direct inspection or execution over placeholder setup"),
         "{description}"
     );
+    for anchor in [
+        "Batch work whose inputs are known and whose effects can be safely combined",
+        "Separate actions when later choices require inspecting earlier results",
+    ] {
+        assert!(description.contains(anchor), "{description}");
+    }
+    assert!(!description.contains("Choose the smallest action"));
     assert!(
         description.contains("The function call is only the transport envelope"),
         "{description}"
@@ -461,6 +468,13 @@ fn openai_responses_request_body_describes_apply_patch_format() {
         description.contains("multiple small hunks"),
         "{description}"
     );
+    for anchor in [
+        "patch reliability, not implementation sizing",
+        "Combine related hunks across files when inputs are known",
+        "do not inspect or validate between hunks without a concrete reason",
+    ] {
+        assert!(description.contains(anchor), "{description}");
+    }
     assert!(description.contains("space context"), "{description}");
     assert!(description.contains("- removed"), "{description}");
     assert!(description.contains("+ added"), "{description}");
@@ -482,7 +496,7 @@ fn openai_responses_request_body_describes_apply_patch_format() {
         "{description}"
     );
     assert!(
-        description.len() < 1350,
+        description.len() < 1600,
         "apply_patch schema guidance should stay compact: {description}"
     );
 }

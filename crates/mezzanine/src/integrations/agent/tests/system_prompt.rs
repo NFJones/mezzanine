@@ -51,7 +51,7 @@ fn system_prompt_keeps_critical_behavioral_invariants() {
                 "planning, review, explanation, or brainstorming",
                 "Use enabled actions directly",
                 "concretely blocked",
-                "validate; repair in-scope failures",
+                "continue until the acceptance criteria are met or a concrete blocker remains",
             ],
         ),
         (
@@ -257,7 +257,7 @@ fn system_prompt_limits_wait_to_explicit_mmp_exchanges() {
 /// Model identity is templated, but server configuration is not invented here.
 fn system_prompt_keeps_mcp_awareness_abstract() {
     let prompt = build_agent_system_prompt(&AgentPromptProfile::for_model("test-model")).unwrap();
-    assert!(prompt.contains("Mezzanine pane agent profile default v40, model test-model"));
+    assert!(prompt.contains("Mezzanine pane agent profile default v41, model test-model"));
     assert!(prompt.contains("Use `mcp_server_search` to discover configured MCP servers when no exact server reference is already present"));
     assert!(prompt.contains(
         "pass its canonical server id directly to `mcp_server_get` without searching first"
@@ -279,10 +279,10 @@ fn system_prompt_keeps_mcp_awareness_abstract() {
 fn system_prompt_requires_connected_observable_completion() {
     let autonomy = super::prompt::system_prompt_fragment("autonomy.md").unwrap();
     for anchor in [
-        "observable behavior, material constraints",
+        "requested observable behavior, affected implementation path, material contracts, and acceptance checks",
         "keep this implicit for straightforward tasks",
         "short acceptance checklist for complex work",
-        "smallest complete vertical slice",
+        "implement a coherent change covering the requested outcome",
         "reconcile the original acceptance criteria",
         "component checkpoint is not completion",
     ] {
@@ -309,17 +309,53 @@ fn system_prompt_requires_connected_observable_completion() {
 fn system_prompt_scales_validation_to_task_and_phase() {
     let validation = super::prompt::system_prompt_fragment("validation.md").unwrap();
     for anchor in [
-        "smallest relevant check during iteration",
+        "Use focused checks during development",
         "applicable repository-required checks for the final code candidate",
         "Documentation, research, or tracker-only work",
         "do not automatically compile the workspace",
-        "relevant source, configuration, and toolchain inputs remain unchanged",
+        "inputs relevant to each check remain unchanged",
+        "including source, configuration, and toolchain",
+        "unrelated edits do not invalidate them",
         "observation timeout is not evidence that a check stopped",
         "do not launch a duplicate",
     ] {
         assert!(
             validation.contains(anchor),
             "missing validation distinction: {anchor}"
+        );
+    }
+}
+
+/// Protects coherent feature delivery and useful feedback boundaries without
+/// weakening acceptance coverage or exact-context patch safety.
+#[test]
+fn system_prompt_avoids_micro_iterations_without_skipping_coverage() {
+    let prompt = build_agent_system_prompt(&AgentPromptProfile::for_model("test-model")).unwrap();
+    for anchor in [
+        "Minimize avoidable elapsed time and rework",
+        "Batch related implementation, test, and documentation edits whose inputs are already known",
+        "not merely because another file or component is involved",
+        "excluding unrelated work, not by fragmenting necessary work",
+        "Preserve result inspection before dependent decisions",
+        "Do not run tests mechanically after every hunk or file edit",
+        "Group related edits before validation when intermediate results would not change the next step",
+        "Do not omit necessary coverage merely to reduce test count or elapsed time",
+        "Small anchored hunks are a patch-reliability technique, not an implementation-size limit",
+        "Every old/context line must be copied verbatim",
+    ] {
+        assert!(
+            prompt.contains(anchor),
+            "missing delivery contract: {anchor}"
+        );
+    }
+    for obsolete in [
+        "smallest complete vertical slice",
+        "Test small behavior gaps after one evidence pass",
+        "smallest relevant check during iteration",
+    ] {
+        assert!(
+            !prompt.contains(obsolete),
+            "micro-step incentive: {obsolete}"
         );
     }
 }

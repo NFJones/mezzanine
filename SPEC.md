@@ -18153,9 +18153,20 @@ The autonomy section SHOULD make completion observable: identify the requested
 behavior, material constraints, and a check demonstrating completion. This
 SHOULD remain implicit for straightforward tasks; complex work SHOULD retain a
 short acceptance checklist without mandatory planning ceremonies or tracking
-files. Once the owning path, relevant contracts, and check are known, the agent
-SHOULD implement the smallest complete vertical slice rather than disconnected
-components. Before finishing, it MUST reconcile the original acceptance criteria
+files. The prompt SHOULD optimize for quickly and correctly completing the
+requested outcome, including integration, relevant tests, documentation, and
+required validation, rather than minimizing individual actions, patches, or
+test counts. Once sufficient evidence is available, the agent SHOULD implement
+a coherent change covering that outcome and batch related implementation,
+test, and documentation edits whose inputs are known. It SHOULD split work
+where dependencies, material uncertainty, or meaningful risk make intermediate
+feedback useful, not merely at file or component boundaries. Scope SHOULD be
+limited by excluding unrelated work, not by fragmenting necessary work.
+Further inspection SHOULD answer a concrete implementation or validation
+question; a cheap targeted experiment or test SHOULD resolve uncertainty when
+more useful than further inspection or speculation. Result inspection before
+dependent decisions MUST remain required.
+Before finishing, it MUST reconcile the original acceptance criteria
 and report unfinished criteria; a component checkpoint is not feature completion.
 Validation guidance MUST require checking the changed user-facing path or the
 closest faithful production-boundary test. A helper-only test or successful
@@ -18166,11 +18177,19 @@ unrelated pre-existing failures. It MUST require repair of the former and
 separate reporting of the latter without automatically adopting them as
 implementation work. This scope boundary MUST NOT weaken repository-required
 validation or evidence-backed handoff requirements.
-Validation guidance SHOULD distinguish the smallest relevant iterative checks
-from applicable repository-required final code gates. Documentation, research,
-and tracker-only work SHOULD use relevant artifact checks without automatic
-workspace compilation. Valid results MAY be reused only while their relevant
-source, configuration, and toolchain inputs remain unchanged. An observation
+Validation guidance SHOULD select checks by changed behavior, consequences of
+failure, and remaining uncertainty. Intermediate checks SHOULD guide subsequent
+work, catch costly integration mistakes early, or establish a prerequisite; they
+SHOULD NOT run mechanically after every hunk or file edit when the result would
+not change the next step. A failing regression test SHOULD precede a bug fix
+when it establishes the defect or materially improves diagnosis. Necessary
+coverage MUST NOT be omitted merely to reduce elapsed time or test count.
+Validation guidance SHOULD distinguish focused development checks from
+applicable repository-required final code gates. Documentation, research, and
+tracker-only work SHOULD use relevant artifact checks without automatic
+workspace compilation. Valid results MAY be reused only while inputs relevant
+to each check remain unchanged, including source, configuration, and toolchain;
+unrelated edits MUST NOT by themselves invalidate those results. An observation
 timeout MUST NOT be treated as proof that the underlying check stopped or as a
 reason to launch a duplicate; the existing run SHOULD be inspected. Unavailable
 required checks MUST be reported rather than represented as passing.
@@ -18283,7 +18302,11 @@ examples or explanatory text.
 The main prompt's patch guidance SHOULD stay concise and emphasize the
 canonical path: use `apply_patch` as a semantic action, emit the patch string
 directly, use small anchored hunks with exact copied context, and reread before
-retry after hunk mismatch. Detailed patch compatibility, fallback matching, and
+retry after hunk mismatch. The prompt and provider patch description SHOULD
+clarify that small hunks improve patch reliability rather than limiting
+implementation size. Related hunks across files SHOULD be combined when their
+inputs are known; intermediate inspection or validation SHOULD require a
+concrete reason. Detailed patch compatibility, fallback matching, and
 recovery behavior MAY live in provider schemas and action-result diagnostics
 instead of the high-level prompt.
 The prompt MUST instruct the agent to treat recent file-inspection action
@@ -18506,8 +18529,13 @@ MUST prohibit batch-rationale text that says the model is complying with a
 required function call, tool call, current-actions call, schema wrapper, or
 action wrapper.
 
-The prompt SHOULD instruct the agent to choose the smallest action that makes
-real progress and to avoid actions that do not answer the current task.
+The prompt and provider action-batch description SHOULD favor substantive
+progress toward verified completion without unnecessary setup or fragmentation.
+They SHOULD encourage batching work whose inputs are known and whose effects
+can be safely combined, while requiring separate actions when later choices
+depend on inspecting earlier results. Direct inspection or execution SHOULD
+take precedence over placeholder setup; actions that do not answer the current
+task SHOULD be avoided.
 It MUST state that persistent-memory actions are not a generic progress
 mechanism. They MUST instruct the model that unclear next steps should be
 resolved with current action results, adjusted direct integration queries,
