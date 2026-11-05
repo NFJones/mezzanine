@@ -3,6 +3,8 @@
 
 use super::*;
 
+mod checkpoint;
+
 /// Creates an empty canonical owner with one exact stable policy slot.
 fn owner() -> ReplayEpochContext {
     ReplayEpochContext::new(

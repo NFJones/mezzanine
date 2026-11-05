@@ -219,11 +219,14 @@ impl ReplayEpochContext {
         self.accounting.totals
     }
 
-    /// Builds the initial index once from the actual unsummarized source owner.
+    /// Builds the index once from an initial or restored canonical epoch.
+    /// A restored head belongs only to the summary partition, never raw source.
     pub(super) fn initialize_accounting(&mut self) -> AgentContextResult<()> {
         let mut accounting = ReplayAccounting::default();
         accounting.replace_stable(self.context.stable_slots())?;
-        for event in self.context.chronology() {
+        let offset = usize::from(self.head.is_some());
+        accounting.replace_summary(self.context.chronology().first().filter(|_| offset == 1))?;
+        for event in self.context.chronology().iter().skip(offset) {
             accounting.add_raw(event, self.event_is_replaceable(event))?;
         }
         self.accounting = accounting;

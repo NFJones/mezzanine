@@ -19,6 +19,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::action_result::ActionResult;
@@ -72,7 +73,8 @@ const CONTEXT_EVENT_SEQUENCE_STRIDE: u64 = 1024;
 /// Providers use this contract to preserve role provenance, choose stable
 /// prompt-cache prefixes, and keep volatile controller state out of reusable
 /// request material without depending on product runtime types.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ContextSourceKind {
     /// Product system instructions.
     System,
@@ -225,7 +227,8 @@ pub enum ContextCachePolicy {
 }
 
 /// Explicit provider-neutral placement for model-visible context.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ContextPlacement {
     /// Invariant instructions and configuration that form the reusable prefix.
     StablePrefix,
@@ -238,7 +241,8 @@ pub enum ContextPlacement {
 /// Providers may need to wrap neutral context in a supported transport role,
 /// but they must preserve this canonical meaning and cannot turn controller or
 /// repository context into direct user authorship.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ContextSemanticKind {
     /// Invariant system, developer, policy, or project instructions.
     AmbientInstruction,
@@ -255,7 +259,8 @@ pub enum ContextSemanticKind {
 }
 
 /// Retention and compaction treatment for one context block.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ContextRetention {
     /// Preserve the block byte-for-byte across request preparation and active
     /// turn compaction.
@@ -1011,7 +1016,10 @@ impl ConversationEvent {
 }
 
 /// One ordered unit of model-visible context.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Serde decoding is structural only; canonical import or checkpoint adoption
+/// must validate provenance, placement, lifecycle and accounting before use.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ContextBlock {
     /// Provenance and role class for the block.
     pub source: ContextSourceKind,
@@ -1268,10 +1276,11 @@ pub struct AgentContext {
     next_event_sequence: u64,
     /// Typed request metadata excluded from model-message projection.
     metadata: ModelContextMetadata,
-    /// Runtime-owned unresolved groups; never projected or transcript-serialized.
+    /// Unresolved source protection, never projected. An explicit epoch
+    /// checkpoint may preserve this descriptive state without execution rights.
     pending_execution_groups: BTreeSet<ContextExecutionGroupId>,
     /// Exact committed peer references awaiting local request handoff. Runtime
-    /// ownership only; never serialized or projected to provider messages.
+    /// protection only; checkpointing it grants no delivery or ACK rights.
     pending_peer_messages: BTreeSet<ContextEventSequence>,
     /// Explicitly completed instruction occurrences. Their bytes and authorship
     /// remain immutable while their retention becomes historical. This typed

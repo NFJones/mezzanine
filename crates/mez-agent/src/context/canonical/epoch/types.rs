@@ -141,7 +141,8 @@ impl std::fmt::Debug for ReplayExecutionOwner {
 /// Required head policy for a publication. Summary is the default. The explicit
 /// omission contract is for later policy-qualified adapters, not a product
 /// configuration option or an alternate runtime compaction engine.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ReplayHeadPolicy {
     /// A completed, nonempty, bounded model summary must be adopted.
     #[default]

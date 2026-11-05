@@ -29,7 +29,9 @@ use accounting::ReplayAccounting;
 pub use accounting::{
     ReplayCompactionInputEstimates, ReplayEpochInputEstimates, ReplayProviderProjection,
 };
+mod checkpoint;
 mod lifecycle;
+pub use checkpoint::ReplayEpochCheckpoint;
 mod native_groups;
 mod planning;
 mod publication;

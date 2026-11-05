@@ -277,7 +277,7 @@ pub use context::{
 };
 pub use context::{
     ReplayCompactionInputEstimates, ReplayCompactionNoWork, ReplayCompactionPlan,
-    ReplayCompactionPreparation, ReplayConversationId, ReplayEpochContext,
+    ReplayCompactionPreparation, ReplayConversationId, ReplayEpochCheckpoint, ReplayEpochContext,
     ReplayEpochInputEstimates, ReplayEpochMember, ReplayEpochRevision, ReplayExecutionOwner,
     ReplayHeadPolicy, ReplayHeadPublication, ReplayInstructionOwner, ReplayProviderProjection,
     ReplaySummaryIdentity,

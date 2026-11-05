@@ -10859,6 +10859,21 @@ skip protected prefix events to gather later ranges. Equal text MUST retain
 separate original occurrence identities. A summary's chronological anchor is an
 ordering slot, not a claim to the original identity of covered source.
 
+The pure replay owner exposes a versioned, explicitly validated checkpoint of
+the current head, raw membership, original accounting, lifecycle witnesses and
+arrival high-water mark. A checkpoint is descriptive source, not a publication
+receipt or an instruction/execution authority. Adoption MUST validate the
+externally selected conversation and canonical membership before exposing the
+candidate. Current trusted stable instructions and request/cache metadata MUST
+come from the caller; only matching stable accounting may be restored. Removed
+stable slots MUST remain absent. Restored source MUST preserve instruction
+completion and pending peer/native protection without executing effects or
+granting ACK rights. A restored owner MUST allocate a fresh incarnation, reject
+old task/closure handles and plans, and validate native closure before treating a
+group as settled. Stale estimates MUST be checked against actual bytes. This
+pure checkpoint contract does not itself install a product manifest, migrate
+transcript formats, or claim restart durability for unsaved conversations.
+
 Canonical blocks MUST own an immutable occurrence ID separately from their
 ordering sequence and execution group. Equal bytes committed twice MUST receive
 distinct IDs; importing a typed occurrence or revising its content MUST preserve
