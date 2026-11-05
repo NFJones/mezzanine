@@ -61,9 +61,14 @@ impl ReplayEpochRevision {
 pub struct ReplaySummaryIdentity {
     pub(super) conversation: ReplayConversationId,
     pub(super) revision: ReplayEpochRevision,
+    pub(super) occurrence_id: ContextBlockOccurrenceId,
 }
 
 impl ReplaySummaryIdentity {
+    /// Returns the actual summary occurrence, independent of its ordering anchor.
+    pub fn occurrence_id(&self) -> ContextBlockOccurrenceId {
+        self.occurrence_id
+    }
     /// Returns the summary's conversation namespace.
     pub fn conversation(&self) -> &ReplayConversationId {
         &self.conversation
@@ -79,11 +84,16 @@ impl ReplaySummaryIdentity {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReplayEpochMember {
     pub(super) origin: ContextEventSequence,
+    pub(super) occurrence_id: ContextBlockOccurrenceId,
     pub(super) born_in: ReplayEpochRevision,
 }
 
 impl ReplayEpochMember {
-    /// Returns the original canonical occurrence, including for equal text.
+    /// Returns immutable origin across local resequencing and epoch transfer.
+    pub fn occurrence_id(&self) -> ContextBlockOccurrenceId {
+        self.occurrence_id
+    }
+    /// Returns the local canonical ordering position, separate from durable origin.
     pub fn origin(&self) -> ContextEventSequence {
         self.origin
     }
@@ -211,9 +221,14 @@ pub struct ReplayCompactionPlan {
     pub(super) members: Vec<ReplayEpochMember>,
     pub(super) prefix_members: usize,
     pub(super) prefix_events: usize,
+    pub(super) input_estimates: ReplayCompactionInputEstimates,
 }
 
 impl ReplayCompactionPlan {
+    /// Returns frozen source/tail estimates, excluding stable and fixed overhead.
+    pub fn input_estimates(&self) -> ReplayCompactionInputEstimates {
+        self.input_estimates
+    }
     /// Returns the exact committed parent required at publication.
     pub fn expected_parent(&self) -> ReplayEpochRevision {
         self.parent

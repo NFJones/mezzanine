@@ -10882,6 +10882,18 @@ Saved stable metadata MUST NOT install instructions or overwrite current source
 fingerprints. Ordinary semantic decoding, display and model projection MUST
 unwrap only semantic source, keeping accounting metadata out of that content.
 
+Canonical replay membership and its summary head MUST retain those occurrence
+IDs independently of local ordering and birth revision. The pure epoch owner
+MUST update disjoint stable/head/raw and eligible-raw estimate totals at actual
+membership and lifecycle transitions using checked arithmetic. Reopening a
+closed execution group MUST withdraw its previous raw members from eligible
+totals; a stale task/group closure MUST NOT change accounting. Frozen plans MUST
+retain selected-raw, prior-head and retained-tail estimates, excluding later
+arrivals and fixed compactor instructions/schema/wrapper overhead. Ordinary
+framing estimates are distinct from the provider-specific native visibility
+projection and MUST NOT become billing or a compaction trigger. Invalid or
+exhausted arithmetic MUST reject adoption atomically, without saturated totals.
+
 Manual, observed-input and provider-limit adapters MUST use the same configured
 raw-tail selection contract. Token retention rounds upward and complete
 execution groups remain indivisible. Once compaction is requested, fitting the

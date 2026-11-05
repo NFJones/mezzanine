@@ -276,10 +276,10 @@ pub use context::{
     validate_context_required, validate_context_semantics,
 };
 pub use context::{
-    ReplayCompactionNoWork, ReplayCompactionPlan, ReplayCompactionPreparation,
-    ReplayConversationId, ReplayEpochContext, ReplayEpochMember, ReplayEpochRevision,
-    ReplayExecutionOwner, ReplayHeadPolicy, ReplayHeadPublication, ReplayInstructionOwner,
-    ReplaySummaryIdentity,
+    ReplayCompactionInputEstimates, ReplayCompactionNoWork, ReplayCompactionPlan,
+    ReplayCompactionPreparation, ReplayConversationId, ReplayEpochContext,
+    ReplayEpochInputEstimates, ReplayEpochMember, ReplayEpochRevision, ReplayExecutionOwner,
+    ReplayHeadPolicy, ReplayHeadPublication, ReplayInstructionOwner, ReplaySummaryIdentity,
 };
 pub use context_appenders::{
     EMPTY_PROJECT_GUIDANCE_CONTEXT, MCP_CATALOG_REMOVED_CONTEXT,

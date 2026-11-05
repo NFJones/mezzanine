@@ -501,8 +501,8 @@ fn pending_peer_prefix_blocks_later_source_until_exact_handoff_release() {
             .unwrap(),
         ReplayCompactionPreparation::NoWork(ReplayCompactionNoWork::ProtectedPrefix)
     );
-    assert!(owner.release_peer(peer));
-    assert!(!owner.release_peer(peer));
+    assert!(owner.release_peer(peer).unwrap());
+    assert!(!owner.release_peer(peer).unwrap());
     let frozen = plan(&owner);
     assert_eq!(
         frozen.summary_input()[0].block().trust_domain(),

@@ -15,14 +15,18 @@
 //! completion or replay membership; those require a typed durable witness.
 
 use super::{
-    AgentContext, AgentContextError, AgentContextResult, ContextBlock, ContextConversationAppend,
-    ContextEventSequence, ContextExecutionGroupId, ContextPlacement, ContextRetention,
-    ContextSourceKind, ConversationEvent, StableContextBlock, context_block_is_compaction_summary,
+    AgentContext, AgentContextError, AgentContextResult, ContextBlock, ContextBlockOccurrenceId,
+    ContextConversationAppend, ContextEventSequence, ContextExecutionGroupId, ContextPlacement,
+    ContextRetention, ContextSourceKind, ConversationEvent, StableContextBlock,
+    context_block_is_compaction_summary,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
 mod types;
 pub use types::*;
+mod accounting;
+use accounting::ReplayAccounting;
+pub use accounting::{ReplayCompactionInputEstimates, ReplayEpochInputEstimates};
 mod lifecycle;
 mod native_groups;
 mod planning;
@@ -41,6 +45,7 @@ pub struct ReplayEpochContext {
     policy: ReplayHeadPolicy,
     head: Option<ReplaySummaryIdentity>,
     members: Vec<ReplayEpochMember>,
+    accounting: ReplayAccounting,
     instruction_owners: BTreeMap<u64, BTreeSet<ContextEventSequence>>,
     next_instruction_owner: u64,
 }
@@ -99,10 +104,11 @@ impl ReplayEpochContext {
             .iter()
             .map(|event| ReplayEpochMember {
                 origin: event.sequence(),
+                occurrence_id: event.record().occurrence_id(),
                 born_in: revision,
             })
             .collect();
-        let owner = Self {
+        let mut owner = Self {
             context,
             owner_identity: ReplayOwnerIdentity::new(),
             conversation,
@@ -110,9 +116,11 @@ impl ReplayEpochContext {
             policy,
             head: None,
             members,
+            accounting: ReplayAccounting::default(),
             instruction_owners: BTreeMap::new(),
             next_instruction_owner: 1,
         };
+        owner.initialize_accounting()?;
         owner.validate_membership()?;
         Ok(owner)
     }
@@ -140,9 +148,14 @@ impl ReplayEpochContext {
         &mut self,
         slots: Vec<StableContextBlock>,
     ) -> AgentContextResult<()> {
-        self.context.replace_stable_slots(slots).map_err(|_| {
+        let mut candidate = self.clone();
+        candidate.context.replace_stable_slots(slots).map_err(|_| {
             AgentContextError::new("replay stable-prefix replacement failed canonical validation")
-        })
+        })?;
+        candidate.refresh_accounting_stable()?;
+        candidate.validate_membership()?;
+        *self = candidate;
+        Ok(())
     }
 
     /// Appends actual execution events and conservatively protects every touched
@@ -164,10 +177,13 @@ impl ReplayEpochContext {
             .map_err(|_| {
                 AgentContextError::new("replay execution admission failed canonical validation")
             })?;
-        for group in groups {
-            candidate.context.retain_pending_execution_group(&group)?;
+        for group in &groups {
+            candidate.context.retain_pending_execution_group(group)?;
         }
-        candidate.record_arrivals(&sequences);
+        candidate.record_arrivals(&sequences)?;
+        for group in &groups {
+            candidate.refresh_accounting_group(group)?;
+        }
         candidate.validate_membership()?;
         *self = candidate;
         Ok(sequences)
@@ -211,7 +227,13 @@ impl ReplayEpochContext {
             ));
         }
         self.validate_native_group_closure(&owner.group)?;
-        self.context.release_pending_execution_group(&owner.group);
+        let mut candidate = self.clone();
+        candidate
+            .context
+            .release_pending_execution_group(&owner.group);
+        candidate.refresh_accounting_group(&owner.group)?;
+        candidate.validate_membership()?;
+        *self = candidate;
         Ok(())
     }
 
@@ -239,19 +261,10 @@ impl ReplayEpochContext {
             .map_err(|_| {
                 AgentContextError::new("replay fact admission failed canonical validation")
             })?;
-        candidate.record_arrivals(&[sequence]);
+        candidate.record_arrivals(&[sequence])?;
         candidate.validate_membership()?;
         *self = candidate;
         Ok(sequence)
-    }
-
-    /// Records fresh members only after their canonical append commits.
-    fn record_arrivals(&mut self, sequences: &[ContextEventSequence]) {
-        self.members
-            .extend(sequences.iter().map(|origin| ReplayEpochMember {
-                origin: *origin,
-                born_in: self.revision,
-            }));
     }
 }
 

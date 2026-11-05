@@ -31,17 +31,37 @@ impl ReplayEpochContext {
                     .any(|event| !self.event_is_replaceable(event))
             })
             .unwrap_or(units.len());
+        let mut unit_totals = Vec::with_capacity(units.len() + 1);
+        unit_totals.push(0usize);
+        for unit in &units {
+            let cost = raw[unit.clone()].iter().try_fold(0usize, |sum, event| {
+                sum.checked_add(event.record().estimated_input_tokens())
+                    .ok_or_else(|| AgentContextError::new("replay unit estimate exhausted"))
+            })?;
+            let total = unit_totals
+                .last()
+                .copied()
+                .unwrap_or(0)
+                .checked_add(cost)
+                .ok_or_else(|| AgentContextError::new("replay source estimate exhausted"))?;
+            unit_totals.push(total);
+        }
+        if unit_totals.last().copied() != Some(self.input_estimates().raw_input_tokens()) {
+            return Err(AgentContextError::new("replay source aggregate drifted"));
+        }
         let target = policy.retained_raw_tokens();
         let mut selected = units.len();
         let mut retained = 0usize;
-        for (index, unit) in units.iter().enumerate().rev() {
-            let cost = raw[unit.clone()]
-                .iter()
-                .map(|event| event.metadata().estimated_input_tokens())
-                .fold(0usize, usize::saturating_add);
-            let Some(total) = retained.checked_add(cost).filter(|total| *total <= target) else {
+        for index in (0..units.len()).rev() {
+            let cost = unit_totals[index + 1]
+                .checked_sub(unit_totals[index])
+                .ok_or_else(|| AgentContextError::new("replay unit estimate drifted"))?;
+            let total = retained
+                .checked_add(cost)
+                .ok_or_else(|| AgentContextError::new("replay retained estimate exhausted"))?;
+            if total > target {
                 break;
-            };
+            }
             retained = total;
             selected = index;
         }
@@ -62,6 +82,18 @@ impl ReplayEpochContext {
             .get(selected - 1)
             .ok_or_else(|| AgentContextError::new("replay unit selection is inconsistent"))?
             .end;
+        let selected_raw = unit_totals[selected];
+        let retained_raw = self
+            .input_estimates()
+            .raw_input_tokens()
+            .checked_sub(selected_raw)
+            .ok_or_else(|| AgentContextError::new("replay selected estimate drifted"))?;
+        let input_estimates = ReplayCompactionInputEstimates {
+            selected_raw,
+            prior_summary: self.input_estimates().summary_input_tokens(),
+            retained_raw,
+        };
+        input_estimates.source_input_tokens()?;
         Ok(ReplayCompactionPreparation::Ready(ReplayCompactionPlan {
             owner_identity: self.owner_identity.clone(),
             conversation: self.conversation.clone(),
@@ -72,6 +104,7 @@ impl ReplayEpochContext {
             members: self.members.clone(),
             prefix_members: cut,
             prefix_events: offset + cut,
+            input_estimates,
         }))
     }
 
@@ -118,6 +151,7 @@ impl ReplayEpochContext {
                     && head.revision == self.revision
                     && events.first().is_some_and(|event| {
                         event.block().source == ContextSourceKind::CompactionPrefix
+                            && event.record().occurrence_id() == head.occurrence_id
                     })
             }
             None => true,
@@ -133,14 +167,16 @@ impl ReplayEpochContext {
                 .iter()
                 .zip(events.iter().skip(offset))
                 .any(|(member, event)| {
-                    member.origin != event.sequence() || member.born_in > self.revision
+                    member.origin != event.sequence()
+                        || member.born_in > self.revision
+                        || member.occurrence_id != event.record().occurrence_id()
                 })
         {
             return Err(AgentContextError::new(
                 "replay head or raw membership drifted from canonical context",
             ));
         }
-        Ok(())
+        self.validate_accounting()
     }
 
     /// Requires explicit runtime retirement before selecting protected source.

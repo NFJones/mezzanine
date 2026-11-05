@@ -81,7 +81,7 @@ impl ReplayEpochContext {
                 AgentContextError::new("replay instruction admission failed canonical validation")
             })?;
         let sequence = sequences[0];
-        candidate.record_arrivals(&sequences);
+        candidate.record_arrivals(&sequences)?;
         candidate.bind_instruction_occurrences(owner, &sequences)?;
         candidate.validate_membership()?;
         *self = candidate;
@@ -97,12 +97,12 @@ impl ReplayEpochContext {
     ) -> AgentContextResult<()> {
         let sequences = self.check_instruction_owner(owner)?.clone();
         let mut candidate = self.clone();
-        for sequence in sequences {
+        for sequence in &sequences {
             let event = candidate
                 .context
                 .chronology
                 .iter_mut()
-                .find(|event| event.sequence == sequence)
+                .find(|event| event.sequence == *sequence)
                 .ok_or_else(|| AgentContextError::new("active instruction source disappeared"))?;
             if !instruction_source_can_complete(&event.block)
                 || event.retention != ContextRetention::Exact
@@ -115,10 +115,11 @@ impl ReplayEpochContext {
             candidate
                 .context
                 .historical_instruction_events
-                .insert(sequence);
+                .insert(*sequence);
         }
         candidate.instruction_owners.remove(&owner.generation);
         candidate.context.rebuild_projections();
+        candidate.refresh_accounting_sequences(sequences)?;
         candidate.validate_membership()?;
         *self = candidate;
         Ok(())
@@ -153,7 +154,7 @@ impl ReplayEpochContext {
                 AgentContextError::new("replay peer admission failed canonical validation")
             })?;
         candidate.context.retain_pending_peer_message(sequence)?;
-        candidate.record_arrivals(&[sequence]);
+        candidate.record_arrivals(&[sequence])?;
         candidate.validate_membership()?;
         *self = candidate;
         Ok(sequence)
@@ -161,8 +162,16 @@ impl ReplayEpochContext {
 
     /// Releases only the identified peer occurrence after actual handoff. Source
     /// remains in current membership and is not acknowledged or executed here.
-    pub fn release_peer(&mut self, sequence: ContextEventSequence) -> bool {
-        self.context.release_pending_peer_message(sequence)
+    /// Returns false when already released; accounting failures reject atomically.
+    pub fn release_peer(&mut self, sequence: ContextEventSequence) -> AgentContextResult<bool> {
+        let mut candidate = self.clone();
+        if !candidate.context.release_pending_peer_message(sequence) {
+            return Ok(false);
+        }
+        candidate.refresh_accounting_sequences([sequence])?;
+        candidate.validate_membership()?;
+        *self = candidate;
+        Ok(true)
     }
 
     /// Resolves one active generation without permitting handle reuse.

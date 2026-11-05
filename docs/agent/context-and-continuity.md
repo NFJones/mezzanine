@@ -488,6 +488,13 @@ Saved guidance metadata does not restore old instructions over current guidance.
 These estimates are not provider usage or billing, and their metadata is not
 part of the semantic source supplied to the model.
 
+The pure epoch API tracks stable, summary, raw and eligible raw estimates as
+membership changes. Its frozen selection keeps the previous head, selected raw
+source and retained tail separate; later arrivals do not change those frozen
+estimates. Group reopening and explicit retirement change eligibility without
+rewriting original source. These ordinary-framing totals exclude fixed request
+overhead and require a separate provider-native visibility projection.
+
 The shared canonical API defines one summary head and explicit retained raw
 membership. Summaries are reference material: they cannot enable tools or grant
 access. Current controlling instructions and unresolved call/result groups stay

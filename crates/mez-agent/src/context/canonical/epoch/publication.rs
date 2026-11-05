@@ -97,6 +97,13 @@ impl ReplayEpochContext {
             candidate.head = Some(ReplaySummaryIdentity {
                 conversation: self.conversation.clone(),
                 revision,
+                occurrence_id: candidate
+                    .context
+                    .chronology()
+                    .first()
+                    .ok_or_else(|| AgentContextError::new("published summary is missing"))?
+                    .record()
+                    .occurrence_id(),
             });
         } else {
             candidate.context.chronology.drain(..plan.prefix_events);
@@ -106,6 +113,7 @@ impl ReplayEpochContext {
             })?;
             candidate.head = None;
         }
+        candidate.publish_accounting(&plan)?;
         candidate.members.drain(..plan.prefix_members);
         candidate.revision = revision;
         candidate.validate_membership()?;
