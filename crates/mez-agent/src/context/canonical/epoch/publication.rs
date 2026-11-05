@@ -117,6 +117,7 @@ impl ReplayEpochContext {
         candidate.publish_accounting(&plan)?;
         candidate.members.drain(..plan.prefix_members);
         candidate.revision = revision;
+        candidate.prune_source_lifecycle();
         candidate.validate_membership()?;
         *self = candidate;
         Ok(revision)

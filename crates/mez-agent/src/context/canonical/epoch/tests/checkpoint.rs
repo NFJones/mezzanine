@@ -368,3 +368,56 @@ fn checkpoint_round_trips_empty_and_explicit_omission_epochs() {
     assert_eq!(restored.revision().get(), 1);
     assert!(restored.append_fact("new", "post-restart arrival").unwrap() > covered);
 }
+
+/// Storage may externalize only payload bytes. A serialized reference roundtrip
+/// preserves every original ID, framing, lifecycle and accounting field while
+/// equal text remains two distinct occurrences. Callback errors stop extraction.
+#[test]
+fn checkpoint_external_payload_mapping_preserves_canonical_state() {
+    let mut source = owner();
+    source.append_fact("first", "equal source bytes").unwrap();
+    source.append_fact("second", "equal source bytes").unwrap();
+    let checkpoint = source.checkpoint().unwrap();
+    let mut payloads = Vec::new();
+    let referenced = checkpoint
+        .clone()
+        .try_map_payloads(|id, bytes| {
+            let index = payloads.len();
+            payloads.push((id, bytes));
+            Ok::<_, ()>(index)
+        })
+        .unwrap();
+    assert_ne!(payloads[0].0, payloads[1].0);
+    assert_eq!(payloads[0].1, payloads[1].1);
+    let encoded = serde_json::to_vec(&referenced).unwrap();
+    assert!(!String::from_utf8_lossy(&encoded).contains("equal source bytes"));
+    let referenced: ReplayEpochCheckpoint<usize> = serde_json::from_slice(&encoded).unwrap();
+    let resolved = referenced
+        .try_map_payloads(|id, index| {
+            assert_eq!(id, payloads[index].0);
+            Ok::<_, ()>(payloads[index].1.clone())
+        })
+        .unwrap();
+    assert_eq!(resolved, checkpoint);
+    let restored = ReplayEpochContext::from_checkpoint(
+        ReplayConversationId::new("conversation-a").unwrap(),
+        resolved,
+        owner().context().clone(),
+    )
+    .unwrap();
+    assert_eq!(restored.context(), source.context());
+    assert_eq!(restored.input_estimates(), source.input_estimates());
+    let unchanged = source.clone();
+    let mut calls = 0;
+    let failed = checkpoint.try_map_payloads(|_, bytes| {
+        calls += 1;
+        if calls == 2 {
+            Err("storage failed")
+        } else {
+            Ok(bytes)
+        }
+    });
+    assert_eq!(failed.unwrap_err(), "storage failed");
+    assert_eq!(calls, 2);
+    assert_eq!(source, unchanged);
+}

@@ -10874,6 +10874,38 @@ group as settled. Stale estimates MUST be checked against actual bytes. This
 pure checkpoint contract does not itself install a product manifest, migrate
 transcript formats, or claim restart durability for unsaved conversations.
 
+The single-head storage boundary uses version four of the same authoritative
+compaction sidecar, with an exact parent/publication identity and integrity-bound
+checkpoint references. The storage CAS revision MUST remain distinct from the
+canonical compaction epoch revision so later raw edits need not invent epochs.
+Encoded metadata MUST fit 16 MiB; each logical source or current replay payload
+set MUST fit 64 MiB. Oversized proposals MUST refuse before authority replacement.
+Immutable content-addressed payloads MUST be synced before manifest replacement;
+reusing equal payload bytes MUST NOT collapse occurrence
+identity. Publication MUST share the existing conversation mutation lease, sync
+the replacement and directory before acknowledgment, and retain its exact
+proposal across ambiguous completion. Retry MUST settle only that exact proposal
+or report a conflicting newer parent, without regenerating summaries or replaying
+effects. Required source corruption MUST be explicit. Publication MUST qualify
+the actual committed parent's head and complete raw prefix under
+the held mutation lease before writing new backing. A matching revision or head
+UUID alone MUST NOT admit substituted bytes, dropped/reordered occurrences or
+changed birth revisions. Genuine arrivals MUST respect prior reservations and
+current birth revision. New instruction retirement, peer handoff or pending-group
+closure MUST require controller-minted in-memory witnesses tied to actual source;
+deserialized descriptive metadata MUST NOT mint those transitions. Such witnesses
+MUST remain outside checkpoints/receipts and be pruned with covered membership.
+Independent source backing
+MUST NOT imply ordinary transcript append acknowledgment. Storage qualification
+MUST preserve covered live source and settled effect evidence in an immutable
+per-publication source receipt before latest-authority replacement, even when
+ordinary archival appends are pending. Such receipts are audit evidence, not a
+second selectable history; ordinary replay MUST resolve only current members.
+Receipt capture is per compaction, not a continuously written second journal.
+Product loader/migration adoption follows storage qualification: legacy authority
+requires an explicit transition, and old readers/writers MUST refuse version
+four rather than silently treating it as raw-history absence.
+
 Canonical blocks MUST own an immutable occurrence ID separately from their
 ordering sequence and execution group. Equal bytes committed twice MUST receive
 distinct IDs; importing a typed occurrence or revising its content MUST preserve

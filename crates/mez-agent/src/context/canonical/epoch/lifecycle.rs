@@ -113,6 +113,10 @@ impl ReplayEpochContext {
             }
             event.retention = ContextRetention::Summarizable;
             candidate
+                .source_lifecycle
+                .completed_instructions
+                .insert(event.record.occurrence_id());
+            candidate
                 .context
                 .historical_instruction_events
                 .insert(*sequence);
@@ -168,6 +172,16 @@ impl ReplayEpochContext {
         if !candidate.context.release_pending_peer_message(sequence) {
             return Ok(false);
         }
+        let occurrence = candidate
+            .members
+            .iter()
+            .find(|member| member.origin == sequence)
+            .ok_or_else(|| AgentContextError::new("peer handoff source disappeared"))?
+            .occurrence_id;
+        candidate
+            .source_lifecycle
+            .handed_off_peers
+            .insert(occurrence);
         candidate.refresh_accounting_sequences([sequence])?;
         candidate.validate_membership()?;
         *self = candidate;

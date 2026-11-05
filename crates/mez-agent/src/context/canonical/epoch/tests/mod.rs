@@ -4,6 +4,7 @@
 use super::*;
 
 mod checkpoint;
+mod source;
 
 /// Creates an empty canonical owner with one exact stable policy slot.
 fn owner() -> ReplayEpochContext {

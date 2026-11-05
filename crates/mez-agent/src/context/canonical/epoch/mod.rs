@@ -35,6 +35,8 @@ pub use checkpoint::ReplayEpochCheckpoint;
 mod native_groups;
 mod planning;
 mod publication;
+mod source;
+use source::ReplaySourceLifecycle;
 #[cfg(test)]
 mod tests;
 
@@ -52,6 +54,8 @@ pub struct ReplayEpochContext {
     accounting: ReplayAccounting,
     instruction_owners: BTreeMap<u64, BTreeSet<ContextEventSequence>>,
     next_instruction_owner: u64,
+    /// Controller-minted source transitions; never restored from checkpoints.
+    source_lifecycle: ReplaySourceLifecycle,
 }
 
 impl ReplayEpochContext {
@@ -123,6 +127,7 @@ impl ReplayEpochContext {
             accounting: ReplayAccounting::default(),
             instruction_owners: BTreeMap::new(),
             next_instruction_owner: 1,
+            source_lifecycle: ReplaySourceLifecycle::default(),
         };
         owner.initialize_accounting()?;
         owner.validate_membership()?;
@@ -183,6 +188,7 @@ impl ReplayEpochContext {
             })?;
         for group in &groups {
             candidate.context.retain_pending_execution_group(group)?;
+            candidate.source_lifecycle.closed_groups.remove(group);
         }
         candidate.record_arrivals(&sequences)?;
         for group in &groups {
@@ -235,6 +241,10 @@ impl ReplayEpochContext {
         candidate
             .context
             .release_pending_execution_group(&owner.group);
+        candidate
+            .source_lifecycle
+            .closed_groups
+            .insert(owner.group.clone(), owner.frontier);
         candidate.refresh_accounting_group(&owner.group)?;
         candidate.validate_membership()?;
         *self = candidate;

@@ -21,14 +21,14 @@ use serde::{Deserialize, Serialize};
 /// owns payload integrity, publication CAS and durability, not this pure DTO.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct ReplayEpochCheckpoint {
+pub struct ReplayEpochCheckpoint<P = String> {
     version: u32,
     conversation: String,
     revision: u64,
     policy: ReplayHeadPolicy,
     head: Option<ContextBlockOccurrenceId>,
     members: Vec<Member>,
-    events: Vec<Event>,
+    events: Vec<Event<P>>,
     next_event_sequence: u64,
     stable_records: Vec<StableContextBlockRecord>,
     pending_execution_groups: Vec<String>,
@@ -48,15 +48,81 @@ struct Member {
 /// Canonical event bytes and metadata, never a reconstructed label heuristic.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Event {
+struct Event<P> {
     record: ContextBlockRecord,
-    block: ContextBlock,
+    block: Block<P>,
     semantic_kind: ContextSemanticKind,
     retention: ContextRetention,
     sequence: u64,
     execution_group_id: Option<String>,
     provider_owner: Option<ProviderOwner>,
     recoverable_for_compaction: bool,
+}
+
+/// Separates immutable semantic framing from inline or referenced payload bytes.
+/// String payloads retain the original version-one JSON block representation.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Block<P> {
+    source: ContextSourceKind,
+    placement: ContextPlacement,
+    label: String,
+    content: P,
+}
+
+impl<P> ReplayEpochCheckpoint<P> {
+    /// Returns the descriptive append reservation carried by this snapshot.
+    /// It grants no admission rights; checked restoration validates it against
+    /// actual canonical chronology before the owner may allocate new events.
+    pub fn next_event_sequence(&self) -> u64 {
+        self.next_event_sequence
+    }
+
+    /// Transforms each event payload once, in canonical order, without changing
+    /// membership, semantic framing, source IDs or lifecycle metadata. Storage
+    /// can replace bytes with checked immutable references and resolve them
+    /// before [`ReplayEpochContext::from_checkpoint`]. The callback's error
+    /// aborts transformation; this operation itself performs no I/O or adoption.
+    pub fn try_map_payloads<Q, E>(
+        self,
+        mut map: impl FnMut(ContextBlockOccurrenceId, P) -> Result<Q, E>,
+    ) -> Result<ReplayEpochCheckpoint<Q>, E> {
+        let events = self
+            .events
+            .into_iter()
+            .map(|event| {
+                Ok(Event {
+                    block: Block {
+                        source: event.block.source,
+                        placement: event.block.placement,
+                        label: event.block.label,
+                        content: map(event.record.occurrence_id(), event.block.content)?,
+                    },
+                    record: event.record,
+                    semantic_kind: event.semantic_kind,
+                    retention: event.retention,
+                    sequence: event.sequence,
+                    execution_group_id: event.execution_group_id,
+                    provider_owner: event.provider_owner,
+                    recoverable_for_compaction: event.recoverable_for_compaction,
+                })
+            })
+            .collect::<Result<_, E>>()?;
+        Ok(ReplayEpochCheckpoint {
+            events,
+            version: self.version,
+            conversation: self.conversation,
+            revision: self.revision,
+            policy: self.policy,
+            head: self.head,
+            members: self.members,
+            next_event_sequence: self.next_event_sequence,
+            stable_records: self.stable_records,
+            pending_execution_groups: self.pending_execution_groups,
+            pending_peer_messages: self.pending_peer_messages,
+            historical_instruction_events: self.historical_instruction_events,
+        })
+    }
 }
 
 /// Exact API/provider identity. The legacy bit preserves an already-decoded
@@ -198,6 +264,7 @@ impl ReplayEpochContext {
             accounting: ReplayAccounting::default(),
             instruction_owners: BTreeMap::new(),
             next_instruction_owner: 1,
+            source_lifecycle: ReplaySourceLifecycle::default(),
         };
         if owner.revision.get() == 0 && owner.head.is_some()
             || owner.revision.get() > 0
@@ -245,12 +312,17 @@ impl ReplayEpochContext {
     }
 }
 
-impl Event {
+impl Event<String> {
     /// Copies only immutable source metadata, excluding live process ownership.
     fn capture(event: &ConversationEvent) -> Self {
         Self {
             record: event.record,
-            block: event.block.clone(),
+            block: Block {
+                source: event.block.source,
+                placement: event.block.placement,
+                label: event.block.label.clone(),
+                content: event.block.content.clone(),
+            },
             semantic_kind: event.semantic_kind,
             retention: event.retention,
             sequence: event.sequence.get(),
@@ -273,9 +345,15 @@ impl Event {
         if self.block.placement != ContextPlacement::ConversationAppend {
             return Err(invalid("event cannot contain a stable instruction"));
         }
+        let block = ContextBlock {
+            source: self.block.source,
+            placement: self.block.placement,
+            label: self.block.label,
+            content: self.block.content,
+        };
         Ok(ConversationEvent {
-            record: self.record.restored(&self.block)?,
-            block: self.block,
+            record: self.record.restored(&block)?,
+            block,
             semantic_kind: self.semantic_kind,
             retention: self.retention,
             sequence: ContextEventSequence::new(self.sequence)?,
@@ -334,7 +412,7 @@ fn invalid(reason: &str) -> AgentContextError {
     AgentContextError::new(format!("invalid replay epoch checkpoint: {reason}"))
 }
 
-impl std::fmt::Debug for ReplayEpochCheckpoint {
+impl<P> std::fmt::Debug for ReplayEpochCheckpoint<P> {
     /// Reports structural counts without source text or private provider IDs.
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter

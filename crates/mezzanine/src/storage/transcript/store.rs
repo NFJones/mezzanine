@@ -5569,7 +5569,7 @@ impl AgentTranscriptStore {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    fn ensure_session_dir(&self, conversation_id: &str) -> Result<PathBuf> {
+    pub(super) fn ensure_session_dir(&self, conversation_id: &str) -> Result<PathBuf> {
         self.ensure_store_dir()?;
         let session_dir = self.session_dir_for(conversation_id)?;
         std_fs::create_dir_all(&session_dir)?;
@@ -5720,6 +5720,17 @@ impl AgentTranscriptStore {
         let mut metadata = self.read_conversation_metadata_locked(conversation_id)?;
         if !metadata.row_origins_required {
             metadata.row_origins_required = true;
+            self.write_conversation_metadata_locked(conversation_id, &metadata)?;
+        }
+        Ok(())
+    }
+
+    /// Requires the existing epoch sidecar after its payload and directory are
+    /// durable. This helper shares held ownership; it never reacquires flock.
+    pub(super) fn require_compaction_epoch_locked(&self, conversation_id: &str) -> Result<()> {
+        let mut metadata = self.read_conversation_metadata_locked(conversation_id)?;
+        if !metadata.compaction_epoch_required {
+            metadata.compaction_epoch_required = true;
             self.write_conversation_metadata_locked(conversation_id, &metadata)?;
         }
         Ok(())

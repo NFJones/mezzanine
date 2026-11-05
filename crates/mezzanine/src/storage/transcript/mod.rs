@@ -74,6 +74,11 @@ pub(crate) use append_batch::TranscriptAppendBatch;
 pub(crate) use receipts::CustodyAppendReceipt;
 #[cfg(test)]
 pub(crate) use receipts::custody::CustodyReceiptPublicationFault;
+#[allow(
+    dead_code,
+    reason = "single-head publication is qualified before the active aec1b788 loader and actor cutover phase"
+)]
+mod replay_epoch;
 /// Leased, validated sequence frontiers and raw replay counts.
 mod replay_position;
 mod stable_records;
