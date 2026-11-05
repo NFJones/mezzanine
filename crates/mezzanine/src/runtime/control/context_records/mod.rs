@@ -14,7 +14,8 @@
 //! freshly assembled stable prefix and task suffix. Only explicit user admission
 //! supersedes prior task instructions; peer admission preserves their protection.
 //! Newly supplied execution metadata is confined to the new suffix. This adapter
-//! returns model context, not a durable publication owner or transition receipt.
+//! returns model context carrying its actual in-memory replay continuation;
+//! this is neither a durable publication nor a transition receipt from storage.
 
 use crate::error::{MezError, Result};
 use mez_agent::transcript::{TranscriptContextEvent, TranscriptContextRecord, TranscriptEntry};
@@ -513,7 +514,7 @@ impl RuntimeContextRecords {
             let mut appended =
                 AgentContext::import_durable_blocks_with_records(suffix, &suffix_records, &[])?;
             appended.restore_imported_execution_events(execution)?;
-            let mut context = owner.context().clone();
+            let mut context = owner.into_owned_context();
             context.append_imported_history(&appended)?;
             return Ok(context);
         }

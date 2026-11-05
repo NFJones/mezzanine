@@ -4,6 +4,7 @@
 use super::*;
 
 mod checkpoint;
+mod continuation;
 mod source;
 
 /// Creates an empty canonical owner with one exact stable policy slot.

@@ -30,6 +30,8 @@ pub use accounting::{
     ReplayCompactionInputEstimates, ReplayEpochInputEstimates, ReplayProviderProjection,
 };
 mod checkpoint;
+mod continuation;
+pub(super) use continuation::ReplayEpochContinuation;
 mod lifecycle;
 pub use checkpoint::ReplayEpochCheckpoint;
 mod native_groups;
@@ -77,6 +79,11 @@ impl ReplayEpochContext {
         mut context: AgentContext,
         policy: ReplayHeadPolicy,
     ) -> AgentContextResult<Self> {
+        if context.has_replay_owner() {
+            return Err(AgentContextError::new(
+                "initial replay source already has a live owner",
+            ));
+        }
         context.validate_durable().map_err(|_| {
             AgentContextError::new("initial replay source failed canonical validation")
         })?;

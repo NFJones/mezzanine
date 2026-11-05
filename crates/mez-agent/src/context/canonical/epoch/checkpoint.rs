@@ -214,6 +214,9 @@ impl ReplayEpochContext {
         checkpoint: ReplayEpochCheckpoint,
         mut current_prefix: AgentContext,
     ) -> AgentContextResult<Self> {
+        if current_prefix.has_replay_owner() {
+            return Err(invalid("checkpoint prefix already has a live owner"));
+        }
         if checkpoint.version != 1 || checkpoint.conversation != conversation.as_str() {
             return Err(invalid("unsupported format or foreign conversation"));
         }

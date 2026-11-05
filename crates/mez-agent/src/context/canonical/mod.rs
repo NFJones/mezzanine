@@ -1286,6 +1286,8 @@ pub struct AgentContext {
     /// remain immutable while their retention becomes historical. This typed
     /// lifecycle is not reconstructed from labels or bare block imports.
     historical_instruction_events: BTreeSet<ContextEventSequence>,
+    /// Actual live replay incarnation and source seals, never serialized/projected.
+    replay_continuation: Option<Box<epoch::ReplayEpochContinuation>>,
 }
 
 impl AgentContext {
@@ -1305,6 +1307,7 @@ impl AgentContext {
             pending_execution_groups: BTreeSet::new(),
             pending_peer_messages: BTreeSet::new(),
             historical_instruction_events: BTreeSet::new(),
+            replay_continuation: None,
         }
     }
 
@@ -1562,6 +1565,9 @@ impl AgentContext {
                 })
             })
             .collect::<AgentContextResult<Vec<_>>>()?;
+        if let Some(continuation) = &mut candidate.replay_continuation {
+            continuation.admit_preludes(&events);
+        }
         candidate
             .chronology
             .splice(active_user_index..active_user_index, events);

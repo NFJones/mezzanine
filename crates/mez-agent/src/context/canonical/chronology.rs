@@ -245,6 +245,7 @@ impl AgentContext {
                 &event.block,
                 &event.metadata(),
             )?;
+            candidate.protect_replay_arrival(&event);
             candidate.chronology.push(event);
             sequences.push(sequence);
         }
@@ -269,6 +270,7 @@ impl AgentContext {
         for event in &history.chronology {
             let mut event = event.clone();
             event.sequence = candidate.allocate_event_sequence()?;
+            candidate.protect_replay_arrival(&event);
             candidate.chronology.push(event);
         }
         candidate.rebuild_projections();

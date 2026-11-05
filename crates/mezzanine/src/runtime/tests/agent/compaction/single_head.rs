@@ -114,3 +114,105 @@ fn runtime_peer_context_preserves_single_head_user_task() {
     assert!(prepared.context.execution_group_is_pending(&fixture.group));
     service.terminate_all_pane_processes().unwrap();
 }
+
+/// A real admitted context must retain the supersession witness needed by the
+/// existing durable publisher. Cold reconstruction of identical descriptive
+/// state cannot substitute for that live transition against the pending parent.
+/// Publication covers only eligible old intent; native source and current task
+/// remain exact and no ordinary append or provider/action is manufactured.
+#[test]
+fn runtime_admitted_epoch_keeps_live_witness_for_durable_publication() {
+    use crate::storage::transcript::replay_epoch::ReplayEpochPublication;
+    use mez_agent::{
+        AgentContext, ReplayCompactionPreparation, ReplayConversationId, ReplayEpochContext,
+        ReplayHeadPublication, ReplayTailPolicy,
+    };
+    let fixture = Fixture::new();
+    let mut service = test_runtime_service();
+    service.set_agent_transcript_store(fixture.store.clone());
+    service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .bind_conversation("%1", CONVERSATION, 0)
+        .unwrap();
+    let mut context = service
+        .agent_context_for_pane_prompt("%1", "CURRENT_NEW_TASK", 0)
+        .unwrap();
+    // Seal the current prompt, then exercise the actual sparse prelude insertion
+    // across a live-owner round trip, rather than only before the first export.
+    context.update_replay_owner(|_| Ok(())).unwrap();
+    context
+        .insert_task_preludes_before_active_user(vec![ContextBlock::task_prelude(
+            ContextSourceKind::SkillInstruction,
+            "late skill",
+            "current task instructions",
+        )])
+        .unwrap();
+    let live = ReplayEpochContext::from_owned_context(
+        ReplayConversationId::new(CONVERSATION).unwrap(),
+        context,
+    )
+    .unwrap();
+    live.validate_source_extension(&fixture.source).unwrap();
+    let cold = ReplayEpochContext::from_checkpoint(
+        ReplayConversationId::new(CONVERSATION).unwrap(),
+        live.checkpoint().unwrap(),
+        AgentContext::empty(),
+    )
+    .unwrap();
+    let prepare = |source: &ReplayEpochContext| {
+        let plan = match source
+            .prepare_compaction(ReplayTailPolicy::new(1000, 0).unwrap())
+            .unwrap()
+        {
+            ReplayCompactionPreparation::Ready(plan) => plan,
+            other => panic!("expected historical intent, got {other:?}"),
+        };
+        ReplayEpochPublication::prepare(
+            CONVERSATION,
+            Some(fixture.identity.clone()),
+            source,
+            plan,
+            ReplayHeadPublication::Summary("model head 4".into()),
+        )
+        .unwrap()
+    };
+    assert!(fixture.store.publish_replay_epoch(&prepare(&cold)).is_err());
+    fixture.store.publish_replay_epoch(&prepare(&live)).unwrap();
+    let (_, restored) = fixture
+        .store
+        .load_replay_epoch(CONVERSATION, AgentContext::empty())
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        restored.context().chronology()[0].block().content,
+        "model head 4"
+    );
+    assert_eq!(
+        restored.context().chronology()[1],
+        fixture.source.context().chronology()[2]
+    );
+    assert!(
+        restored
+            .context()
+            .execution_group_is_pending(&fixture.group)
+    );
+    assert_eq!(
+        restored
+            .context()
+            .chronology()
+            .last()
+            .unwrap()
+            .block()
+            .content,
+        "CURRENT_NEW_TASK"
+    );
+    assert!(fixture.store.inspect(CONVERSATION).unwrap().is_empty());
+    service.terminate_all_pane_processes().unwrap();
+}

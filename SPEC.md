@@ -10874,6 +10874,26 @@ group as settled. Stale estimates MUST be checked against actual bytes. This
 pure checkpoint contract does not itself install a product manifest, migrate
 transcript formats, or claim restart durability for unsaved conversations.
 
+Moving a live replay owner's body into runtime `AgentContext` storage MUST retain
+its actual incarnation, task handles and private lifecycle witnesses as
+nonserialized metadata. This continuation MUST own no second history body and
+MUST NOT enter model projection. Reacquisition MUST qualify original event bytes,
+framing, records, order and lifecycle protection before admitting new current-born
+arrivals. Only the actual pre-dispatch task-prelude inserter may qualify insertion
+in an existing reserved gap; an arbitrary reconstructed insertion MUST refuse.
+Current stable instructions and request metadata MAY change independently.
+Runtime peer release MUST retain its actual local handoff witness. Runtime group
+release MUST require the original captured execution handle and check actual
+native closure before retaining its frontier witness. An unfenced generic release
+MUST NOT sample a newer frontier; it MUST preserve owned replay protection until
+the typed runtime handoff is connected. New group arrivals MUST invalidate prior
+closure. A failed owner update MUST leave
+the original body and continuation unchanged. Cold checkpoints MUST continue to
+allocate a fresh incarnation and MUST NOT reconstruct these live capabilities.
+Actual admission or renewed retention MUST update the private pending protection
+fence immediately and invalidate prior release witnesses. A stale body rebase
+MUST NOT erase that protection even when event bytes and ordering are unchanged.
+
 The single-head storage boundary uses version four of the same authoritative
 compaction sidecar, with an exact parent/publication identity and integrity-bound
 checkpoint references. The storage CAS revision MUST remain distinct from the
@@ -10891,7 +10911,10 @@ the actual committed parent's head and complete raw prefix under
 the held mutation lease before writing new backing. A matching revision or head
 UUID alone MUST NOT admit substituted bytes, dropped/reordered occurrences or
 changed birth revisions. Genuine arrivals MUST respect prior reservations and
-current birth revision. New instruction retirement, peer handoff or pending-group
+current birth revision, except privately witnessed current task preludes inserted
+after the complete unchanged parent prefix. Each sub-reservation arrival MUST
+carry that actual insertion witness; one witnessed prelude MUST NOT admit other
+unqualified arrivals. New instruction retirement, peer handoff or pending-group
 closure MUST require controller-minted in-memory witnesses tied to actual source;
 deserialized descriptive metadata MUST NOT mint those transitions. Such witnesses
 MUST remain outside checkpoints/receipts and be pruned with covered membership.

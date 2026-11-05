@@ -16,6 +16,8 @@ pub(super) struct ReplaySourceLifecycle {
     pub(super) completed_instructions: BTreeSet<ContextBlockOccurrenceId>,
     pub(super) handed_off_peers: BTreeSet<ContextBlockOccurrenceId>,
     pub(super) closed_groups: BTreeMap<ContextExecutionGroupId, ContextEventSequence>,
+    /// Actual prompt-boundary insertions, qualified before owner reacquisition.
+    pub(super) inserted_preludes: BTreeSet<ContextBlockOccurrenceId>,
 }
 
 impl ReplayEpochContext {
@@ -23,7 +25,8 @@ impl ReplayEpochContext {
     /// Stable instructions, request metadata and provider views remain live
     /// caller inputs. The head, existing raw bytes/framing/records/order/births,
     /// conversation and epoch must match. New events must start at the parent's
-    /// reserved frontier and be born in this epoch; reservations never rewind.
+    /// reserved frontier, except actual controller-witnessed late task preludes,
+    /// and be born in this epoch; reservations never rewind.
     ///
     /// Existing exact instructions may become historical only through this
     /// owner's typed task completion. Peer protection may end only through its
@@ -54,8 +57,14 @@ impl ReplayEpochContext {
             || self.members[previous.members.len()..]
                 .iter()
                 .any(|member| member.born_in != self.revision)
-            || events.get(old_events.len()).is_some_and(|arrival| {
+            || events.iter().skip(old_events.len()).any(|arrival| {
                 arrival.sequence().get() < previous.context.next_event_sequence
+                    && !(arrival.semantic_kind() == super::super::ContextSemanticKind::TaskPrelude
+                        && arrival.retention() == ContextRetention::Exact
+                        && self
+                            .source_lifecycle
+                            .inserted_preludes
+                            .contains(&arrival.record().occurrence_id()))
             })
         {
             return Err(invalid());
@@ -117,6 +126,9 @@ impl ReplayEpochContext {
             .retain(|id| members.contains(id));
         self.source_lifecycle
             .handed_off_peers
+            .retain(|id| members.contains(id));
+        self.source_lifecycle
+            .inserted_preludes
             .retain(|id| members.contains(id));
         let frontiers = group_frontiers(self.context.chronology());
         let pending = &self.context.pending_execution_groups;

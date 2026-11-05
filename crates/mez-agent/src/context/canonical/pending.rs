@@ -20,12 +20,15 @@ impl AgentContext {
         &mut self,
         sequence: ContextEventSequence,
     ) -> AgentContextResult<()> {
-        if !self.chronology.iter().any(|event| {
+        let Some(event) = self.chronology.iter().find(|event| {
             event.sequence() == sequence && event.block().source == ContextSourceKind::PeerMessage
-        }) {
+        }) else {
             return Err(AgentContextError::new(
                 "pending peer source is absent from context",
             ));
+        };
+        if let Some(continuation) = &mut self.replay_continuation {
+            continuation.protect_peer(sequence, event.record().occurrence_id());
         }
         self.pending_peer_messages.insert(sequence);
         Ok(())
@@ -33,7 +36,14 @@ impl AgentContext {
 
     /// Releases one runtime-owned peer source after handoff or conversation
     /// retirement. This changes no event, cursor, result, or scheduler state.
+    /// A retained replay owner records this actual controller transition. An
+    /// invalid continuation refuses locally and leaves protection unchanged.
     pub fn release_pending_peer_message(&mut self, sequence: ContextEventSequence) -> bool {
+        if self.has_replay_owner() {
+            return self
+                .update_replay_owner(|owner| owner.release_peer(sequence))
+                .unwrap_or(false);
+        }
         self.pending_peer_messages.remove(&sequence)
     }
 
@@ -59,13 +69,23 @@ impl AgentContext {
             ));
         }
         self.pending_execution_groups.insert(group.clone());
+        if let Some(continuation) = &mut self.replay_continuation {
+            continuation.protect_group(group);
+        }
         Ok(())
     }
 
     /// Releases protection after the runtime owner retires the group's final
     /// obligation. Returns whether protection existed; it does not acknowledge
     /// any context append, child result, native result, hook or scheduler wake.
+    /// Retained replay ownership requires the original typed execution handle
+    /// through `update_replay_owner` and `finish_execution_group`. This unfenced
+    /// API returns false for owned replay source: a stale caller must not sample
+    /// a newer frontier and retire work admitted after its original obligation.
     pub fn release_pending_execution_group(&mut self, group: &ContextExecutionGroupId) -> bool {
+        if self.has_replay_owner() {
+            return false;
+        }
         self.pending_execution_groups.remove(group)
     }
 
