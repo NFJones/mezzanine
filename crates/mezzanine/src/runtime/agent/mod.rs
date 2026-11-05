@@ -5,8 +5,8 @@
 //! interact through typed APIs instead of duplicating subsystem details.
 
 use super::agent_state::{
-    RuntimeAgentLoopCompletion, RuntimeAgentLoopSettlement, RuntimeAgentProviderClaim,
-    RuntimeNativeShellDispatch,
+    RuntimeAgentCompactionTarget, RuntimeAgentLoopCompletion, RuntimeAgentLoopSettlement,
+    RuntimeAgentProviderClaim, RuntimeNativeShellDispatch,
 };
 use super::commands::RuntimeModelCatalog;
 use super::config::SubagentNameMode;
@@ -181,6 +181,8 @@ struct RuntimeInterruptedSubagentRedirection {
 /// Canonical context retained while an interrupted agent awaits correction.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct RuntimeInterruptedAgentContinuation {
+    /// Original history/store owner accompanying the retained chronology.
+    history_source: Option<std::sync::Arc<crate::runtime::control::RuntimeAgentHistorySource>>,
     /// Conversation that must still own the next pane-local prompt.
     conversation_id: String,
     /// Exact durable context assembled when the interrupted turn stopped.
@@ -883,6 +885,9 @@ pub(crate) struct RuntimeAgentComponent {
     agent_turn_ledger: AgentTurnLedger,
     /// Assembled provider context keyed by turn id.
     agent_turn_contexts: BTreeMap<String, AgentContext>,
+    /// Original replay read/store ownership for each actual admitted context.
+    agent_turn_history_sources:
+        BTreeMap<String, std::sync::Arc<crate::runtime::control::RuntimeAgentHistorySource>>,
     /// Accepted local summary coverage, captured by terminal bookkeeping before cleanup.
     pub(in crate::runtime) agent_turn_compaction_handoffs:
         BTreeMap<String, crate::runtime::agent_state::RuntimeTurnCompactionHandoff>,
@@ -2293,6 +2298,11 @@ impl RuntimeSessionService {
         self.agent.interrupted_agent_continuations.insert(
             turn.agent_id.clone(),
             RuntimeInterruptedAgentContinuation {
+                history_source: self
+                    .agent
+                    .agent_turn_history_sources
+                    .get(&turn.turn_id)
+                    .cloned(),
                 conversation_id: turn.conversation_id.clone(),
                 context,
                 imported_history_sequence_high_water,
@@ -3221,6 +3231,22 @@ impl RuntimeSessionService {
 
     /// Queues one compaction task and marks its pane active.
     pub(crate) fn queue_agent_compaction_task(&mut self, mut task: RuntimeAgentCompactionTask) {
+        if task.source_owner.is_none() {
+            let turn_id = match &task.target {
+                RuntimeAgentCompactionTarget::ActiveTurn { turn_id, .. } => Some(turn_id.as_str()),
+                RuntimeAgentCompactionTarget::Conversation => task.resume_turn_id.as_deref(),
+            };
+            let history = turn_id
+                .and_then(|turn_id| self.agent.agent_turn_history_sources.get(turn_id))
+                .cloned();
+            let store = match &history {
+                Some(source) => source.store(),
+                None => self.persistence.cloned_transcript_store(),
+            };
+            task.source_owner = Some(std::sync::Arc::new(
+                crate::runtime::agent_state::RuntimeCompactionSourceOwner { store, history },
+            ));
+        }
         self.agent.next_agent_compaction_task_generation = self
             .agent
             .next_agent_compaction_task_generation

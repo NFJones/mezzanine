@@ -33,7 +33,7 @@ fn staged_compaction_legacy_fallback_case(prior_epoch: bool) {
     .unwrap()
     .to_transcript_content();
     let (mut service, store, turn_id) =
-        queue_observed_input_compaction_with_second_group(Some(second));
+        queue_observed_input_compaction_with_groups_and_epoch(None, Some(second), prior_epoch);
     let conversation_id = service
         .agent_shell_store()
         .get("%1")
@@ -47,16 +47,6 @@ fn staged_compaction_legacy_fallback_case(prior_epoch: bool) {
     );
     service.set_agent_turn_model_profile(turn_id.clone(), profile);
     let task = service.take_pending_agent_compaction_task("%1").unwrap();
-    if prior_epoch {
-        store
-            .save_compaction_ranges(
-                &conversation_id,
-                0,
-                "prior authoritative summary",
-                Vec::new(),
-            )
-            .unwrap();
-    }
     let original_epoch = store.compaction_epoch(&conversation_id).unwrap();
     let original_rows = store.inspect(&conversation_id).unwrap();
     service.claim_agent_compaction_task_state("%1", task);
@@ -1603,6 +1593,20 @@ fn queue_observed_input_compaction_with_groups(
     AgentTranscriptStore,
     String,
 ) {
+    queue_observed_input_compaction_with_groups_and_epoch(first_group, second_group, false)
+}
+
+/// Captures a prior epoch before the real prompt/history import, so the frozen
+/// operation starts with that authority rather than observing a mid-flight edit.
+fn queue_observed_input_compaction_with_groups_and_epoch(
+    first_group: Option<String>,
+    second_group: Option<String>,
+    prior_epoch: bool,
+) -> (
+    crate::runtime::RuntimeSessionService,
+    AgentTranscriptStore,
+    String,
+) {
     let mut service = test_runtime_service();
     service
         .replace_config_layers(vec![ConfigLayer {
@@ -1703,6 +1707,12 @@ max_input_tokens = 20000
         .agent_shell_store_mut()
         .record_transcript_entries("%1", historical_count)
         .unwrap();
+
+    if prior_epoch {
+        transcript_store
+            .save_compaction_epoch(&session.session_id, 0, "prior authoritative summary")
+            .unwrap();
+    }
 
     let start = service.dispatch_runtime_control_body(
         r#"{"jsonrpc":"2.0","id":"observed-input-exact-history","method":"agent/shell/command","params":{"idempotency_key":"observed-input-exact-history","input":"CURRENT_USER_PROMPT Continue with the collected evidence."}}"#,

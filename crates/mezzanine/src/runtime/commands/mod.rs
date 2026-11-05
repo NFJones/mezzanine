@@ -1977,6 +1977,7 @@ impl RuntimeSessionService {
         }
         let (history, receipts) = history;
         let crate::runtime::control::RuntimeAgentPromptContext {
+            history_source,
             context,
             prompt_sequence,
             delivered_message_sequence,
@@ -2106,6 +2107,12 @@ impl RuntimeSessionService {
             turn_id.clone(),
             active_imported_history_sequence_high_water,
         );
+        let history_source = if continued_interrupted_turn {
+            self.interrupted_agent_history_source(&agent_id, &conversation_id)
+        } else {
+            history_source
+        };
+        self.set_agent_turn_history_source(turn_id.clone(), history_source);
         if let Some(content) = current_environment_snapshot {
             self.set_agent_turn_current_environment_snapshot(turn_id.clone(), content);
         }

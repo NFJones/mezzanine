@@ -25,6 +25,8 @@ const LEGACY_MAAP_ASSISTANT_CONTEXT: &str =
 /// Exact transcript projection plus non-model-visible execution ownership.
 #[derive(Debug, Clone)]
 pub(crate) struct RuntimeAgentTranscriptContext {
+    /// Original leased history source, independent of later installed stores.
+    pub(in crate::runtime) source: Option<std::sync::Arc<super::RuntimeAgentHistorySource>>,
     /// Provider-visible blocks in durable transcript order.
     pub(in crate::runtime) blocks: Vec<ContextBlock>,
     /// Typed causal metadata for exact execution blocks.
@@ -61,18 +63,35 @@ pub(crate) struct RuntimeAgentHistoryEpochInputs {
 /// captured conversation and feed the rows through the canonical projection.
 /// Callers retain ownership of freshness checks and all prompt-admission side
 /// effects when this result returns to the actor.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RuntimeAgentHistoryEpochWork {
+    /// Deferred exact-target pending validation failure; never an empty source.
+    pub(super) pending_capture_error: Option<String>,
     /// Store containing the captured source conversation.
     pub(super) store: crate::storage::transcript::AgentTranscriptStore,
     /// Immutable replay range and pending persistence rows captured by the actor.
     pub(super) inputs: RuntimeAgentHistoryEpochInputs,
 }
 
+impl RuntimeAgentHistoryEpochWork {
+    /// Refuses a failed pending capture at the worker boundary without reading
+    /// or publishing anything. Infallible actor queue assembly retains this
+    /// diagnostic instead of silently treating malformed ownership as no rows.
+    fn validate_pending_capture(&self) -> Result<()> {
+        if let Some(error) = &self.pending_capture_error {
+            return Err(crate::MezError::invalid_state(format!(
+                "transcript pending source capture failed: {error}"
+            )));
+        }
+        Ok(())
+    }
+}
+
 /// Reads and projects one actor-captured transcript epoch without live service state.
 pub(crate) fn execute_runtime_agent_history_epoch_work(
     work: RuntimeAgentHistoryEpochWork,
 ) -> Result<RuntimeAgentTranscriptContext> {
+    work.validate_pending_capture()?;
     work.store
         .publish_terminal_compaction_handoffs(&work.inputs.conversation_id)?;
     let snapshot = work.store.conversation_replay_snapshot(
@@ -80,11 +99,18 @@ pub(crate) fn execute_runtime_agent_history_epoch_work(
         &work.inputs.pending_entries,
         |epoch| runtime_agent_history_read(&work.inputs, epoch),
     )?;
-    Ok(runtime_agent_history_epoch_from_snapshot(
-        work.inputs,
+    let mut history = runtime_agent_history_epoch_from_snapshot(
+        work.inputs.clone(),
+        snapshot.epoch.clone(),
+        snapshot.view.logical.clone(),
+    );
+    super::RuntimeAgentHistorySource::attach(
+        &mut history,
+        work,
         snapshot.epoch,
         snapshot.view.logical,
-    ))
+    );
+    Ok(history)
 }
 
 /// Projects a proposed epoch through the same replay path without publishing it.
@@ -92,6 +118,7 @@ pub(crate) fn execute_runtime_agent_history_epoch_with_projection(
     work: RuntimeAgentHistoryEpochWork,
     epoch: Option<crate::storage::transcript::AgentCompactionEpoch>,
 ) -> Result<RuntimeAgentTranscriptContext> {
+    work.validate_pending_capture()?;
     let entries = match runtime_agent_history_read(&work.inputs, epoch.as_ref()) {
         Some((read, required)) => {
             work.store
@@ -105,11 +132,13 @@ pub(crate) fn execute_runtime_agent_history_epoch_with_projection(
         }
         None => Vec::new(),
     };
-    Ok(runtime_agent_history_epoch_from_snapshot(
-        work.inputs,
-        epoch,
-        entries,
-    ))
+    let mut history = runtime_agent_history_epoch_from_snapshot(
+        work.inputs.clone(),
+        epoch.clone(),
+        entries.clone(),
+    );
+    super::RuntimeAgentHistorySource::attach(&mut history, work, epoch, entries);
+    Ok(history)
 }
 
 /// Selects the existing raw window using only immutable owner and epoch inputs.
@@ -263,6 +292,7 @@ impl RuntimeAgentPromptHistoryWork {
         high_water: u64,
     ) -> Result<RuntimeAgentTranscriptSnapshot> {
         let empty = |blocks| RuntimeAgentTranscriptContext {
+            source: Some(super::RuntimeAgentHistorySource::absent()),
             blocks,
             execution_events: Vec::new(),
             records: RuntimeContextRecords::default(),
@@ -278,6 +308,7 @@ impl RuntimeAgentPromptHistoryWork {
         let work = self.transcript_work.ok_or_else(|| {
             crate::MezError::invalid_state("manual source has no captured transcript history owner")
         })?;
+        work.validate_pending_capture()?;
         if &work.store != store || work.inputs.conversation_id != conversation_id {
             return Err(crate::MezError::conflict(
                 "manual source history owner changed",
@@ -316,12 +347,19 @@ impl RuntimeAgentPromptHistoryWork {
                     "manual source epoch advanced beyond its captured frontier",
                 ));
             }
-            epoch
-                .ranges
-                .retain(|range| range.through_sequence <= high_water);
+            epoch.retain_summary_ranges(|range| range.through_sequence <= high_water)?;
         }
-        let transcript =
-            runtime_agent_history_epoch_from_snapshot(work.inputs, epoch.clone(), rows.clone());
+        let mut transcript = runtime_agent_history_epoch_from_snapshot(
+            work.inputs.clone(),
+            epoch.clone(),
+            rows.clone(),
+        );
+        super::RuntimeAgentHistorySource::attach(
+            &mut transcript,
+            work,
+            epoch.clone(),
+            rows.clone(),
+        );
         let history = runtime_agent_prompt_history_from_transcript(self.memory_blocks, transcript);
         Ok(RuntimeAgentTranscriptSnapshot {
             rows,
@@ -338,6 +376,7 @@ pub(crate) fn execute_runtime_agent_prompt_history_work(
     let blocks = work.memory_blocks;
     let Some(transcript_work) = work.transcript_work else {
         return Ok(RuntimeAgentTranscriptContext {
+            source: Some(super::RuntimeAgentHistorySource::absent()),
             blocks,
             execution_events: Vec::new(),
             records: RuntimeContextRecords::default(),
@@ -367,6 +406,7 @@ fn runtime_agent_prompt_history_from_transcript(
     records.prepend_blocks(blocks.len());
     blocks.extend(transcript.blocks);
     RuntimeAgentTranscriptContext {
+        source: transcript.source,
         blocks,
         execution_events: transcript.execution_events,
         records,
@@ -393,6 +433,7 @@ pub(super) fn runtime_agent_history_epoch_from_entries(
     }
     if entries.is_empty() {
         return RuntimeAgentTranscriptContext {
+            source: None,
             blocks: Vec::new(),
             execution_events: Vec::new(),
             records: RuntimeContextRecords::default(),
@@ -712,6 +753,7 @@ fn runtime_agent_transcript_context_with_ranges_and_mcp_epoch(
         );
     }
     RuntimeAgentTranscriptContext {
+        source: None,
         blocks,
         execution_events,
         records,
@@ -1290,6 +1332,7 @@ mod tests {
             )
             .unwrap();
         let history = execute_runtime_agent_history_epoch_work(RuntimeAgentHistoryEpochWork {
+            pending_capture_error: None,
             store,
             inputs: RuntimeAgentHistoryEpochInputs {
                 pane_id: "%1".to_string(),
@@ -1382,6 +1425,7 @@ mod tests {
             )
             .unwrap();
         let history = execute_runtime_agent_history_epoch_work(RuntimeAgentHistoryEpochWork {
+            pending_capture_error: None,
             store,
             inputs: RuntimeAgentHistoryEpochInputs {
                 pane_id: "%1".to_string(),
@@ -1474,6 +1518,7 @@ mod tests {
             )
             .unwrap();
         let history = execute_runtime_agent_history_epoch_work(RuntimeAgentHistoryEpochWork {
+            pending_capture_error: None,
             store,
             inputs: RuntimeAgentHistoryEpochInputs {
                 pane_id: "%1".to_string(),
@@ -1522,6 +1567,7 @@ mod tests {
         pending.content = "pending history".to_string();
 
         let history = execute_runtime_agent_history_epoch_work(RuntimeAgentHistoryEpochWork {
+            pending_capture_error: None,
             store,
             inputs: RuntimeAgentHistoryEpochInputs {
                 pane_id: "%1".to_string(),
@@ -1574,6 +1620,7 @@ mod tests {
         std::fs::write(&path, format!("invalid compacted prefix\n{retained}")).unwrap();
 
         let result = execute_runtime_agent_history_epoch_work(RuntimeAgentHistoryEpochWork {
+            pending_capture_error: None,
             store,
             inputs: RuntimeAgentHistoryEpochInputs {
                 pane_id: "%1".to_string(),

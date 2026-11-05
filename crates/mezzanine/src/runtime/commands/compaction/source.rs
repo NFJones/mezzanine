@@ -1,4 +1,8 @@
-//! Immutable durable-source work for manual conversation compaction preparation.
+//! Original compaction storage ownership and immutable manual-source work.
+//!
+//! Accepted logical tasks retain their store through correction and retry.
+//! Pending rows come from the existing exact-target persistence owners, never
+//! from an unqualified conversation lookup after installation changes.
 //!
 //! The runtime captures the installed transcript store and exact conversation
 //! before decoding any source. Execution consumes that capture and never looks
@@ -15,6 +19,35 @@
 
 use super::{Result, TranscriptEntry};
 use crate::storage::transcript::AgentTranscriptStore;
+
+impl super::RuntimeAgentCompactionTask {
+    /// Uses only the logical operation's original captured publication store.
+    /// Missing storage is retained absence, never permission to sample a later
+    /// installation during response correction or persistence retry.
+    pub(in crate::runtime) fn source_store(&self) -> Option<AgentTranscriptStore> {
+        self.source_owner
+            .as_ref()
+            .and_then(|owner| owner.store.clone())
+    }
+}
+
+impl super::RuntimeSessionService {
+    /// Resolves pending rows through existing exact-target receipt ownership.
+    /// Later accepted original-path rows remain visible after installation
+    /// changes; equal-CID rows owned by a replacement path cannot enter it.
+    pub(in crate::runtime) fn compaction_pending_entries(
+        &self,
+        task: &super::RuntimeAgentCompactionTask,
+    ) -> Result<Vec<TranscriptEntry>> {
+        let Some(store) = task.source_store() else {
+            return Ok(Vec::new());
+        };
+        self.persistence.pending_transcript_entries_at_path(
+            &store.transcript_path(&task.conversation_id)?,
+            &task.conversation_id,
+        )
+    }
+}
 
 /// Actor-captured store and conversation, never a live service reference.
 #[derive(Debug, Clone)]

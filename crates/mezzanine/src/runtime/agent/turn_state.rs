@@ -109,6 +109,42 @@ impl RuntimeSessionService {
         &mut self.agent.agent_turn_contexts
     }
 
+    /// Records the original source accompanying an actually admitted chronology.
+    pub(crate) fn set_agent_turn_history_source(
+        &mut self,
+        turn_id: String,
+        source: Option<std::sync::Arc<crate::runtime::control::RuntimeAgentHistorySource>>,
+    ) {
+        if let Some(source) = source {
+            self.agent
+                .agent_turn_history_sources
+                .insert(turn_id, source);
+        } else {
+            self.agent.agent_turn_history_sources.remove(&turn_id);
+        }
+    }
+
+    /// Reads the immutable source associated with this turn's actual history.
+    pub(crate) fn agent_turn_history_source(
+        &self,
+        turn_id: &str,
+    ) -> Option<&std::sync::Arc<crate::runtime::control::RuntimeAgentHistorySource>> {
+        self.agent.agent_turn_history_sources.get(turn_id)
+    }
+
+    /// Retains the original interrupted source rather than fresh replacement replay.
+    pub(crate) fn interrupted_agent_history_source(
+        &self,
+        agent_id: &str,
+        conversation_id: &str,
+    ) -> Option<std::sync::Arc<crate::runtime::control::RuntimeAgentHistorySource>> {
+        self.agent
+            .interrupted_agent_continuations
+            .get(agent_id)
+            .filter(|continuation| continuation.conversation_id == conversation_id)
+            .and_then(|continuation| continuation.history_source.clone())
+    }
+
     /// Records the replayed-history sequence boundary for one active turn.
     pub(crate) fn set_agent_turn_imported_history_sequence_high_water(
         &mut self,

@@ -3008,6 +3008,7 @@ mod tests {
             service.claim_agent_compaction_task_state(
                 "%1",
                 crate::runtime::RuntimeAgentCompactionTask {
+                    source_owner: None,
                     summary_proposal: None,
                     frozen_compaction_epoch: None,
                     task_generation: 1,

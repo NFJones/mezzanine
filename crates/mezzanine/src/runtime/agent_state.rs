@@ -639,6 +639,16 @@ pub enum RuntimeAgentLoopSettlement {
     },
 }
 
+/// Original publication store and imported source retained by one logical job.
+/// An explicit missing store stays missing through retries and replacement.
+#[derive(Debug, Clone)]
+pub(crate) struct RuntimeCompactionSourceOwner {
+    /// Original storage handle, never looked up again from installation state.
+    pub(crate) store: Option<crate::storage::transcript::AgentTranscriptStore>,
+    /// Original history read that supplied imported canonical occurrences.
+    pub(crate) history: Option<std::sync::Arc<crate::runtime::control::RuntimeAgentHistorySource>>,
+}
+
 /// Provider-backed conversation compaction queued outside the actor.
 ///
 /// The actor keeps pane state serialized while provider I/O runs in a worker.
@@ -646,6 +656,8 @@ pub enum RuntimeAgentLoopSettlement {
 /// metadata needed to finish compaction once a model response returns.
 #[derive(Debug, Clone)]
 pub struct RuntimeAgentCompactionTask {
+    /// Original source/store capture; once present even missing storage is frozen.
+    pub(crate) source_owner: Option<std::sync::Arc<RuntimeCompactionSourceOwner>>,
     /// Original accepted summary record, retained through sizing and I/O retry.
     pub(crate) summary_proposal: Option<RuntimeCompactionSummaryProposal>,
     /// Unique queued/claimed task generation used to reject stale worker outcomes.

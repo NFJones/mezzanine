@@ -241,6 +241,15 @@ slots fail visibly. Existing summary text limits stay at one MiB; the v3 file
 allows sixteen MiB to accommodate accounting metadata during migration.
 Accounting remains outside model messages and billed usage.
 
+The source imported for a turn keeps its original store, replay epoch, physical
+row images and accepted pending ownership. Compaction uses that capture through
+dispatch, correction and interruption recovery. Installing another store with
+the same conversation or record IDs does not replace it. Later pending arrivals
+remain qualified by their original archive path. Summary publication, MCP reset
+and guidance rows, and accepted replay refresh use that same store; a turn that
+originally had no storage does not acquire it retroactively. Conflicting pending
+ownership fails preparation visibly instead of being treated as empty history.
+
 A manual prefix retry retains the original proposal occurrence. If its epoch
 reached disk before a later write failed, retry checks the same frozen source
 rows and exact proposal before settling the required-state marker. An equal-text

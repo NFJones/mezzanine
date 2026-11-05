@@ -99,6 +99,7 @@ pub(crate) use context::{
     runtime_owned_bridge_message, runtime_peer_message_block_label,
     runtime_peer_message_context_content, runtime_peer_message_logged_payload,
 };
+mod history_source;
 pub(crate) use context::{
     RuntimeAgentHistoryEpochInputs, RuntimeAgentHistoryEpochWork, RuntimeAgentPromptHistoryWork,
     RuntimeAgentTranscriptContext, RuntimeAgentTranscriptSnapshot,
@@ -109,6 +110,7 @@ pub(crate) use external_enrollment::ExternalSourceEndWork;
 pub(crate) use external_enrollment::ExternalSourceRenewalWork;
 pub(crate) use external_enrollment::ExternalSourceRetirementWork;
 pub(crate) use external_usage::ExternalUsageWork;
+pub(crate) use history_source::RuntimeAgentHistorySource;
 mod external_usage_requests;
 pub(crate) use external_usage_requests::ExternalUsageBeginWork;
 use mez_agent::{
@@ -138,6 +140,8 @@ const AGENT_PLAN_MODE_DISABLED_CONTEXT: &str = "[plan-only mode]\nstate=disabled
 
 /// Prompt-boundary context plus the runtime ownership facts derived with it.
 pub(super) struct RuntimeAgentPromptContext {
+    /// Source captured with the actual imported history, never rediscovered.
+    pub(super) history_source: Option<std::sync::Arc<RuntimeAgentHistorySource>>,
     /// Complete durable context assembled for the new turn.
     pub(super) context: AgentContext,
     /// Producer-assigned identity of this exact prompt occurrence.
@@ -163,6 +167,8 @@ pub(super) struct RuntimeAgentPromptContext {
 
 /// Prompt-boundary context for one peer-message-triggered turn.
 pub(super) struct RuntimePeerMessageTurnContext {
+    /// Original store/replay images used for this peer-triggered turn.
+    pub(super) history_source: Option<std::sync::Arc<RuntimeAgentHistorySource>>,
     /// Complete durable context carrying the unread peer-message blocks.
     pub(super) context: AgentContext,
     /// Highest unread peer-message sequence included in the context.
@@ -271,6 +277,7 @@ impl RuntimeSessionService {
                     .prompt_cache_lineage_id = Self::runtime_new_agent_conversation_id();
             }
         }
+        let history_source = history.source;
         let imported_records = history.records;
         let mut blocks = history.blocks;
         let imported_execution_events = history.execution_events;
@@ -521,6 +528,7 @@ impl RuntimeSessionService {
             .and_then(|metadata| metadata.event_sequence())
             .ok_or_else(|| MezError::invalid_state("prompt event identity unavailable"))?;
         Ok(RuntimeAgentPromptContext {
+            history_source,
             context,
             prompt_sequence,
             delivered_message_sequence,
@@ -546,6 +554,7 @@ impl RuntimeSessionService {
         self.refresh_project_config_layers_for_pane(pane_id)?;
         self.settle_recoverable_pane_readiness_for_agent_prompt(pane_id)?;
         let history = self.runtime_agent_history_epoch_context(pane_id)?;
+        let history_source = history.source;
         let imported_records = history.records;
         let mut blocks = history.blocks;
         let imported_execution_events = history.execution_events;
@@ -626,6 +635,7 @@ impl RuntimeSessionService {
             .and_then(|index| context.chronology().get(index))
             .map_or(0, |event| event.sequence().get());
         Ok(RuntimePeerMessageTurnContext {
+            history_source,
             context,
             delivered_message_sequence,
             delivered_messages,
@@ -769,6 +779,31 @@ impl RuntimeSessionService {
         Ok(())
     }
 
+    /// Refreshes one actual turn using its original archive and exact-target
+    /// receipt owners, including rows accepted after compactor dispatch.
+    fn prepare_runtime_agent_turn_history_work(
+        &self,
+        pane_id: &str,
+        turn_id: &str,
+    ) -> Result<RuntimeAgentPromptHistoryWork> {
+        let mut work = self.prepare_runtime_agent_prompt_history_work(pane_id);
+        if let Some(source) = self.agent_turn_history_source(turn_id) {
+            let Some(mut transcript) = source.work.clone() else {
+                work.transcript_work = None;
+                return Ok(work);
+            };
+            transcript.inputs.pending_entries =
+                self.persistence.pending_transcript_entries_at_path(
+                    &transcript
+                        .store
+                        .transcript_path(&transcript.inputs.conversation_id)?,
+                    &transcript.inputs.conversation_id,
+                )?;
+            work.transcript_work = Some(transcript);
+        }
+        Ok(work)
+    }
+
     /// Captures immutable prompt history inputs before transcript I/O begins.
     pub(crate) fn prepare_runtime_agent_prompt_history_work(
         &self,
@@ -823,9 +858,20 @@ impl RuntimeSessionService {
                 transcript_work: None,
             };
         }
+        let pending = store
+            .transcript_path(transcript_conversation_id)
+            .and_then(|path| {
+                self.persistence
+                    .pending_transcript_entries_at_path(&path, transcript_conversation_id)
+            });
+        let (pending_entries, pending_capture_error) = match pending {
+            Ok(entries) => (entries, None),
+            Err(error) => (Vec::new(), Some(error.message().to_string())),
+        };
         RuntimeAgentPromptHistoryWork {
             memory_blocks,
             transcript_work: Some(RuntimeAgentHistoryEpochWork {
+                pending_capture_error,
                 store: store.clone(),
                 inputs: RuntimeAgentHistoryEpochInputs {
                     pane_id: pane_id.to_string(),
@@ -833,9 +879,7 @@ impl RuntimeSessionService {
                     ephemeral_source_entries: session.ephemeral.then_some(transcript_entries),
                     active_entries: (!session.ephemeral)
                         .then(|| usize::try_from(transcript_entries).unwrap_or(usize::MAX)),
-                    pending_entries: self
-                        .persistence
-                        .pending_transcript_entries(transcript_conversation_id),
+                    pending_entries,
                 },
             }),
         }
@@ -870,7 +914,10 @@ impl RuntimeSessionService {
             return Ok(false);
         }
 
-        let refreshed_history = self.runtime_agent_history_epoch_context(&turn.pane_id)?;
+        let refreshed_history = execute_runtime_agent_prompt_history_work(
+            self.prepare_runtime_agent_turn_history_work(&turn.pane_id, turn_id)?,
+        )?;
+        let refreshed_source = refreshed_history.source;
         let refreshed_records = refreshed_history.records;
         let mut refreshed_blocks = refreshed_history.blocks;
         let refreshed_execution_events = refreshed_history.execution_events;
@@ -924,6 +971,7 @@ impl RuntimeSessionService {
             turn_id.to_string(),
             refreshed_imported_history_sequence_high_water,
         );
+        self.set_agent_turn_history_source(turn_id.to_string(), refreshed_source);
         self.append_agent_trace_turn_event(
             &turn.pane_id,
             turn_id,
@@ -944,12 +992,10 @@ impl RuntimeSessionService {
         turn_id: &str,
         mut candidate: AgentContext,
     ) -> Result<AgentContext> {
-        let Some(store) = self.persistence.cloned_transcript_store() else {
+        let Some(store) = task.source_store() else {
             return Ok(candidate);
         };
-        let pending = self
-            .persistence
-            .pending_transcript_entries(&task.conversation_id);
+        let pending = self.compaction_pending_entries(task)?;
         let view = store.conversation_transcript_view(
             &task.conversation_id,
             crate::storage::transcript::ConversationTranscriptRead::All,
@@ -1006,7 +1052,7 @@ impl RuntimeSessionService {
 
         let projected_history = projection.is_some();
         let history = if let Some(epoch) = projection {
-            let mut work = self.prepare_runtime_agent_prompt_history_work(&turn.pane_id);
+            let mut work = self.prepare_runtime_agent_turn_history_work(&turn.pane_id, turn_id)?;
             let transcript_work = work.transcript_work.take().ok_or_else(|| {
                 MezError::invalid_state("selective compaction preview requires transcript history")
             })?;
@@ -1026,13 +1072,16 @@ impl RuntimeSessionService {
             records.prepend_blocks(blocks.len());
             blocks.extend(transcript.blocks);
             RuntimeAgentTranscriptContext {
+                source: transcript.source,
                 blocks,
                 execution_events: transcript.execution_events,
                 records,
                 provider_history_repair_identity: transcript.provider_history_repair_identity,
             }
         } else {
-            self.runtime_agent_history_epoch_context(&turn.pane_id)?
+            execute_runtime_agent_prompt_history_work(
+                self.prepare_runtime_agent_turn_history_work(&turn.pane_id, turn_id)?,
+            )?
         };
         let imported_history_sequence_high_water =
             self.agent_turn_imported_history_sequence_high_water(turn_id);

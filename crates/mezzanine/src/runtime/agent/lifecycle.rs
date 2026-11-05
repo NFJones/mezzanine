@@ -360,6 +360,7 @@ impl RuntimeSessionService {
         self.clear_pending_final_say_previews_for_turn(turn_id);
         if !self.provider_refusal_context_is_live(turn_id) {
             self.agent_turn_contexts_mut().remove(turn_id);
+            self.agent.agent_turn_history_sources.remove(turn_id);
         }
         self.agent.agent_turn_compaction_handoffs.remove(turn_id);
         self.agent

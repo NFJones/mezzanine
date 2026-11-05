@@ -103,54 +103,13 @@ impl RuntimeSessionService {
         needed: &std::collections::BTreeSet<mez_agent::ContextBlockOccurrenceId>,
     ) -> Result<std::collections::BTreeMap<mez_agent::ContextBlockOccurrenceId, Option<String>>>
     {
-        let store = self.persistence.cloned_transcript_store().ok_or_else(|| {
-            MezError::invalid_state("imported compaction source archive is unavailable")
-        })?;
-        let pending = self
-            .persistence
-            .pending_transcript_entries(&task.conversation_id);
-        let view = store.conversation_transcript_view(
-            &task.conversation_id,
-            crate::storage::transcript::ConversationTranscriptRead::All,
-            task.transcript_entries > pending.len() as u64,
-            &pending,
-        )?;
-        let mut captured = std::collections::BTreeMap::new();
-        for row in &view.logical {
-            let record = if row.role == TranscriptRole::System {
-                mez_agent::transcript::TranscriptContextRecord::from_transcript_content(
-                    &row.content,
-                )?
-            } else {
-                None
-            };
-            let origin = match record {
-                Some(record) => record.record().occurrence_id(),
-                None => mez_agent::ContextBlockOccurrenceId::for_legacy_archive_row(
-                    &row.conversation_id,
-                    row.sequence,
-                    0,
-                )?,
-            };
-            if needed.contains(&origin)
-                && captured
-                    .insert(
-                        origin,
-                        (row.role == TranscriptRole::System).then(|| row.content.clone()),
-                    )
-                    .is_some()
-            {
-                return Err(MezError::conflict(
-                    "imported compaction source occurrence is duplicated",
-                ));
-            }
-        }
-        if captured.len() != needed.len() {
-            return Err(MezError::conflict(
-                "imported compaction source occurrence is unavailable",
-            ));
-        }
-        Ok(captured)
+        task.source_owner
+            .as_ref()
+            .and_then(|owner| owner.history.as_ref())
+            .ok_or_else(|| {
+                MezError::invalid_state("imported compaction source snapshot is unavailable")
+            })?
+            .selected_images(needed)
     }
 
     /// Accepts a distinct terminal witness only after the ordinary retry fits.

@@ -414,16 +414,31 @@ impl RuntimeSubagentForkSnapshot {
 pub(super) fn child_history(
     pane_id: &str,
     batch: &crate::storage::transcript::TranscriptAppendBatch,
+    store: Option<crate::storage::transcript::AgentTranscriptStore>,
 ) -> crate::runtime::control::RuntimeAgentTranscriptContext {
-    super::super::context::runtime_agent_history_epoch_from_snapshot(
-        super::super::context::RuntimeAgentHistoryEpochInputs {
-            pane_id: pane_id.into(),
-            conversation_id: batch.conversation_id().into(),
-            ephemeral_source_entries: None,
-            active_entries: Some(batch.entries().len()),
-            pending_entries: Vec::new(),
-        },
+    let inputs = super::super::context::RuntimeAgentHistoryEpochInputs {
+        pane_id: pane_id.into(),
+        conversation_id: batch.conversation_id().into(),
+        ephemeral_source_entries: None,
+        active_entries: Some(batch.entries().len()),
+        pending_entries: batch.entries().to_vec(),
+    };
+    let mut history = super::super::context::runtime_agent_history_epoch_from_snapshot(
+        inputs.clone(),
         batch.initial_compaction_epoch().cloned(),
         batch.entries().to_vec(),
-    )
+    );
+    if let Some(store) = store {
+        super::super::RuntimeAgentHistorySource::attach(
+            &mut history,
+            super::super::RuntimeAgentHistoryEpochWork {
+                store,
+                inputs,
+                pending_capture_error: None,
+            },
+            batch.initial_compaction_epoch().cloned(),
+            batch.entries().to_vec(),
+        );
+    }
+    history
 }

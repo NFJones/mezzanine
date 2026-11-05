@@ -9,6 +9,7 @@ use super::*;
 /// Late same-group evidence keeps its original full-chronology occurrence.
 mod occurrences;
 mod receive_admission;
+mod source_owner;
 
 /// Mixed staging must abandon its original selective projection even when the
 /// archive already owns the first group. After all summaries fit and terminal
@@ -144,9 +145,21 @@ fn live_fixture_with_source_codec(
     durable_first: bool,
     accounted_history: bool,
 ) -> (RuntimeSessionService, AgentTranscriptStore, String) {
+    live_fixture_with_source_store(words, durable_first, accounted_history, true)
+}
+
+/// Captures a genuine missing-store prompt when storage is intentionally absent.
+fn live_fixture_with_source_store(
+    words: usize,
+    durable_first: bool,
+    accounted_history: bool,
+    with_store: bool,
+) -> (RuntimeSessionService, AgentTranscriptStore, String) {
     let mut service = test_runtime_service();
     let store = AgentTranscriptStore::new(temp_root("terminal-live-handoff"));
-    service.set_agent_transcript_store(store.clone());
+    if with_store {
+        service.set_agent_transcript_store(store.clone());
+    }
     service.replace_config_layers(vec![ConfigLayer {
         name: "terminal-live".into(), path: None, format: ConfigFormat::Toml, scope: ConfigScope::Primary, trusted: true,
         text: "[agents]\ndefault_provider=\"runtime-batch\"\ndefault_model_profile=\"live\"\n[providers.runtime-batch]\nkind=\"openai\"\nmodels=[\"test\"]\ndefault_model=\"test\"\n[model_profiles.live]\nprovider=\"runtime-batch\"\nmodel=\"test\"\ncontext_window_tokens=40000\nmax_input_tokens=20000\n".into(),
@@ -255,6 +268,18 @@ fn live_fixture_with_source_codec(
 
 /// Runs one model-backed compaction through its actual runtime completion path.
 fn compact_live(service: &mut RuntimeSessionService, turn_id: &str, summary: &str, observed: bool) {
+    queue_live_compaction(service, turn_id, observed);
+    complete_runtime_test_compaction(service, "%1", summary);
+    assert!(
+        service
+            .pending_agent_compaction_task_for_tests("%1")
+            .is_none()
+    );
+}
+
+/// Retains the real dispatch boundary so fixtures may replace storage while
+/// provider work is in flight without changing the accepted request source.
+fn queue_live_compaction(service: &mut RuntimeSessionService, turn_id: &str, observed: bool) {
     let context = service.agent_turn_contexts().get(turn_id).unwrap();
     let plan = mez_agent::plan_model_context_compaction_for_provider_tokens(
         context,
@@ -283,12 +308,6 @@ fn compact_live(service: &mut RuntimeSessionService, turn_id: &str, summary: &st
         service
             .queue_agent_active_turn_compaction(turn_id, "live".into(), profile, trigger, plan)
             .unwrap()
-    );
-    complete_runtime_test_compaction(service, "%1", summary);
-    assert!(
-        service
-            .pending_agent_compaction_task_for_tests("%1")
-            .is_none()
     );
 }
 

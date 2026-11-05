@@ -14771,6 +14771,16 @@ The baseline command capabilities are:
   prefix and each ordered selective summary. Candidate sizing, terminal
   handoff, publication, receipt recovery and reopened replay MUST preserve
   those records; repeated projection MUST NOT mint replacement identities.
+  Imported source proofs MUST retain the original leased replay snapshot,
+  store, epoch (including absence), and accepted pending ownership through
+  compactor dispatch, correction, interruption and retry. Installing a different
+  store MUST NOT replace that source, even for matching conversation or record
+  IDs. Subsequent arrivals and allocation MUST use existing pending owners at
+  the exact original archive path; equal-CID replacement-path rows MUST remain
+  separate. Summary publication, MCP reset/catalog/guidance rows and refreshed
+  replay MUST use the same captured store. Originally absent storage MUST remain
+  absent for that source. Invalid captured pending ownership MUST fail visibly
+  at preparation rather than becoming an empty successful history.
   A manual prefix retry after uncertain publication MUST preserve its original
   proposal, recheck the frozen physical source, and require the exact published
   proposal before settling a missing required-state marker. Equal text with a

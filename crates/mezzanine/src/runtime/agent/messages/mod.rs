@@ -656,6 +656,7 @@ impl RuntimeSessionService {
             return Ok(0);
         }
         let crate::runtime::control::RuntimePeerMessageTurnContext {
+            history_source,
             mut context,
             delivered_message_sequence,
             delivered_messages,
@@ -727,6 +728,7 @@ impl RuntimeSessionService {
             turn_id.clone(),
             imported_history_sequence_high_water,
         );
+        self.set_agent_turn_history_source(turn_id.clone(), history_source);
         self.set_agent_turn_model_profile(turn_id.clone(), model_profile);
         if let Some(failure) = failure
             && let Some(stored) = self

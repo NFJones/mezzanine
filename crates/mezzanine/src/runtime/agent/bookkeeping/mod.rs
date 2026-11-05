@@ -1087,12 +1087,16 @@ impl RuntimeSessionService {
     /// Persists an MCP authorization-reset boundary and fresh safe catalog after compaction.
     /// Manual publication supplies its checked next logical sequence so this
     /// step needs no additional archive read or mutation lock. Other producers
-    /// retain their existing allocation path. Sequence exhaustion fails before
+    /// check the original logical frontier and exact-target pending owners.
+    /// Sequence exhaustion fails before
     /// any control row is queued or written.
+    /// The compactor supplies its original store. Later installation and
+    /// equal-CID pending rows at another path cannot retarget this publication.
     pub(crate) fn persist_mcp_compaction_epoch_transcript(
         &mut self,
         pane_id: &str,
         conversation_id: &str,
+        store: Option<crate::storage::transcript::AgentTranscriptStore>,
         catalog_snapshot: Option<String>,
         checked_next_sequence: Option<u64>,
     ) -> Result<usize> {
@@ -1102,18 +1106,27 @@ impl RuntimeSessionService {
         if session.session_id != conversation_id || session.ephemeral {
             return Ok(0);
         }
-        let Some(store) = self.persistence.cloned_transcript_store() else {
+        let Some(store) = store else {
             return Ok(0);
         };
         let sequence = if let Some(sequence) = checked_next_sequence {
             sequence
-        } else if self.persistence.transcript_uses_adapter() {
-            self.persistence
-                .deferred_transcript_next_sequence(conversation_id)
-                .map(Ok)
-                .unwrap_or_else(|| next_transcript_sequence(&store, conversation_id))?
         } else {
-            next_transcript_sequence(&store, conversation_id)?
+            let pending = self.persistence.pending_transcript_entries_at_path(
+                &store.transcript_path(conversation_id)?,
+                conversation_id,
+            )?;
+            let view = store.conversation_transcript_view(
+                conversation_id,
+                crate::storage::transcript::ConversationTranscriptRead::All,
+                false,
+                &pending,
+            )?;
+            view.logical.last().map_or(Ok(1), |row| {
+                row.sequence.checked_add(1).ok_or_else(|| {
+                    MezError::invalid_state("MCP compaction transcript sequence is exhausted")
+                })
+            })?
         };
         let additional = if catalog_snapshot.is_some() { 2 } else { 1 };
         sequence

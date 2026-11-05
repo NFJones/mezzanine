@@ -60,7 +60,7 @@ fn runtime_compaction_raw_and_framed_payloads_preserve_summary_identity() {
         assert!(
             epoch.summary == expected || epoch.ranges.iter().any(|range| range.summary == expected)
         );
-        qualify_manual_summary_correction(false, Some((&raw, expected)));
+        qualify_manual_summary_correction(false, Some((&raw, expected)), false);
     }
 }
 
@@ -251,7 +251,7 @@ fn runtime_compaction_provider_failure_preserves_correction_provenance() {
 /// accepting a short model summary publishes once without an ordinary turn.
 #[test]
 fn runtime_manual_compaction_invalid_completed_summary_repairs_privately() {
-    qualify_manual_summary_correction(false, None);
+    qualify_manual_summary_correction(false, None, false);
 }
 
 /// A valid repaired manual summary cannot publish over selected durable rows
@@ -259,12 +259,21 @@ fn runtime_manual_compaction_invalid_completed_summary_repairs_privately() {
 /// are revalidated by the same candidate owner used for correction admission.
 #[test]
 fn runtime_manual_compaction_summary_correction_rejects_source_changed_during_retry() {
-    qualify_manual_summary_correction(true, None);
+    qualify_manual_summary_correction(true, None, false);
+}
+
+/// A repaired proposal keeps the original selected source through correction
+/// even when another installed store reuses its conversation with other bytes.
+/// Publication and MCP controls belong to the original store; the replacement
+/// receives neither a transcript append nor a compaction epoch from this job.
+#[test]
+fn runtime_manual_compaction_summary_correction_preserves_original_store() {
+    qualify_manual_summary_correction(false, None, true);
 }
 
 /// Seeds one manual frozen source and optionally replaces its row during repair
 /// or delivers raw provider text to qualify optional-frame versus JSON identity.
-fn qualify_manual_summary_correction(mutate: bool, raw: Option<(&str, &str)>) {
+fn qualify_manual_summary_correction(mutate: bool, raw: Option<(&str, &str)>, replace_store: bool) {
     let mut service = test_runtime_service();
     service.replace_config_layers(vec![ConfigLayer {
         name: "manual-correction".into(), path: None, format: ConfigFormat::Toml,
@@ -309,12 +318,27 @@ fn qualify_manual_summary_correction(mutate: bool, raw: Option<(&str, &str)>) {
             .is_none()
     );
     assert_eq!(store.inspect("manual-correction").unwrap(), before);
-    let changed = if mutate {
+    let replacement = if replace_store {
         let changed = AgentTranscriptStore::new(temp_root("manual-output-correction-mutated"));
         let mut row = before[0].clone();
         row.content = "genuinely rewritten selected source".into();
         changed.append(&row).unwrap();
         service.set_agent_transcript_store(changed.clone());
+        Some((changed, row))
+    } else {
+        None
+    };
+    let changed = if mutate {
+        let changed = store.clone();
+        changed
+            .compare_and_swap_entry_content(
+                "manual-correction",
+                1,
+                "%1",
+                &changed.transcript_entry_revision(&before[0]).unwrap(),
+                "genuinely rewritten selected source".into(),
+            )
+            .unwrap();
         let task = service
             .pending_agent_compaction_task_for_tests("%1")
             .unwrap();
@@ -369,6 +393,15 @@ fn qualify_manual_summary_correction(mutate: bool, raw: Option<(&str, &str)>) {
             .summary
             .ends_with(expected)
     );
+    if let Some((replacement, row)) = replacement {
+        assert_eq!(replacement.inspect("manual-correction").unwrap(), vec![row]);
+        assert!(
+            replacement
+                .compaction_epoch("manual-correction")
+                .unwrap()
+                .is_none()
+        );
+    }
     assert!(service.pending_agent_provider_tasks().is_empty());
 }
 

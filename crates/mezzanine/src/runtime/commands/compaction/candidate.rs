@@ -52,12 +52,10 @@ impl RuntimeSessionService {
             .get(&task.pane_id)
             .filter(|session| session.session_id == task.conversation_id)
             .ok_or_else(|| MezError::invalid_state("manual compaction session is unavailable"))?;
-        let store = self.persistence.cloned_transcript_store().ok_or_else(|| {
+        let store = task.source_store().ok_or_else(|| {
             MezError::invalid_state("manual compaction candidate requires transcript storage")
         })?;
-        let pending = self
-            .persistence
-            .pending_transcript_entries(&task.conversation_id);
+        let pending = self.compaction_pending_entries(task)?;
         let snapshot =
             store.conversation_replay_snapshot(&task.conversation_id, &pending, |_| {
                 Some((

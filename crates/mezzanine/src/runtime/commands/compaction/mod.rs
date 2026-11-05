@@ -306,8 +306,15 @@ impl RuntimeSessionService {
         {
             return Ok(state.baseline_epoch.clone());
         }
-        self.persistence
-            .cloned_transcript_store()
+        if let Some(history) = task
+            .source_owner
+            .as_ref()
+            .and_then(|owner| owner.history.as_ref())
+            && history.conversation_id() == Some(task.conversation_id.as_str())
+        {
+            return Ok(history.epoch.clone());
+        }
+        task.source_store()
             .map(|store| store.compaction_epoch(&task.conversation_id))
             .transpose()
             .map(Option::flatten)
@@ -429,7 +436,7 @@ impl RuntimeSessionService {
         plan: &mez_agent::ModelContextCompactionPlan,
         summary: &str,
     ) -> Result<Option<AgentCompactionEpoch>> {
-        let Some(store) = self.persistence.cloned_transcript_store() else {
+        let Some(store) = task.source_store() else {
             return Ok(None);
         };
         let previous = store.compaction_epoch(&task.conversation_id)?;
@@ -460,9 +467,7 @@ impl RuntimeSessionService {
         }) {
             return Err(MezError::invalid_state("staged compaction epoch is stale"));
         }
-        let pending = self
-            .persistence
-            .pending_transcript_entries(&task.conversation_id);
+        let pending = self.compaction_pending_entries(task)?;
         let view = store.conversation_transcript_view(
             &task.conversation_id,
             crate::storage::transcript::ConversationTranscriptRead::All,
@@ -561,7 +566,7 @@ impl RuntimeSessionService {
         summary: &str,
         projection: &AgentCompactionEpoch,
     ) -> Result<Vec<TranscriptEntry>> {
-        let store = self.persistence.cloned_transcript_store().ok_or_else(|| {
+        let store = task.source_store().ok_or_else(|| {
             MezError::invalid_state("selective compaction requires transcript storage")
         })?;
         let committed = store
@@ -900,6 +905,7 @@ impl RuntimeSessionService {
             .last()
             .map(|message| message.content.clone());
         self.queue_agent_compaction_task(RuntimeAgentCompactionTask {
+            source_owner: None,
             summary_proposal: None,
             frozen_compaction_epoch: (source == "manual").then(|| projection.clone()),
             task_generation: 0,
@@ -1079,6 +1085,7 @@ impl RuntimeSessionService {
         }
         self.refresh_project_trust_store_from_disk_if_changed()?;
         self.queue_agent_compaction_task(RuntimeAgentCompactionTask {
+            source_owner: None,
             summary_proposal: None,
             frozen_compaction_epoch: None,
             task_generation: 0,
@@ -2534,7 +2541,7 @@ impl RuntimeSessionService {
         let projection = match (
             projection,
             task.compacted_through_sequence,
-            self.persistence.cloned_transcript_store(),
+            task.source_store(),
         ) {
             (Some(projection), _, _) => Some(projection),
             (None, Some(boundary), Some(store)) => {
@@ -2627,7 +2634,7 @@ impl RuntimeSessionService {
         );
         let mut published_boundary = None;
         let mut checked_next_sequence = None;
-        if let Some(store) = self.persistence.cloned_transcript_store() {
+        if let Some(store) = task.source_store() {
             let previous = store.compaction_epoch(&task.conversation_id)?;
             let previous_boundary = previous.as_ref().map_or(0, |epoch| epoch.through_sequence);
             let boundary = task.compacted_through_sequence.unwrap_or(previous_boundary);
@@ -2637,9 +2644,7 @@ impl RuntimeSessionService {
                         "manual prefix cannot publish a selective proposal",
                     ));
                 }
-                let pending = self
-                    .persistence
-                    .pending_transcript_entries(&task.conversation_id);
+                let pending = self.compaction_pending_entries(task)?;
                 checked_next_sequence = Some(store.save_compaction_prefix_with_proof(
                     &task.conversation_id,
                     boundary,
@@ -2708,6 +2713,7 @@ impl RuntimeSessionService {
         let mcp_epoch_entries = self.persist_mcp_compaction_epoch_transcript(
             pane_id,
             &task.conversation_id,
+            task.source_store(),
             mcp_catalog_snapshot,
             checked_next_sequence,
         )?;

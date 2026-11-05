@@ -841,7 +841,13 @@ impl RuntimeSessionService {
         let captured_history = child_batch
             .as_ref()
             .filter(|batch| batch.initial_compaction_epoch().is_some())
-            .map(|batch| fork_source::child_history(&started.pane_id, batch));
+            .map(|batch| {
+                fork_source::child_history(
+                    &started.pane_id,
+                    batch,
+                    self.persistence.cloned_transcript_store(),
+                )
+            });
         let child_prompt_cache_lineage_id = fork_snapshot
             .as_ref()
             .map(|snapshot| snapshot.prompt_cache_lineage_id.clone());
