@@ -161,7 +161,9 @@ impl RuntimePersistenceComponent {
         self.session_registry.clone()
     }
 
-    /// Returns the reserved high-water after queued, worker-owned, or settled rows.
+    /// Inspects historical CID-wide reservation metadata for regression fixtures.
+    /// Production allocation uses actual original-path owners instead.
+    #[cfg(test)]
     pub(crate) fn deferred_transcript_next_sequence(&self, conversation_id: &str) -> Option<u64> {
         self.legacy_deferred_transcript_next_sequence(conversation_id)
     }

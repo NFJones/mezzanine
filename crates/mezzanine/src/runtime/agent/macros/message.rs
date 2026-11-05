@@ -276,8 +276,14 @@ impl RuntimeSessionService {
                 )),
             )));
         }
-        let context = self.agent_context_for_pane_prompt(child_pane_id, payload, 100)?;
-        let context = self.apply_agent_shell_preference_context(child_pane_id, context)?;
+        let prepared = self.agent_context_for_pane_prompt_with_message_delivery(
+            child_pane_id,
+            payload,
+            100,
+            false,
+            true,
+        )?;
+        let context = self.apply_agent_shell_preference_context(child_pane_id, prepared.context)?;
         let turn_id = self.next_agent_turn_id();
         let conversation_id = self
             .agent_shell_store()
@@ -307,6 +313,11 @@ impl RuntimeSessionService {
         self.snapshot_agent_native_shell_timeout_for_turn(&turn_id);
         self.agent_turn_contexts_mut()
             .insert(turn_id.clone(), context);
+        self.set_agent_turn_imported_history_sequence_high_water(
+            turn_id.clone(),
+            prepared.imported_history_sequence_high_water,
+        );
+        self.set_agent_turn_history_source(turn_id.clone(), prepared.history_source);
         self.agent
             .agent_turn_model_profiles
             .insert(turn_id.clone(), model_profile);

@@ -23,6 +23,8 @@ pub(crate) struct RuntimeAgentHistorySource {
     pub(in crate::runtime) epoch: Option<crate::storage::transcript::AgentCompactionEpoch>,
     /// Original checked logical window, shared through retries/interruption.
     rows: Arc<[mez_agent::TranscriptEntry]>,
+    /// Target policy captured at turn admission, independent of source window.
+    target_ephemeral: Option<bool>,
 }
 
 impl RuntimeAgentHistorySource {
@@ -40,12 +42,31 @@ impl RuntimeAgentHistorySource {
             .map(|work| work.inputs.conversation_id.as_str())
     }
 
+    /// Actual target save policy captured at admission, not the source pane's
+    /// replay-window policy (a persistent child may inherit ephemeral history).
+    pub(in crate::runtime) fn ephemeral(&self) -> Option<bool> {
+        self.target_ephemeral
+    }
+
+    /// Shares unchanged captures; a distinct target policy owns only a new
+    /// descriptor while retaining the same original physical source images.
+    pub(in crate::runtime) fn with_target_policy(
+        mut source: Arc<Self>,
+        ephemeral: bool,
+    ) -> Arc<Self> {
+        if source.target_ephemeral != Some(ephemeral) {
+            Arc::make_mut(&mut source).target_ephemeral = Some(ephemeral);
+        }
+        source
+    }
+
     /// Freezes genuine source absence at the original prompt boundary.
     pub(super) fn absent() -> Arc<Self> {
         Arc::new(Self {
             work: None,
             epoch: None,
             rows: Arc::from([]),
+            target_ephemeral: None,
         })
     }
 
@@ -60,6 +81,7 @@ impl RuntimeAgentHistorySource {
             work: Some(work),
             epoch,
             rows: rows.into(),
+            target_ephemeral: None,
         }));
     }
 

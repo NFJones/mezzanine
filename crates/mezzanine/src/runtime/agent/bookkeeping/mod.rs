@@ -100,7 +100,16 @@ impl RuntimeBookkeepingTranscriptReadWork {
 
     /// Reads the store sequence on the same worker that checks turn chronology.
     pub(crate) fn next_sequence(&self) -> Result<u64> {
-        next_transcript_sequence(&self.store, &self.conversation_id)
+        let committed = next_transcript_sequence(&self.store, &self.conversation_id)?;
+        self.pending.iter().try_fold(committed, |next, entry| {
+            entry
+                .sequence
+                .checked_add(1)
+                .map(|pending| next.max(pending))
+                .ok_or_else(|| {
+                    MezError::invalid_state("original transcript pending sequence is exhausted")
+                })
+        })
     }
 }
 
@@ -287,6 +296,33 @@ impl RuntimeBookkeepingCandidateWork {
 }
 
 impl RuntimeSessionService {
+    /// Allocates after actual accepted rows at the original path. A prepared
+    /// worker frontier avoids another disk read; a CID-only allocator cannot
+    /// supply another repository's reservation. MAX fails before mutation.
+    fn original_transcript_next_sequence(
+        &self,
+        store: &crate::storage::transcript::AgentTranscriptStore,
+        conversation_id: &str,
+        prepared: Option<u64>,
+    ) -> Result<u64> {
+        let pending = self.persistence.pending_transcript_entries_at_path(
+            &store.transcript_path(conversation_id)?,
+            conversation_id,
+        )?;
+        let committed = prepared
+            .map(Ok)
+            .unwrap_or_else(|| next_transcript_sequence(store, conversation_id))?;
+        pending.iter().try_fold(committed, |next, entry| {
+            entry
+                .sequence
+                .checked_add(1)
+                .map(|pending| next.max(pending))
+                .ok_or_else(|| {
+                    MezError::invalid_state("original transcript pending sequence is exhausted")
+                })
+        })
+    }
+
     /// Claims ordered chronology candidates using current accepted pending rows.
     pub(crate) fn claim_bookkeeping_candidates(&mut self) -> Vec<RuntimeBookkeepingCandidateWork> {
         let canonical_writers = self.canonical_message_writing_conversations();
@@ -303,22 +339,25 @@ impl RuntimeSessionService {
         &mut self,
         candidate: RuntimeBookkeepingCandidate,
     ) -> RuntimeBookkeepingCandidateWork {
+        let mut read_capture_error = None;
         let mut read = if !candidate.read.frozen_completion
             && self
                 .agent_shell_store()
                 .get(&candidate.turn.pane_id)
                 .is_some_and(|session| session.session_id == candidate.turn.conversation_id)
         {
-            self.capture_bookkeeping_transcript_read(candidate.read.store.clone(), &candidate.turn)
+            match self
+                .capture_bookkeeping_transcript_read(candidate.read.store.clone(), &candidate.turn)
+            {
+                Ok(read) => read,
+                Err(error) => {
+                    read_capture_error = Some(Box::new(error));
+                    candidate.read.clone()
+                }
+            }
         } else {
             candidate.read.clone()
         };
-        if !candidate.read.frozen_completion {
-            read.pending.extend(
-                self.persistence
-                    .pending_transcript_entries(&candidate.turn.conversation_id),
-            );
-        }
         read.terminal_handoff |= candidate.read.terminal_handoff;
         let captured = if candidate.read.frozen_completion {
             Some(self.capture_completion_archive_read(&candidate))
@@ -337,7 +376,7 @@ impl RuntimeSessionService {
             candidate,
             read,
             completion_archive,
-            completion_capture_error,
+            completion_capture_error: read_capture_error.or(completion_capture_error),
             claim,
         }
     }
@@ -409,15 +448,15 @@ impl RuntimeSessionService {
                 .get(&owner.turn.pane_id)
                 .is_some_and(|session| session.session_id == owner.turn.conversation_id);
         let checked = history.and_then(|(history, sequence)| {
+            if let Some(error) = &work.completion_capture_error {
+                return Err((**error).clone());
+            }
             if !same_candidate || (frozen && work.read != owner.read) {
                 return Err(MezError::invalid_state(
                     "completion worker read differs from frozen candidate owner",
                 ));
             }
             let observation = if frozen {
-                if let Some(error) = &work.completion_capture_error {
-                    return Err((**error).clone());
-                }
                 let archive = work.completion_archive.as_ref().ok_or_else(|| {
                     MezError::invalid_state("original archive admission fence is missing")
                 })?;
@@ -457,12 +496,16 @@ impl RuntimeSessionService {
                 .map(crate::runtime::persistence::RuntimeTranscriptNextSequence::Next)
                 .unwrap_or(crate::runtime::persistence::RuntimeTranscriptNextSequence::Exhausted)
         } else {
-            crate::runtime::persistence::RuntimeTranscriptNextSequence::Next(
-                self.persistence
-                    .deferred_transcript_next_sequence(&turn.conversation_id)
-                    .unwrap_or(sequence)
-                    .max(sequence),
-            )
+            match self.original_transcript_next_sequence(
+                &candidate.read.store,
+                &turn.conversation_id,
+                Some(sequence),
+            ) {
+                Ok(sequence) => {
+                    crate::runtime::persistence::RuntimeTranscriptNextSequence::Next(sequence)
+                }
+                Err(error) => return self.block_bookkeeping_after_error(candidate, error),
+            }
         };
         let first_sequence = match next {
             crate::runtime::persistence::RuntimeTranscriptNextSequence::Next(sequence) => {
@@ -681,7 +724,8 @@ impl RuntimeSessionService {
         Ok((result, through))
     }
 
-    /// Captures the current transcript owner and pending receipts for checked bookkeeping.
+    /// Captures pending receipts only at this original transcript path. Invalid
+    /// ownership fails instead of borrowing equal-CID replacement-store rows.
     /// Wraps ONLY existing permitted synchronous writes. Invalidate old reads
     /// before I/O; confirm a frontier only after actual append success. The one
     /// optional retry requires the store's definite-precommit proof and repeats
@@ -721,10 +765,11 @@ impl RuntimeSessionService {
         &self,
         store: crate::storage::transcript::AgentTranscriptStore,
         turn: &AgentTurnRecord,
-    ) -> RuntimeBookkeepingTranscriptReadWork {
-        let pending = self
-            .persistence
-            .pending_transcript_entries(&turn.conversation_id);
+    ) -> Result<RuntimeBookkeepingTranscriptReadWork> {
+        let pending = self.persistence.pending_transcript_entries_at_path(
+            &store.transcript_path(&turn.conversation_id)?,
+            &turn.conversation_id,
+        )?;
         let committed_prefix_required =
             self.agent_shell_store()
                 .get(&turn.pane_id)
@@ -736,7 +781,7 @@ impl RuntimeSessionService {
                             .collect::<std::collections::BTreeSet<_>>()
                             .len() as u64
                 });
-        RuntimeBookkeepingTranscriptReadWork {
+        Ok(RuntimeBookkeepingTranscriptReadWork {
             store,
             conversation_id: turn.conversation_id.clone(),
             pane_id: turn.pane_id.clone(),
@@ -753,7 +798,7 @@ impl RuntimeSessionService {
                 .agent_turn_compaction_handoffs
                 .contains_key(&turn.turn_id),
             frozen_completion: false,
-        }
+        })
     }
 
     /// Runs the persist runtime agent turn execution transcript operation for this subsystem.
@@ -780,7 +825,7 @@ impl RuntimeSessionService {
         turn: &AgentTurnRecord,
     ) -> Result<RuntimeBookkeepingTranscriptReadWork> {
         let path = store.transcript_path(&turn.conversation_id)?;
-        let mut read = self.capture_bookkeeping_transcript_read(store, turn);
+        let mut read = self.capture_bookkeeping_transcript_read(store, turn)?;
         read.pending = self
             .persistence
             .pending_transcript_entries_at_path(&path, &turn.conversation_id)?;
@@ -847,6 +892,7 @@ impl RuntimeSessionService {
                 "completion snapshot lost its original context",
             ));
         }
+        source.validate_store(&read.store)?;
         let entries = source.entries_for_execution(
             &turn.conversation_id,
             2,
@@ -874,11 +920,14 @@ impl RuntimeSessionService {
     /// execution format. The caller supplies only actor identity/stage/kind facts,
     /// never raw exception strings or unprojectable output. Existing immutable
     /// candidates are cloned by their group owner before adding changed facts.
+    /// A retained record belongs to this exact unchanged evidence proposal;
+    /// new proposals allocate once and return their record to the group owner.
     pub(in crate::runtime::agent) fn append_completion_settlement_evidence(
         candidate: &mut RuntimeBookkeepingCandidate,
         group: &mez_agent::ContextExecutionGroupId,
         content: String,
-    ) -> Result<()> {
+        retained: Option<mez_agent::ContextBlockRecord>,
+    ) -> Result<mez_agent::ContextBlockRecord> {
         let ordinal = candidate
             .entries
             .iter()
@@ -896,12 +945,15 @@ impl RuntimeSessionService {
             .unwrap_or(0)
             .checked_add(1)
             .ok_or_else(|| MezError::invalid_state("completion evidence ordinal exhausted"))?;
-        let record =
-            mez_agent::ContextBlockRecord::allocate(&mez_agent::ContextBlock::evidence_event(
-                ContextSourceKind::CommittedEvidence,
-                "completion settlement evidence v1",
-                content.clone(),
-            ))?;
+        let block = mez_agent::ContextBlock::evidence_event(
+            ContextSourceKind::CommittedEvidence,
+            "completion settlement evidence v1",
+            content.clone(),
+        );
+        let record = match retained {
+            Some(record) => record.restored(&block)?,
+            None => mez_agent::ContextBlockRecord::allocate(&block)?,
+        };
         let event = TranscriptContextEvent::execution_block_with_metadata(
             ContextSourceKind::CommittedEvidence,
             "completion settlement evidence v1",
@@ -928,7 +980,7 @@ impl RuntimeSessionService {
         };
         entry.validate()?;
         candidate.entries.push(entry);
-        Ok(())
+        Ok(record)
     }
 
     /// Accepts worker-checked chronology and sequence evidence before queuing an append.
@@ -949,7 +1001,7 @@ impl RuntimeSessionService {
         if self.completion_owns_transcript_policy(&turn.turn_id) {
             return Ok(0);
         }
-        let Some((session_conversation_id, session_ephemeral)) = self
+        let Some((session_conversation_id, _)) = self
             .agent_shell_store()
             .get(&turn.pane_id)
             .map(|session| (session.session_id.clone(), session.ephemeral))
@@ -963,10 +1015,16 @@ impl RuntimeSessionService {
         }
         let conversation_id = turn.conversation_id.clone();
         self.record_runtime_agent_patch_results(&conversation_id, execution);
-        if session_ephemeral {
+        if self.agent_turn_transcript_is_ephemeral(turn) {
             return Ok(0);
         }
-        let Some(store) = self.persistence.cloned_transcript_store() else {
+        let store = if let Some((read, _, _)) = &prepared {
+            RuntimeTranscriptProjection::live(self, &turn.turn_id).validate_store(&read.store)?;
+            Some(read.store.clone())
+        } else {
+            self.agent_turn_transcript_store(&turn.turn_id)
+        };
+        let Some(store) = store else {
             return Ok(0);
         };
         let persistence_key = (conversation_id.clone(), turn.turn_id.clone());
@@ -990,7 +1048,7 @@ impl RuntimeSessionService {
                     generation: 0,
                     checked_source: None,
                     turn: turn.clone(),
-                    read: self.capture_bookkeeping_transcript_read(store.clone(), turn),
+                    read: self.capture_bookkeeping_transcript_read(store.clone(), turn)?,
                     persistence_key,
                     entries,
                     directory,
@@ -1004,19 +1062,18 @@ impl RuntimeSessionService {
             if let Some((read, entries, sequence)) = prepared {
                 (read, entries, Some(sequence))
             } else {
-                let read = self.capture_bookkeeping_transcript_read(store.clone(), turn);
+                let read = self.capture_bookkeeping_transcript_read(store.clone(), turn)?;
                 let entries = read.execute()?;
                 (read, entries, None)
             };
         read.check_owner(self)?;
         let created_at_unix_seconds = current_unix_seconds().max(1);
         let entries = if self.persistence.transcript_uses_adapter() {
-            let first_sequence = self
-                .persistence
-                .deferred_transcript_next_sequence(&conversation_id)
-                .or(prepared_sequence)
-                .map(Ok)
-                .unwrap_or_else(|| next_transcript_sequence(&store, &conversation_id))?;
+            let first_sequence = self.original_transcript_next_sequence(
+                &store,
+                &conversation_id,
+                prepared_sequence,
+            )?;
             let first_persistence = first_sequence == 1;
             let entries = self.runtime_transcript_entries_for_execution(
                 &conversation_id,
@@ -1046,7 +1103,8 @@ impl RuntimeSessionService {
             }
             entries
         } else {
-            let first_sequence = next_transcript_sequence(&store, &conversation_id)?;
+            let first_sequence =
+                self.original_transcript_next_sequence(&store, &conversation_id, None)?;
             let entries = self.runtime_transcript_entries_for_execution(
                 &conversation_id,
                 first_sequence,
@@ -1243,17 +1301,19 @@ impl RuntimeSessionService {
         if self.completion_owns_transcript_policy(&turn.turn_id) {
             return Ok(0);
         }
-        let Some((session_conversation_id, session_ephemeral)) = self
+        let Some((session_conversation_id, _)) = self
             .agent_shell_store()
             .get(&turn.pane_id)
             .map(|session| (session.session_id.clone(), session.ephemeral))
         else {
             return Ok(0);
         };
-        if session_conversation_id != turn.conversation_id || session_ephemeral {
+        if session_conversation_id != turn.conversation_id
+            || self.agent_turn_transcript_is_ephemeral(turn)
+        {
             return Ok(0);
         }
-        let Some(store) = self.persistence.cloned_transcript_store() else {
+        let Some(store) = self.agent_turn_transcript_store(&turn.turn_id) else {
             return Ok(0);
         };
         let persistence_key = (
@@ -1304,7 +1364,7 @@ impl RuntimeSessionService {
             // Candidate sequences are placeholders until checked actor acceptance.
             1
         } else {
-            next_transcript_sequence(&store, &turn.conversation_id)?
+            self.original_transcript_next_sequence(&store, &turn.conversation_id, None)?
         };
         let first_persistence = first_sequence == 1;
         let projection = RuntimeTranscriptProjection::live(self, &turn.turn_id);
@@ -1351,7 +1411,7 @@ impl RuntimeSessionService {
                     generation: 0,
                     checked_source: None,
                     turn: turn.clone(),
-                    read: self.capture_bookkeeping_transcript_read(store.clone(), turn),
+                    read: self.capture_bookkeeping_transcript_read(store.clone(), turn)?,
                     persistence_key,
                     entries,
                     directory: None,
@@ -1361,7 +1421,7 @@ impl RuntimeSessionService {
                 });
             return Ok(0);
         }
-        let read = self.capture_bookkeeping_transcript_read(store.clone(), turn);
+        let read = self.capture_bookkeeping_transcript_read(store.clone(), turn)?;
         let existing_entries = read.execute()?;
         read.check_owner(self)?;
         entries = Self::new_runtime_transcript_entries(entries, &existing_entries, first_sequence);

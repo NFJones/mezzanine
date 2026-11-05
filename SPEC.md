@@ -14781,6 +14781,15 @@ The baseline command capabilities are:
   replay MUST use the same captured store. Originally absent storage MUST remain
   absent for that source. Invalid captured pending ownership MUST fail visibly
   at preparation rather than becoming an empty successful history.
+  Terminal bookkeeping and completion-group admission derived from that history
+  MUST retain its original storage target and the turn's admitted save policy,
+  including no-save policy, even if installation changes before group admission.
+  Target save policy MUST NOT be inferred from an inherited history window.
+  Original context retirement MUST move source provenance with its projection
+  metadata; a retained completion candidate MUST reject a different source store.
+  Reprojection of an unchanged same-group settlement-evidence proposal MUST
+  reuse its original occurrence/cost record. A changed evidence proposal or
+  distinct group MUST NOT inherit occurrence identity merely from equal text.
   A manual prefix retry after uncertain publication MUST preserve its original
   proposal, recheck the frozen physical source, and require the exact published
   proposal before settling a missing required-state marker. Equal text with a

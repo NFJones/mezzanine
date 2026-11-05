@@ -412,6 +412,7 @@ impl RuntimePersistenceComponent {
 
     /// Legacy CID lookup preserves its previous max-across-target semantics.
     /// It is compatibility bookkeeping, never original-path acceptance proof.
+    #[cfg(test)]
     pub(super) fn legacy_deferred_transcript_next_sequence(
         &self,
         conversation_id: &str,

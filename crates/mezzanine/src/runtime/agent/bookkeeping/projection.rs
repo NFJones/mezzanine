@@ -2,6 +2,8 @@
 //!
 //! Live callers capture one source view; failed completion groups retain the
 //! actual moved context and its imported-history/compaction/routing metadata.
+//! Original archive ownership and admitted save policy move with that context;
+//! a retained projection cannot acquire a replacement store's write target.
 //! The same encoding/occurrence logic serves both paths, preserving original
 //! witness anchors and full-chronology ordinals. Projection neither installs
 //! runtime maps nor accepts archive writes, continuations or producer transfer.
@@ -11,6 +13,8 @@ use crate::runtime::agent_state::RuntimeTurnCompactionHandoff;
 
 /// Non-context metadata needed to project the same original canonical source.
 pub(in crate::runtime::agent) struct RuntimeTranscriptProjectionMetadata {
+    /// Original source moves with the actual context before live cleanup.
+    history_source: Option<std::sync::Arc<crate::runtime::control::RuntimeAgentHistorySource>>,
     /// Exact native peer occurrences retained by the original canonical owner.
     native_owned_peers: std::collections::BTreeSet<u64>,
     /// Imported occurrences are restored for ordinal assignment, not reappended.
@@ -26,6 +30,8 @@ pub(in crate::runtime::agent) struct RuntimeTranscriptProjectionMetadata {
 
 /// Borrowed immutable canonical source; absence never adopts another context.
 pub(in crate::runtime::agent) struct RuntimeTranscriptProjection<'a> {
+    /// Borrowed original owner, never a later pane/store installation lookup.
+    history_source: Option<&'a std::sync::Arc<crate::runtime::control::RuntimeAgentHistorySource>>,
     /// Excludes only actual root-owned peer rows, independent of later cleanup.
     native_owned_peers: std::collections::BTreeSet<u64>,
     /// Completion requires actual context; legacy interrupted projections may lack it.
@@ -49,6 +55,7 @@ impl RuntimeSessionService {
     ) -> RuntimeTranscriptProjectionMetadata {
         let routed_presentation = self.routed_presentation_turn(turn_id);
         RuntimeTranscriptProjectionMetadata {
+            history_source: self.agent.agent_turn_history_sources.remove(turn_id),
             native_owned_peers: self.native_owned_peer_events(turn_id),
             imported_history_high_water: self
                 .agent
@@ -69,6 +76,7 @@ impl<'a> RuntimeTranscriptProjection<'a> {
         metadata: &'a RuntimeTranscriptProjectionMetadata,
     ) -> Self {
         Self {
+            history_source: metadata.history_source.as_ref(),
             context,
             native_owned_peers: metadata.native_owned_peers.clone(),
             imported_history_high_water: metadata.imported_history_high_water,
@@ -82,6 +90,7 @@ impl<'a> RuntimeTranscriptProjection<'a> {
     /// Subsequent row encoding performs no ambient lookup or witness cloning.
     pub(super) fn live(service: &'a RuntimeSessionService, turn_id: &str) -> Self {
         Self {
+            history_source: service.agent_turn_history_source(turn_id),
             context: service.agent_turn_contexts().get(turn_id),
             native_owned_peers: service.native_owned_peer_events(turn_id),
             imported_history_high_water: service
@@ -90,6 +99,22 @@ impl<'a> RuntimeTranscriptProjection<'a> {
             routed_presentation: service.routed_presentation_turn(turn_id),
             terminal_archive: false,
         }
+    }
+
+    /// Requires the original persisted target and refuses a source admitted with
+    /// no-save policy. Strong source retention does not grant new write rights.
+    pub(super) fn validate_store(
+        &self,
+        store: &crate::storage::transcript::AgentTranscriptStore,
+    ) -> Result<()> {
+        if let Some(source) = self.history_source
+            && (source.ephemeral() == Some(true) || source.store().as_ref() != Some(store))
+        {
+            return Err(MezError::conflict(
+                "transcript projection differs from original source store",
+            ));
+        }
+        Ok(())
     }
 
     /// Projects ordinary rows and exact canonical occurrences from this source.

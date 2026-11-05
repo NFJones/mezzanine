@@ -640,7 +640,9 @@ fn runtime_completion_handoff_rejects_changed_worker_read() {
         .agent_shell_store_mut()
         .record_transcript_entries(&candidate.turn.pane_id, 1)
         .unwrap();
-    work.read = service.capture_bookkeeping_transcript_read(store.clone(), &candidate.turn);
+    work.read = service
+        .capture_bookkeeping_transcript_read(store.clone(), &candidate.turn)
+        .unwrap();
     assert_ne!(work.read, candidate.read);
     assert_eq!(work.candidate.read, candidate.read);
     let error = service

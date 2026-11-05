@@ -1178,7 +1178,9 @@ fn runtime_local_transcript_failure_retains_accepted_execution() {
         0
     );
     assert_eq!(store.inspect(&turn.conversation_id).unwrap(), entries);
-    let captured = service.capture_bookkeeping_transcript_read(store.clone(), &turn);
+    let captured = service
+        .capture_bookkeeping_transcript_read(store.clone(), &turn)
+        .unwrap();
     service
         .agent_shell_store_mut()
         .record_transcript_entries("%1", 1)

@@ -1104,6 +1104,16 @@ impl CompletionFixture {
 
     /// Captures original repository policy before the actual worker claim.
     async fn fetch_with_save_policy(final_turn: bool, attach_store: bool) -> Self {
+        Self::fetch_with_save_policy_and_replacement(final_turn, attach_store, false).await
+    }
+
+    /// Replaces installation after the real prompt captured source but before
+    /// the execution group reserves its original transcript/receipt policy.
+    async fn fetch_with_save_policy_and_replacement(
+        final_turn: bool,
+        attach_store: bool,
+        replace_before_group: bool,
+    ) -> Self {
         let root = CompletionRoot(
             temp_root("completed-result-owner"),
             CompletionRootCleanup::RemoveOwned,
@@ -1121,17 +1131,39 @@ impl CompletionFixture {
             .unwrap();
         // Keep the nested large admission future off the outer fixture frame;
         // this is not a peak-stack or stack-free-construction claim.
-        Box::pin(Self::admit_prepared(service, primary, root, final_turn)).await
+        Box::pin(Self::admit_prepared_with_store_replacement(
+            service,
+            primary,
+            root,
+            final_turn,
+            replace_before_group,
+        ))
+        .await
     }
 
     /// Reuses the original real request/header/context/claim predecessor after
     /// its caller has established service, storage and any genuine native root.
     /// This does not create native ownership or relax admission/cleanup guards.
     async fn admit_prepared(
+        service: RuntimeSessionService,
+        primary: mez_core::ids::ClientId,
+        root: CompletionRoot,
+        final_turn: bool,
+    ) -> Self {
+        Box::pin(Self::admit_prepared_with_store_replacement(
+            service, primary, root, final_turn, false,
+        ))
+        .await
+    }
+
+    /// Uses only actual source admission and provider-result predecessor APIs;
+    /// store replacement grants no execution or receipt-transfer authority.
+    async fn admit_prepared_with_store_replacement(
         mut service: RuntimeSessionService,
         primary: mez_core::ids::ClientId,
         root: CompletionRoot,
         final_turn: bool,
+        replace_before_group: bool,
     ) -> Self {
         service
             .agent_shell_store_mut()
@@ -1150,6 +1182,11 @@ impl CompletionFixture {
             .turn(&started.turn_id)
             .unwrap()
             .clone();
+        if replace_before_group {
+            service.set_agent_transcript_store(AgentTranscriptStore::new(
+                root.0.join("replacement-repository"),
+            ));
+        }
         let fetch = |id: &str, suffix: &str| AgentAction {
             id: id.to_string(),
             payload: AgentActionPayload::FetchUrl {
@@ -1541,77 +1578,84 @@ async fn runtime_completion_owner_retains_fetch_before_immediate_install_failure
 /// is deliberately not used as the RAW archive oracle.
 #[tokio::test]
 async fn runtime_completion_owner_late_repository_does_not_override_original_no_save() {
-    let mut fixture = CompletionFixture::fetch_with_save_policy(true, false).await;
-    let store = AgentTranscriptStore::new(fixture._root.0.join("late-repository"));
-    fixture.service.set_agent_transcript_store(store.clone());
-    let execution = fixture.retained();
-    assert_eq!(
-        fixture
+    for replace_before_group in [false, true] {
+        let mut fixture = CompletionFixture::fetch_with_save_policy_and_replacement(
+            true,
+            false,
+            replace_before_group,
+        )
+        .await;
+        let store = AgentTranscriptStore::new(fixture._root.0.join("replacement-repository"));
+        fixture.service.set_agent_transcript_store(store.clone());
+        let execution = fixture.retained();
+        assert_eq!(
+            fixture
+                .service
+                .persist_runtime_agent_turn_execution_transcript(&fixture.turn, &execution)
+                .unwrap(),
+            0
+        );
+        assert!(fixture.service.claim_bookkeeping_candidates().is_empty());
+        let outcome = fixture.outcome();
+        assert!(
+            fixture
+                .service
+                .complete_approved_external_action(outcome)
+                .unwrap()
+        );
+        let sibling = fixture.retained().response.action_batch.unwrap().actions[1].clone();
+        let dispatch = fixture
             .service
-            .persist_runtime_agent_turn_execution_transcript(&fixture.turn, &execution)
-            .unwrap(),
-        0
-    );
-    assert!(fixture.service.claim_bookkeeping_candidates().is_empty());
-    let outcome = fixture.outcome();
-    assert!(
-        fixture
-            .service
-            .complete_approved_external_action(outcome)
+            .claim_approved_external_action(&fixture.turn.turn_id, &sibling.id)
             .unwrap()
-    );
-    let sibling = fixture.retained().response.action_batch.unwrap().actions[1].clone();
-    let dispatch = fixture
-        .service
-        .claim_approved_external_action(&fixture.turn.turn_id, &sibling.id)
-        .unwrap()
-        .unwrap();
-    let result = ActionResult::succeeded(
-        &fixture.turn,
-        &sibling,
-        vec!["no-save sibling".to_string()],
-        None,
-    );
-    assert!(
-        fixture
-            .service
-            .complete_approved_external_action(
-                crate::runtime::RuntimeApprovedExternalActionOutcome {
-                    turn_id: fixture.turn.turn_id.clone(),
-                    action_id: sibling.id,
-                    attempt: dispatch.attempt,
-                    result: Ok(result),
-                    mcp_transport: None,
-                }
-            )
-            .unwrap()
-    );
-    assert_eq!(
-        fixture
-            .service
-            .agent_turn_ledger()
-            .turn(&fixture.turn.turn_id)
-            .unwrap()
-            .state,
-        AgentTurnState::Completed
-    );
-    assert!(fixture.service.claim_bookkeeping_candidates().is_empty());
-    let raw_path = store
-        .transcript_path(&fixture.turn.conversation_id)
-        .unwrap();
-    assert!(
-        !raw_path.exists(),
-        "no-save policy must not manufacture an empty RAW archive"
-    );
-    assert!(
-        fixture
-            .service
-            .persistence
-            .pending_transcript_entries_at_path(&raw_path, &fixture.turn.conversation_id)
-            .unwrap()
-            .is_empty()
-    );
-    fixture.service.ensure_completion_admission_open().unwrap();
+            .unwrap();
+        let result = ActionResult::succeeded(
+            &fixture.turn,
+            &sibling,
+            vec!["no-save sibling".to_string()],
+            None,
+        );
+        assert!(
+            fixture
+                .service
+                .complete_approved_external_action(
+                    crate::runtime::RuntimeApprovedExternalActionOutcome {
+                        turn_id: fixture.turn.turn_id.clone(),
+                        action_id: sibling.id,
+                        attempt: dispatch.attempt,
+                        result: Ok(result),
+                        mcp_transport: None,
+                    }
+                )
+                .unwrap()
+        );
+        assert_eq!(
+            fixture
+                .service
+                .agent_turn_ledger()
+                .turn(&fixture.turn.turn_id)
+                .unwrap()
+                .state,
+            AgentTurnState::Completed
+        );
+        assert!(fixture.service.claim_bookkeeping_candidates().is_empty());
+        let raw_path = store
+            .transcript_path(&fixture.turn.conversation_id)
+            .unwrap();
+        assert!(
+            !raw_path.exists(),
+            "no-save policy must not manufacture an empty RAW archive"
+        );
+        assert!(
+            fixture
+                .service
+                .persistence
+                .pending_transcript_entries_at_path(&raw_path, &fixture.turn.conversation_id)
+                .unwrap()
+                .is_empty()
+        );
+        fixture.service.ensure_completion_admission_open().unwrap();
+    }
 }
 
 /// The original archive target, not the repository attached at callback time,
@@ -1620,91 +1664,97 @@ async fn runtime_completion_owner_late_repository_does_not_override_original_no_
 /// parallel mutable candidate or send bytes to the replacement repository.
 #[tokio::test]
 async fn runtime_completion_owner_repository_replacement_has_one_original_candidate() {
-    let mut fixture = CompletionFixture::fetch().await;
-    let original = fixture
-        .service
-        .persistence
-        .cloned_transcript_store()
-        .unwrap();
-    let replacement = AgentTranscriptStore::new(fixture._root.0.join("replacement-repository"));
-    fixture.service.persistence.enable_transcript_adapter();
-    fixture
-        .service
-        .set_agent_transcript_store(replacement.clone());
-    let outcome = fixture.outcome();
-    assert!(
+    for replace_before_group in [false, true] {
+        let mut fixture = CompletionFixture::fetch_with_save_policy_and_replacement(
+            true,
+            true,
+            replace_before_group,
+        )
+        .await;
+        let original = AgentTranscriptStore::new(fixture._root.0.join("transcripts"));
+        let replacement = AgentTranscriptStore::new(fixture._root.0.join("replacement-repository"));
+        fixture.service.persistence.enable_transcript_adapter();
         fixture
             .service
-            .complete_approved_external_action(outcome)
-            .unwrap()
-    );
-    let sibling = fixture.retained().response.action_batch.unwrap().actions[1].clone();
-    let dispatch = fixture
-        .service
-        .claim_approved_external_action(&fixture.turn.turn_id, &sibling.id)
-        .unwrap()
-        .unwrap();
-    let result = ActionResult::succeeded(
-        &fixture.turn,
-        &sibling,
-        vec!["original-store sibling".to_string()],
-        None,
-    );
-    assert!(
-        fixture
+            .set_agent_transcript_store(replacement.clone());
+        let outcome = fixture.outcome();
+        assert!(
+            fixture
+                .service
+                .complete_approved_external_action(outcome)
+                .unwrap()
+        );
+        let sibling = fixture.retained().response.action_batch.unwrap().actions[1].clone();
+        let dispatch = fixture
             .service
-            .complete_approved_external_action(
-                crate::runtime::RuntimeApprovedExternalActionOutcome {
-                    turn_id: fixture.turn.turn_id.clone(),
-                    action_id: sibling.id,
-                    attempt: dispatch.attempt,
-                    result: Ok(result),
-                    mcp_transport: None,
-                }
-            )
+            .claim_approved_external_action(&fixture.turn.turn_id, &sibling.id)
             .unwrap()
-    );
-    let mut work = fixture.service.claim_bookkeeping_candidates();
-    assert_eq!(
-        work.len(),
-        1,
-        "the group must not also use a legacy candidate"
-    );
-    let work = work.pop().unwrap();
-    assert_eq!(work.read, work.read.clone().freeze_completion());
-    let checked = work.execute();
-    assert!(
-        checked.is_ok(),
-        "original checked history must be readable: {checked:?}"
-    );
-    assert!(
-        fixture
-            .service
-            .complete_bookkeeping_candidate(work, checked)
-            .unwrap()
-    );
-    let original_path = original
-        .transcript_path(&fixture.turn.conversation_id)
-        .unwrap();
-    let replacement_path = replacement
-        .transcript_path(&fixture.turn.conversation_id)
-        .unwrap();
-    assert!(
-        !fixture
-            .service
-            .persistence
-            .pending_transcript_entries_at_path(&original_path, &fixture.turn.conversation_id)
-            .unwrap()
-            .is_empty()
-    );
-    assert!(
-        fixture
-            .service
-            .persistence
-            .pending_transcript_entries_at_path(&replacement_path, &fixture.turn.conversation_id)
-            .unwrap()
-            .is_empty()
-    );
+            .unwrap();
+        let result = ActionResult::succeeded(
+            &fixture.turn,
+            &sibling,
+            vec!["original-store sibling".to_string()],
+            None,
+        );
+        assert!(
+            fixture
+                .service
+                .complete_approved_external_action(
+                    crate::runtime::RuntimeApprovedExternalActionOutcome {
+                        turn_id: fixture.turn.turn_id.clone(),
+                        action_id: sibling.id,
+                        attempt: dispatch.attempt,
+                        result: Ok(result),
+                        mcp_transport: None,
+                    }
+                )
+                .unwrap()
+        );
+        let mut work = fixture.service.claim_bookkeeping_candidates();
+        assert_eq!(
+            work.len(),
+            1,
+            "the group must not also use a legacy candidate"
+        );
+        let work = work.pop().unwrap();
+        assert_eq!(work.read, work.read.clone().freeze_completion());
+        let checked = work.execute();
+        assert!(
+            checked.is_ok(),
+            "original checked history must be readable: {checked:?}"
+        );
+        assert!(
+            fixture
+                .service
+                .complete_bookkeeping_candidate(work, checked)
+                .unwrap()
+        );
+        let original_path = original
+            .transcript_path(&fixture.turn.conversation_id)
+            .unwrap();
+        let replacement_path = replacement
+            .transcript_path(&fixture.turn.conversation_id)
+            .unwrap();
+        assert!(
+            !fixture
+                .service
+                .persistence
+                .pending_transcript_entries_at_path(&original_path, &fixture.turn.conversation_id)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            fixture
+                .service
+                .persistence
+                .pending_transcript_entries_at_path(
+                    &replacement_path,
+                    &fixture.turn.conversation_id
+                )
+                .unwrap()
+                .is_empty()
+        );
+    }
 }
 
 /// A held first result and a successful serialized sibling cannot bypass group

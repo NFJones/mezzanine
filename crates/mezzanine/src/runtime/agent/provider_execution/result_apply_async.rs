@@ -651,13 +651,11 @@ impl RuntimeSessionService {
             && execution.terminal_state != AgentTurnState::Running;
         if needs_bookkeeping
             && self.persistence.provider_settlement_uses_adapter()
-            && self
-                .agent_shell_store()
-                .get(&turn.pane_id)
-                .is_some_and(|session| !session.ephemeral)
-            && let Some(store) = self.persistence.cloned_transcript_store()
+            && self.agent_shell_store().get(&turn.pane_id).is_some()
+            && !self.agent_turn_transcript_is_ephemeral(turn)
+            && let Some(store) = self.agent_turn_transcript_store(&turn.turn_id)
         {
-            let read = self.capture_bookkeeping_transcript_read(store, turn);
+            let read = self.capture_bookkeeping_transcript_read(store, turn)?;
             self.queue_provider_settlement_phase(
                 turn,
                 model_profile,

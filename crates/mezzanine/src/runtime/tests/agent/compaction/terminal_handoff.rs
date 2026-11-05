@@ -6,6 +6,7 @@
 
 use super::*;
 
+mod completion_owner;
 /// Late same-group evidence keeps its original full-chronology occurrence.
 mod occurrences;
 mod receive_admission;

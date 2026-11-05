@@ -250,6 +250,14 @@ and guidance rows, and accepted replay refresh use that same store; a turn that
 originally had no storage does not acquire it retroactively. Conflicting pending
 ownership fails preparation visibly instead of being treated as empty history.
 
+Ordinary terminal bookkeeping and completion receipts retain the same original
+store and the turn's admitted save policy, including when a store is installed
+or replaced before completion-group admission. A child's save policy is separate
+from the history window it inherits. Retiring context moves its original source
+with the retained projection metadata. Rebuilding the same completion evidence
+for a failed handoff reuses its occurrence and local estimate; a changed proposal
+or a new group receives its own record.
+
 A manual prefix retry retains the original proposal occurrence. If its epoch
 reached disk before a later write failed, retry checks the same frozen source
 rows and exact proposal before settling the required-state marker. An equal-text

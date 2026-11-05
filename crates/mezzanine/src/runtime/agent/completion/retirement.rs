@@ -154,6 +154,9 @@ pub(super) struct CompletionFailedBacking {
 
 /// The exact immutable candidate and its cached actual producer witness.
 pub(super) struct CompletionTranscriptHandoff {
+    /// Original record for this group's actual settlement-evidence proposal.
+    /// Reprojection with unchanged evidence must not allocate a new occurrence.
+    pub(super) evidence_record: mez_agent::ContextBlockRecord,
     pub(super) candidate: RuntimeBookkeepingCandidate,
     pub(super) witness: Option<RuntimeCompletionCandidateWitness>,
     pub(super) evidence: String,
@@ -537,11 +540,11 @@ impl RuntimeSessionService {
                 "completion group original conversation changed",
             ));
         }
-        let transcript = if session.ephemeral {
+        let transcript = if self.agent_turn_transcript_is_ephemeral(&turn) {
             CompletionTranscriptTarget::NoPersistencePolicy(
                 CompletionNoPersistencePolicy::Ephemeral,
             )
-        } else if let Some(store) = self.persistence.cloned_transcript_store() {
+        } else if let Some(store) = self.agent_turn_transcript_store(turn_id) {
             CompletionTranscriptTarget::Original {
                 read: Box::new(self.capture_completion_transcript_read(store, &turn)?),
                 directory: self.capture_completion_directory_entry(&turn),
@@ -1031,13 +1034,22 @@ impl RuntimeSessionService {
                 "completion handoff execution is unavailable",
             ));
         };
-        if fresh_source || existing.is_none_or(|handoff| handoff.evidence != evidence) {
-            Self::append_completion_settlement_evidence(
-                &mut candidate,
-                &group.group,
-                evidence.clone(),
-            )?;
-        }
+        let retained_record = existing
+            .filter(|handoff| handoff.evidence == evidence)
+            .map(|handoff| handoff.evidence_record);
+        let evidence_record =
+            if fresh_source || existing.is_none_or(|handoff| handoff.evidence != evidence) {
+                Self::append_completion_settlement_evidence(
+                    &mut candidate,
+                    &group.group,
+                    evidence.clone(),
+                    retained_record,
+                )?
+            } else {
+                retained_record.ok_or_else(|| {
+                    MezError::invalid_state("original completion evidence record is unavailable")
+                })?
+            };
         if let Some(handoff) = existing
             && handoff.evidence == evidence
             && handoff.candidate.entries.len() == candidate.entries.len()
@@ -1070,6 +1082,7 @@ impl RuntimeSessionService {
             .get_mut(turn_id)
             .ok_or_else(|| MezError::invalid_state("completion handoff owner disappeared"))?;
         group.handoff = Some(Box::new(CompletionTranscriptHandoff {
+            evidence_record,
             candidate,
             witness: None,
             evidence,

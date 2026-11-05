@@ -339,10 +339,11 @@ impl RuntimeSessionService {
                 directory.clone(),
             )?;
             let evidence = Self::completion_group_settlement_evidence(group);
-            Self::append_completion_settlement_evidence(
+            let evidence_record = Self::append_completion_settlement_evidence(
                 &mut candidate,
                 &group.group,
                 evidence.clone(),
+                None,
             )?;
             if let Some(group) = self
                 .agent
@@ -352,6 +353,7 @@ impl RuntimeSessionService {
                 .and_then(|source| source.group.as_mut())
             {
                 group.handoff = Some(Box::new(CompletionTranscriptHandoff {
+                    evidence_record,
                     candidate,
                     witness: None,
                     evidence,

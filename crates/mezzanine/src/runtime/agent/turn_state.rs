@@ -116,6 +116,26 @@ impl RuntimeSessionService {
         source: Option<std::sync::Arc<crate::runtime::control::RuntimeAgentHistorySource>>,
     ) {
         if let Some(source) = source {
+            let policy = self
+                .agent
+                .agent_turn_history_sources
+                .get(&turn_id)
+                .and_then(|original| original.ephemeral())
+                .or_else(|| {
+                    self.agent_turn_ledger().turn(&turn_id).and_then(|turn| {
+                        self.agent_shell_store()
+                            .get(&turn.pane_id)
+                            .filter(|session| session.session_id == turn.conversation_id)
+                            .map(|session| session.ephemeral)
+                    })
+                });
+            let source = if let Some(policy) = policy {
+                crate::runtime::control::RuntimeAgentHistorySource::with_target_policy(
+                    source, policy,
+                )
+            } else {
+                source
+            };
             self.agent
                 .agent_turn_history_sources
                 .insert(turn_id, source);
@@ -130,6 +150,35 @@ impl RuntimeSessionService {
         turn_id: &str,
     ) -> Option<&std::sync::Arc<crate::runtime::control::RuntimeAgentHistorySource>> {
         self.agent.agent_turn_history_sources.get(turn_id)
+    }
+
+    /// Uses the admitted source's original store, including explicit absence.
+    /// Older producers without an explicit source use their current admission
+    /// target; this fallback does not establish an earlier source identity.
+    pub(crate) fn agent_turn_transcript_store(
+        &self,
+        turn_id: &str,
+    ) -> Option<crate::storage::transcript::AgentTranscriptStore> {
+        match self.agent_turn_history_source(turn_id) {
+            Some(source) => source.store(),
+            None => self.persistence.cloned_transcript_store(),
+        }
+    }
+
+    /// Preserves the admitted source's ephemeral policy, including when live
+    /// session metadata subsequently changes. Legacy non-history producers use
+    /// their current admission policy until they capture an explicit source.
+    pub(crate) fn agent_turn_transcript_is_ephemeral(
+        &self,
+        turn: &mez_agent::AgentTurnRecord,
+    ) -> bool {
+        self.agent_turn_history_source(&turn.turn_id)
+            .and_then(|source| source.ephemeral())
+            .unwrap_or_else(|| {
+                self.agent_shell_store()
+                    .get(&turn.pane_id)
+                    .is_some_and(|session| session.ephemeral)
+            })
     }
 
     /// Retains the original interrupted source rather than fresh replacement replay.
