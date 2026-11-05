@@ -1664,8 +1664,16 @@ impl AsyncRuntimeSessionActor {
         }
         if let Some(claim_id) = claim_id {
             let (entries, path) = match &persistence_event {
-                PersistenceEvent::TranscriptCompleted { entries, path, .. }
-                | PersistenceEvent::TranscriptFailed { entries, path, .. } => (entries, path),
+                PersistenceEvent::TranscriptCompleted {
+                    batch: entries,
+                    path,
+                    ..
+                }
+                | PersistenceEvent::TranscriptFailed {
+                    batch: entries,
+                    path,
+                    ..
+                } => (entries, path),
                 _ => return Ok(RuntimeTransition::default()),
             };
             if !self
@@ -1676,33 +1684,44 @@ impl AsyncRuntimeSessionActor {
             }
         }
         let completed_claim = match &persistence_event {
-            PersistenceEvent::TranscriptCompleted { entries, path, .. } => {
-                Some((entries.clone(), path.clone()))
-            }
+            PersistenceEvent::TranscriptCompleted {
+                batch: entries,
+                path,
+                ..
+            } => Some((entries.clone(), path.clone())),
             _ => None,
         };
         if let PersistenceEvent::TranscriptCompleted {
             conversation_id,
             first_sequence,
-            entries,
+            batch: entries,
             ..
         }
         | PersistenceEvent::TranscriptFailed {
             conversation_id,
             first_sequence,
-            entries,
+            batch: entries,
             ..
         } = &persistence_event
-            && (entries.first().is_none_or(|first| {
+            && (entries.entries().first().is_none_or(|first| {
                 first.conversation_id != *conversation_id || first.sequence != *first_sequence
             }) || entries
+                .entries()
                 .iter()
                 .any(|entry| entry.conversation_id != *conversation_id))
         {
             return Ok(RuntimeTransition::default());
         }
-        if let PersistenceEvent::TranscriptCompleted { entries, path, .. }
-        | PersistenceEvent::TranscriptFailed { entries, path, .. } = &persistence_event
+        if let PersistenceEvent::TranscriptCompleted {
+            batch: entries,
+            path,
+            ..
+        }
+        | PersistenceEvent::TranscriptFailed {
+            batch: entries,
+            path,
+            ..
+        } = &persistence_event
             && !self
                 .side_effect_routes
                 .owns_claimed_transcript(entries, path)
@@ -1718,7 +1737,7 @@ impl AsyncRuntimeSessionActor {
                 self.side_effect_routes.recover_claimed_transcripts();
             }
             PersistenceEvent::TranscriptFailed {
-                entries,
+                batch: entries,
                 path,
                 retryable: false,
                 ..

@@ -24,7 +24,10 @@ fn runtime_fork_source_ignores_foreign_same_conversation_pending_owner() {
         .queue_transcript(RuntimeSideEffect::PersistTranscriptEntries {
             path: foreign_path.clone(),
             store: foreign,
-            entries: vec![other.clone()],
+            batch: crate::storage::transcript::TranscriptAppendBatch::owned_rows(vec![
+                other.clone(),
+            ])
+            .unwrap(),
         });
     let snapshot = service
         .prepare_subagent_fork_read_work("agent-%1")

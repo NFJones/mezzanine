@@ -29,8 +29,10 @@ pub(crate) mod steering;
 /// Immutable transcript-only fallback evidence in the existing presentation log.
 pub(crate) mod fallback;
 
+mod append_accounting;
 /// Immutable transcript rows and optional initial fork authority.
 mod append_batch;
+pub(crate) use append_accounting::TranscriptAppendAccounting;
 /// Receipt-owned inherited raw identity/cost publication, separate from epochs.
 mod initial_accounting;
 pub(crate) use initial_accounting::InitialTranscriptRowAccounting;

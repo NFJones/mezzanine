@@ -124,6 +124,8 @@ pub(crate) struct RuntimeBookkeepingCandidate {
     pub(crate) read: RuntimeBookkeepingTranscriptReadWork,
     pub(crate) persistence_key: (String, String),
     pub(crate) entries: Vec<TranscriptEntry>,
+    /// Once-allocated physical append proposal retained through checked retries.
+    append_proposal: Option<crate::storage::transcript::TranscriptAppendBatch>,
     pub(crate) directory: Option<TranscriptEntry>,
     pub(crate) blocked: bool,
     /// Runtime failure metadata is not immutable evidence identity.
@@ -154,6 +156,26 @@ impl std::fmt::Debug for RuntimeBookkeepingCandidate {
 }
 
 impl RuntimeBookkeepingCandidate {
+    /// Freezes descriptive append identity only after final physical placement
+    /// is checked. Retry cannot reconstruct a new owner from equal raw rows.
+    fn append_proposal_for(
+        &mut self,
+        entries: &[TranscriptEntry],
+    ) -> Result<crate::storage::transcript::TranscriptAppendBatch> {
+        if let Some(proposal) = &self.append_proposal {
+            if proposal.entries() != entries {
+                return Err(MezError::conflict(
+                    "retained append proposal changed physical source",
+                ));
+            }
+            return Ok(proposal.clone());
+        }
+        let proposal =
+            crate::storage::transcript::TranscriptAppendBatch::owned_rows(entries.to_vec())?;
+        self.append_proposal = Some(proposal.clone());
+        Ok(proposal)
+    }
+
     /// Canonically encodes exact immutable evidence and original checked-read
     /// ownership. Runtime generation/blocked state are not evidence identity.
     /// This is an in-process handoff identity, not a new transcript wire format.
@@ -478,7 +500,7 @@ impl RuntimeSessionService {
             }
             Ok((history, sequence, observation))
         });
-        let Some(candidate) = self
+        let Some(mut candidate) = self
             .persistence
             .take_bookkeeping_candidate_for_claim(work.candidate.generation, claim)
         else {
@@ -585,21 +607,25 @@ impl RuntimeSessionService {
                 return self.block_bookkeeping_after_error(candidate, error);
             }
         } else if frozen {
+            let batch = match candidate.append_proposal_for(&entries) {
+                Ok(batch) => batch,
+                Err(error) => return self.block_bookkeeping_after_error(candidate, error),
+            };
             if let Err(error) = self.persistence.queue_checked_completion_transcript(
-                RuntimeSideEffect::PersistTranscriptEntries {
-                    path,
-                    store,
-                    entries: entries.clone(),
-                },
+                RuntimeSideEffect::PersistTranscriptEntries { path, store, batch },
             ) {
                 return self.block_bookkeeping_after_error(candidate, error);
             }
         } else {
+            let batch = match candidate.append_proposal_for(&entries) {
+                Ok(batch) => batch,
+                Err(error) => return self.block_bookkeeping_after_error(candidate, error),
+            };
             self.persistence
                 .queue_transcript(RuntimeSideEffect::PersistTranscriptEntries {
                     path,
                     store,
-                    entries: entries.clone(),
+                    batch,
                 });
         }
         self.agent
@@ -907,6 +933,7 @@ impl RuntimeSessionService {
             read: read.freeze_completion(),
             persistence_key: (turn.conversation_id.clone(), turn.turn_id.clone()),
             entries,
+            append_proposal: None,
             directory,
             blocked: false,
             failure: None,
@@ -1051,6 +1078,7 @@ impl RuntimeSessionService {
                     read: self.capture_bookkeeping_transcript_read(store.clone(), turn)?,
                     persistence_key,
                     entries,
+                    append_proposal: None,
                     directory,
                     blocked: false,
                     failure: None,
@@ -1096,7 +1124,9 @@ impl RuntimeSessionService {
                 .queue_transcript(RuntimeSideEffect::PersistTranscriptEntries {
                     path: store.transcript_path(&conversation_id)?,
                     store,
-                    entries: entries.clone(),
+                    batch: crate::storage::transcript::TranscriptAppendBatch::owned_rows(
+                        entries.clone(),
+                    )?,
                 });
             if first_persistence {
                 self.queue_saved_session_retention_operation(created_at_unix_seconds, false)?;
@@ -1248,7 +1278,9 @@ impl RuntimeSessionService {
                 .queue_transcript(RuntimeSideEffect::PersistTranscriptEntries {
                     path: store.transcript_path(conversation_id)?,
                     store,
-                    entries: entries.clone(),
+                    batch: crate::storage::transcript::TranscriptAppendBatch::owned_rows(
+                        entries.clone(),
+                    )?,
                 });
         } else {
             self.append_transcript_with_admission_observation(&store, &entries, false)?;
@@ -1414,6 +1446,7 @@ impl RuntimeSessionService {
                     read: self.capture_bookkeeping_transcript_read(store.clone(), turn)?,
                     persistence_key,
                     entries,
+                    append_proposal: None,
                     directory: None,
                     blocked: false,
                     failure: None,
@@ -1434,7 +1467,9 @@ impl RuntimeSessionService {
                 .queue_transcript(RuntimeSideEffect::PersistTranscriptEntries {
                     path: store.transcript_path(&turn.conversation_id)?,
                     store,
-                    entries: entries.clone(),
+                    batch: crate::storage::transcript::TranscriptAppendBatch::owned_rows(
+                        entries.clone(),
+                    )?,
                 });
             if first_persistence {
                 self.queue_saved_session_retention_operation(created_at_unix_seconds, false)?;

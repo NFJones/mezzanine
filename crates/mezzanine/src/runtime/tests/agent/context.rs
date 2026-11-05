@@ -1216,7 +1216,11 @@ fn runtime_local_transcript_failure_retains_accepted_execution() {
         .queue_transcript(RuntimeSideEffect::PersistTranscriptEntries {
             path: store.transcript_path(&turn.conversation_id).unwrap(),
             store: store.clone(),
-            entries: vec![entries[0].clone(), entries[0].clone()],
+            batch: crate::storage::transcript::TranscriptAppendBatch::owned_rows(vec![
+                entries[0].clone(),
+                entries[0].clone(),
+            ])
+            .unwrap(),
         });
     std::fs::remove_file(store.transcript_path(&turn.conversation_id).unwrap()).unwrap();
     let error = service

@@ -38,11 +38,11 @@ impl super::RuntimeSessionService {
     pub(in crate::runtime) fn compaction_pending_entries(
         &self,
         task: &super::RuntimeAgentCompactionTask,
-    ) -> Result<Vec<TranscriptEntry>> {
+    ) -> Result<crate::runtime::persistence::RuntimePendingTranscriptContext> {
         let Some(store) = task.source_store() else {
-            return Ok(Vec::new());
+            return Ok(Default::default());
         };
-        self.persistence.pending_transcript_entries_at_path(
+        self.persistence.pending_transcript_context_at_path(
             &store.transcript_path(&task.conversation_id)?,
             &task.conversation_id,
         )

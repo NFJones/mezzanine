@@ -36,7 +36,8 @@ async fn native_input_waits_for_queued_and_inflight_ordinary_rows() {
         .queue_transcript_for_tests(RuntimeSideEffect::PersistTranscriptEntries {
             store: store.clone(),
             path: path.clone(),
-            entries: vec![row.clone()],
+            batch: crate::storage::transcript::TranscriptAppendBatch::owned_rows(vec![row.clone()])
+                .unwrap(),
         });
     assert!(
         actor.service.pending_native_input_work().is_none(),
@@ -54,21 +55,23 @@ async fn native_input_waits_for_queued_and_inflight_ordinary_rows() {
     for effect in effects {
         if let RuntimeSideEffect::PersistTranscriptEntries {
             store,
-            entries,
+            batch: entries,
             path,
         } = effect
         {
             let original = entries.clone();
-            let bytes = tokio::task::spawn_blocking(move || store.append_many(&entries))
-                .await
-                .unwrap()
-                .unwrap();
+            let bytes = tokio::task::spawn_blocking(move || {
+                store.commit_accounted_transcript_batch(&entries, 1)
+            })
+            .await
+            .unwrap()
+            .unwrap();
             actor
                 .service
                 .apply_persistence_transition(PersistenceEvent::TranscriptCompleted {
                     conversation_id: turn.conversation_id.clone(),
-                    first_sequence: original[0].sequence,
-                    entries: original,
+                    first_sequence: original.first_sequence(),
+                    batch: original,
                     path,
                     bytes,
                 })

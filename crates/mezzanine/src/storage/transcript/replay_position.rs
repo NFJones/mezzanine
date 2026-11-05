@@ -73,6 +73,7 @@ impl AgentTranscriptStore {
         ) -> Result<(T, Vec<(u64, mez_agent::ContextBlockRecord)>)>,
     ) -> Result<(ConversationReplaySnapshot, T)> {
         let lease = self.acquire_conversation_lock(conversation_id)?;
+        self.recover_accounted_appends_for_replay_locked(conversation_id, &lease)?;
         let epoch = self.compaction_epoch_locked(conversation_id)?;
         let view = match select(epoch.as_ref()) {
             Some((read, required)) => self.conversation_transcript_view_locked(

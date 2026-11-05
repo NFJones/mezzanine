@@ -655,14 +655,14 @@ impl RuntimeSideEffectRouter {
     /// Stops replaying an exact permanently rejected claim without hiding its logical rows.
     pub(super) fn block_claimed_transcript(
         &mut self,
-        entries: &[mez_agent::transcript::TranscriptEntry],
+        entries: &crate::storage::transcript::TranscriptAppendBatch,
         path: &std::path::Path,
     ) {
         if !self.owns_claimed_transcript(entries, path) {
             return;
         }
         if let Some(claim) = self.claimed_transcripts.iter_mut().find(|claim| {
-            !claim.blocked && matches!(&claim.effect, RuntimeSideEffect::PersistTranscriptEntries { entries: claimed, path: claimed_path, .. } if claimed == entries && claimed_path == path)
+            !claim.blocked && matches!(&claim.effect, RuntimeSideEffect::PersistTranscriptEntries { batch: claimed, path: claimed_path, .. } if claimed == entries && claimed_path == path)
         }) {
             claim.blocked = true;
             if let Some(position) = self.persistence.iter().position(|queued| queued.recovered_claim == Some(claim.id)) {
@@ -674,11 +674,11 @@ impl RuntimeSideEffectRouter {
     /// Retires only the exact immutable transcript write acknowledged by a worker.
     pub(super) fn settle_claimed_transcript(
         &mut self,
-        entries: &[mez_agent::transcript::TranscriptEntry],
+        entries: &crate::storage::transcript::TranscriptAppendBatch,
         path: &std::path::Path,
     ) -> bool {
         let Some(position) = self.claimed_transcripts.iter().position(|claim| {
-            !claim.blocked && matches!(&claim.effect, RuntimeSideEffect::PersistTranscriptEntries { entries: claimed, path: claimed_path, .. } if claimed == entries && claimed_path == path)
+            !claim.blocked && matches!(&claim.effect, RuntimeSideEffect::PersistTranscriptEntries { batch: claimed, path: claimed_path, .. } if claimed == entries && claimed_path == path)
         }) else { return false; };
         let Some(claim) = self.claimed_transcripts.remove(position) else {
             return false;
@@ -697,11 +697,11 @@ impl RuntimeSideEffectRouter {
     pub(super) fn owns_claimed_transcript_id(
         &self,
         id: u64,
-        entries: &[mez_agent::transcript::TranscriptEntry],
+        entries: &crate::storage::transcript::TranscriptAppendBatch,
         path: &std::path::Path,
     ) -> bool {
         id != 0 && self.claimed_transcripts.iter().any(|claim| {
-            claim.id == id && !claim.blocked && matches!(&claim.effect, RuntimeSideEffect::PersistTranscriptEntries { entries: claimed, path: claimed_path, .. } if claimed == entries && claimed_path == path)
+            claim.id == id && !claim.blocked && matches!(&claim.effect, RuntimeSideEffect::PersistTranscriptEntries { batch: claimed, path: claimed_path, .. } if claimed == entries && claimed_path == path)
         })
     }
 
@@ -709,7 +709,7 @@ impl RuntimeSideEffectRouter {
     pub(super) fn block_claimed_transcript_id(
         &mut self,
         id: u64,
-        entries: &[mez_agent::transcript::TranscriptEntry],
+        entries: &crate::storage::transcript::TranscriptAppendBatch,
         path: &std::path::Path,
     ) {
         if !self.owns_claimed_transcript_id(id, entries, path) {
@@ -730,7 +730,7 @@ impl RuntimeSideEffectRouter {
     pub(super) fn settle_claimed_transcript_id(
         &mut self,
         id: u64,
-        entries: &[mez_agent::transcript::TranscriptEntry],
+        entries: &crate::storage::transcript::TranscriptAppendBatch,
         path: &std::path::Path,
     ) -> bool {
         if !self.owns_claimed_transcript_id(id, entries, path) {
@@ -745,11 +745,11 @@ impl RuntimeSideEffectRouter {
     /// Reports whether a worker event still names an exact claimed append.
     pub(super) fn owns_claimed_transcript(
         &self,
-        entries: &[mez_agent::transcript::TranscriptEntry],
+        entries: &crate::storage::transcript::TranscriptAppendBatch,
         path: &std::path::Path,
     ) -> bool {
         self.claimed_transcripts.iter().any(|claim| {
-            !claim.blocked && matches!(&claim.effect, RuntimeSideEffect::PersistTranscriptEntries { entries: claimed, path: claimed_path, .. } if claimed == entries && claimed_path == path)
+            !claim.blocked && matches!(&claim.effect, RuntimeSideEffect::PersistTranscriptEntries { batch: claimed, path: claimed_path, .. } if claimed == entries && claimed_path == path)
         })
     }
 
@@ -986,7 +986,8 @@ mod transcript_claim_tests {
         let effect = RuntimeSideEffect::PersistTranscriptEntries {
             path: store.transcript_path(&row.conversation_id).unwrap(),
             store,
-            entries: vec![row],
+            batch: crate::storage::transcript::TranscriptAppendBatch::owned_rows(vec![row])
+                .unwrap(),
         };
         let mut route = RuntimeSideEffectRouter::default();
         route.push_persistence(effect.clone());
@@ -1051,7 +1052,8 @@ mod transcript_claim_tests {
         route.push_persistence(RuntimeSideEffect::PersistTranscriptEntries {
             path: store.transcript_path(&row.conversation_id).unwrap(),
             store,
-            entries: vec![row],
+            batch: crate::storage::transcript::TranscriptAppendBatch::owned_rows(vec![row])
+                .unwrap(),
         });
         let id = route.persistence[0].claim_id.unwrap();
         assert!(route.hold_transcript_receipt(id));
@@ -1067,16 +1069,19 @@ mod transcript_claim_tests {
         route.push_persistence(RuntimeSideEffect::PersistTranscriptEntries {
             path: root.join("retry"),
             store: crate::storage::transcript::AgentTranscriptStore::new(root.clone()),
-            entries: vec![TranscriptEntry {
-                conversation_id: "held-receipt".to_string(),
-                sequence: 2,
-                created_at_unix_seconds: 2,
-                role: TranscriptRole::Assistant,
-                turn_id: "turn-2".to_string(),
-                agent_id: "agent-%1".to_string(),
-                pane_id: "%1".to_string(),
-                content: "later".to_string(),
-            }],
+            batch: crate::storage::transcript::TranscriptAppendBatch::owned_rows(vec![
+                TranscriptEntry {
+                    conversation_id: "held-receipt".to_string(),
+                    sequence: 2,
+                    created_at_unix_seconds: 2,
+                    role: TranscriptRole::Assistant,
+                    turn_id: "turn-2".to_string(),
+                    agent_id: "agent-%1".to_string(),
+                    pane_id: "%1".to_string(),
+                    content: "later".to_string(),
+                },
+            ])
+            .unwrap(),
         });
         let rejected_id = route.persistence[0].claim_id.unwrap();
         assert!(route.hold_transcript_receipt(rejected_id));
@@ -1108,7 +1113,8 @@ mod transcript_claim_tests {
         let effect = RuntimeSideEffect::PersistTranscriptEntries {
             path: store.transcript_path(&row.conversation_id).unwrap(),
             store,
-            entries: vec![row],
+            batch: crate::storage::transcript::TranscriptAppendBatch::owned_rows(vec![row])
+                .unwrap(),
         };
         let mut first = RuntimeSideEffectRouter::default();
         let mut replacement = RuntimeSideEffectRouter::default();
@@ -1168,7 +1174,7 @@ mod transcript_claim_tests {
         )
         .unwrap();
         assert!(!route.settle_claimed_initial_transcript(id, &different, &path));
-        assert!(!route.owns_claimed_transcript_id(id, &[], &path));
+        assert!(!route.owns_claimed_transcript_id(id, &batch, &path));
         assert_eq!(route.recover_claimed_transcripts(), 1);
         let recovered = route.drain_persistence_claims(1);
         assert!(

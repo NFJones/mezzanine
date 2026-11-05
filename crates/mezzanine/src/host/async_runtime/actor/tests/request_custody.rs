@@ -302,7 +302,10 @@ async fn request_required_append_receipt_is_exact_under_pressure() {
             .queue_transcript_for_tests(RuntimeSideEffect::PersistTranscriptEntries {
                 path: store.transcript_path(&row.conversation_id).unwrap(),
                 store: store.clone(),
-                entries: vec![row.clone()],
+                batch: crate::storage::transcript::TranscriptAppendBatch::owned_rows(vec![
+                    row.clone(),
+                ])
+                .unwrap(),
             });
         let (reply, mut response) = tokio::sync::oneshot::channel();
         if request {
@@ -342,14 +345,14 @@ async fn request_required_append_receipt_is_exact_under_pressure() {
                     )).await.unwrap();
                     let effects = response.await.unwrap().unwrap();
                     if let Some(effect) = effects.into_iter().find(|effect| matches!(effect,
-                        RuntimeSideEffect::PersistTranscriptEntries { entries, .. } if entries == &vec![row.clone()])) {
+                        RuntimeSideEffect::PersistTranscriptEntries { batch: entries, .. } if entries.entries() == &vec![row.clone()])) {
                         break effect;
                     }
                     tokio::task::yield_now().await;
                 }
             }).await.expect("receipt becomes ready without another command");
             assert!(
-                matches!(offered, RuntimeSideEffect::PersistTranscriptEntries { entries, .. } if entries == vec![row.clone()])
+                matches!(offered, RuntimeSideEffect::PersistTranscriptEntries { batch: entries, .. } if entries.entries() == vec![row.clone()])
             );
             assert_eq!(
                 store

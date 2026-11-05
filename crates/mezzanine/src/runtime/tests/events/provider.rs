@@ -1970,7 +1970,8 @@ fn runtime_terminal_execution_transcript_persistence_is_idempotent() {
         .queue_transcript(RuntimeSideEffect::PersistTranscriptEntries {
             path: transcript_store.transcript_path(&conversation_id).unwrap(),
             store: transcript_store.clone(),
-            entries: vec![conflicting],
+            batch: crate::storage::transcript::TranscriptAppendBatch::owned_rows(vec![conflicting])
+                .unwrap(),
         });
     let error = service
         .persist_runtime_agent_turn_execution_transcript(&turn, &execution)

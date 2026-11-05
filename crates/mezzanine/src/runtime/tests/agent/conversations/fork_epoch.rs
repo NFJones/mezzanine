@@ -54,13 +54,16 @@ fn runtime_saved_fork_waits_for_accepted_source_chronology() {
         };
         let path = store.transcript_path("fork-source").unwrap();
         let before = fs::read(&path).unwrap();
+        let proposal =
+            crate::storage::transcript::TranscriptAppendBatch::owned_rows(vec![row.clone()])
+                .unwrap();
         if matches!(state, "queued" | "claimed") {
             service
                 .persistence
                 .queue_transcript(RuntimeSideEffect::PersistTranscriptEntries {
                     path: path.clone(),
                     store: store.clone(),
-                    entries: vec![row.clone()],
+                    batch: proposal.clone(),
                 });
             if state == "claimed" {
                 assert_eq!(service.persistence.take_transcript_effects().len(), 1);
@@ -94,7 +97,13 @@ fn runtime_saved_fork_waits_for_accepted_source_chronology() {
         if state == "receipt" {
             store.recover_append_receipts().unwrap();
         } else {
-            store.append(&row).unwrap();
+            if matches!(state, "queued" | "claimed") {
+                store
+                    .commit_accounted_transcript_batch(&proposal, 1)
+                    .unwrap();
+            } else {
+                store.append(&row).unwrap();
+            }
             if state == "queued" {
                 service.persistence.take_transcript_effects();
             }
@@ -103,7 +112,7 @@ fn runtime_saved_fork_waits_for_accepted_source_chronology() {
                     "fork-source",
                     2,
                     &path,
-                    std::slice::from_ref(&row)
+                    &proposal
                 ));
             }
         }

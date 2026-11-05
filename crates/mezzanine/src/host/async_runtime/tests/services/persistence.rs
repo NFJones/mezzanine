@@ -189,7 +189,8 @@ async fn async_persistence_worker_recovers_lost_transcript_acknowledgment() {
     service.queue_transcript_for_tests(RuntimeSideEffect::PersistTranscriptEntries {
         store: store.clone(),
         path,
-        entries: vec![row.clone()],
+        batch: crate::storage::transcript::TranscriptAppendBatch::owned_rows(vec![row.clone()])
+            .unwrap(),
     });
     let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
         .build()
@@ -251,7 +252,8 @@ async fn async_persistence_worker_failed_receipt_replays_after_restart() {
     service.queue_transcript_for_tests(RuntimeSideEffect::PersistTranscriptEntries {
         path: store.transcript_path(&row.conversation_id).unwrap(),
         store: store.clone(),
-        entries: vec![row.clone()],
+        batch: crate::storage::transcript::TranscriptAppendBatch::owned_rows(vec![row.clone()])
+            .unwrap(),
     });
     let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
         .build()
@@ -334,7 +336,8 @@ async fn async_persistence_worker_partial_claim_replays_after_restart() {
     service.queue_transcript_for_tests(RuntimeSideEffect::PersistTranscriptEntries {
         path: store.transcript_path(&first.conversation_id).unwrap(),
         store: store.clone(),
-        entries: entries.clone(),
+        batch: crate::storage::transcript::TranscriptAppendBatch::owned_rows(entries.clone())
+            .unwrap(),
     });
     let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
         .build()
@@ -343,7 +346,6 @@ async fn async_persistence_worker_partial_claim_replays_after_restart() {
         wait_for_startup_receipts(&handle, &store, 1).await;
         let abandoned = handle.drain_persistence_side_effects(1).await.unwrap();
         assert_eq!(abandoned.len(), 1);
-        store.accept_append_receipt(&entries, 1).unwrap();
         store.fail_transcript_append_after_first();
         assert!(store.append_many(&entries).is_err());
         assert_eq!(store.inspect(&first.conversation_id).unwrap(), vec![first]);
@@ -386,7 +388,8 @@ async fn async_persistence_worker_recovers_after_two_transcript_failures() {
     service.queue_transcript_for_tests(RuntimeSideEffect::PersistTranscriptEntries {
         store: store.clone(),
         path,
-        entries: vec![row.clone()],
+        batch: crate::storage::transcript::TranscriptAppendBatch::owned_rows(vec![row.clone()])
+            .unwrap(),
     });
     let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
         .build()
@@ -448,7 +451,8 @@ async fn async_persistence_worker_recovers_dependent_transcript_batches() {
         service.queue_transcript_for_tests(RuntimeSideEffect::PersistTranscriptEntries {
             store: store.clone(),
             path: path.clone(),
-            entries: vec![row.clone()],
+            batch: crate::storage::transcript::TranscriptAppendBatch::owned_rows(vec![row.clone()])
+                .unwrap(),
         });
     }
     let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)

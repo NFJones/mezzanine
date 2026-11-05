@@ -43,7 +43,7 @@ pub(crate) struct RuntimeSubagentForkReadWork {
     source_entries: u64,
     source_high_water: u64,
     ephemeral_source: bool,
-    pending: Vec<mez_agent::TranscriptEntry>,
+    pending: crate::runtime::persistence::RuntimePendingTranscriptContext,
     prompt_cache_lineage_id: String,
 }
 
@@ -119,7 +119,7 @@ impl RuntimeSubagentForkReadWork {
             .store
             .conversation_replay_projection(
                 &self.source_conversation_id,
-                &self.pending,
+                self.pending.entries(),
                 |epoch| {
                     if self.source_high_water > 0 {
                         Some((
@@ -235,7 +235,7 @@ impl RuntimeSubagentForkReadWork {
                 conversation_id: self.source_conversation_id.clone(),
                 ephemeral_source_entries: Some(self.source_high_water),
                 active_entries: Some(entries.len()),
-                pending_entries: Vec::new(),
+                pending_entries: self.pending.clone(),
             },
             compaction_epoch.clone(),
             entries.clone(),
@@ -245,8 +245,9 @@ impl RuntimeSubagentForkReadWork {
         let row_origins = entries
             .iter()
             .filter_map(|row| {
-                source
-                    .row_origins
+                history
+                    .records
+                    .source_row_origins()
                     .get(&row.sequence)
                     .map(|origin| (row.sequence, *origin))
             })
@@ -254,8 +255,9 @@ impl RuntimeSubagentForkReadWork {
         let mut row_records = entries
             .iter()
             .filter_map(|row| {
-                source
-                    .row_records
+                history
+                    .records
+                    .source_row_records()
                     .get(&row.sequence)
                     .map(|record| (row.sequence, *record))
             })
@@ -270,7 +272,16 @@ impl RuntimeSubagentForkReadWork {
                 row_origins,
                 row_records,
             },
-            updates,
+            updates
+                .into_iter()
+                .filter(|(sequence, _)| {
+                    source
+                        .view
+                        .committed
+                        .iter()
+                        .any(|row| row.sequence == *sequence)
+                })
+                .collect(),
         ))
     }
 }
@@ -365,7 +376,7 @@ impl RuntimeSessionService {
                 "forked subagent sessions require the parent durable transcript store",
             ));
         };
-        let pending = self.persistence.pending_transcript_entries_at_path(
+        let pending = self.persistence.pending_transcript_context_at_path(
             &store.transcript_path(&source_conversation_id)?,
             &source_conversation_id,
         )?;
@@ -494,7 +505,7 @@ impl RuntimeSubagentForkSnapshot {
                         row_records,
                     ),
                 )?;
-                let history = child_history(child_pane, &batch, None);
+                let history = child_history(child_pane, &batch, None)?;
                 let accounting = batch
                     .initial_row_accounting()
                     .cloned()
@@ -514,13 +525,15 @@ pub(super) fn child_history(
     pane_id: &str,
     batch: &crate::storage::transcript::TranscriptAppendBatch,
     store: Option<crate::storage::transcript::AgentTranscriptStore>,
-) -> crate::runtime::control::RuntimeAgentTranscriptContext {
+) -> Result<crate::runtime::control::RuntimeAgentTranscriptContext> {
     let inputs = super::super::context::RuntimeAgentHistoryEpochInputs {
         pane_id: pane_id.into(),
         conversation_id: batch.conversation_id().into(),
         ephemeral_source_entries: None,
         active_entries: Some(batch.entries().len()),
-        pending_entries: batch.entries().to_vec(),
+        pending_entries: crate::runtime::persistence::RuntimePendingTranscriptContext::from_batch(
+            batch,
+        )?,
     };
     let snapshot = batch.initial_replay_snapshot();
     let mut history = super::super::context::runtime_agent_history_epoch_from_snapshot(
@@ -539,10 +552,7 @@ pub(super) fn child_history(
             },
             batch.initial_compaction_epoch().cloned(),
             batch.entries().to_vec(),
-            snapshot
-                .map(|snapshot| snapshot.row_origins)
-                .unwrap_or_default(),
         );
     }
-    history
+    Ok(history)
 }

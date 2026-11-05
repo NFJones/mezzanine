@@ -89,15 +89,17 @@ fn runtime_peer_receive_defers_terminal_compaction_handoff_receipt() {
     for effect in effects {
         if let RuntimeSideEffect::PersistTranscriptEntries {
             store: writer,
-            entries,
+            batch: entries,
             path,
         } = effect
         {
-            writer.append_many(&entries).unwrap();
+            writer
+                .commit_accounted_transcript_batch(&entries, 1)
+                .unwrap();
             receipts.push(crate::runtime::PersistenceEvent::TranscriptCompleted {
                 conversation_id: conversation.clone(),
-                first_sequence: entries[0].sequence,
-                entries,
+                first_sequence: entries.first_sequence(),
+                batch: entries,
                 path,
                 bytes: 1,
             });

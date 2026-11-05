@@ -191,17 +191,23 @@ fn check_late_same_group_result(adapter: bool) {
         for effect in effects {
             if let RuntimeSideEffect::PersistTranscriptEntries {
                 store: writer,
-                entries,
+                batch: entries,
                 path,
             } = effect
             {
                 writer.fail_transcript_append_after_first();
-                assert!(writer.append_many(&entries).is_err());
-                let bytes = writer.append_many(&entries).unwrap();
+                assert!(
+                    writer
+                        .commit_accounted_transcript_batch(&entries, 1)
+                        .is_err()
+                );
+                let bytes = writer
+                    .commit_accounted_transcript_batch(&entries, 1)
+                    .unwrap();
                 let receipt = crate::runtime::PersistenceEvent::TranscriptCompleted {
                     conversation_id: turn.conversation_id.clone(),
-                    first_sequence: entries[0].sequence,
-                    entries,
+                    first_sequence: entries.first_sequence(),
+                    batch: entries,
                     path,
                     bytes,
                 };

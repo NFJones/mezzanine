@@ -851,7 +851,8 @@ impl RuntimeSessionService {
                     batch,
                     self.persistence.cloned_transcript_store(),
                 )
-            });
+            })
+            .transpose()?;
         let child_prompt_cache_lineage_id = fork_snapshot
             .as_ref()
             .map(|snapshot| snapshot.prompt_cache_lineage_id.clone());
@@ -1902,7 +1903,13 @@ impl RuntimeSessionService {
                 .queue_transcript(RuntimeSideEffect::PersistTranscriptEntries {
                     path: store.transcript_path(batch.conversation_id())?,
                     store,
-                    entries: batch.entries().to_vec(),
+                    batch: if batch.row_accounting().is_some() {
+                        batch.clone()
+                    } else {
+                        crate::storage::transcript::TranscriptAppendBatch::owned_rows(
+                            batch.entries().to_vec(),
+                        )?
+                    },
                 });
         } else {
             self.append_transcript_with_admission_observation(&store, batch.entries(), false)?;

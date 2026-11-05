@@ -463,9 +463,9 @@ async fn run_terminal_bookkeeping_lock(expire: bool) {
                         .unwrap()
                         .into_iter()
                         .filter_map(|effect| match effect {
-                            RuntimeSideEffect::PersistTranscriptEntries { entries, .. } => {
-                                Some(entries)
-                            }
+                            RuntimeSideEffect::PersistTranscriptEntries {
+                                batch: entries, ..
+                            } => Some(entries.entries().to_vec()),
                             _ => None,
                         })
                         .flatten()
@@ -498,7 +498,9 @@ async fn run_terminal_bookkeeping_lock(expire: bool) {
             .unwrap()
             .into_iter()
             .filter_map(|effect| match effect {
-                RuntimeSideEffect::PersistTranscriptEntries { entries, .. } => Some(entries),
+                RuntimeSideEffect::PersistTranscriptEntries { batch: entries, .. } => {
+                    Some(entries.entries().to_vec())
+                }
                 _ => None,
             })
             .flatten()
@@ -625,8 +627,8 @@ async fn async_actor_interruption_bookkeeping_survives_locked_replacement() {
                     .unwrap()
                     .into_iter()
                     .filter_map(|effect| match effect {
-                        RuntimeSideEffect::PersistTranscriptEntries { entries, .. } => {
-                            Some(entries)
+                        RuntimeSideEffect::PersistTranscriptEntries { batch: entries, .. } => {
+                            Some(entries.entries().to_vec())
                         }
                         _ => None,
                     })

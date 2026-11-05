@@ -130,7 +130,8 @@ fn deferred_transfer_zero_capacity_enrolls_durable_source_once() {
         .queue_transcript(RuntimeSideEffect::PersistTranscriptEntries {
             path: path.clone(),
             store,
-            entries: vec![row.clone()],
+            batch: crate::storage::transcript::TranscriptAppendBatch::owned_rows(vec![row.clone()])
+                .unwrap(),
         });
     service
         .persistence
@@ -139,8 +140,11 @@ fn deferred_transfer_zero_capacity_enrolls_durable_source_once() {
         .drain_deferred_effects_transition_up_to(0)
         .side_effects;
     assert!(
-        matches!(&first[..], [RuntimeSideEffect::PersistTranscriptEntries { entries, .. }] if entries == std::slice::from_ref(&row))
+        matches!(&first[..], [RuntimeSideEffect::PersistTranscriptEntries { batch: entries, .. }] if entries.entries() == std::slice::from_ref(&row))
     );
+    let RuntimeSideEffect::PersistTranscriptEntries { batch, .. } = &first[0] else {
+        unreachable!()
+    };
     for _ in 0..3 {
         assert!(
             service
@@ -159,7 +163,7 @@ fn deferred_transfer_zero_capacity_enrolls_durable_source_once() {
         &row.conversation_id,
         row.sequence,
         &path,
-        std::slice::from_ref(&row)
+        batch
     ));
     assert!(
         service

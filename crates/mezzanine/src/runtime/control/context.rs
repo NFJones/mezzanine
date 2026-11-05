@@ -54,7 +54,7 @@ pub(crate) struct RuntimeAgentHistoryEpochInputs {
     /// Number of newest entries retained by a durable pane conversation.
     pub(super) active_entries: Option<usize>,
     /// Actor-captured persistence entries not yet visible in durable storage.
-    pub(super) pending_entries: Vec<TranscriptEntry>,
+    pub(super) pending_entries: crate::runtime::persistence::RuntimePendingTranscriptContext,
 }
 
 /// Immutable transcript-store work prepared by the actor for one history epoch.
@@ -96,7 +96,7 @@ pub(crate) fn execute_runtime_agent_history_epoch_work(
         .publish_terminal_compaction_handoffs(&work.inputs.conversation_id)?;
     let (snapshot, mut history) = work.store.conversation_replay_projection(
         &work.inputs.conversation_id,
-        &work.inputs.pending_entries,
+        work.inputs.pending_entries.entries(),
         |epoch| runtime_agent_history_read(&work.inputs, epoch),
         |snapshot| {
             let history = runtime_agent_history_epoch_from_snapshot(
@@ -105,7 +105,7 @@ pub(crate) fn execute_runtime_agent_history_epoch_work(
                 snapshot.view.logical.clone(),
                 Some(snapshot),
             );
-            let records = history.records.rendered_row_records()?;
+            let records = history.records.committed_row_records(snapshot)?;
             Ok((history, records))
         },
     )?;
@@ -114,7 +114,6 @@ pub(crate) fn execute_runtime_agent_history_epoch_work(
         work,
         snapshot.epoch,
         snapshot.view.logical,
-        snapshot.row_origins,
     );
     Ok(history)
 }
@@ -127,7 +126,7 @@ pub(crate) fn execute_runtime_agent_history_epoch_with_projection(
     work.validate_pending_capture()?;
     let (snapshot, mut history) = work.store.conversation_replay_projection(
         &work.inputs.conversation_id,
-        &work.inputs.pending_entries,
+        work.inputs.pending_entries.entries(),
         |_| runtime_agent_history_read(&work.inputs, epoch.as_ref()),
         |snapshot| {
             let history = runtime_agent_history_epoch_from_snapshot(
@@ -136,18 +135,12 @@ pub(crate) fn execute_runtime_agent_history_epoch_with_projection(
                 snapshot.view.logical.clone(),
                 Some(snapshot),
             );
-            let records = history.records.rendered_row_records()?;
+            let records = history.records.committed_row_records(snapshot)?;
             Ok((history, records))
         },
     )?;
     let entries = snapshot.view.logical;
-    super::RuntimeAgentHistorySource::attach(
-        &mut history,
-        work,
-        epoch,
-        entries,
-        snapshot.row_origins,
-    );
+    super::RuntimeAgentHistorySource::attach(&mut history, work, epoch, entries);
     Ok(history)
 }
 
@@ -182,7 +175,7 @@ fn runtime_agent_history_read(
 /// Builds canonical prefix/selective history from one already checked snapshot.
 /// This pure renderer performs no additional archive or epoch reads.
 pub(in crate::runtime) fn runtime_agent_history_epoch_from_snapshot(
-    mut inputs: RuntimeAgentHistoryEpochInputs,
+    inputs: RuntimeAgentHistoryEpochInputs,
     epoch: Option<crate::storage::transcript::AgentCompactionEpoch>,
     mut entries: Vec<TranscriptEntry>,
     accounting: Option<&crate::storage::transcript::ConversationReplaySnapshot>,
@@ -229,6 +222,7 @@ pub(in crate::runtime) fn runtime_agent_history_epoch_from_snapshot(
             applicable_records.as_deref(),
             false,
             accounting,
+            Some(&inputs.pending_entries),
         );
         if epoch.version == 3 && epoch.summary_records.is_none() {
             history.records.mark_invalid();
@@ -261,8 +255,7 @@ pub(in crate::runtime) fn runtime_agent_history_epoch_from_snapshot(
         }
         return history;
     }
-    inputs.pending_entries.clear();
-    runtime_agent_history_epoch_from_entries(inputs, entries, accounting)
+    runtime_agent_history_epoch_from_selected_entries(inputs, entries, accounting)
 }
 
 /// Immutable compact-memory and durable-transcript inputs for one prompt epoch.
@@ -335,9 +328,9 @@ impl RuntimeAgentPromptHistoryWork {
             .map(|row| row.sequence)
             .collect::<BTreeSet<_>>()
             .len() as u64;
-        let (snapshot, (rows, epoch, mut transcript)) = store.conversation_replay_projection(
+        let (_, (rows, epoch, mut transcript)) = store.conversation_replay_projection(
             conversation_id,
-            &work.inputs.pending_entries,
+            work.inputs.pending_entries.entries(),
             |_| {
                 Some((
                     ConversationTranscriptRead::Through(high_water),
@@ -367,7 +360,7 @@ impl RuntimeAgentPromptHistoryWork {
                     rows.clone(),
                     Some(snapshot),
                 );
-                let records = transcript.records.rendered_row_records()?;
+                let records = transcript.records.committed_row_records(snapshot)?;
                 Ok(((rows, epoch, transcript), records))
             },
         )?;
@@ -376,7 +369,6 @@ impl RuntimeAgentPromptHistoryWork {
             work,
             epoch.clone(),
             rows.clone(),
-            snapshot.row_origins,
         );
         let history = runtime_agent_prompt_history_from_transcript(self.memory_blocks, transcript);
         Ok(RuntimeAgentTranscriptSnapshot {
@@ -432,15 +424,13 @@ fn runtime_agent_prompt_history_from_transcript(
     }
 }
 
-/// Merges durable and actor-captured pending transcript entries, trims the
-/// result by the captured session policy, then builds the exact canonical
-/// model-context projection.
-pub(super) fn runtime_agent_history_epoch_from_entries(
+/// Trims one checked logical window by captured session policy. Pending rows
+/// are already present; retain their metadata without duplicating physical rows.
+fn runtime_agent_history_epoch_from_selected_entries(
     inputs: RuntimeAgentHistoryEpochInputs,
     mut entries: Vec<TranscriptEntry>,
     accounting: Option<&crate::storage::transcript::ConversationReplaySnapshot>,
 ) -> RuntimeAgentTranscriptContext {
-    entries.extend(inputs.pending_entries);
     entries.retain(|entry| entry.conversation_id == inputs.conversation_id);
     entries.sort_by_key(|entry| entry.sequence);
     entries.dedup_by_key(|entry| entry.sequence);
@@ -466,6 +456,7 @@ pub(super) fn runtime_agent_history_epoch_from_entries(
         None,
         false,
         accounting,
+        Some(&inputs.pending_entries),
     )
 }
 
@@ -486,7 +477,7 @@ pub(super) fn runtime_agent_transcript_context_with_ranges(
     ranges: &[crate::storage::transcript::AgentCompactionRange],
 ) -> RuntimeAgentTranscriptContext {
     runtime_agent_transcript_context_with_ranges_and_mcp_epoch(
-        pane_id, entries, ranges, None, false, None,
+        pane_id, entries, ranges, None, false, None, None,
     )
 }
 
@@ -496,6 +487,7 @@ pub(super) fn runtime_agent_transcript_context_from_snapshot(
     pane_id: &str,
     entries: &[TranscriptEntry],
     snapshot: &crate::storage::transcript::ConversationReplaySnapshot,
+    pending: Option<&crate::runtime::persistence::RuntimePendingTranscriptContext>,
 ) -> RuntimeAgentTranscriptContext {
     runtime_agent_transcript_context_with_ranges_and_mcp_epoch(
         pane_id,
@@ -504,6 +496,7 @@ pub(super) fn runtime_agent_transcript_context_from_snapshot(
         None,
         false,
         Some(snapshot),
+        pending,
     )
 }
 
@@ -515,6 +508,7 @@ pub(crate) fn runtime_agent_compaction_replay_context(
     ranges: &[crate::storage::transcript::AgentCompactionRange],
     summary_records: Option<&[mez_agent::ContextBlockRecord]>,
     accounting: Option<&crate::storage::transcript::ConversationReplaySnapshot>,
+    pending: Option<&crate::runtime::persistence::RuntimePendingTranscriptContext>,
 ) -> RuntimeAgentTranscriptContext {
     runtime_agent_transcript_context_with_ranges_and_mcp_epoch(
         pane_id,
@@ -523,6 +517,7 @@ pub(crate) fn runtime_agent_compaction_replay_context(
         summary_records,
         true,
         accounting,
+        pending,
     )
 }
 
@@ -534,10 +529,20 @@ fn runtime_agent_transcript_context_with_ranges_and_mcp_epoch(
     summary_records: Option<&[mez_agent::ContextBlockRecord]>,
     prospective_mcp_epoch: bool,
     accounting: Option<&crate::storage::transcript::ConversationReplaySnapshot>,
+    pending: Option<&crate::runtime::persistence::RuntimePendingTranscriptContext>,
 ) -> RuntimeAgentTranscriptContext {
     let mut blocks = Vec::new();
     let mut execution_events = Vec::new();
-    let mut records = RuntimeContextRecords::for_rows(accounting);
+    let mut records = RuntimeContextRecords::for_rows(accounting, pending);
+    if records.ensure_valid().is_err() {
+        return RuntimeAgentTranscriptContext {
+            source: None,
+            blocks,
+            execution_events,
+            records,
+            provider_history_repair_identity: None,
+        };
+    }
     if summary_records.is_some_and(|records| records.len() != ranges.len()) {
         records.mark_invalid();
     }
@@ -1387,7 +1392,7 @@ mod tests {
                 conversation_id: "selective-epoch".to_string(),
                 ephemeral_source_entries: None,
                 active_entries: Some(5),
-                pending_entries: Vec::new(),
+                pending_entries: Default::default(),
             },
         })
         .unwrap();
@@ -1480,7 +1485,7 @@ mod tests {
                 conversation_id: "selective-fork".to_string(),
                 ephemeral_source_entries: Some(2),
                 active_entries: None,
-                pending_entries: Vec::new(),
+                pending_entries: Default::default(),
             },
         })
         .unwrap();
@@ -1573,7 +1578,7 @@ mod tests {
                 conversation_id: "crossing-fork".to_string(),
                 ephemeral_source_entries: Some(2),
                 active_entries: None,
-                pending_entries: Vec::new(),
+                pending_entries: Default::default(),
             },
         })
         .unwrap();
@@ -1622,7 +1627,10 @@ mod tests {
                 conversation_id: "history-work".to_string(),
                 ephemeral_source_entries: None,
                 active_entries: Some(2),
-                pending_entries: vec![pending],
+                pending_entries:
+                    crate::runtime::persistence::RuntimePendingTranscriptContext::unaccounted(vec![
+                        pending,
+                    ]),
             },
         })
         .unwrap();
@@ -1675,7 +1683,7 @@ mod tests {
                 conversation_id: "history-tail".to_string(),
                 ephemeral_source_entries: None,
                 active_entries: Some(2),
-                pending_entries: Vec::new(),
+                pending_entries: Default::default(),
             },
         });
         assert!(result.is_err());

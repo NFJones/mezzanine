@@ -79,8 +79,8 @@ impl RuntimeAgentHistorySource {
         work: RuntimeAgentHistoryEpochWork,
         epoch: Option<crate::storage::transcript::AgentCompactionEpoch>,
         rows: Vec<mez_agent::TranscriptEntry>,
-        row_origins: crate::storage::transcript::TranscriptRowOrigins,
     ) {
+        let row_origins = history.records.source_row_origins().clone();
         history.source = Some(Arc::new(Self {
             work: Some(work),
             epoch,

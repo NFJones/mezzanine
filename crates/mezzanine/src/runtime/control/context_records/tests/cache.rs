@@ -39,7 +39,7 @@ fn fixture() -> (
             conversation_id: "legacy-costs".into(),
             ephemeral_source_entries: None,
             active_entries: Some(3),
-            pending_entries: Vec::new(),
+            pending_entries: Default::default(),
         },
     };
     (directory, store, work)
@@ -158,7 +158,9 @@ fn legacy_pending_cost_is_not_persisted_before_original_row_commit() {
     let mut pending = store.inspect("legacy-costs").unwrap()[0].clone();
     pending.sequence = 4;
     pending.content = "late accepted legacy source".into();
-    work.inputs.pending_entries.push(pending.clone());
+    work.inputs
+        .pending_entries
+        .push_unaccounted(pending.clone());
     work.inputs.active_entries = Some(4);
     let first = execute_runtime_agent_history_epoch_work(work.clone()).unwrap();
     assert_eq!(first.records.estimate_recomputations(), 4);

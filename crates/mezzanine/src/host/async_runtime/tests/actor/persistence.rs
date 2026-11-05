@@ -25,6 +25,107 @@ async fn wait_for_startup_transcript_receipts(
     .unwrap();
 }
 
+/// A real actor admission and persistence worker must carry one original batch
+/// through its typed claim/outcome and cold model-context composition. Equal raw
+/// assistant text remains distinct, pending ownership retires, and source bytes
+/// and roles are preserved without a paid provider or physical shell process.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_ordinary_batch_preserves_identity_through_worker_and_cold_context() {
+    use mez_agent::transcript::{TranscriptEntry, TranscriptRole};
+    let root = std::env::temp_dir().join(format!(
+        "mez-ordinary-batch-worker-{}-{}",
+        std::process::id(),
+        rand::random::<u64>()
+    ));
+    let store = AgentTranscriptStore::new(&root);
+    let rows = (1..=2)
+        .map(|sequence| TranscriptEntry {
+            conversation_id: "ordinary-worker".into(),
+            sequence,
+            created_at_unix_seconds: 1,
+            role: TranscriptRole::Assistant,
+            turn_id: "original-turn".into(),
+            agent_id: "agent-%1".into(),
+            pane_id: "%1".into(),
+            content: "equal original worker 雪 {\"code\":[1,2,3]}".into(),
+        })
+        .collect::<Vec<_>>();
+    let original =
+        crate::storage::transcript::TranscriptAppendBatch::owned_rows(rows.clone()).unwrap();
+    let origins = original.row_accounting().unwrap().origins().clone();
+    let mut service = test_service_with_event_log();
+    service.queue_transcript_for_tests(RuntimeSideEffect::PersistTranscriptEntries {
+        path: store.transcript_path(original.conversation_id()).unwrap(),
+        store: store.clone(),
+        batch: original.clone(),
+    });
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+    let client = async {
+        wait_for_startup_transcript_receipts(&handle, &store, 1).await;
+        let report = tokio::time::timeout(
+            Duration::from_secs(10),
+            run_async_persistence_side_effect_service(
+                &handle,
+                AsyncRuntimeSideEffectServiceConfig {
+                    max_polls: 10_000,
+                    drain_limit: 1,
+                    idle_interval: Duration::from_millis(1),
+                },
+                |_, _| store.pending_append_receipts().unwrap().is_empty(),
+            ),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(report.completed, 1);
+        assert_eq!(report.failed, 0);
+        assert!(report.bytes_written > 0);
+        assert!(handle.drain_persistence_claims(8).await.unwrap().is_empty());
+        handle.shutdown().await.unwrap();
+    };
+    let ((), mut exit) = tokio::join!(client, actor.run());
+    assert_eq!(store.inspect(original.conversation_id()).unwrap(), rows);
+    let raw = std::fs::read(store.transcript_path(original.conversation_id()).unwrap()).unwrap();
+    let cold = AgentTranscriptStore::new(&root);
+    exit.service.set_agent_transcript_store(cold);
+    exit.service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    exit.service
+        .agent_shell_store_mut()
+        .bind_conversation("%1", original.conversation_id(), 2)
+        .unwrap();
+    assert!(exit.service.check_agent_history_admission("%1").is_ok());
+    for _ in 0..2 {
+        let context = exit
+            .service
+            .agent_context_for_pane_prompt("%1", "continue", 100)
+            .unwrap();
+        let inherited = context
+            .chronology()
+            .iter()
+            .filter(|event| {
+                event.block().source == mez_agent::ContextSourceKind::TranscriptAssistant
+            })
+            .map(|event| event.record().occurrence_id())
+            .collect::<Vec<_>>();
+        assert_eq!(inherited, origins.values().copied().collect::<Vec<_>>());
+        assert_ne!(inherited[0], inherited[1]);
+    }
+    assert_eq!(
+        std::fs::read(store.transcript_path(original.conversation_id()).unwrap()).unwrap(),
+        raw
+    );
+    assert!(exit.service.pane_processes().is_empty());
+    drop(exit);
+    drop(handle);
+    drop(store);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
 /// Startup holds service-owned transcript work until its receipt has synced;
 /// a replacement store can recover it without a persistence worker drain.
 #[tokio::test(flavor = "current_thread")]
@@ -51,7 +152,8 @@ async fn async_actor_construction_journals_before_worker_drain() {
     service.queue_transcript_for_tests(RuntimeSideEffect::PersistTranscriptEntries {
         path: store.transcript_path(&row.conversation_id).unwrap(),
         store: store.clone(),
-        entries: vec![row.clone()],
+        batch: crate::storage::transcript::TranscriptAppendBatch::owned_rows(vec![row.clone()])
+            .unwrap(),
     });
     let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
         .build()
@@ -105,7 +207,10 @@ async fn async_actor_transcript_admission_journals_before_reply() {
                 .queue_runtime_side_effects(vec![RuntimeSideEffect::PersistTranscriptEntries {
                     store: store.clone(),
                     path,
-                    entries: vec![row.clone()],
+                    batch: crate::storage::transcript::TranscriptAppendBatch::owned_rows(vec![
+                        row.clone()
+                    ])
+                    .unwrap(),
                 }])
                 .await
                 .unwrap(),
@@ -164,7 +269,10 @@ async fn async_actor_cancelled_transcript_producer_does_not_strand_claim() {
                         .transcript_path(&producer_row.conversation_id)
                         .unwrap(),
                     store: producer_store,
-                    entries: vec![producer_row],
+                    batch: crate::storage::transcript::TranscriptAppendBatch::owned_rows(vec![
+                        producer_row,
+                    ])
+                    .unwrap(),
                 }])
                 .await
         });
@@ -224,7 +332,8 @@ async fn async_actor_terminal_step_journals_service_transcript_before_reply() {
         .queue_transcript_for_tests(RuntimeSideEffect::PersistTranscriptEntries {
             path: store.transcript_path(&row.conversation_id).unwrap(),
             store: store.clone(),
-            entries: vec![row.clone()],
+            batch: crate::storage::transcript::TranscriptAppendBatch::owned_rows(vec![row.clone()])
+                .unwrap(),
         });
     let client = async {
         handle
@@ -295,7 +404,8 @@ async fn async_actor_multiframe_control_rejects_earlier_failed_receipt() {
         .queue_transcript_for_tests(RuntimeSideEffect::PersistTranscriptEntries {
             path: store.transcript_path(&row.conversation_id).unwrap(),
             store: store.clone(),
-            entries: vec![row],
+            batch: crate::storage::transcript::TranscriptAppendBatch::owned_rows(vec![row])
+                .unwrap(),
         });
     let client = async {
         let mut input = encode_control_body(
@@ -409,6 +519,8 @@ async fn async_actor_event_admission_journals_service_transcript_before_reply() 
         pane_id: "%1".to_string(),
         content: "accepted through event".to_string(),
     };
+    let row_append =
+        crate::storage::transcript::TranscriptAppendBatch::owned_rows(vec![row.clone()]).unwrap();
     let (handle, mut actor) = AsyncRuntimeActorFixture::from_service(test_service_with_event_log())
         .build()
         .unwrap();
@@ -417,7 +529,7 @@ async fn async_actor_event_admission_journals_service_transcript_before_reply() 
         .queue_transcript_for_tests(RuntimeSideEffect::PersistTranscriptEntries {
             path: store.transcript_path(&row.conversation_id).unwrap(),
             store: store.clone(),
-            entries: vec![row.clone()],
+            batch: row_append.clone(),
         });
     let client = async {
         let mut batch = RuntimeEventBatch::new();
@@ -425,7 +537,7 @@ async fn async_actor_event_admission_journals_service_transcript_before_reply() 
             crate::runtime::PersistenceEvent::TranscriptFailed {
                 conversation_id: row.conversation_id.clone(),
                 first_sequence: row.sequence,
-                entries: vec![row.clone()],
+                batch: row_append.clone(),
                 path: store.transcript_path(&row.conversation_id).unwrap(),
                 error: "unclaimed".to_string(),
                 retryable: true,
@@ -476,7 +588,8 @@ async fn async_actor_recovers_service_receipt_after_admission_failure() {
     service.queue_transcript_for_tests(RuntimeSideEffect::PersistTranscriptEntries {
         path: store.transcript_path(&row.conversation_id).unwrap(),
         store: store.clone(),
-        entries: vec![row.clone()],
+        batch: crate::storage::transcript::TranscriptAppendBatch::owned_rows(vec![row.clone()])
+            .unwrap(),
     });
     let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
         .build()
@@ -539,13 +652,19 @@ async fn async_actor_journals_consecutive_transcript_admissions_in_order() {
             handle.queue_runtime_side_effects(vec![RuntimeSideEffect::PersistTranscriptEntries {
                 path: store.transcript_path("ordered-receipts").unwrap(),
                 store: store.clone(),
-                entries: vec![rows[0].clone()],
+                batch: crate::storage::transcript::TranscriptAppendBatch::owned_rows(vec![
+                    rows[0].clone(),
+                ])
+                .unwrap(),
             }]);
         let second =
             handle.queue_runtime_side_effects(vec![RuntimeSideEffect::PersistTranscriptEntries {
                 path: store.transcript_path("ordered-receipts").unwrap(),
                 store: store.clone(),
-                entries: vec![rows[1].clone()],
+                batch: crate::storage::transcript::TranscriptAppendBatch::owned_rows(vec![
+                    rows[1].clone(),
+                ])
+                .unwrap(),
             }]);
         let (first, second) = tokio::join!(first, second);
         assert_eq!(first.unwrap(), 1);
@@ -600,7 +719,10 @@ async fn async_actor_rejects_unjournaled_transcript_admission() {
                 .queue_runtime_side_effects(vec![RuntimeSideEffect::PersistTranscriptEntries {
                     path: store.transcript_path(&row.conversation_id).unwrap(),
                     store: store.clone(),
-                    entries: vec![row.clone()],
+                    batch: crate::storage::transcript::TranscriptAppendBatch::owned_rows(vec![
+                        row.clone()
+                    ])
+                    .unwrap(),
                 }])
                 .await
                 .is_err()
@@ -619,7 +741,7 @@ async fn async_actor_rejects_unjournaled_transcript_admission() {
     let _ = std::fs::remove_dir_all(outside);
 }
 
-/// An invalid later receipt rejects the producer submission without losing
+/// A later receipt with a sequence gap rejects submission without losing
 /// the earlier durable receipt or preventing its exact worker claim.
 #[tokio::test(flavor = "current_thread")]
 async fn async_actor_mixed_receipt_failure_preserves_accepted_prefix() {
@@ -653,12 +775,21 @@ async fn async_actor_mixed_receipt_failure_preserves_accepted_prefix() {
                     RuntimeSideEffect::PersistTranscriptEntries {
                         path: store.transcript_path("mixed-receipts").unwrap(),
                         store: store.clone(),
-                        entries: vec![rows[0].clone()],
+                        batch: crate::storage::transcript::TranscriptAppendBatch::owned_rows(vec![
+                            rows[0].clone()
+                        ])
+                        .unwrap(),
                     },
                     RuntimeSideEffect::PersistTranscriptEntries {
                         path: store.transcript_path("mixed-receipts").unwrap(),
                         store: store.clone(),
-                        entries: vec![rows[1].clone(), rows[0].clone()],
+                        batch: crate::storage::transcript::TranscriptAppendBatch::owned_rows(vec![
+                            TranscriptEntry {
+                                sequence: 3,
+                                ..rows[1].clone()
+                            }
+                        ])
+                        .unwrap(),
                     },
                 ])
                 .await
@@ -671,7 +802,7 @@ async fn async_actor_mixed_receipt_failure_preserves_accepted_prefix() {
         let claims = handle.drain_persistence_claims(2).await.unwrap();
         assert_eq!(claims.len(), 1);
         assert!(
-            matches!(&claims[0].0, RuntimeSideEffect::PersistTranscriptEntries { entries, .. } if entries == &vec![rows[0].clone()])
+            matches!(&claims[0].0, RuntimeSideEffect::PersistTranscriptEntries { batch: entries, .. } if entries.entries() == &vec![rows[0].clone()])
         );
         handle.shutdown().await.unwrap();
     };
@@ -709,11 +840,13 @@ async fn async_actor_recovers_unacknowledged_transcript_before_later_work() {
         pane_id: "%1".to_string(),
         content: "accepted".to_string(),
     };
+    let row_append =
+        crate::storage::transcript::TranscriptAppendBatch::owned_rows(vec![row.clone()]).unwrap();
     let mut service = test_service_with_event_log();
     service.queue_transcript_for_tests(RuntimeSideEffect::PersistTranscriptEntries {
         store: store.clone(),
         path: path.clone(),
-        entries: vec![row.clone()],
+        batch: row_append.clone(),
     });
     let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
         .build()
@@ -725,7 +858,7 @@ async fn async_actor_recovers_unacknowledged_transcript_before_later_work() {
             crate::runtime::PersistenceEvent::TranscriptFailed {
                 conversation_id: row.conversation_id.clone(),
                 first_sequence: row.sequence,
-                entries: vec![row.clone()],
+                batch: row_append.clone(),
                 path: path.clone(),
                 error: "unclaimed failure".to_string(),
                 retryable: true,
@@ -744,7 +877,7 @@ async fn async_actor_recovers_unacknowledged_transcript_before_later_work() {
             crate::runtime::PersistenceEvent::TranscriptFailed {
                 conversation_id: row.conversation_id.clone(),
                 first_sequence: row.sequence,
-                entries: vec![row.clone()],
+                batch: row_append.clone(),
                 path: path.clone(),
                 error: "unclaimed permanent failure".to_string(),
                 retryable: false,
@@ -763,7 +896,7 @@ async fn async_actor_recovers_unacknowledged_transcript_before_later_work() {
             crate::runtime::PersistenceEvent::TranscriptCompleted {
                 conversation_id: row.conversation_id.clone(),
                 first_sequence: row.sequence,
-                entries: vec![row.clone()],
+                batch: row_append.clone(),
                 path: path.clone(),
                 bytes: 1,
             },
@@ -783,7 +916,7 @@ async fn async_actor_recovers_unacknowledged_transcript_before_later_work() {
             crate::runtime::PersistenceEvent::TranscriptCompleted {
                 conversation_id: row.conversation_id.clone(),
                 first_sequence: row.sequence,
-                entries: vec![row.clone()],
+                batch: row_append.clone(),
                 path: path.with_extension("wrong"),
                 bytes: 1,
             },
@@ -801,7 +934,7 @@ async fn async_actor_recovers_unacknowledged_transcript_before_later_work() {
             crate::runtime::PersistenceEvent::TranscriptFailed {
                 conversation_id: row.conversation_id.clone(),
                 first_sequence: row.sequence,
-                entries: vec![row.clone()],
+                batch: row_append.clone(),
                 path: path.with_extension("wrong"),
                 error: "foreign destination".to_string(),
                 retryable: false,
@@ -820,10 +953,13 @@ async fn async_actor_recovers_unacknowledged_transcript_before_later_work() {
             .queue_runtime_side_effects(vec![RuntimeSideEffect::PersistTranscriptEntries {
                 store: store.clone(),
                 path: path.clone(),
-                entries: vec![TranscriptEntry {
-                    sequence: 2,
-                    ..row.clone()
-                }],
+                batch: crate::storage::transcript::TranscriptAppendBatch::owned_rows(vec![
+                    TranscriptEntry {
+                        sequence: 2,
+                        ..row.clone()
+                    },
+                ])
+                .unwrap(),
             }])
             .await
             .unwrap();
@@ -832,10 +968,10 @@ async fn async_actor_recovers_unacknowledged_transcript_before_later_work() {
         let replay = handle.drain_persistence_side_effects(2).await.unwrap();
         assert_eq!(replay.len(), 2);
         assert!(
-            matches!(&replay[0], RuntimeSideEffect::PersistTranscriptEntries { entries, .. } if entries == &vec![row.clone()])
+            matches!(&replay[0], RuntimeSideEffect::PersistTranscriptEntries { batch: entries, .. } if entries.entries() == &vec![row.clone()])
         );
         assert!(
-            matches!(&replay[1], RuntimeSideEffect::PersistTranscriptEntries { entries, .. } if entries[0].sequence == 2)
+            matches!(&replay[1], RuntimeSideEffect::PersistTranscriptEntries { batch: entries, .. } if entries.first_sequence() == 2)
         );
         store.append_many(std::slice::from_ref(&row)).unwrap();
         let mut malformed = RuntimeEventBatch::new();
@@ -843,7 +979,7 @@ async fn async_actor_recovers_unacknowledged_transcript_before_later_work() {
             crate::runtime::PersistenceEvent::TranscriptCompleted {
                 conversation_id: row.conversation_id.clone(),
                 first_sequence: 2,
-                entries: vec![row.clone()],
+                batch: row_append.clone(),
                 path: path.clone(),
                 bytes: 0,
             },
@@ -855,7 +991,7 @@ async fn async_actor_recovers_unacknowledged_transcript_before_later_work() {
             crate::runtime::PersistenceEvent::TranscriptCompleted {
                 conversation_id: row.conversation_id.clone(),
                 first_sequence: 1,
-                entries: vec![row.clone()],
+                batch: row_append.clone(),
                 path,
                 bytes: 0,
             },
@@ -864,7 +1000,7 @@ async fn async_actor_recovers_unacknowledged_transcript_before_later_work() {
         assert_eq!(handle.recover_claimed_transcripts().await.unwrap(), 0);
         let remaining = handle.drain_persistence_side_effects(2).await.unwrap();
         assert!(
-            matches!(remaining.as_slice(), [RuntimeSideEffect::PersistTranscriptEntries { entries, .. }] if entries[0].sequence == 2)
+            matches!(remaining.as_slice(), [RuntimeSideEffect::PersistTranscriptEntries { batch: entries, .. }] if entries.first_sequence() == 2)
         );
         handle.shutdown().await.unwrap();
     };
@@ -894,12 +1030,14 @@ async fn async_actor_recovered_claim_preserves_later_identical_append() {
         pane_id: "%1".to_string(),
         content: "accepted".to_string(),
     };
+    let row_append =
+        crate::storage::transcript::TranscriptAppendBatch::owned_rows(vec![row.clone()]).unwrap();
     let path = store.transcript_path(&row.conversation_id).unwrap();
     let mut service = test_service_with_event_log();
     service.queue_transcript_for_tests(RuntimeSideEffect::PersistTranscriptEntries {
         store: store.clone(),
         path: path.clone(),
-        entries: vec![row.clone()],
+        batch: row_append.clone(),
     });
     let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
         .build()
@@ -918,14 +1056,14 @@ async fn async_actor_recovered_claim_preserves_later_identical_append() {
             .queue_runtime_side_effects(vec![RuntimeSideEffect::PersistTranscriptEntries {
                 store: store.clone(),
                 path: path.clone(),
-                entries: vec![row.clone()],
+                batch: row_append.clone(),
             }])
             .await
             .unwrap();
         assert_eq!(handle.recover_claimed_transcripts().await.unwrap(), 1);
         let replay = handle.drain_persistence_side_effects(1).await.unwrap();
         assert!(
-            matches!(replay.as_slice(), [RuntimeSideEffect::PersistTranscriptEntries { entries, .. }] if entries == &vec![row.clone()])
+            matches!(replay.as_slice(), [RuntimeSideEffect::PersistTranscriptEntries { batch: entries, .. }] if entries.entries() == &vec![row.clone()])
         );
         store.append_many(std::slice::from_ref(&row)).unwrap();
         let mut events = RuntimeEventBatch::new();
@@ -933,7 +1071,7 @@ async fn async_actor_recovered_claim_preserves_later_identical_append() {
             crate::runtime::PersistenceEvent::TranscriptCompleted {
                 conversation_id: row.conversation_id.clone(),
                 first_sequence: row.sequence,
-                entries: vec![row.clone()],
+                batch: row_append.clone(),
                 path,
                 bytes: 0,
             },
@@ -944,7 +1082,7 @@ async fn async_actor_recovered_claim_preserves_later_identical_append() {
         );
         let remaining = handle.drain_persistence_side_effects(1).await.unwrap();
         assert!(
-            matches!(remaining.as_slice(), [RuntimeSideEffect::PersistTranscriptEntries { entries, .. }] if entries == &vec![row.clone()])
+            matches!(remaining.as_slice(), [RuntimeSideEffect::PersistTranscriptEntries { batch: entries, .. }] if entries.entries() == &vec![row.clone()])
         );
         handle.shutdown().await.unwrap();
     };
@@ -974,12 +1112,14 @@ async fn async_actor_completion_preserves_queued_identical_transcript() {
         pane_id: "%1".to_string(),
         content: "accepted".to_string(),
     };
+    let row_append =
+        crate::storage::transcript::TranscriptAppendBatch::owned_rows(vec![row.clone()]).unwrap();
     let path = store.transcript_path(&row.conversation_id).unwrap();
     let mut service = test_service_with_event_log();
     service.queue_transcript_for_tests(RuntimeSideEffect::PersistTranscriptEntries {
         store: store.clone(),
         path: path.clone(),
-        entries: vec![row.clone()],
+        batch: row_append.clone(),
     });
     let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
         .build()
@@ -998,7 +1138,7 @@ async fn async_actor_completion_preserves_queued_identical_transcript() {
             .queue_runtime_side_effects(vec![RuntimeSideEffect::PersistTranscriptEntries {
                 store: store.clone(),
                 path: path.clone(),
-                entries: vec![row.clone()],
+                batch: row_append.clone(),
             }])
             .await
             .unwrap();
@@ -1008,7 +1148,7 @@ async fn async_actor_completion_preserves_queued_identical_transcript() {
             crate::runtime::PersistenceEvent::TranscriptCompleted {
                 conversation_id: row.conversation_id.clone(),
                 first_sequence: row.sequence,
-                entries: vec![row.clone()],
+                batch: row_append.clone(),
                 path,
                 bytes: 0,
             },
@@ -1019,7 +1159,7 @@ async fn async_actor_completion_preserves_queued_identical_transcript() {
         );
         let remaining = handle.drain_persistence_side_effects(1).await.unwrap();
         assert!(
-            matches!(remaining.as_slice(), [RuntimeSideEffect::PersistTranscriptEntries { entries, .. }] if entries == &vec![row.clone()])
+            matches!(remaining.as_slice(), [RuntimeSideEffect::PersistTranscriptEntries { batch: entries, .. }] if entries.entries() == &vec![row.clone()])
         );
         assert_eq!(handle.recover_claimed_transcripts().await.unwrap(), 1);
         handle.shutdown().await.unwrap();
@@ -1028,7 +1168,7 @@ async fn async_actor_completion_preserves_queued_identical_transcript() {
     let _ = std::fs::remove_dir_all(root);
 }
 
-/// Two fresh identical claims each need a replacement-worker replay, while a
+/// Two physical claims of one original proposal need independent replays; a
 /// second recovery request must not add another copy of either claim.
 #[tokio::test(flavor = "current_thread")]
 async fn async_actor_recovers_two_fresh_identical_transcript_claims() {
@@ -1050,10 +1190,12 @@ async fn async_actor_recovers_two_fresh_identical_transcript_claims() {
         pane_id: "%1".to_string(),
         content: "accepted".to_string(),
     };
+    let row_append =
+        crate::storage::transcript::TranscriptAppendBatch::owned_rows(vec![row.clone()]).unwrap();
     let effect = RuntimeSideEffect::PersistTranscriptEntries {
         path: store.transcript_path(&row.conversation_id).unwrap(),
         store: store.clone(),
-        entries: vec![row.clone()],
+        batch: row_append.clone(),
     };
     let mut service = test_service_with_event_log();
     service.queue_transcript_for_tests(effect.clone());
@@ -1078,7 +1220,7 @@ async fn async_actor_recovers_two_fresh_identical_transcript_claims() {
                 outcome: Box::new(crate::runtime::PersistenceEvent::TranscriptCompleted {
                     conversation_id: row.conversation_id.clone(),
                     first_sequence: row.sequence,
-                    entries: vec![row.clone()],
+                    batch: row_append.clone(),
                     path: store.transcript_path(&row.conversation_id).unwrap(),
                     bytes: 0,
                 }),
@@ -1145,6 +1287,8 @@ async fn async_actor_requeues_failed_transcript_before_later_work() {
         pane_id: "%1".to_string(),
         content: "accepted".to_string(),
     };
+    let first_append =
+        crate::storage::transcript::TranscriptAppendBatch::owned_rows(vec![first.clone()]).unwrap();
     let second = TranscriptEntry {
         sequence: 2,
         ..first.clone()
@@ -1157,7 +1301,7 @@ async fn async_actor_requeues_failed_transcript_before_later_work() {
             .queue_runtime_side_effects(vec![RuntimeSideEffect::PersistTranscriptEntries {
                 store: store.clone(),
                 path: path.clone(),
-                entries: vec![first.clone()],
+                batch: first_append.clone(),
             }])
             .await
             .unwrap();
@@ -1173,7 +1317,10 @@ async fn async_actor_requeues_failed_transcript_before_later_work() {
             .queue_runtime_side_effects(vec![RuntimeSideEffect::PersistTranscriptEntries {
                 store: store.clone(),
                 path: path.clone(),
-                entries: vec![second.clone()],
+                batch: crate::storage::transcript::TranscriptAppendBatch::owned_rows(vec![
+                    second.clone(),
+                ])
+                .unwrap(),
             }])
             .await
             .unwrap();
@@ -1182,7 +1329,7 @@ async fn async_actor_requeues_failed_transcript_before_later_work() {
             crate::runtime::PersistenceEvent::TranscriptFailed {
                 conversation_id: first.conversation_id.clone(),
                 first_sequence: 1,
-                entries: vec![first.clone()],
+                batch: first_append.clone(),
                 path: path.clone(),
                 error: "transient".to_string(),
                 retryable: true,
@@ -1191,8 +1338,8 @@ async fn async_actor_requeues_failed_transcript_before_later_work() {
         handle.submit_runtime_events(events).await.unwrap();
         let replay = handle.drain_persistence_side_effects(2).await.unwrap();
         assert!(matches!(replay.as_slice(),
-            [RuntimeSideEffect::PersistTranscriptEntries { entries: old, .. }, RuntimeSideEffect::PersistTranscriptEntries { entries: new, .. }]
-            if old == &vec![first] && new == &vec![second]));
+            [RuntimeSideEffect::PersistTranscriptEntries { batch: old, .. }, RuntimeSideEffect::PersistTranscriptEntries { batch: new, .. }]
+            if old.entries() == &vec![first] && new.entries() == &vec![second]));
         handle.shutdown().await.unwrap();
     };
     let ((), _) = tokio::join!(client, actor.run());
@@ -1230,7 +1377,10 @@ async fn async_actor_does_not_requeue_permanent_transcript_failure() {
             .queue_runtime_side_effects(vec![RuntimeSideEffect::PersistTranscriptEntries {
                 store,
                 path: path.clone(),
-                entries: vec![row.clone()],
+                batch: crate::storage::transcript::TranscriptAppendBatch::owned_rows(vec![
+                    row.clone(),
+                ])
+                .unwrap(),
             }])
             .await
             .unwrap();
@@ -1247,7 +1397,8 @@ async fn async_actor_does_not_requeue_permanent_transcript_failure() {
             crate::runtime::PersistenceEvent::TranscriptFailed {
                 conversation_id: row.conversation_id.clone(),
                 first_sequence: 1,
-                entries: vec![row],
+                batch: crate::storage::transcript::TranscriptAppendBatch::owned_rows(vec![row])
+                    .unwrap(),
                 path,
                 error: "conflicting durable row".to_string(),
                 retryable: false,
@@ -1289,11 +1440,13 @@ async fn async_actor_permanent_failure_preserves_other_identical_claim() {
         pane_id: "%1".to_string(),
         content: "accepted".to_string(),
     };
+    let row_append =
+        crate::storage::transcript::TranscriptAppendBatch::owned_rows(vec![row.clone()]).unwrap();
     let path = store.transcript_path(&row.conversation_id).unwrap();
     let effect = RuntimeSideEffect::PersistTranscriptEntries {
         store: store.clone(),
         path: path.clone(),
-        entries: vec![row.clone()],
+        batch: row_append.clone(),
     };
     let mut service = test_service_with_event_log();
     service.queue_transcript_for_tests(effect.clone());
@@ -1316,7 +1469,7 @@ async fn async_actor_permanent_failure_preserves_other_identical_claim() {
                 outcome: Box::new(crate::runtime::PersistenceEvent::TranscriptFailed {
                     conversation_id: row.conversation_id.clone(),
                     first_sequence: row.sequence,
-                    entries: vec![row.clone()],
+                    batch: row_append.clone(),
                     path,
                     error: "permanent conflict".to_string(),
                     retryable: false,
@@ -1352,7 +1505,7 @@ async fn async_actor_permanent_failure_preserves_other_identical_claim() {
         assert_eq!(handle.recover_claimed_transcripts().await.unwrap(), 0);
         let replay = handle.drain_persistence_claims(2).await.unwrap();
         assert!(
-            matches!(replay.as_slice(), [(RuntimeSideEffect::PersistTranscriptEntries { entries, .. }, Some(id))] if entries == &vec![row.clone()] && *id == second_id)
+            matches!(replay.as_slice(), [(RuntimeSideEffect::PersistTranscriptEntries { batch: entries, .. }, Some(id))] if entries.entries() == &vec![row.clone()] && *id == second_id)
         );
         handle.shutdown().await.unwrap();
     };
@@ -1386,6 +1539,12 @@ async fn async_actor_mixed_transcript_failures_do_not_replay_permanent_claim() {
             sequence: 2,
             ..first.clone()
         };
+        let first_proposal =
+            crate::storage::transcript::TranscriptAppendBatch::owned_rows(vec![first.clone()])
+                .unwrap();
+        let second_proposal =
+            crate::storage::transcript::TranscriptAppendBatch::owned_rows(vec![second.clone()])
+                .unwrap();
         let path = store.transcript_path(&first.conversation_id).unwrap();
         let (handle, actor) = AsyncRuntimeActorFixture::from_service(test_service_with_event_log())
             .build()
@@ -1393,12 +1552,12 @@ async fn async_actor_mixed_transcript_failures_do_not_replay_permanent_claim() {
         let client = async {
             handle
                 .queue_runtime_side_effects(
-                    [first.clone(), second.clone()]
+                    [first_proposal.clone(), second_proposal.clone()]
                         .into_iter()
-                        .map(|row| RuntimeSideEffect::PersistTranscriptEntries {
+                        .map(|batch| RuntimeSideEffect::PersistTranscriptEntries {
                             store: store.clone(),
                             path: path.clone(),
-                            entries: vec![row],
+                            batch,
                         })
                         .collect(),
                 )
@@ -1412,11 +1571,11 @@ async fn async_actor_mixed_transcript_failures_do_not_replay_permanent_claim() {
                     .len(),
                 2
             );
-            let failure = |row: TranscriptEntry, retryable| {
+            let failure = |batch: crate::storage::transcript::TranscriptAppendBatch, retryable| {
                 RuntimeEvent::Persistence(crate::runtime::PersistenceEvent::TranscriptFailed {
-                    conversation_id: row.conversation_id.clone(),
-                    first_sequence: row.sequence,
-                    entries: vec![row],
+                    conversation_id: batch.conversation_id().to_string(),
+                    first_sequence: batch.first_sequence(),
+                    batch,
                     path: path.clone(),
                     error: "test failure".to_string(),
                     retryable,
@@ -1424,21 +1583,21 @@ async fn async_actor_mixed_transcript_failures_do_not_replay_permanent_claim() {
             };
             let mut events = RuntimeEventBatch::new();
             if permanent_first {
-                events.push(failure(first.clone(), false));
-                events.push(failure(second.clone(), true));
+                events.push(failure(first_proposal.clone(), false));
+                events.push(failure(second_proposal.clone(), true));
             } else {
-                events.push(failure(second.clone(), true));
-                events.push(failure(first.clone(), false));
+                events.push(failure(second_proposal.clone(), true));
+                events.push(failure(first_proposal.clone(), false));
             }
             handle.submit_runtime_events(events).await.unwrap();
             let replay = handle.drain_persistence_side_effects(4).await.unwrap();
             assert!(
-                matches!(replay.as_slice(), [RuntimeSideEffect::PersistTranscriptEntries { entries, .. }] if entries == &vec![second.clone()])
+                matches!(replay.as_slice(), [RuntimeSideEffect::PersistTranscriptEntries { batch: entries, .. }] if entries.entries() == &vec![second.clone()])
             );
             assert_eq!(handle.recover_claimed_transcripts().await.unwrap(), 1);
             let recovered = handle.drain_persistence_side_effects(4).await.unwrap();
             assert!(
-                matches!(recovered.as_slice(), [RuntimeSideEffect::PersistTranscriptEntries { entries, .. }] if entries == &vec![second.clone()])
+                matches!(recovered.as_slice(), [RuntimeSideEffect::PersistTranscriptEntries { batch: entries, .. }] if entries.entries() == &vec![second.clone()])
             );
             handle.shutdown().await.unwrap();
         };

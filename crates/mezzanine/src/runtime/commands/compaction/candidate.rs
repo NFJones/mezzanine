@@ -58,7 +58,7 @@ impl RuntimeSessionService {
         let pending = self.compaction_pending_entries(task)?;
         let (_, candidate) = store.conversation_replay_projection(
             &task.conversation_id,
-            &pending,
+            pending.entries(),
             |_| {
                 Some((
                     crate::storage::transcript::ConversationTranscriptRead::All,
@@ -71,6 +71,7 @@ impl RuntimeSessionService {
                     summary,
                     base_context,
                     snapshot,
+                    &pending,
                 )
             },
         )?;
@@ -86,6 +87,7 @@ impl RuntimeSessionService {
         summary: &str,
         base_context: &AgentContext,
         snapshot: &crate::storage::transcript::ConversationReplaySnapshot,
+        pending: &crate::runtime::persistence::RuntimePendingTranscriptContext,
     ) -> Result<(AgentContext, Vec<(u64, mez_agent::ContextBlockRecord)>)> {
         let entries = &snapshot.view.logical;
         let previous_epoch = snapshot.epoch.clone();
@@ -153,8 +155,9 @@ impl RuntimeSessionService {
                 .as_ref()
                 .map(|records| records.ranges.as_slice()),
             Some(snapshot),
+            Some(pending),
         );
-        let row_records = replay.records.rendered_row_records()?;
+        let row_records = replay.records.committed_row_records(snapshot)?;
         let compact_memory_id =
             mez_agent::memory::canonical_memory_uuid(&format!("compact-{}", task.conversation_id));
         let mut base_context =

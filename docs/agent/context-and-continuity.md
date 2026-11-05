@@ -549,6 +549,15 @@ Saved guidance metadata does not restore old instructions over current guidance.
 These estimates are not provider usage or billing, and their metadata is not
 part of the semantic source supplied to the model.
 
+New ordinary appends retain their original occurrence proposal while queued,
+in flight and committed. Cancelling a queued append and creating another at the
+same row slot gives unaccounted rows new IDs even when all raw fields match.
+Retries retain the original proposal. The version-6 append receipt binds that
+proposal to exact rows; worker commit and cold recovery publish raw rows and
+accounting under one source lease before completing the receipt. A stale capture
+cannot adopt another producer's committed occurrence. These IDs do not replace
+worker claim or durability checks, and do not change raw text or roles.
+
 Legacy raw rows also retain their original occurrence through saved forks,
 content edits and deletion of preceding rows. Their private conversation-owned
 `row-origins.sqlite3` file keeps placement separate from the raw transcript;

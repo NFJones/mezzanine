@@ -10882,6 +10882,16 @@ Saved stable metadata MUST NOT install instructions or overwrite current source
 fingerprints. Ordinary semantic decoding, display and model projection MUST
 unwrap only semantic source, keeping accounting metadata out of that content.
 
+New ordinary pending appends MUST allocate each unaccounted occurrence once at
+its producer and retain the immutable proposal through queueing, worker claims,
+completion and canonical pending-history capture. Typed authored occurrences
+retain their actual IDs. Exact retries MUST reuse the original proposal;
+cancelling a queued append and creating another at the same physical slot MUST
+allocate new unaccounted occurrences even when every raw field is equal.
+Committed overlap MUST match the original placement before captured pending
+work can adopt it. IDs remain descriptive and MUST NOT replace claim-generation,
+source, execution or durability checks.
+
 Legacy raw-row placement is retained in the conversation-owned versioned
 `row-origins.sqlite3` projection without embedding metadata in raw source text.
 First import preserves original conversation/sequence origins. Saved forks,
@@ -14956,11 +14966,20 @@ The baseline command capabilities are:
   a metadata-only receipt key of zero MUST NOT become a transcript sequence.
   Its canonical filename MUST use `<cid>-initial-<20-digit-generation>.json`;
   numeric zero sequence/generation filenames remain noncanonical.
-  Row-only receipts retain version 1. Genuine epoch-only initial receipts retain
+  Ordinary accounted append receipts use version 6 with a separate digest domain
+  binding exact rows and the complete original occurrence/cost proposal. Their
+  admission is journal-only; the worker MUST reconcile raw rows and accounting
+  under one conversation mutation lease before settlement. Cold replay MUST
+  recover an accepted ordinary receipt's interrupted publication under that
+  same lease before adopting source. Missing receipt authority MUST NOT permit
+  a fresh proposal to adopt equal committed legacy rows. Global recovery MUST
+  preflight original placements and cache integrity before unrelated mutations.
+  Ordinary accounting MUST NOT grant initial, native or handoff authority.
+  Genuine unaccounted row-only receipts retain version 1. Genuine epoch-only initial receipts retain
   version 2 with `compaction_epoch` in their domain-separated digest. Initial raw
   accounting uses version 5, binding the complete original placement/cost proposal
   and its future namespace together with exact rows and the optional epoch.
-  Versions 1–4 retain their original recovery validation/digests without rewriting
+  Versions 1–5 retain their original recovery validation/digests without rewriting
   accepted journals; native custody versions 3–4 cannot grant inherited authority.
   Version/shape mismatches and unknown versions MUST fail closed. Existing
   compaction epoch formats include version 3 original summary records; this does not change the

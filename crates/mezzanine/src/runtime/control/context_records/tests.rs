@@ -11,6 +11,7 @@ use std::path::PathBuf;
 
 mod authored_cache;
 mod cache;
+mod pending_ownership;
 
 /// Owns only a generated private fixture directory.
 struct Directory(PathBuf);

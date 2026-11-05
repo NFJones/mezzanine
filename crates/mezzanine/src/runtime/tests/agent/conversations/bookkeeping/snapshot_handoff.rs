@@ -708,7 +708,10 @@ fn runtime_completion_handoff_rejects_reply_after_original_row_admission() {
                 crate::runtime::RuntimeSideEffect::PersistTranscriptEntries {
                     path: path.clone(),
                     store: store.clone(),
-                    entries: vec![row.clone()],
+                    batch: crate::storage::transcript::TranscriptAppendBatch::owned_rows(vec![
+                        row.clone()
+                    ])
+                    .unwrap(),
                 },
             )
             .unwrap()

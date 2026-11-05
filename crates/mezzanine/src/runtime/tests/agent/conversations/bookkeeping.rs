@@ -262,7 +262,9 @@ fn runtime_bookkeeping_candidate_survives_conversation_replacement() {
     let rows = effects
         .into_iter()
         .filter_map(|effect| match effect {
-            RuntimeSideEffect::PersistTranscriptEntries { entries, .. } => Some(entries),
+            RuntimeSideEffect::PersistTranscriptEntries { batch: entries, .. } => {
+                Some(entries.entries().to_vec())
+            }
             _ => None,
         })
         .flatten()
@@ -412,7 +414,9 @@ fn candidate_rows(service: &mut RuntimeSessionService) -> Vec<TranscriptEntry> {
         .side_effects
         .into_iter()
         .filter_map(|effect| match effect {
-            RuntimeSideEffect::PersistTranscriptEntries { entries, .. } => Some(entries),
+            RuntimeSideEffect::PersistTranscriptEntries { batch: entries, .. } => {
+                Some(entries.entries().to_vec())
+            }
             _ => None,
         })
         .flatten()

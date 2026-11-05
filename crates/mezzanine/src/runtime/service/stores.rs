@@ -106,7 +106,7 @@ impl RuntimeSessionService {
             crate::runtime::PersistenceEvent::TranscriptCompleted {
                 conversation_id,
                 first_sequence,
-                entries,
+                batch: entries,
                 path,
                 ..
             } => Some((
@@ -141,7 +141,7 @@ impl RuntimeSessionService {
             crate::runtime::PersistenceEvent::TranscriptCompleted {
                 conversation_id,
                 first_sequence,
-                entries,
+                batch: entries,
                 path,
                 bytes,
             } => {
@@ -166,7 +166,7 @@ impl RuntimeSessionService {
             crate::runtime::PersistenceEvent::TranscriptFailed {
                 conversation_id,
                 first_sequence,
-                entries,
+                batch: entries,
                 path,
                 error,
                 retryable,
@@ -968,7 +968,10 @@ mod transcript_settlement_tests {
             crate::runtime::RuntimeSideEffect::PersistTranscriptEntries {
                 store,
                 path: path.clone(),
-                entries: vec![row.clone()],
+                batch: crate::storage::transcript::TranscriptAppendBatch::owned_rows(vec![
+                    row.clone(),
+                ])
+                .unwrap(),
             },
         );
         service.persistence.take_transcript_effects();
@@ -976,7 +979,10 @@ mod transcript_settlement_tests {
             .apply_persistence_transition(crate::runtime::PersistenceEvent::TranscriptFailed {
                 conversation_id: row.conversation_id.clone(),
                 first_sequence: 1,
-                entries: vec![row.clone()],
+                batch: crate::storage::transcript::TranscriptAppendBatch::owned_rows(vec![
+                    row.clone(),
+                ])
+                .unwrap(),
                 path: path.clone(),
                 error: "uncertain write".to_string(),
                 retryable: true,
@@ -992,7 +998,10 @@ mod transcript_settlement_tests {
             .apply_persistence_transition(crate::runtime::PersistenceEvent::TranscriptCompleted {
                 conversation_id: row.conversation_id.clone(),
                 first_sequence: 1,
-                entries: vec![row.clone()],
+                batch: crate::storage::transcript::TranscriptAppendBatch::owned_rows(vec![
+                    row.clone(),
+                ])
+                .unwrap(),
                 path,
                 bytes: 1,
             })
@@ -1032,7 +1041,10 @@ mod transcript_settlement_tests {
             crate::runtime::RuntimeSideEffect::PersistTranscriptEntries {
                 store,
                 path: path.clone(),
-                entries: vec![row.clone()],
+                batch: crate::storage::transcript::TranscriptAppendBatch::owned_rows(vec![
+                    row.clone(),
+                ])
+                .unwrap(),
             },
         );
         service.persistence.take_transcript_effects();
@@ -1040,7 +1052,10 @@ mod transcript_settlement_tests {
             .apply_persistence_transition(crate::runtime::PersistenceEvent::TranscriptFailed {
                 conversation_id: row.conversation_id.clone(),
                 first_sequence: row.sequence,
-                entries: vec![row.clone()],
+                batch: crate::storage::transcript::TranscriptAppendBatch::owned_rows(vec![
+                    row.clone(),
+                ])
+                .unwrap(),
                 path: path.with_extension("wrong"),
                 error: "foreign destination".to_string(),
                 retryable: false,
@@ -1051,7 +1066,10 @@ mod transcript_settlement_tests {
             .apply_persistence_transition(crate::runtime::PersistenceEvent::TranscriptCompleted {
                 conversation_id: row.conversation_id.clone(),
                 first_sequence: row.sequence,
-                entries: vec![row.clone()],
+                batch: crate::storage::transcript::TranscriptAppendBatch::owned_rows(vec![
+                    row.clone(),
+                ])
+                .unwrap(),
                 path: path.with_extension("wrong"),
                 bytes: 1,
             })
@@ -1085,7 +1103,8 @@ mod transcript_settlement_tests {
             .apply_persistence_transition(crate::runtime::PersistenceEvent::TranscriptCompleted {
                 conversation_id: row.conversation_id.clone(),
                 first_sequence: row.sequence,
-                entries: vec![row],
+                batch: crate::storage::transcript::TranscriptAppendBatch::owned_rows(vec![row])
+                    .unwrap(),
                 path: std::path::PathBuf::from("/tmp/unowned-transcript"),
                 bytes: 1,
             })
@@ -1121,14 +1140,18 @@ mod transcript_settlement_tests {
             crate::runtime::RuntimeSideEffect::PersistTranscriptEntries {
                 store,
                 path: path.clone(),
-                entries: vec![row.clone()],
+                batch: crate::storage::transcript::TranscriptAppendBatch::owned_rows(vec![
+                    row.clone(),
+                ])
+                .unwrap(),
             },
         );
         service.persistence.take_transcript_effects();
         let completed = crate::runtime::PersistenceEvent::TranscriptCompleted {
             conversation_id: row.conversation_id.clone(),
             first_sequence: row.sequence,
-            entries: vec![row.clone()],
+            batch: crate::storage::transcript::TranscriptAppendBatch::owned_rows(vec![row.clone()])
+                .unwrap(),
             path,
             bytes: 1,
         };
@@ -1172,7 +1195,8 @@ mod transcript_settlement_tests {
                 .apply_persistence_transition(crate::runtime::PersistenceEvent::TranscriptFailed {
                     conversation_id: row.conversation_id.clone(),
                     first_sequence: row.sequence,
-                    entries: vec![row],
+                    batch: crate::storage::transcript::TranscriptAppendBatch::owned_rows(vec![row])
+                        .unwrap(),
                     path: std::path::PathBuf::from("/tmp/unowned-transcript"),
                     error: "late failure".to_string(),
                     retryable: true,

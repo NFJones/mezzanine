@@ -196,7 +196,10 @@ fn compaction_refresh_uses_original_pending_path_after_store_replacement() {
         crate::runtime::RuntimeSideEffect::PersistTranscriptEntries {
             path: original.transcript_path(&conversation).unwrap(),
             store: original.clone(),
-            entries: vec![pending.clone()],
+            batch: crate::storage::transcript::TranscriptAppendBatch::owned_rows(vec![
+                pending.clone(),
+            ])
+            .unwrap(),
         },
     );
     service
@@ -209,7 +212,10 @@ fn compaction_refresh_uses_original_pending_path_after_store_replacement() {
         crate::runtime::RuntimeSideEffect::PersistTranscriptEntries {
             path: replacement.transcript_path(&conversation).unwrap(),
             store: replacement.clone(),
-            entries: vec![foreign.clone()],
+            batch: crate::storage::transcript::TranscriptAppendBatch::owned_rows(vec![
+                foreign.clone(),
+            ])
+            .unwrap(),
         },
     );
     service.set_agent_transcript_store(replacement.clone());
@@ -346,7 +352,8 @@ fn history_preparation_retains_original_pending_capture_failure() {
             crate::runtime::RuntimeSideEffect::PersistTranscriptEntries {
                 path: store.transcript_path(&conversation).unwrap(),
                 store: store.clone(),
-                entries: vec![row],
+                batch: crate::storage::transcript::TranscriptAppendBatch::owned_rows(vec![row])
+                    .unwrap(),
             },
         );
     }

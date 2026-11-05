@@ -56,7 +56,8 @@ async fn async_actor_receipt_retirement_does_not_stall_unrelated_persistence() {
     service.queue_transcript_for_tests(RuntimeSideEffect::PersistTranscriptEntries {
         path: store.transcript_path(&a.conversation_id).unwrap(),
         store: store.clone(),
-        entries: vec![a.clone()],
+        batch: crate::storage::transcript::TranscriptAppendBatch::owned_rows(vec![a.clone()])
+            .unwrap(),
     });
     let (observed_tx, observed_rx) = std::sync::mpsc::channel();
     let (resume_tx, resume_rx) = std::sync::mpsc::channel();

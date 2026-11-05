@@ -3041,7 +3041,8 @@ fn runtime_subagent_session_modes_fork_bounded_history_or_start_isolated() {
                 .transcript_path(&parent.session_id)
                 .unwrap(),
             store: transcript_store.clone(),
-            entries: vec![conflicting],
+            batch: crate::storage::transcript::TranscriptAppendBatch::owned_rows(vec![conflicting])
+                .unwrap(),
         });
     let error = service
         .spawn_runtime_subagent(

@@ -54,7 +54,7 @@ fn fixture() -> (
             conversation_id: "record-round-trip".into(),
             ephemeral_source_entries: None,
             active_entries: Some(100),
-            pending_entries: Vec::new(),
+            pending_entries: Default::default(),
         },
     };
     (directory, store, work, original)
@@ -114,7 +114,7 @@ fn valid_authored_costs_need_no_duplicate_durable_cache() {
             conversation_id: "record-round-trip".into(),
             ephemeral_source_entries: None,
             active_entries: Some(100),
-            pending_entries: Vec::new(),
+            pending_entries: Default::default(),
         },
     };
     let rendered = execute_runtime_agent_history_epoch_work(work).unwrap();
@@ -153,7 +153,9 @@ fn pending_authored_repair_waits_for_its_actual_raw_commit() {
         .unwrap()
         .to_transcript_content()
         .unwrap();
-    work.inputs.pending_entries.push(pending.clone());
+    work.inputs
+        .pending_entries
+        .push_unaccounted(pending.clone());
     let first = execute_runtime_agent_history_epoch_work(work.clone()).unwrap();
     assert_eq!(first.records.estimate_recomputations(), 2);
     assert_eq!(first.records.indices_with_offset(0).unwrap()[3].1, record);

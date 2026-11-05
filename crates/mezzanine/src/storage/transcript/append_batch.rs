@@ -27,11 +27,23 @@ pub(crate) struct TranscriptAppendBatch {
     initial_compaction_epoch: Option<AgentCompactionEpoch>,
     /// Original raw occurrences/caches, independent of optional summary authority.
     initial_row_accounting: Option<std::sync::Arc<super::InitialTranscriptRowAccounting>>,
+    /// Once-allocated ordinary occurrences; absent only at explicit raw imports.
+    row_accounting: Option<std::sync::Arc<super::TranscriptAppendAccounting>>,
 }
 
 impl TranscriptAppendBatch {
-    /// Captures a nonempty contiguous ordinary append. Invalid entries, mixed
-    /// conversations, reordered rows or exhausted spans fail without mutation.
+    /// Owns an ordinary producer's exact row occurrence proposal. Unaccounted
+    /// rows receive new IDs once; clones retain them and authored rows retain
+    /// their actual canonical producer records.
+    pub(crate) fn owned_rows(entries: Vec<TranscriptEntry>) -> Result<Self> {
+        let batch = Self::rows(entries)?;
+        let accounting = super::TranscriptAppendAccounting::new(batch.entries())?;
+        batch.with_row_accounting(accounting)
+    }
+
+    /// Validates a nonempty raw span at an explicit unaccounted import/recovery
+    /// boundary or before attaching inherited accounting. New ordinary producers
+    /// use `owned_rows`. Invalid rows or ordering fail without mutation.
     pub(crate) fn rows(entries: Vec<TranscriptEntry>) -> Result<Self> {
         let conversation_id = entries
             .first()
@@ -131,6 +143,7 @@ impl TranscriptAppendBatch {
             entries,
             initial_compaction_epoch,
             initial_row_accounting: None,
+            row_accounting: None,
         })
     }
 
@@ -140,9 +153,35 @@ impl TranscriptAppendBatch {
         mut self,
         accounting: super::InitialTranscriptRowAccounting,
     ) -> Result<Self> {
+        if self.row_accounting.is_some() {
+            return Err(MezError::invalid_args(
+                "ordinary accounting cannot own initial authority",
+            ));
+        }
         accounting.validate(&self.entries)?;
         self.initial_row_accounting = Some(std::sync::Arc::new(accounting));
         Ok(self)
+    }
+
+    /// Restores an original ordinary proposal at the explicit receipt boundary.
+    /// Initial replay authority uses its separate whole-conversation contract.
+    pub(crate) fn with_row_accounting(
+        mut self,
+        accounting: super::TranscriptAppendAccounting,
+    ) -> Result<Self> {
+        if self.has_initial_authority() {
+            return Err(MezError::invalid_args(
+                "initial authority cannot own ordinary accounting",
+            ));
+        }
+        accounting.validate(&self.entries)?;
+        self.row_accounting = Some(std::sync::Arc::new(accounting));
+        Ok(self)
+    }
+
+    /// Borrows the original ordinary proposal without allocating on retry.
+    pub(crate) fn row_accounting(&self) -> Option<&super::TranscriptAppendAccounting> {
+        self.row_accounting.as_deref()
     }
 
     /// Borrows the exact initial raw record proposal without resampling storage.

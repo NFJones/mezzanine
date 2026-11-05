@@ -22,6 +22,8 @@ pub(in crate::runtime) struct RuntimeContextRecords {
     records: Vec<(usize, ContextBlockRecord)>,
     stable: Option<Vec<StableContextBlockRecord>>,
     invalid: bool,
+    /// Content-free rejection from the original pending source qualification.
+    pending_rejection: Option<(crate::MezErrorKind, String)>,
     row_origins: crate::storage::transcript::TranscriptRowOrigins,
     row_cache: crate::storage::transcript::TranscriptRowRecords,
     rendered_rows: crate::storage::transcript::TranscriptRowRecords,
@@ -42,7 +44,22 @@ impl RuntimeContextRecords {
     /// them before use, so no temporary estimated records are constructed.
     pub(super) fn for_rows(
         accounting: Option<&crate::storage::transcript::ConversationReplaySnapshot>,
+        pending: Option<&crate::runtime::persistence::RuntimePendingTranscriptContext>,
     ) -> Self {
+        if let (Some(snapshot), Some(pending)) = (accounting, pending) {
+            return match pending.projected_accounting(snapshot) {
+                Ok((row_origins, row_cache)) => Self {
+                    row_origins,
+                    row_cache,
+                    ..Self::default()
+                },
+                Err(error) => Self {
+                    invalid: true,
+                    pending_rejection: Some((error.kind(), error.message().to_owned())),
+                    ..Self::default()
+                },
+            };
+        }
         accounting.map_or_else(Self::default, |snapshot| Self {
             row_origins: snapshot.row_origins.clone(),
             row_cache: snapshot.row_records.clone(),
@@ -61,6 +78,35 @@ impl RuntimeContextRecords {
             .iter()
             .map(|(sequence, record)| (*sequence, *record))
             .collect())
+    }
+
+    /// Returns only actual committed repairs to the original leased publisher;
+    /// proposed pending IDs never become durable cache authority prematurely.
+    pub(in crate::runtime) fn committed_row_records(
+        &self,
+        snapshot: &crate::storage::transcript::ConversationReplaySnapshot,
+    ) -> Result<Vec<(u64, ContextBlockRecord)>> {
+        let committed = snapshot
+            .view
+            .committed
+            .iter()
+            .map(|row| row.sequence)
+            .collect::<std::collections::BTreeSet<_>>();
+        Ok(self
+            .rendered_row_records()?
+            .into_iter()
+            .filter(|(sequence, _)| committed.contains(sequence))
+            .collect())
+    }
+
+    /// Original checked placement used by this actual canonical render.
+    pub(super) fn source_row_origins(&self) -> &crate::storage::transcript::TranscriptRowOrigins {
+        &self.row_origins
+    }
+
+    /// Descriptive source caches selected before constructing this projection.
+    pub(super) fn source_row_records(&self) -> &crate::storage::transcript::TranscriptRowRecords {
+        &self.row_cache
     }
 
     /// Counts actual missing/stale row estimate constructions in one renderer.
@@ -252,6 +298,12 @@ impl RuntimeContextRecords {
 
     /// Rejects malformed/future reserved records before a source is published.
     pub(in crate::runtime) fn ensure_valid(&self) -> Result<()> {
+        if let Some((kind, message)) = &self.pending_rejection {
+            return Err(MezError::new(
+                *kind,
+                format!("pending transcript accounting: {message}"),
+            ));
+        }
         if self.invalid {
             return Err(invalid());
         }

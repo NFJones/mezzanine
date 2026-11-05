@@ -16,20 +16,25 @@ fn complete_with_later_row(deferred: bool, cached_cursor: bool) {
     if cached_cursor {
         let rows = store.inspect("prepare-owned").unwrap();
         let path = store.transcript_path("prepare-owned").unwrap();
+        // Prime the cursor from this genuine legacy archive's exact original
+        // batch. This fixture completes it before any canonical preparation;
+        // it must not invent a new ordinary owner for already committed rows.
+        let proposal =
+            crate::storage::transcript::TranscriptAppendBatch::rows(rows.clone()).unwrap();
         service
             .persistence
             .queue_transcript(RuntimeSideEffect::PersistTranscriptEntries {
                 store: store.clone(),
                 path: path.clone(),
-                entries: rows.clone(),
+                batch: proposal.clone(),
             });
         assert_eq!(service.persistence.take_transcript_effects().len(), 1);
-        store.append_many(&rows).unwrap();
+        store.append_many(proposal.entries()).unwrap();
         assert!(service.persistence.settle_transcript_write_at_path(
             "prepare-owned",
             1,
             &path,
-            &rows
+            &proposal
         ));
         assert_eq!(
             service

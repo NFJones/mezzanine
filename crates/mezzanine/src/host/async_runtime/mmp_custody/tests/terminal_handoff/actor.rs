@@ -212,22 +212,24 @@ async fn drain_ordinary(actor: &mut AsyncRuntimeSessionActor) {
         {
             if let RuntimeSideEffect::PersistTranscriptEntries {
                 store,
-                entries,
+                batch: entries,
                 path,
             } = effect
             {
                 progressed = true;
                 let original = entries.clone();
-                let bytes = tokio::task::spawn_blocking(move || store.append_many(&entries))
-                    .await
-                    .unwrap()
-                    .unwrap();
+                let bytes = tokio::task::spawn_blocking(move || {
+                    store.commit_accounted_transcript_batch(&entries, 1)
+                })
+                .await
+                .unwrap()
+                .unwrap();
                 actor
                     .service
                     .apply_persistence_transition(PersistenceEvent::TranscriptCompleted {
-                        conversation_id: original[0].conversation_id.clone(),
-                        first_sequence: original[0].sequence,
-                        entries: original,
+                        conversation_id: original.conversation_id().to_string(),
+                        first_sequence: original.first_sequence(),
+                        batch: original,
                         path,
                         bytes,
                     })
@@ -611,7 +613,8 @@ async fn actor_sender_handoff_waits_for_ordinary_producer_before_context_preflig
         .queue_transcript_for_tests(RuntimeSideEffect::PersistTranscriptEntries {
             path: store.transcript_path(&turn.conversation_id).unwrap(),
             store: store.clone(),
-            entries: vec![row.clone()],
+            batch: crate::storage::transcript::TranscriptAppendBatch::owned_rows(vec![row.clone()])
+                .unwrap(),
         });
     actor.poll_message_custody_for_tests();
     assert_eq!(
@@ -739,7 +742,7 @@ async fn actor_sender_handoff_deferred_source_does_not_starve_historical_positiv
     runtime.queue_transcript_for_tests(RuntimeSideEffect::PersistTranscriptEntries {
         path: transcript.transcript_path("native-sender").unwrap(),
         store: transcript,
-        entries: vec![row],
+        batch: crate::storage::transcript::TranscriptAppendBatch::owned_rows(vec![row]).unwrap(),
     });
     let (_, mut actor) = AsyncRuntimeSessionActor::new(runtime, Default::default()).unwrap();
     actor.register_message_custody(root).unwrap();
@@ -905,7 +908,7 @@ async fn actor_sender_handoff_multiple_deferrals_do_not_spin_root_lookups() {
     runtime.queue_transcript_for_tests(RuntimeSideEffect::PersistTranscriptEntries {
         path: transcript.transcript_path("native-sender").unwrap(),
         store: transcript,
-        entries: vec![row],
+        batch: crate::storage::transcript::TranscriptAppendBatch::owned_rows(vec![row]).unwrap(),
     });
     let (_, mut actor) = AsyncRuntimeSessionActor::new(runtime, Default::default()).unwrap();
     actor.register_message_custody(root).unwrap();
@@ -961,7 +964,7 @@ async fn actor_sender_handoff_positive_backoff_suppresses_older_parked_lookup_wa
     runtime.queue_transcript_for_tests(RuntimeSideEffect::PersistTranscriptEntries {
         path: transcript.transcript_path("native-sender").unwrap(),
         store: transcript,
-        entries: vec![row],
+        batch: crate::storage::transcript::TranscriptAppendBatch::owned_rows(vec![row]).unwrap(),
     });
     let (handle, mut actor) = AsyncRuntimeSessionActor::new(runtime, Default::default()).unwrap();
     let scope = root.storage_scope().clone();

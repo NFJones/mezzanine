@@ -793,7 +793,7 @@ impl RuntimeSessionService {
                 return Ok(work);
             };
             transcript.inputs.pending_entries =
-                self.persistence.pending_transcript_entries_at_path(
+                self.persistence.pending_transcript_context_at_path(
                     &transcript
                         .store
                         .transcript_path(&transcript.inputs.conversation_id)?,
@@ -862,11 +862,11 @@ impl RuntimeSessionService {
             .transcript_path(transcript_conversation_id)
             .and_then(|path| {
                 self.persistence
-                    .pending_transcript_entries_at_path(&path, transcript_conversation_id)
+                    .pending_transcript_context_at_path(&path, transcript_conversation_id)
             });
         let (pending_entries, pending_capture_error) = match pending {
             Ok(entries) => (entries, None),
-            Err(error) => (Vec::new(), Some(error.message().to_string())),
+            Err(error) => (Default::default(), Some(error.message().to_string())),
         };
         RuntimeAgentPromptHistoryWork {
             memory_blocks,
@@ -998,7 +998,7 @@ impl RuntimeSessionService {
         let pending = self.compaction_pending_entries(task)?;
         let (_, history) = store.conversation_replay_projection(
             &task.conversation_id,
-            &pending,
+            pending.entries(),
             |_| {
                 Some((
                     crate::storage::transcript::ConversationTranscriptRead::All,
@@ -1017,8 +1017,9 @@ impl RuntimeSessionService {
                     &task.pane_id,
                     &arrivals,
                     snapshot,
+                    Some(&pending),
                 );
-                let records = history.records.rendered_row_records()?;
+                let records = history.records.committed_row_records(snapshot)?;
                 Ok((history, records))
             },
         )?;

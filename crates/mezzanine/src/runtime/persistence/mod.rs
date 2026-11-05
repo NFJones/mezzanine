@@ -22,10 +22,14 @@ mod adapters;
 mod audit;
 pub(crate) use audit::RuntimeAuditWriterIdentity;
 mod bookkeeping;
+mod pending_history;
+#[cfg(test)]
+mod test_support;
 mod transcript_admission;
 #[cfg(test)]
 pub(crate) use bookkeeping::RuntimeCompletionCandidateAcceptance;
 pub(crate) use bookkeeping::{RuntimeBookkeepingClaimIdentity, RuntimeCompletionCandidateWitness};
+pub(crate) use pending_history::RuntimePendingTranscriptContext;
 pub(crate) use transcript_admission::{
     RuntimeTranscriptAdmissionStamp, RuntimeTranscriptNextSequence,
 };
@@ -42,7 +46,7 @@ mod stores;
 /// One worker-owned transcript append awaiting exact-path settlement.
 type InFlightTranscriptBatch = (
     std::path::PathBuf,
-    Vec<mez_agent::transcript::TranscriptEntry>,
+    crate::storage::transcript::TranscriptAppendBatch,
 );
 
 /// Owns repository handles and deferred effects for one application runtime.

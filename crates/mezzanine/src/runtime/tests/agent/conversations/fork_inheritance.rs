@@ -442,7 +442,7 @@ fn runtime_fork_inheritance_first_context_waits_for_exact_initial_publication() 
             .apply_persistence_transition(PersistenceEvent::TranscriptCompleted {
                 conversation_id: cid.clone(),
                 first_sequence: 0,
-                entries: vec![],
+                batch: batch.clone(),
                 path: path.clone(),
                 bytes: 0
             })

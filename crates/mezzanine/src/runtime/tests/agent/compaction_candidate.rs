@@ -134,12 +134,14 @@ fn runtime_manual_compaction_candidate_retains_native_execution_ownership() {
     row.content = "retained turn completed".to_string();
     rows.push(row.clone());
     service.persistence.enable_transcript_adapter();
+    let append =
+        crate::storage::transcript::TranscriptAppendBatch::owned_rows(rows.clone()).unwrap();
     service
         .persistence
         .queue_transcript(RuntimeSideEffect::PersistTranscriptEntries {
             path: store.transcript_path("candidate-native").unwrap(),
             store: store.clone(),
-            entries: rows.clone(),
+            batch: append.clone(),
         });
     service
         .agent_shell_store_mut()
@@ -284,7 +286,7 @@ fn runtime_manual_compaction_candidate_retains_native_execution_ownership() {
     // Commit the same pending occurrences, then capture a real next auxiliary
     // task. Its frozen publication proof must retain the wrapper, while its
     // actual provider request contains only the original semantic event.
-    store.append_many(&rows).unwrap();
+    store.commit_accounted_transcript_batch(&append, 1).unwrap();
     let response = service.dispatch_runtime_control_body(
         r#"{"jsonrpc":"2.0","id":"candidate-native-next","method":"agent/shell/command","params":{"idempotency_key":"candidate-native-next","input":"/compact"}}"#,
         &primary,
@@ -379,6 +381,7 @@ fn runtime_compaction_candidate_mcp_epoch_matches_published_projection() {
         "%1",
         &rows,
         &[],
+        None,
         None,
         None,
     );

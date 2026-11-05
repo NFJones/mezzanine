@@ -565,8 +565,17 @@ impl AsyncRuntimeSessionActor {
                     .map(|(id, effect)| {
                         let result = match effect {
                             RuntimeSideEffect::PersistTranscriptEntries {
-                                store, entries, ..
-                            } => store.accept_append_receipt(&entries, id),
+                                store, batch, ..
+                            } => {
+                                if batch.row_accounting().is_none() || batch.has_initial_authority()
+                                {
+                                    Err(MezError::invalid_args(
+                                        "ordinary transcript effect lacks its occurrence proposal",
+                                    ))
+                                } else {
+                                    store.accept_transcript_append_receipt(&batch, id)
+                                }
+                            }
                             RuntimeSideEffect::PersistInitialTranscript { store, path, batch } => {
                                 if !batch.has_initial_authority() {
                                     Err(MezError::invalid_args(

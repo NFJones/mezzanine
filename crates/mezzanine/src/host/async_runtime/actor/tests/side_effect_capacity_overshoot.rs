@@ -833,7 +833,10 @@ async fn mixed_committed_refusal_retains_exact_transcript_receipt_claim() {
             RuntimeSideEffect::PersistTranscriptEntries {
                 path: store.transcript_path(&row.conversation_id).unwrap(),
                 store,
-                entries: vec![row.clone()],
+                batch: crate::storage::transcript::TranscriptAppendBatch::owned_rows(vec![
+                    row.clone(),
+                ])
+                .unwrap(),
             },
             timer_effect("refused"),
         ])
@@ -844,10 +847,10 @@ async fn mixed_committed_refusal_retains_exact_transcript_receipt_claim() {
         .hold_transcript_receipts_after(previous);
     assert_eq!(admissions.len(), 1);
     let (id, effect) = &admissions[0];
-    let RuntimeSideEffect::PersistTranscriptEntries { entries, .. } = effect else {
+    let RuntimeSideEffect::PersistTranscriptEntries { batch: entries, .. } = effect else {
         panic!("held receipt changed persistence family");
     };
-    assert_eq!(entries, &vec![row.clone()]);
+    assert_eq!(entries.entries(), &vec![row.clone()]);
     assert!(
         actor
             .side_effect_routes
@@ -868,8 +871,8 @@ async fn mixed_committed_refusal_retains_exact_transcript_receipt_claim() {
     let drained = actor.side_effect_routes.drain_persistence_claims(8);
     assert!(matches!(
         drained.as_slice(),
-        [(RuntimeSideEffect::PersistTranscriptEntries { entries, .. }, Some(found))]
-            if entries == &vec![row] && found == id
+        [(RuntimeSideEffect::PersistTranscriptEntries { batch: entries, .. }, Some(found))]
+            if entries.entries() == &vec![row] && found == id
     ));
     assert!(
         actor

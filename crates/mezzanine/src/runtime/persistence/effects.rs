@@ -268,8 +268,8 @@ impl RuntimePersistenceComponent {
 
     /// Queues one transcript or prompt-history persistence effect.
     pub(crate) fn queue_transcript(&mut self, effect: RuntimeSideEffect) {
-        if let RuntimeSideEffect::PersistTranscriptEntries { entries, path, .. } = &effect
-            && let Some(last) = entries.last()
+        if let RuntimeSideEffect::PersistTranscriptEntries { batch, path, .. } = &effect
+            && let Some(last) = batch.entries().last()
         {
             self.reserve_transcript_sequence_at_path(path, &last.conversation_id, last.sequence);
         }
@@ -358,9 +358,8 @@ impl RuntimePersistenceComponent {
     ) {
         self.queued_transcript_effects
             .retain_mut(|effect| match effect {
-                RuntimeSideEffect::PersistTranscriptEntries { entries, .. } => {
-                    entries.retain(|entry| entry.conversation_id != conversation_id);
-                    !entries.is_empty()
+                RuntimeSideEffect::PersistTranscriptEntries { batch, .. } => {
+                    batch.conversation_id() != conversation_id
                 }
                 RuntimeSideEffect::PersistInitialTranscript { batch, .. } => {
                     batch.conversation_id() != conversation_id
@@ -463,13 +462,15 @@ impl RuntimePersistenceComponent {
                 .in_flight_transcript_entries
                 .iter()
                 .any(|((owner, _), batches)| {
-                    owner == conversation_id && batches.iter().any(|(_, rows)| !rows.is_empty())
+                    owner == conversation_id
+                        && batches.iter().any(|(_, batch)| !batch.entries().is_empty())
                 })
             || self
                 .queued_transcript_effects
                 .iter()
                 .any(|effect| match effect {
-                    RuntimeSideEffect::PersistTranscriptEntries { entries, .. } => entries
+                    RuntimeSideEffect::PersistTranscriptEntries { batch, .. } => batch
+                        .entries()
                         .iter()
                         .any(|row| row.conversation_id == conversation_id),
                     _ => false,
@@ -486,13 +487,19 @@ impl RuntimePersistenceComponent {
             .in_flight_transcript_entries
             .iter()
             .filter(|((owner, _), _)| owner == conversation_id)
-            .flat_map(|(_, batches)| batches.iter().flat_map(|(_, rows)| rows.iter().cloned()))
+            .flat_map(|(_, batches)| {
+                batches
+                    .iter()
+                    .flat_map(|(_, batch)| batch.entries().iter().cloned())
+            })
             .collect::<Vec<_>>();
         entries.extend(
             self.queued_transcript_effects
                 .iter()
                 .filter_map(|effect| match effect {
-                    RuntimeSideEffect::PersistTranscriptEntries { entries, .. } => Some(entries),
+                    RuntimeSideEffect::PersistTranscriptEntries { batch, .. } => {
+                        Some(batch.entries())
+                    }
                     _ => None,
                 })
                 .flatten()
@@ -556,14 +563,14 @@ impl RuntimePersistenceComponent {
         let effects = std::mem::take(&mut self.queued_transcript_effects);
         for effect in &effects {
             self.retain_initial_transcript_effect(effect);
-            if let RuntimeSideEffect::PersistTranscriptEntries { entries, path, .. } = effect
-                && let Some(first) = entries.first()
+            if let RuntimeSideEffect::PersistTranscriptEntries { batch, path, .. } = effect
+                && let Some(first) = batch.entries().first()
             {
                 let batches = self
                     .in_flight_transcript_entries
                     .entry((first.conversation_id.clone(), first.sequence))
                     .or_default();
-                batches.push((path.clone(), entries.clone()));
+                batches.push((path.clone(), batch.clone()));
             }
         }
         effects
@@ -576,7 +583,7 @@ impl RuntimePersistenceComponent {
         conversation_id: &str,
         first_sequence: u64,
         path: &std::path::Path,
-        entries: &[mez_agent::transcript::TranscriptEntry],
+        entries: &crate::storage::transcript::TranscriptAppendBatch,
     ) -> bool {
         self.in_flight_transcript_entries
             .get(&(conversation_id.to_string(), first_sequence))
@@ -593,13 +600,13 @@ impl RuntimePersistenceComponent {
         conversation_id: &str,
         first_sequence: u64,
         path: &std::path::Path,
-        entries: &[mez_agent::transcript::TranscriptEntry],
+        entries: &crate::storage::transcript::TranscriptAppendBatch,
     ) -> bool {
         let key = (conversation_id.to_string(), first_sequence);
         if !self.owns_transcript_write_at_path(conversation_id, first_sequence, path, entries) {
             return false;
         }
-        if let Some(last) = entries.last() {
+        if let Some(last) = entries.entries().last() {
             self.observe_committed_transcript_at_path(path, conversation_id, last.sequence);
         }
         if let Some(batches) = self.in_flight_transcript_entries.get_mut(&key) {
@@ -692,6 +699,7 @@ impl RuntimePersistenceComponent {
 
 #[cfg(test)]
 mod tests {
+    use super::super::test_support::drain_batches;
     use super::*;
 
     /// Drained rows remain logically visible until their exact write settles;
@@ -724,7 +732,8 @@ mod tests {
         component.queue_transcript(RuntimeSideEffect::PersistTranscriptEntries {
             path: path.clone(),
             store,
-            entries: vec![row.clone()],
+            batch: crate::storage::transcript::TranscriptAppendBatch::owned_rows(vec![row.clone()])
+                .unwrap(),
         });
         assert_eq!(
             component.deferred_transcript_next_sequence("drained-write"),
@@ -736,7 +745,8 @@ mod tests {
         );
         assert!(component.has_pending_transcript_entries("drained-write"));
         assert!(!component.has_pending_transcript_entries("other-conversation"));
-        assert_eq!(component.take_transcript_effects().len(), 1);
+        let batches = drain_batches(&mut component);
+        assert_eq!(batches.len(), 1);
         assert!(component.has_pending_transcript_entries("drained-write"));
         assert_eq!(
             component.deferred_transcript_next_sequence("drained-write"),
@@ -746,34 +756,23 @@ mod tests {
             component.pending_transcript_entries("drained-write"),
             vec![row.clone()]
         );
-        component.settle_transcript_write_at_path(
-            "other-conversation",
-            1,
-            &path,
-            std::slice::from_ref(&row),
-        );
+        component.settle_transcript_write_at_path("other-conversation", 1, &path, &batches[0]);
         assert_eq!(
             component.pending_transcript_entries("drained-write").len(),
             1
         );
         let mut stale = row.clone();
         stale.content = "stale replacement".to_string();
-        assert!(!component.settle_transcript_write_at_path(
-            "drained-write",
-            1,
-            &path,
-            std::slice::from_ref(&stale)
-        ));
+        let stale = crate::storage::transcript::TranscriptAppendBatch::rows(vec![stale])
+            .unwrap()
+            .with_row_accounting(batches[0].row_accounting().unwrap().clone())
+            .unwrap();
+        assert!(!component.settle_transcript_write_at_path("drained-write", 1, &path, &stale));
         assert_eq!(
             component.pending_transcript_entries("drained-write"),
             vec![row.clone()]
         );
-        component.settle_transcript_write_at_path(
-            "drained-write",
-            1,
-            &path,
-            std::slice::from_ref(&row),
-        );
+        component.settle_transcript_write_at_path("drained-write", 1, &path, &batches[0]);
         assert_eq!(
             component.deferred_transcript_next_sequence("drained-write"),
             Some(2)
@@ -818,20 +817,19 @@ mod tests {
             component.queue_transcript(RuntimeSideEffect::PersistTranscriptEntries {
                 store: store.clone(),
                 path: path.clone(),
-                entries: vec![row.clone()],
+                batch: crate::storage::transcript::TranscriptAppendBatch::owned_rows(vec![
+                    row.clone(),
+                ])
+                .unwrap(),
             });
         }
         assert_eq!(
             component.deferred_transcript_next_sequence("high-water"),
             Some(3)
         );
-        assert_eq!(component.take_transcript_effects().len(), 2);
-        assert!(component.settle_transcript_write_at_path(
-            "high-water",
-            2,
-            &path,
-            std::slice::from_ref(&second)
-        ));
+        let batches = drain_batches(&mut component);
+        assert_eq!(batches.len(), 2);
+        assert!(component.settle_transcript_write_at_path("high-water", 2, &path, &batches[1]));
         assert_eq!(
             component.pending_transcript_entries("high-water"),
             vec![first.clone()]
@@ -851,12 +849,7 @@ mod tests {
             Some(3),
             "worker-owned and settled sequences survive cancellation of queued work"
         );
-        assert!(component.settle_transcript_write_at_path(
-            "high-water",
-            1,
-            &path,
-            std::slice::from_ref(&first)
-        ));
+        assert!(component.settle_transcript_write_at_path("high-water", 1, &path, &batches[0]));
         assert_eq!(
             component.deferred_transcript_next_sequence("high-water"),
             Some(3)
@@ -892,22 +885,16 @@ mod tests {
             component.queue_transcript(RuntimeSideEffect::PersistTranscriptEntries {
                 path: path.clone(),
                 store: store.clone(),
-                entries: vec![row.clone()],
+                batch: crate::storage::transcript::TranscriptAppendBatch::owned_rows(vec![
+                    row.clone(),
+                ])
+                .unwrap(),
             });
         }
-        assert_eq!(component.take_transcript_effects().len(), 2);
-        assert!(component.owns_transcript_write_at_path(
-            "claim-collision",
-            1,
-            &path,
-            std::slice::from_ref(&first)
-        ));
-        assert!(component.owns_transcript_write_at_path(
-            "claim-collision",
-            1,
-            &path,
-            std::slice::from_ref(&replacement)
-        ));
+        let batches = drain_batches(&mut component);
+        assert_eq!(batches.len(), 2);
+        assert!(component.owns_transcript_write_at_path("claim-collision", 1, &path, &batches[0]));
+        assert!(component.owns_transcript_write_at_path("claim-collision", 1, &path, &batches[1]));
         assert_eq!(
             component.pending_transcript_entries("claim-collision"),
             vec![first.clone(), replacement.clone()]
@@ -916,23 +903,18 @@ mod tests {
             "claim-collision",
             1,
             &path,
-            std::slice::from_ref(&first)
+            &batches[0]
         ));
         assert_eq!(
             component.pending_transcript_entries("claim-collision"),
             vec![replacement.clone()]
         );
-        assert!(component.owns_transcript_write_at_path(
-            "claim-collision",
-            1,
-            &path,
-            std::slice::from_ref(&replacement)
-        ));
+        assert!(component.owns_transcript_write_at_path("claim-collision", 1, &path, &batches[1]));
         let _ = std::fs::remove_dir_all(root);
     }
 
-    /// An old completion can currently settle a newly claimed identical
-    /// batch: row equality alone cannot distinguish their claim generations.
+    /// A retry of the same original proposal retains identity; only the outer
+    /// claim generation can distinguish its separate physical worker claims.
     #[test]
     fn transcript_late_completion_can_settle_identical_replacement() {
         let root = std::env::temp_dir().join(format!(
@@ -955,25 +937,16 @@ mod tests {
         let effect = RuntimeSideEffect::PersistTranscriptEntries {
             path: path.clone(),
             store,
-            entries: vec![row.clone()],
+            batch: crate::storage::transcript::TranscriptAppendBatch::owned_rows(vec![row.clone()])
+                .unwrap(),
         };
         let mut component = RuntimePersistenceComponent::default();
         component.queue_transcript(effect.clone());
-        component.take_transcript_effects();
-        assert!(component.settle_transcript_write_at_path(
-            "identical-claim",
-            1,
-            &path,
-            std::slice::from_ref(&row)
-        ));
+        let original = drain_batches(&mut component).remove(0);
+        assert!(component.settle_transcript_write_at_path("identical-claim", 1, &path, &original));
         component.queue_transcript(effect);
         component.take_transcript_effects();
-        assert!(component.settle_transcript_write_at_path(
-            "identical-claim",
-            1,
-            &path,
-            std::slice::from_ref(&row)
-        ));
+        assert!(component.settle_transcript_write_at_path("identical-claim", 1, &path, &original));
         assert!(
             component
                 .pending_transcript_entries("identical-claim")
@@ -1006,12 +979,14 @@ mod tests {
         let effect = RuntimeSideEffect::PersistTranscriptEntries {
             path: path.clone(),
             store,
-            entries: vec![row.clone()],
+            batch: crate::storage::transcript::TranscriptAppendBatch::owned_rows(vec![row.clone()])
+                .unwrap(),
         };
         let mut component = RuntimePersistenceComponent::default();
         component.queue_transcript(effect.clone());
         component.queue_transcript(effect);
-        assert_eq!(component.take_transcript_effects().len(), 2);
+        let batches = drain_batches(&mut component);
+        assert_eq!(batches.len(), 2);
         assert_eq!(
             component.pending_transcript_entries("duplicate-claims"),
             vec![row.clone(), row.clone()]
@@ -1020,7 +995,7 @@ mod tests {
             "duplicate-claims",
             1,
             &path,
-            std::slice::from_ref(&row)
+            &batches[0]
         ));
         assert_eq!(
             component.pending_transcript_entries("duplicate-claims"),
@@ -1030,7 +1005,7 @@ mod tests {
             "duplicate-claims",
             1,
             &path,
-            std::slice::from_ref(&row)
+            &batches[1]
         ));
         assert!(
             component

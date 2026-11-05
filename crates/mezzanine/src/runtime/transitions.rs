@@ -12,7 +12,7 @@ use crate::security::audit::AuditRetentionPolicy;
 use crate::storage::registry::SessionRegistry;
 use crate::storage::token_usage::{TokenUsageEvent, TokenUsageStore};
 use crate::storage::transcript::AgentTranscriptStore;
-use mez_agent::transcript::{AgentSessionMetadata, TranscriptEntry};
+use mez_agent::transcript::AgentSessionMetadata;
 use mez_agent::{AgentTurnExecution, ModelResponse};
 use mez_core::ids::{AgentId, ClientId};
 use mez_mux::layout::Size;
@@ -641,8 +641,8 @@ pub enum PersistenceEvent {
         conversation_id: String,
         /// First sequence of the settled append.
         first_sequence: u64,
-        /// Exact immutable rows handed to the worker, for settlement fencing.
-        entries: Vec<TranscriptEntry>,
+        /// Original immutable proposal handed to the worker, including identities.
+        batch: crate::storage::transcript::TranscriptAppendBatch,
         /// Destination path written by the worker.
         path: PathBuf,
         /// Number of durable bytes written.
@@ -654,8 +654,8 @@ pub enum PersistenceEvent {
         conversation_id: String,
         /// First sequence of the failed append.
         first_sequence: u64,
-        /// Exact immutable rows handed to the worker, for diagnostic identity.
-        entries: Vec<TranscriptEntry>,
+        /// Original immutable proposal retained through uncertain completion.
+        batch: crate::storage::transcript::TranscriptAppendBatch,
         /// Destination path attempted by the worker.
         path: PathBuf,
         /// Human-readable write failure.
@@ -1250,8 +1250,8 @@ pub enum RuntimeSideEffect {
         store: AgentTranscriptStore,
         /// Destination transcript file used for diagnostics.
         path: PathBuf,
-        /// Entries to append in sequence order.
-        entries: Vec<TranscriptEntry>,
+        /// Exact immutable append proposal, including original row identities.
+        batch: crate::storage::transcript::TranscriptAppendBatch,
     },
     /// Admit initial fork rows and authority together, then retire its receipt.
     /// Admission completes the initial publication before this effect is released

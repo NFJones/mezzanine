@@ -1252,23 +1252,7 @@ impl AgentTranscriptStore {
             ));
         }
         #[cfg(test)]
-        if consume_failure_countdown(&self.fail_transcript_append_attempts) > 0 {
-            return Err(MezError::from(std::io::Error::new(
-                std::io::ErrorKind::Interrupted,
-                "injected consecutive transcript append failure",
-            )));
-        }
-        #[cfg(test)]
-        if self
-            .fail_next_transcript_append
-            .swap(false, Ordering::SeqCst)
-        {
-            return Err(MezError::from(std::io::Error::new(
-                std::io::ErrorKind::Interrupted,
-                "injected transcript append failure before commit",
-            ))
-            .mark_local_transcript_precommit_retryable());
-        }
+        self.check_transcript_append_failure_for_tests()?;
         let mut grouped = BTreeMap::<String, Vec<&TranscriptEntry>>::new();
         for entry in entries {
             entry.validate()?;
@@ -1319,6 +1303,29 @@ impl AgentTranscriptStore {
             }
         }
         Ok(bytes)
+    }
+
+    /// Injects the same pre-write failures at ordinary and legacy append entry
+    /// points, preserving actual retry and interrupted-publication coverage.
+    #[cfg(test)]
+    pub(super) fn check_transcript_append_failure_for_tests(&self) -> Result<()> {
+        if consume_failure_countdown(&self.fail_transcript_append_attempts) > 0 {
+            return Err(MezError::from(std::io::Error::new(
+                std::io::ErrorKind::Interrupted,
+                "injected consecutive transcript append failure",
+            )));
+        }
+        if self
+            .fail_next_transcript_append
+            .swap(false, Ordering::SeqCst)
+        {
+            return Err(MezError::from(std::io::Error::new(
+                std::io::ErrorKind::Interrupted,
+                "injected transcript append failure before commit",
+            ))
+            .mark_local_transcript_precommit_retryable());
+        }
+        Ok(())
     }
 
     /// Reconciles one validated contiguous conversation span under its existing
@@ -2266,6 +2273,7 @@ impl AgentTranscriptStore {
     ///
     /// This is used by the async runtime persistence worker so transcript
     /// durability does not require a blocking worker task.
+    #[cfg(test)]
     pub async fn append_many_async(&self, entries: &[TranscriptEntry]) -> Result<usize> {
         let store = self.clone();
         let entries = entries.to_vec();

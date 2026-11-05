@@ -125,7 +125,7 @@ impl RuntimePersistenceComponent {
         }
         let mut rows = BTreeMap::new();
         for ((owner, _), batches) in &self.in_flight_transcript_entries {
-            for (owned_path, entries) in batches {
+            for (owned_path, batch) in batches {
                 if owned_path != path {
                     continue;
                 }
@@ -134,14 +134,14 @@ impl RuntimePersistenceComponent {
                         "original transcript in-flight owner changed",
                     ));
                 }
-                insert(&mut rows, entries, conversation_id)?;
+                insert(&mut rows, batch.entries(), conversation_id)?;
             }
         }
         for effect in &self.queued_transcript_effects {
             if let RuntimeSideEffect::PersistTranscriptEntries {
                 path: owned_path,
                 store,
-                entries,
+                batch,
             } = effect
             {
                 if owned_path != path {
@@ -152,7 +152,7 @@ impl RuntimePersistenceComponent {
                         "original transcript queued store differs from its target",
                     ));
                 }
-                insert(&mut rows, entries, conversation_id)?;
+                insert(&mut rows, batch.entries(), conversation_id)?;
             }
         }
         insert(
@@ -170,16 +170,17 @@ impl RuntimePersistenceComponent {
         &mut self,
         effect: RuntimeSideEffect,
     ) -> Result<bool> {
-        let RuntimeSideEffect::PersistTranscriptEntries {
-            path,
-            store,
-            entries,
-        } = &effect
-        else {
+        let RuntimeSideEffect::PersistTranscriptEntries { path, store, batch } = &effect else {
             return Err(MezError::invalid_state(
                 "completion append is not a transcript effect",
             ));
         };
+        let entries = batch.entries();
+        if batch.row_accounting().is_none() {
+            return Err(MezError::invalid_state(
+                "completion append lacks its original occurrence proposal",
+            ));
+        }
         let first = entries
             .first()
             .ok_or_else(|| MezError::invalid_state("completion append is empty"))?;
@@ -222,7 +223,13 @@ impl RuntimePersistenceComponent {
             }
         }
         if already_owned == entries.len() {
-            return Ok(false);
+            return if self.pending_transcript_proposal_matches(path, batch) {
+                Ok(false)
+            } else {
+                Err(MezError::conflict(
+                    "equal pending rows belong to a different append proposal",
+                ))
+            };
         }
         if already_owned != 0 {
             return Err(MezError::invalid_state(
@@ -434,7 +441,7 @@ impl RuntimePersistenceComponent {
                 continue;
             }
             for (path, entries) in batches {
-                if let Some(last) = entries.last() {
+                if let Some(last) = entries.entries().last() {
                     let frontier = active_paths.entry(path.clone()).or_insert(0);
                     *frontier = (*frontier).max(last.sequence);
                 }
@@ -497,11 +504,14 @@ mod tests {
     }
 
     /// Builds only an effect value; these metadata tests never service its I/O.
-    fn effect(store: &AgentTranscriptStore, rows: Vec<TranscriptEntry>) -> RuntimeSideEffect {
+    fn effect(
+        store: &AgentTranscriptStore,
+        rows: crate::storage::transcript::TranscriptAppendBatch,
+    ) -> RuntimeSideEffect {
         RuntimeSideEffect::PersistTranscriptEntries {
             path: store.transcript_path("archive-owner").unwrap(),
             store: store.clone(),
-            entries: rows,
+            batch: rows,
         }
     }
 
@@ -516,7 +526,9 @@ mod tests {
         let path_a = a.transcript_path("archive-owner").unwrap();
         let path_b = b.transcript_path("archive-owner").unwrap();
         let other = owner.capture_transcript_admission_stamp(&path_b, "archive-owner");
-        let entries = vec![row(1, "accepted")];
+        let entries =
+            crate::storage::transcript::TranscriptAppendBatch::owned_rows(vec![row(1, "accepted")])
+                .unwrap();
         assert!(
             owner
                 .queue_checked_completion_transcript(effect(&a, entries.clone()))
@@ -525,14 +537,22 @@ mod tests {
         let stamp = owner.capture_transcript_admission_stamp(&path_a, "archive-owner");
         assert_eq!(stamp.next, RuntimeTranscriptNextSequence::Next(2));
         assert_eq!(stamp.committed_through, 0);
-        assert_eq!(owner.take_transcript_effects().len(), 1);
+        assert_eq!(
+            super::super::test_support::drain_batches(&mut owner),
+            vec![entries.clone()]
+        );
         assert!(owner.transcript_admission_matches(&stamp));
-        assert!(!owner.settle_transcript_write_at_path(
-            "archive-owner",
-            1,
-            &path_a,
-            &[row(1, "foreign")]
-        ));
+        assert!(
+            !owner.settle_transcript_write_at_path(
+                "archive-owner",
+                1,
+                &path_a,
+                &crate::storage::transcript::TranscriptAppendBatch::rows(vec![row(1, "foreign")])
+                    .unwrap()
+                    .with_row_accounting(entries.row_accounting().unwrap().clone())
+                    .unwrap()
+            )
+        );
         assert_eq!(
             owner
                 .transcript_admission_committed_through(&stamp)
@@ -572,7 +592,11 @@ mod tests {
         assert_eq!(empty.next, recreated.next);
         assert!(!owner.transcript_admission_matches(&empty));
         assert!(!owner.transcript_admission_matches(&empty_clone));
-        let entries = vec![row(1, "inflight retained")];
+        let entries = crate::storage::transcript::TranscriptAppendBatch::owned_rows(vec![row(
+            1,
+            "inflight retained",
+        )])
+        .unwrap();
         owner
             .queue_checked_completion_transcript(effect(&store, entries.clone()))
             .unwrap();
@@ -584,7 +608,7 @@ mod tests {
             owner
                 .pending_transcript_entries_at_path(&path, "archive-owner")
                 .unwrap(),
-            entries
+            entries.entries()
         );
         let failed = owner.capture_transcript_admission_stamp(&path, "archive-owner");
         owner.cancel_queued_transcript_entries_for_conversation("archive-owner");
@@ -593,7 +617,7 @@ mod tests {
             owner
                 .pending_transcript_entries_at_path(&path, "archive-owner")
                 .unwrap(),
-            entries
+            entries.entries()
         );
         let cancelled = owner.capture_transcript_admission_stamp(&path, "archive-owner");
         assert_eq!(cancelled.committed_through, 0);
@@ -607,7 +631,11 @@ mod tests {
         let mut owner = RuntimePersistenceComponent::default();
         let store = AgentTranscriptStore::new(PathBuf::from("archive-max"));
         let path = store.transcript_path("archive-owner").unwrap();
-        let entries = vec![row(u64::MAX, "last row")];
+        let entries = crate::storage::transcript::TranscriptAppendBatch::owned_rows(vec![row(
+            u64::MAX,
+            "last row",
+        )])
+        .unwrap();
         assert!(
             owner
                 .queue_checked_completion_transcript(effect(&store, entries.clone()))
@@ -622,7 +650,11 @@ mod tests {
             owner
                 .queue_checked_completion_transcript(effect(
                     &store,
-                    vec![row(u64::MAX, "conflict")]
+                    crate::storage::transcript::TranscriptAppendBatch::owned_rows(vec![row(
+                        u64::MAX,
+                        "conflict"
+                    )])
+                    .unwrap()
                 ))
                 .is_err()
         );
@@ -642,7 +674,11 @@ mod tests {
             owner
                 .queue_checked_completion_transcript(effect(
                     &store,
-                    vec![row(u64::MAX, "new after MAX")]
+                    crate::storage::transcript::TranscriptAppendBatch::owned_rows(vec![row(
+                        u64::MAX,
+                        "new after MAX"
+                    )])
+                    .unwrap()
                 ))
                 .is_err()
         );

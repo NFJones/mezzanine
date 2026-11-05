@@ -2,6 +2,8 @@
 
 /// Shared-index corruption, isolated checkpoints and legacy recovery.
 mod active_metadata;
+/// Ordinary pending proposals retain original identity through raw publication.
+mod append_accounting;
 /// Regression coverage for shared, saturating failure-injection countdowns.
 mod failure_countdowns;
 /// Forked active projections preserve source-owned compaction authority.

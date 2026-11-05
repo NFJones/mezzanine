@@ -36,6 +36,7 @@ use crate::runtime::{
 };
 use crate::security::audit::AuditRetentionPolicy;
 use crate::storage::transcript::AgentTranscriptStore;
+#[cfg(test)]
 use mez_agent::transcript::TranscriptEntry;
 
 // Async side-effect worker scaffolding.
@@ -1319,15 +1320,13 @@ where
                 RuntimeSideEffect::PersistTranscriptEntries {
                     store,
                     path,
-                    entries,
+                    batch: append,
                 } => {
-                    let conversation_id = entries
-                        .first()
-                        .map_or(String::new(), |entry| entry.conversation_id.clone());
-                    let first_sequence = entries.first().map_or(0, |entry| entry.sequence);
+                    let conversation_id = append.conversation_id().to_string();
+                    let first_sequence = append.first_sequence();
                     let result = match claim_id {
                         Some(id) => {
-                            persist_transcript_entries_with_generation(store, entries.clone(), id)
+                            persist_transcript_batch_with_generation(store, append.clone(), id)
                                 .await
                         }
                         None => Err(MezError::invalid_state(
@@ -1344,7 +1343,7 @@ where
                                     outcome: Box::new(PersistenceEvent::TranscriptCompleted {
                                         conversation_id,
                                         first_sequence,
-                                        entries,
+                                        batch: append,
                                         path,
                                         bytes,
                                     }),
@@ -1364,7 +1363,7 @@ where
                                     outcome: Box::new(PersistenceEvent::TranscriptFailed {
                                         conversation_id,
                                         first_sequence,
-                                        entries,
+                                        batch: append,
                                         path,
                                         error: error.message().to_string(),
                                         retryable,
@@ -2422,6 +2421,7 @@ fn audit_retention_policy_disabled(retention: &AuditRetentionPolicy) -> bool {
 
 /// Appends transcript entries through the transcript store's async filesystem API.
 #[cfg(test)]
+#[cfg(test)]
 async fn persist_transcript_entries(
     store: AgentTranscriptStore,
     entries: Vec<TranscriptEntry>,
@@ -2429,7 +2429,37 @@ async fn persist_transcript_entries(
     persist_transcript_entries_with_generation(store, entries, 1).await
 }
 
-/// Reconciles one immutable worker claim using its exact receipt generation.
+/// Commits the original batch proposal on the blocking pool. Join uncertainty
+/// retains the same batch in its actual claim for journal-qualified recovery.
+async fn persist_transcript_batch_with_generation(
+    store: AgentTranscriptStore,
+    batch: crate::storage::transcript::TranscriptAppendBatch,
+    generation: u64,
+) -> Result<usize> {
+    tokio::task::spawn_blocking(move || {
+        match store.commit_accounted_transcript_batch(&batch, generation) {
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    crate::MezErrorKind::Conflict | crate::MezErrorKind::InvalidArgs
+                ) =>
+            {
+                Err(error)
+            }
+            // An uncertain prefix is reconciled against the same original
+            // receipt under the mutation lease, never regenerated from rows.
+            Err(_) => store.commit_accounted_transcript_batch(&batch, generation),
+            result => result,
+        }
+    })
+    .await
+    .map_err(|error| {
+        MezError::invalid_state(format!("transcript batch worker join failed: {error}"))
+    })?
+}
+
+/// Reconciles one legacy unaccounted fixture with its exact receipt generation.
+#[cfg(test)]
 async fn persist_transcript_entries_with_generation(
     store: AgentTranscriptStore,
     entries: Vec<TranscriptEntry>,

@@ -472,7 +472,7 @@ impl RuntimeSessionService {
             &task.conversation_id,
             crate::storage::transcript::ConversationTranscriptRead::All,
             boundary > 0 || task.transcript_entries > pending.len() as u64,
-            &pending,
+            pending.entries(),
         )?;
         if task
             .frozen_compaction_rows
@@ -2654,7 +2654,7 @@ impl RuntimeSessionService {
                     },
                     &task.frozen_compaction_rows,
                     baseline,
-                    &pending,
+                    pending.entries(),
                 )?);
             } else if let Some(projection) = projection {
                 let prior_ranges = previous

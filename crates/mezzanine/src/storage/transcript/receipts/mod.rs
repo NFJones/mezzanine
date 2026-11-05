@@ -37,6 +37,8 @@ use super::types::{AgentCompactionEpoch, AgentTranscriptStore};
 pub(super) mod custody;
 /// Initial projection publication and whole-payload recovery checks.
 mod initial_projection;
+/// Ordinary occurrence publication follows the exact original append proposal.
+mod ordinary_accounting;
 pub(crate) use custody::CustodyAppendReceipt;
 
 const RECEIPT_VERSION: u64 = 1;
@@ -48,6 +50,8 @@ const NATIVE_RECEIPT_VERSION: u64 = 3;
 const HANDOFF_RECEIPT_VERSION: u64 = 4;
 /// Complete inherited raw placement/costs with optional initial summary authority.
 const ACCOUNTED_INITIAL_RECEIPT_VERSION: u64 = 5;
+/// Ordinary producer identities survive pending cancellation, retries and commit.
+const ACCOUNTED_APPEND_RECEIPT_VERSION: u64 = 6;
 
 /// One-shot test handshake after receipt path enumeration, before opening files.
 #[cfg(test)]
@@ -74,6 +78,9 @@ pub(super) struct AppendReceipt {
     /// Original raw accounting is valid only in an explicit version-five owner.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     initial_row_accounting: Option<super::InitialTranscriptRowAccounting>,
+    /// Version-six ordinary proposal; never initial or native replay authority.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    row_accounting: Option<super::TranscriptAppendAccounting>,
     /// Original physical batch and source; never decoded as ACK authority.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     native_input: Option<CustodyAppendPlan>,
@@ -97,7 +104,10 @@ impl AppendReceipt {
             .collect::<Result<Vec<_>>>()?;
         let compaction_epoch = batch.initial_compaction_epoch().cloned();
         let initial_row_accounting = batch.initial_row_accounting().cloned();
-        let version = if initial_row_accounting.is_some() {
+        let row_accounting = batch.row_accounting().cloned();
+        let version = if row_accounting.is_some() {
+            ACCOUNTED_APPEND_RECEIPT_VERSION
+        } else if initial_row_accounting.is_some() {
             ACCOUNTED_INITIAL_RECEIPT_VERSION
         } else if compaction_epoch.is_some() {
             PROJECTION_RECEIPT_VERSION
@@ -109,6 +119,7 @@ impl AppendReceipt {
             compaction_epoch.as_ref(),
             None,
             initial_row_accounting.as_ref(),
+            row_accounting.as_ref(),
         )?;
         Ok(Self {
             version,
@@ -119,6 +130,7 @@ impl AppendReceipt {
             rows,
             compaction_epoch,
             initial_row_accounting,
+            row_accounting,
             native_input: None,
             terminal_handoff: None,
         })
@@ -134,7 +146,14 @@ impl AppendReceipt {
                     | NATIVE_RECEIPT_VERSION
                     | HANDOFF_RECEIPT_VERSION
                     | ACCOUNTED_INITIAL_RECEIPT_VERSION
+                    | ACCOUNTED_APPEND_RECEIPT_VERSION
             )
+            || (self.version != ACCOUNTED_APPEND_RECEIPT_VERSION && self.row_accounting.is_some())
+            || (self.version == ACCOUNTED_APPEND_RECEIPT_VERSION
+                && (self.row_accounting.is_none()
+                    || self.initial_row_accounting.is_some()
+                    || self.compaction_epoch.is_some()
+                    || self.custody_plan().is_some()))
             || (self.version != ACCOUNTED_INITIAL_RECEIPT_VERSION
                 && self.initial_row_accounting.is_some())
             || (self.version == ACCOUNTED_INITIAL_RECEIPT_VERSION
@@ -163,6 +182,7 @@ impl AppendReceipt {
                     self.compaction_epoch.as_ref(),
                     self.custody_plan(),
                     self.initial_row_accounting.as_ref(),
+                    self.row_accounting.as_ref(),
                 )?
         {
             return Err(MezError::invalid_state(
@@ -188,6 +208,9 @@ impl AppendReceipt {
         };
         if let Some(accounting) = &self.initial_row_accounting {
             batch = batch.with_initial_row_accounting(accounting.clone())?;
+        }
+        if let Some(accounting) = &self.row_accounting {
+            batch = batch.with_row_accounting(accounting.clone())?;
         }
         if batch.conversation_id() != self.conversation_id
             || batch.first_sequence() != self.first_sequence
@@ -262,7 +285,22 @@ fn digest_payload(
     epoch: Option<&AgentCompactionEpoch>,
     native: Option<&CustodyAppendPlan>,
     accounting: Option<&super::InitialTranscriptRowAccounting>,
+    append_accounting: Option<&super::TranscriptAppendAccounting>,
 ) -> Result<String> {
+    if let Some(accounting) = append_accounting {
+        let encoded = serde_json::to_vec(accounting)
+            .map_err(|_| MezError::invalid_state("ordinary append accounting encode failed"))?;
+        let mut digest = Sha256::new();
+        digest.update(b"mezzanine-transcript-append-accounting-v6\0");
+        digest.update(digest_rows(rows).as_bytes());
+        digest.update((encoded.len() as u64).to_be_bytes());
+        digest.update(encoded);
+        return Ok(digest
+            .finalize()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect());
+    }
     if let Some(accounting) = accounting {
         let mut digest = Sha256::new();
         digest.update(b"mezzanine-initial-transcript-accounting-v5\0");
@@ -633,6 +671,7 @@ impl AgentTranscriptStore {
     }
 
     /// Preserves ordinary row-only admission and its v1 recovery contract.
+    #[cfg(test)]
     pub(crate) fn accept_append_receipt(
         &self,
         entries: &[TranscriptEntry],
@@ -652,9 +691,20 @@ impl AgentTranscriptStore {
         batch: &TranscriptAppendBatch,
         generation: u64,
     ) -> Result<()> {
-        let entries = batch.entries();
         let receipt = AppendReceipt::from_batch(batch, generation)?;
         let _lock = self.acquire_conversation_lock(&receipt.conversation_id)?;
+        self.accept_prepared_transcript_receipt_locked(batch, &receipt, &_lock)
+    }
+
+    /// Admits the receipt prepared from this same immutable batch while its
+    /// caller retains the exact conversation lease. Never reacquires that lane.
+    pub(super) fn accept_prepared_transcript_receipt_locked(
+        &self,
+        batch: &TranscriptAppendBatch,
+        receipt: &AppendReceipt,
+        lease: &fs::File,
+    ) -> Result<()> {
+        let entries = batch.entries();
         self.ensure_custody_receipts_settled_locked(&receipt.conversation_id)?;
         // Admission must not leave a replayable receipt for a sequence that
         // already belongs to different durable content. Check the complete
@@ -679,6 +729,7 @@ impl AgentTranscriptStore {
         };
         let pending = self.read_locked_append_receipts(&[&receipt.conversation_id])?;
         self.check_initial_projection_admission_locked(batch, &pending, committed_count)?;
+        self.check_ordinary_accounting_admission_locked(batch, &pending, committed_count)?;
         let mut next_sequence = committed_count
             .checked_add(1)
             .ok_or_else(|| MezError::invalid_state("transcript receipt sequence overflow"))?;
@@ -707,18 +758,19 @@ impl AgentTranscriptStore {
                 continue;
             }
             if existing.first_sequence == receipt.first_sequence
-                && existing.generation == generation
+                && existing.generation == receipt.generation
             {
                 if rows == entries
                     && existing.compaction_epoch == receipt.compaction_epoch
                     && existing.initial_row_accounting == receipt.initial_row_accounting
+                    && existing.row_accounting == receipt.row_accounting
                 {
                     let directory = self.append_receipt_directory();
                     set_private_dir_permissions(&directory)?;
                     set_private_file_permissions(&directory.join(existing.filename()))?;
                     fs::File::open(&directory)?.sync_all()?;
                     fs::File::open(&self.root)?.sync_all()?;
-                    self.reconcile_initial_projection_locked(batch, &_lock)?;
+                    self.reconcile_initial_projection_locked(batch, lease)?;
                     return Ok(());
                 }
                 return Err(MezError::conflict("transcript receipt identity changed"));
@@ -770,7 +822,7 @@ impl AgentTranscriptStore {
         fs::rename(&temporary, &path)?;
         fs::File::open(&directory)?.sync_all()?;
         fs::File::open(&self.root)?.sync_all()?;
-        self.reconcile_initial_projection_locked(batch, &_lock)?;
+        self.reconcile_initial_projection_locked(batch, lease)?;
         Ok(())
     }
 
@@ -802,20 +854,7 @@ impl AgentTranscriptStore {
             .filter(|(_, receipt, _)| receipt.custody_plan().is_none())
             .collect::<Vec<_>>();
         self.preflight_initial_projection_receipts(&receipts)?;
-        // Reject mutually inconsistent retained claims before any append can
-        // make one side of the conflict durable. A damaged journal remains
-        // available for diagnosis rather than being partially replayed.
-        let mut claimed = std::collections::BTreeMap::new();
-        for (_, receipt, entries) in &receipts {
-            for entry in entries {
-                let key = (receipt.conversation_id.as_str(), entry.sequence);
-                if claimed.insert(key, entry).is_some_and(|old| old != entry) {
-                    return Err(MezError::conflict(
-                        "transcript recovery receipts conflict at the same sequence",
-                    ));
-                }
-            }
-        }
+        let claimed = self.preflight_ordinary_accounting_receipts(&receipts)?;
         // Detect conflicting committed history across every conversation
         // before replay mutates any archive. The append path repeats these
         // checks under its conversation lock when it actually writes.
@@ -876,6 +915,10 @@ impl AgentTranscriptStore {
         });
         for (receipt, _) in receipts {
             let batch = receipt.batch()?;
+            if batch.row_accounting().is_some() {
+                self.commit_accounted_transcript_batch(&batch, receipt.generation)?;
+                continue;
+            }
             self.accept_transcript_append_receipt(&batch, receipt.generation)?;
             if !batch.has_initial_authority() {
                 self.append_many(batch.entries())?;
@@ -886,6 +929,7 @@ impl AgentTranscriptStore {
     }
 
     /// Retires only a matching durable receipt after exact archive reconciliation.
+    #[cfg(test)]
     pub(crate) fn settle_append_receipt(
         &self,
         entries: &[TranscriptEntry],
@@ -904,9 +948,20 @@ impl AgentTranscriptStore {
         batch: &TranscriptAppendBatch,
         generation: u64,
     ) -> Result<()> {
-        let entries = batch.entries();
         let receipt = AppendReceipt::from_batch(batch, generation)?;
         let _lock = self.acquire_conversation_lock(&receipt.conversation_id)?;
+        self.settle_prepared_transcript_receipt_locked(batch, &receipt, &_lock)
+    }
+
+    /// Retires the same prepared payload under an already-held source lease.
+    /// Raw bytes, original placement and receipt identity are still verified.
+    pub(super) fn settle_prepared_transcript_receipt_locked(
+        &self,
+        batch: &TranscriptAppendBatch,
+        receipt: &AppendReceipt,
+        _lease: &fs::File,
+    ) -> Result<()> {
+        let entries = batch.entries();
         let directory = self.append_receipt_directory();
         match fs::symlink_metadata(&directory) {
             Ok(metadata) if metadata.file_type().is_dir() => {}
@@ -963,6 +1018,7 @@ impl AgentTranscriptStore {
             ));
         }
         self.verify_initial_projection_committed_locked(batch)?;
+        self.verify_ordinary_accounting_committed_locked(batch)?;
         fs::remove_file(&path)?;
         fs::File::open(&directory)?.sync_all()?;
         Ok(())
@@ -986,6 +1042,7 @@ impl AgentTranscriptStore {
             ));
         }
         self.verify_initial_projection_committed_locked(batch)?;
+        self.verify_ordinary_accounting_committed_locked(batch)?;
         Ok(())
     }
 }
