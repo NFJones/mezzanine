@@ -964,14 +964,14 @@ mod transcript_settlement_tests {
             pane_id: "%1".to_string(),
             content: "accepted text".to_string(),
         };
+        let batch =
+            crate::storage::transcript::TranscriptAppendBatch::owned_rows(vec![row.clone()])
+                .unwrap();
         service.persistence.queue_transcript(
             crate::runtime::RuntimeSideEffect::PersistTranscriptEntries {
                 store,
                 path: path.clone(),
-                batch: crate::storage::transcript::TranscriptAppendBatch::owned_rows(vec![
-                    row.clone(),
-                ])
-                .unwrap(),
+                batch: batch.clone(),
             },
         );
         service.persistence.take_transcript_effects();
@@ -979,10 +979,7 @@ mod transcript_settlement_tests {
             .apply_persistence_transition(crate::runtime::PersistenceEvent::TranscriptFailed {
                 conversation_id: row.conversation_id.clone(),
                 first_sequence: 1,
-                batch: crate::storage::transcript::TranscriptAppendBatch::owned_rows(vec![
-                    row.clone(),
-                ])
-                .unwrap(),
+                batch: batch.clone(),
                 path: path.clone(),
                 error: "uncertain write".to_string(),
                 retryable: true,
@@ -998,10 +995,7 @@ mod transcript_settlement_tests {
             .apply_persistence_transition(crate::runtime::PersistenceEvent::TranscriptCompleted {
                 conversation_id: row.conversation_id.clone(),
                 first_sequence: 1,
-                batch: crate::storage::transcript::TranscriptAppendBatch::owned_rows(vec![
-                    row.clone(),
-                ])
-                .unwrap(),
+                batch: batch.clone(),
                 path,
                 bytes: 1,
             })
@@ -1136,22 +1130,21 @@ mod transcript_settlement_tests {
             content: "accepted text".to_string(),
         };
         let path = store.transcript_path(&row.conversation_id).unwrap();
+        let batch =
+            crate::storage::transcript::TranscriptAppendBatch::owned_rows(vec![row.clone()])
+                .unwrap();
         service.persistence.queue_transcript(
             crate::runtime::RuntimeSideEffect::PersistTranscriptEntries {
                 store,
                 path: path.clone(),
-                batch: crate::storage::transcript::TranscriptAppendBatch::owned_rows(vec![
-                    row.clone(),
-                ])
-                .unwrap(),
+                batch: batch.clone(),
             },
         );
         service.persistence.take_transcript_effects();
         let completed = crate::runtime::PersistenceEvent::TranscriptCompleted {
             conversation_id: row.conversation_id.clone(),
             first_sequence: row.sequence,
-            batch: crate::storage::transcript::TranscriptAppendBatch::owned_rows(vec![row.clone()])
-                .unwrap(),
+            batch: batch.clone(),
             path,
             bytes: 1,
         };

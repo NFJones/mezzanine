@@ -12,10 +12,7 @@ use crate::runtime::agent::native_filesystem::NativeFilesystemAttempt;
 
 /// Keeps the original store before admission and enables off-actor work.
 fn saved_fixture() -> Fixture {
-    let mut fixture = Fixture::new();
-    fixture
-        .service
-        .set_agent_transcript_store(AgentTranscriptStore::new(fixture.root.join("archive")));
+    let mut fixture = Fixture::with_transcript_store("archive");
     fixture.service.persistence.enable_transcript_adapter();
     fixture
 }
@@ -346,10 +343,7 @@ fn native_filesystem_checked_archive_keeps_original_runtime_only_policy() {
 /// eligible for actual checked work; this refusal was not an entered append.
 #[test]
 fn native_filesystem_checked_archive_refuses_inline_actor_persistence() {
-    let mut fixture = Fixture::new();
-    fixture
-        .service
-        .set_agent_transcript_store(AgentTranscriptStore::new(fixture.root.join("archive")));
+    let mut fixture = Fixture::with_transcript_store("archive");
     let attempt = project(&mut fixture);
     assert!(
         fixture

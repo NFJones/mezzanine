@@ -101,10 +101,10 @@ impl RuntimeSessionService {
                 turn.state,
                 AgentTurnState::Queued | AgentTurnState::Running | AgentTurnState::Blocked
             )
-            || !self
+            || self
                 .agent_shell_store()
                 .get(&owner.pane_id)
-                .is_some_and(|shell| shell.session_id == owner.conversation_id)
+                .is_none_or(|shell| shell.session_id != owner.conversation_id)
             || self.native_input_pending_for_conversation(&owner.conversation_id)
         {
             return Ok(false);

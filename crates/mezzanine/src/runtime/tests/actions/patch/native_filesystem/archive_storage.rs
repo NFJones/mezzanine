@@ -57,10 +57,7 @@ pub(super) async fn persist(actor: &ActorFixture) {
 /// leave the actor's actual gate and raw outcome retained and continuation blocked.
 #[tokio::test(flavor = "current_thread")]
 async fn native_filesystem_physical_archive_requires_real_writer_and_root_join() {
-    let mut fixture = Fixture::new();
-    fixture
-        .service
-        .set_agent_transcript_store(AgentTranscriptStore::new(fixture.root.join("archive")));
+    let mut fixture = Fixture::with_transcript_store("archive");
     fixture.service.persistence.enable_transcript_adapter();
     let attempt = fixture.queue();
     let producer = NativeFilesystemProducer::new(attempt.clone());
@@ -166,12 +163,11 @@ async fn native_filesystem_physical_archive_no_save_has_no_worker() {
 /// raw effect instead of minting storage acceptance or replaying the mutation.
 #[tokio::test(flavor = "current_thread")]
 async fn native_filesystem_physical_archive_corruption_preserves_first_error() {
-    let mut fixture = Fixture::new();
-    let store = AgentTranscriptStore::new(fixture.root.join("archive"));
+    let mut fixture = Fixture::with_transcript_store("archive");
+    let store = fixture.service.agent_transcript_store().unwrap().clone();
     let path = store
         .transcript_path(&fixture.turn.conversation_id)
         .unwrap();
-    fixture.service.set_agent_transcript_store(store.clone());
     fixture.service.persistence.enable_transcript_adapter();
     let attempt = fixture.queue();
     let producer = NativeFilesystemProducer::new(attempt.clone());
@@ -212,10 +208,7 @@ async fn native_filesystem_physical_archive_corruption_preserves_first_error() {
 /// can accept only its original seal, without another descriptor mutation.
 #[tokio::test(flavor = "current_thread")]
 async fn native_filesystem_physical_archive_cancelled_bridge_retains_join() {
-    let mut fixture = Fixture::new();
-    fixture
-        .service
-        .set_agent_transcript_store(AgentTranscriptStore::new(fixture.root.join("archive")));
+    let mut fixture = Fixture::with_transcript_store("archive");
     fixture.service.persistence.enable_transcript_adapter();
     let attempt = fixture.queue();
     let producer = NativeFilesystemProducer::new(attempt.clone());

@@ -64,7 +64,7 @@ fn canonical_sender_consumption_requires_separate_write_and_original_adoption() 
     assert!(terminal.released);
     assert_eq!(terminal.observed_at_ms, 16);
     assert_eq!(terminal.reason, DeliveryTerminalReason::Expired);
-    assert_eq!(row.acknowledged.lock().unwrap()[0], false);
+    assert!(!row.acknowledged.lock().unwrap()[0]);
     assert_eq!(*row.horizon_observed_at_ms.lock().unwrap(), None);
     assert!(
         scene

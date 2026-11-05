@@ -431,16 +431,16 @@ async fn actor_native_late_commit_survives_context_retirement_without_replacemen
         .unwrap();
     let peers = rows
         .iter()
-        .filter(
-            |r| match TranscriptContextEvent::from_transcript_content(&r.content) {
-                Some(TranscriptContextEvent::NativePeerMessage { .. }) => true,
-                Some(TranscriptContextEvent::PromptBoundary {
-                    source: mez_agent::ContextSourceKind::PeerMessage,
-                    ..
-                }) => true,
-                _ => false,
-            },
-        )
+        .filter(|r| {
+            matches!(
+                TranscriptContextEvent::from_transcript_content(&r.content),
+                Some(TranscriptContextEvent::NativePeerMessage { .. })
+                    | Some(TranscriptContextEvent::PromptBoundary {
+                        source: mez_agent::ContextSourceKind::PeerMessage,
+                        ..
+                    })
+            )
+        })
         .count();
     assert_eq!(
         peers, 1,

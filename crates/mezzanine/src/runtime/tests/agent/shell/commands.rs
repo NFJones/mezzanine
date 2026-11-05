@@ -271,7 +271,8 @@ fn runtime_agent_shell_status_reports_live_runtime_state() {
         response.contains("| src | agent-%1 | owned-write |"),
         "{response}"
     );
-    assert!(response.contains("| Context | 1 blocks"), "{response}");
+    // Actual prompt context includes the activated primary identity and user.
+    assert!(response.contains("| Context | 2 blocks"), "{response}");
     assert!(
         response.contains("| Pane agent tokens | 2 models; see Pane Agent Token Usage |"),
         "{response}"

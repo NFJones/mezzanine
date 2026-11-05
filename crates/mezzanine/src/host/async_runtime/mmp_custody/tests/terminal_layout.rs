@@ -406,11 +406,11 @@ async fn attached_and_prefix_layout_load_resume_following_actions() {
         {
             let value: serde_json::Value =
                 serde_json::from_str(&event.payload).unwrap_or(serde_json::Value::Null);
-            if value.get("key_binding_command").is_some() {
-                if let Some(output) = value.get("output").and_then(serde_json::Value::as_str) {
-                    let result: serde_json::Value = serde_json::from_str(output).unwrap();
-                    assert_ne!(result["executed"], 0, "premature deferred output: {value}");
-                }
+            if value.get("key_binding_command").is_some()
+                && let Some(output) = value.get("output").and_then(serde_json::Value::as_str)
+            {
+                let result: serde_json::Value = serde_json::from_str(output).unwrap();
+                assert_ne!(result["executed"], 0, "premature deferred output: {value}");
             }
         }
     }

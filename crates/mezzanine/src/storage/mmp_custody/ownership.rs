@@ -309,6 +309,26 @@ impl mez_agent::messaging::MessagePayloadLoadStore for OwnedCustodyStore<'_> {
     }
 }
 
+impl mez_agent::messaging::MessageStorageSnapshotStore for OwnedCustodyStore<'_> {
+    /// Verifies original references under the live kernel fence before and after I/O.
+    fn verify(
+        &mut self,
+        request: &mez_agent::messaging::MessageStorageSnapshotWrite,
+    ) -> mez_agent::messaging::Result<mez_agent::messaging::MessageStorageBinding> {
+        let result = (|| {
+            self.revalidate()?;
+            let binding = self.store.storage_snapshot_binding(request)?;
+            self.revalidate()?;
+            Ok(binding)
+        })();
+        result.map_err(|e: MezError| {
+            mez_agent::messaging::MessageError::invalid_state(format!(
+                "MMP checkpoint original verification: {e}"
+            ))
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::CustodyWrite;
@@ -603,25 +623,5 @@ mod tests {
         fixture.child.wait().unwrap();
         reader.join().unwrap();
         let _replacement = RootOwnership::acquire(&fixture.root).unwrap();
-    }
-}
-
-impl mez_agent::messaging::MessageStorageSnapshotStore for OwnedCustodyStore<'_> {
-    /// Verifies original references under the live kernel fence before and after I/O.
-    fn verify(
-        &mut self,
-        request: &mez_agent::messaging::MessageStorageSnapshotWrite,
-    ) -> mez_agent::messaging::Result<mez_agent::messaging::MessageStorageBinding> {
-        let result = (|| {
-            self.revalidate()?;
-            let binding = self.store.storage_snapshot_binding(request)?;
-            self.revalidate()?;
-            Ok(binding)
-        })();
-        result.map_err(|e: MezError| {
-            mez_agent::messaging::MessageError::invalid_state(format!(
-                "MMP checkpoint original verification: {e}"
-            ))
-        })
     }
 }

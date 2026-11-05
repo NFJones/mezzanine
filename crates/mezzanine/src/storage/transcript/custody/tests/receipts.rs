@@ -349,9 +349,8 @@ fn canonical_native_receipt_lookup_refuses_fifo_without_blocking() {
         .unwrap();
     worker.join().unwrap();
     drop((release, owner));
-    assert_eq!(
+    assert!(
         observed.unwrap(),
-        true,
         "special files must refuse without a writer"
     );
 }

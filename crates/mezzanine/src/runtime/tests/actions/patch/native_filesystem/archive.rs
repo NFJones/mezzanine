@@ -12,10 +12,7 @@ use super::*;
 /// preserve the same archive target, and remain stable on a duplicate callback.
 #[test]
 fn native_filesystem_archive_reprojects_late_original_failed_backing() {
-    let mut fixture = Fixture::new();
-    fixture
-        .service
-        .set_agent_transcript_store(AgentTranscriptStore::new(fixture.root.join("archive")));
+    let mut fixture = Fixture::with_transcript_store("archive");
     fixture.service.persistence.enable_transcript_adapter();
     let (attempt, _) = execute_and_retain(&mut fixture, false);
     assert!(
@@ -75,7 +72,8 @@ fn native_filesystem_archive_reprojects_late_original_failed_backing() {
 /// group as imported; this tests projection isolation, not a historical reader.
 #[test]
 fn native_filesystem_archive_ignores_replacement_maps_and_keeps_import_boundary() {
-    let mut fixture = Fixture::with_context(
+    let mut fixture = Fixture::with_context_and_store(
+        Some("original-archive"),
         false,
         |root| {
             vec![mez_agent::AgentAction {
@@ -120,11 +118,6 @@ fn native_filesystem_archive_ignores_replacement_maps_and_keeps_import_boundary(
             );
         },
     );
-    fixture
-        .service
-        .set_agent_transcript_store(AgentTranscriptStore::new(
-            fixture.root.join("original-archive"),
-        ));
     fixture.service.persistence.enable_transcript_adapter();
     let (attempt, _) = execute_and_retain(&mut fixture, false);
     let replacement_context = fixture.service.agent_turn_contexts()[&fixture.turn.turn_id].clone();
@@ -211,7 +204,8 @@ fn native_filesystem_archive_ignores_replacement_maps_and_keeps_import_boundary(
 /// producer before the pending filesystem assistant is installed. Offline test
 /// provider output is deterministic; no model or filesystem effect is replayed.
 fn compacted_fixture() -> Fixture {
-    Fixture::with_context(
+    Fixture::with_context_and_store(
+        Some("archive"),
         false,
         |root| {
             vec![mez_agent::AgentAction {
@@ -306,9 +300,6 @@ fn compacted_fixture() -> Fixture {
 #[test]
 fn native_filesystem_archive_keeps_actual_compaction_witnesses_after_detach() {
     let mut fixture = compacted_fixture();
-    fixture
-        .service
-        .set_agent_transcript_store(AgentTranscriptStore::new(fixture.root.join("archive")));
     fixture.service.persistence.enable_transcript_adapter();
     let (attempt, _) = execute_and_retain(&mut fixture, false);
     let handoff =
@@ -371,10 +362,7 @@ fn native_filesystem_archive_keeps_actual_compaction_witnesses_after_detach() {
 /// rather than publish old rows or borrow the replacement as its original owner.
 #[test]
 fn native_filesystem_archive_missing_captured_context_never_uses_replacement() {
-    let mut fixture = Fixture::new();
-    fixture
-        .service
-        .set_agent_transcript_store(AgentTranscriptStore::new(fixture.root.join("archive")));
+    let mut fixture = Fixture::with_transcript_store("archive");
     fixture.service.persistence.enable_transcript_adapter();
     let (attempt, raw) = execute_and_retain(&mut fixture, false);
     fixture
@@ -448,9 +436,6 @@ fn native_filesystem_archive_missing_captured_context_never_uses_replacement() {
 #[test]
 fn native_filesystem_archive_rejects_changed_original_compaction_witness() {
     let mut fixture = compacted_fixture();
-    fixture
-        .service
-        .set_agent_transcript_store(AgentTranscriptStore::new(fixture.root.join("archive")));
     fixture.service.persistence.enable_transcript_adapter();
     let (attempt, _) = execute_and_retain(&mut fixture, false);
     fixture

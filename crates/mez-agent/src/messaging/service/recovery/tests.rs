@@ -98,7 +98,7 @@ fn recovery_sender_consumption_does_not_mint_horizon_observation() {
     assert!(recovered.pending.is_empty());
     let row = &recovered.queued_by_sequence[&2];
     assert_eq!(*row.horizon_observed_at_ms.lock().unwrap(), None);
-    assert_eq!(row.acknowledged.lock().unwrap()[0], false);
+    assert!(!row.acknowledged.lock().unwrap()[0]);
     let terminal = row.terminal.lock().unwrap()[0].unwrap();
     assert!(terminal.released);
     assert_eq!(terminal.observed_at_ms, 111);

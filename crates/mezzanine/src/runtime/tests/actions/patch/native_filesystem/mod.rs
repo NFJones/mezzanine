@@ -29,6 +29,28 @@ struct Fixture {
 }
 
 impl Fixture {
+    /// Admits a saved turn with its original store already installed. Installing
+    /// a store after admission must not change the turn's captured save policy.
+    fn with_transcript_store(directory: &str) -> Self {
+        Self::with_context_and_store(
+            Some(directory),
+            false,
+            |root| {
+                vec![mez_agent::AgentAction {
+                    id: "native-file".into(),
+                    payload: mez_agent::AgentActionPayload::ApplyPatch {
+                        patch: format!(
+                            "*** Begin Patch\n*** Add File: {}\n+native data\n*** End Patch",
+                            root.join("file").display(),
+                        ),
+                        strip: None,
+                    },
+                }]
+            },
+            |_, _| {},
+        )
+    }
+
     /// Installs a real canonical pending patch slot and explicit path authority.
     /// The pane root is a fixture process; queue/claim starts no patch child.
     fn new() -> Self {
@@ -74,10 +96,24 @@ impl Fixture {
         actions: impl FnOnce(&std::path::Path) -> Vec<mez_agent::AgentAction>,
         prepare: impl FnOnce(&mut RuntimeSessionService, &AgentTurnRecord),
     ) -> Self {
+        Self::with_context_and_store(None, owned_directory, actions, prepare)
+    }
+
+    /// Captures the optional original archive before constructing the turn;
+    /// later controlled source preparation cannot invent its admitted target.
+    fn with_context_and_store(
+        directory: Option<&str>,
+        owned_directory: bool,
+        actions: impl FnOnce(&std::path::Path) -> Vec<mez_agent::AgentAction>,
+        prepare: impl FnOnce(&mut RuntimeSessionService, &AgentTurnRecord),
+    ) -> Self {
         let root = temp_root("native-filesystem-attempt");
         fs::create_dir_all(&root).unwrap();
         let root = fs::canonicalize(root).unwrap();
         let mut service = test_runtime_service();
+        if let Some(directory) = directory {
+            service.set_agent_transcript_store(AgentTranscriptStore::new(root.join(directory)));
+        }
         service
             .start_initial_pane_process_with_launch_context(Some("cat"), Some(&root), None)
             .unwrap();

@@ -802,7 +802,7 @@ async fn async_actor_mixed_receipt_failure_preserves_accepted_prefix() {
         let claims = handle.drain_persistence_claims(2).await.unwrap();
         assert_eq!(claims.len(), 1);
         assert!(
-            matches!(&claims[0].0, RuntimeSideEffect::PersistTranscriptEntries { batch: entries, .. } if entries.entries() == &vec![rows[0].clone()])
+            matches!(&claims[0].0, RuntimeSideEffect::PersistTranscriptEntries { batch: entries, .. } if entries.entries() == std::slice::from_ref(&rows[0]))
         );
         handle.shutdown().await.unwrap();
     };
@@ -968,7 +968,7 @@ async fn async_actor_recovers_unacknowledged_transcript_before_later_work() {
         let replay = handle.drain_persistence_side_effects(2).await.unwrap();
         assert_eq!(replay.len(), 2);
         assert!(
-            matches!(&replay[0], RuntimeSideEffect::PersistTranscriptEntries { batch: entries, .. } if entries.entries() == &vec![row.clone()])
+            matches!(&replay[0], RuntimeSideEffect::PersistTranscriptEntries { batch: entries, .. } if entries.entries() == std::slice::from_ref(&row))
         );
         assert!(
             matches!(&replay[1], RuntimeSideEffect::PersistTranscriptEntries { batch: entries, .. } if entries.first_sequence() == 2)
@@ -1063,7 +1063,7 @@ async fn async_actor_recovered_claim_preserves_later_identical_append() {
         assert_eq!(handle.recover_claimed_transcripts().await.unwrap(), 1);
         let replay = handle.drain_persistence_side_effects(1).await.unwrap();
         assert!(
-            matches!(replay.as_slice(), [RuntimeSideEffect::PersistTranscriptEntries { batch: entries, .. }] if entries.entries() == &vec![row.clone()])
+            matches!(replay.as_slice(), [RuntimeSideEffect::PersistTranscriptEntries { batch: entries, .. }] if entries.entries() == std::slice::from_ref(&row))
         );
         store.append_many(std::slice::from_ref(&row)).unwrap();
         let mut events = RuntimeEventBatch::new();
@@ -1082,7 +1082,7 @@ async fn async_actor_recovered_claim_preserves_later_identical_append() {
         );
         let remaining = handle.drain_persistence_side_effects(1).await.unwrap();
         assert!(
-            matches!(remaining.as_slice(), [RuntimeSideEffect::PersistTranscriptEntries { batch: entries, .. }] if entries.entries() == &vec![row.clone()])
+            matches!(remaining.as_slice(), [RuntimeSideEffect::PersistTranscriptEntries { batch: entries, .. }] if entries.entries() == std::slice::from_ref(&row))
         );
         handle.shutdown().await.unwrap();
     };
@@ -1159,7 +1159,7 @@ async fn async_actor_completion_preserves_queued_identical_transcript() {
         );
         let remaining = handle.drain_persistence_side_effects(1).await.unwrap();
         assert!(
-            matches!(remaining.as_slice(), [RuntimeSideEffect::PersistTranscriptEntries { batch: entries, .. }] if entries.entries() == &vec![row.clone()])
+            matches!(remaining.as_slice(), [RuntimeSideEffect::PersistTranscriptEntries { batch: entries, .. }] if entries.entries() == std::slice::from_ref(&row))
         );
         assert_eq!(handle.recover_claimed_transcripts().await.unwrap(), 1);
         handle.shutdown().await.unwrap();
@@ -1339,7 +1339,7 @@ async fn async_actor_requeues_failed_transcript_before_later_work() {
         let replay = handle.drain_persistence_side_effects(2).await.unwrap();
         assert!(matches!(replay.as_slice(),
             [RuntimeSideEffect::PersistTranscriptEntries { batch: old, .. }, RuntimeSideEffect::PersistTranscriptEntries { batch: new, .. }]
-            if old.entries() == &vec![first] && new.entries() == &vec![second]));
+            if old.entries() == std::slice::from_ref(&first) && new.entries() == std::slice::from_ref(&second)));
         handle.shutdown().await.unwrap();
     };
     let ((), _) = tokio::join!(client, actor.run());
@@ -1505,7 +1505,7 @@ async fn async_actor_permanent_failure_preserves_other_identical_claim() {
         assert_eq!(handle.recover_claimed_transcripts().await.unwrap(), 0);
         let replay = handle.drain_persistence_claims(2).await.unwrap();
         assert!(
-            matches!(replay.as_slice(), [(RuntimeSideEffect::PersistTranscriptEntries { batch: entries, .. }, Some(id))] if entries.entries() == &vec![row.clone()] && *id == second_id)
+            matches!(replay.as_slice(), [(RuntimeSideEffect::PersistTranscriptEntries { batch: entries, .. }, Some(id))] if entries.entries() == std::slice::from_ref(&row) && *id == second_id)
         );
         handle.shutdown().await.unwrap();
     };
@@ -1592,12 +1592,12 @@ async fn async_actor_mixed_transcript_failures_do_not_replay_permanent_claim() {
             handle.submit_runtime_events(events).await.unwrap();
             let replay = handle.drain_persistence_side_effects(4).await.unwrap();
             assert!(
-                matches!(replay.as_slice(), [RuntimeSideEffect::PersistTranscriptEntries { batch: entries, .. }] if entries.entries() == &vec![second.clone()])
+                matches!(replay.as_slice(), [RuntimeSideEffect::PersistTranscriptEntries { batch: entries, .. }] if entries.entries() == std::slice::from_ref(&second))
             );
             assert_eq!(handle.recover_claimed_transcripts().await.unwrap(), 1);
             let recovered = handle.drain_persistence_side_effects(4).await.unwrap();
             assert!(
-                matches!(recovered.as_slice(), [RuntimeSideEffect::PersistTranscriptEntries { batch: entries, .. }] if entries.entries() == &vec![second.clone()])
+                matches!(recovered.as_slice(), [RuntimeSideEffect::PersistTranscriptEntries { batch: entries, .. }] if entries.entries() == std::slice::from_ref(&second))
             );
             handle.shutdown().await.unwrap();
         };

@@ -22,11 +22,12 @@ async fn prepared(
     NativeFilesystemProducer,
     NativeFilesystemArchiveSettlement,
 ) {
-    let mut fixture = Fixture::new();
+    let mut fixture = if saved {
+        Fixture::with_transcript_store("archive")
+    } else {
+        Fixture::new()
+    };
     if saved {
-        fixture
-            .service
-            .set_agent_transcript_store(AgentTranscriptStore::new(fixture.root.join("archive")));
         fixture.service.persistence.enable_transcript_adapter();
     }
     let producer = NativeFilesystemProducer::new(fixture.queue());
@@ -599,11 +600,10 @@ async fn native_filesystem_transfer_refuses_raw_that_omits_captured_confirmation
 #[tokio::test(flavor = "current_thread")]
 async fn native_filesystem_transfer_late_failed_backing_keeps_original_saved_target() {
     use crate::host::async_runtime::native_filesystem::retain_joined_native_filesystem_outcome;
-    let mut fixture = Fixture::new();
-    let original = AgentTranscriptStore::new(fixture.root.join("original-archive"));
+    let mut fixture = Fixture::with_transcript_store("original-archive");
+    let original = fixture.service.agent_transcript_store().unwrap().clone();
     let replacement = AgentTranscriptStore::new(fixture.root.join("replacement-archive"));
     let conversation_id = fixture.turn.conversation_id.clone();
-    fixture.service.set_agent_transcript_store(original.clone());
     fixture.service.persistence.enable_transcript_adapter();
     let producer = NativeFilesystemProducer::new(fixture.queue());
     let actor = ActorFixture::new(fixture);

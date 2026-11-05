@@ -4783,6 +4783,9 @@ impl AgentTranscriptStore {
         let row_origins = self.transcript_row_origins_locked(source_conversation_id, &entries)?;
         let row_records =
             self.transcript_row_records_locked(source_conversation_id, &row_origins)?;
+        let stable_baseline = self
+            .initial_row_accounting_locked(source_conversation_id)?
+            .and_then(|accounting| accounting.stable_records().map(Vec::from));
         let presentations = self.inspect_presentation_unlocked(source_conversation_id)?;
         let fallback_source = if presentations.is_empty() {
             Some(super::fallback::Source::from_records(&entries)?.encode()?)
@@ -4794,8 +4797,10 @@ impl AgentTranscriptStore {
             // The existing active-delete journal owns compensation until all
             // target payloads and its authoritative projection are durable.
             self.begin_fork_publication(target_conversation_id)?;
-            let mut frozen_rows = Vec::new();
-            for entry in entries {
+            // Reuse the checked row allocation for the actual target image.
+            // Its complete shape also qualifies an inherited stable baseline.
+            let mut copied_entries = entries;
+            for forked in &mut copied_entries {
                 if cancelled
                     .iter()
                     .any(|flag| flag.load(std::sync::atomic::Ordering::Acquire))
@@ -4804,11 +4809,8 @@ impl AgentTranscriptStore {
                         "saved fork worker cancelled during publication",
                     ));
                 }
-                let mut forked = TranscriptEntry {
-                    conversation_id: target_conversation_id.to_string(),
-                    created_at_unix_seconds,
-                    ..entry
-                };
+                forked.conversation_id = target_conversation_id.to_string();
+                forked.created_at_unix_seconds = created_at_unix_seconds;
                 if forked.role == mez_agent::transcript::TranscriptRole::System
                     && let Some(content) =
                         super::compaction_handoff::TerminalCompactionHandoff::fork_content(
@@ -4821,17 +4823,21 @@ impl AgentTranscriptStore {
                     forked.content = content;
                 }
                 forked.validate()?;
-                self.append_one_locked(&forked)?;
-                if epoch.as_ref().is_some_and(|epoch| {
-                    epoch.ranges.iter().any(|range| {
-                        (range.first_sequence..=range.through_sequence).contains(&forked.sequence)
-                    })
-                }) {
-                    frozen_rows.push(forked);
-                }
+                self.append_one_locked(forked)?;
             }
-            self.install_fork_row_origins_locked(target_conversation_id, &row_origins)?;
-            self.copy_fork_row_records_locked(target_conversation_id, &row_records)?;
+            if stable_baseline.is_some() {
+                let accounting =
+                    super::InitialTranscriptRowAccounting::new(row_origins, row_records)
+                        .with_stable_records(stable_baseline)?;
+                self.publish_initial_row_accounting_locked(
+                    target_conversation_id,
+                    &copied_entries,
+                    &accounting,
+                )?;
+            } else {
+                self.install_fork_row_origins_locked(target_conversation_id, &row_origins)?;
+                self.copy_fork_row_records_locked(target_conversation_id, &row_records)?;
+            }
             // Transcript creation time remains fork-local. Only a genuinely
             // transcript-only source needs original bounded record evidence in
             // the existing presentation channel; later forks copy it unchanged.
@@ -4880,7 +4886,14 @@ impl AgentTranscriptStore {
             }
             if let Some(mut epoch) = epoch {
                 epoch.retarget_summary_records(target_conversation_id)?;
-                self.save_compaction_projection_locked(epoch, Some(&frozen_rows), Some(&None))?;
+                // Complete rows have qualified initial accounting. Reuse that
+                // allocation for selective proof instead of cloning raw source.
+                copied_entries.retain(|row| {
+                    epoch.ranges.iter().any(|range| {
+                        (range.first_sequence..=range.through_sequence).contains(&row.sequence)
+                    })
+                });
+                self.save_compaction_projection_locked(epoch, Some(&copied_entries), Some(&None))?;
             }
             // Reconcile only the new target. The existing owner validates the
             // translated baseline and exact copied occurrence payloads; it never

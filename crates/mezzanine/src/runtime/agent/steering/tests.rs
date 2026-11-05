@@ -394,7 +394,23 @@ fn steering_receipts_failed_deferred_context_commit_settles_partial_owner() {
 /// continuation context independently of the failed durable write.
 #[test]
 fn steering_receipts_interrupted_persistence_failure_preserves_terminal_evidence() {
-    let (mut service, turn) = fixture();
+    let root = std::env::temp_dir().join(format!(
+        "mez-steering-interrupt-{}",
+        crate::storage::token_usage::new_token_usage_event_id()
+    ));
+    let store = crate::storage::transcript::AgentTranscriptStore::new(root.clone());
+    let mut service = crate::test_support::runtime::RuntimeServiceFixture::new().build();
+    service.set_agent_transcript_store(store.clone());
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let started = service.start_agent_prompt_turn("%1", "initial").unwrap();
+    let turn = service
+        .agent_turn_ledger()
+        .turn(&started.turn_id)
+        .unwrap()
+        .clone();
     service
         .inject_agent_steering_with_display("%1", "admitted", "first")
         .unwrap();
@@ -409,12 +425,6 @@ fn steering_receipts_interrupted_persistence_failure_preserves_terminal_evidence
         .inject_agent_steering_with_display("%1", "unconsumed", "second")
         .unwrap();
     let before = service.agent_turn_contexts()[&turn.turn_id].clone();
-    let root = std::env::temp_dir().join(format!(
-        "mez-steering-interrupt-{}",
-        crate::storage::token_usage::new_token_usage_event_id()
-    ));
-    let store = crate::storage::transcript::AgentTranscriptStore::new(root.clone());
-    service.set_agent_transcript_store(store.clone());
     store.fail_next_transcript_append();
     assert!(
         service

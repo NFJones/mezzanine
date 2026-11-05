@@ -208,11 +208,11 @@ impl Fixture {
                 original_mail.recipient = Recipient::Agent(raw.agent_id.clone());
             }
 
-            let accepted_at = if n == 2 && terminal_clock.is_some() {
+            let accepted_at = if let (2, Some(terminal_clock)) = (n, terminal_clock) {
                 if matches!(&original, Original::CrashTerminal(_, _)) {
                     original_mail.ttl_ms = Some(1);
                 }
-                terminal_clock.unwrap() - 2
+                terminal_clock - 2
             } else if n == 2
                 && matches!(&original, Original::CrashNativePreparation(_))
                 && std::env::var_os(native_input::EXPIRE_PREPARATION).is_some()

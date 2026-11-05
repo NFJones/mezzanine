@@ -10977,6 +10977,10 @@ Bounded child/fork views MUST select their preceding baseline without adopting a
 later retained carrier as earlier state. Genuine version-1 proposals retain their
 original serialized fields/digests and explicitly supply no baseline. Missing or
 malformed required immutable initial markers MUST refuse the affected source.
+Saved forks MUST preserve this baseline even when their raw archive has no
+snapshot carrier. A target receives its own initial proposal and future-row
+namespace while retaining the original stable occurrences. Source validation
+MUST precede target publication; existing fork compensation owns partial writes.
 
 Fork source capture MUST retain its original store path, checked logical cutoff,
 roles, original occurrence IDs and source caches. Pending same-CID work owned by a

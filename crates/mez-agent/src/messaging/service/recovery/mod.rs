@@ -295,10 +295,10 @@ impl MessageStorageRecovery {
             || count > limits.recipient_count
             || source.envelope().payload.len() > limits.payload_bytes
             || record.expiry_observed_at_ms.is_some_and(|clock| {
-                !source
+                source
                     .envelope()
                     .ttl_ms
-                    .is_some_and(|ttl| source.accepted_at_ms().saturating_add(ttl) < clock)
+                    .is_none_or(|ttl| source.accepted_at_ms().saturating_add(ttl) >= clock)
             })
         {
             return Err(unavailable());

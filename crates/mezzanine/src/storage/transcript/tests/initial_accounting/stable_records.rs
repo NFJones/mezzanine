@@ -42,6 +42,47 @@ fn seeded(stable: Vec<StableContextBlockRecord>, empty: bool) -> TranscriptAppen
     batch.with_initial_row_accounting(accounting).unwrap()
 }
 
+/// Saving an independently sequenced child as another saved conversation must
+/// copy its initial stable baseline even when no raw carrier exists. Nested
+/// saved forks preserve the same descriptive records and leave the source raw
+/// archive intact; target raw mapping alone cannot reconstruct this metadata.
+#[test]
+fn initial_stable_baseline_survives_saved_fork_and_nested_cold_replay() {
+    let root = temp_root("saved-inherited-stable");
+    let store = AgentTranscriptStore::new(&root);
+    let stable = source("current trusted source").stable_block_records();
+    let batch = seeded(stable.clone(), false);
+    store.accept_transcript_append_receipt(&batch, 20).unwrap();
+    store.settle_transcript_append_receipt(&batch, 20).unwrap();
+    let raw = fs::read(store.transcript_path("accounted-child").unwrap()).unwrap();
+    for (parent, target) in [
+        ("accounted-child", "saved-child"),
+        ("saved-child", "saved-again"),
+    ] {
+        store.fork(parent, target, 21).unwrap();
+        let cold = AgentTranscriptStore::new(&root);
+        let snapshot = cold
+            .conversation_replay_snapshot(target, &[], |_| {
+                Some((ConversationTranscriptRead::All, true))
+            })
+            .unwrap();
+        assert_eq!(snapshot.view.logical.len(), batch.entries().len());
+        assert_eq!(
+            snapshot
+                .stable_records
+                .expect("saved fork discarded the inherited stable baseline")
+                .records()
+                .unwrap(),
+            stable
+        );
+    }
+    assert_eq!(
+        fs::read(store.transcript_path("accounted-child").unwrap()).unwrap(),
+        raw
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
 /// Recovery preserves a seed even with no physical tail; later carrier claims
 /// supersede it only within their visible window. Through-prefix lookup must
 /// retain the older seed when a full read also contains a future snapshot.
@@ -281,6 +322,12 @@ fn initial_stable_baseline_validates_versions_and_required_marker() {
                 .is_err(),
             "{fault}"
         );
+        assert!(
+            store
+                .fork("accounted-child", "invalid-source-copy", 30)
+                .is_err()
+        );
+        assert!(!root.join("invalid-source-copy").exists());
         assert_eq!(
             fs::read(store.transcript_path("accounted-child").unwrap()).unwrap(),
             raw

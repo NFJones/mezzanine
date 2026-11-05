@@ -86,8 +86,7 @@ async fn elapsed_clock_registered_root_keeps_original_time_and_failed_reader_aft
         MmpCustodyStore::open_existing(&fixture.path, "original-session", Default::default())
             .unwrap();
     {
-        let bound = owner.bind_store(&mut store).unwrap();
-        drop(bound);
+        let _bound = owner.bind_store(&mut store).unwrap();
     }
     store.invalidate_elapsed_clock_for_tests();
     drop(store);

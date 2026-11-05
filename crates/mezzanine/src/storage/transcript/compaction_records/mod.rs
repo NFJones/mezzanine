@@ -218,7 +218,7 @@ impl AgentCompactionEpoch {
             .summary_records
             .as_ref()
             .ok_or_else(|| invalid("compaction summary records are missing"))?;
-        if records.prefix.is_some() != !self.summary.trim().is_empty()
+        if records.prefix.is_some() == self.summary.trim().is_empty()
             || records.ranges.len() != self.ranges.len()
         {
             return Err(invalid(

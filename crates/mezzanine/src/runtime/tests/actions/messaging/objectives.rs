@@ -202,10 +202,11 @@ fn runtime_unreadable_objective_metadata_preserves_published_prompt_and_model_va
     let prompt_error = service
         .start_agent_prompt_turn("%1", "Do not replace the published objective")
         .unwrap_err();
+    // Required history metadata may reject before the objective-specific read;
+    // the cause must still be metadata, not unrelated prompt admission failure.
     assert!(
-        prompt_error
-            .message()
-            .contains("conversation objective metadata is unavailable")
+        prompt_error.message().contains("metadata"),
+        "{prompt_error}"
     );
 
     let action = mez_agent::AgentAction {

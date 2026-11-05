@@ -367,9 +367,9 @@ pub(super) fn validate_stable_sources(
     let mut selected = std::collections::BTreeMap::new();
     let mut keys = std::collections::BTreeSet::new();
     for (index, key) in sources {
-        if !blocks
+        if blocks
             .get(*index)
-            .is_some_and(|block| block.placement == super::ContextPlacement::StablePrefix)
+            .is_none_or(|block| block.placement != super::ContextPlacement::StablePrefix)
             || !keys.insert(key.as_str())
             || selected.insert(*index, key.clone()).is_some()
         {

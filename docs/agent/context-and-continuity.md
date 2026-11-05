@@ -565,6 +565,9 @@ with the original row records before readiness. It survives cold replay without
 copying old instructions; later visible carriers replace it. Historical child
 views do not borrow later retained snapshots. Older version-1 initial payloads
 explicitly have no stable baseline and keep their original recovery encoding.
+Saving or copying an inherited conversation preserves this baseline through
+nested forks, using the target's own initial proposal and future-row namespace.
+An invalid required source marker refuses the copy before creating its target.
 These estimates are not provider usage or billing, and their metadata is not
 part of the semantic source supplied to the model.
 

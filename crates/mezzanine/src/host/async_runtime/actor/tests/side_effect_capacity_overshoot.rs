@@ -872,7 +872,7 @@ async fn mixed_committed_refusal_retains_exact_transcript_receipt_claim() {
     assert!(matches!(
         drained.as_slice(),
         [(RuntimeSideEffect::PersistTranscriptEntries { batch: entries, .. }, Some(found))]
-            if entries.entries() == &vec![row] && found == id
+            if entries.entries() == std::slice::from_ref(&row) && found == id
     ));
     assert!(
         actor

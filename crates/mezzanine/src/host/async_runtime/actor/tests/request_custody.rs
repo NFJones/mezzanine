@@ -345,7 +345,7 @@ async fn request_required_append_receipt_is_exact_under_pressure() {
                     )).await.unwrap();
                     let effects = response.await.unwrap().unwrap();
                     if let Some(effect) = effects.into_iter().find(|effect| matches!(effect,
-                        RuntimeSideEffect::PersistTranscriptEntries { batch: entries, .. } if entries.entries() == &vec![row.clone()])) {
+                        RuntimeSideEffect::PersistTranscriptEntries { batch: entries, .. } if entries.entries() == std::slice::from_ref(&row))) {
                         break effect;
                     }
                     tokio::task::yield_now().await;

@@ -18,15 +18,25 @@ use crate::runtime::processes::native_filesystem_producer::NativeFilesystemProdu
 /// projection and transfer cannot repeat either filesystem or transcript effects.
 #[tokio::test(flavor = "current_thread")]
 async fn parent_effects_survive_actual_producer_progress_and_checked_durable_transfer() {
-    let mut fixture = Fixture::with_patch(false, |root| {
-        format!(
-            "*** Begin Patch\n*** Add File: {}\n+first\n*** Add File: {}\n+second\n*** End Patch",
-            root.join("one/two/a").display(),
-            root.join("one/two/b").display()
-        )
-    });
-    let store = AgentTranscriptStore::new(fixture.root.join("archive"));
-    fixture.service.set_agent_transcript_store(store.clone());
+    let mut fixture = Fixture::with_context_and_store(
+        Some("archive"),
+        false,
+        |root| {
+            vec![mez_agent::AgentAction {
+                id: "native-file".into(),
+                payload: mez_agent::AgentActionPayload::ApplyPatch {
+                    patch: format!(
+                        "*** Begin Patch\n*** Add File: {}\n+first\n*** Add File: {}\n+second\n*** End Patch",
+                        root.join("one/two/a").display(),
+                        root.join("one/two/b").display()
+                    ),
+                    strip: None,
+                },
+            }]
+        },
+        |_, _| {},
+    );
+    let store = fixture.service.agent_transcript_store().unwrap().clone();
     fixture.service.persistence.enable_transcript_adapter();
     let attempt = fixture.queue();
     let producer = NativeFilesystemProducer::new(attempt.clone());
