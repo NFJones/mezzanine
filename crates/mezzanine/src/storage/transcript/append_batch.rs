@@ -25,6 +25,8 @@ pub(crate) struct TranscriptAppendBatch {
     entries: Vec<TranscriptEntry>,
     /// Optional zero-boundary prefix and selective authority for a new child.
     initial_compaction_epoch: Option<AgentCompactionEpoch>,
+    /// Original raw occurrences/caches, independent of optional summary authority.
+    initial_row_accounting: Option<std::sync::Arc<super::InitialTranscriptRowAccounting>>,
 }
 
 impl TranscriptAppendBatch {
@@ -128,7 +130,45 @@ impl TranscriptAppendBatch {
             conversation_id,
             entries,
             initial_compaction_epoch,
+            initial_row_accounting: None,
         })
+    }
+
+    /// Couples complete inherited raw accounting to this immutable initial owner.
+    /// Pure validation rejects missing placement or changed authored identities.
+    pub(crate) fn with_initial_row_accounting(
+        mut self,
+        accounting: super::InitialTranscriptRowAccounting,
+    ) -> Result<Self> {
+        accounting.validate(&self.entries)?;
+        self.initial_row_accounting = Some(std::sync::Arc::new(accounting));
+        Ok(self)
+    }
+
+    /// Borrows the exact initial raw record proposal without resampling storage.
+    pub(crate) fn initial_row_accounting(&self) -> Option<&super::InitialTranscriptRowAccounting> {
+        self.initial_row_accounting.as_deref()
+    }
+
+    /// Identifies initial publication even when the source has no summary head.
+    pub(crate) fn has_initial_authority(&self) -> bool {
+        self.initial_compaction_epoch.is_some() || self.initial_row_accounting.is_some()
+    }
+
+    /// Constructs a pure initial render source. No rows are claimed committed;
+    /// original receipt settlement still owns durability and all real authority.
+    pub(crate) fn initial_replay_snapshot(&self) -> Option<super::ConversationReplaySnapshot> {
+        self.initial_row_accounting
+            .as_ref()
+            .map(|accounting| super::ConversationReplaySnapshot {
+                epoch: self.initial_compaction_epoch.clone(),
+                view: super::store::ConversationTranscriptView {
+                    committed: Vec::new(),
+                    logical: self.entries.clone(),
+                },
+                row_origins: accounting.origins().clone(),
+                row_records: accounting.records().clone(),
+            })
     }
 
     /// Returns the exact conversation owner, even for a metadata-only batch.

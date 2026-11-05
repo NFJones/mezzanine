@@ -568,7 +568,7 @@ impl AsyncRuntimeSessionActor {
                                 store, entries, ..
                             } => store.accept_append_receipt(&entries, id),
                             RuntimeSideEffect::PersistInitialTranscript { store, path, batch } => {
-                                if batch.initial_compaction_epoch().is_none() {
+                                if !batch.has_initial_authority() {
                                     Err(MezError::invalid_args(
                                         "initial transcript effect has no projection",
                                     ))

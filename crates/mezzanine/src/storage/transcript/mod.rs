@@ -31,6 +31,9 @@ pub(crate) mod fallback;
 
 /// Immutable transcript rows and optional initial fork authority.
 mod append_batch;
+/// Receipt-owned inherited raw identity/cost publication, separate from epochs.
+mod initial_accounting;
+pub(crate) use initial_accounting::InitialTranscriptRowAccounting;
 /// Source-proven terminal handoffs for accepted turn-local model summaries.
 pub(crate) mod compaction_handoff;
 /// Versioned summary occurrence records and qualified legacy epoch imports.

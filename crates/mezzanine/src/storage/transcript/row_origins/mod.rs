@@ -41,7 +41,7 @@ impl AgentTranscriptStore {
     /// never migrates metadata: unrelated admission/rollback may still fail.
     /// Callers exposing IDs or acknowledging raw source explicitly require the
     /// marker after the database is durable; interrupted marker writes retry it.
-    fn open_row_origins_locked(&self, conversation: &str) -> Result<Connection> {
+    pub(super) fn open_row_origins_locked(&self, conversation: &str) -> Result<Connection> {
         let directory = self.row_origins_directory_locked(conversation)?;
         let path = directory.join(FILE_NAME);
         if !path.exists() {
@@ -78,7 +78,7 @@ impl AgentTranscriptStore {
             OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
         )?;
         let version: u32 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-        if !matches!(version, 1 | 2) {
+        if !matches!(version, 1..=3) {
             return Err(MezError::invalid_state(
                 "unsupported transcript row origins version",
             ));
@@ -275,7 +275,7 @@ impl AgentTranscriptStore {
             )?;
             let version: u32 =
                 transaction.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-            if version == 2 {
+            if matches!(version, 2 | 3) {
                 transaction.execute(
                     "DELETE FROM row_costs WHERE origin NOT IN (SELECT origin FROM origins)",
                     [],

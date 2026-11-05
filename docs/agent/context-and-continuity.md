@@ -559,6 +559,16 @@ same source lease as the successful replay, and pending rows receive durable
 caches only after their original rows commit. A failed projection publishes no
 costs. These records remain descriptive metadata outside model-visible source.
 
+Forked children carry these original row records through their initial append
+receipt even when the parent has no summary. The child gets independent row
+positions and a future-row namespace while inherited occurrences keep their IDs.
+Pane-dependent labels can change rendering, so the batch prepares those revised
+estimates once for the actual child pane. Initial context and cold replay reuse
+them. Readiness waits for raw rows, identity/cost mapping and any inherited
+summary authority to settle; interrupted publication retains its exact receipt
+for recovery. A retry cannot adopt another equal-text proposal or roll back a
+newer valid cost cache. Pending work from another store path is excluded.
+
 The pure epoch API tracks stable, summary, raw and eligible raw estimates as
 membership changes. Its frozen selection keeps the previous head, selected raw
 source and retained tail separate; later arrivals do not change those frozen

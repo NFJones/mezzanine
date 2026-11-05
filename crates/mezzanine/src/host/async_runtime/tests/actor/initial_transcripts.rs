@@ -41,6 +41,108 @@ fn initial_owner_service(
     service
 }
 
+/// Summary-free initial accounting crosses the real actor admission hold and
+/// worker settlement path. Readiness requires the actual raw mapping/costs, and
+/// the worker retires its complete original receipt without provider/process I/O.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_initial_raw_accounting_settles_without_summary() {
+    let root = std::env::temp_dir().join(format!(
+        "mez-initial-raw-actor-{}",
+        crate::storage::token_usage::new_token_usage_event_id()
+    ));
+    let store = AgentTranscriptStore::new(&root);
+    let mut rows = Vec::new();
+    let mut origins = std::collections::BTreeMap::new();
+    let mut records = std::collections::BTreeMap::new();
+    for sequence in 1..=2 {
+        let content = "equal inherited actor source 雪".to_string();
+        let record = mez_agent::ContextBlockRecord::allocate(&mez_agent::ContextBlock {
+            source: mez_agent::ContextSourceKind::TranscriptAssistant,
+            placement: mez_agent::ContextPlacement::ConversationAppend,
+            label: "previous assistant message for pane %1".into(),
+            content: content.clone(),
+        })
+        .unwrap();
+        origins.insert(sequence, record.occurrence_id());
+        records.insert(sequence, record);
+        rows.push(mez_agent::TranscriptEntry {
+            conversation_id: "raw-initial-child".into(),
+            sequence,
+            created_at_unix_seconds: 1,
+            role: mez_agent::TranscriptRole::Assistant,
+            turn_id: "inherited-turn".into(),
+            agent_id: "agent-%1".into(),
+            pane_id: "%1".into(),
+            content,
+        });
+    }
+    let batch = TranscriptAppendBatch::rows(rows.clone())
+        .unwrap()
+        .with_initial_row_accounting(
+            crate::storage::transcript::InitialTranscriptRowAccounting::new(
+                origins.clone(),
+                records.clone(),
+            ),
+        )
+        .unwrap();
+    let service = initial_owner_service(&store, &batch);
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+    let client = async {
+        let mut watcher = handle.side_effect_delivery_watcher();
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                if store.pending_append_receipts().unwrap() == [rows.clone()] {
+                    break;
+                }
+                watcher.changed().await.unwrap();
+            }
+        })
+        .await
+        .expect("raw initial accounting must become ready before worker settlement");
+        let snapshot = store
+            .conversation_replay_snapshot(batch.conversation_id(), &[], |_| {
+                Some((
+                    crate::storage::transcript::ConversationTranscriptRead::All,
+                    true,
+                ))
+            })
+            .unwrap();
+        assert_eq!(snapshot.view.logical, rows);
+        assert_eq!(snapshot.row_origins, origins);
+        assert_eq!(snapshot.row_records, records);
+        assert!(snapshot.epoch.is_none());
+        let report = tokio::time::timeout(
+            Duration::from_secs(10),
+            run_async_persistence_side_effect_service(
+                &handle,
+                AsyncRuntimeSideEffectServiceConfig {
+                    max_polls: 10_000,
+                    drain_limit: 1,
+                    idle_interval: Duration::from_millis(1),
+                },
+                |_, _| store.pending_append_receipts().unwrap().is_empty(),
+            ),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(report.completed, 1);
+        assert_eq!(report.failed, 0);
+        assert!(handle.drain_persistence_claims(8).await.unwrap().is_empty());
+        handle.shutdown().await.unwrap();
+    };
+    let ((), exit) = tokio::join!(client, actor.run());
+    assert!(exit.service.check_agent_history_admission("%1").is_ok());
+    assert!(exit.service.pane_processes().is_empty());
+    assert!(exit.service.pending_agent_provider_tasks().is_empty());
+    drop(exit);
+    drop(handle);
+    drop(store);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
 /// Metadata-only initial ownership must survive service handoff, admission and
 /// exact worker settlement. Its sidecar and empty archive are ready before the
 /// worker is released, and a late duplicate generation cannot settle twice.

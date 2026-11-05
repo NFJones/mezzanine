@@ -44,6 +44,7 @@ impl AgentTranscriptStore {
     /// mutation lease. The pure selector receives only that epoch and may skip
     /// row decoding when the captured owner has no replay work. Malformed epoch,
     /// missing required history, conflicting pending rows, and gaps remain errors.
+    #[cfg(test)]
     pub(crate) fn conversation_replay_snapshot(
         &self,
         conversation_id: &str,

@@ -24,6 +24,9 @@ pub(crate) struct RuntimeSubagentForkSnapshot {
     pub(crate) compaction_epoch: Option<crate::storage::transcript::AgentCompactionEpoch>,
     /// Frozen parent logical frontier, independent of raw-tail cardinality.
     pub(crate) source_high_water: u64,
+    /// Original raw placement and available validated costs from that same lease.
+    pub(crate) row_origins: crate::storage::transcript::TranscriptRowOrigins,
+    pub(crate) row_records: crate::storage::transcript::TranscriptRowRecords,
 }
 
 /// Immutable parent-history read input captured before child pane allocation.
@@ -112,20 +115,25 @@ impl RuntimeSubagentForkReadWork {
             .map(|row| row.sequence)
             .collect::<std::collections::BTreeSet<_>>()
             .len() as u64;
-        let mut snapshot = self
+        let (_, source) = self
             .store
-            .conversation_replay_snapshot(&self.source_conversation_id, &self.pending, |epoch| {
-                if self.source_high_water > 0 {
-                    Some((
-                        ConversationTranscriptRead::Through(self.source_high_water),
-                        self.source_high_water > pending_count,
-                    ))
-                } else {
-                    // A zero-boundary inherited summary still owns a real empty
-                    // archive. With no epoch or rows there is nothing to decode.
-                    epoch.map(|_| (ConversationTranscriptRead::All, true))
-                }
-            })
+            .conversation_replay_projection(
+                &self.source_conversation_id,
+                &self.pending,
+                |epoch| {
+                    if self.source_high_water > 0 {
+                        Some((
+                            ConversationTranscriptRead::Through(self.source_high_water),
+                            self.source_high_water > pending_count,
+                        ))
+                    } else {
+                        // A zero-boundary inherited summary still owns a real empty
+                        // archive. With no epoch or rows there is nothing to decode.
+                        epoch.map(|_| (ConversationTranscriptRead::All, true))
+                    }
+                },
+                |snapshot| self.capture_from_replay(snapshot),
+            )
             .map_err(|error| {
                 // An existing epoch reads its archive frontier before the row-view
                 // policy runs. Preserve the required-history diagnostic for that
@@ -139,7 +147,20 @@ impl RuntimeSubagentForkReadWork {
                     error
                 }
             })?;
-        let mut compaction_epoch = snapshot.epoch;
+        Ok(source)
+    }
+
+    /// Qualifies terminal authority and renders source accounting without I/O.
+    /// The original store publishes only committed costs after this succeeds;
+    /// pending rows keep their records solely in the returned immutable source.
+    fn capture_from_replay(
+        &self,
+        source: &crate::storage::transcript::ConversationReplaySnapshot,
+    ) -> Result<(
+        RuntimeSubagentForkSnapshot,
+        Vec<(u64, mez_agent::ContextBlockRecord)>,
+    )> {
+        let mut compaction_epoch = source.epoch.clone();
         if let Some(epoch) = compaction_epoch.as_mut() {
             if epoch.through_sequence > self.source_high_water {
                 return Err(MezError::conflict(
@@ -163,20 +184,22 @@ impl RuntimeSubagentForkReadWork {
         // A zero-frontier epoch needs an actual empty-archive qualification,
         // but its read may also observe later rows. Bound both evidence domains
         // before interpreting terminal witnesses, just as nonzero reads do.
-        snapshot
+        // Checked rows are ordered. Borrow only the captured windows instead
+        // of cloning the complete archival snapshot to discard its old prefix.
+        let committed = &source.view.committed[..source
             .view
             .committed
-            .retain(|row| row.sequence <= self.source_high_water);
-        snapshot
+            .partition_point(|row| row.sequence <= self.source_high_water)];
+        let logical = &source.view.logical[..source
             .view
             .logical
-            .retain(|row| row.sequence <= self.source_high_water);
-        for row in &snapshot.view.logical {
+            .partition_point(|row| row.sequence <= self.source_high_water)];
+        for row in logical {
             if row.role == mez_agent::TranscriptRole::System
                 && row
                     .content
                     .starts_with(crate::storage::transcript::compaction_handoff::MARKER)
-                && !snapshot.view.committed.contains(row)
+                && !committed.contains(row)
             {
                 return Err(MezError::conflict(
                     "fork terminal handoff must settle before source capture",
@@ -186,13 +209,12 @@ impl RuntimeSubagentForkReadWork {
         compaction_epoch =
             crate::storage::transcript::compaction_handoff::fork_terminal_projection(
                 &self.source_conversation_id,
-                &snapshot.view.committed,
+                committed,
                 compaction_epoch,
             )?;
-        let mut entries = snapshot.view.logical;
         // Limit by the actor-captured owner before selecting the retained tail.
         if self.source_high_water > 0
-            && entries
+            && logical
                 .last()
                 .is_none_or(|entry| entry.sequence < self.source_high_water)
         {
@@ -200,18 +222,56 @@ impl RuntimeSubagentForkReadWork {
                 "fork source transcript is missing its captured high-water row",
             ));
         }
-        entries.retain(|entry| entry.sequence <= self.source_high_water);
-        if !self.ephemeral_source {
+        let first_retained = if self.ephemeral_source {
+            0
+        } else {
             let retained_entries = usize::try_from(self.source_entries).unwrap_or(usize::MAX);
-            let first_retained = entries.len().saturating_sub(retained_entries);
-            entries.drain(..first_retained);
-        }
-        Ok(RuntimeSubagentForkSnapshot {
-            prompt_cache_lineage_id: self.prompt_cache_lineage_id.clone(),
-            entries,
-            compaction_epoch,
-            source_high_water: self.source_high_water,
-        })
+            logical.len().saturating_sub(retained_entries)
+        };
+        let entries = logical[first_retained..].to_vec();
+        let history = super::super::context::runtime_agent_history_epoch_from_snapshot(
+            super::super::context::RuntimeAgentHistoryEpochInputs {
+                pane_id: self.parent_pane_id.clone(),
+                conversation_id: self.source_conversation_id.clone(),
+                ephemeral_source_entries: Some(self.source_high_water),
+                active_entries: Some(entries.len()),
+                pending_entries: Vec::new(),
+            },
+            compaction_epoch.clone(),
+            entries.clone(),
+            Some(source),
+        );
+        let updates = history.records.rendered_row_records()?;
+        let row_origins = entries
+            .iter()
+            .filter_map(|row| {
+                source
+                    .row_origins
+                    .get(&row.sequence)
+                    .map(|origin| (row.sequence, *origin))
+            })
+            .collect();
+        let mut row_records = entries
+            .iter()
+            .filter_map(|row| {
+                source
+                    .row_records
+                    .get(&row.sequence)
+                    .map(|record| (row.sequence, *record))
+            })
+            .collect::<crate::storage::transcript::TranscriptRowRecords>();
+        row_records.extend(updates.iter().copied());
+        Ok((
+            RuntimeSubagentForkSnapshot {
+                prompt_cache_lineage_id: self.prompt_cache_lineage_id.clone(),
+                entries,
+                compaction_epoch,
+                source_high_water: self.source_high_water,
+                row_origins,
+                row_records,
+            },
+            updates,
+        ))
     }
 }
 
@@ -245,6 +305,8 @@ impl RuntimeSessionService {
                     entries: Vec::new(),
                     compaction_epoch: None,
                     source_high_water: 0,
+                    row_origins: Default::default(),
+                    row_records: Default::default(),
                 })
             }
         }
@@ -303,9 +365,10 @@ impl RuntimeSessionService {
                 "forked subagent sessions require the parent durable transcript store",
             ));
         };
-        let pending = self
-            .persistence
-            .pending_transcript_entries(&source_conversation_id);
+        let pending = self.persistence.pending_transcript_entries_at_path(
+            &store.transcript_path(&source_conversation_id)?,
+            &source_conversation_id,
+        )?;
         Ok(Some(RuntimeSubagentForkReadWork {
             store,
             #[cfg(test)]
@@ -334,6 +397,7 @@ impl RuntimeSubagentForkSnapshot {
     pub(super) fn child_batch(
         &self,
         child_cid: &str,
+        child_pane: &str,
         created_at: u64,
     ) -> Result<Option<crate::storage::transcript::TranscriptAppendBatch>> {
         let prefix = self
@@ -365,6 +429,8 @@ impl RuntimeSubagentForkSnapshot {
             }
         }
         let mut rows = Vec::new();
+        let mut row_origins = crate::storage::transcript::TranscriptRowOrigins::new();
+        let mut row_records = crate::storage::transcript::TranscriptRowRecords::new();
         for source in self
             .entries
             .iter()
@@ -376,6 +442,17 @@ impl RuntimeSubagentForkSnapshot {
                 .checked_add(1)
                 .ok_or_else(|| MezError::invalid_state("fork child sequence is exhausted"))?;
             child.created_at_unix_seconds = created_at;
+            let origin = self
+                .row_origins
+                .get(&source.sequence)
+                .copied()
+                .ok_or_else(|| {
+                    MezError::invalid_state("fork source original row occurrence is missing")
+                })?;
+            row_origins.insert(child.sequence, origin);
+            if let Some(record) = self.row_records.get(&source.sequence) {
+                row_records.insert(child.sequence, *record);
+            }
             if child.role == mez_agent::TranscriptRole::System
                 && let Some(content) =
                     crate::storage::transcript::compaction_handoff::inherited_terminal_audit(
@@ -386,7 +463,7 @@ impl RuntimeSubagentForkSnapshot {
             }
             rows.push(child);
         }
-        if let Some(mut epoch) = self.compaction_epoch.clone() {
+        let batch = if let Some(mut epoch) = self.compaction_epoch.clone() {
             epoch.retarget_summary_records(child_cid)?;
             epoch.through_sequence = 0;
             for range in &mut epoch.ranges {
@@ -399,13 +476,35 @@ impl RuntimeSubagentForkSnapshot {
                     .checked_sub(prefix)
                     .ok_or_else(|| MezError::conflict("fork selective end precedes raw source"))?;
             }
-            crate::storage::transcript::TranscriptAppendBatch::initial_projection(epoch, rows)
-                .map(Some)
+            Some(
+                crate::storage::transcript::TranscriptAppendBatch::initial_projection(epoch, rows)?,
+            )
         } else if rows.is_empty() {
-            Ok(None)
+            None
         } else {
-            crate::storage::transcript::TranscriptAppendBatch::rows(rows).map(Some)
-        }
+            Some(crate::storage::transcript::TranscriptAppendBatch::rows(
+                rows,
+            )?)
+        };
+        batch
+            .map(|batch| {
+                let batch = batch.with_initial_row_accounting(
+                    crate::storage::transcript::InitialTranscriptRowAccounting::new(
+                        row_origins,
+                        row_records,
+                    ),
+                )?;
+                let history = child_history(child_pane, &batch, None);
+                let accounting = batch
+                    .initial_row_accounting()
+                    .cloned()
+                    .ok_or_else(|| {
+                        MezError::invalid_state("fork initial row accounting producer is missing")
+                    })?
+                    .with_rendered_records(history.records.rendered_row_records()?)?;
+                batch.with_initial_row_accounting(accounting)
+            })
+            .transpose()
     }
 }
 
@@ -423,11 +522,12 @@ pub(super) fn child_history(
         active_entries: Some(batch.entries().len()),
         pending_entries: batch.entries().to_vec(),
     };
+    let snapshot = batch.initial_replay_snapshot();
     let mut history = super::super::context::runtime_agent_history_epoch_from_snapshot(
         inputs.clone(),
         batch.initial_compaction_epoch().cloned(),
         batch.entries().to_vec(),
-        None,
+        snapshot.as_ref(),
     );
     if let Some(store) = store {
         super::super::RuntimeAgentHistorySource::attach(
@@ -439,7 +539,9 @@ pub(super) fn child_history(
             },
             batch.initial_compaction_epoch().cloned(),
             batch.entries().to_vec(),
-            std::collections::BTreeMap::new(),
+            snapshot
+                .map(|snapshot| snapshot.row_origins)
+                .unwrap_or_default(),
         );
     }
     history

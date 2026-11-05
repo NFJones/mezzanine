@@ -46,6 +46,8 @@ const PROJECTION_RECEIPT_VERSION: u64 = 2;
 const NATIVE_RECEIPT_VERSION: u64 = 3;
 /// Original sender handoff uses a separate source role and receipt namespace.
 const HANDOFF_RECEIPT_VERSION: u64 = 4;
+/// Complete inherited raw placement/costs with optional initial summary authority.
+const ACCOUNTED_INITIAL_RECEIPT_VERSION: u64 = 5;
 
 /// One-shot test handshake after receipt path enumeration, before opening files.
 #[cfg(test)]
@@ -69,6 +71,9 @@ pub(super) struct AppendReceipt {
     /// Version-two initial authority; forbidden on a version-one receipt.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     compaction_epoch: Option<AgentCompactionEpoch>,
+    /// Original raw accounting is valid only in an explicit version-five owner.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    initial_row_accounting: Option<super::InitialTranscriptRowAccounting>,
     /// Original physical batch and source; never decoded as ACK authority.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     native_input: Option<CustodyAppendPlan>,
@@ -91,12 +96,20 @@ impl AppendReceipt {
             .map(encode_transcript_entry)
             .collect::<Result<Vec<_>>>()?;
         let compaction_epoch = batch.initial_compaction_epoch().cloned();
-        let version = if compaction_epoch.is_some() {
+        let initial_row_accounting = batch.initial_row_accounting().cloned();
+        let version = if initial_row_accounting.is_some() {
+            ACCOUNTED_INITIAL_RECEIPT_VERSION
+        } else if compaction_epoch.is_some() {
             PROJECTION_RECEIPT_VERSION
         } else {
             RECEIPT_VERSION
         };
-        let digest = digest_payload(&rows, compaction_epoch.as_ref(), None)?;
+        let digest = digest_payload(
+            &rows,
+            compaction_epoch.as_ref(),
+            None,
+            initial_row_accounting.as_ref(),
+        )?;
         Ok(Self {
             version,
             conversation_id: batch.conversation_id().into(),
@@ -105,6 +118,7 @@ impl AppendReceipt {
             digest,
             rows,
             compaction_epoch,
+            initial_row_accounting,
             native_input: None,
             terminal_handoff: None,
         })
@@ -119,7 +133,12 @@ impl AppendReceipt {
                     | PROJECTION_RECEIPT_VERSION
                     | NATIVE_RECEIPT_VERSION
                     | HANDOFF_RECEIPT_VERSION
+                    | ACCOUNTED_INITIAL_RECEIPT_VERSION
             )
+            || (self.version != ACCOUNTED_INITIAL_RECEIPT_VERSION
+                && self.initial_row_accounting.is_some())
+            || (self.version == ACCOUNTED_INITIAL_RECEIPT_VERSION
+                && (self.initial_row_accounting.is_none() || self.custody_plan().is_some()))
             || (self.version == RECEIPT_VERSION
                 && (self.compaction_epoch.is_some() || self.custody_plan().is_some()))
             || (self.version == PROJECTION_RECEIPT_VERSION
@@ -143,6 +162,7 @@ impl AppendReceipt {
                     &self.rows,
                     self.compaction_epoch.as_ref(),
                     self.custody_plan(),
+                    self.initial_row_accounting.as_ref(),
                 )?
         {
             return Err(MezError::invalid_state(
@@ -162,10 +182,13 @@ impl AppendReceipt {
                 ));
             }
         }
-        let batch = match self.compaction_epoch.as_ref() {
+        let mut batch = match self.compaction_epoch.as_ref() {
             Some(epoch) => TranscriptAppendBatch::initial_projection(epoch.clone(), entries)?,
             None => TranscriptAppendBatch::rows(entries)?,
         };
+        if let Some(accounting) = &self.initial_row_accounting {
+            batch = batch.with_initial_row_accounting(accounting.clone())?;
+        }
         if batch.conversation_id() != self.conversation_id
             || batch.first_sequence() != self.first_sequence
         {
@@ -190,7 +213,11 @@ impl AppendReceipt {
                 &native.source().occurrence(),
             );
         }
-        if self.version == PROJECTION_RECEIPT_VERSION && self.first_sequence == 0 {
+        if matches!(
+            self.version,
+            PROJECTION_RECEIPT_VERSION | ACCOUNTED_INITIAL_RECEIPT_VERSION
+        ) && self.first_sequence == 0
+        {
             return format!(
                 "{}-initial-{:020}.json",
                 self.conversation_id, self.generation
@@ -207,6 +234,11 @@ impl AppendReceipt {
         self.native_input
             .as_ref()
             .or(self.terminal_handoff.as_ref())
+    }
+
+    /// Identifies complete initial owners independently of physical row count.
+    fn has_initial_authority(&self) -> bool {
+        self.compaction_epoch.is_some() || self.initial_row_accounting.is_some()
     }
 }
 
@@ -229,7 +261,25 @@ fn digest_payload(
     rows: &[String],
     epoch: Option<&AgentCompactionEpoch>,
     native: Option<&CustodyAppendPlan>,
+    accounting: Option<&super::InitialTranscriptRowAccounting>,
 ) -> Result<String> {
+    if let Some(accounting) = accounting {
+        let mut digest = Sha256::new();
+        digest.update(b"mezzanine-initial-transcript-accounting-v5\0");
+        digest.update(digest_rows(rows).as_bytes());
+        for encoded in [serde_json::to_vec(&epoch), serde_json::to_vec(accounting)] {
+            let encoded = encoded.map_err(|_| {
+                MezError::invalid_state("initial transcript receipt accounting encode failed")
+            })?;
+            digest.update((encoded.len() as u64).to_be_bytes());
+            digest.update(encoded);
+        }
+        return Ok(digest
+            .finalize()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect());
+    }
     if let Some(native) = native {
         let metadata = serde_json::to_vec(native).map_err(|_| {
             MezError::invalid_state("native transcript receipt metadata encode failed")
@@ -504,7 +554,7 @@ impl AgentTranscriptStore {
             .any(|(_, receipt, rows)| {
                 receipt.conversation_id == conversation_id
                     && (rows.first().is_some_and(|row| row.sequence <= through)
-                        || (rows.is_empty() && receipt.compaction_epoch.is_some()))
+                        || (rows.is_empty() && receipt.has_initial_authority()))
             }))
     }
 
@@ -659,7 +709,10 @@ impl AgentTranscriptStore {
             if existing.first_sequence == receipt.first_sequence
                 && existing.generation == generation
             {
-                if rows == entries && existing.compaction_epoch == receipt.compaction_epoch {
+                if rows == entries
+                    && existing.compaction_epoch == receipt.compaction_epoch
+                    && existing.initial_row_accounting == receipt.initial_row_accounting
+                {
                     let directory = self.append_receipt_directory();
                     set_private_dir_permissions(&directory)?;
                     set_private_file_permissions(&directory.join(existing.filename()))?;
@@ -821,13 +874,10 @@ impl AgentTranscriptStore {
                     right.0.generation,
                 ))
         });
-        for (receipt, entries) in receipts {
-            let batch = match receipt.compaction_epoch {
-                Some(epoch) => TranscriptAppendBatch::initial_projection(epoch, entries)?,
-                None => TranscriptAppendBatch::rows(entries)?,
-            };
+        for (receipt, _) in receipts {
+            let batch = receipt.batch()?;
             self.accept_transcript_append_receipt(&batch, receipt.generation)?;
-            if batch.initial_compaction_epoch().is_none() {
+            if !batch.has_initial_authority() {
                 self.append_many(batch.entries())?;
             }
             self.settle_transcript_append_receipt(&batch, receipt.generation)?;

@@ -61,6 +61,183 @@ fn spawn_child(
     (pane, cid, turn)
 }
 
+/// A real fork drops the prefix-covered raw row and resequences its retained
+/// tail, including two equal independent bodies. The actual initial child
+/// request and cold replay must retain every original occurrence and local
+/// estimate, rather than deriving identity from the new CID/row positions.
+#[test]
+fn runtime_fork_inheritance_preserves_original_raw_records_through_initial_receipt() {
+    let (mut service, store, primary) = resumed_source(7, 1);
+    for sequence in [6, 7] {
+        let row = store
+            .inspect(CONVERSATION)
+            .unwrap()
+            .into_iter()
+            .find(|row| row.sequence == sequence)
+            .unwrap();
+        store
+            .compare_and_swap_entry_content(
+                CONVERSATION,
+                sequence,
+                "%9",
+                &store.transcript_entry_revision(&row).unwrap(),
+                "equal inherited 雪 code {\"rows\":[1,2,3]}".into(),
+            )
+            .unwrap();
+    }
+    let parent = service
+        .agent_context_for_pane_prompt("%1", "inspect parent", 0)
+        .unwrap();
+    let originals = parent
+        .chronology()
+        .iter()
+        .filter(|event| event.block().source == ContextSourceKind::TranscriptAssistant)
+        .map(|event| event.record())
+        .collect::<Vec<_>>();
+    assert_eq!(originals.len(), 6);
+    assert_ne!(originals[4].occurrence_id(), originals[5].occurrence_id());
+    let raw = fs::read(store.transcript_path(CONVERSATION).unwrap()).unwrap();
+    let (pane, cid, turn) = spawn_child(&mut service, &primary, false);
+    let turn = turn.unwrap();
+    let child = service.agent_turn_contexts().get(&turn).unwrap();
+    let inherited = child
+        .chronology()
+        .iter()
+        .filter(|event| event.block().source == ContextSourceKind::TranscriptAssistant)
+        .map(|event| event.record())
+        .collect::<Vec<_>>();
+    assert_eq!(inherited.len(), originals.len());
+    let expected = child
+        .chronology()
+        .iter()
+        .filter(|event| event.block().source == ContextSourceKind::TranscriptAssistant)
+        .zip(
+            parent
+                .chronology()
+                .iter()
+                .filter(|event| event.block().source == ContextSourceKind::TranscriptAssistant),
+        )
+        .map(|(child, original)| {
+            assert_eq!(child.block().content, original.block().content);
+            original.record().restored(child.block()).unwrap()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        inherited, expected,
+        "actual initial child request lost original records"
+    );
+    assert_eq!(store.inspect(&cid).unwrap().len(), 6);
+    let snapshot = store
+        .conversation_replay_snapshot(&cid, &[], |_| {
+            Some((
+                crate::storage::transcript::ConversationTranscriptRead::All,
+                true,
+            ))
+        })
+        .unwrap();
+    assert_eq!(
+        snapshot.row_records.values().copied().collect::<Vec<_>>(),
+        expected
+    );
+    service.set_agent_transcript_store(AgentTranscriptStore::new(store.root()));
+    let cold = service
+        .agent_context_for_pane_prompt(&pane, "inspect cold child", 0)
+        .unwrap();
+    let restored = cold
+        .chronology()
+        .iter()
+        .filter(|event| event.block().source == ContextSourceKind::TranscriptAssistant)
+        .map(|event| event.record())
+        .collect::<Vec<_>>();
+    assert_eq!(restored, expected);
+    assert_eq!(
+        fs::read(store.transcript_path(CONVERSATION).unwrap()).unwrap(),
+        raw
+    );
+    service.terminate_all_pane_processes().unwrap();
+}
+
+/// A parent without compaction authority still requires complete initial raw
+/// accounting. The summary-free path must use the same batch/receipt contract
+/// and preserve duplicate occurrences through actual initial and cold contexts.
+#[test]
+fn runtime_fork_inheritance_without_summary_preserves_raw_record_ownership() {
+    let store = AgentTranscriptStore::new(temp_root("plain-inherited-records"));
+    for sequence in 1..=3 {
+        let mut entry = row(1);
+        entry.sequence = sequence;
+        entry.content = "equal plain inherited source 雪".into();
+        store.append(&entry).unwrap();
+    }
+    let mut service = test_runtime_service();
+    service.set_agent_transcript_store(store.clone());
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .bind_conversation("%1", CONVERSATION, 3)
+        .unwrap();
+    let parent = service
+        .agent_context_for_pane_prompt("%1", "inspect plain parent", 0)
+        .unwrap();
+    let originals = parent
+        .chronology()
+        .iter()
+        .filter(|event| event.block().source == ContextSourceKind::TranscriptAssistant)
+        .map(|event| event.record().occurrence_id())
+        .collect::<Vec<_>>();
+    assert_eq!(originals.len(), 3);
+    assert_ne!(originals[0], originals[1]);
+    let (pane, cid, turn) = spawn_child(&mut service, &primary, false);
+    let context = service
+        .agent_turn_contexts()
+        .get(turn.as_ref().unwrap())
+        .unwrap();
+    let records = context
+        .chronology()
+        .iter()
+        .filter(|event| event.block().source == ContextSourceKind::TranscriptAssistant)
+        .map(|event| event.record())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        records
+            .iter()
+            .map(|record| record.occurrence_id())
+            .collect::<Vec<_>>(),
+        originals
+    );
+    assert!(store.compaction_epoch(&cid).unwrap().is_none());
+    let snapshot = store
+        .conversation_replay_snapshot(&cid, &[], |_| {
+            Some((
+                crate::storage::transcript::ConversationTranscriptRead::All,
+                true,
+            ))
+        })
+        .unwrap();
+    assert_eq!(
+        snapshot.row_records.values().copied().collect::<Vec<_>>(),
+        records
+    );
+    service.set_agent_transcript_store(AgentTranscriptStore::new(store.root()));
+    let cold = service
+        .agent_context_for_pane_prompt(&pane, "inspect plain child", 0)
+        .unwrap();
+    let restored = cold
+        .chronology()
+        .iter()
+        .filter(|event| event.block().source == ContextSourceKind::TranscriptAssistant)
+        .map(|event| event.record())
+        .collect::<Vec<_>>();
+    assert_eq!(restored, records);
+    service.terminate_all_pane_processes().unwrap();
+}
+
 /// A real fully compacted parent produces a durable child with zero physical
 /// rows and the complete inherited summary. Reopening the store preserves both
 /// counter domains; a later parent append cannot enter the independent child.

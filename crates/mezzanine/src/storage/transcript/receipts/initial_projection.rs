@@ -25,13 +25,15 @@ impl AgentTranscriptStore {
         pending: &[StoredReceipt],
         committed_count: u64,
     ) -> Result<()> {
-        let Some(epoch) = batch.initial_compaction_epoch() else {
+        if !batch.has_initial_authority() {
             return Ok(());
-        };
+        }
+        let epoch = batch.initial_compaction_epoch();
+        let accounting = batch.initial_row_accounting();
         let current = self.compaction_epoch_locked(batch.conversation_id())?;
         if current
             .as_ref()
-            .is_some_and(|existing| !existing.matches_expected(epoch))
+            .is_some_and(|existing| epoch.is_none_or(|epoch| !existing.matches_expected(epoch)))
         {
             return Err(MezError::conflict(
                 "initial transcript projection differs from existing authority",
@@ -39,8 +41,10 @@ impl AgentTranscriptStore {
         }
         if pending.iter().any(|(_, receipt, rows)| {
             receipt.conversation_id == batch.conversation_id()
-                && receipt.compaction_epoch.is_some()
-                && (receipt.compaction_epoch.as_ref() != Some(epoch) || rows != batch.entries())
+                && receipt.has_initial_authority()
+                && (receipt.compaction_epoch.as_ref() != epoch
+                    || receipt.initial_row_accounting.as_ref() != accounting
+                    || rows != batch.entries())
         }) {
             return Err(MezError::conflict(
                 "transcript receipts claim different complete initial payloads",
@@ -48,10 +52,18 @@ impl AgentTranscriptStore {
         }
         let owned_partial = pending.iter().any(|(_, receipt, rows)| {
             receipt.conversation_id == batch.conversation_id()
-                && receipt.compaction_epoch.as_ref() == Some(epoch)
+                && receipt.compaction_epoch.as_ref() == epoch
+                && receipt.initial_row_accounting.as_ref() == accounting
                 && rows == batch.entries()
         });
-        if current.is_none()
+        let current_accounting =
+            self.preflight_initial_row_accounting_locked(batch.conversation_id(), accounting)?;
+        let durable_initial = if accounting.is_some() {
+            current_accounting
+        } else {
+            current.is_some()
+        };
+        if !durable_initial
             && !owned_partial
             && self.transcript_path(batch.conversation_id())?.exists()
         {
@@ -59,7 +71,7 @@ impl AgentTranscriptStore {
                 "initial transcript projection requires a fresh target or matching receipt",
             ));
         }
-        if current.is_some() && !owned_partial && committed_count < batch.entries().len() as u64 {
+        if durable_initial && !owned_partial && committed_count < batch.entries().len() as u64 {
             return Err(MezError::conflict(
                 "initial transcript replay cannot append new rows without its receipt",
             ));
@@ -75,20 +87,31 @@ impl AgentTranscriptStore {
         batch: &TranscriptAppendBatch,
         lease: &File,
     ) -> Result<()> {
-        let Some(epoch) = batch.initial_compaction_epoch() else {
+        if !batch.has_initial_authority() {
             return Ok(());
-        };
+        }
         let previous = self.compaction_epoch_locked(batch.conversation_id())?;
-        if previous
-            .as_ref()
-            .is_some_and(|existing| !existing.matches_expected(epoch))
-        {
+        if previous.as_ref().is_some_and(|existing| {
+            batch
+                .initial_compaction_epoch()
+                .is_none_or(|epoch| !existing.matches_expected(epoch))
+        }) {
             return Err(MezError::conflict(
                 "initial transcript projection changed before publication",
             ));
         }
         let rows = batch.entries().iter().collect::<Vec<_>>();
         self.append_conversation_rows_locked(batch.conversation_id(), &rows, lease)?;
+        if let Some(accounting) = batch.initial_row_accounting() {
+            self.publish_initial_row_accounting_locked(
+                batch.conversation_id(),
+                batch.entries(),
+                accounting,
+            )?;
+        }
+        let Some(epoch) = batch.initial_compaction_epoch() else {
+            return Ok(());
+        };
         // The immutable batch and checked archive already match. The writer
         // validates range groups again and repairs a sidecar-before-marker
         // failure even when the exact sidecar is already present.
@@ -110,6 +133,13 @@ impl AgentTranscriptStore {
         &self,
         batch: &TranscriptAppendBatch,
     ) -> Result<()> {
+        if let Some(accounting) = batch.initial_row_accounting() {
+            self.verify_initial_row_accounting_locked(
+                batch.conversation_id(),
+                batch.entries(),
+                accounting,
+            )?;
+        }
         if let Some(epoch) = batch.initial_compaction_epoch()
             && (self
                 .compaction_epoch_locked(batch.conversation_id())?
@@ -132,27 +162,33 @@ impl AgentTranscriptStore {
     ) -> Result<()> {
         let mut projections = BTreeMap::new();
         for (_, receipt, rows) in receipts {
-            if let Some(epoch) = receipt.compaction_epoch.as_ref()
+            let payload = (
+                receipt.compaction_epoch.as_ref(),
+                receipt.initial_row_accounting.as_ref(),
+                rows,
+            );
+            if receipt.has_initial_authority()
                 && projections
-                    .insert(receipt.conversation_id.as_str(), (epoch, rows))
-                    .is_some_and(|previous| previous != (epoch, rows))
+                    .insert(receipt.conversation_id.as_str(), payload)
+                    .is_some_and(|previous| previous != payload)
             {
                 return Err(MezError::conflict(
                     "transcript recovery receipts claim different complete initial payloads",
                 ));
             }
         }
-        for (conversation_id, (epoch, _)) in projections {
+        for (conversation_id, (epoch, accounting, _)) in projections {
             let _lease = self.acquire_conversation_lock(conversation_id)?;
             if self
                 .compaction_epoch_locked(conversation_id)?
                 .as_ref()
-                .is_some_and(|current| !current.matches_expected(epoch))
+                .is_some_and(|current| epoch.is_none_or(|epoch| !current.matches_expected(epoch)))
             {
                 return Err(MezError::conflict(
                     "transcript recovery initial projection conflicts with durable authority",
                 ));
             }
+            self.preflight_initial_row_accounting_locked(conversation_id, accounting)?;
         }
         Ok(())
     }

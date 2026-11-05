@@ -10882,7 +10882,7 @@ Saved stable metadata MUST NOT install instructions or overwrite current source
 fingerprints. Ordinary semantic decoding, display and model projection MUST
 unwrap only semantic source, keeping accounting metadata out of that content.
 
-Legacy raw-row placement is retained in the conversation-owned version-2
+Legacy raw-row placement is retained in the conversation-owned versioned
 `row-origins.sqlite3` projection without embedding metadata in raw source text.
 First import preserves original conversation/sequence origins. Saved forks,
 content edits and surviving rows after deletion MUST preserve those origins;
@@ -10907,6 +10907,31 @@ committed-row cost publication share the original source lease; pending rows and
 failed projections MUST NOT publish durable costs. Unchanged reads MUST NOT
 rewrite valid costs. Saved forks and survivor resequencing retain original
 records, and deleting a row retires its unused cost cache.
+
+Inherited child batches MUST carry complete original raw placement and available
+cost records independently of an optional summary. Version-5 append receipts bind
+that version-1 initial accounting proposal, its once-allocated future namespace,
+exact physical rows and optional epoch in a separate digest domain; versions 1–4
+retain their original validation/digests for genuine persisted recovery. Initial
+accounting publishes atomically in projection schema 3 with an immutable proposal
+marker, row mapping and costs before readiness. Schema 1–2 imports happen only at
+actual initial publication. Retry and retirement MUST verify the original full
+owner; equal bytes with different placement/proposal MUST NOT adopt its target.
+Global recovery MUST reject conflicting complete initial proposals before changing
+unrelated archives. A matching immutable marker MUST NOT hide nonrepairable
+published placement, schema or cost-record conflicts; preflight MUST validate
+those states without publishing repairs. Missing costs and incomplete required
+markers remain recoverable by the original owner. The exact receipt retains ownership through raw, ledger, epoch
+and required-marker failure windows. Valid later cache revisions MUST NOT be
+overwritten by a retry of an older initial proposal.
+
+Fork source capture MUST retain its original store path, checked logical cutoff,
+roles, original occurrence IDs and source caches. Pending same-CID work owned by a
+different store path MUST NOT enter or invalidate that capture. Child resequencing
+changes placement only. Actual child pane/framing changes MUST revise affected
+costs once at batch creation, retaining IDs and the original proposal namespace;
+the first request and cold replay MUST consume those prepared records. Inherited
+terminal audits remain inert and metadata MUST stay outside semantic source.
 
 Canonical replay membership and its summary head MUST retain those occurrence
 IDs independently of local ordering and birth revision. The pure epoch owner
@@ -14910,18 +14935,22 @@ The baseline command capabilities are:
   rows until the complete durable archive matches, and startup recovery MUST
   reconcile retained receipts before validating checkpointed history. A
   projection-bearing initial child append MUST retain its exact conversation
-  identity, rows and complete prefix/selective epoch in one immutable payload.
+  identity, rows, original raw accounting and any complete prefix/selective epoch
+  in one immutable payload.
   Its admission MUST journal that payload, reconcile rows and sidecar under one
   conversation mutation lease, and require the durable sidecar marker before
   acknowledging readiness. Empty raw tails MUST use a genuine empty archive;
   a metadata-only receipt key of zero MUST NOT become a transcript sequence.
   Its canonical filename MUST use `<cid>-initial-<20-digit-generation>.json`;
   numeric zero sequence/generation filenames remain noncanonical.
-  Row-only receipts retain version 1. Initial-projection receipts MUST use
-  version 2 with `compaction_epoch` included in their domain-separated digest;
-  version 1 recovery remains supported without rewriting accepted journals.
+  Row-only receipts retain version 1. Genuine epoch-only initial receipts retain
+  version 2 with `compaction_epoch` in their domain-separated digest. Initial raw
+  accounting uses version 5, binding the complete original placement/cost proposal
+  and its future namespace together with exact rows and the optional epoch.
+  Versions 1–4 retain their original recovery validation/digests without rewriting
+  accepted journals; native custody versions 3–4 cannot grant inherited authority.
   Version/shape mismatches and unknown versions MUST fail closed. Existing
-  compaction epoch formats remain versions 1 and 2; this does not change the
+  compaction epoch formats include version 3 original summary records; this does not change the
   configuration schema. Initial publication MUST reject unowned existing raw
   history, different durable replay authority and conflicting retained payloads.
   Recovery MUST preflight projection conflicts before mutating any conversation,

@@ -818,7 +818,11 @@ impl RuntimeSessionService {
         let child_batch = match fork_snapshot
             .as_ref()
             .map(|snapshot| {
-                snapshot.child_batch(&child_conversation_id, current_unix_seconds().max(1))
+                snapshot.child_batch(
+                    &child_conversation_id,
+                    &started.pane_id,
+                    current_unix_seconds().max(1),
+                )
             })
             .transpose()
         {
@@ -840,7 +844,7 @@ impl RuntimeSessionService {
             .map_or(0, |batch| batch.entries().len() as u64);
         let captured_history = child_batch
             .as_ref()
-            .filter(|batch| batch.initial_compaction_epoch().is_some())
+            .filter(|batch| batch.has_initial_authority())
             .map(|batch| {
                 fork_source::child_history(
                     &started.pane_id,
@@ -1881,7 +1885,7 @@ impl RuntimeSessionService {
                 "forked subagent sessions require the child durable transcript store",
             )
         })?;
-        if batch.initial_compaction_epoch().is_some() {
+        if batch.has_initial_authority() {
             if self.persistence.transcript_uses_adapter() {
                 self.persistence
                     .queue_transcript(RuntimeSideEffect::PersistInitialTranscript {

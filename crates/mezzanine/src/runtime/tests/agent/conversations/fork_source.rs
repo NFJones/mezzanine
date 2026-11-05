@@ -9,6 +9,44 @@ use crate::storage::transcript::{AgentCompactionEpoch, AgentCompactionRange};
 
 use super::fork_fixtures::{CONVERSATION, resumed_source, row};
 
+/// Same-CID pending work in another repository cannot conflict with or enter
+/// this parent snapshot. Capture reads only the original store path and leaves
+/// the foreign queued owner available for its own later persistence.
+#[test]
+fn runtime_fork_source_ignores_foreign_same_conversation_pending_owner() {
+    let (mut service, store, _) = resumed_source(5, 1);
+    let foreign = AgentTranscriptStore::new(temp_root("foreign-fork-pending"));
+    let mut other = row(5);
+    other.content = "FOREIGN_SAME_CID_SOURCE".into();
+    let foreign_path = foreign.transcript_path(CONVERSATION).unwrap();
+    service
+        .persistence
+        .queue_transcript(RuntimeSideEffect::PersistTranscriptEntries {
+            path: foreign_path.clone(),
+            store: foreign,
+            entries: vec![other.clone()],
+        });
+    let snapshot = service
+        .prepare_subagent_fork_read_work("agent-%1")
+        .unwrap()
+        .unwrap()
+        .execute()
+        .unwrap();
+    assert_eq!(snapshot.entries.last(), Some(&row(5)));
+    assert_eq!(
+        snapshot.row_origins[&5],
+        mez_agent::ContextBlockOccurrenceId::for_legacy_archive_row(CONVERSATION, 5, 0).unwrap()
+    );
+    assert_eq!(
+        service
+            .persistence
+            .pending_transcript_entries_at_path(&foreign_path, CONVERSATION)
+            .unwrap(),
+        [other]
+    );
+    assert_eq!(store.inspect(CONVERSATION).unwrap().last(), Some(&row(5)));
+}
+
 /// A nonempty summary remains source work when no raw tail survives. A parent
 /// with a retained tail must carry the same complete prefix authority too.
 #[test]

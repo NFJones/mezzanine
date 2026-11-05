@@ -236,7 +236,7 @@ impl AgentTranscriptStore {
             CustodyReceiptKind::NativeInput => data.native_input = Some(plan),
             CustodyReceiptKind::TerminalHandoff => data.terminal_handoff = Some(plan),
         }
-        data.digest = digest_payload(&data.rows, None, data.custody_plan())?;
+        data.digest = digest_payload(&data.rows, None, data.custody_plan(), None)?;
         data.batch()?;
         let bytes = serde_json::to_vec(&data).map_err(|_| invalid())?;
         if bytes.len() > MAX_RECEIPT_BYTES {

@@ -1260,7 +1260,7 @@ where
                         let batch = initial_batch.clone();
                         let worker_path = path.clone();
                         tokio::task::spawn_blocking(move || {
-                            if batch.initial_compaction_epoch().is_none() {
+                            if !batch.has_initial_authority() {
                                 return Err(MezError::invalid_args(
                                     "initial transcript effect has no projection",
                                 ));
