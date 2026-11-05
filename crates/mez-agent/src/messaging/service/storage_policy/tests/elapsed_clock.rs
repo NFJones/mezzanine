@@ -55,6 +55,24 @@ fn elapsed_clock_owns_acceptance_offer_expiry_and_duplicate_status() {
         },
     )
     .unwrap();
+    let metadata = crate::messaging::decode_message_acceptance_metadata(
+        store.originals[&delivery.sequence].as_slice(),
+        MessageAcceptanceDecodeLimits {
+            payload_bytes: 64,
+            auxiliary_bytes: 4096,
+            recipient_count: 16,
+            recipient_bytes: 4096,
+        },
+    )
+    .unwrap();
+    assert_eq!(metadata.custody_clock_domain(), Some(domain));
+    assert_eq!(
+        metadata.recipient_registration_namespace(0),
+        source.recipient_registration_namespace(0)
+    );
+    assert_eq!(metadata.native_sender(), source.native_sender());
+    assert_eq!(metadata.native_recipient(0), source.native_recipient(0));
+    assert_eq!(metadata.envelope().payload.bytes(), envelope.payload.len());
     assert_eq!(source.custody_clock_domain(), Some(domain));
     assert_eq!(source.accepted_at_ms(), 100);
     assert!(

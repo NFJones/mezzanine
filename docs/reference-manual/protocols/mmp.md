@@ -518,6 +518,17 @@ reclamation remains unfinished. These internal operation bounds
 do not establish complete admitted-state capacity or enable normal host/all-
 ingress activation.
 
+Inventory and checkpoint/ACK, terminal, native-input and handoff proof validation
+now stream the original payload and retain its decoded length/SHA256 instead of
+allocating a body. The descriptor shares full decoding's JSON/UTF-8/escape,
+resource and semantic checks; the store still verifies the complete original
+encoded checksum and framing. It preserves frozen recipients, namespace/native
+attribution, TTL and clock domain. The descriptor cannot become an empty message,
+reload result or delivery. Actual reload and cold construction use their
+separately reserved full-body reader. No source or receipt is deleted by this
+metadata-validation path; evidence-preserving reclamation remains a separate
+required step.
+
 The trusted storage-only reconstruction path now moves those originals into the
 canonical message owner as cold metadata, preserving pending obligations,
 source-bound ACK slots, native attribution, receipts, TTLs and allocator floor.

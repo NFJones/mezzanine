@@ -581,7 +581,7 @@ impl MmpCustodyStore {
         }
         if group.commit {
             let (source, digest, encoded_bytes) =
-                self.read_accepted_source_in_snapshot(transaction, group.sequence, limits)?;
+                self.read_accepted_metadata_in_snapshot(transaction, group.sequence, limits)?;
             if group.chunks != encoded_bytes.div_ceil(64 * 1024) {
                 return Err(invalid("occurrence chunks are incomplete or extra"));
             }

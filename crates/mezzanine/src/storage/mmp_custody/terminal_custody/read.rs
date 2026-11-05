@@ -129,7 +129,7 @@ impl MmpCustodyStore {
             return Err(invalid());
         }
         let (source, digest, _) =
-            self.read_accepted_source_in_snapshot(transaction, frame.sequence, limits)?;
+            self.read_accepted_metadata_in_snapshot(transaction, frame.sequence, limits)?;
         if digest != frame.source_sha256
             || source.envelope().ttl_ms.is_none_or(|ttl| {
                 source.accepted_at_ms().saturating_add(ttl) >= frame.observed_at_ms

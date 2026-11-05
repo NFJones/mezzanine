@@ -132,10 +132,10 @@ impl MmpCustodyStore {
         }
         for row in &data.sources {
             let (source, digest, _) =
-                self.read_accepted_source_in_snapshot(transaction, row.sequence, limits)?;
+                self.read_accepted_metadata_in_snapshot(transaction, row.sequence, limits)?;
             if digest != row.source_sha256
                 || source.envelope().id != row.delivery.message_id
-                || source.envelope().payload.len() != row.payload_bytes
+                || source.envelope().payload.bytes() != row.payload_bytes
                 || source.accepted_at_ms() != row.accepted_at_ms
                 || source.envelope().ttl_ms != row.ttl_ms
                 || source.recipient_bindings() != row.recipient_bindings

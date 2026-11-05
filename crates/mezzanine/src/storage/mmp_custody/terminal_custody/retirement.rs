@@ -230,7 +230,7 @@ impl MmpCustodyStore {
         }
         {
             let (source, digest, _) =
-                self.read_accepted_source_in_snapshot(transaction, frame.sequence, limits)?;
+                self.read_accepted_metadata_in_snapshot(transaction, frame.sequence, limits)?;
             let index = frame.binding_index as usize;
             let binding = source.recipient_bindings().get(index).ok_or_else(invalid)?;
             let end_key = super::super::registration_end::record_key(&frame.namespace);

@@ -773,8 +773,9 @@ fn cold_reconstruction_preserves_genuine_ack_offer_clocks_across_rollback() {
     }
 }
 
-/// Every original inventory/ACK-source decode must use the destination's actual
-/// reserved payload quantum. Observe actual decoder inputs and completed bodies:
+/// Metadata scans enforce the destination's payload-size bound without a body
+/// allocation; actual construction uses its reserved payload quantum. Observe
+/// both real decoder inputs and completed bodies independently:
 /// a narrow-cache refusal cannot first allocate an oversized original, and retry
 /// under a sufficient policy must still recover the unchanged original store.
 #[test]
@@ -789,6 +790,8 @@ fn cold_reconstruction_narrow_cache_refuses_before_oversized_inventory_decode() 
     drop(scene);
     store.source_decode_probe.maximum_limit.set(0);
     store.source_decode_probe.maximum_payload.set(0);
+    store.source_decode_probe.maximum_streamed_limit.set(0);
+    store.source_decode_probe.maximum_streamed_payload.set(0);
     let before = store.acceptance_plan(0).unwrap();
     let scope = MessageStorageScope::default();
     let limits = mez_agent::messaging::MessageStorageLimits {
@@ -808,8 +811,18 @@ fn cold_reconstruction_narrow_cache_refuses_before_oversized_inventory_decode() 
         "an oversized original must not complete decoding before refusal"
     );
     assert_eq!(
-        store.source_decode_probe.maximum_limit.get(),
+        store.source_decode_probe.maximum_streamed_limit.get(),
         limits.cache_payload_bytes
+    );
+    assert_eq!(
+        store.source_decode_probe.maximum_limit.get(),
+        0,
+        "full body reader ran before capacity refusal"
+    );
+    assert_eq!(
+        store.source_decode_probe.maximum_streamed_payload.get(),
+        0,
+        "oversized descriptor completed validation before refusal"
     );
     assert!(before.same_position(&store.acceptance_plan(0).unwrap()));
     let (service, _input_lease) = fence
@@ -823,4 +836,41 @@ fn cold_reconstruction_narrow_cache_refuses_before_oversized_inventory_decode() 
         mez_agent::messaging::MessagePayloadUsage::default()
     );
     assert!(before.same_position(&store.acceptance_plan(0).unwrap()));
+}
+
+/// Real accepted originals, durable ACK evidence and an older schema10 source
+/// checkpoint all validate through the streaming descriptor. Proof qualification
+/// must not allocate any payload; actual subsequent payload loading is the
+/// positive control demonstrating that the full decoder probe remains effective.
+#[test]
+fn original_source_and_ack_qualification_stream_payload_without_materializing_it() {
+    let fixture = Fixture::new();
+    let owner = RootOwnership::acquire(&fixture.0).unwrap();
+    let mut store = MmpCustodyStore::open(&fixture.0, "original-session").unwrap();
+    let mut scene = Scene::new();
+    scene.accept(&mut store, "first");
+    scene.accept(&mut store, "second");
+    let checkpoint = scene.capture(&mut store, &owner);
+    let _committed_ack = scene.commit_first_ack(&mut store, &owner);
+    store.source_decode_probe.maximum_payload.set(0);
+    store.source_decode_probe.maximum_streamed_payload.set(0);
+    let evidence = owner
+        .bind_store(&mut store)
+        .unwrap()
+        .qualify_recovery_checkpoint(checkpoint, limits())
+        .unwrap();
+    assert_eq!(evidence.history.inventory.occurrences.len(), 2);
+    assert_eq!(evidence.history.acknowledgements.len(), 1);
+    assert_eq!(
+        store.source_decode_probe.maximum_payload.get(),
+        0,
+        "metadata validation materialized a body"
+    );
+    assert_eq!(
+        store.source_decode_probe.maximum_streamed_payload.get(),
+        80_000
+    );
+    let (source, _, _) = store.read_accepted_source(1, limits()).unwrap();
+    assert_eq!(source.envelope().payload.len(), 80_000);
+    assert_eq!(store.source_decode_probe.maximum_payload.get(), 80_000);
 }

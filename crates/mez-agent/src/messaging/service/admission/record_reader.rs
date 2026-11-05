@@ -10,6 +10,25 @@
 use std::io::{BufRead, BufReader, Read};
 
 use super::{MessageError, Result};
+use sha2::{Digest, Sha256};
+
+/// Validated decoded payload length and SHA256, without a retained body.
+/// These descriptive bytes never authorize delivery or reconstruct a payload.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MessagePayloadFingerprint {
+    bytes: usize,
+    sha256: [u8; 32],
+}
+impl MessagePayloadFingerprint {
+    /// Returns the exact decoded UTF-8 length, excluding JSON escape syntax.
+    pub fn bytes(&self) -> usize {
+        self.bytes
+    }
+    /// Returns SHA256 of the exact validated decoded UTF-8 payload bytes.
+    pub fn sha256(&self) -> &[u8; 32] {
+        &self.sha256
+    }
+}
 
 /// Bounded buffered cursor over one private encoded acceptance source.
 pub(super) struct RecordReader<R> {
@@ -89,24 +108,74 @@ impl<R: Read> RecordReader<R> {
         }
     }
 
-    /// Reads a string while enforcing its decoded UTF-8 byte bound before growth.
+    /// Retains the same bounded decoded string used by the metadata-only reader.
     pub(super) fn string(&mut self, limit: usize) -> Result<String> {
+        let mut output = Vec::new();
+        self.string_chunks(limit, |bytes| append_bounded(&mut output, bytes, limit))?;
+        // The shared parser checked every UTF-8 fragment before emitting it.
+        String::from_utf8(output).map_err(|_| invalid_utf8())
+    }
+
+    /// Validates and hashes a payload using one fixed 8-KiB buffer. There is no
+    /// body-sized allocation, empty-envelope substitute or unchecked skip path.
+    pub(super) fn payload_fingerprint(
+        &mut self,
+        limit: usize,
+    ) -> Result<MessagePayloadFingerprint> {
+        let mut hash = Sha256::new();
+        let bytes = self.string_chunks(limit, |bytes| {
+            hash.update(bytes);
+            Ok(())
+        })?;
+        Ok(MessagePayloadFingerprint {
+            bytes,
+            sha256: hash.finalize().into(),
+        })
+    }
+
+    /// Shares exact JSON escapes, decoded-byte limits and UTF-8 validation with
+    /// both consumers. A fragment boundary may retain at most three UTF-8 bytes;
+    /// malformed bytes, incomplete scalars and read errors withhold the result.
+    fn string_chunks(
+        &mut self,
+        limit: usize,
+        mut emit: impl FnMut(&[u8]) -> Result<()>,
+    ) -> Result<usize> {
         self.literal(b"\"")?;
-        let mut bytes = Vec::new();
+        let mut buffer = [0u8; 8192];
+        let mut used = 0usize;
+        let mut total = 0usize;
         loop {
-            match self.byte()? {
+            let mut scalar = [0u8; 4];
+            let bytes: &[u8] = match self.byte()? {
                 b'"' => break,
-                b'\\' => self.escape(&mut bytes, limit)?,
+                b'\\' => self.escape()?.encode_utf8(&mut scalar).as_bytes(),
                 0..=31 => {
                     return Err(MessageError::invalid_args(
                         "MMP acceptance string contains a raw control byte",
                     ));
                 }
-                value => append_bounded(&mut bytes, &[value], limit)?,
+                value => {
+                    scalar[0] = value;
+                    &scalar[..1]
+                }
+            };
+            total = total
+                .checked_add(bytes.len())
+                .filter(|length| *length <= limit)
+                .ok_or_else(|| {
+                    MessageError::invalid_args("MMP acceptance decoded string exceeds its budget")
+                })?;
+            for byte in bytes {
+                buffer[used] = *byte;
+                used += 1;
+                if used == buffer.len() {
+                    used = emit_utf8(&mut buffer, used, false, &mut emit)?;
+                }
             }
         }
-        String::from_utf8(bytes)
-            .map_err(|_| MessageError::invalid_args("MMP acceptance string is not valid UTF-8"))
+        emit_utf8(&mut buffer, used, true, &mut emit)?;
+        Ok(total)
     }
 
     /// Reads either a bounded string or an explicit JSON null.
@@ -120,7 +189,7 @@ impl<R: Read> RecordReader<R> {
     }
 
     /// Decodes one JSON escape, including a complete UTF-16 surrogate pair.
-    fn escape(&mut self, output: &mut Vec<u8>, limit: usize) -> Result<()> {
+    fn escape(&mut self) -> Result<char> {
         let value = match self.byte()? {
             b'"' => '"',
             b'\\' => '\\',
@@ -162,8 +231,7 @@ impl<R: Read> RecordReader<R> {
                 ));
             }
         };
-        let mut encoded = [0u8; 4];
-        append_bounded(output, value.encode_utf8(&mut encoded).as_bytes(), limit)
+        Ok(value)
     }
 
     /// Reads four ASCII hexadecimal digits as one UTF-16 code unit.
@@ -218,6 +286,26 @@ fn append_bounded(output: &mut Vec<u8>, bytes: &[u8], limit: usize) -> Result<()
     }
     output.extend_from_slice(bytes);
     Ok(())
+}
+
+/// Emits complete valid scalars and carries an incomplete suffix across chunks.
+fn emit_utf8(
+    buffer: &mut [u8; 8192],
+    used: usize,
+    final_chunk: bool,
+    emit: &mut impl FnMut(&[u8]) -> Result<()>,
+) -> Result<usize> {
+    let valid = match std::str::from_utf8(&buffer[..used]) {
+        Ok(_) => used,
+        Err(error) if !final_chunk && error.error_len().is_none() => error.valid_up_to(),
+        Err(_) => return Err(invalid_utf8()),
+    };
+    emit(&buffer[..valid])?;
+    buffer.copy_within(valid..used, 0);
+    Ok(used - valid)
+}
+fn invalid_utf8() -> MessageError {
+    MessageError::invalid_args("MMP acceptance string is not valid UTF-8")
 }
 
 #[cfg(test)]
@@ -293,6 +381,50 @@ mod tests {
         let mut trailing = RecordReader::new(b"\"ok\" ".as_slice());
         assert_eq!(trailing.string(2).unwrap(), "ok");
         assert!(trailing.finish().is_err());
+    }
+
+    /// UTF-8 scalars may straddle the fixed output fragment. Literal and escaped
+    /// scalars hash identically after decoding; invalid cross-fragment UTF-8,
+    /// incomplete sequences and invalid surrogates never yield a fingerprint.
+    #[test]
+    fn payload_fingerprint_checks_utf8_at_fragment_edges_and_escape_aliases() {
+        use sha2::{Digest, Sha256};
+        for offset in [8189, 8190, 8191, 8192] {
+            let text = format!("{}😀é\0\n\"", "a".repeat(offset));
+            let encoded = serde_json::to_vec(&text).unwrap();
+            let value = RecordReader::new(encoded.as_slice())
+                .payload_fingerprint(text.len())
+                .unwrap();
+            assert_eq!(value.bytes(), text.len());
+            assert_eq!(
+                value.sha256(),
+                &<[u8; 32]>::from(Sha256::digest(text.as_bytes()))
+            );
+            let mut invalid = Vec::new();
+            invalid.push(b'"');
+            invalid.extend(std::iter::repeat_n(b'a', offset));
+            invalid.extend_from_slice(&[0xf0, 0x9f, b'"']);
+            assert!(
+                RecordReader::new(invalid.as_slice())
+                    .payload_fingerprint(16384)
+                    .is_err()
+            );
+        }
+        let literal = RecordReader::new("\"😀\"".as_bytes())
+            .payload_fingerprint(4)
+            .unwrap();
+        let escaped = RecordReader::new(br#""\uD83D\uDE00""#.as_slice())
+            .payload_fingerprint(4)
+            .unwrap();
+        assert_eq!(literal, escaped);
+        for bad in [
+            br#""\uD83D""#.as_slice(),
+            br#""\uDE00""#.as_slice(),
+            b"\"\xff\"",
+            b"\"x\n\"",
+        ] {
+            assert!(RecordReader::new(bad).payload_fingerprint(100).is_err());
+        }
     }
 
     /// Short underlying reads and a physical read error are observed rather

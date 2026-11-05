@@ -29,17 +29,49 @@ pub struct MessageAcceptanceDecodeLimits {
 }
 
 /// Immutable, quarantined record with no live sender or recipient authority.
-pub struct MessageAcceptanceSource {
+pub struct MessageAcceptanceSource<P = String> {
     sequence: u64,
     accepted_at_ms: u64,
     custody_clock: Option<[u8; 16]>,
     sender_registered_after_sequence: u64,
-    envelope: MessageEnvelopeSnapshot,
+    envelope: MessageAcceptanceEnvelope<P>,
     audience: MessageAudienceSnapshot,
     recipient_bindings: Vec<MessageRecipientBindingSnapshot>,
     native_bindings: Option<super::super::native_binding::NativeBindings>,
     registration_bindings: Option<super::super::registration_binding::RegistrationBindings>,
 }
+
+/// Validated original envelope fields; the payload type explicitly distinguishes
+/// a full decoded body from a descriptive fingerprint. Metadata is never mail.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MessageAcceptanceEnvelope<P> {
+    /// Original validated protocol spelling.
+    pub protocol: String,
+    /// Original envelope idempotency key.
+    pub id: String,
+    /// Original validated send/response kind.
+    pub message_type: String,
+    /// Authored timestamp, independent of the acceptance clock.
+    pub time: String,
+    /// Exact original sender identity and project attribution.
+    pub sender: MessageIdentitySnapshot,
+    /// Original selector, without re-resolving frozen recipients.
+    pub recipient: MessageRecipientSnapshot,
+    /// Original optional correlation; this grants no request ownership.
+    pub correlation_id: Option<String>,
+    /// Original acceptance-relative TTL duration.
+    pub ttl_ms: Option<u64>,
+    /// Original payload media type.
+    pub content_type: String,
+    /// Full validated UTF-8 text or its explicitly typed length/digest.
+    pub payload: P,
+    /// Bounded original extensions, with validated JSON values.
+    pub extension_fields: Vec<MessageExtensionFieldSnapshot>,
+}
+
+/// Descriptive original fields with a validated length/digest instead of a body.
+/// It has no conversion to an envelope, cold occurrence or payload-load result.
+pub type MessageAcceptanceMetadata = MessageAcceptanceSource<super::MessagePayloadFingerprint>;
 
 impl MessageAcceptanceSource {
     /// Compares all frozen namespace attribution before a reload discards this
@@ -115,7 +147,9 @@ impl MessageAcceptanceSource {
             ack_expiry_observed_at_ms: std::sync::Mutex::new(expiry_observed_at_ms),
         })
     }
+}
 
+impl<P> MessageAcceptanceSource<P> {
     /// Borrows descriptive original registration attribution. Older schemas
     /// remain unknown; bytes grant no live endpoint or retirement authority.
     pub fn recipient_registration_namespace(&self, index: usize) -> Option<[u8; 16]> {
@@ -144,7 +178,7 @@ impl MessageAcceptanceSource {
         self.sender_registered_after_sequence
     }
     /// Borrows the original envelope; the value remains quarantined evidence.
-    pub fn envelope(&self) -> &MessageEnvelopeSnapshot {
+    pub fn envelope(&self) -> &MessageAcceptanceEnvelope<P> {
         &self.envelope
     }
     /// Borrows the captured audience without resolving current membership.
@@ -183,7 +217,7 @@ impl MessageAcceptanceSource {
 }
 
 /// Moves owned validated source fields, preserving the original body allocation.
-fn owned_envelope(snapshot: MessageEnvelopeSnapshot) -> Result<Envelope> {
+fn owned_envelope(snapshot: MessageAcceptanceEnvelope<String>) -> Result<Envelope> {
     let sender = sender_identity_from_snapshot(&snapshot.sender, 9)?;
     let recipient = recipient_from_snapshot(&snapshot.recipient)?;
     Ok(Envelope {
@@ -265,6 +299,25 @@ pub fn decode_message_acceptance<R: Read>(
     input: R,
     limits: MessageAcceptanceDecodeLimits,
 ) -> Result<MessageAcceptanceSource> {
+    decode_record(input, limits, RecordReader::string)
+}
+
+/// Reads and validates the exact same original source without retaining its
+/// payload. Full-source checksum/commit/root qualification remains the caller's
+/// responsibility; this descriptor cannot supply a body or live capability.
+pub fn decode_message_acceptance_metadata<R: Read>(
+    input: R,
+    limits: MessageAcceptanceDecodeLimits,
+) -> Result<MessageAcceptanceMetadata> {
+    decode_record(input, limits, RecordReader::payload_fingerprint)
+}
+
+/// One grammar/semantic implementation for retained and fingerprinted bodies.
+fn decode_record<R: Read, P>(
+    input: R,
+    limits: MessageAcceptanceDecodeLimits,
+    payload: fn(&mut RecordReader<R>, usize) -> Result<P>,
+) -> Result<MessageAcceptanceSource<P>> {
     let mut reader = RecordReader::new(input);
     let mut metadata = MetadataBudget::new(limits.auxiliary_bytes)?;
     reader.literal(b"{\"schema_version\":")?;
@@ -323,7 +376,7 @@ pub fn decode_message_acceptance<R: Read>(
     reader.literal(b",\"content_type\":")?;
     let content_type = metadata.string(&mut reader)?;
     reader.literal(b",\"payload\":")?;
-    let payload = reader.string(limits.payload_bytes)?;
+    let payload = payload(&mut reader, limits.payload_bytes)?;
     reader.literal(b",\"extension_fields\":[")?;
     let mut extension_fields = Vec::new();
     while reader.peek()? != Some(b']') {
@@ -410,7 +463,7 @@ pub fn decode_message_acceptance<R: Read>(
         custody_clock,
         accepted_at_ms,
         sender_registered_after_sequence: sender_floor,
-        envelope: MessageEnvelopeSnapshot {
+        envelope: MessageAcceptanceEnvelope {
             protocol,
             id,
             message_type,
@@ -543,7 +596,7 @@ fn decode_native_owner<R: Read>(
 }
 
 /// Checks original semantic constraints without publishing any live authority.
-fn validate(record: &MessageAcceptanceSource) -> Result<()> {
+fn validate<P>(record: &MessageAcceptanceSource<P>) -> Result<()> {
     if record.sequence == 0
         || record.sender_registered_after_sequence >= record.sequence
         || record.recipient_bindings.is_empty()
@@ -782,6 +835,42 @@ mod tests {
         }
     }
 
+    /// Both decoder modes consume the exact immutable source grammar. Metadata
+    /// retains decoded UTF-8 length/digest, original TTL, audience and recipient
+    /// intervals without constructing an empty or alternate payload envelope.
+    #[test]
+    fn metadata_decoder_preserves_source_fields_and_exact_payload_fingerprint() {
+        use sha2::{Digest, Sha256};
+        let payload = "a\0\"\n\\é😀".repeat(12_000);
+        let (encoded, _) = source(&payload);
+        let full = decode_message_acceptance(encoded.as_slice(), limits()).unwrap();
+        let meta = decode_message_acceptance_metadata(encoded.as_slice(), limits()).unwrap();
+        assert_eq!(meta.sequence(), full.sequence());
+        assert_eq!(meta.accepted_at_ms(), full.accepted_at_ms());
+        assert_eq!(
+            meta.sender_registered_after_sequence(),
+            full.sender_registered_after_sequence()
+        );
+        assert_eq!(meta.envelope().sender, full.envelope().sender);
+        assert_eq!(meta.envelope().recipient, full.envelope().recipient);
+        assert_eq!(meta.envelope().ttl_ms, full.envelope().ttl_ms);
+        assert_eq!(meta.audience(), full.audience());
+        assert_eq!(meta.recipient_bindings(), full.recipient_bindings());
+        assert_eq!(meta.envelope().payload.bytes(), payload.len());
+        assert_eq!(
+            meta.envelope().payload.sha256(),
+            &<[u8; 32]>::from(Sha256::digest(payload.as_bytes()))
+        );
+        let mut too_small = limits();
+        too_small.payload_bytes = payload.len() - 1;
+        assert!(decode_message_acceptance_metadata(encoded.as_slice(), too_small).is_err());
+        let mut future = encoded.clone();
+        let text = String::from_utf8(std::mem::take(&mut future))
+            .unwrap()
+            .replacen("\"schema_version\":1", "\"schema_version\":5", 1);
+        assert!(decode_message_acceptance_metadata(text.as_bytes(), limits()).is_err());
+    }
+
     /// A real admission round-trips its complete immutable payload, clocks,
     /// audience, original recipient and sender floors, including JSON escapes.
     /// The resulting value is descriptive and is never installed as live mail.
@@ -816,7 +905,7 @@ mod tests {
     fn decoder_enforces_independent_payload_metadata_and_binding_limits() {
         let (encoded, target) = source("12345678");
         let original = decode_message_acceptance(encoded.as_slice(), limits()).unwrap();
-        let envelope = envelope_from_snapshot(&original.envelope, 9).unwrap();
+        let envelope = owned_envelope(original.envelope.clone()).unwrap();
         let exact_metadata = super::super::super::auxiliary::envelope_bytes(&envelope);
         let mut exact = limits();
         exact.payload_bytes = 8;

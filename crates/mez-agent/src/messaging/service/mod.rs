@@ -66,10 +66,11 @@ mod admission;
 pub(super) use admission::PendingMessageAdmission;
 pub use admission::{
     MessageAcceptanceAttempt, MessageAcceptanceCommit, MessageAcceptanceDecodeLimits,
-    MessageAcceptanceJoin, MessageAcceptanceRejected, MessageAcceptanceSource,
-    MessageAcceptanceStore, MessageAcceptanceStoreError, MessageAcceptanceTicket,
-    MessageAcceptanceUncertain, MessageAcceptanceWrite, MessageAcceptanceWriteOutcome,
-    MessageStorageScope, decode_message_acceptance,
+    MessageAcceptanceEnvelope, MessageAcceptanceJoin, MessageAcceptanceMetadata,
+    MessageAcceptanceRejected, MessageAcceptanceSource, MessageAcceptanceStore,
+    MessageAcceptanceStoreError, MessageAcceptanceTicket, MessageAcceptanceUncertain,
+    MessageAcceptanceWrite, MessageAcceptanceWriteOutcome, MessagePayloadFingerprint,
+    MessageStorageScope, decode_message_acceptance, decode_message_acceptance_metadata,
 };
 mod discovery;
 pub use acceptance_proof::{MessageAcceptanceProof, MessageAcceptanceReservation};

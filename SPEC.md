@@ -15790,6 +15790,20 @@ This root scope MUST NOT be serialized as a reconnect or native task capability.
 After replay eviction, durable disk lookup/dedup remains required before product
 activation; this live cache is not a complete durable idempotency ledger.
 
+Original-source metadata validation for inventory, checkpoint/ACK, terminal and
+native canonical/handoff evidence MUST stream and validate the complete payload
+without retaining a body-sized allocation. The metadata descriptor MUST retain
+its exact decoded UTF-8 length/SHA256, immutable envelope fields, audience,
+frozen recipients, native/registration attribution and clock domain. Descriptor
+and full-body decoding MUST share string grammar, UTF-8/escape validation,
+independent decoded-byte/metadata limits and semantic checks. The original-store
+reader MUST still verify the complete original encoded checksum and exact
+framing before exposing either result. A payload fingerprint is descriptive:
+it MUST NOT be converted to an empty envelope, a payload-load completion or a
+live delivery. Actual payload reload/cold construction retains its separately
+reserved full-body path. These readers do not themselves authorize reclamation
+or remove original source/receipt/proof/allocator evidence.
+
 Raw caller loss/lease retirement MUST preserve issued acceptance through original
 join/adoption without reviving the sender registration. Active storage retries
 MUST keep the same source/plan. Graceful shutdown of a failed original MAY use

@@ -199,7 +199,7 @@ impl MmpCustodyStore {
             self.ensure_handoff_unreleased(transaction, &journal.source)?;
         }
         let (source, digest, _) =
-            self.read_accepted_source_in_snapshot(transaction, journal.source.sequence, limits)?;
+            self.read_accepted_metadata_in_snapshot(transaction, journal.source.sequence, limits)?;
         if digest != journal.source.source_sha256
             || source
                 .native_sender()

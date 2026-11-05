@@ -131,7 +131,7 @@ impl MmpCustodyStore {
         let Some(journal) = self.read_native_input_metadata_in_snapshot(transaction, key)? else {
             return Ok(None);
         };
-        let (source, digest, _) = self.read_accepted_source_in_snapshot(
+        let (source, digest, _) = self.read_accepted_metadata_in_snapshot(
             transaction,
             journal.source.message_sequence,
             limits,

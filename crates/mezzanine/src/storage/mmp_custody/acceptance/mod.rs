@@ -12,8 +12,9 @@
 use std::io::{self, Read, Write};
 
 use mez_agent::messaging::{
-    MessageAcceptanceDecodeLimits, MessageAcceptanceSource, MessageAcceptanceStore,
-    MessageAcceptanceStoreError, MessageAcceptanceWrite, MessageError, decode_message_acceptance,
+    MessageAcceptanceDecodeLimits, MessageAcceptanceMetadata, MessageAcceptanceSource,
+    MessageAcceptanceStore, MessageAcceptanceStoreError, MessageAcceptanceWrite, MessageError,
+    decode_message_acceptance, decode_message_acceptance_metadata,
 };
 use serde::{Deserialize, Serialize};
 
@@ -24,10 +25,14 @@ use super::*;
 #[cfg(test)]
 #[derive(Default)]
 pub(super) struct SourceDecodeProbe {
-    /// Largest payload limit passed to the real decoder before reading bytes.
+    /// Largest payload limit passed to the full-body decoder before reading bytes.
     pub(super) maximum_limit: std::cell::Cell<usize>,
     /// Largest completed decoded body, even if later whole-recovery checks fail.
     pub(super) maximum_payload: std::cell::Cell<usize>,
+    /// Largest payload validated through the allocation-free descriptor path.
+    pub(super) maximum_streamed_payload: std::cell::Cell<usize>,
+    /// Independent payload validation bound supplied to the descriptor reader.
+    pub(super) maximum_streamed_limit: std::cell::Cell<usize>,
 }
 
 mod recovery;
@@ -301,28 +306,8 @@ impl MmpCustodyStore {
             let source = decode_message_acceptance(reader, limits).map_err(|error| {
                 MezError::invalid_state(format!("MMP acceptance decode failed: {error}"))
             })?;
-            if source.custody_clock_domain()
-                != self
-                    .clock_anchor
-                    .as_ref()
-                    .map(|_| self.store_id.as_slice().try_into())
-                    .transpose()
-                    .map_err(|_| {
-                        MezError::invalid_state("MMP elapsed allocation framing unavailable")
-                    })?
-            {
-                return Err(MezError::invalid_state(
-                    "MMP source elapsed domain differs from original store",
-                ));
-            }
+            self.validate_decoded_source(transaction, sequence, &source)?;
 
-            if let Some(clock) = self.checked_state(transaction)?.clock
-                && (source.accepted_at_ms() == 0 || source.accepted_at_ms() > clock.progress)
-            {
-                return Err(MezError::invalid_state(
-                    "MMP source time exceeds committed elapsed progress",
-                ));
-            }
             #[cfg(test)]
             self.source_decode_probe.maximum_payload.set(
                 self.source_decode_probe
@@ -330,13 +315,78 @@ impl MmpCustodyStore {
                     .get()
                     .max(source.envelope().payload.len()),
             );
-            if source.sequence() != sequence {
-                return Err(MezError::invalid_state(
-                    "MMP acceptance record sequence disagrees with its committed marker",
-                ));
-            }
             Ok(source)
         })
+    }
+
+    /// Streams and hashes the original payload without retaining it. Inventory
+    /// and proof validation need immutable fields, not a mailbox body or cache
+    /// allocation. The enclosing chunk reader still verifies the full original
+    /// checksum, marker and exact byte count before returning this descriptor.
+    pub(super) fn read_accepted_metadata_in_snapshot(
+        &self,
+        transaction: &rusqlite::Transaction<'_>,
+        sequence: u64,
+        limits: MessageAcceptanceDecodeLimits,
+    ) -> Result<(MessageAcceptanceMetadata, [u8; 32], usize)> {
+        #[cfg(test)]
+        self.source_decode_probe.maximum_streamed_limit.set(
+            self.source_decode_probe
+                .maximum_streamed_limit
+                .get()
+                .max(limits.payload_bytes),
+        );
+        self.verified_accepted_in_snapshot(transaction, sequence, |reader| {
+            let source = decode_message_acceptance_metadata(reader, limits).map_err(|error| {
+                MezError::invalid_state(format!("MMP acceptance metadata decode failed: {error}"))
+            })?;
+            self.validate_decoded_source(transaction, sequence, &source)?;
+            #[cfg(test)]
+            self.source_decode_probe.maximum_streamed_payload.set(
+                self.source_decode_probe
+                    .maximum_streamed_payload
+                    .get()
+                    .max(source.envelope().payload.bytes()),
+            );
+            Ok(source)
+        })
+    }
+
+    /// Applies exactly the same source/clock lineage checks to either body type.
+    fn validate_decoded_source<P>(
+        &self,
+        transaction: &rusqlite::Transaction<'_>,
+        sequence: u64,
+        source: &MessageAcceptanceSource<P>,
+    ) -> Result<()> {
+        if source.custody_clock_domain()
+            != self
+                .clock_anchor
+                .as_ref()
+                .map(|_| self.store_id.as_slice().try_into())
+                .transpose()
+                .map_err(|_| {
+                    MezError::invalid_state("MMP elapsed allocation framing unavailable")
+                })?
+        {
+            return Err(MezError::invalid_state(
+                "MMP source elapsed domain differs from original store",
+            ));
+        }
+
+        if let Some(clock) = self.checked_state(transaction)?.clock
+            && (source.accepted_at_ms() == 0 || source.accepted_at_ms() > clock.progress)
+        {
+            return Err(MezError::invalid_state(
+                "MMP source time exceeds committed elapsed progress",
+            ));
+        }
+        if source.sequence() != sequence {
+            return Err(MezError::invalid_state(
+                "MMP acceptance record sequence disagrees with its committed marker",
+            ));
+        }
+        Ok(())
     }
 
     /// Verifies an accepted original inside the caller's existing snapshot.

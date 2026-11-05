@@ -143,7 +143,7 @@ impl MmpCustodyStore {
                 return Err(invalid("decision sequence is invalid"));
             }
             let (source, digest, _) =
-                self.read_accepted_source_in_snapshot(transaction, sequence, limits)?;
+                self.read_accepted_metadata_in_snapshot(transaction, sequence, limits)?;
             if digest.as_slice() != &entry[21..] {
                 return Err(invalid("decision source digest changed"));
             }

@@ -23,8 +23,10 @@ pub(super) use record::source_digest_with_envelope;
 mod record_decode;
 mod record_reader;
 pub use record_decode::{
-    MessageAcceptanceDecodeLimits, MessageAcceptanceSource, decode_message_acceptance,
+    MessageAcceptanceDecodeLimits, MessageAcceptanceEnvelope, MessageAcceptanceMetadata,
+    MessageAcceptanceSource, decode_message_acceptance, decode_message_acceptance_metadata,
 };
+pub use record_reader::MessagePayloadFingerprint;
 /// Computes immutable source integrity on the owned ACK worker, not the actor.
 pub(super) fn acknowledgement_source_digest(
     row: &QueuedEnvelope,
