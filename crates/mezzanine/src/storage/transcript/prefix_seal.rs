@@ -9,7 +9,7 @@
 //! retention or confinement against noncooperating writers after this boundary.
 
 use super::AgentTranscriptStore;
-use super::encoding::{decode_transcript_entry, encode_transcript_entry};
+use super::encoding::{decode_archive_transcript_entry, encode_transcript_entry};
 use crate::error::{MezError, Result};
 use mez_agent::transcript::{TranscriptEntry, validate_conversation_id};
 use sha2::{Digest, Sha256};
@@ -174,7 +174,7 @@ impl AgentTranscriptStore {
                     "physical archive row is incomplete or exceeds its captured bound",
                 ));
             }
-            let row = decode_transcript_entry(line.trim_end_matches(['\r', '\n']))?;
+            let row = decode_archive_transcript_entry(line.trim_end_matches(['\r', '\n']))?;
             if row.conversation_id != source.conversation_id
                 || sequence.checked_add(1) != Some(row.sequence)
             {

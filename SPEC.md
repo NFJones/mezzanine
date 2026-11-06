@@ -11043,8 +11043,16 @@ whole execution groups while any member is still required, preserving original
 ordinal baselines. This retirement does not delete archive, receipt or payload
 files, nor grant execution rights. Final active escrow retains the above logical
 and manifest bounds; an exceeded bound MUST refuse rather than discard unsettled
-source. Ordinary receipt recovery and settlement still require their own bounded
-cursor integration; the typed history optimization alone does not establish it.
+source. If every retained ordinary receipt already has complete original
+accounting wholly inside a validated cut, typed history MAY omit redundant
+recovery after checking all retained claims, full-field images, original batch
+occurrences, committed costs and required accounting state under the same lease.
+It MUST retain the original receipts for their actual settlement owner; that
+history read MUST NOT acknowledge physical append durability or delete receipts
+based on the model cut. Actual ordinary settlement MUST continue to validate
+exact physical source and preserve receipts on corruption. Uncovered/incomplete
+receipts retain their actual recovery path. General bounded ordinary admission,
+recovery and physical settlement still require separate cursor integration.
 
 The typed runtime reader MUST capture the committed identity and
 checked checkpoint under the same conversation lease. Pane display counts MUST

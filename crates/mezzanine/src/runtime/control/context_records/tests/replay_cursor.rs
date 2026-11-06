@@ -234,6 +234,209 @@ fn replay_cursor_omits_large_indexed_prefix_through_actual_history_worker() {
     }
 }
 
+/// Already complete original accounting needs no replay repair. History leaves
+/// the original receipt with its actual owner instead of inventing an ACK from
+/// the cut; explicit settlement still checks the actual physical archive.
+#[test]
+fn replay_cursor_keeps_original_receipt_without_decoding_archived_prefix() {
+    let fixture = Fixture::new();
+    fixture
+        .store
+        .accept_transcript_append_receipt(&fixture.batch, 1)
+        .unwrap();
+    let receipt_input = crate::storage::transcript::transcript_decode_count();
+    assert_eq!(fixture.store.pending_append_receipts().unwrap().len(), 1);
+    assert_eq!(
+        crate::storage::transcript::transcript_decode_count(),
+        receipt_input
+    );
+    let path = fixture.directory().join("history.tsv");
+    let original = std::fs::read(&path).unwrap();
+    for cold in [false, true] {
+        let mut work = fixture.work();
+        if cold {
+            work.store = AgentTranscriptStore::new(fixture.store.root());
+        }
+        let before = crate::storage::transcript::transcript_decode_count();
+        let history = execute_runtime_agent_history_epoch_work(work).unwrap();
+        let decoded = crate::storage::transcript::transcript_decode_count() - before;
+        assert_eq!(
+            history
+                .records
+                .import_context(history.blocks)
+                .unwrap()
+                .chronology(),
+            fixture.owner.context().chronology()
+        );
+        assert_eq!(
+            fixture.store.pending_append_receipts().unwrap(),
+            vec![fixture.batch.entries().to_vec()]
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), original);
+        assert!(
+            decoded <= 4,
+            "decoded {decoded} rows with a fully archived original receipt"
+        );
+    }
+    fixture
+        .store
+        .settle_transcript_append_receipt(&fixture.batch, 1)
+        .unwrap();
+    assert!(fixture.store.pending_append_receipts().unwrap().is_empty());
+}
+
+/// A real accepted but unappended tail is outside the cut. The actual worker
+/// must finish its original accounting and physical settlement before replay,
+/// preserving source and avoiding a duplicate current model occurrence.
+#[test]
+fn replay_cursor_recovers_uncovered_original_receipt_before_history() {
+    let fixture = Fixture::new();
+    let batch =
+        TranscriptAppendBatch::owned_rows(vec![source_row(&fixture.new_source, 289)]).unwrap();
+    fixture
+        .store
+        .accept_transcript_append_receipt(&batch, 2)
+        .unwrap();
+    assert_eq!(fixture.store.pending_append_receipts().unwrap().len(), 1);
+    let history = execute_runtime_agent_history_epoch_work(fixture.work()).unwrap();
+    assert_eq!(
+        history
+            .records
+            .import_context(history.blocks)
+            .unwrap()
+            .chronology(),
+        fixture.owner.context().chronology()
+    );
+    assert!(fixture.store.pending_append_receipts().unwrap().is_empty());
+    let physical_before = crate::storage::transcript::transcript_decode_count();
+    let durable = fixture.store.inspect(CID).unwrap();
+    assert_eq!(durable.len(), 289);
+    assert!(
+        crate::storage::transcript::transcript_decode_count() - physical_before
+            >= durable.len() as u64
+    );
+    assert_eq!(durable.last(), batch.entries().last());
+}
+
+/// Mixed receipt domains keep existing recovery rather than qualifying an
+/// unaccounted owner from a different batch's original-accounting proof.
+#[test]
+fn replay_cursor_mixed_receipts_keep_existing_recovery_path() {
+    let fixture = Fixture::new();
+    fixture
+        .store
+        .accept_transcript_append_receipt(&fixture.batch, 1)
+        .unwrap();
+    let mut row = fixture.batch.entries()[0].clone();
+    row.sequence = 289;
+    row.content = "unaccounted audit source".into();
+    let unaccounted = TranscriptAppendBatch::rows(vec![row]).unwrap();
+    fixture
+        .store
+        .accept_transcript_append_receipt(&unaccounted, 2)
+        .unwrap();
+    let history = execute_runtime_agent_history_epoch_work(fixture.work()).unwrap();
+    assert_eq!(
+        history
+            .records
+            .import_context(history.blocks)
+            .unwrap()
+            .chronology(),
+        fixture.owner.context().chronology()
+    );
+    assert_eq!(
+        fixture.store.pending_append_receipts().unwrap(),
+        vec![unaccounted.entries().to_vec()]
+    );
+}
+
+/// Bounded replay does not certify arbitrary old raw bytes or remove the only
+/// original receipt. A real settlement rejects changed source, retains its
+/// receipt, and succeeds only after the exact original archive is restored.
+#[test]
+fn replay_cursor_retained_receipt_requires_actual_source_before_ack() {
+    let fixture = Fixture::new();
+    fixture
+        .store
+        .accept_transcript_append_receipt(&fixture.batch, 1)
+        .unwrap();
+    let receipt = std::fs::read_dir(fixture.store.root().join(".append-receipts"))
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    let original_receipt = std::fs::read(&receipt).unwrap();
+    let path = fixture.directory().join("history.tsv");
+    let original = std::fs::read_to_string(&path).unwrap();
+    let changed = original.replacen("exact old-0", "EXACT OLD-0", 1);
+    assert_ne!(original, changed);
+    std::fs::write(&path, changed).unwrap();
+    let before = crate::storage::transcript::transcript_decode_count();
+    let history = execute_runtime_agent_history_epoch_work(fixture.work()).unwrap();
+    assert!(crate::storage::transcript::transcript_decode_count() - before <= 4);
+    assert_eq!(
+        history
+            .records
+            .import_context(history.blocks)
+            .unwrap()
+            .chronology(),
+        fixture.owner.context().chronology()
+    );
+    assert_eq!(std::fs::read(&receipt).unwrap(), original_receipt);
+    assert!(
+        fixture
+            .store
+            .settle_transcript_append_receipt(&fixture.batch, 1)
+            .is_err()
+    );
+    assert_eq!(std::fs::read(&receipt).unwrap(), original_receipt);
+    std::fs::write(path, original).unwrap();
+    fixture
+        .store
+        .settle_transcript_append_receipt(&fixture.batch, 1)
+        .unwrap();
+    assert!(fixture.store.pending_append_receipts().unwrap().is_empty());
+}
+
+/// A complete cut does not cover missing required source images or costs. The
+/// read fails locally and leaves actual receipt recovery evidence unchanged.
+#[test]
+fn replay_cursor_keeps_receipt_on_required_image_or_accounting_damage() {
+    for image in [false, true] {
+        let fixture = Fixture::new();
+        fixture
+            .store
+            .accept_transcript_append_receipt(&fixture.batch, 1)
+            .unwrap();
+        let receipt = std::fs::read_dir(fixture.store.root().join(".append-receipts"))
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
+        let original_receipt = std::fs::read(&receipt).unwrap();
+        let connection =
+            rusqlite::Connection::open(fixture.directory().join("row-origins.sqlite3")).unwrap();
+        connection
+            .execute(
+                if image {
+                    "DELETE FROM row_digests WHERE sequence = '1'"
+                } else {
+                    "DELETE FROM row_costs"
+                },
+                [],
+            )
+            .unwrap();
+        drop(connection);
+        assert!(
+            execute_runtime_agent_history_epoch_work(fixture.work()).is_err(),
+            "image={image}"
+        );
+        assert_eq!(std::fs::read(receipt).unwrap(), original_receipt);
+    }
+}
+
 /// Only an actual indexed archive cut retires old backing. The new source is
 /// still unsettled, so deleting that required payload must fail explicitly.
 #[test]

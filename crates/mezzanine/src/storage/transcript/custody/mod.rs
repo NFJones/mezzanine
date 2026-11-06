@@ -23,7 +23,7 @@ use super::AgentTranscriptStore;
 
 mod receipt;
 mod source;
-use super::encoding::{decode_transcript_entry, encode_transcript_entry};
+use super::encoding::{decode_archive_transcript_entry, encode_transcript_entry};
 use crate::error::{MezError, Result};
 pub(crate) use receipt::{
     CustodyAppendPlan, MAX_CUSTODY_APPEND_BYTES, MAX_CUSTODY_APPEND_ROWS,
@@ -370,7 +370,7 @@ impl CustodyTranscriptLease {
             return Err(unavailable());
         }
         let text = std::str::from_utf8(&bytes).map_err(|_| unavailable())?;
-        let row = decode_transcript_entry(text.trim_end_matches('\n'))?;
+        let row = decode_archive_transcript_entry(text.trim_end_matches('\n'))?;
         if row.conversation_id != plan.conversation_id || row.sequence != plan.archive_sequence {
             return Err(unavailable());
         }

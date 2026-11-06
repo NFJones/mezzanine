@@ -13,7 +13,7 @@ use super::{
 };
 use crate::Result;
 use crate::storage::transcript::{
-    TranscriptRowOrigins, encoding::decode_transcript_entry, row_origins::IndexedRowImage,
+    TranscriptRowOrigins, encoding::decode_archive_transcript_entry, row_origins::IndexedRowImage,
     store::ConversationTranscriptView,
 };
 use mez_agent::{
@@ -331,7 +331,7 @@ fn read_window(
         if !line.ends_with('\n') {
             return Err(invalid("archive tail has an unterminated row"));
         }
-        let row = decode_transcript_entry(line.trim_end_matches(['\r', '\n']))?;
+        let row = decode_archive_transcript_entry(line.trim_end_matches(['\r', '\n']))?;
         sequence = sequence
             .checked_add(1)
             .ok_or_else(|| invalid("archive tail sequence exhausted"))?;
@@ -350,6 +350,46 @@ fn read_window(
 }
 
 impl AgentTranscriptStore {
+    /// Proves only that this original ordinary batch needs no accounting repair
+    /// for typed replay. The caller holds its conversation lease. This is not a
+    /// physical-source settlement proof: the original receipt must remain with
+    /// its ordinary owner until that owner checks actual bytes and acknowledges.
+    pub(in crate::storage::transcript) fn replay_cut_covers_complete_accounting_locked(
+        &self,
+        batch: &crate::storage::transcript::TranscriptAppendBatch,
+    ) -> Result<bool> {
+        let Some(accounting) = batch.row_accounting() else {
+            return Ok(false);
+        };
+        if batch.has_initial_authority() {
+            return Ok(false);
+        }
+        accounting.validate(batch.entries())?;
+        let Some(snapshot) = self.replay_epoch_snapshot_locked(batch.conversation_id())? else {
+            return Ok(false);
+        };
+        let Some(cut) = &snapshot.archive_cut else {
+            return Ok(false);
+        };
+        if batch
+            .entries()
+            .last()
+            .is_none_or(|row| row.sequence > cut.through_sequence)
+        {
+            return Ok(false);
+        }
+        let originals = self
+            .indexed_row_origins_locked(batch.conversation_id(), batch.entries())?
+            .ok_or_else(|| invalid("required archived receipt images disappeared"))?;
+        if &originals != accounting.origins() {
+            return Err(invalid(
+                "archived receipt has a different original append owner",
+            ));
+        }
+        self.verify_ordinary_accounting_committed_locked(batch)?;
+        Ok(true)
+    }
+
     /// Reads only the post-cut tail and verifies omitted old pending rows against
     /// full-field index images. The runtime must also check original batch IDs.
     pub(in crate::storage::transcript) fn replay_cursor_view_locked(

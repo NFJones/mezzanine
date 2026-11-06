@@ -453,8 +453,14 @@ placement is inside the cut. Current pre-rewrite source, unsettled originals and
 whole still-required execution groups remain backed. This does not delete files
 or acknowledge pending appends. Active escrow remains bounded; a full bound
 produces an explicit refusal rather than lost source. Ordinary receipt recovery
-and settlement still use their existing archive validation and need separate
-bounded cursor integration. Valid version-five escrow can upgrade through this
+and settlement still use their existing archive validation. When all retained
+ordinary receipts already have complete original accounting inside the cut,
+history verifies their original row images, IDs, costs and required state, then
+leaves those receipts with their settlement owner. This skips redundant replay
+repair while preserving actual physical-source verification before ordinary
+acknowledgment. Missing required accounting refuses and retains the receipt.
+Uncovered/incomplete recovery and general bounded physical settlement still need
+separate integration. Valid version-five escrow can upgrade through this
 publication path without a model call.
 The earlier version-four prototype still supports frozen empty-archive reads,
 but writing a new epoch requires an explicit original-source escrow transition.

@@ -223,7 +223,7 @@ impl AgentTranscriptStore {
 
     /// Requires original placement and available proposal costs before receipt
     /// retirement; a valid later rendering cache is never rolled back.
-    pub(super) fn verify_ordinary_accounting_committed_locked(
+    pub(in crate::storage::transcript) fn verify_ordinary_accounting_committed_locked(
         &self,
         batch: &TranscriptAppendBatch,
     ) -> Result<()> {
@@ -311,9 +311,12 @@ impl AgentTranscriptStore {
         .map_err(|_| MezError::invalid_state("ordinary transcript byte count overflow"))
     }
 
-    /// Finishes only this conversation's accepted ordinary accounting receipts
-    /// before canonical replay. No candidate, native action or unrelated archive
-    /// is published. An unsafe partial source remains a local explicit error.
+    /// Repairs this conversation's unfinished ordinary accounting before
+    /// canonical replay. Complete original accounting wholly inside a
+    /// validated typed cut needs no replay repair; leave those receipts with the
+    /// actual ordinary settlement owner rather than derive ACK from that cut.
+    /// No candidate, native action or unrelated archive is published. An unsafe
+    /// partial source remains a local explicit error.
     pub(in crate::storage::transcript) fn recover_accounted_appends_for_replay_locked(
         &self,
         cid: &str,
@@ -327,10 +330,21 @@ impl AgentTranscriptStore {
             return Ok(());
         }
         let claimed = ordinary_receipt_claims(&receipts)?;
+        let mut already_complete = receipts
+            .iter()
+            .all(|(_, receipt, _)| receipt.row_accounting.is_some());
         for (_, receipt, _) in &receipts {
             if receipt.row_accounting.is_some() {
-                self.ordinary_accounting_state_locked(&receipt.batch()?)?;
+                let batch = receipt.batch()?;
+                self.ordinary_accounting_state_locked(&batch)?;
+                already_complete &= self.replay_cut_covers_complete_accounting_locked(&batch)?;
             }
+        }
+        if already_complete {
+            // Every retained claim was preflighted. The cut permits model I/O
+            // omission, not physical receipt settlement or a synthetic ACK.
+            // Actual off-actor settlement still validates exact archive bytes.
+            return Ok(());
         }
         match self.inspect(cid) {
             Ok(rows) => {

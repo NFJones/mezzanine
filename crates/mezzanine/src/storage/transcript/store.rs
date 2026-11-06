@@ -30,7 +30,7 @@ use super::archive::{
     archived_payloads_exist,
 };
 use super::catalog::{self, CatalogCandidate, CatalogPayloadLayout};
-use super::encoding::{decode_transcript_entry, encode_transcript_entry};
+use super::encoding::{decode_archive_transcript_entry, encode_transcript_entry};
 use super::fs::{set_private_dir_permissions, set_private_file_permissions};
 use super::history;
 use super::types::{
@@ -1361,7 +1361,9 @@ impl AgentTranscriptStore {
             let mut first_line = String::new();
             BufReader::new(std_fs::File::open(&path)?).read_line(&mut first_line)?;
             if !first_line.is_empty()
-                && decode_transcript_entry(first_line.trim_end_matches(['\r', '\n']))?.sequence != 1
+                && decode_archive_transcript_entry(first_line.trim_end_matches(['\r', '\n']))?
+                    .sequence
+                    != 1
             {
                 return Err(MezError::invalid_state(
                     "transcript archive is missing its leading history",
@@ -3133,7 +3135,7 @@ impl AgentTranscriptStore {
         std_fs::File::open(path)?.read_to_string(&mut data)?;
         data.lines()
             .filter(|line| !line.trim().is_empty())
-            .map(decode_transcript_entry)
+            .map(decode_archive_transcript_entry)
             .collect()
     }
 
@@ -3160,7 +3162,7 @@ impl AgentTranscriptStore {
                     "restored transcript has an unterminated row",
                 ));
             }
-            let entry = decode_transcript_entry(line.trim_end_matches(['\r', '\n']))?;
+            let entry = decode_archive_transcript_entry(line.trim_end_matches(['\r', '\n']))?;
             count = count
                 .checked_add(1)
                 .ok_or_else(|| MezError::invalid_state("restored transcript sequence overflow"))?;
@@ -3199,7 +3201,7 @@ impl AgentTranscriptStore {
                     "restored transcript has an unterminated row",
                 ));
             }
-            let entry = decode_transcript_entry(line.trim_end_matches(['\r', '\n']))?;
+            let entry = decode_archive_transcript_entry(line.trim_end_matches(['\r', '\n']))?;
             let expected = u64::try_from(entries.len())
                 .ok()
                 .and_then(|count| count.checked_add(1))
@@ -3256,7 +3258,7 @@ impl AgentTranscriptStore {
                         "restored transcript has an unterminated row",
                     ));
                 }
-                let entry = decode_transcript_entry(line.trim_end_matches(['\r', '\n']))?;
+                let entry = decode_archive_transcript_entry(line.trim_end_matches(['\r', '\n']))?;
                 expected = expected.checked_add(1).ok_or_else(|| {
                     MezError::invalid_state("restored transcript sequence overflow")
                 })?;
@@ -3334,7 +3336,7 @@ impl AgentTranscriptStore {
                     "restored transcript has an unterminated row",
                 ));
             }
-            let entry = decode_transcript_entry(line.trim_end_matches(['\r', '\n']))?;
+            let entry = decode_archive_transcript_entry(line.trim_end_matches(['\r', '\n']))?;
             let expected = u64::try_from(entries.len())
                 .ok()
                 .and_then(|count| count.checked_add(1))
@@ -3810,7 +3812,7 @@ impl AgentTranscriptStore {
             .collect::<Vec<_>>();
         let decoded = lines
             .into_iter()
-            .map(decode_transcript_entry)
+            .map(decode_archive_transcript_entry)
             .collect::<Result<Vec<_>>>()?;
         let first = decoded.len().saturating_sub(max_entries);
         Ok(decoded[first..].to_vec())
@@ -3841,7 +3843,7 @@ impl AgentTranscriptStore {
         let mut first_line = String::new();
         BufReader::new(std_fs::File::open(&path)?).read_line(&mut first_line)?;
         if !first_line.is_empty() && {
-            let first = decode_transcript_entry(first_line.trim_end_matches(['\r', '\n']))?;
+            let first = decode_archive_transcript_entry(first_line.trim_end_matches(['\r', '\n']))?;
             first.sequence != 1 || first.conversation_id != conversation_id
         } {
             return Err(MezError::invalid_state(
@@ -3890,7 +3892,7 @@ impl AgentTranscriptStore {
             .into_iter()
             .map(|line| {
                 let text = String::from_utf8_lossy(&line);
-                let entry = decode_transcript_entry(&text)?;
+                let entry = decode_archive_transcript_entry(&text)?;
                 if entry.conversation_id != conversation_id {
                     return Err(MezError::invalid_state(
                         "transcript archive contains a foreign entry",
@@ -3940,7 +3942,7 @@ impl AgentTranscriptStore {
                 .rev()
                 .filter(|segment| !segment.is_empty())
             {
-                let entry = decode_transcript_entry(&String::from_utf8_lossy(segment))?;
+                let entry = decode_archive_transcript_entry(&String::from_utf8_lossy(segment))?;
                 if entry.conversation_id != conversation_id
                     || newer_sequence
                         .is_some_and(|newer| entry.sequence.checked_add(1) != Some(newer))
@@ -3967,7 +3969,7 @@ impl AgentTranscriptStore {
             }
         }
         if !prefix.is_empty() {
-            let entry = decode_transcript_entry(&String::from_utf8_lossy(&prefix))?;
+            let entry = decode_archive_transcript_entry(&String::from_utf8_lossy(&prefix))?;
             if entry.conversation_id != conversation_id
                 || newer_sequence.is_some_and(|newer| entry.sequence.checked_add(1) != Some(newer))
             {
@@ -4027,7 +4029,7 @@ impl AgentTranscriptStore {
         let text = std::str::from_utf8(&record).map_err(|_| {
             MezError::invalid_state("conversation transcript row is not valid UTF-8")
         })?;
-        let entry = decode_transcript_entry(text)?;
+        let entry = decode_archive_transcript_entry(text)?;
         if entry.conversation_id != conversation_id {
             return Err(MezError::invalid_state(
                 "conversation transcript final row belongs to another conversation",
@@ -5328,7 +5330,7 @@ impl AgentTranscriptStore {
                 let line = std::str::from_utf8(line).map_err(|error| {
                     MezError::invalid_args(format!("transcript is not UTF-8: {error}"))
                 })?;
-                decode_transcript_entry(line.trim_end_matches(['\r', '\n']))
+                decode_archive_transcript_entry(line.trim_end_matches(['\r', '\n']))
             })
             .collect()
     }
