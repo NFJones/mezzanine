@@ -331,6 +331,7 @@ impl ReplayEpochContext {
             return Err(invalid("duplicate MCP retrieval revocation"));
         }
         owner.context.retired_mcp_retrievals = unique;
+        owner.bind_mcp_retrieval_scope();
         owner.initialize_accounting()?;
         owner.validate_membership()?;
         if let Some(head) = owner

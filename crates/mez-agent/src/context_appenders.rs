@@ -368,8 +368,16 @@ pub fn mcp_server_is_referencable_from_action_result(
 /// Only a server currently reported as available and its currently available tools
 /// can create a grant. The returned content contains complete validated object
 /// schemas but no transport, approval, credential, or live-authority internals.
-pub fn mcp_retrieved_manifest_for_action_result(result: &ActionResult) -> Option<(String, String)> {
+/// Retrieval identity keeps a fresh successful action distinct from retained
+/// revoked evidence; epoch framing remains unchanged through later persistence.
+pub fn mcp_retrieved_manifest_for_action_result(
+    result: &ActionResult,
+    context: &AgentContext,
+) -> Option<(String, String)> {
     if result.action_type != "mcp_server_get" || result.status != ActionStatus::Succeeded {
+        return None;
+    }
+    if result.turn_id.trim().is_empty() || result.action_id.trim().is_empty() {
         return None;
     }
     let server =
@@ -412,15 +420,35 @@ pub fn mcp_retrieved_manifest_for_action_result(result: &ActionResult) -> Option
         })
         .collect::<Vec<_>>();
     tools.sort_by(|left, right| left["name"].as_str().cmp(&right["name"].as_str()));
-    let content = serde_json::to_string(&serde_json::json!({
-        "version": "mez-mcp-retrieved-manifest/v1",
+    let manifest = serde_json::json!({
+        "version": "mez-mcp-retrieved-manifest/v2",
+        "retrieval": {"turn_id": result.turn_id, "action_id": result.action_id},
+        "replay_scope": context.mcp_retrieval_scope(),
         "server_id": server_id,
         "display_name": display_name,
         "purpose": purpose,
         "usage_instructions": usage_instructions,
         "tools": tools,
-    }))
-    .ok()?;
+    });
+    // A duplicate callback must keep its original scope even after acceptance.
+    // Current context is only the creation scope for a genuinely new retrieval.
+    for block in context
+        .blocks()
+        .iter()
+        .filter(|block| block.source == ContextSourceKind::McpRetrievedManifest)
+    {
+        let Ok(original) = serde_json::from_str::<serde_json::Value>(&block.content) else {
+            continue;
+        };
+        if original.get("version") == manifest.get("version")
+            && original.get("retrieval") == manifest.get("retrieval")
+        {
+            let mut repeated = manifest.clone();
+            repeated["replay_scope"] = original.get("replay_scope")?.clone();
+            return (original == repeated).then(|| (server_id.to_string(), block.content.clone()));
+        }
+    }
+    let content = serde_json::to_string(&manifest).ok()?;
     Some((server_id.to_string(), content))
 }
 
@@ -435,7 +463,7 @@ pub fn mcp_retrieved_manifest_tools_for_context(context: &AgentContext) -> Vec<M
         {
             continue;
         }
-        let Some((server_id, tools)) = parse_mcp_retrieved_manifest(&block.content) else {
+        let Some((server_id, tools)) = parse_mcp_retrieved_manifest(&block.content, context) else {
             continue;
         };
         manifests.insert(server_id, tools);
@@ -445,10 +473,25 @@ pub fn mcp_retrieved_manifest_tools_for_context(context: &AgentContext) -> Vec<M
 
 /// Parses one canonical durable retrieval manifest without accepting legacy
 /// generic action results as executable authority.
-fn parse_mcp_retrieved_manifest(content: &str) -> Option<(String, Vec<McpPromptTool>)> {
+fn parse_mcp_retrieved_manifest(
+    content: &str,
+    context: &AgentContext,
+) -> Option<(String, Vec<McpPromptTool>)> {
     let value = serde_json::from_str::<serde_json::Value>(content).ok()?;
-    if value.get("version")?.as_str()? != "mez-mcp-retrieved-manifest/v1" {
-        return None;
+    match value.get("version")?.as_str()? {
+        "mez-mcp-retrieved-manifest/v1" if context.legacy_mcp_retrieval_is_current() => {}
+        "mez-mcp-retrieved-manifest/v2" => {
+            let retrieval = value.get("retrieval")?;
+            for field in ["turn_id", "action_id"] {
+                if retrieval.get(field)?.as_str()?.trim().is_empty() {
+                    return None;
+                }
+            }
+            if !context.mcp_retrieval_scope_matches(value.get("replay_scope")?) {
+                return None;
+            }
+        }
+        _ => return None,
     }
     let server_id = value.get("server_id")?.as_str()?.trim();
     if server_id.is_empty() {

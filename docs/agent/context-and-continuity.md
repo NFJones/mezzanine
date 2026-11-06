@@ -434,6 +434,15 @@ checkpoints retain their receipt framing and derive older-epoch restrictions
 from their checked member births. These restrictions never grant action or
 permission rights; fresh retrieval still needs current registry validation.
 
+New retrieval evidence also keeps its original turn/action identity and replay
+scope in the version-two manifest. An identical fresh retrieval is therefore
+distinct from older revoked evidence, while duplicate results remain identical.
+Later archive settlement cannot change the scope: a pre-acceptance retrieval
+persisted after the head write still cannot grant tools on cold replay. Missing
+or mismatched scope after a rewrite requires fresh retrieval. Original unscoped
+manifests remain evidence and can grant before the first rewrite. This framing
+changes neither configuration nor the enclosing transcript-record version.
+
 The current writer uses sidecar version six to carry original-source escrow
 across publications. If ordinary rows arrive after several summaries, replay
 checks their original turn, occurrence, bytes and native metadata before

@@ -84,6 +84,7 @@ impl ReplayEpochContext {
         candidate.publish_accounting(plan)?;
         candidate.members.drain(..plan.prefix_members);
         candidate.revision = prepared.candidate.revision;
+        candidate.bind_mcp_retrieval_scope();
         candidate.revoke_retrieved_mcp_grants();
         candidate.prune_source_lifecycle();
         candidate.validate_membership()?;
@@ -184,6 +185,7 @@ impl ReplayEpochContext {
         candidate.publish_accounting(&plan)?;
         candidate.members.drain(..plan.prefix_members);
         candidate.revision = revision;
+        candidate.bind_mcp_retrieval_scope();
         candidate.revoke_retrieved_mcp_grants();
         candidate.prune_source_lifecycle();
         candidate.validate_membership()?;

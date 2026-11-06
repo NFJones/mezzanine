@@ -8,7 +8,38 @@
 
 use super::*;
 
+/// Original retrieval epoch, carried in the immutable retrieval evidence so a
+/// delayed ordinary append cannot become a fresh grant after a head replacement.
+/// This is an availability restriction, not a native action permission or ACK.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ReplayMcpRetrievalScope {
+    conversation: String,
+    revision: u64,
+}
+
 impl AgentContext {
+    pub(crate) fn mcp_retrieval_scope(&self) -> Option<&ReplayMcpRetrievalScope> {
+        self.mcp_retrieval_scope.as_ref()
+    }
+
+    /// Unscoped original records can only grant before the first accepted
+    /// rewrite. Missing provenance after that point cannot establish freshness.
+    pub(crate) fn legacy_mcp_retrieval_is_current(&self) -> bool {
+        self.mcp_retrieval_scope
+            .as_ref()
+            .is_none_or(|scope| scope.revision == 0)
+    }
+
+    pub(crate) fn mcp_retrieval_scope_matches(&self, value: &serde_json::Value) -> bool {
+        serde_json::from_value::<Option<ReplayMcpRetrievalScope>>(value.clone())
+            .ok()
+            .is_some_and(|scope| {
+                scope.as_ref() == self.mcp_retrieval_scope.as_ref()
+                    || scope.is_none() && self.legacy_mcp_retrieval_is_current()
+            })
+    }
+
     /// Queries descriptive retrieval availability without interpreting a label
     /// or removing evidence. Actual native action admission remains separate.
     pub(crate) fn mcp_retrieval_is_current(&self, id: ContextBlockOccurrenceId) -> bool {
@@ -31,6 +62,15 @@ impl AgentContext {
 }
 
 impl ReplayEpochContext {
+    /// Binds availability to the actual checked owner. This metadata has no
+    /// independent history body and is reconstructed from the selected epoch.
+    pub(super) fn bind_mcp_retrieval_scope(&mut self) {
+        self.context.mcp_retrieval_scope = Some(ReplayMcpRetrievalScope {
+            conversation: self.conversation.as_str().to_owned(),
+            revision: self.revision.get(),
+        });
+    }
+
     /// Revokes callable tools represented by current retrieval evidence while
     /// preserving its bytes, records, ordering and costs. Fresh retrieval with
     /// its own occurrence can grant again. Source copies/forks may use this
@@ -66,6 +106,14 @@ impl ReplayEpochContext {
     /// Denials may be stricter than birth metadata (for example a source copy),
     /// but cannot name missing/non-retrieval source or omit an older grant.
     pub(super) fn validate_mcp_retrievals(&self) -> AgentContextResult<()> {
+        if self.context.mcp_retrieval_scope.as_ref()
+            != Some(&ReplayMcpRetrievalScope {
+                conversation: self.conversation.as_str().to_owned(),
+                revision: self.revision.get(),
+            })
+        {
+            return Err(AgentContextError::new("replay MCP retrieval scope drifted"));
+        }
         let retained = self
             .context
             .chronology()

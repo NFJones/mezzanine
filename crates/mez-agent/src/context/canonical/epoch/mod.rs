@@ -35,6 +35,7 @@ pub(super) use continuation::ReplayEpochContinuation;
 mod lifecycle;
 mod mcp_grants;
 pub use checkpoint::ReplayEpochCheckpoint;
+pub(crate) use mcp_grants::ReplayMcpRetrievalScope;
 mod native_groups;
 mod planning;
 mod publication;
@@ -138,6 +139,7 @@ impl ReplayEpochContext {
             next_instruction_owner: 1,
             source_lifecycle: ReplaySourceLifecycle::default(),
         };
+        owner.bind_mcp_retrieval_scope();
         owner.initialize_accounting()?;
         owner.validate_membership()?;
         Ok(owner)

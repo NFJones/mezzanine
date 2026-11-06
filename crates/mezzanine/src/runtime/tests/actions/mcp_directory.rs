@@ -63,7 +63,13 @@ fn runtime_mcp_directory_get_excludes_raw_server_errors() {
         value["server"]["recovery"],
         "inspect_operator_diagnostics_then_explicit_retry"
     );
-    assert!(mez_agent::mcp_retrieved_manifest_for_action_result(result).is_none());
+    assert!(
+        mez_agent::mcp_retrieved_manifest_for_action_result(
+            result,
+            &mez_agent::AgentContext::empty()
+        )
+        .is_none()
+    );
     assert_eq!(
         service
             .mcp_registry()
@@ -226,7 +232,13 @@ fn runtime_mcp_directory_get_reports_configured_states_without_search() {
             .is_empty()
         );
         if state != "available" {
-            assert!(mez_agent::mcp_retrieved_manifest_for_action_result(result).is_none());
+            assert!(
+                mez_agent::mcp_retrieved_manifest_for_action_result(
+                    result,
+                    &mez_agent::AgentContext::empty()
+                )
+                .is_none()
+            );
         }
         let mut missing = metadata_execution(&turn, "unknown");
         service

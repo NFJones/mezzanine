@@ -79,13 +79,13 @@ fn context_with_retrieved_mcp_manifest(
         is_error: false,
         error: None,
     };
-    let (server_id, content) = mcp_retrieved_manifest_for_action_result(&result).unwrap();
     let group = crate::ContextExecutionGroupId::new("mcp-retrieval-1").unwrap();
     let mut context = AgentContext::new(vec![ContextBlock::user_event(
         "user prompt",
         "retrieve an MCP server",
     )])
     .unwrap();
+    let (server_id, content) = mcp_retrieved_manifest_for_action_result(&result, &context).unwrap();
     context
         .append_assistant_event(
             "assistant retrieval",

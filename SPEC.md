@@ -10887,6 +10887,18 @@ Original version-one checkpoints MUST retain their original serialized framing
 and derive minimum denials from checked member birth revisions. A new source
 extending a committed parent MUST NOT remove the parent's retained denials.
 
+New MCP retrieval manifests use version two with their original turn/action
+identity and the actual conversation/replay revision at creation. Repeating the
+same result MUST preserve its bytes; fresh retrieval MUST remain distinct even
+when schemas are unchanged. A delayed ordinary append MUST retain that original
+framing rather than acquire the epoch at persistence or replay time. The tool
+selector MUST compare it to the actual selected replay owner. Foreign, future,
+malformed or missing scope MUST NOT establish fresh availability after a rewrite.
+Original unscoped manifests remain readable evidence and MAY grant only before
+the first accepted replay rewrite. Scope is restrictive provenance, not action,
+permission or transcript-durability authority. These payload versions do not
+change the configuration schema or the versioned transcript envelope.
+
 Moving a live replay owner's body into runtime `AgentContext` storage MUST retain
 its actual incarnation, task handles and private lifecycle witnesses as
 nonserialized metadata. This continuation MUST own no second history body and

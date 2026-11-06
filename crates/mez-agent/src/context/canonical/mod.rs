@@ -1292,6 +1292,9 @@ pub struct AgentContext {
     /// Typed checkpoints preserve this set; source bytes and records do not
     /// change, and an old occurrence cannot regain its grant through replay.
     retired_mcp_retrievals: BTreeSet<ContextBlockOccurrenceId>,
+    /// Descriptive current epoch for retrieval framing, rebound from the checked
+    /// canonical owner rather than restored from an unqualified grant payload.
+    mcp_retrieval_scope: Option<epoch::ReplayMcpRetrievalScope>,
     /// Actual live replay incarnation and source seals, never serialized/projected.
     replay_continuation: Option<Box<epoch::ReplayEpochContinuation>>,
 }
@@ -1314,6 +1317,7 @@ impl AgentContext {
             pending_peer_messages: BTreeSet::new(),
             historical_instruction_events: BTreeSet::new(),
             retired_mcp_retrievals: BTreeSet::new(),
+            mcp_retrieval_scope: None,
             replay_continuation: None,
         }
     }

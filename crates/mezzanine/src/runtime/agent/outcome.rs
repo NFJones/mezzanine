@@ -704,7 +704,7 @@ impl RuntimeSessionService {
             }
             if let (Some(group), Some((server_id, content))) = (
                 execution_group.as_ref(),
-                mez_agent::mcp_retrieved_manifest_for_action_result(result),
+                mez_agent::mcp_retrieved_manifest_for_action_result(result, &context),
             ) {
                 let label = format!(
                     "{}{}",

@@ -39,14 +39,15 @@ pub(super) fn grant_fixture_mcp_tool_for_turn(service: &mut RuntimeSessionServic
         is_error: false,
         error: None,
     };
-    let (server_id, content) = mez_agent::mcp_retrieved_manifest_for_action_result(&result)
-        .expect("fixture retrieval result should produce durable MCP authority");
     let group = mez_agent::ContextExecutionGroupId::new(format!("fixture-retrieval-{turn_id}"))
         .expect("fixture retrieval group should be valid");
     let context = service
         .agent_turn_contexts_mut()
         .get_mut(turn_id)
         .expect("fixture turn context should be available");
+    let (server_id, content) =
+        mez_agent::mcp_retrieved_manifest_for_action_result(&result, context)
+            .expect("fixture retrieval result should produce durable MCP authority");
     context
         .append_assistant_event(
             "fixture MCP retrieval",

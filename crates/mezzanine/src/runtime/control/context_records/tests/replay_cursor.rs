@@ -50,6 +50,14 @@ fn plan(owner: &ReplayEpochContext) -> mez_agent::ReplayCompactionPlan {
 }
 
 fn source_row(event: &mez_agent::ConversationEvent, sequence: u64) -> TranscriptEntry {
+    source_row_with_ordinal(event, sequence, 1)
+}
+
+fn source_row_with_ordinal(
+    event: &mez_agent::ConversationEvent,
+    sequence: u64,
+    ordinal: u64,
+) -> TranscriptEntry {
     let block = event.block();
     TranscriptEntry {
         conversation_id: CID.into(),
@@ -65,7 +73,7 @@ fn source_row(event: &mez_agent::ConversationEvent, sequence: u64) -> Transcript
                 &block.label,
                 &block.content,
                 event.execution_group_id().unwrap().clone(),
-                1,
+                ordinal,
                 None,
             )
             .unwrap(),
@@ -76,6 +84,35 @@ fn source_row(event: &mez_agent::ConversationEvent, sequence: u64) -> Transcript
         .to_transcript_content()
         .unwrap(),
     }
+}
+
+/// Uses the real safe result-to-manifest owner, including immutable retrieval
+/// identity and original epoch framing. No transport or native tool is invoked.
+fn retrieved_manifest(context: &AgentContext, action_id: &str) -> String {
+    let result = mez_agent::ActionResult {
+        protocol: "maap/1".into(),
+        turn_id: "original-turn".into(),
+        agent_id: "original-agent".into(),
+        action_id: action_id.into(),
+        action_type: "mcp_server_get",
+        status: mez_agent::ActionStatus::Succeeded,
+        content: Vec::new(),
+        structured_content_json: Some(
+            serde_json::json!({"server": {
+                "server_id":"synthetic", "state":"available", "display_name":"Synthetic",
+                "purpose":"Synthetic coverage", "usage_instructions":"Use echo",
+                "tools":[{"name":"echo", "state":"available", "description":"synthetic echo",
+                    "input_schema":{"type":"object", "properties":{"value":{"type":"string"}}}}]
+            }})
+            .to_string(),
+        ),
+        permission_evaluation: None,
+        is_error: false,
+        error: None,
+    };
+    mez_agent::mcp_retrieved_manifest_for_action_result(&result, context)
+        .unwrap()
+        .1
 }
 
 impl Fixture {
@@ -247,16 +284,11 @@ fn replay_epoch_cold_history_revokes_retained_mcp_grants() {
     append_closed(&mut fixture.owner, "mcp-covered-source");
     let frozen = plan(&fixture.owner);
     let mut body = fixture.owner.clone().into_owned_context();
+    let content = retrieved_manifest(&body, "captured-get");
     body.append_reference_event(
         ContextSourceKind::McpRetrievedManifest,
         "retrieved MCP manifest synthetic",
-        serde_json::json!({
-            "version": "mez-mcp-retrieved-manifest/v1",
-            "server_id": "synthetic",
-            "tools": [{"name":"echo", "description":"synthetic echo",
-                "input_schema":{"type":"object", "properties":{"value":{"type":"string"}}}}]
-        })
-        .to_string(),
+        content,
     )
     .unwrap();
     let original = body.chronology().last().unwrap().clone();
@@ -273,6 +305,110 @@ fn replay_epoch_cold_history_revokes_retained_mcp_grants() {
     assert_eq!(restored.chronology().last(), Some(&original));
     assert!(mez_agent::invoked_mcp_tools_for_context(&restored, &summary).is_empty());
     assert!(mez_agent::invoked_mcp_tools_for_context(fixture.owner.context(), &summary).is_empty());
+}
+
+/// Source created after preparation can physically append after publication.
+/// Cold replay assigns current membership, but must retain its original grant
+/// epoch and exact records. Neither row order nor cold import grants freshness.
+#[test]
+fn replay_epoch_late_mcp_append_keeps_original_grant_scope_after_cold_reopen() {
+    let mut fixture = Fixture::new();
+    append_closed(&mut fixture.owner, "late-mcp-source");
+    let (parent, _) = fixture
+        .store
+        .load_replay_epoch(CID, AgentContext::empty())
+        .unwrap()
+        .unwrap();
+    let proposal = fixture
+        .store
+        .prepare_replay_epoch(
+            origin().capture(None),
+            CID,
+            Some(parent),
+            &fixture.owner,
+            plan(&fixture.owner),
+            ReplayHeadPublication::Summary("late source head".into()),
+        )
+        .unwrap();
+    let mut body = fixture.owner.clone().into_owned_context();
+    let content = retrieved_manifest(&body, "during-write-get");
+    let group = ContextExecutionGroupId::new("late-mcp-group").unwrap();
+    body.append_assistant_event("retrieve", "retrieve safe metadata", group.clone())
+        .unwrap();
+    body.append_evidence_event(
+        ContextSourceKind::McpRetrievedManifest,
+        "retrieved MCP manifest synthetic",
+        content,
+        group,
+        None,
+        true,
+    )
+    .unwrap();
+    let late = body.chronology()[body.chronology().len() - 2..].to_vec();
+    let summary = mez_agent::McpPromptSummary {
+        available_servers: Vec::new(),
+        available_tools: Vec::new(),
+        unavailable_servers: Vec::new(),
+    };
+    assert_eq!(
+        mez_agent::invoked_mcp_tools_for_context(&body, &summary).len(),
+        1
+    );
+    let ack = fixture.store.publish_replay_epoch(&proposal).unwrap();
+    ack.adopt(&fixture.store, &proposal, &mut body).unwrap();
+    assert!(mez_agent::invoked_mcp_tools_for_context(&body, &summary).is_empty());
+    fixture.owner =
+        ReplayEpochContext::from_owned_context(ReplayConversationId::new(CID).unwrap(), body)
+            .unwrap();
+    let batch = TranscriptAppendBatch::owned_rows(
+        late.iter()
+            .enumerate()
+            .map(|(index, event)| {
+                source_row_with_ordinal(event, 289 + index as u64, index as u64 + 1)
+            })
+            .collect(),
+    )
+    .unwrap();
+    fixture
+        .store
+        .commit_accounted_transcript_batch(&batch, 289)
+        .unwrap();
+    let mut work = fixture.work();
+    work.store = AgentTranscriptStore::new(fixture.store.root());
+    let history = execute_runtime_agent_history_epoch_work(work).unwrap();
+    let restored = history.records.import_context(history.blocks).unwrap();
+    let replay =
+        ReplayEpochContext::from_owned_context(ReplayConversationId::new(CID).unwrap(), restored)
+            .unwrap();
+    for (actual, original) in replay
+        .context()
+        .chronology()
+        .iter()
+        .rev()
+        .take(2)
+        .zip(late.iter().rev())
+    {
+        assert_eq!(actual.block(), original.block());
+        assert_eq!(actual.record(), original.record());
+    }
+    assert_eq!(
+        replay.members().last().unwrap().born_in(),
+        replay.revision()
+    );
+    assert!(mez_agent::invoked_mcp_tools_for_context(replay.context(), &summary).is_empty());
+    let mut fresh = replay.into_owned_context();
+    let content = retrieved_manifest(&fresh, "fresh-get");
+    fresh
+        .append_reference_event(
+            ContextSourceKind::McpRetrievedManifest,
+            "fresh metadata",
+            content,
+        )
+        .unwrap();
+    assert_eq!(
+        mez_agent::invoked_mcp_tools_for_context(&fresh, &summary).len(),
+        1
+    );
 }
 
 /// Already complete original accounting needs no replay repair. History leaves

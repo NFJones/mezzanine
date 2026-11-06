@@ -686,6 +686,9 @@ fn resource_and_owner_failures_are_atomic_without_authority_downgrade() {
         .unwrap();
     owner.revision = ReplayEpochRevision(u64::MAX);
     owner.head.as_mut().unwrap().revision = owner.revision;
+    // This synthetic counter-limit owner must retain a coherent scope before
+    // exercising checked overflow, rather than fail the earlier drift check.
+    owner.bind_mcp_retrieval_scope();
     owner.append_fact("new", "current source").unwrap();
     let frozen = plan(&owner);
     let before = owner.clone();
