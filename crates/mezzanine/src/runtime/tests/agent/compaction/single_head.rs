@@ -184,12 +184,44 @@ fn runtime_admitted_epoch_keeps_live_witness_for_durable_publication() {
         .unwrap()
     };
     assert!(fixture.store.publish_replay_epoch(&prepare(&cold)).is_err());
-    fixture.store.publish_replay_epoch(&prepare(&live)).unwrap();
+    let proposal = prepare(&live);
+    let mut body = live.into_owned_context();
+    let original_native_source = body
+        .replay_execution_append_owner(&fixture.group)
+        .unwrap()
+        .clone();
+    let current_prefix = body.stable_slots().to_vec();
+    let current_metadata = body.metadata().clone();
+    // This arrival is not in the prepared checkpoint. A real worker publishes
+    // that checkpoint, and its ACK must adopt the exact head into this body.
+    body.append_runtime_fact_event("during write", "actual runtime arrival")
+        .unwrap();
+    let arrival = body.chronology().last().unwrap().clone();
+    let ack = std::thread::scope(|scope| {
+        scope
+            .spawn(|| fixture.store.publish_replay_epoch(&proposal))
+            .join()
+            .unwrap()
+            .unwrap()
+    });
+    ack.adopt(&fixture.store, &proposal, &mut body).unwrap();
+    assert_eq!(body.stable_slots(), current_prefix);
+    assert_eq!(body.metadata(), &current_metadata);
+    assert_eq!(body.chronology().last(), Some(&arrival));
+    assert_eq!(
+        body.replay_execution_append_owner(&fixture.group),
+        Some(&original_native_source)
+    );
+    assert!(body.execution_group_is_pending(&fixture.group));
+    let before = body.clone();
+    ack.adopt(&fixture.store, &proposal, &mut body).unwrap();
+    assert_eq!(body, before);
     let (_, restored) = fixture
         .store
         .load_replay_epoch(CONVERSATION, AgentContext::empty())
         .unwrap()
         .unwrap();
+    assert_eq!(restored.context().chronology()[0], body.chronology()[0]);
     assert_eq!(
         restored.context().chronology()[0].block().content,
         "model head 4"

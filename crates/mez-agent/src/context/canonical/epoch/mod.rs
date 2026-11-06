@@ -37,6 +37,7 @@ pub use checkpoint::ReplayEpochCheckpoint;
 mod native_groups;
 mod planning;
 mod publication;
+pub use publication::ReplayPreparedCompaction;
 mod source;
 use source::{ReplayExecutionClosure, ReplaySourceLifecycle};
 #[cfg(test)]

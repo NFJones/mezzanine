@@ -116,7 +116,12 @@ fn first_live_epoch_is_durable_without_ordinary_append() {
         prefix(),
     )
     .unwrap();
-    let identity = fixture.store.publish_replay_epoch(&prepared).unwrap();
+    let identity = fixture
+        .store
+        .publish_replay_epoch(&prepared)
+        .unwrap()
+        .identity()
+        .clone();
     assert_eq!(owner, unchanged);
     assert_eq!(identity, prepared.identity());
     let directory = fixture.root.join("conversation-a");
@@ -166,6 +171,104 @@ fn first_live_epoch_is_durable_without_ordinary_append() {
             .is_err()
     );
     assert_eq!(fixture.load().0, identity);
+}
+
+/// A storage worker may commit before its reply is observed. Retrying the same
+/// retained proposal obtains a real ACK for that head, adopts it without cold
+/// reconstruction, and carries an intervening arrival into a second real
+/// publication. Wrong store/proposal/body cannot consume that receipt.
+#[test]
+fn acknowledged_head_adopts_live_arrivals_and_settles_lost_reply() {
+    let fixture = Fixture::new();
+    let owner = source();
+    let prepared = proposal(&owner, None, "exact first head");
+    let mut body = owner.into_owned_context();
+    std::thread::scope(|scope| {
+        scope
+            .spawn(|| {
+                let _lease = fixture
+                    .store
+                    .acquire_conversation_lock("conversation-a")
+                    .unwrap();
+                fixture
+                    .store
+                    .publish_replay_epoch_locked(&prepared, |phase| {
+                        if phase == Phase::BeforeAcknowledgment {
+                            Err(invalid("injected lost reply after commit"))
+                        } else {
+                            Ok(())
+                        }
+                    })
+            })
+            .join()
+            .unwrap()
+            .unwrap_err();
+    });
+    body.append_runtime_fact_event("arrival", "received while worker was running")
+        .unwrap();
+    let arrival = body.chronology()[1].clone();
+    let ack = std::thread::scope(|scope| {
+        scope
+            .spawn(|| fixture.store.publish_replay_epoch(&prepared))
+            .join()
+            .unwrap()
+            .unwrap()
+    });
+    assert_eq!(ack.identity(), &prepared.identity());
+    let other = Fixture::new();
+    let before = body.clone();
+    assert!(ack.adopt(&other.store, &prepared, &mut body).is_err());
+    assert_eq!(body, before);
+    let competing = proposal(
+        prepared.prepared.source(),
+        None,
+        "same epoch different proposal",
+    );
+    assert!(ack.adopt(&fixture.store, &competing, &mut body).is_err());
+    assert_eq!(body, before);
+    let mut plain = prefix();
+    let plain_before = plain.clone();
+    assert!(ack.adopt(&fixture.store, &prepared, &mut plain).is_err());
+    assert_eq!(plain, plain_before);
+    let mut cold = ReplayEpochContext::from_checkpoint(
+        ReplayConversationId::new("conversation-a").unwrap(),
+        prepared.prepared.source().checkpoint().unwrap(),
+        prefix(),
+    )
+    .unwrap()
+    .into_owned_context();
+    let cold_before = cold.clone();
+    assert!(ack.adopt(&fixture.store, &prepared, &mut cold).is_err());
+    assert_eq!(cold, cold_before);
+    ack.adopt(&fixture.store, &prepared, &mut body).unwrap();
+    assert_eq!(
+        body.chronology()[0],
+        prepared.prepared.candidate().context().chronology()[0]
+    );
+    assert_eq!(body.chronology()[1], arrival);
+    let before = body.clone();
+    ack.adopt(&fixture.store, &prepared, &mut body).unwrap();
+    assert_eq!(body, before);
+    let live = ReplayEpochContext::from_owned_context(
+        ReplayConversationId::new("conversation-a").unwrap(),
+        body,
+    )
+    .unwrap();
+    assert_eq!(live.members()[0].born_in().get(), 0);
+    let second = proposal(&live, Some(ack.identity().clone()), "exact second head");
+    let mut body = live.into_owned_context();
+    let second_ack = fixture.store.publish_replay_epoch(&second).unwrap();
+    second_ack
+        .adopt(&fixture.store, &second, &mut body)
+        .unwrap();
+    let before = body.clone();
+    assert!(ack.adopt(&fixture.store, &prepared, &mut body).is_err());
+    assert_eq!(body, before);
+    let (identity, loaded) = fixture.load();
+    assert_eq!(&identity, second_ack.identity());
+    assert_eq!(loaded.context().chronology(), body.chronology());
+    assert!(loaded.members().is_empty());
+    assert!(fixture.store.inspect("conversation-a").unwrap().is_empty());
 }
 
 /// Every named I/O boundary preserves complete old or new authority. Retrying
@@ -238,8 +341,12 @@ fn every_publication_fault_preserves_old_or_new_and_exact_retry() {
                 assert_eq!(observed, Some(prepared.identity()), "fault={fault:?}");
             }
             assert_eq!(
-                fixture.store.publish_replay_epoch(&prepared).unwrap(),
-                prepared.identity()
+                fixture
+                    .store
+                    .publish_replay_epoch(&prepared)
+                    .unwrap()
+                    .identity(),
+                &prepared.identity()
             );
             assert_eq!(fixture.load().0, prepared.identity());
             assert_eq!(fixture.load().1.context().chronology().len(), 2);
@@ -350,8 +457,12 @@ fn competing_and_late_publications_are_fenced_by_exact_parent() {
         &competing
     };
     assert_eq!(
-        fixture.store.publish_replay_epoch(winner).unwrap(),
-        winner.identity()
+        fixture
+            .store
+            .publish_replay_epoch(winner)
+            .unwrap()
+            .identity(),
+        &winner.identity()
     );
     let (identity, mut owner) = fixture.load();
     owner.append_fact("next", "new source").unwrap();
@@ -394,8 +505,12 @@ fn damaged_required_source_is_explicit_and_exact_missing_payload_can_recover() {
             .is_err()
     );
     assert_eq!(
-        fixture.store.publish_replay_epoch(&prepared).unwrap(),
-        prepared.identity()
+        fixture
+            .store
+            .publish_replay_epoch(&prepared)
+            .unwrap()
+            .identity(),
+        &prepared.identity()
     );
     assert_eq!(fs::read(path).unwrap(), original);
     let manifest_path = directory.join(MANIFEST_NAME);
@@ -598,8 +713,12 @@ fn immutable_source_receipt_is_required_and_exact_retry_settles_it() {
             .is_err()
     );
     assert_eq!(
-        fixture.store.publish_replay_epoch(&prepared).unwrap(),
-        prepared.identity()
+        fixture
+            .store
+            .publish_replay_epoch(&prepared)
+            .unwrap()
+            .identity(),
+        &prepared.identity()
     );
     assert_eq!(fs::read(&path).unwrap(), bytes);
     let mut corrupt = bytes.clone();

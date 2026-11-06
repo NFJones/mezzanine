@@ -10927,14 +10927,31 @@ effects. Required source corruption MUST be explicit. Publication MUST qualify
 the actual committed parent's head and complete raw prefix under
 the held mutation lease before writing new backing. A matching revision or head
 UUID alone MUST NOT admit substituted bytes, dropped/reordered occurrences or
-changed birth revisions. Genuine arrivals MUST respect prior reservations and
-current birth revision, except privately witnessed current task preludes inserted
-after the complete unchanged parent prefix. Each sub-reservation arrival MUST
+changed birth revisions. Genuine arrivals MUST retain the current birth revision
+unless a private prepared-adoption witness qualifies their original earlier
+birth. They MUST respect prior reservations, except privately witnessed current
+task preludes inserted after the complete unchanged parent prefix. Each sub-reservation arrival MUST
 carry that actual insertion witness; one witnessed prelude MUST NOT admit other
 unqualified arrivals. New instruction retirement, peer handoff or pending-group
 closure MUST require controller-minted in-memory witnesses tied to actual source;
 deserialized descriptive metadata MUST NOT mint those transitions. Such witnesses
 MUST remain outside checkpoints/receipts and be pruned with covered membership.
+Live adoption MUST use the exact prepared head record, not allocate a new head
+or cold-load a replacement owner after acknowledgment. The successful storage
+boundary MUST return a nonserializable receipt tied to the exact proposal and
+original archive after all durability barriers. Wrong archive, proposal, live
+incarnation, changed source, renewed selected protection or superseded parent
+MUST refuse adoption without changing the live body. Exact duplicate adoption
+MUST preserve current work. Current stable slots, request metadata, task/native
+handles, protection allocations and qualified lifecycle transitions MUST survive.
+Arrivals admitted during persistence MUST retain their actual IDs, bytes, costs
+and birth revisions. Adoption MAY mint private source witnesses for those exact
+carried arrivals so a later publication can qualify them against the persisted
+head; deserializing their descriptive state MUST NOT mint those witnesses.
+Such witnesses MUST be bounded by retained membership and pruned when covered.
+These receipts do not yet connect the actor publication lifecycle or qualify
+ordinary archive arrivals, fork, migration or source-custody settlement.
+
 Independent source backing
 MUST NOT imply ordinary transcript append acknowledgment. Storage qualification
 MUST preserve covered live source and settled effect evidence in an immutable

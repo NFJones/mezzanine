@@ -411,6 +411,17 @@ occurrence encoding and handoff representation remain at their existing version.
 These guarantees do not assert that every old session is
 compactable, or that a larger follow-up prompt cannot legitimately need recovery.
 
+The version-four publisher now returns a private acknowledgment for its exact
+prepared summary and original archive. Its live adoption boundary installs that
+same summary occurrence while retaining current instructions, request metadata,
+pending native ownership and source received during the write. A duplicate reply
+preserves subsequent work; a wrong archive, replacement owner, changed protected
+selection or newer head refuses the stale adoption. Arrivals keep their original
+birth revisions, with live-only witnesses for subsequent publication. A cold
+checkpoint cannot recreate those witnesses. This is an implementation boundary;
+the actor publication lifecycle, ordinary archive arrivals, custody settlement,
+fork and migration support remain incomplete for this format.
+
 The context percentage is the latest positive ordinary execution sample divided
 by the model's context-window budget, not the size of a newly rebuilt request or
 its `max_input_tokens` limit. Below 100% therefore does not establish that the

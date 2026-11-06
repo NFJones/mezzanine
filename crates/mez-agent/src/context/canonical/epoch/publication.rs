@@ -3,7 +3,93 @@
 
 use super::*;
 
+/// Immutable output of one actual source selection and summary acceptance.
+/// Clones retain the original live incarnation, exact head record and source;
+/// this value grants no storage acknowledgment or execution authority.
+#[derive(Clone, Debug)]
+pub struct ReplayPreparedCompaction {
+    source: ReplayEpochContext,
+    candidate: ReplayEpochContext,
+    plan: ReplayCompactionPlan,
+}
+
+impl ReplayPreparedCompaction {
+    /// Borrows the original live source, including private lifecycle witnesses.
+    pub fn source(&self) -> &ReplayEpochContext {
+        &self.source
+    }
+
+    /// Borrows the exact frozen output to persist, without granting mutation.
+    pub fn candidate(&self) -> &ReplayEpochContext {
+        &self.candidate
+    }
+}
+
 impl ReplayEpochContext {
+    /// Accepts summary output once without changing the live source. The
+    /// returned proposal freezes the allocated head and can cross a storage
+    /// worker boundary. It is not evidence that any bytes are durable.
+    pub fn prepare_compaction_publication(
+        &self,
+        plan: ReplayCompactionPlan,
+        publication: ReplayHeadPublication,
+    ) -> AgentContextResult<ReplayPreparedCompaction> {
+        let mut candidate = self.clone();
+        candidate.publish_compaction(plan.clone(), publication)?;
+        Ok(ReplayPreparedCompaction {
+            source: self.clone(),
+            candidate,
+            plan,
+        })
+    }
+
+    /// Adopts the exact prepared head into its original live owner, preserving
+    /// current policy slots, request metadata, lifecycle handles and arrivals.
+    /// The product must separately qualify storage acknowledgment. A foreign
+    /// incarnation, changed parent/source or newly protected selection rejects
+    /// atomically. Repeating the same adoption validates the current extension
+    /// and preserves subsequent work rather than replacing it with old bytes.
+    pub fn adopt_compaction_publication(
+        &mut self,
+        prepared: &ReplayPreparedCompaction,
+    ) -> AgentContextResult<ReplayEpochRevision> {
+        if self.owner_identity != prepared.source.owner_identity {
+            return Err(AgentContextError::new(
+                "prepared replay publication belongs to a different live owner",
+            ));
+        }
+        if self.revision == prepared.candidate.revision && self.head == prepared.candidate.head {
+            self.validate_source_extension(&prepared.candidate)?;
+            return Ok(self.revision);
+        }
+        self.validate_source_extension(&prepared.source)?;
+        let plan = &prepared.plan;
+        self.validate_publication_selection(plan)?;
+        let mut candidate = self.clone();
+        let head_events = usize::from(prepared.candidate.head.is_some());
+        for member in &self.members[prepared.source.members.len()..] {
+            candidate
+                .source_lifecycle
+                .carried_arrivals
+                .insert(member.occurrence_id, member.clone());
+        }
+        candidate.context.chronology.splice(
+            ..plan.prefix_events,
+            prepared.candidate.context.chronology()[..head_events]
+                .iter()
+                .cloned(),
+        );
+        candidate.context.rebuild_projections();
+        candidate.head = prepared.candidate.head.clone();
+        candidate.publish_accounting(plan)?;
+        candidate.members.drain(..plan.prefix_members);
+        candidate.revision = prepared.candidate.revision;
+        candidate.prune_source_lifecycle();
+        candidate.validate_membership()?;
+        *self = candidate;
+        Ok(self.revision)
+    }
+
     /// Adopts a completed publication against its exact frozen parent/source.
     /// Append-only arrivals survive with their original IDs and birth revisions.
     /// Stale parents, newly protected source, crossing execution groups, policy
@@ -30,27 +116,7 @@ impl ReplayEpochContext {
                 "replay publication has a stale parent or frozen source",
             ));
         }
-        let offset = usize::from(self.head.is_some());
-        let selected = &self.context.chronology()[offset..plan.prefix_events];
-        let group_crosses_frontier = {
-            let retained = self.context.chronology()[plan.prefix_events..]
-                .iter()
-                .filter_map(ConversationEvent::execution_group_id)
-                .collect::<BTreeSet<_>>();
-            selected
-                .iter()
-                .filter_map(ConversationEvent::execution_group_id)
-                .any(|group| retained.contains(group))
-        };
-        if selected
-            .iter()
-            .any(|event| !self.event_is_replaceable(event))
-            || group_crosses_frontier
-        {
-            return Err(AgentContextError::new(
-                "replay publication source became protected or its execution group changed",
-            ));
-        }
+        self.validate_publication_selection(&plan)?;
         let summary = match (self.policy, publication) {
             (ReplayHeadPolicy::Summary, ReplayHeadPublication::Summary(text)) => {
                 crate::context_compaction::validate_model_compaction_summary(
@@ -121,5 +187,30 @@ impl ReplayEpochContext {
         candidate.validate_membership()?;
         *self = candidate;
         Ok(revision)
+    }
+
+    /// Rechecks the selected prefix against protection and group membership
+    /// at acceptance/adoption. The source check must establish prefix bounds.
+    fn validate_publication_selection(
+        &self,
+        plan: &ReplayCompactionPlan,
+    ) -> AgentContextResult<()> {
+        let offset = usize::from(self.head.is_some());
+        let selected = &self.context.chronology()[offset..plan.prefix_events];
+        let retained_groups = self.context.chronology()[plan.prefix_events..]
+            .iter()
+            .filter_map(ConversationEvent::execution_group_id)
+            .collect::<BTreeSet<_>>();
+        if selected.iter().any(|event| {
+            !self.event_is_replaceable(event)
+                || event
+                    .execution_group_id()
+                    .is_some_and(|group| retained_groups.contains(group))
+        }) {
+            return Err(AgentContextError::new(
+                "replay publication source became protected or its execution group changed",
+            ));
+        }
+        Ok(())
     }
 }

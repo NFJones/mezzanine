@@ -18,6 +18,9 @@ pub(super) struct ReplaySourceLifecycle {
     pub(super) closed_groups: BTreeMap<ContextExecutionGroupId, ReplayExecutionClosure>,
     /// Actual prompt-boundary insertions, qualified before owner reacquisition.
     pub(super) inserted_preludes: BTreeSet<ContextBlockOccurrenceId>,
+    /// Actual arrivals carried across preparation/adoption, retaining their
+    /// earlier birth revision. Cold descriptive state cannot mint this proof.
+    pub(super) carried_arrivals: BTreeMap<ContextBlockOccurrenceId, ReplayEpochMember>,
 }
 
 /// Exact completed protection interval, never rebuilt from descriptive bytes.
@@ -33,7 +36,8 @@ impl ReplayEpochContext {
     /// caller inputs. The head, existing raw bytes/framing/records/order/births,
     /// conversation and epoch must match. New events must start at the parent's
     /// reserved frontier, except actual controller-witnessed late task preludes,
-    /// and be born in this epoch; reservations never rewind.
+    /// and be born in this epoch unless actual prepared-head adoption retained
+    /// their earlier birth with a private arrival witness; reservations never rewind.
     ///
     /// Existing exact instructions may become historical only through this
     /// owner's typed task completion. Peer protection may end only through its
@@ -61,9 +65,14 @@ impl ReplayEpochContext {
         let old_events = previous.context.chronology();
         let events = self.context.chronology();
         if events.len() < old_events.len()
-            || self.members[previous.members.len()..]
-                .iter()
-                .any(|member| member.born_in != self.revision)
+            || self.members[previous.members.len()..].iter().any(|member| {
+                member.born_in != self.revision
+                    && self
+                        .source_lifecycle
+                        .carried_arrivals
+                        .get(&member.occurrence_id)
+                        != Some(member)
+            })
             || events.iter().skip(old_events.len()).any(|arrival| {
                 arrival.sequence().get() < previous.context.next_event_sequence
                     && !(arrival.semantic_kind() == super::super::ContextSemanticKind::TaskPrelude
@@ -140,6 +149,9 @@ impl ReplayEpochContext {
         self.source_lifecycle
             .inserted_preludes
             .retain(|id| members.contains(id));
+        self.source_lifecycle
+            .carried_arrivals
+            .retain(|id, _| members.contains(id));
         let frontiers = group_frontiers(self.context.chronology());
         let pending = &self.context.pending_execution_groups;
         self.source_lifecycle.closed_groups.retain(|group, closed| {

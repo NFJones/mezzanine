@@ -18,7 +18,7 @@ use super::AgentTranscriptStore;
 use crate::{MezError, Result};
 use mez_agent::{
     AgentContext, ContextBlockOccurrenceId, ReplayCompactionPlan, ReplayConversationId,
-    ReplayEpochCheckpoint, ReplayEpochContext, ReplayHeadPublication,
+    ReplayEpochCheckpoint, ReplayEpochContext, ReplayHeadPublication, ReplayPreparedCompaction,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -107,7 +107,47 @@ pub(crate) struct ReplayEpochPublication {
     payloads: BTreeMap<String, String>,
     /// Actual controller owner retains nonserializable lifecycle witnesses.
     /// Its checkpoint must exactly match the immutable recorded source.
-    source_owner: ReplayEpochContext,
+    prepared: ReplayPreparedCompaction,
+}
+
+/// Nonserializable acknowledgment minted after the original store's complete
+/// durability barrier. It names one exact proposal and archive; descriptive
+/// loaded identities cannot stand in for this live adoption receipt.
+#[derive(Debug, Clone)]
+pub(crate) struct ReplayEpochCommit {
+    identity: ReplayEpochIdentity,
+    root: std::path::PathBuf,
+}
+
+impl ReplayEpochCommit {
+    /// Borrows the exact committed publication identity for owner bookkeeping.
+    pub(crate) fn identity(&self) -> &ReplayEpochIdentity {
+        &self.identity
+    }
+
+    /// Adopts only this acknowledged proposal into its original live body.
+    /// The caller supplies its frozen source store, never a newly looked-up
+    /// installation. Wrong archives/proposals/incarnations reject atomically.
+    /// Duplicate acknowledgments preserve current instructions and arrivals;
+    /// they neither reload a cold owner nor acknowledge ordinary append work.
+    pub(crate) fn adopt(
+        &self,
+        original_store: &AgentTranscriptStore,
+        proposal: &ReplayEpochPublication,
+        context: &mut AgentContext,
+    ) -> Result<()> {
+        if self.root != original_store.root || self.identity != proposal.identity() {
+            return Err(MezError::conflict(
+                "replay acknowledgment does not match original store and proposal",
+            ));
+        }
+        context
+            .update_replay_owner(|owner| {
+                owner.adopt_compaction_publication(&proposal.prepared)?;
+                Ok(())
+            })
+            .map_err(context_error)
+    }
 }
 
 /// Fault boundaries mirror actual ordered storage transitions, not dispatch.
@@ -151,10 +191,10 @@ impl ReplayEpochPublication {
             .map(|event| event.record().occurrence_id())
             .collect();
         let frontier = plan.arrival_frontier().map(|sequence| sequence.get());
-        let mut candidate = source.clone();
-        candidate
-            .publish_compaction(plan, summary)
+        let prepared = source
+            .prepare_compaction_publication(plan, summary)
             .map_err(context_error)?;
+        let candidate = prepared.candidate();
         let head = candidate
             .head()
             .ok_or_else(|| invalid("publication has no summary head"))?
@@ -196,7 +236,7 @@ impl ReplayEpochPublication {
         Ok(Self {
             envelope,
             payloads,
-            source_owner: source.clone(),
+            prepared,
         })
     }
 
@@ -362,9 +402,13 @@ impl AgentTranscriptStore {
     pub(crate) fn publish_replay_epoch(
         &self,
         proposal: &ReplayEpochPublication,
-    ) -> Result<ReplayEpochIdentity> {
+    ) -> Result<ReplayEpochCommit> {
         let _lease = self.acquire_conversation_lock(&proposal.envelope.manifest.conversation_id)?;
-        self.publish_replay_epoch_locked(proposal, |_| Ok(()))
+        let identity = self.publish_replay_epoch_locked(proposal, |_| Ok(()))?;
+        Ok(ReplayEpochCommit {
+            identity,
+            root: self.root.clone(),
+        })
     }
 
     /// Loads only current referenced source, checking required-state, integrity
@@ -416,7 +460,8 @@ impl AgentTranscriptStore {
             AgentContext::empty(),
         )?;
         let recorded_source = proposal
-            .source_owner
+            .prepared
+            .source()
             .checkpoint()
             .map_err(context_error)?
             .try_map_payloads(|_, content| Ok::<_, MezError>(Payload::new(content.as_bytes())))?;
@@ -432,7 +477,8 @@ impl AgentTranscriptStore {
                 payload::read(&directory, &reference)
             })?;
             proposal
-                .source_owner
+                .prepared
+                .source()
                 .validate_source_extension(&parent)
                 .map_err(context_error)?;
         }
