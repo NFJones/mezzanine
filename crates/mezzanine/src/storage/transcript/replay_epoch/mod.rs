@@ -13,7 +13,9 @@
 //! their turn provenance. Late exact copies are qualified for deduplication,
 //! never expanded into model history. The v4 prototype remains readable only at
 //! its frozen empty-archive boundary and requires an explicit escrow transition.
-//! Actual actor lifecycle, new arrival custody, cursor/settlement, legacy
+//! Checked authored arrivals retain original producer rows through replay and
+//! subsequent publication; source classification never grants append rights.
+//! Actual actor lifecycle, remaining arrival owners, cursor/settlement, legacy
 //! migration and cleanup remain consumers; legacy-only APIs refuse these formats.
 
 use super::AgentTranscriptStore;
@@ -58,13 +60,31 @@ pub(crate) struct ReplayEpochIdentity {
 /// It is immutable history, not a live owner or an execution capability.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ReplayEpochSnapshot {
+    root: std::path::PathBuf,
+    conversation_id: String,
     identity: ReplayEpochIdentity,
     checkpoint: ReplayEpochCheckpoint,
     escrow: Option<Vec<escrow::EscrowOccurrence>>,
     qualified_rows: BTreeSet<u64>,
+    /// Original new authored rows from this same checked logical view. The
+    /// runtime must qualify pending accounting/native source before adoption.
+    arrivals: Vec<mez_agent::TranscriptEntry>,
 }
 
 impl ReplayEpochSnapshot {
+    /// Original conversation captured with the parent, independent of row count.
+    pub(crate) fn conversation_id(&self) -> &str {
+        &self.conversation_id
+    }
+
+    /// Identifies a candidate authored arrival from this checked logical view.
+    /// Pending accounting and native validation still precede actual adoption.
+    pub(crate) fn row_is_authored_arrival(&self, sequence: u64) -> bool {
+        self.arrivals
+            .binary_search_by_key(&sequence, |row| row.sequence)
+            .is_ok()
+    }
+
     /// Borrows the exact committed identity captured with this checked source.
     pub(crate) fn identity(&self) -> &ReplayEpochIdentity {
         &self.identity
@@ -123,8 +143,34 @@ pub(crate) struct ReplayEpochPublication {
     /// Actual controller owner retains nonserializable lifecycle witnesses.
     /// Its checkpoint must exactly match the immutable recorded source.
     prepared: ReplayPreparedCompaction,
+    backing: OriginalSourceBacking,
+}
+
+/// Original producer and immutable history captured beside the actual source.
+/// This is descriptive custody input, not an execution or ordinary append ACK.
+pub(crate) struct ReplaySourceCapture<'a> {
+    origin: ReplaySourceOrigin,
+    history: Option<&'a ReplayEpochSnapshot>,
+}
+
+/// Exact backing inputs retained with the proposal through uncertain I/O.
+#[derive(Clone)]
+struct OriginalSourceBacking {
     origin: ReplaySourceOrigin,
     inherited: Vec<escrow::EscrowOccurrence>,
+    arrivals: Vec<mez_agent::TranscriptEntry>,
+}
+
+impl ReplaySourceOrigin {
+    /// Pairs this turn's producer with its original checked history, when any.
+    /// Imported arrivals require that history capture so a later caller cannot
+    /// substitute its own turn/agent/pane for their original provenance.
+    pub(crate) fn capture(self, history: Option<&ReplayEpochSnapshot>) -> ReplaySourceCapture<'_> {
+        ReplaySourceCapture {
+            origin: self,
+            history,
+        }
+    }
 }
 
 /// Nonserializable acknowledgment minted after the original store's complete
@@ -189,8 +235,7 @@ impl ReplayEpochPublication {
         source: &ReplayEpochContext,
         plan: ReplayCompactionPlan,
         summary: ReplayHeadPublication,
-        origin: &ReplaySourceOrigin,
-        inherited: &[escrow::EscrowOccurrence],
+        backing: OriginalSourceBacking,
     ) -> Result<Self> {
         mez_agent::transcript::validate_conversation_id(conversation_id)?;
         if source.revision().get()
@@ -242,7 +287,12 @@ impl ReplayEpochPublication {
             frozen_arrival_frontier: frontier,
             source_checkpoint,
             checkpoint,
-            source_escrow: Some(escrow::extend(inherited, source, origin)?),
+            source_escrow: Some(escrow::extend(
+                &backing.inherited,
+                source,
+                &backing.origin,
+                &backing.arrivals,
+            )?),
         };
         let envelope = Envelope {
             sha256: digest(&encode(&manifest)?),
@@ -257,8 +307,7 @@ impl ReplayEpochPublication {
             envelope,
             payloads,
             prepared,
-            origin: origin.clone(),
-            inherited: inherited.to_vec(),
+            backing,
         })
     }
 
@@ -368,11 +417,14 @@ impl AgentTranscriptStore {
     /// Freezes one proposal with actual inherited unsettled backing before any
     /// uncertain write. Parent lookup shares the existing conversation lease;
     /// this preparation belongs on the storage worker. A first no-archive source
-    /// remains pure. Old v4 backing needs an explicit transition, never guessed
+    /// remains pure. Imported arrivals must supply their original history
+    /// capture; a later live producer cannot replace their provenance. A foreign
+    /// store/parent capture or changed source refuses before writing anything.
+    /// Old v4 backing needs an explicit transition, never guessed
     /// missing originals or provider work during resume.
     pub(crate) fn prepare_replay_epoch(
         &self,
-        origin: ReplaySourceOrigin,
+        capture: ReplaySourceCapture<'_>,
         conversation_id: &str,
         expected_parent: Option<ReplayEpochIdentity>,
         source: &ReplayEpochContext,
@@ -391,6 +443,13 @@ impl AgentTranscriptStore {
         if current.as_ref().map(Envelope::identity) != expected_parent {
             return Err(MezError::conflict("replay preparation parent changed"));
         }
+        if capture.history.is_some_and(|capture| {
+            capture.root != self.root || Some(&capture.identity) != expected_parent.as_ref()
+        }) {
+            return Err(MezError::conflict(
+                "replay arrival capture has a different original store or parent",
+            ));
+        }
         let inherited =
             match &current {
                 Some(current) => {
@@ -407,8 +466,13 @@ impl AgentTranscriptStore {
             source,
             plan,
             summary,
-            &origin,
-            inherited,
+            OriginalSourceBacking {
+                origin: capture.origin,
+                inherited: inherited.to_vec(),
+                arrivals: capture
+                    .history
+                    .map_or_else(Vec::new, |capture| capture.arrivals.clone()),
+            },
         )
     }
 
@@ -463,17 +527,21 @@ impl AgentTranscriptStore {
         self.require_compaction_epoch_locked(conversation_id)?;
         sync_directory(&directory)?;
         Ok(Some(ReplayEpochSnapshot {
+            root: self.root.clone(),
+            conversation_id: conversation_id.to_owned(),
             identity: envelope.identity(),
             checkpoint,
             escrow: envelope.manifest.source_escrow.clone(),
             qualified_rows: BTreeSet::new(),
+            arrivals: Vec::new(),
         }))
     }
 
     /// Qualifies late original rows without selecting their covered source for
     /// replay. The caller already owns the conversation lease and checked row
-    /// view. Unknown semantic arrivals still require the following runtime
-    /// projection gate; this method grants only exact-copy deduplication.
+    /// view. New authored rows retain their original images for the following
+    /// accounting/combined-source gate; this classification alone cannot adopt
+    /// arrivals or acknowledge an ordinary append.
     pub(super) fn qualify_replay_source_copies_locked(
         &self,
         conversation_id: &str,
@@ -488,10 +556,15 @@ impl AgentTranscriptStore {
             }
             return Ok(());
         };
-        snapshot.qualified_rows =
-            escrow::qualify_rows(escrow, conversation_id, rows, |reference| {
-                payload::read(&self.root.join(conversation_id), reference)
-            })?;
+        let qualified = escrow::qualify_rows(
+            escrow,
+            conversation_id,
+            rows,
+            escrow::RowAdmission::AuthoredArrivals,
+            |reference| payload::read(&self.root.join(conversation_id), reference),
+        )?;
+        snapshot.qualified_rows = qualified.copies;
+        snapshot.arrivals = qualified.arrivals;
         Ok(())
     }
 
@@ -586,19 +659,20 @@ impl AgentTranscriptStore {
             let inherited = current.manifest.source_escrow.as_deref().ok_or_else(|| {
                 invalid("version-four replay requires explicit original-source escrow migration")
             })?;
-            if inherited != proposal.inherited {
+            if inherited != proposal.backing.inherited {
                 return Err(invalid(
                     "replay publication changed its captured parent escrow",
                 ));
             }
         }
-        if manifest.expected_parent.is_none() && !proposal.inherited.is_empty()
+        if manifest.expected_parent.is_none() && !proposal.backing.inherited.is_empty()
             || manifest.source_escrow.as_deref()
                 != Some(
                     escrow::extend(
-                        &proposal.inherited,
+                        &proposal.backing.inherited,
                         proposal.prepared.source(),
-                        &proposal.origin,
+                        &proposal.backing.origin,
+                        &proposal.backing.arrivals,
                     )?
                     .as_slice(),
                 )
@@ -627,6 +701,7 @@ impl AgentTranscriptStore {
             manifest.source_escrow.as_deref().unwrap_or_default(),
             &manifest.conversation_id,
             &rows,
+            escrow::RowAdmission::KnownCopies,
             |reference| {
                 if let Some(content) = proposal.payloads.get(&reference.sha256) {
                     reference.validate(content.as_bytes())?;

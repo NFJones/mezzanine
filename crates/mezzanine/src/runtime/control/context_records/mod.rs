@@ -37,6 +37,10 @@ pub(in crate::runtime) struct RuntimeContextRecords {
     row_origins: crate::storage::transcript::TranscriptRowOrigins,
     row_cache: crate::storage::transcript::TranscriptRowRecords,
     rendered_rows: crate::storage::transcript::TranscriptRowRecords,
+    /// Original typed reservations address occurrences, never row positions in
+    /// a different projection or labels that may repeat across producers.
+    source_sequences:
+        std::collections::BTreeMap<ContextBlockOccurrenceId, mez_agent::ContextEventSequence>,
     /// Frozen typed history; never rebuilt from its read-only flat projection.
     replay: Option<ReplayHistory>,
     #[cfg(test)]
@@ -49,6 +53,9 @@ pub(in crate::runtime) struct RuntimeContextRecords {
 struct ReplayHistory {
     conversation: mez_agent::ReplayConversationId,
     snapshot: std::sync::Arc<crate::storage::transcript::replay_epoch::ReplayEpochSnapshot>,
+    /// Original head/tail plus checked new arrivals, without mutating the
+    /// committed parent snapshot used for publication CAS and source custody.
+    checkpoint: mez_agent::ReplayEpochCheckpoint,
     blocks: usize,
 }
 
@@ -85,6 +92,7 @@ impl RuntimeContextRecords {
                 records,
                 replay: Some(ReplayHistory {
                     conversation,
+                    checkpoint: snapshot.checkpoint().clone(),
                     snapshot: std::sync::Arc::new(snapshot),
                     blocks: blocks.len(),
                 }),
@@ -92,6 +100,58 @@ impl RuntimeContextRecords {
             },
             blocks,
         ))
+    }
+
+    /// Appends only new accounted rows to the original typed base. The renderer
+    /// has already excluded qualified copies; canonical import validates native
+    /// identities against that unchanged base and preserves explicit sequences.
+    /// No completion or transport/append receipt is inferred from source rows.
+    pub(super) fn append_replay_arrivals(
+        &mut self,
+        blocks: Vec<ContextBlock>,
+        arrivals: &Self,
+        execution: &[mez_agent::ImportedExecutionEvent],
+    ) -> Result<Vec<ContextBlock>> {
+        arrivals.ensure_valid()?;
+        let replay = self.replay.as_ref().ok_or_else(invalid)?;
+        let owner = mez_agent::ReplayEpochContext::from_checkpoint(
+            replay.conversation.clone(),
+            replay.checkpoint.clone(),
+            AgentContext::empty(),
+        )?;
+        let mut body = owner.into_owned_context();
+        let sequences = arrivals
+            .records
+            .iter()
+            .filter_map(|(index, record)| {
+                arrivals
+                    .source_sequences
+                    .get(&record.occurrence_id())
+                    .map(|sequence| (*index, *sequence))
+            })
+            .collect::<Vec<_>>();
+        body.append_imported_replay_arrivals(blocks, &arrivals.records, execution, &sequences)?;
+        let owner =
+            mez_agent::ReplayEpochContext::from_owned_context(replay.conversation.clone(), body)?;
+        let checkpoint = owner.checkpoint()?;
+        let blocks = owner.context().blocks().to_vec();
+        self.records = owner
+            .context()
+            .chronology()
+            .iter()
+            .enumerate()
+            .map(|(index, event)| (index, event.record()))
+            .collect();
+        self.stable = arrivals.stable.clone();
+        self.stable_sequence = arrivals.stable_sequence;
+        self.row_origins = arrivals.row_origins.clone();
+        self.row_cache = arrivals.row_cache.clone();
+        self.rendered_rows = arrivals.rendered_rows.clone();
+        self.source_sequences = arrivals.source_sequences.clone();
+        let replay = self.replay.as_mut().ok_or_else(invalid)?;
+        replay.checkpoint = checkpoint;
+        replay.blocks = blocks.len();
+        Ok(blocks)
     }
 
     /// Shares the original coherent identity/source with frozen history owners.
@@ -242,7 +302,11 @@ impl RuntimeContextRecords {
 
     /// Captures malformed reserved envelopes as an explicit pending failure.
     /// Unrelated/legacy rows remain readable and supply no authored cost claim.
-    pub(super) fn decode_row(&mut self, entry: &TranscriptEntry) -> DecodedContextRow {
+    pub(super) fn decode_row(
+        &mut self,
+        entry: &TranscriptEntry,
+        observe_stable: bool,
+    ) -> DecodedContextRow {
         if entry.role != mez_agent::transcript::TranscriptRole::System {
             return DecodedContextRow {
                 event: None,
@@ -253,7 +317,27 @@ impl RuntimeContextRecords {
         match TranscriptContextRecord::from_transcript_content(&entry.content) {
             Ok(Some(record)) => {
                 let (event, record, stable) = record.into_parts();
-                self.observe_stable(entry.sequence, stable.as_deref());
+                if observe_stable {
+                    self.observe_stable(entry.sequence, stable.as_deref());
+                }
+                let sequence = match &event {
+                    TranscriptContextEvent::UserEvent { event_sequence, .. }
+                    | TranscriptContextEvent::McpCatalogSnapshot { event_sequence, .. }
+                    | TranscriptContextEvent::PromptBoundary {
+                        event_sequence: Some(event_sequence),
+                        ..
+                    } => Some(*event_sequence),
+                    _ => None,
+                };
+                if let Some(sequence) = sequence {
+                    match mez_agent::ContextEventSequence::new(sequence) {
+                        Ok(sequence) => {
+                            self.source_sequences
+                                .insert(record.occurrence_id(), sequence);
+                        }
+                        Err(_) => self.invalid = true,
+                    }
+                }
                 DecodedContextRow {
                     event: Some(event),
                     record: Some(record),
@@ -456,8 +540,7 @@ impl RuntimeContextRecords {
                 .as_deref()
                 .unwrap_or_else(|| replay.snapshot.checkpoint().stable_records());
             let checkpoint = replay
-                .snapshot
-                .checkpoint()
+                .checkpoint
                 .clone()
                 .with_stable_records(stable.to_vec())?;
             let current_prefix = AgentContext::import_durable_blocks_with_stable_sources(

@@ -84,6 +84,7 @@ pub(super) fn extend(
     inherited: &[EscrowOccurrence],
     source: &ReplayEpochContext,
     origin: &ReplaySourceOrigin,
+    captured_rows: &[TranscriptEntry],
 ) -> Result<Vec<EscrowOccurrence>> {
     validate(inherited)?;
     origin.validate()?;
@@ -91,6 +92,17 @@ pub(super) fn extend(
         .iter()
         .map(|item| (item.record.occurrence_id(), item.clone()))
         .collect::<BTreeMap<_, _>>();
+    let mut captured = BTreeMap::new();
+    for row in captured_rows {
+        let authored = TranscriptContextRecord::from_transcript_content(&row.content)?
+            .ok_or_else(|| invalid("captured replay arrival has no authored occurrence"))?;
+        if captured
+            .insert(authored.record().occurrence_id(), (row, authored))
+            .is_some()
+        {
+            return Err(invalid("captured replay arrival occurrence is duplicated"));
+        }
+    }
     for event in source
         .context()
         .chronology()
@@ -110,7 +122,10 @@ pub(super) fn extend(
             provider: event
                 .provider_owner()
                 .map(|owner| (owner.api().as_str().into(), owner.provider_id().into())),
-            origin: origin.clone(),
+            origin: captured.get(&event.record().occurrence_id()).map_or_else(
+                || Ok(origin.clone()),
+                |(row, _)| ReplaySourceOrigin::new(&row.turn_id, &row.agent_id, &row.pane_id),
+            )?,
         };
         match originals.get(&item.record.occurrence_id()) {
             Some(previous) => {
@@ -142,6 +157,29 @@ pub(super) fn extend(
         }
     }
     validate(&result)?;
+    if !captured.is_empty() {
+        let by_id = result
+            .iter()
+            .map(|item| (item.occurrence_id(), item))
+            .collect::<BTreeMap<_, _>>();
+        let source_by_id = source
+            .context()
+            .chronology()
+            .iter()
+            .map(|event| (event.record().occurrence_id(), event))
+            .collect::<BTreeMap<_, _>>();
+        for (id, (row, authored)) in captured {
+            let item = by_id
+                .get(&id)
+                .ok_or_else(|| invalid("captured replay arrival is absent from source"))?;
+            let event = source_by_id
+                .get(&id)
+                .ok_or_else(|| invalid("captured replay arrival is absent from current source"))?;
+            if !item.matches(row, &authored, &event.block().content) {
+                return Err(invalid("captured replay arrival changed original framing"));
+            }
+        }
+    }
     Ok(result)
 }
 
@@ -201,7 +239,7 @@ pub(super) fn validate_current(
         .iter()
         .map(EscrowOccurrence::occurrence_id)
         .collect::<BTreeSet<_>>();
-    if extend(items, source, &first.origin)? != items
+    if extend(items, source, &first.origin, &[])? != items
         || covered.iter().any(|id| !ids.contains(id))
         || source
             .head()
@@ -325,6 +363,21 @@ impl EscrowOccurrence {
     }
 }
 
+/// Whether classification is preparing new authored source or checking a
+/// publication whose complete semantic source must already be escrow-backed.
+pub(super) enum RowAdmission {
+    KnownCopies,
+    AuthoredArrivals,
+}
+
+/// Exact copies and original new rows are separate source domains. New rows
+/// remain unadopted until the runtime validates accounting and combined native
+/// source; classification alone grants no execution or append authority.
+pub(super) struct QualifiedRows {
+    pub(super) copies: BTreeSet<u64>,
+    pub(super) arrivals: Vec<TranscriptEntry>,
+}
+
 /// Checks original semantic copies and zero-model display/audit rows from one
 /// already validated archive view. The resolver uses proposed bytes before
 /// publication or required immutable files during replay; no lock is acquired.
@@ -332,8 +385,9 @@ pub(super) fn qualify_rows(
     items: &[EscrowOccurrence],
     conversation: &str,
     rows: &[TranscriptEntry],
+    admission: RowAdmission,
     mut resolve: impl FnMut(&Payload) -> Result<String>,
-) -> Result<BTreeSet<u64>> {
+) -> Result<QualifiedRows> {
     let index = items
         .iter()
         .map(|item| (item.occurrence_id(), item))
@@ -342,6 +396,8 @@ pub(super) fn qualify_rows(
     let mut qualified = BTreeSet::new();
     let mut events = Vec::with_capacity(rows.len());
     let mut groups = BTreeSet::new();
+    let mut arrivals = Vec::new();
+    let mut arrival_sequences = BTreeSet::new();
     for row in rows {
         if row.conversation_id != conversation {
             return Err(invalid("replay source copy has a foreign conversation"));
@@ -361,13 +417,43 @@ pub(super) fn qualify_rows(
             events.push(None);
             continue;
         };
-        let original = index
-            .get(&authored.record().occurrence_id())
-            .ok_or_else(|| invalid("new replay semantic source lacks original arrival custody"))?;
-        let content = resolve(original.payload())?;
-        if !original.matches(row, &authored, &content) || !seen.insert(original.occurrence_id()) {
+        if !seen.insert(authored.record().occurrence_id()) {
+            return Err(invalid("replay row repeats an original source occurrence"));
+        }
+        if let Some(original) = index.get(&authored.record().occurrence_id()) {
+            let content = resolve(original.payload())?;
+            if !original.matches(row, &authored, &content) {
+                return Err(invalid(
+                    "late replay row conflicts with its original source escrow",
+                ));
+            }
+            qualified.insert(row.sequence);
+        } else if matches!(admission, RowAdmission::AuthoredArrivals)
+            && matches!(
+                authored.event(),
+                TranscriptContextEvent::UserEvent { .. }
+                    | TranscriptContextEvent::PromptBoundary {
+                        event_sequence: Some(_),
+                        ..
+                    }
+                    | TranscriptContextEvent::ExecutionBlock {
+                        execution_group_id: Some(_),
+                        ordinal: Some(_),
+                        ..
+                    }
+                    | TranscriptContextEvent::EnvironmentSnapshot { .. }
+                    | TranscriptContextEvent::McpCatalogSnapshot { .. }
+                    | TranscriptContextEvent::NativePeerMessage { .. }
+                    | TranscriptContextEvent::TerminalHandoff { .. }
+                    | TranscriptContextEvent::RoutedHandoff { .. }
+            )
+        {
+            ReplaySourceOrigin::new(&row.turn_id, &row.agent_id, &row.pane_id)?;
+            arrival_sequences.insert(row.sequence);
+            arrivals.push(row.clone());
+        } else {
             return Err(invalid(
-                "late replay row conflicts with its original source escrow",
+                "new replay semantic source lacks original arrival custody",
             ));
         }
         if let TranscriptContextEvent::ExecutionBlock {
@@ -378,17 +464,19 @@ pub(super) fn qualify_rows(
             groups.insert(group.clone());
         }
         events.push(Some(authored.into_event()));
-        qualified.insert(row.sequence);
     }
     let zero = mez_agent::transcript::transcript_zero_projection_indices(rows, &events, &groups);
-    if rows
-        .iter()
-        .enumerate()
-        .any(|(index, row)| !qualified.contains(&row.sequence) && !zero.contains(&index))
-    {
+    if rows.iter().enumerate().any(|(index, row)| {
+        !qualified.contains(&row.sequence)
+            && !arrival_sequences.contains(&row.sequence)
+            && !zero.contains(&index)
+    }) {
         return Err(invalid("replay archive has unqualified model source"));
     }
-    Ok(qualified)
+    Ok(QualifiedRows {
+        copies: qualified,
+        arrivals,
+    })
 }
 
 #[cfg(test)]
@@ -409,9 +497,9 @@ mod tests {
         )
         .unwrap();
         source.append_fact("fact", "same text").unwrap();
-        let first = extend(&[], &source, &origin).unwrap();
+        let first = extend(&[], &source, &origin, &[]).unwrap();
         source.append_fact("fact", "same text").unwrap();
-        let both = extend(&first, &source, &other).unwrap();
+        let both = extend(&first, &source, &other, &[]).unwrap();
         assert_eq!(both[0].origin, origin);
         assert_eq!(both[1].origin, other);
         assert_ne!(

@@ -8,8 +8,8 @@
 
 use super::{
     AgentContext, AgentContextError, AgentContextResult, ContextBlock, ContextBlockRecord,
-    ContextExecutionGroupId, ContextPlacement, ContextRetention, ImportedExecutionEvent,
-    ProviderTranscriptEvent,
+    ContextEventSequence, ContextExecutionGroupId, ContextPlacement, ContextRetention,
+    ImportedExecutionEvent, ProviderTranscriptEvent,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -35,7 +35,53 @@ impl AgentContext {
         records: &[(usize, ContextBlockRecord)],
         imported: &[ImportedExecutionEvent],
     ) -> AgentContextResult<usize> {
+        self.append_imported_source(blocks, records, imported, &[], false)
+    }
+
+    /// Imports checked arrivals while preserving explicit original sequence
+    /// reservations supplied by typed user/prompt/catalog records. Hints address
+    /// only this suffix, must be unique, and may advance but never rewind the
+    /// actual reserved frontier. Unhinted rows allocate at the resulting frontier.
+    /// All ordinary history/native validation and atomicity guarantees apply;
+    /// hints confer neither source custody nor late-prelude insertion authority.
+    /// Every block requires its original record. Checked source remains
+    /// recoverable for immutable publication backing, while exact retention and
+    /// pending protection still require their actual lifecycle gates. Returns
+    /// the number of admitted arrivals; failure leaves this owner unchanged.
+    pub fn append_imported_replay_arrivals(
+        &mut self,
+        blocks: Vec<ContextBlock>,
+        records: &[(usize, ContextBlockRecord)],
+        imported: &[ImportedExecutionEvent],
+        sequences: &[(usize, ContextEventSequence)],
+    ) -> AgentContextResult<usize> {
+        if records.len() != blocks.len() {
+            return Err(AgentContextError::new(
+                "replay arrivals require every original record",
+            ));
+        }
+        self.append_imported_source(blocks, records, imported, sequences, true)
+    }
+
+    /// Ordinary composition does not claim independently backed source. The
+    /// checked replay boundary retains every original record and can supply its
+    /// source to immutable publication backing. Recoverability changes neither
+    /// exact retention nor pending protection and grants no completion witness.
+    fn append_imported_source(
+        &mut self,
+        blocks: Vec<ContextBlock>,
+        records: &[(usize, ContextBlockRecord)],
+        imported: &[ImportedExecutionEvent],
+        sequences: &[(usize, ContextEventSequence)],
+        recoverable: bool,
+    ) -> AgentContextResult<usize> {
         self.validate_durable()?;
+        let hints = sequences.iter().copied().collect::<BTreeMap<_, _>>();
+        if hints.len() != sequences.len() || hints.keys().any(|index| *index >= blocks.len()) {
+            return Err(AgentContextError::new(
+                "invalid imported arrival sequence hints",
+            ));
+        }
         if blocks
             .iter()
             .any(|block| block.placement != ContextPlacement::ConversationAppend)
@@ -58,7 +104,18 @@ impl AgentContext {
             })?;
         }
         let mut candidate = self.clone();
-        for mut event in history.chronology {
+        for (index, mut event) in history.chronology.into_iter().enumerate() {
+            if recoverable {
+                event.recoverable_for_compaction = true;
+            }
+            if let Some(sequence) = hints.get(&index) {
+                if sequence.get() < candidate.next_event_sequence {
+                    return Err(AgentContextError::new(
+                        "imported arrival reservation rewinds source",
+                    ));
+                }
+                candidate.next_event_sequence = sequence.get();
+            }
             event.sequence = candidate.allocate_event_sequence()?;
             candidate.chronology.push(event);
         }

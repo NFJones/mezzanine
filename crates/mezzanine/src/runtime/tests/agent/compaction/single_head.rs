@@ -227,7 +227,7 @@ fn runtime_admitted_epoch_keeps_live_witness_for_durable_publication() {
         fixture
             .store
             .prepare_replay_epoch(
-                source_origin(),
+                source_origin().capture(None),
                 CONVERSATION,
                 Some(fixture.identity.clone()),
                 source,

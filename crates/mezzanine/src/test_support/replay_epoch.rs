@@ -108,7 +108,7 @@ impl Fixture {
             }
             let proposal = store
                 .prepare_replay_epoch(
-                    source_origin(),
+                    source_origin().capture(None),
                     CONVERSATION,
                     parent,
                     &source,

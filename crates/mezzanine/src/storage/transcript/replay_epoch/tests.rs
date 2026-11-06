@@ -87,7 +87,7 @@ fn proposal(
     fixture
         .store
         .prepare_replay_epoch(
-            origin(),
+            origin().capture(None),
             "conversation-a",
             parent,
             owner,
@@ -112,7 +112,7 @@ fn first_live_epoch_is_durable_without_ordinary_append() {
     let prepared = fixture
         .store
         .prepare_replay_epoch(
-            origin(),
+            origin().capture(None),
             "conversation-a",
             None,
             &owner,
@@ -319,7 +319,7 @@ fn every_publication_fault_preserves_old_or_new_and_exact_retry() {
             let prepared = fixture
                 .store
                 .prepare_replay_epoch(
-                    origin(),
+                    origin().capture(None),
                     "conversation-a",
                     parent.clone(),
                     &owner,
@@ -393,7 +393,7 @@ fn three_epochs_reuse_payloads_without_collapsing_occurrences() {
         let prepared = fixture
             .store
             .prepare_replay_epoch(
-                origin(),
+                origin().capture(None),
                 "conversation-a",
                 parent,
                 &owner,
@@ -655,7 +655,7 @@ fn header_semantics_and_source_namespace_are_checked() {
         fixture
             .store
             .prepare_replay_epoch(
-                origin(),
+                origin().capture(None),
                 "foreign",
                 None,
                 &owner,
@@ -671,7 +671,7 @@ fn header_semantics_and_source_namespace_are_checked() {
     let prepared = fixture
         .store
         .prepare_replay_epoch(
-            origin(),
+            origin().capture(None),
             "conversation-a",
             None,
             &live,
@@ -845,7 +845,7 @@ fn committed_parent_source_cannot_be_substituted_or_dropped() {
     let first = fixture
         .store
         .prepare_replay_epoch(
-            origin(),
+            origin().capture(None),
             "conversation-a",
             None,
             &original,
@@ -882,7 +882,7 @@ fn committed_parent_source_cannot_be_substituted_or_dropped() {
         )
         .unwrap();
         let branch = fixture.store.prepare_replay_epoch(
-            origin(),
+            origin().capture(None),
             "conversation-a",
             Some(parent.clone()),
             &altered,
@@ -929,7 +929,7 @@ fn actual_lifecycle_extension_is_accepted_but_deserialized_claims_are_refused() 
     let first = fixture
         .store
         .prepare_replay_epoch(
-            origin(),
+            origin().capture(None),
             "conversation-a",
             None,
             &original,
@@ -994,7 +994,7 @@ fn old_prototype_requires_explicit_original_source_transition() {
     restored.append_fact("new", "new source").unwrap();
     let before = publication_files(&directory);
     let result = fixture.store.prepare_replay_epoch(
-        origin(),
+        origin().capture(None),
         "conversation-a",
         Some(parent),
         &restored,

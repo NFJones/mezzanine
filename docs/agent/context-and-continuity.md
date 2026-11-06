@@ -419,7 +419,7 @@ preserves subsequent work; a wrong archive, replacement owner, changed protected
 selection or newer head refuses the stale adoption. Arrivals keep their original
 birth revisions, with live-only witnesses for subsequent publication. A cold
 checkpoint cannot recreate those witnesses. This is an implementation boundary;
-the actor publication lifecycle, ordinary archive arrivals, custody settlement,
+the actor publication lifecycle, complete arrival coverage, custody settlement,
 fork and migration support remain incomplete for this format.
 
 The current writer uses sidecar version five to carry original-source escrow
@@ -427,7 +427,16 @@ across publications. If ordinary rows arrive after several summaries, replay
 checks their original turn, occurrence, bytes and native metadata before
 deduplicating them. Earlier covered source and display copies do not reenter
 the model, and a delayed stable snapshot does not override the frozen baseline.
-Unknown semantic arrivals still require custody support. Required escrow backing
+Supported new authored rows now join the frozen typed base once through the same
+history worker. Pending rows must retain their original immutable append batch;
+replay preserves original occurrences, costs, native ownership and explicit
+user/prompt/catalog sequence reservations. The original history capture carries
+their producer into a later publication, including when the ordinary batch has
+not yet settled. It does not acknowledge that append, complete old tasks, or
+execute native work. Duplicates, broken native order/providers, unowned pending
+rows and rewound sequence reservations refuse the read. Unaccounted legacy
+semantic arrivals and unsupported controls still require their own custody
+integration. Required escrow backing
 is bounded and retained until its receipt-qualified settlement/cursor integration
 is complete; a full bound produces an explicit refusal rather than lost source.
 The earlier version-four prototype still supports frozen empty-archive reads,
@@ -440,8 +449,8 @@ using the original execution group and provider. It preserves the saved source
 and the new result's occurrence and cost; it does not repeat the call or invent a
 second assistant. Missing metadata, broken ordinal order, mismatched providers
 and orphan or duplicate results refuse composition. Unanswered calls remain
-protected. This prepares the typed import boundary for archive-arrival custody;
-it does not yet enable unqualified ordinary archive or ephemeral arrivals.
+protected. Authored archive arrivals use this same combined-source validation;
+unqualified ordinary source and bounded ephemeral arrivals remain unsupported.
 
 The context percentage is the latest positive ordinary execution sample divided
 by the model's context-window budget, not the size of a newly rebuilt request or

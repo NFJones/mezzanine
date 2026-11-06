@@ -10949,8 +10949,8 @@ and birth revisions. Adoption MAY mint private source witnesses for those exact
 carried arrivals so a later publication can qualify them against the persisted
 head; deserializing their descriptive state MUST NOT mint those witnesses.
 Such witnesses MUST be bounded by retained membership and pruned when covered.
-These receipts do not yet connect the actor publication lifecycle or qualify
-genuinely new archive arrivals, fork, migration or source-custody settlement.
+These receipts do not yet connect the actor publication lifecycle, fork,
+migration or source-custody settlement.
 
 Independent source backing
 MUST NOT imply ordinary transcript append acknowledgment. Storage qualification
@@ -10985,8 +10985,25 @@ occurrence/record, semantic bytes and group/provider/ordinal qualification under
 the same replay lease. The production semantic renderer MUST independently prove
 that remaining display/audit rows contribute no new model blocks. Known copies
 MUST NOT replace the current head/raw chronology, refresh native ownership or
-become later stable-slot producers. Unknown semantic source MUST continue to
-refuse until its arrival custody is connected. The v4 prototype remains a frozen
+become later stable-slot producers. Supported new authored semantic rows MAY join
+the exact current typed base once, preserving their original occurrences/costs,
+producer and explicit user/prompt/catalog sequence reservations. Typed user
+instructions MUST remain exact source rather than silently becoming historical
+transcript text. Pending arrivals
+MUST retain the same original immutable batch's occurrence proposal; envelope
+bytes alone MUST NOT establish pending ownership. Native ordinal/API/provider/call
+validation MUST use the actual unchanged base and complete new suffix before
+adopting any arrival. Invalid source MUST reject the whole read, not silently
+omit a repaired execution group. Imported source alone MUST NOT retire tasks,
+close pending execution, replay effects or acknowledge ordinary append durability.
+Checked arrival source MAY be marked recoverable for immutable publication
+backing, but eligibility MUST still require its actual exact/pending lifecycle
+gates; a recoverability flag alone MUST NOT retire protected source.
+The original-store/parent history capture MUST accompany imported arrivals into
+publication preparation so their producer cannot become a later publisher's
+turn/agent/pane. The proposal MUST bind those exact original rows to actual source
+before persisting their escrow. Unaccounted semantic rows, unsupported controls,
+duplicates or unqualified earlier reservations MUST continue to refuse. The v4 prototype remains a frozen
 empty-archive reader, without an old-format writer; a v5 publication from v4
 MUST visibly require an explicit original-source escrow transition instead of
 inventing missing earlier originals or calling a model on resume. Missing v5
@@ -11011,17 +11028,20 @@ Qualified suffix import MUST seed execution-group ordinals from the actual
 unchanged canonical base. A later native result MAY continue a saved pending
 declaration without introducing a duplicate assistant or restarting its ordinal.
 Imported metadata MUST match only new suffix occurrences, preserving their
-original records/costs and allocating only local ordering sequences. Native rows
+original records/costs and allocating only local ordering sequences. Explicit
+typed arrival reservations MUST remain unchanged, may advance the reserved
+frontier, and MUST NOT rewind it or mint a late-prelude insertion witness. Native rows
 MUST carry explicit execution metadata. API/provider/call validation MUST inspect
 the combined group: orphan/repeated results and repeated unanswered declarations
 MUST refuse atomically, while genuinely unanswered calls remain protected. New
 source MUST advance only its actual append fence and MUST NOT release unrelated
 pending groups, mint completion/ACK rights or infer archive custody. This boundary
-MUST NOT weaken the frozen archive-arrival guard described below.
+MUST NOT weaken the original-source custody guard described below.
 
-This reader stage qualifies only exact backed source copies in version five,
-not genuinely new archive arrivals or bounded ephemeral source. Until the
-original source frontier and custody bridge are connected, those combinations MUST refuse
+This reader stage qualifies exact backed source copies and supported new authored
+arrivals in version five. It does not yet qualify unaccounted legacy semantic
+arrivals, unsupported control owners or bounded ephemeral source. Until those
+original source frontiers and custody bridges are connected, those combinations MUST refuse
 the affected context read rather than flatten covered source, guess a frontier
 from pane counts, or silently choose a newer parent checkpoint. This restriction
 is an implementation gap, not completion of arrival, fork or migration support.

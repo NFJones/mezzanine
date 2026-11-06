@@ -101,6 +101,26 @@ impl RuntimePendingTranscriptContext {
             .iter()
             .map(|row| row.sequence)
             .collect::<BTreeSet<_>>();
+        if let Some(replay) = &snapshot.replay {
+            for row in snapshot.view.logical.iter().filter(|row| {
+                replay.row_is_authored_arrival(row.sequence) && !committed.contains(&row.sequence)
+            }) {
+                let authored =
+                    mez_agent::transcript::TranscriptContextRecord::from_transcript_content(
+                        &row.content,
+                    )?
+                    .ok_or_else(|| {
+                        MezError::invalid_state(
+                            "pending replay arrival has no original authored source",
+                        )
+                    })?;
+                if self.origins.get(&row.sequence) != Some(&authored.record().occurrence_id()) {
+                    return Err(MezError::conflict(
+                        "pending replay arrival lacks original append ownership",
+                    ));
+                }
+            }
+        }
         for (sequence, origin) in &self.origins {
             let Some(row) = selected.get(sequence) else {
                 continue;

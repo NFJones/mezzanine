@@ -12,8 +12,9 @@
 //!
 //! A frozen one-head source carries its own checked identity and membership;
 //! pane row counts cannot select a different projection. Version-five escrow
-//! qualifies exact delayed source copies under this lease. Runtime projection
-//! must still refuse genuinely new semantic rows without arrival custody; pinned
+//! qualifies exact delayed source copies under this lease and captures original
+//! new authored rows for the runtime's accounting/native-source gate. Unaccounted
+//! or unsupported semantic source still refuses. Pinned
 //! ephemeral captures and settled archive cursors remain separate integration.
 
 use super::store::{ConversationTranscriptRead, ConversationTranscriptView};

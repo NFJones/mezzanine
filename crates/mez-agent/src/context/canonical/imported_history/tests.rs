@@ -112,6 +112,84 @@ impl NativeFixture {
     }
 }
 
+/// Explicit typed reservations keep gaps and source identity. Bad indices,
+/// duplicates, rewinds and exhausted reservations leave the original actual
+/// replay owner, records and reserved frontier unchanged.
+#[test]
+fn imported_arrival_reservations_preserve_gaps_and_reject_atomically() {
+    let owner = ReplayEpochContext::new(
+        ReplayConversationId::new("reserved-arrivals").unwrap(),
+        AgentContext::empty(),
+    )
+    .unwrap();
+    let mut original = owner.into_owned_context();
+    original
+        .append_user_event("original", "actual base user")
+        .unwrap();
+    let user = ContextBlock::user_event("later", "actual later user");
+    let record = ContextBlockRecord::allocate(&user).unwrap();
+    // User admission reserves prelude slots beyond its own visible sequence.
+    let next = ReplayEpochContext::from_owned_context(
+        ReplayConversationId::new("reserved-arrivals").unwrap(),
+        original.clone(),
+    )
+    .unwrap()
+    .checkpoint()
+    .unwrap()
+    .next_event_sequence();
+    for hints in [
+        vec![(1, ContextEventSequence::new(next + 4).unwrap())],
+        vec![
+            (0, ContextEventSequence::new(next + 4).unwrap()),
+            (0, ContextEventSequence::new(next + 5).unwrap()),
+        ],
+        vec![(0, ContextEventSequence::new(next - 1).unwrap())],
+        vec![(0, ContextEventSequence::new(u64::MAX).unwrap())],
+    ] {
+        let mut candidate = original.clone();
+        assert!(
+            candidate
+                .append_imported_replay_arrivals(vec![user.clone()], &[(0, record)], &[], &hints)
+                .is_err()
+        );
+        assert_eq!(candidate, original);
+    }
+    let mut candidate = original.clone();
+    assert!(
+        candidate
+            .append_imported_replay_arrivals(vec![user.clone()], &[], &[], &[])
+            .is_err()
+    );
+    assert_eq!(candidate, original);
+    candidate
+        .append_imported_replay_arrivals(
+            vec![user.clone()],
+            &[(0, record)],
+            &[],
+            &[(0, ContextEventSequence::new(next + 4).unwrap())],
+        )
+        .unwrap();
+    assert_eq!(candidate.chronology()[0], original.chronology()[0]);
+    assert_eq!(candidate.chronology()[1].sequence().get(), next + 4);
+    assert_eq!(candidate.chronology()[1].block(), &user);
+    assert_eq!(candidate.chronology()[1].record(), record);
+    assert!(candidate.chronology()[1].recoverable_for_compaction());
+    assert_eq!(
+        candidate.chronology()[1].retention(),
+        ContextRetention::Exact
+    );
+    let owner = ReplayEpochContext::from_owned_context(
+        ReplayConversationId::new("reserved-arrivals").unwrap(),
+        candidate,
+    )
+    .unwrap();
+    let stride = next - original.chronology().last().unwrap().sequence().get();
+    assert_eq!(
+        owner.checkpoint().unwrap().next_event_sequence(),
+        next + 4 + stride
+    );
+}
+
 /// All native families can continue a real pending group without restarting
 /// its ordinal, changing frozen source or replaying its call. Only successful
 /// admission advances the append fence; the old captured frontier cannot close

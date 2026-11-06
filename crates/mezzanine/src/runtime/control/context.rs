@@ -219,7 +219,7 @@ pub(in crate::runtime) fn runtime_agent_history_epoch_from_snapshot(
     accounting: Option<&crate::storage::transcript::ConversationReplaySnapshot>,
 ) -> RuntimeAgentTranscriptContext {
     if let Some(snapshot) = accounting.and_then(|snapshot| snapshot.replay.as_ref()) {
-        let validation = (|| -> Result<()> {
+        let projection = (|| -> Result<(RuntimeContextRecords, Vec<ContextBlock>)> {
             let rendered = runtime_agent_transcript_context_with_ranges_and_mcp_epoch(
                 &inputs.pane_id,
                 &entries,
@@ -230,34 +230,23 @@ pub(in crate::runtime) fn runtime_agent_history_epoch_from_snapshot(
                 Some(&inputs.pending_entries),
             );
             rendered.records.ensure_valid()?;
-            if rendered.provider_history_repair_identity.is_some()
-                || !rendered
-                    .records
-                    .rendered_row_records()?
-                    .iter()
-                    .all(|(sequence, _)| snapshot.row_is_qualified_copy(*sequence))
-            {
+            if rendered.provider_history_repair_identity.is_some() {
                 return Err(crate::MezError::conflict(
-                    "new replay archive source requires original arrival custody",
+                    "replay arrival execution source requires repair",
                 ));
             }
-            Ok(())
+            let (mut records, _) = RuntimeContextRecords::from_replay_snapshot(
+                &inputs.conversation_id,
+                snapshot.clone(),
+            )?;
+            let blocks = records.append_replay_arrivals(
+                rendered.blocks,
+                &rendered.records,
+                &rendered.execution_events,
+            )?;
+            Ok((records, blocks))
         })();
-        if let Err(error) = validation {
-            let mut records = RuntimeContextRecords::default();
-            records.reject_source(&error);
-            return RuntimeAgentTranscriptContext {
-                source: None,
-                blocks: Vec::new(),
-                records,
-                execution_events: Vec::new(),
-                provider_history_repair_identity: None,
-            };
-        }
-        return match RuntimeContextRecords::from_replay_snapshot(
-            &inputs.conversation_id,
-            snapshot.clone(),
-        ) {
+        return match projection {
             Ok((records, blocks)) => RuntimeAgentTranscriptContext {
                 source: None,
                 blocks,
@@ -652,7 +641,10 @@ fn runtime_agent_transcript_context_with_ranges_and_mcp_epoch(
     let mut row_records = Vec::with_capacity(entries.len());
     let mut row_stable_records = Vec::with_capacity(entries.len());
     for entry in entries {
-        let decoded = records.decode_row(entry);
+        let original_copy = accounting
+            .and_then(|snapshot| snapshot.replay.as_ref())
+            .is_some_and(|snapshot| snapshot.row_is_qualified_copy(entry.sequence));
+        let decoded = records.decode_row(entry, !original_copy);
         transcript_events.push(decoded.event);
         row_records.push(decoded.record);
         row_stable_records.push(decoded.stable);
@@ -668,6 +660,32 @@ fn runtime_agent_transcript_context_with_ranges_and_mcp_epoch(
     let mut execution_groups_with_assistant = BTreeSet::new();
     let mut excluded_execution_groups = BTreeSet::new();
     let mut repaired_execution_groups = BTreeSet::new();
+    if let Some(snapshot) = accounting.and_then(|snapshot| snapshot.replay.as_ref()) {
+        let base = mez_agent::ReplayConversationId::new(snapshot.conversation_id()).and_then(
+            |conversation| {
+                mez_agent::ReplayEpochContext::from_checkpoint(
+                    conversation,
+                    snapshot.checkpoint().clone(),
+                    mez_agent::AgentContext::empty(),
+                )
+            },
+        );
+        match base {
+            Ok(base) => {
+                for event in base.context().chronology() {
+                    if let Some(group) = event.execution_group_id() {
+                        *latest_execution_group_ordinals
+                            .entry(group.clone())
+                            .or_insert(0_u64) += 1;
+                        if event.block().source == ContextSourceKind::TranscriptAssistant {
+                            execution_groups_with_assistant.insert(group.clone());
+                        }
+                    }
+                }
+            }
+            Err(error) => records.reject_source(&error.into()),
+        }
+    }
     for (index, event) in transcript_events.iter().enumerate() {
         let Some(TranscriptContextEvent::ExecutionBlock {
             source,
@@ -695,13 +713,13 @@ fn runtime_agent_transcript_context_with_ranges_and_mcp_epoch(
             || matches!(
                 source,
                 ContextSourceKind::ActionResult | ContextSourceKind::TranscriptTool
-            ) && !execution_groups_with_assistant.contains(&execution_group_id)
+            ) && !execution_groups_with_assistant.contains(execution_group_id)
         {
             excluded_execution_groups.insert(execution_group_id.clone());
             repaired_execution_groups.insert(execution_group_id.clone());
         }
         if *source == ContextSourceKind::TranscriptAssistant {
-            execution_groups_with_assistant.insert(execution_group_id);
+            execution_groups_with_assistant.insert(execution_group_id.clone());
         }
     }
     let exact_execution_groups = transcript_events
@@ -720,6 +738,12 @@ fn runtime_agent_transcript_context_with_ranges_and_mcp_epoch(
         &exact_execution_groups,
     );
     for (index, entry) in entries.iter().enumerate() {
+        if accounting
+            .and_then(|snapshot| snapshot.replay.as_ref())
+            .is_some_and(|snapshot| snapshot.row_is_qualified_copy(entry.sequence))
+        {
+            continue;
+        }
         if let Some((range_index, range)) = ranges
             .iter()
             .enumerate()
@@ -757,7 +781,11 @@ fn runtime_agent_transcript_context_with_ranges_and_mcp_epoch(
                 ))
             }
             Some(TranscriptContextEvent::UserEvent { label, content, .. }) => Some(ContextBlock {
-                source: ContextSourceKind::TranscriptUser,
+                source: if accounting.is_some_and(|snapshot| snapshot.replay.is_some()) {
+                    ContextSourceKind::UserInstruction
+                } else {
+                    ContextSourceKind::TranscriptUser
+                },
                 placement: mez_agent::ContextPlacement::ConversationAppend,
                 label: label.clone(),
                 content: content.clone(),
