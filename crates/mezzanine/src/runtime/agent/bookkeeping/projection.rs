@@ -139,6 +139,7 @@ impl<'a> RuntimeTranscriptProjection<'a> {
         // projections cannot distinguish identical prompt and steering text,
         // so exclude them rather than backdating or coalescing user events.
         execution_entries.retain(|entry| entry.role != TranscriptRole::User);
+        self.account_recovery_diagnostic(&mut execution_entries, turn, execution)?;
         self.insert_initial_user_transcript_event(
             &mut execution_entries,
             conversation_id,
@@ -191,7 +192,62 @@ impl<'a> RuntimeTranscriptProjection<'a> {
         Ok(execution_entries)
     }
 
-    /// Inserts the canonical initial prompt before its display projection.
+    /// The lower standalone projection retains a legacy diagnostic row. Remove
+    /// it only when this actual source already carries the exact canonical
+    /// occurrence; ordinary export below preserves its original record/group.
+    /// No terminal render or retry allocates a replacement occurrence or cost.
+    fn account_recovery_diagnostic(
+        &self,
+        entries: &mut Vec<TranscriptEntry>,
+        turn: &AgentTurnRecord,
+        execution: &AgentTurnExecution,
+    ) -> Result<()> {
+        let Some((group, block)) =
+            super::super::provider_execution::canonical_recovery_diagnostic(turn, execution)?
+        else {
+            return Ok(());
+        };
+        let expected = TranscriptContextEvent::execution_block(
+            block.source,
+            block.label.clone(),
+            block.content.clone(),
+        )
+        .ok_or_else(|| {
+            MezError::invalid_state("canonical recovery diagnostic cannot be projected")
+        })?
+        .to_transcript_content();
+        if entries
+            .first()
+            .is_none_or(|row| row.role != TranscriptRole::System || row.content != expected)
+        {
+            return Err(MezError::invalid_state(
+                "canonical recovery diagnostic lost its execution projection position",
+            ));
+        }
+        let context = self.context.ok_or_else(|| {
+            MezError::invalid_state("canonical recovery diagnostic lost its original context")
+        })?;
+        let chronology = RuntimeSessionService::terminal_compaction_source_chronology_from_source(
+            context,
+            self.compaction,
+        )?;
+        if !chronology.iter().any(|event| {
+            event.execution_group_id() == Some(&group)
+                && event.sequence().get() > self.imported_history_high_water
+                && event.block() == &block
+        }) {
+            return Err(MezError::conflict(
+                "canonical recovery diagnostic has no original chronology occurrence",
+            ));
+        }
+        entries.remove(0);
+        Ok(())
+    }
+
+    /// Inserts this turn's canonical initial prompt before its display projection.
+    /// Typed history can retain earlier UserInstruction events with the same
+    /// label. Those original occurrences must never be reattributed to this
+    /// turn merely because they precede its newly admitted prompt.
     fn insert_initial_user_transcript_event(
         &self,
         entries: &mut Vec<TranscriptEntry>,
@@ -202,17 +258,29 @@ impl<'a> RuntimeTranscriptProjection<'a> {
     ) -> Result<()> {
         let Some(event) = self.context.and_then(|context| {
             context.chronology().iter().find(|event| {
-                event.block().source == ContextSourceKind::UserInstruction
+                event.sequence().get() > self.imported_history_high_water
+                    && event.block().source == ContextSourceKind::UserInstruction
                     && event.block().label == "user prompt"
             })
         }) else {
             return Ok(());
         };
-        let transcript_event = TranscriptContextEvent::user_event(
-            event.sequence().get(),
-            event.block().label.clone(),
-            event.block().content.clone(),
-        )
+        let transcript_event = match self
+            .context
+            .and_then(|context| context.replay_task_admission_start(event.record().occurrence_id()))
+        {
+            Some(task_start) => TranscriptContextEvent::task_admission(
+                event.sequence().get(),
+                task_start,
+                event.block().label.clone(),
+                event.block().content.clone(),
+            ),
+            None => TranscriptContextEvent::user_event(
+                event.sequence().get(),
+                event.block().label.clone(),
+                event.block().content.clone(),
+            ),
+        }
         .ok_or_else(|| MezError::invalid_state("turn initial user event is invalid"))?;
         let entry = TranscriptEntry {
             conversation_id: conversation_id.to_string(),
@@ -247,7 +315,10 @@ impl<'a> RuntimeTranscriptProjection<'a> {
             entry.role == TranscriptRole::User
                 || matches!(
                     TranscriptContextEvent::from_transcript_content(&entry.content),
-                    Some(TranscriptContextEvent::UserEvent { .. })
+                    Some(
+                        TranscriptContextEvent::UserEvent { .. }
+                            | TranscriptContextEvent::TaskAdmission { .. }
+                    )
                 )
         }) else {
             return Ok(());

@@ -4907,7 +4907,7 @@ fn runtime_prompt_history_stale_preclaim_releases_pane_command_lifecycle() {
         .begin_agent_prompt_history_preparation(primary, "%1", "stale history")
         .unwrap();
     let dispatch = service
-        .take_pending_agent_prompt_history()
+        .take_pending_agent_prompt_history_for_tests()
         .pop()
         .expect("prompt submission must queue one history dispatch");
     assert!(service.agent_command_is_active("%1"));
@@ -4944,7 +4944,7 @@ fn runtime_prompt_history_preclaim_is_invalidated_by_compaction_epoch() {
         .begin_agent_prompt_history_preparation(primary, "%1", "old replay prompt")
         .unwrap();
     let dispatch = service
-        .take_pending_agent_prompt_history()
+        .take_pending_agent_prompt_history_for_tests()
         .pop()
         .expect("prompt submission must queue one history dispatch");
     service.mark_agent_compacting_for_tests("%1", 1);
@@ -4977,7 +4977,7 @@ fn runtime_prompt_history_failure_releases_lifecycle_and_reports_error() {
         .begin_agent_prompt_history_preparation(primary, "%1", "broken history")
         .unwrap();
     let dispatch = service
-        .take_pending_agent_prompt_history()
+        .take_pending_agent_prompt_history_for_tests()
         .pop()
         .expect("prompt submission must queue one history dispatch");
     assert!(service.claim_agent_prompt_history_preparation(&dispatch));

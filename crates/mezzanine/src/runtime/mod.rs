@@ -243,8 +243,8 @@ mod auto_sizing;
 /// declaration makes the boundary available to the crate.
 mod commands;
 pub(crate) use commands::{
-    RuntimeCompactionReplaySource, RuntimeReplayEpochAttempt, RuntimeReplayEpochCompletion,
-    RuntimeReplayEpochPublication,
+    LoopSourceRead, LoopSourceWork, RuntimeCompactionReplaySource, RuntimeReplayEpochAttempt,
+    RuntimeReplayEpochCompletion, RuntimeReplayEpochPublication,
 };
 pub(crate) use commands::{RuntimeManualCompactionPreparation, RuntimeManualCompactionRequestWork};
 /// Exposes the commands support module boundary.
@@ -502,12 +502,12 @@ use service_state::{
 pub(crate) use service_state::{
     RuntimeAgentCommandAsyncOutcome, RuntimeAgentCommandAsyncWork, RuntimeAgentCommandDispatch,
     RuntimeAgentCommandLifecyclePhase, RuntimeAgentCommandPrepared,
-    RuntimeAgentPromptHistoryDispatch, RuntimeAgentProviderPreparationOutcome,
-    RuntimeAgentProviderPreparationWork, RuntimeDirectResumeProjection,
-    RuntimeDirectResumeProjectionWork, RuntimeDirectResumeRead, RuntimeMcpDiscoveryOutcome,
-    RuntimeMcpDiscoverySuccess, RuntimePersistentSubagent, RuntimeRecordBrowserRefreshDispatch,
-    RuntimeRecordBrowserRefreshIntent, RuntimeRecordBrowserRefreshOutcome,
-    RuntimeRecordBrowserRefreshWork,
+    RuntimeAgentHistoryPreparationDispatch, RuntimeAgentPromptHistoryDispatch,
+    RuntimeAgentProviderPreparationOutcome, RuntimeAgentProviderPreparationWork,
+    RuntimeDirectResumeProjection, RuntimeDirectResumeProjectionWork, RuntimeDirectResumeRead,
+    RuntimeMcpDiscoveryOutcome, RuntimeMcpDiscoverySuccess, RuntimePersistentSubagent,
+    RuntimeRecordBrowserRefreshDispatch, RuntimeRecordBrowserRefreshIntent,
+    RuntimeRecordBrowserRefreshOutcome, RuntimeRecordBrowserRefreshWork,
 };
 pub use sockets::{
     apply_registry_update, apply_registry_update_async, authenticated_unix_peer_uid,

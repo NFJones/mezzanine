@@ -11,7 +11,8 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use crate::{
-    ContextExecutionGroupId, ContextSourceKind, ProviderContinuityOwner, ProviderTranscriptEvent,
+    ContextBlockOccurrenceId, ContextExecutionGroupId, ContextSourceKind, ProviderContinuityOwner,
+    ProviderTranscriptEvent,
 };
 
 /// Marker prefix for provider-independent transcript context events.
@@ -66,6 +67,19 @@ pub enum TranscriptContextEvent {
         /// Original non-zero chronological event sequence.
         event_sequence: u64,
         /// Exact model-visible block label.
+        label: String,
+        /// Exact model-visible user content.
+        content: String,
+    },
+    /// Explicit user-task admission with the first original task-suffix member.
+    /// This descriptive source fact is qualified by the product before replay;
+    /// arbitrary user/steering/peer prose cannot supersede prior instructions.
+    TaskAdmission {
+        /// Original non-zero sequence of the user root.
+        event_sequence: u64,
+        /// Original occurrence of the first new prelude or root, never an index.
+        task_start: ContextBlockOccurrenceId,
+        /// Exact model-visible user label.
         label: String,
         /// Exact model-visible user content.
         content: String,
@@ -138,6 +152,31 @@ pub enum TranscriptContextEvent {
 }
 
 impl TranscriptContextEvent {
+    /// Encodes an actual admission's original suffix boundary and user root.
+    /// Semantic validation matches ordinary user events; boundary membership
+    /// must be independently checked against the exact accounted source.
+    pub fn task_admission(
+        event_sequence: u64,
+        task_start: ContextBlockOccurrenceId,
+        label: impl Into<String>,
+        content: impl Into<String>,
+    ) -> Option<Self> {
+        let Self::UserEvent {
+            event_sequence,
+            label,
+            content,
+        } = Self::user_event(event_sequence, label, content)?
+        else {
+            return None;
+        };
+        Some(Self::TaskAdmission {
+            event_sequence,
+            task_start,
+            label,
+            content,
+        })
+    }
+
     /// Builds one validated canonical user event for durable replay.
     pub fn user_event(
         event_sequence: u64,
@@ -355,6 +394,19 @@ impl TranscriptContextEvent {
                 "label": label,
                 "content": content,
             }),
+            Self::TaskAdmission {
+                event_sequence,
+                task_start,
+                label,
+                content,
+            } => serde_json::json!({
+                "version": TRANSCRIPT_CONTEXT_EVENT_VERSION,
+                "kind": "task_admission",
+                "event_sequence": event_sequence,
+                "task_start": task_start,
+                "label": label,
+                "content": content,
+            }),
             Self::RoutedHandoff { content } => serde_json::json!({
                 "version": TRANSCRIPT_CONTEXT_EVENT_VERSION,
                 "kind": ROUTED_HANDOFF_KIND,
@@ -473,6 +525,12 @@ impl TranscriptContextEvent {
             }
             USER_EVENT_KIND => Self::user_event(
                 value.get("event_sequence")?.as_u64()?,
+                value.get("label")?.as_str()?,
+                value.get("content")?.as_str()?,
+            ),
+            "task_admission" => Self::task_admission(
+                value.get("event_sequence")?.as_u64()?,
+                serde_json::from_value(value.get("task_start")?.clone()).ok()?,
                 value.get("label")?.as_str()?,
                 value.get("content")?.as_str()?,
             ),

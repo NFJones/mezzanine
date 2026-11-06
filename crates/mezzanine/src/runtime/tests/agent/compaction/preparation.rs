@@ -100,7 +100,10 @@ fn runtime_manual_compaction_preserves_queued_and_claimed_history_input() {
                 "accepted history must survive compact refusal",
             )
             .unwrap();
-        let dispatch = service.take_pending_agent_prompt_history().pop().unwrap();
+        let dispatch = service
+            .take_pending_agent_prompt_history_for_tests()
+            .pop()
+            .unwrap();
         if claimed {
             assert!(service.claim_agent_prompt_history_preparation(&dispatch));
         }

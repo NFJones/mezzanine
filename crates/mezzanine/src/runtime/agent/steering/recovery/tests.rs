@@ -192,7 +192,9 @@ fn steering_recovery_deferred_settlement_publishes_at_persistence_drain() {
                 service
                     .execute_agent_shell_command(&primary, "/stop")
                     .unwrap();
-                let dispatch = service.take_pending_agent_prompt_history().remove(0);
+                let dispatch = service
+                    .take_pending_agent_prompt_history_for_tests()
+                    .remove(0);
                 assert!(service.claim_agent_prompt_history_preparation(&dispatch));
                 assert!(
                     service

@@ -88,12 +88,11 @@ impl RuntimeFrozenReplayHistory {
     ) -> Result<Self> {
         let owner = ReplayEpochContext::from_owned_context(conversation.clone(), body.clone())?;
         let snapshot = source.as_ref().and_then(|source| source.replay.clone());
-        let (records, blocks) =
-            super::context_records::RuntimeContextRecords::from_replay_checkpoint(
-                conversation.clone(),
-                owner.checkpoint()?,
-                snapshot,
-            )?;
+        let (records, blocks) = super::context_records::RuntimeContextRecords::from_replay_owner(
+            conversation.clone(),
+            owner,
+            snapshot,
+        )?;
         let source = RuntimeAgentHistorySource::with_target_policy(
             source.unwrap_or_else(RuntimeAgentHistorySource::absent),
             true,

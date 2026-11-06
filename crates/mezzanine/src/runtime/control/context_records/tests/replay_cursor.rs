@@ -620,7 +620,7 @@ fn replay_cursor_keeps_receipt_on_required_image_or_accounting_damage() {
 fn replay_cursor_retires_covered_backing_but_requires_unsettled_originals() {
     let fixture = Fixture::new();
     let manifest = fixture.manifest();
-    assert_eq!(manifest["manifest"]["version"], 6);
+    assert_eq!(manifest["manifest"]["version"], 7);
     assert_eq!(manifest["manifest"]["archive_cut"]["through_sequence"], 288);
     assert_eq!(
         manifest["manifest"]["source_escrow"]

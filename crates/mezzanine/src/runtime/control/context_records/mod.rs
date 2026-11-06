@@ -24,6 +24,8 @@ use mez_agent::{
     StableContextBlockRecord,
 };
 
+mod replay_arrivals;
+
 /// Non-model-visible records for the exact projected history prefix.
 #[derive(Debug, Clone, Default)]
 pub(in crate::runtime) struct RuntimeContextRecords {
@@ -41,6 +43,8 @@ pub(in crate::runtime) struct RuntimeContextRecords {
     /// a different projection or labels that may repeat across producers.
     source_sequences:
         std::collections::BTreeMap<ContextBlockOccurrenceId, mez_agent::ContextEventSequence>,
+    /// Explicit recorded task roots and their first original suffix occurrences.
+    task_admissions: std::collections::BTreeMap<ContextBlockOccurrenceId, ContextBlockOccurrenceId>,
     /// Frozen typed history; never rebuilt from its read-only flat projection.
     replay: Option<ReplayHistory>,
     #[cfg(test)]
@@ -55,9 +59,10 @@ struct ReplayHistory {
     /// An actual durable source when present. Pure NoStore checkpoints must not
     /// fabricate a committed identity merely to reuse canonical composition.
     snapshot: Option<std::sync::Arc<crate::storage::transcript::replay_epoch::ReplayEpochSnapshot>>,
-    /// Original head/tail plus checked new arrivals, without mutating the
-    /// committed parent snapshot used for publication CAS and source custody.
-    checkpoint: mez_agent::ReplayEpochCheckpoint,
+    /// Original head/tail plus checked new arrivals and actual in-memory
+    /// lifecycle witnesses. The committed parent remains independent for CAS.
+    body: AgentContext,
+    stable_records: Vec<StableContextBlockRecord>,
     blocks: usize,
 }
 
@@ -70,8 +75,8 @@ pub(super) struct DecodedContextRow {
 
 impl RuntimeContextRecords {
     /// Validates a frozen one-head epoch and exposes its exact read-only flat
-    /// projection to existing prompt composition. The checked checkpoint remains
-    /// the source of sequences, lifecycle and ownership during final import.
+    /// projection to existing prompt composition. An owned canonical body keeps
+    /// source sequences and any later qualified lifecycle transitions intact.
     pub(super) fn from_replay_snapshot(
         conversation_id: &str,
         snapshot: crate::storage::transcript::replay_epoch::ReplayEpochSnapshot,
@@ -93,11 +98,28 @@ impl RuntimeContextRecords {
             std::sync::Arc<crate::storage::transcript::replay_epoch::ReplayEpochSnapshot>,
         >,
     ) -> Result<(Self, Vec<ContextBlock>)> {
+        let stable_records = checkpoint.stable_records().to_vec();
         let owner = mez_agent::ReplayEpochContext::from_checkpoint(
             conversation.clone(),
-            checkpoint.clone(),
+            checkpoint,
             AgentContext::empty(),
         )?;
+        let (mut records, blocks) = Self::from_replay_owner(conversation, owner, snapshot)?;
+        records.replay.as_mut().ok_or_else(invalid)?.stable_records = stable_records;
+        Ok((records, blocks))
+    }
+
+    /// Preserves actual in-memory lifecycle witnesses through history transport.
+    /// Only an explicit source copy restores a fresh descriptive incarnation.
+    pub(super) fn from_replay_owner(
+        conversation: mez_agent::ReplayConversationId,
+        mut owner: mez_agent::ReplayEpochContext,
+        snapshot: Option<
+            std::sync::Arc<crate::storage::transcript::replay_epoch::ReplayEpochSnapshot>,
+        >,
+    ) -> Result<(Self, Vec<ContextBlock>)> {
+        let stable_records = owner.context().stable_block_records();
+        owner.replace_stable_slots(Vec::new())?;
         let blocks = owner.context().blocks().to_vec();
         let records = blocks
             .iter()
@@ -110,7 +132,8 @@ impl RuntimeContextRecords {
                 records,
                 replay: Some(ReplayHistory {
                     conversation,
-                    checkpoint,
+                    body: owner.into_owned_context(),
+                    stable_records,
                     snapshot,
                     blocks: blocks.len(),
                 }),
@@ -123,7 +146,8 @@ impl RuntimeContextRecords {
     /// Appends only new accounted rows to the original typed base. The renderer
     /// has already excluded qualified copies; canonical import validates native
     /// identities against that unchanged base and preserves explicit sequences.
-    /// No completion or transport/append receipt is inferred from source rows.
+    /// Only explicit accounted task admissions replay instruction supersession;
+    /// ordinary source grants no completion or transport/append receipt.
     pub(super) fn append_replay_arrivals(
         &mut self,
         blocks: Vec<ContextBlock>,
@@ -132,31 +156,17 @@ impl RuntimeContextRecords {
     ) -> Result<Vec<ContextBlock>> {
         arrivals.ensure_valid()?;
         let replay = self.replay.as_ref().ok_or_else(invalid)?;
-        let owner = mez_agent::ReplayEpochContext::from_checkpoint(
+        let owner = mez_agent::ReplayEpochContext::from_owned_context(
             replay.conversation.clone(),
-            replay.checkpoint.clone(),
-            AgentContext::empty(),
+            replay.body.clone(),
         )?;
-        let mut body = owner.into_owned_context();
-        let sequences = arrivals
-            .records
-            .iter()
-            .filter_map(|(index, record)| {
-                arrivals
-                    .source_sequences
-                    .get(&record.occurrence_id())
-                    .map(|sequence| (*index, *sequence))
-            })
-            .collect::<Vec<_>>();
-        body.append_imported_replay_arrivals(blocks, &arrivals.records, execution, &sequences)?;
-        let owner =
-            mez_agent::ReplayEpochContext::from_owned_context(replay.conversation.clone(), body)?;
-        // Restoration used an empty trusted prefix, so the temporary owner has
-        // no stable slots. Preserve the earlier checked accounting separately;
-        // only an explicitly later arrivals snapshot may supersede it below.
-        let checkpoint = owner
-            .checkpoint()?
-            .with_stable_records(replay.checkpoint.stable_records().to_vec())?;
+        let owner = replay_arrivals::append(
+            owner,
+            replay.conversation.clone(),
+            blocks,
+            arrivals,
+            execution,
+        )?;
         let blocks = owner.context().blocks().to_vec();
         self.records = owner
             .context()
@@ -172,7 +182,7 @@ impl RuntimeContextRecords {
         self.rendered_rows = arrivals.rendered_rows.clone();
         self.source_sequences = arrivals.source_sequences.clone();
         let replay = self.replay.as_mut().ok_or_else(invalid)?;
-        replay.checkpoint = checkpoint;
+        replay.body = owner.into_owned_context();
         replay.blocks = blocks.len();
         Ok(blocks)
     }
@@ -201,10 +211,17 @@ impl RuntimeContextRecords {
             .replay
             .as_mut()
             .ok_or_else(|| MezError::conflict("source copy has no original replay checkpoint"))?;
-        replay.checkpoint = replay
-            .checkpoint
-            .clone()
-            .for_conversation_copy(target.clone())?;
+        let owner = mez_agent::ReplayEpochContext::from_owned_context(
+            replay.conversation.clone(),
+            replay.body.clone(),
+        )?;
+        let checkpoint = owner.checkpoint()?.for_conversation_copy(target.clone())?;
+        replay.body = mez_agent::ReplayEpochContext::from_checkpoint(
+            target.clone(),
+            checkpoint,
+            AgentContext::empty(),
+        )?
+        .into_owned_context();
         replay.conversation = target;
         Ok(())
     }
@@ -370,6 +387,7 @@ impl RuntimeContextRecords {
                 }
                 let sequence = match &event {
                     TranscriptContextEvent::UserEvent { event_sequence, .. }
+                    | TranscriptContextEvent::TaskAdmission { event_sequence, .. }
                     | TranscriptContextEvent::McpCatalogSnapshot { event_sequence, .. }
                     | TranscriptContextEvent::PromptBoundary {
                         event_sequence: Some(event_sequence),
@@ -377,6 +395,12 @@ impl RuntimeContextRecords {
                     } => Some(*event_sequence),
                     _ => None,
                 };
+                if observe_stable
+                    && let TranscriptContextEvent::TaskAdmission { task_start, .. } = &event
+                {
+                    self.task_admissions
+                        .insert(record.occurrence_id(), *task_start);
+                }
                 if let Some(sequence) = sequence {
                     match mez_agent::ContextEventSequence::new(sequence) {
                         Ok(sequence) => {
@@ -583,25 +607,18 @@ impl RuntimeContextRecords {
                 .ok_or_else(|| MezError::conflict("frozen replay history is missing"))?;
             let suffix = blocks.split_off(history_end);
             let frozen = blocks.split_off(prefix);
-            let stable = self
-                .stable
-                .as_deref()
-                .unwrap_or_else(|| replay.checkpoint.stable_records());
-            let checkpoint = replay
-                .checkpoint
-                .clone()
-                .with_stable_records(stable.to_vec())?;
+            let stable = self.stable.as_deref().unwrap_or(&replay.stable_records);
             let current_prefix = AgentContext::import_durable_blocks_with_stable_sources(
                 blocks,
                 &[],
                 stable,
                 sources,
             )?;
-            let mut owner = mez_agent::ReplayEpochContext::from_checkpoint(
+            let mut owner = mez_agent::ReplayEpochContext::from_owned_context(
                 replay.conversation.clone(),
-                checkpoint,
-                current_prefix,
+                replay.body.clone(),
             )?;
+            owner.replace_stable_slots(current_prefix.stable_slots().to_vec())?;
             if !owner
                 .context()
                 .chronology()
@@ -613,35 +630,23 @@ impl RuntimeContextRecords {
                     "frozen replay history changed during prompt composition",
                 ));
             }
-            if new_task {
-                let instructions = owner
-                    .context()
-                    .chronology()
-                    .iter()
-                    .filter(|event| {
-                        event.retention() == mez_agent::ContextRetention::Exact
-                            && matches!(
-                                event.block().source,
-                                mez_agent::ContextSourceKind::UserInstruction
-                                    | mez_agent::ContextSourceKind::SkillInstruction
-                                    | mez_agent::ContextSourceKind::PersistedContextDocument
-                                    | mez_agent::ContextSourceKind::LocalMessage
-                            )
-                    })
-                    .map(|event| event.sequence())
-                    .collect::<Vec<_>>();
-                if !instructions.is_empty() {
-                    let task = owner.begin_instruction_task()?;
-                    owner.bind_instruction_occurrences(&task, &instructions)?;
-                    owner.complete_instruction_task(&task)?;
-                }
-            }
             let suffix_records = self
                 .records
                 .iter()
                 .filter(|(index, _)| *index >= replay.blocks)
                 .map(|(index, record)| (index - replay.blocks, *record))
                 .collect::<Vec<_>>();
+            if new_task {
+                let prompt = suffix
+                    .iter()
+                    .position(|block| {
+                        block.source == mez_agent::ContextSourceKind::UserInstruction
+                            && block.label == "user prompt"
+                    })
+                    .ok_or_else(|| MezError::conflict("new task has no original user root"))?;
+                owner.admit_instruction_task(suffix, &suffix_records, execution, prompt)?;
+                return Ok(owner.into_owned_context());
+            }
             let mut context = owner.into_owned_context();
             context.append_imported_history_with_execution(suffix, &suffix_records, execution)?;
             return Ok(context);

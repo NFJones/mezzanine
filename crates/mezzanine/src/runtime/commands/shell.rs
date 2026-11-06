@@ -536,10 +536,10 @@ impl RuntimeSessionService {
                 .as_ref()
                 .is_some_and(|invocation| invocation.name == "stop")
         {
-            self.agent.cancel_agent_command(&pane_id);
+            self.cancel_pending_loop_source(&pane_id)?;
             let outcome = AgentShellCommandOutcome::Mutated {
                 command: "stop".into(),
-                body: "loop source preparation cancelled; no loop was started".into(),
+                body: "loop source preparation cancelled".into(),
                 visibility: AgentShellVisibility::Visible,
             };
             return Ok(runtime_agent_shell_command_response_json(

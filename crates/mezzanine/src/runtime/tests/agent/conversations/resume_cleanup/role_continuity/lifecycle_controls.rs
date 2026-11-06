@@ -252,7 +252,7 @@ async fn runtime_native_role_stale_history_cannot_adopt_rebound_root() {
             .unwrap();
         let dispatch = fixture
             .service
-            .take_pending_agent_prompt_history()
+            .take_pending_agent_prompt_history_for_tests()
             .pop()
             .unwrap();
         let outcome = if claimed {

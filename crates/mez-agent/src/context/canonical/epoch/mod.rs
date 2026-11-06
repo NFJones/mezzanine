@@ -34,6 +34,7 @@ mod continuation;
 pub(super) use continuation::ReplayEpochContinuation;
 mod lifecycle;
 mod mcp_grants;
+mod task_admission;
 pub use checkpoint::ReplayEpochCheckpoint;
 pub(crate) use mcp_grants::ReplayMcpRetrievalScope;
 mod native_groups;

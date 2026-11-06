@@ -1076,6 +1076,15 @@ impl RuntimeAgentComponent {
         })
     }
 
+    pub(crate) fn pending_loop_source_work(
+        &self,
+        pane: &str,
+    ) -> Option<crate::runtime::commands::LoopSourceWork> {
+        self.loop_source_command_is_pending(pane)
+            .then(|| self.loop_source_commands.get(pane).cloned())
+            .flatten()
+    }
+
     /// Retains acceptance inputs under the exact newly allocated command claim.
     pub(crate) fn retain_native_directory_work(
         &mut self,
@@ -1236,6 +1245,21 @@ impl RuntimeAgentComponent {
             })
     }
 
+    pub(crate) fn agent_command_is_cancelled(
+        &self,
+        pane: &str,
+        conversation: &str,
+        command: u64,
+    ) -> bool {
+        self.agent_command_lifecycles
+            .get(pane)
+            .is_some_and(|lifecycle| {
+                lifecycle.command_id == command
+                    && lifecycle.conversation_id == conversation
+                    && lifecycle.phase == RuntimeAgentCommandLifecyclePhase::Cancelled
+            })
+    }
+
     /// Reports whether one pane currently owns a non-terminal deferred command.
     pub(crate) fn agent_command_is_active(&self, pane_id: &str) -> bool {
         self.agent_command_lifecycles
@@ -1370,6 +1394,7 @@ impl RuntimeAgentComponent {
                 .remove(&(pane_id.to_string(), command_id));
             lifecycle.phase = RuntimeAgentCommandLifecyclePhase::Cancelled;
             self.native_directory_commands.remove(pane_id);
+            self.loop_source_commands.remove(pane_id);
             self.finish_deferred_steering_command(
                 pane_id,
                 conversation_id,
@@ -1384,6 +1409,7 @@ impl RuntimeAgentComponent {
     /// Cancels every deferred command during terminal runtime shutdown.
     pub(crate) fn cancel_all_agent_commands(&mut self) -> usize {
         self.native_directory_commands.clear();
+        self.loop_source_commands.clear();
         self.pending_status_reports.clear();
         let mut count = 0usize;
         for lifecycle in self.agent_command_lifecycles.values_mut() {

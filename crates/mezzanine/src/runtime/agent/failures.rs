@@ -228,6 +228,7 @@ impl RuntimeSessionService {
         if let Some(facts) = error.recovery_facts() {
             execution.attach_recovery_facts(facts.clone());
         }
+        self.retain_canonical_recovery_diagnostic(turn, &execution)?;
         self.capture_completion_before_provider_error(turn)?;
         self.agent_turn_executions_mut()
             .insert(turn.turn_id.clone(), execution.clone());

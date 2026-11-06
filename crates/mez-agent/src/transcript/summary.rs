@@ -77,9 +77,10 @@ pub fn transcript_entry_user_content(entry: &TranscriptEntry) -> Option<String> 
         return None;
     }
     match TranscriptContextEvent::from_transcript_content(&entry.content) {
-        Some(TranscriptContextEvent::UserEvent { content, .. }) if !content.trim().is_empty() => {
-            Some(content)
-        }
+        Some(
+            TranscriptContextEvent::UserEvent { content, .. }
+            | TranscriptContextEvent::TaskAdmission { content, .. },
+        ) if !content.trim().is_empty() => Some(content),
         _ => None,
     }
 }

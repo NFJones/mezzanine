@@ -22,6 +22,72 @@ const PROVIDER_ACTION_EXECUTION_SEPARATOR: &str = "~mez~";
 const PROVIDER_ACTION_EXECUTION_DIGEST_LEN: usize = 16;
 
 impl RuntimeSessionService {
+    /// Retains sealed diagnostics before provider-error source capture. Normal
+    /// response admission performs the same append on its local candidate so a
+    /// rejected response cannot partially mutate the original canonical body.
+    pub(in crate::runtime::agent) fn retain_canonical_recovery_diagnostic(
+        &mut self,
+        turn: &AgentTurnRecord,
+        execution: &AgentTurnExecution,
+    ) -> Result<()> {
+        if execution.recovery_facts().is_none() {
+            return Ok(());
+        }
+        let imported = self.agent_turn_imported_history_sequence_high_water(&turn.turn_id);
+        let mut candidate = self
+            .agent_turn_contexts()
+            .get(&turn.turn_id)
+            .cloned()
+            .ok_or_else(|| {
+                MezError::invalid_state(
+                    "canonical recovery diagnostic lost its actual context owner",
+                )
+            })?;
+        if Self::append_canonical_recovery_diagnostic(&mut candidate, imported, turn, execution)? {
+            self.agent_turn_contexts_mut()
+                .insert(turn.turn_id.clone(), candidate);
+        }
+        Ok(())
+    }
+
+    /// Runtime observations own no action/native slots. A fresh occurrence and
+    /// cached cost enter the real body once; duplicates reuse the current-turn
+    /// group, while imported/coincidentally equal source cannot impersonate it.
+    fn append_canonical_recovery_diagnostic(
+        context: &mut mez_agent::AgentContext,
+        imported: u64,
+        turn: &AgentTurnRecord,
+        execution: &AgentTurnExecution,
+    ) -> Result<bool> {
+        let Some((group, block)) = canonical_recovery_diagnostic(turn, execution)? else {
+            return Ok(false);
+        };
+        let mut existing = context
+            .chronology()
+            .iter()
+            .filter(|event| event.execution_group_id() == Some(&group));
+        if let Some(event) = existing.next() {
+            if existing.next().is_some()
+                || event.sequence().get() <= imported
+                || event.block() != &block
+            {
+                return Err(MezError::conflict(
+                    "canonical recovery diagnostic has a different original owner",
+                ));
+            }
+            return Ok(false);
+        }
+        context.append_conversation_events([ContextConversationAppend::evidence(
+            block.source,
+            block.label,
+            block.content,
+            group,
+            None,
+            true,
+        )])?;
+        Ok(true)
+    }
+
     /// Replaces response-local MAAP action ordinals with execution-scoped ids.
     ///
     /// Provider parsers deliberately synthesize ordinal ids such as `action-1`
@@ -108,6 +174,12 @@ impl RuntimeSessionService {
             .get(&turn.turn_id)
             .cloned()
             .ok_or_else(|| MezError::invalid_state("runtime agent turn context is unavailable"))?;
+        let recovery_changed = Self::append_canonical_recovery_diagnostic(
+            &mut context,
+            self.agent_turn_imported_history_sequence_high_water(&turn.turn_id),
+            turn,
+            execution,
+        )?;
 
         let mut retained_decision_counts = BTreeMap::<(String, String), usize>::new();
         for block in context.blocks().iter().filter(|block| {
@@ -213,12 +285,16 @@ impl RuntimeSessionService {
                 && event.block().source == ContextSourceKind::TranscriptAssistant
         });
         if let Some(retained_assistant) = retained_assistant {
-            return match retained_assistant {
-                event if event.block().content == content => Ok(()),
-                _ => Err(MezError::invalid_state(
+            if retained_assistant.block().content != content {
+                return Err(MezError::invalid_state(
                     "replayed provider execution changed its assistant response content",
-                )),
-            };
+                ));
+            }
+            if recovery_changed {
+                self.agent_turn_contexts_mut()
+                    .insert(turn.turn_id.clone(), context);
+            }
+            return Ok(());
         }
         if !mapped_groups.is_empty() {
             return Err(MezError::invalid_state(
@@ -351,6 +427,46 @@ impl RuntimeSessionService {
         }
         Ok(())
     }
+}
+
+/// Derives the diagnostic identity from this actual sealed execution, not from
+/// a history label or a coincidentally equal budget line. The source remains a
+/// runtime observation; it cannot close native work or grant recovery authority.
+pub(in crate::runtime::agent) fn canonical_recovery_diagnostic(
+    turn: &AgentTurnRecord,
+    execution: &AgentTurnExecution,
+) -> Result<Option<(ContextExecutionGroupId, mez_agent::ContextBlock)>> {
+    let Some(facts) = execution.recovery_facts() else {
+        return Ok(None);
+    };
+    if execution.request.turn_id != turn.turn_id || execution.request.agent_id != turn.agent_id {
+        return Err(MezError::conflict(
+            "canonical recovery diagnostic has a foreign request owner",
+        ));
+    }
+    let original = provider_execution_group_id(
+        &turn.turn_id,
+        execution,
+        &provider_execution_identity_content(execution),
+    )?;
+    let mut digest = Sha256::new();
+    update_provider_execution_digest(&mut digest, &turn.conversation_id);
+    update_provider_execution_digest(&mut digest, original.as_str());
+    update_provider_execution_digest(&mut digest, &format!("{facts:?}"));
+    let digest = digest
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    let group = ContextExecutionGroupId::new(format!("canonical-recovery:{digest}"))?;
+    Ok(Some((
+        group,
+        mez_agent::ContextBlock::evidence_event(
+            ContextSourceKind::CommittedEvidence,
+            "canonical recovery facts",
+            facts.diagnostic_line(),
+        ),
+    )))
 }
 
 /// Returns assistant content with execution suffixes removed for identity hashing.

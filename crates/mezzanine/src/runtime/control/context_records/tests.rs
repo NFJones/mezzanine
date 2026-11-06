@@ -12,6 +12,7 @@ use std::path::PathBuf;
 mod authored_cache;
 mod cache;
 mod pending_ownership;
+mod recorded_tasks;
 mod replay_arrivals;
 mod replay_cursor;
 mod replay_epoch;

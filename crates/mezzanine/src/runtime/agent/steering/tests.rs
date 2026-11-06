@@ -352,7 +352,9 @@ fn steering_receipts_failed_deferred_context_commit_settles_partial_owner() {
     service
         .execute_agent_shell_command(&primary, "/stop")
         .unwrap();
-    let dispatch = service.take_pending_agent_prompt_history().remove(0);
+    let dispatch = service
+        .take_pending_agent_prompt_history_for_tests()
+        .remove(0);
     assert!(service.claim_agent_prompt_history_preparation(&dispatch));
     service.fail_next_peer_message_receive_after_context_storage_for_tests();
     let history =
@@ -473,7 +475,9 @@ fn steering_receipts_deferred_transfer_trace_failure_retains_runnable_owner() {
     service
         .execute_agent_shell_command(&primary, "/stop")
         .unwrap();
-    let dispatch = service.take_pending_agent_prompt_history().remove(0);
+    let dispatch = service
+        .take_pending_agent_prompt_history_for_tests()
+        .remove(0);
     assert!(service.claim_agent_prompt_history_preparation(&dispatch));
     service
         .agent_shell_store_mut()
@@ -669,7 +673,9 @@ fn steering_receipts_final_order_transfers_without_new_allocation() {
     service
         .execute_agent_shell_command(&primary, "/stop")
         .unwrap();
-    let dispatch = service.take_pending_agent_prompt_history().remove(0);
+    let dispatch = service
+        .take_pending_agent_prompt_history_for_tests()
+        .remove(0);
     assert_eq!(dispatch.steering_receipts[0].acceptance_order, u64::MAX);
     assert!(service.claim_agent_prompt_history_preparation(&dispatch));
     let history =
@@ -834,7 +840,11 @@ fn steering_receipts_successive_root_observations_cannot_rebind_or_restore() {
                 &service.agent.settled_compaction_steering[&("%1".into(), conversation, epoch)];
             assert_eq!(settled[0].id, entry.receipt.id);
             assert_eq!(settled[0].status, Status::NotSent);
-            assert!(service.take_pending_agent_prompt_history().is_empty());
+            assert!(
+                service
+                    .take_pending_agent_prompt_history_for_tests()
+                    .is_empty()
+            );
         }
     }
 }
@@ -882,7 +892,11 @@ fn steering_receipts_deferred_root_replacement_fences_each_transition() {
             service
                 .execute_agent_shell_command(&primary, "/stop")
                 .unwrap();
-            assert!(service.take_pending_agent_prompt_history().is_empty());
+            assert!(
+                service
+                    .take_pending_agent_prompt_history_for_tests()
+                    .is_empty()
+            );
             let settled = &service.agent.settled_compaction_steering
                 [&("%1".into(), entry.conversation, entry.epoch)];
             assert_eq!(settled[0].id, entry.receipt.id);
@@ -891,7 +905,9 @@ fn steering_receipts_deferred_root_replacement_fences_each_transition() {
             service
                 .execute_agent_shell_command(&primary, "/stop")
                 .unwrap();
-            let dispatch = service.take_pending_agent_prompt_history().remove(0);
+            let dispatch = service
+                .take_pending_agent_prompt_history_for_tests()
+                .remove(0);
             if phase == "complete" {
                 assert!(service.claim_agent_prompt_history_preparation(&dispatch));
             }
@@ -1074,7 +1090,11 @@ fn steering_receipts_compaction_queue_teardown_preserves_occurrences() {
                 .all(|entry| entry.status == Status::NotSent && entry.sequence == 0)
         );
         assert!(service.agent_turn_ledger().turns().is_empty());
-        assert!(service.take_pending_agent_prompt_history().is_empty());
+        assert!(
+            service
+                .take_pending_agent_prompt_history_for_tests()
+                .is_empty()
+        );
         assert!(service.pending_agent_provider_tasks().is_empty());
         service.discard_agent_compaction_steering("%1");
         assert_eq!(
@@ -1116,7 +1136,9 @@ fn steering_receipts_history_cancellation_is_actor_owned() {
             service
                 .execute_agent_shell_command(&primary, "/stop")
                 .unwrap();
-            let dispatch = service.take_pending_agent_prompt_history().remove(0);
+            let dispatch = service
+                .take_pending_agent_prompt_history_for_tests()
+                .remove(0);
             if claimed {
                 assert!(service.claim_agent_prompt_history_preparation(&dispatch));
             }
@@ -1180,7 +1202,9 @@ fn steering_receipts_deferred_history_failure_is_not_sent_once() {
     service
         .execute_agent_shell_command(&primary, "/stop")
         .unwrap();
-    let dispatch = service.take_pending_agent_prompt_history().remove(0);
+    let dispatch = service
+        .take_pending_agent_prompt_history_for_tests()
+        .remove(0);
     assert!(service.claim_agent_prompt_history_preparation(&dispatch));
     assert!(!service.claim_agent_prompt_history_preparation(&dispatch));
     assert!(

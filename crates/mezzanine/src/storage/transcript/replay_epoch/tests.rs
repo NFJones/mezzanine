@@ -1125,11 +1125,59 @@ fn version_five_source_upgrades_through_qualified_publication() {
     assert_eq!(current.context().chronology().last(), Some(&original));
     assert!(mez_agent::invoked_mcp_tools_for_context(current.context(), &summary).is_empty());
     current.append_fact("new", "new exact source").unwrap();
-    let next = proposal(&fixture, &current, Some(parent), "version six head");
-    assert_eq!(next.envelope.manifest.version, 6);
+    let next = proposal(&fixture, &current, Some(parent), "current version head");
+    assert_eq!(next.envelope.manifest.version, 7);
     assert!(next.envelope.manifest.archive_cut.is_some());
     fixture.store.publish_replay_epoch(&next).unwrap();
     assert_eq!(fixture.load().0, next.identity());
+}
+
+/// The version-six wire shape is unchanged when no task-boundary field exists.
+/// A cold reader may load it, then the sole writer advances to version seven.
+#[test]
+fn version_six_source_upgrades_without_reinterpreting_task_lifecycle() {
+    let fixture = Fixture::new();
+    let first = proposal(&fixture, &source(), None, "old head");
+    fixture.store.publish_replay_epoch(&first).unwrap();
+    let mut old = first.envelope.clone();
+    old.manifest.version = 6;
+    old.sha256 = digest(&encode(&old.manifest).unwrap());
+    let directory = fixture.root.join("conversation-a");
+    let bytes = encode(&old).unwrap();
+    payload::publish(&directory, &digest(&bytes), &bytes, || Ok(())).unwrap();
+    fs::write(directory.join(MANIFEST_NAME), bytes).unwrap();
+    let (parent, mut current) = fixture.load();
+    current
+        .append_fact("arrival", "original arrival bytes")
+        .unwrap();
+    let next = proposal(&fixture, &current, Some(parent), "new head");
+    assert_eq!(next.envelope.manifest.version, 7);
+    fixture.store.publish_replay_epoch(&next).unwrap();
+    assert_eq!(fixture.load().0, next.identity());
+}
+
+#[test]
+fn earlier_manifest_cannot_claim_explicit_task_boundary_source() {
+    let fixture = Fixture::new();
+    let mut source = source();
+    source
+        .admit_instruction_task(
+            vec![ContextBlock::user_event("user prompt", "actual task")],
+            &[],
+            &[],
+            0,
+        )
+        .unwrap();
+    let current = proposal(&fixture, &source, None, "head with exact task tail");
+    for version in [5, 6] {
+        let mut old = current.envelope.clone();
+        old.manifest.version = version;
+        if version == 5 {
+            old.manifest.archive_cut = None;
+        }
+        old.sha256 = digest(&encode(&old.manifest).unwrap());
+        assert!(old.validate("conversation-a").is_err());
+    }
 }
 
 /// Reproduce the actual old nested format, rather than relabeling a current

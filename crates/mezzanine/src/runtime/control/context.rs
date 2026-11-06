@@ -935,7 +935,10 @@ fn runtime_agent_transcript_context_with_ranges_and_mcp_epoch(
                     event.content.clone(),
                 ))
             }
-            Some(TranscriptContextEvent::UserEvent { label, content, .. }) => Some(ContextBlock {
+            Some(
+                TranscriptContextEvent::UserEvent { label, content, .. }
+                | TranscriptContextEvent::TaskAdmission { label, content, .. },
+            ) => Some(ContextBlock {
                 source: if accounting.is_some_and(|snapshot| snapshot.replay.is_some()) {
                     ContextSourceKind::UserInstruction
                 } else {

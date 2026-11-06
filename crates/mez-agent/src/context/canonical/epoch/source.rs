@@ -14,6 +14,9 @@ use super::*;
 #[derive(Clone, Default, PartialEq, Eq)]
 pub(super) struct ReplaySourceLifecycle {
     pub(super) completed_instructions: BTreeSet<ContextBlockOccurrenceId>,
+    /// Actual task admission binds its root to the first original suffix member.
+    /// A descriptive checkpoint cannot recreate this producer witness.
+    pub(super) task_admissions: BTreeMap<ContextBlockOccurrenceId, ContextBlockOccurrenceId>,
     pub(super) handed_off_peers: BTreeSet<ContextBlockOccurrenceId>,
     pub(super) closed_groups: BTreeMap<ContextExecutionGroupId, ReplayExecutionClosure>,
     /// Actual prompt-boundary insertions, qualified before owner reacquisition.
@@ -163,6 +166,9 @@ impl ReplayEpochContext {
         self.source_lifecycle
             .completed_instructions
             .retain(|id| members.contains(id));
+        self.source_lifecycle
+            .task_admissions
+            .retain(|id, _| members.contains(id));
         self.source_lifecycle
             .handed_off_peers
             .retain(|id| members.contains(id));

@@ -965,6 +965,13 @@ pub(in crate::host::async_runtime) enum AsyncRuntimeRequest {
         /// Canonical history epoch prepared without accessing live actor state.
         history: Result<crate::runtime::RuntimeAgentTranscriptContext>,
     },
+    /// Starts the pinned internal reuse iteration after its original source read.
+    CompleteLoopContinuationSource {
+        /// Exact internal controller/predecessor claim and physical source owner.
+        work: crate::runtime::LoopSourceWork,
+        /// Opaque result from that original source worker.
+        result: Box<Result<crate::runtime::LoopSourceRead>>,
+    },
     /// Adopts exact manual compaction source work without replaying command input.
     CompleteManualCompactionPreparation {
         /// Captured preparation identity and finite worker ownership.
@@ -1729,6 +1736,7 @@ impl AsyncRuntimeRequest {
             | Self::CompleteAgentShellProviderInfoRefresh { .. }
             | Self::CompleteAgentPromptProviderInfoRefresh { .. }
             | Self::CompleteAgentPromptHistoryPreparation { .. }
+            | Self::CompleteLoopContinuationSource { .. }
             | Self::CompleteManualCompactionPreparation { .. }
             | Self::CompleteManualCompactionRequest { .. }
             | Self::CompleteBookkeepingCandidate { .. }

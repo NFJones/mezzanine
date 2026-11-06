@@ -136,7 +136,9 @@ impl AgentContext {
             .collect::<BTreeSet<_>>()
         {
             candidate.validate_native_group_source(&group, false)?;
-            candidate.retain_pending_execution_group(&group)?;
+            if !candidate.execution_group_is_observational(&group) {
+                candidate.retain_pending_execution_group(&group)?;
+            }
         }
         for index in start..candidate.chronology.len() {
             candidate.protect_replay_arrival(&candidate.chronology[index].clone())?;

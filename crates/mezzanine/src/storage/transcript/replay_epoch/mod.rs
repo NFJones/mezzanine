@@ -1,7 +1,7 @@
 //! Immutable single-head source backing and expected-parent publication.
 //!
 //! The existing conversation mutation lease serializes this writer with archive,
-//! editing and persistence owners. Version six extends the same authoritative
+//! editing and persistence owners. Version seven extends the same authoritative
 //! compaction sidecar, never a parallel selectable history. Payloads are private,
 //! content-addressed immutable files; retained bytes are reused across epochs.
 //! A prepared proposal retains its original publication identity and summary so
@@ -312,7 +312,7 @@ impl ReplayEpochPublication {
             &mut payloads,
         )?;
         let manifest = Manifest {
-            version: 6,
+            version: 7,
             conversation_id: conversation_id.to_owned(),
             epoch_revision: candidate.revision().get(),
             revision: expected_parent
@@ -1059,7 +1059,7 @@ impl Envelope {
                 manifest.source_escrow.is_some(),
                 manifest.archive_cut.is_some()
             ),
-            (4, false, false) | (5, true, false) | (6, true, true)
+            (4, false, false) | (5, true, false) | (6 | 7, true, true)
         ) || manifest.conversation_id != conversation_id
             || manifest.revision == 0
             || manifest.epoch_revision == 0
@@ -1090,6 +1090,15 @@ impl Envelope {
         }
         if let Some(escrow) = &manifest.source_escrow {
             escrow::validate(escrow)?;
+            if manifest.version < 7
+                && escrow
+                    .iter()
+                    .any(escrow::EscrowOccurrence::has_task_admission)
+            {
+                return Err(invalid(
+                    "task boundary requires version-seven source backing",
+                ));
+            }
             if manifest.version < 6 && escrow.iter().any(escrow::EscrowOccurrence::is_archived) {
                 return Err(invalid(
                     "legacy source escrow cannot claim archive settlement",

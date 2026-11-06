@@ -4,6 +4,48 @@
 use super::*;
 use crate::{AgentContext, ContextBlock, ContextSourceKind};
 
+/// Explicit admission is a distinct reserved fact; malformed or missing original
+/// boundaries cannot downgrade into ordinary user text or an empty claim.
+#[test]
+fn accounted_task_admission_round_trips_boundary_and_rejects_invalid_identity() {
+    let block = ContextBlock::user_event("user prompt", "actual new task");
+    let record = ContextBlockRecord::allocate(&block).unwrap();
+    let first = crate::ContextBlockOccurrenceId::allocate();
+    let event =
+        TranscriptContextEvent::task_admission(2048, first, &block.label, &block.content).unwrap();
+    let encoded = TranscriptContextRecord::new(event.clone(), record, None)
+        .unwrap()
+        .to_transcript_content()
+        .unwrap();
+    let decoded = TranscriptContextRecord::from_transcript_content(&encoded)
+        .unwrap()
+        .unwrap();
+    assert_eq!(decoded.event(), &event);
+    assert_eq!(decoded.record(), record);
+    let mut value: Value = serde_json::from_str(
+        encoded
+            .strip_prefix(ACCOUNTED_CONTEXT_RECORD_MARKER)
+            .unwrap(),
+    )
+    .unwrap();
+    for fault in [
+        Value::Null,
+        serde_json::json!("00000000-0000-0000-0000-000000000000"),
+        serde_json::json!(17),
+    ] {
+        value["event"]["task_start"] = fault;
+        assert!(
+            TranscriptContextRecord::from_transcript_content(&format!(
+                "{ACCOUNTED_CONTEXT_RECORD_MARKER}{value}"
+            ))
+            .is_err()
+        );
+    }
+    assert!(
+        TranscriptContextEvent::task_admission(0, first, &block.label, &block.content).is_none()
+    );
+}
+
 /// Metadata lookup over covered no-snapshot records skips actual semantic
 /// reconstruction. Empty snapshots remain full claims; unsupported framing,
 /// formats, fields and carrier semantics cannot become an absence fallback.

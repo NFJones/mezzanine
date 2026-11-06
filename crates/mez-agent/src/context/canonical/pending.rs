@@ -10,8 +10,16 @@
 
 use super::{
     AgentContext, AgentContextError, AgentContextResult, ContextEventSequence,
-    ContextExecutionGroupId, ContextSourceKind,
+    ContextExecutionGroupId, ContextSemanticKind, ContextSourceKind, ConversationEvent,
 };
+
+/// Controller observations carry no assistant/action/native obligation. This
+/// checks typed metadata, never a display label or a claimed completion string.
+pub(super) fn observation_only_event(event: &ConversationEvent) -> bool {
+    event.block().source == ContextSourceKind::CommittedEvidence
+        && event.semantic_kind() == ContextSemanticKind::EvidenceEvent
+        && event.provider_owner().is_none()
+}
 
 /// One opaque in-memory protection interval. Clones share its allocation;
 /// renewing protection after release allocates another one even at the same
@@ -35,6 +43,17 @@ impl PartialEq for ContextExecutionProtection {
 impl Eq for ContextExecutionProtection {}
 
 impl AgentContext {
+    /// Nonempty groups consisting solely of runtime observations cannot mint
+    /// execution fences. Existing protection is never released by this query.
+    pub(super) fn execution_group_is_observational(&self, group: &ContextExecutionGroupId) -> bool {
+        let mut members = self
+            .chronology()
+            .iter()
+            .filter(|event| event.execution_group_id() == Some(group))
+            .peekable();
+        members.peek().is_some() && members.all(observation_only_event)
+    }
+
     /// Protects an already committed peer event until its request owner's context
     /// and wake handoff commits. Missing/non-peer sequences reject without
     /// creating phantom history. Repeated retention is idempotent and does not

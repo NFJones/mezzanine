@@ -8420,6 +8420,18 @@ turn exists.
 Pending bookkeeping or canonical message receipts for the selected original
 parent and required source MUST fence both initial capture and result adoption,
 before any controller restoration, conversation switch, or turn creation.
+Reuse-mode continuation history MUST also be prepared off the session actor.
+Its work MUST retain the settled predecessor and exact controller/iteration
+claim, and use the returned history without rereading it at turn admission.
+Cancellation, replacement, duplicate callbacks, or source failure MUST NOT
+replay the settled iteration or submit a new user `/loop` command. A failed
+continuation MUST remain local to its controller; independently replaced pane
+bindings and unrelated work MUST remain usable.
+Canonical recovery diagnostics MUST retain the same accounted occurrence and
+estimate in live context, terminal export and replay. Standalone runtime
+observations MUST NOT mint execution fences or retire an existing obligation.
+Assistant, action and native-tool groups MUST retain their ordinary ownership
+and pending-source checks; observation text MUST NOT certify effect completion.
 When the command is invoked with `--new`, `/loop` MUST start every work
 iteration in a fresh empty conversation instead of reusing the current pane
 conversation or forking the parent transcript. New-mode work conversations
@@ -11078,8 +11090,22 @@ MUST retain the same original immutable batch's occurrence proposal; envelope
 bytes alone MUST NOT establish pending ownership. Native ordinal/API/provider/call
 validation MUST use the actual unchanged base and complete new suffix before
 adopting any arrival. Invalid source MUST reject the whole read, not silently
-omit a repaired execution group. Imported source alone MUST NOT retire tasks,
+omit a repaired execution group. Ordinary imported source alone MUST NOT retire tasks,
 close pending execution, replay effects or acknowledge ordinary append durability.
+An accounted `task_admission` semantic record MUST identify the exact original
+user root and the first occurrence of its new task suffix, including any preceding
+prelude. The producer MUST derive this boundary from actual task admission, never
+from saved prompt labels or matching text. Replay MUST qualify both occurrences
+in the same ordered original arrival source and retire the prior exact task scope
+before importing that suffix. The new prelude/root remain exact. Steering,
+ordinary legacy `user_event` records and peer input MUST NOT infer supersession.
+An old root record lacking this witness that would create two active prompts
+MUST refuse explicitly; it MUST NOT silently discard intent or retype instructions.
+Recorded admission reconstructs only instruction lifecycle: native/peer fences,
+execution ownership and ordinary append receipts remain independently enforced.
+Actual lifecycle witnesses MUST survive in-memory history preparation/composition
+so a subsequent publication can qualify its extension against the committed parent;
+a descriptive checkpoint alone MUST NOT mint those witnesses.
 Checked arrival source MAY be marked recoverable for immutable publication
 backing, but eligibility MUST still require its actual exact/pending lifecycle
 gates; a recoverability flag alone MUST NOT retire protected source.
@@ -11093,8 +11119,10 @@ MUST visibly require an explicit original-source escrow transition instead of
 inventing missing earlier originals or calling a model on resume. Missing v5
 escrow MUST NOT default to a successful migration.
 
-Version six adds a required immutable archive cut to that same manifest and is
-the only one-head format written. A valid version-five source escrow MAY advance
+Version six adds a required immutable archive cut to that same manifest.
+Version seven additionally binds explicit task-suffix boundaries in original
+source escrow and is the only one-head format written. Valid version-five and
+version-six sources MAY advance
 through the qualified publication path without a provider call. Preparation MUST
 qualify the actual newly observed archive rows against original source and the
 production zero-model renderer, then advance only through a contiguous prefix
@@ -11105,6 +11133,11 @@ ordinary append acknowledgment. Publication MUST recheck the frozen complete
 prefix, original index/source qualifications and expected parent under its held
 lease, then sync the archive before latest-authority replacement and acknowledgment.
 No changed old prefix may be recertified while extending a cut.
+Version-seven task boundary metadata MUST match later original audit rows exactly.
+Its original first occurrence MUST remain backed while its root remains required
+or unsettled, even if that earlier occurrence already entered the archive cut.
+Earlier manifests MUST NOT carry version-seven boundary metadata. This changes
+conversation persistence only and does not change the configuration schema.
 
 Ordinary typed history reads MUST validate the committed cut's boundary and
 required index references, then decode only its later archive tail. Current

@@ -627,7 +627,59 @@ impl AsyncRuntimeSessionActor {
 
     /// Starts worker preparation for every prompt-history dispatch currently owned by the service.
     pub(super) fn dispatch_pending_agent_prompt_history(&mut self) {
-        for dispatch in self.service.take_pending_agent_prompt_history() {
+        for preparation in self.service.take_pending_agent_history_preparations() {
+            let dispatch = match preparation {
+                crate::runtime::RuntimeAgentHistoryPreparationDispatch::Prompt(dispatch) => {
+                    *dispatch
+                }
+                crate::runtime::RuntimeAgentHistoryPreparationDispatch::LoopContinuation(work) => {
+                    match self.service.claim_loop_continuation_source(&work) {
+                        Ok(true) => {}
+                        Ok(false) => continue,
+                        Err(error) => {
+                            let _ = self.service.append_agent_error_text_to_terminal_buffer(
+                                work.pane(),
+                                error.message(),
+                            );
+                            continue;
+                        }
+                    }
+                    let sender = self.sender.clone();
+                    tokio::spawn(async move {
+                        #[cfg(test)]
+                        let probe = work.preparation_probe_for_tests();
+                        #[cfg(test)]
+                        if let Some((started, release)) = &probe {
+                            started.notify_one();
+                            release.notified().await;
+                        }
+                        let source = work.clone();
+                        let result = tokio::task::spawn_blocking(move || {
+                            #[cfg(test)]
+                            if let Some((started, _)) = &probe {
+                                started.notify_one();
+                            }
+                            source.execute()
+                        })
+                        .await
+                        .map_err(|error| {
+                            crate::MezError::invalid_state(format!(
+                                "loop continuation source worker failed: {error}"
+                            ))
+                        })
+                        .and_then(|read| read);
+                        let _ = sender
+                            .send(AsyncRuntimeRequestEnvelope::new(
+                                AsyncRuntimeRequest::CompleteLoopContinuationSource {
+                                    work,
+                                    result: Box::new(result),
+                                },
+                            ))
+                            .await;
+                    });
+                    continue;
+                }
+            };
             if !self
                 .service
                 .claim_agent_prompt_history_preparation(&dispatch)
@@ -2977,6 +3029,36 @@ impl AsyncRuntimeSessionActor {
                     );
                     let _ = self.queue_runtime_side_effects(transition.side_effects);
                     self.dispatch_pending_agent_prompt_history();
+                    self.notify_event_delivery();
+                }
+                false
+            }
+            AsyncRuntimeRequest::CompleteLoopContinuationSource { work, result } => {
+                let previous_sources = self.ready_dispatch_sources();
+                let result = self
+                    .service
+                    .complete_loop_continuation_source(&work, *result);
+                if result.as_ref().is_ok_and(|applied| *applied) || result.is_err() {
+                    if let Err(error) = &result {
+                        let _ = self.service.append_agent_error_text_to_terminal_buffer(
+                            work.pane(),
+                            error.message(),
+                        );
+                    }
+                    let _ = self.queue_fitting_deferred_service_side_effects();
+                    self.queue_newly_ready_dispatch_sources(previous_sources);
+                    let clients = self
+                        .service
+                        .session()
+                        .clients()
+                        .iter()
+                        .filter(|client| client.state == mez_mux::session::ClientState::Attached)
+                        .map(|client| crate::runtime::RuntimeSideEffect::RenderClient {
+                            client_id: client.id.clone(),
+                            reason: crate::runtime::RenderInvalidationReason::AgentPrompt,
+                        })
+                        .collect();
+                    let _ = self.queue_runtime_side_effects(clients);
                     self.notify_event_delivery();
                 }
                 false

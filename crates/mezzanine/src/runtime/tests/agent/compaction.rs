@@ -6354,7 +6354,7 @@ fn runtime_manual_compaction_queues_steering_and_blocks_conversation_mutation() 
         .unwrap();
     assert!(stopped.contains("compaction_cancelled=true"), "{stopped}");
     assert!(!service.agent_is_compacting("%1"));
-    let resumed = service.take_pending_agent_prompt_history();
+    let resumed = service.take_pending_agent_prompt_history_for_tests();
     assert_eq!(resumed.len(), 1);
     assert_eq!(
         resumed[0].prompt,
@@ -6484,7 +6484,7 @@ context_window_tokens = 5000
         .unwrap();
     assert!(stopped.contains("compaction_cancelled=true"), "{stopped}");
     assert!(!service.agent_is_compacting("%1"));
-    let resumed = service.take_pending_agent_prompt_history();
+    let resumed = service.take_pending_agent_prompt_history_for_tests();
     assert_eq!(resumed.len(), 1);
     assert_eq!(resumed[0].prompt, "continue after cancellation");
 
@@ -6497,7 +6497,10 @@ context_window_tokens = 5000
         .unwrap();
     assert!(!late.applied);
     assert!(!service.agent_is_compacting("%1"));
-    assert_eq!(service.take_pending_agent_prompt_history().len(), 0);
+    assert_eq!(
+        service.take_pending_agent_prompt_history_for_tests().len(),
+        0
+    );
     assert_eq!(service.agent_turn_ledger().turns().len(), 0);
 }
 
@@ -6543,7 +6546,11 @@ fn runtime_manual_compaction_steering_does_not_cross_conversation_rebind() {
     service.mark_agent_compacting_for_tests("%1", 1);
     service.cancel_current_agent_compaction_task("%1");
     assert!(!service.resume_agent_compaction_steering("%1").unwrap());
-    assert!(service.take_pending_agent_prompt_history().is_empty());
+    assert!(
+        service
+            .take_pending_agent_prompt_history_for_tests()
+            .is_empty()
+    );
 }
 
 /// Verifies pane compaction is a dispatch barrier for ordinary model work.
@@ -7263,7 +7270,7 @@ fn runtime_manual_compaction_splits_configured_input_cap() {
             .summary
             .contains("FINAL_CAP_SUMMARY")
     );
-    let resumed = service.take_pending_agent_prompt_history();
+    let resumed = service.take_pending_agent_prompt_history_for_tests();
     assert_eq!(resumed.len(), 1);
     assert_eq!(resumed[0].prompt, "keep steering across chunks");
 }
@@ -7442,7 +7449,7 @@ fn runtime_manual_compaction_recovers_provider_context_limit() {
             .summary
             .contains("FINAL_MANUAL_SUMMARY")
     );
-    let resumed = service.take_pending_agent_prompt_history();
+    let resumed = service.take_pending_agent_prompt_history_for_tests();
     assert_eq!(resumed.len(), 1);
     assert_eq!(
         resumed[0].prompt,
@@ -7776,7 +7783,7 @@ context_window_tokens = 128000
             .unwrap()
             .applied
     );
-    let resumed = service.take_pending_agent_prompt_history();
+    let resumed = service.take_pending_agent_prompt_history_for_tests();
     assert_eq!(resumed.len(), 1);
     assert_eq!(resumed[0].prompt, "continue after compaction");
     assert_eq!(resumed[0].transcript_entries, 4);

@@ -12,6 +12,8 @@ use crate::runtime::control::{
 };
 use std::sync::Arc;
 
+mod continuation;
+
 #[derive(Clone)]
 pub(crate) struct LoopSourceWork {
     pub(crate) operation: u64,
@@ -21,6 +23,9 @@ pub(crate) struct LoopSourceWork {
 struct Inputs {
     pane: String,
     input: String,
+    /// Exact settled predecessor for an internal reuse continuation. Absence
+    /// identifies a user-command admission, never a synthetic continuation.
+    continuation: Option<String>,
     binding: Binding,
     frozen: Option<RuntimeFrozenReplayHistory>,
     stale: Option<RuntimeAgentLoopState>,
@@ -36,6 +41,8 @@ struct Inputs {
     /// A later binding cannot redirect the adoption-time chronology fence.
     admission_conversations: Vec<String>,
     _permit: Option<Arc<tokio::sync::OwnedSemaphorePermit>>,
+    #[cfg(test)]
+    probe: Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>,
 }
 
 /// Descriptive freshness fields only. The worker retains no shell task handles,
@@ -122,6 +129,19 @@ impl std::fmt::Debug for LoopSourceRead {
 }
 
 impl LoopSourceWork {
+    #[cfg(test)]
+    pub(crate) fn preparation_probe_for_tests(
+        &self,
+    ) -> Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)> {
+        self.inner.probe.clone()
+    }
+    pub(crate) fn pane(&self) -> &str {
+        &self.inner.pane
+    }
+    pub(crate) fn conversation(&self) -> &str {
+        &self.inner.binding.session_id
+    }
+
     pub(crate) fn execute(&self) -> Result<LoopSourceRead> {
         let objective = self
             .inner
@@ -194,6 +214,20 @@ impl RuntimeSessionService {
                 "an agent loop is already active for this pane",
             ));
         }
+        self.capture_loop_history_work(pane, input, parsed.mode, permit, None)
+    }
+
+    /// Shares immutable capture and freshness rules between initial admission
+    /// and internal reuse continuation. Only the former restores a stale
+    /// controller's original parent before beginning a new logical loop.
+    fn capture_loop_history_work(
+        &self,
+        pane: &str,
+        input: &str,
+        mode: RuntimeAgentLoopMode,
+        permit: Option<Arc<tokio::sync::OwnedSemaphorePermit>>,
+        continuation: Option<&str>,
+    ) -> Result<LoopSourceWork> {
         let binding = self
             .agent_shell_store()
             .get(pane)
@@ -205,7 +239,9 @@ impl RuntimeSessionService {
         let stale = self.agent_loop_state(pane).cloned();
         let mut parent = binding.clone();
         let mut parent_frozen = frozen.clone();
-        if let Some(state) = &stale {
+        if continuation.is_none()
+            && let Some(state) = &stale
+        {
             parent.session_id = state.parent_conversation_id.clone();
             parent.transcript_entries = state.parent_transcript_entries;
             parent.transcript_high_water = state.parent_transcript_high_water;
@@ -236,16 +272,17 @@ impl RuntimeSessionService {
         } else {
             parent.transcript_high_water
         };
-        let history = (parsed.mode != RuntimeAgentLoopMode::NewEachIteration || parent.ephemeral)
+        let history = (mode != RuntimeAgentLoopMode::NewEachIteration || parent.ephemeral)
             .then(|| self.prepare_prompt_history_for_binding(pane, Some(&parent), parent_frozen));
-        let objective_conversation =
-            (parsed.mode != RuntimeAgentLoopMode::ReuseCurrentConversation || stale.is_some())
-                .then(|| parent.session_id.clone());
+        let objective_conversation = (continuation.is_none()
+            && (mode != RuntimeAgentLoopMode::ReuseCurrentConversation || stale.is_some()))
+        .then(|| parent.session_id.clone());
         Ok(LoopSourceWork {
             operation: 0,
             inner: Arc::new(Inputs {
                 pane: pane.into(),
                 input: input.into(),
+                continuation: continuation.map(str::to_owned),
                 binding: Binding::capture(&binding),
                 frozen,
                 stale,
@@ -259,6 +296,11 @@ impl RuntimeSessionService {
                 source_frontier,
                 admission_conversations,
                 _permit: permit,
+                #[cfg(test)]
+                probe: {
+                    let (started, release) = self.integration.prompt_history_preparation_probe();
+                    started.zip(release)
+                },
             }),
         })
     }
@@ -310,6 +352,11 @@ impl RuntimeSessionService {
         work: &LoopSourceWork,
         read: &LoopSourceRead,
     ) -> Result<AgentShellCommandOutcome> {
+        if work.inner.continuation.is_some() {
+            return Err(MezError::conflict(
+                "loop continuation cannot start a new loop command",
+            ));
+        }
         if !work.same_owner(&read.owner) {
             return Err(MezError::conflict(
                 "loop source result has a different owner",

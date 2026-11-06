@@ -6,8 +6,10 @@ use super::*;
 mod checkpoint;
 mod continuation;
 mod mcp_grants;
+mod observations;
 mod publication;
 mod source;
+mod task_admission;
 
 /// Creates an empty canonical owner with one exact stable policy slot.
 fn owner() -> ReplayEpochContext {

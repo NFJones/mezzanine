@@ -1424,7 +1424,7 @@ fn attached_agent_prompt_redraw_after_history_settles() {
     assert_eq!(application.agent_prompt_inputs_applied, 1);
     assert!(service.agent_command_is_active("%1"));
     assert!(service.pending_agent_provider_tasks().is_empty());
-    let mut dispatches = service.take_pending_agent_prompt_history();
+    let mut dispatches = service.take_pending_agent_prompt_history_for_tests();
     assert_eq!(dispatches.len(), 1);
     let dispatch = dispatches.pop().unwrap();
     assert!(service.claim_agent_prompt_history_preparation(&dispatch));

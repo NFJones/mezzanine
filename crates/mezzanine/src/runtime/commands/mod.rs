@@ -1140,7 +1140,7 @@ impl RuntimeSessionService {
     /// The first iteration consumes the worker's admitted history. Isolated
     /// iterations always use the original immutable source or explicit empty
     /// history; reuse continuations retain the ordinary current-history path.
-    fn start_agent_loop_work_turn_with_history(
+    pub(in crate::runtime) fn start_agent_loop_work_turn_with_history(
         &mut self,
         pane_id: &str,
         initial_history: Option<crate::runtime::control::RuntimeAgentTranscriptContext>,
@@ -1872,22 +1872,24 @@ impl RuntimeSessionService {
             "agent: preparing conversation history",
         );
         self.presentation.push_pending_agent_prompt_history(
-            crate::runtime::RuntimeAgentPromptHistoryDispatch {
-                primary_client_id,
-                pane_id: pane_id.to_string(),
-                conversation_id,
-                config_generation: self.session.config_generation,
-                compaction_epoch: self.agent_compaction_epoch(pane_id),
-                transcript_entries,
-                claim_generation,
-                prompt: prompt.to_string(),
-                steering_receipts,
-                history_work,
-                #[cfg(test)]
-                prompt_history_preparation_started,
-                #[cfg(test)]
-                prompt_history_preparation_release,
-            },
+            crate::runtime::RuntimeAgentHistoryPreparationDispatch::Prompt(Box::new(
+                crate::runtime::RuntimeAgentPromptHistoryDispatch {
+                    primary_client_id,
+                    pane_id: pane_id.to_string(),
+                    conversation_id,
+                    config_generation: self.session.config_generation,
+                    compaction_epoch: self.agent_compaction_epoch(pane_id),
+                    transcript_entries,
+                    claim_generation,
+                    prompt: prompt.to_string(),
+                    steering_receipts,
+                    history_work,
+                    #[cfg(test)]
+                    prompt_history_preparation_started,
+                    #[cfg(test)]
+                    prompt_history_preparation_release,
+                },
+            )),
         );
         Ok(true)
     }

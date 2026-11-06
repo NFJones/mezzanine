@@ -116,6 +116,7 @@ fn accounted_occurrence_identity(record: TranscriptContextRecord) -> String {
     } else {
         match &mut semantic {
             TranscriptContextEvent::UserEvent { event_sequence, .. }
+            | TranscriptContextEvent::TaskAdmission { event_sequence, .. }
             | TranscriptContextEvent::McpCatalogSnapshot { event_sequence, .. } => {
                 *event_sequence = 1
             }

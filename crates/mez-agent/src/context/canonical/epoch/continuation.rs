@@ -228,7 +228,9 @@ impl ReplayEpochContext {
                 if prelude.is_some() {
                     inserted_preludes.insert(event.record().occurrence_id());
                 }
-                if let Some(group) = event.execution_group_id() {
+                if let Some(group) = event.execution_group_id()
+                    && !context.execution_group_is_observational(group)
+                {
                     context
                         .pending_execution_groups
                         .entry(group.clone())
@@ -285,8 +287,24 @@ impl ReplayEpochContext {
 }
 
 impl AgentContext {
-    /// Applies conservative protection at actual live admission, before either
-    /// legacy readers or a later checked owner conversion can observe the body.
+    /// Returns the first original suffix occurrence of an actual task admission.
+    /// This descriptive producer fact grants no task or execution capability;
+    /// cold checkpoints do not manufacture it from prompt labels.
+    pub fn replay_task_admission_start(
+        &self,
+        prompt: ContextBlockOccurrenceId,
+    ) -> Option<ContextBlockOccurrenceId> {
+        self.replay_continuation
+            .as_ref()?
+            .source_lifecycle
+            .task_admissions
+            .get(&prompt)
+            .copied()
+    }
+
+    /// Protects actual execution at live admission. Standalone runtime
+    /// observations create no effect fence; adding an assistant/native event
+    /// later protects the whole group, and existing protection is never released.
     pub(in super::super) fn protect_replay_arrival(
         &mut self,
         event: &ConversationEvent,
@@ -296,6 +314,15 @@ impl AgentContext {
         }
         let protection = event
             .execution_group_id()
+            .filter(|group| {
+                self.execution_group_is_pending(group)
+                    || !super::super::pending::observation_only_event(event)
+                    || !self
+                        .chronology()
+                        .iter()
+                        .filter(|existing| existing.execution_group_id() == Some(*group))
+                        .all(super::super::pending::observation_only_event)
+            })
             .map(|group| self.activate_execution_protection(group))
             .transpose()?;
         if let Some(continuation) = &mut self.replay_continuation {

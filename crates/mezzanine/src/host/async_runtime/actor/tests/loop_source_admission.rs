@@ -16,12 +16,12 @@ use std::time::{Duration, Instant};
 
 /// Always releases and joins the owned lease thread, including on assertion
 /// failure. The finite fallback also bounds an accidentally inline actor read.
-struct Lease {
+pub(super) struct Lease {
     release: Option<std::sync::mpsc::Sender<()>>,
     thread: Option<std::thread::JoinHandle<()>>,
 }
 impl Lease {
-    fn hold(root: &std::path::Path) -> Self {
+    pub(super) fn hold(root: &std::path::Path) -> Self {
         let file = std::fs::OpenOptions::new()
             .read(true)
             .write(true)

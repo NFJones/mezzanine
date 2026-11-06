@@ -601,6 +601,15 @@ pub(crate) struct RuntimeAgentCommandDispatch {
     pub claim_generation: u64,
 }
 
+/// Existing history preparation lane carries either a user prompt or an
+/// internal loop continuation. Neither kind may impersonate the other's input
+/// or completion ownership; loop work retains its exact physical source permit.
+#[derive(Debug, Clone)]
+pub(crate) enum RuntimeAgentHistoryPreparationDispatch {
+    Prompt(Box<RuntimeAgentPromptHistoryDispatch>),
+    LoopContinuation(crate::runtime::commands::LoopSourceWork),
+}
+
 /// One interactive prompt whose immutable history epoch is prepared off actor.
 ///
 /// The actor performs configuration, trust, and hook admission before creating

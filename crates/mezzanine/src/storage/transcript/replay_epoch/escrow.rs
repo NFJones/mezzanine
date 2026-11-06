@@ -70,6 +70,9 @@ pub(super) struct EscrowOccurrence {
     ordinal: Option<u64>,
     provider: Option<(String, String)>,
     origin: ReplaySourceOrigin,
+    /// Version-seven explicit task boundary; absent in older source formats.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    task_start: Option<ContextBlockOccurrenceId>,
     /// Original ordinary image is covered by this manifest's durable cut.
     #[serde(default, skip_serializing_if = "is_false")]
     archived: bool,
@@ -140,6 +143,13 @@ fn extend_with_limit(
                 || Ok(origin.clone()),
                 |(row, _)| ReplaySourceOrigin::new(&row.turn_id, &row.agent_id, &row.pane_id),
             )?,
+            task_start: source
+                .task_admission_start(event.record().occurrence_id())
+                .or_else(|| {
+                    originals
+                        .get(&event.record().occurrence_id())
+                        .and_then(|item| item.task_start)
+                }),
             archived: false,
         };
         match originals.get(&item.record.occurrence_id()) {
@@ -242,6 +252,23 @@ fn validate_with_limit(items: &[EscrowOccurrence], limit: usize) -> Result<()> {
         }
         sequence = item.sequence;
     }
+    let by_id = items
+        .iter()
+        .map(|item| (item.occurrence_id(), item))
+        .collect::<BTreeMap<_, _>>();
+    for item in items {
+        if let Some(first) = item.task_start {
+            let first = by_id
+                .get(&first)
+                .ok_or_else(|| invalid("task boundary source is missing"))?;
+            if item.source != ContextSourceKind::UserInstruction
+                || first.sequence > item.sequence
+                || first.origin != item.origin
+            {
+                return Err(invalid("invalid task boundary source"));
+            }
+        }
+    }
     Ok(())
 }
 
@@ -273,6 +300,9 @@ pub(super) fn validate_current(
 }
 
 impl EscrowOccurrence {
+    pub(super) fn has_task_admission(&self) -> bool {
+        self.task_start.is_some()
+    }
     pub(super) fn is_archived(&self) -> bool {
         self.archived
     }
@@ -306,10 +336,24 @@ impl EscrowOccurrence {
                 label,
                 content: actual,
             } => {
-                matches!(
-                    self.source,
-                    ContextSourceKind::UserInstruction | ContextSourceKind::TranscriptUser
-                ) && *event_sequence == self.sequence
+                self.task_start.is_none()
+                    && matches!(
+                        self.source,
+                        ContextSourceKind::UserInstruction | ContextSourceKind::TranscriptUser
+                    )
+                    && *event_sequence == self.sequence
+                    && label == &self.label
+                    && actual == content
+            }
+            TranscriptContextEvent::TaskAdmission {
+                event_sequence,
+                task_start,
+                label,
+                content: actual,
+            } => {
+                self.source == ContextSourceKind::UserInstruction
+                    && self.task_start == Some(*task_start)
+                    && *event_sequence == self.sequence
                     && label == &self.label
                     && actual == content
             }
@@ -428,13 +472,22 @@ pub(super) fn publication_source(
 }
 
 fn retire_archived(items: &mut Vec<EscrowOccurrence>, source: &ReplayEpochContext) {
-    let required = source
+    let mut required = source
         .context()
         .chronology()
         .iter()
         .skip(usize::from(source.head().is_some()))
         .map(|event| event.record().occurrence_id())
         .collect::<BTreeSet<_>>();
+    // A retained/unsettled task root still requires its exact original boundary,
+    // including after that prelude itself entered the durable archive cut.
+    for item in items.iter() {
+        if (!item.archived || required.contains(&item.occurrence_id()))
+            && let Some(first) = item.task_start
+        {
+            required.insert(first);
+        }
+    }
     let groups = items
         .iter()
         .filter(|item| !item.archived || required.contains(&item.occurrence_id()))
@@ -523,6 +576,7 @@ pub(super) fn qualify_rows(
             && matches!(
                 authored.event(),
                 TranscriptContextEvent::UserEvent { .. }
+                    | TranscriptContextEvent::TaskAdmission { .. }
                     | TranscriptContextEvent::PromptBoundary {
                         event_sequence: Some(_),
                         ..
@@ -683,5 +737,89 @@ mod tests {
         duplicated[1].record = duplicated[0].record;
         assert!(validate(&duplicated).is_err());
         assert!(ReplaySourceOrigin::new("", "agent", "pane").is_err());
+    }
+
+    /// An archived prelude still backs an unsettled root. Delayed source must
+    /// carry its exact task boundary, not a changed source with equal text.
+    #[test]
+    fn escrow_task_boundary_survives_partial_settlement_and_rejects_changed_copy() {
+        let origin = ReplaySourceOrigin::new("task", "agent", "pane").unwrap();
+        let mut source = ReplayEpochContext::new(
+            ReplayConversationId::new("task-escrow").unwrap(),
+            AgentContext::empty(),
+        )
+        .unwrap();
+        source
+            .admit_instruction_task(
+                vec![
+                    mez_agent::ContextBlock::task_prelude(
+                        ContextSourceKind::SkillInstruction,
+                        "skill",
+                        "exact skill",
+                    ),
+                    mez_agent::ContextBlock::user_event("user prompt", "exact task"),
+                ],
+                &[],
+                &[],
+                1,
+            )
+            .unwrap();
+        let items = extend(&[], &source, &origin, &[]).unwrap();
+        assert_eq!(items[1].task_start, Some(items[0].occurrence_id()));
+        let empty = ReplayEpochContext::new(
+            ReplayConversationId::new("task-escrow").unwrap(),
+            AgentContext::empty(),
+        )
+        .unwrap();
+        let partial = publication_source(
+            &items,
+            &empty,
+            &origin,
+            &[],
+            &BTreeSet::from([items[0].occurrence_id()]),
+        )
+        .unwrap();
+        assert_eq!(partial.len(), 2);
+        assert!(partial[0].archived);
+        assert!(!partial[1].archived);
+        assert!(
+            publication_source(
+                &partial,
+                &empty,
+                &origin,
+                &[],
+                &BTreeSet::from([items[1].occurrence_id()])
+            )
+            .unwrap()
+            .is_empty()
+        );
+        let root = &source.context().chronology()[1];
+        let row = TranscriptEntry {
+            conversation_id: "task-escrow".into(),
+            sequence: 2,
+            created_at_unix_seconds: 123,
+            role: TranscriptRole::System,
+            turn_id: "task".into(),
+            agent_id: "agent".into(),
+            pane_id: "pane".into(),
+            content: String::new(),
+        };
+        for (first, expected) in [
+            (items[0].occurrence_id(), true),
+            (items[1].occurrence_id(), false),
+        ] {
+            let event = TranscriptContextEvent::task_admission(
+                root.sequence().get(),
+                first,
+                &root.block().label,
+                &root.block().content,
+            )
+            .unwrap();
+            let authored = TranscriptContextRecord::new(event, root.record(), None).unwrap();
+            assert_eq!(
+                items[1].matches(&row, &authored, &root.block().content),
+                expected
+            );
+        }
     }
 }

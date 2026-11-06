@@ -417,19 +417,26 @@ impl RuntimeSessionService {
     }
 
     /// Drains interactive prompts whose immutable history needs worker preparation.
-    pub(crate) fn take_pending_agent_prompt_history(
+    pub(crate) fn take_pending_agent_history_preparations(
         &mut self,
-    ) -> Vec<crate::runtime::RuntimeAgentPromptHistoryDispatch> {
+    ) -> Vec<crate::runtime::RuntimeAgentHistoryPreparationDispatch> {
         let pending = std::mem::take(&mut self.presentation.pending_agent_prompt_history);
         let mut ready = Vec::new();
-        for mut dispatch in pending {
+        for item in pending {
+            let crate::runtime::RuntimeAgentHistoryPreparationDispatch::Prompt(mut dispatch) = item
+            else {
+                // Loop snapshots retain their actual controller/source owner.
+                // Never recapture a different history while draining the lane.
+                ready.push(item);
+                continue;
+            };
             if self
                 .persistence
                 .bookkeeping_pending(&dispatch.conversation_id)
             {
                 self.presentation
                     .pending_agent_prompt_history
-                    .push(dispatch);
+                    .push(crate::runtime::RuntimeAgentHistoryPreparationDispatch::Prompt(dispatch));
             } else {
                 if let Some(session) = self.agent_shell_store().get(&dispatch.pane_id)
                     && session.session_id == dispatch.conversation_id
@@ -442,10 +449,28 @@ impl RuntimeSessionService {
                     dispatch.history_work =
                         self.prepare_runtime_agent_prompt_history_work(&dispatch.pane_id);
                 }
-                ready.push(dispatch);
+                ready
+                    .push(crate::runtime::RuntimeAgentHistoryPreparationDispatch::Prompt(dispatch));
             }
         }
         ready
+    }
+
+    /// Ordinary prompt fixtures inspect their own typed lane; an internal loop
+    /// item must not be silently discarded or treated as a user prompt.
+    #[cfg(test)]
+    pub(crate) fn take_pending_agent_prompt_history_for_tests(
+        &mut self,
+    ) -> Vec<crate::runtime::RuntimeAgentPromptHistoryDispatch> {
+        self.take_pending_agent_history_preparations()
+            .into_iter()
+            .map(|item| match item {
+                crate::runtime::RuntimeAgentHistoryPreparationDispatch::Prompt(prompt) => *prompt,
+                crate::runtime::RuntimeAgentHistoryPreparationDispatch::LoopContinuation(_) => {
+                    panic!("ordinary prompt fixture received loop continuation")
+                }
+            })
+            .collect()
     }
 
     /// Drains deferred record-browser refreshes queued by overlay flows.

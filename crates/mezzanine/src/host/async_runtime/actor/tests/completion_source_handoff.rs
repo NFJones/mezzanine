@@ -72,7 +72,10 @@ fn history_at_capacity() -> (
             "retain accepted completion dispatch",
         )
         .unwrap();
-    let dispatch = actor.service.take_pending_agent_prompt_history().remove(0);
+    let dispatch = actor
+        .service
+        .take_pending_agent_prompt_history_for_tests()
+        .remove(0);
     assert!(
         actor
             .service
@@ -257,7 +260,10 @@ async fn accepted_history_completion_stale_callback_preserves_replacement() {
         .service
         .begin_agent_prompt_history_preparation(primary.clone(), "%1", "new exact history owner")
         .unwrap();
-    let replacement = actor.service.take_pending_agent_prompt_history().remove(0);
+    let replacement = actor
+        .service
+        .take_pending_agent_prompt_history_for_tests()
+        .remove(0);
     assert_ne!(dispatch.claim_generation, replacement.claim_generation);
     assert_ne!(dispatch.conversation_id, replacement.conversation_id);
     assert!(

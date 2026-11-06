@@ -121,6 +121,11 @@ history projection, so later parent changes do not enter the loop. `/stop` can
 cancel preparation before a work turn exists; a late result cannot start the
 cancelled loop. A reader that is still running keeps its worker capacity until
 it retires.
+Reuse-mode loops prepare the next iteration's current history on that worker
+lane too. Each result belongs to its exact settled predecessor and iteration;
+cancellation or a duplicate result cannot repeat completed work or start an
+extra iteration. Source failures stop that controller while other panes remain
+usable.
 
 Agent log entries retain presentation-only local occurrence evidence separately
 from saved-session creation and activity timestamps. Streamed components keep the
@@ -477,18 +482,26 @@ keeping the archive entry count at zero. Discovery checks the saved header and
 its original receipt; actual replay independently checks the required source and
 payloads before admitting a request.
 
-The current writer uses sidecar version six to carry original-source escrow
+The current writer uses sidecar version seven to carry original-source escrow
 across publications. If ordinary rows arrive after several summaries, replay
 checks their original turn, occurrence, bytes and native metadata before
 deduplicating them. Earlier covered source and display copies do not reenter
 the model, and a delayed stable snapshot does not override the frozen baseline.
+New task admissions record the first original member of their task suffix, so
+replay retires the prior task before importing the new prelude and prompt. The
+original bytes, IDs and costs remain intact. Steering and peer messages keep the
+current task protected. An older user record without an admission witness that
+would create two active prompts is refused explicitly. Version-five and
+version-six sidecars can advance through checked publication without inference;
+they do not gain missing lifecycle witnesses from labels or text.
 Supported new authored rows now join the frozen typed base once through the same
 history worker. Pending rows must retain their original immutable append batch;
 replay preserves original occurrences, costs, native ownership and explicit
 user/prompt/catalog sequence reservations. The original history capture carries
 their producer into a later publication, including when the ordinary batch has
-not yet settled. It does not acknowledge that append, complete old tasks, or
-execute native work. Duplicates, broken native order/providers, unowned pending
+not yet settled. Ordinary imported rows do not complete old tasks; only the
+explicit recorded admission above can supersede them. Replay does not acknowledge
+the append or execute native work. Duplicates, broken native order/providers, unowned pending
 rows and rewound sequence reservations refuse the read. Unaccounted legacy
 semantic arrivals and unsupported controls still require their own custody
 integration. An immutable indexed archive cut now lets typed history reads skip

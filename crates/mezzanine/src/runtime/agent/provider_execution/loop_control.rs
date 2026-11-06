@@ -172,8 +172,19 @@ impl RuntimeSessionService {
         let Some(state) = self.agent_loop_state_by_id(&continuation.loop_id).cloned() else {
             return Ok(());
         };
-        match self.start_agent_loop_work_turn(&continuation.pane_id) {
-            Ok(_) => {
+        let started = if state.mode
+            == crate::runtime::agent_state::RuntimeAgentLoopMode::ReuseCurrentConversation
+            && self.agent_source_preparation_uses_adapter()
+        {
+            self.begin_loop_continuation_source(&continuation, settled_turn_id)
+                .map(|_| None)
+        } else {
+            self.start_agent_loop_work_turn(&continuation.pane_id)
+                .map(Some)
+        };
+        match started {
+            Ok(None) => Ok(()),
+            Ok(Some(_)) => {
                 self.append_agent_status_text_to_terminal_buffer(
                     &state.invoking_pane_id,
                     &format!(
@@ -199,7 +210,7 @@ impl RuntimeSessionService {
     /// parent through the existing bounded explanation path, while an ordinary
     /// controller reports the failure on its invoking pane because the turn it
     /// belonged to has already settled.
-    fn recover_failed_agent_loop_continuation(
+    pub(in crate::runtime) fn recover_failed_agent_loop_continuation(
         &mut self,
         loop_id: &str,
         settled_turn_id: &str,

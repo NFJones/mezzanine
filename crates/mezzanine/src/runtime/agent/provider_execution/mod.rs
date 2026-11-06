@@ -15,6 +15,7 @@ mod result_apply;
 mod result_apply_async;
 mod worker;
 
+pub(in crate::runtime::agent) use context::canonical_recovery_diagnostic;
 pub(super) use context::provider_log_execution_group_id;
 pub(crate) use persistence::execute_agent_provider_persistence_work;
 pub(crate) use recovery::{ProviderFailureRecoveryDecision, decide_provider_failure_recovery};
