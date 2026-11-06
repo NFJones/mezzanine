@@ -3,6 +3,138 @@
 
 use super::*;
 
+/// Re-protection is a new obligation even when the source frontier is unchanged.
+/// A completed handle must not close that renewed allocation; a freshly captured
+/// handle may close it, and only that exact completion verifies afterward.
+#[test]
+fn owned_context_retired_handle_cannot_close_renewed_same_frontier() {
+    let mut source = owner();
+    let group = ContextExecutionGroupId::new("renewed protection").unwrap();
+    let frontier = source
+        .append_execution_events([ContextConversationAppend::assistant(
+            "assistant",
+            "closed source",
+            group.clone(),
+        )])
+        .unwrap()[0];
+    let retired = source.capture_execution_owner(&group, frontier).unwrap();
+    source.finish_execution_group(&retired).unwrap();
+    let mut context = source.into_owned_context();
+    context.retain_pending_execution_group(&group).unwrap();
+    let before = context.clone();
+    assert!(
+        context
+            .update_replay_owner(|owner| owner.finish_execution_group(&retired))
+            .is_err(),
+        "retired source fence closed a renewed protection"
+    );
+    assert_eq!(context, before);
+    context.retain_pending_execution_group(&group).unwrap();
+    assert_eq!(
+        context, before,
+        "still-pending retention must remain idempotent"
+    );
+    let renewed = context
+        .update_replay_owner(|owner| owner.capture_execution_owner(&group, frontier))
+        .unwrap();
+    assert_ne!(renewed, retired);
+    context
+        .update_replay_owner(|owner| owner.finish_execution_group(&renewed))
+        .unwrap();
+    context
+        .update_replay_owner(|owner| {
+            assert!(owner.execution_group_finished(&renewed));
+            assert!(!owner.execution_group_finished(&retired));
+            Ok(())
+        })
+        .unwrap();
+}
+
+/// An older pending snapshot may have the same source and pending flag, but a
+/// different protection allocation. Rebase and repeated retention cannot roll
+/// the private fence backward and make the older handle usable again.
+#[test]
+fn owned_context_rejects_pending_allocation_rollback() {
+    let mut source = owner();
+    let group = ContextExecutionGroupId::new("pending allocation rollback").unwrap();
+    let frontier = source
+        .append_execution_events([ContextConversationAppend::assistant(
+            "assistant",
+            "unchanged source",
+            group.clone(),
+        )])
+        .unwrap()[0];
+    let retired = source.capture_execution_owner(&group, frontier).unwrap();
+    let stale = source.clone().into_owned_context();
+    source.finish_execution_group(&retired).unwrap();
+    let mut current = source.into_owned_context();
+    current.retain_pending_execution_group(&group).unwrap();
+    let frozen = current.chronology().to_vec();
+    current.rebase_chronology_suffix(&frozen, &stale).unwrap();
+    let before = current.clone();
+    assert!(
+        current
+            .update_replay_owner(|owner| owner.finish_execution_group(&retired))
+            .is_err()
+    );
+    assert!(current.retain_pending_execution_group(&group).is_err());
+    assert_eq!(current, before);
+}
+
+/// Append fences are captured at actual source admission and survive live body
+/// moves. An older fence cannot close a newer append; exact completed-source
+/// verification survives retries but cannot be reconstructed by a cold checkpoint.
+#[test]
+fn owned_context_append_fences_preserve_original_retirement_source() {
+    let mut context = owner().into_owned_context();
+    let group = ContextExecutionGroupId::new("actual append group").unwrap();
+    context
+        .append_assistant_event("assistant", "original source", group.clone())
+        .unwrap();
+    let first = context
+        .replay_execution_append_owner(&group)
+        .unwrap()
+        .clone();
+    let sequence = context
+        .append_evidence_event(
+            ContextSourceKind::ActionResult,
+            "settled evidence",
+            "actual result",
+            group.clone(),
+            None,
+            true,
+        )
+        .unwrap();
+    let completed = context
+        .replay_execution_append_owner(&group)
+        .unwrap()
+        .clone();
+    assert_eq!(completed.frontier(), sequence);
+    assert_ne!(first, completed);
+    assert!(
+        context
+            .update_replay_owner(|owner| owner.finish_execution_group(&first))
+            .is_err()
+    );
+    context
+        .update_replay_owner(|owner| owner.finish_execution_group(&completed))
+        .unwrap();
+    assert!(context.replay_execution_append_owner(&group).is_none());
+    let live = ReplayEpochContext::from_owned_context(
+        ReplayConversationId::new("conversation-a").unwrap(),
+        context,
+    )
+    .unwrap();
+    assert!(live.execution_group_finished(&completed));
+    let cold = ReplayEpochContext::from_checkpoint(
+        ReplayConversationId::new("conversation-a").unwrap(),
+        live.checkpoint().unwrap(),
+        AgentContext::empty(),
+    )
+    .unwrap();
+    assert!(!cold.execution_group_finished(&completed));
+}
+
 /// Restoring a live body must retain actual task handles and completed-source
 /// witnesses, while cold descriptive restoration gets a new incarnation.
 #[test]

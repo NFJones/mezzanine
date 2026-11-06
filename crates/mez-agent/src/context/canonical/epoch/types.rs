@@ -113,10 +113,13 @@ pub struct ReplayInstructionOwner {
 }
 
 /// Exact source fence for a pending execution group. It identifies admitted
-/// source, not a native process, worker generation or completion receipt.
+/// source and one protection allocation, not a native process, worker generation
+/// or completion receipt. Renewed protection invalidates a retired handle even
+/// when its source frontier is unchanged.
 #[derive(Clone, PartialEq, Eq)]
 pub struct ReplayExecutionOwner {
     pub(super) owner_identity: ReplayOwnerIdentity,
+    pub(super) protection: ContextExecutionProtection,
     pub(super) group: ContextExecutionGroupId,
     pub(super) frontier: ContextEventSequence,
 }

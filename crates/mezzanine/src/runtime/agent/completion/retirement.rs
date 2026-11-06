@@ -176,6 +176,8 @@ pub(super) struct CompletionGroup {
     pub(super) identity: std::sync::Arc<()>,
     pub(super) turn: AgentTurnRecord,
     pub(super) group: mez_agent::ContextExecutionGroupId,
+    /// Original typed source fence, updated only by an actual context append.
+    pub(super) replay_owner: Option<mez_agent::ReplayExecutionOwner>,
     pub(super) actions: Vec<(String, String, usize)>,
     /// Original provider-native call ownership survives moved failed backing.
     pub(super) provider_calls: Vec<(mez_agent::ProviderContinuityOwner, String)>,
@@ -577,12 +579,18 @@ impl RuntimeSessionService {
             .and_then(|groups| groups.get(group_id))
             .cloned()
             .unwrap_or_default();
+        let replay_owner = self
+            .agent_turn_contexts()
+            .get(turn_id)
+            .and_then(|context| context.replay_execution_append_owner(group_id))
+            .cloned();
         self.agent.completion_settlements.groups.insert(
             turn_id.to_string(),
             Box::new(CompletionGroup {
                 identity: std::sync::Arc::new(()),
                 turn,
                 group: group_id.clone(),
+                replay_owner,
                 actions,
                 provider_calls,
                 issued: BTreeSet::new(),
@@ -1275,6 +1283,7 @@ impl RuntimeSessionService {
             {
                 return Ok(false);
             }
+            self.finish_completion_replay_group(turn_id)?;
             return Ok(self.queue_completion_provider_task(turn_id.to_string()));
         }
         if let Some(execution) = self.agent_turn_executions().get(turn_id).cloned() {
@@ -1313,6 +1322,7 @@ impl RuntimeSessionService {
             {
                 return Ok(false);
             }
+            self.finish_completion_replay_group(turn_id)?;
             let queued = self.queue_completion_provider_task(turn_id.to_string());
             if queued {
                 self.clear_completion_settlement_intent(turn_id);
@@ -1776,6 +1786,7 @@ impl RuntimeSessionService {
                 "completion publication still owns group finalization",
             ));
         }
+        self.finish_completion_replay_group(&turn.turn_id)?;
         let ownership = match self.retain_completion_group_transcript(&turn.turn_id) {
             Ok(ownership) => ownership,
             Err(error) => {

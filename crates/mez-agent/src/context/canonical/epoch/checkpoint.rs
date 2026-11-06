@@ -179,7 +179,7 @@ impl ReplayEpochContext {
             pending_execution_groups: self
                 .context
                 .pending_execution_groups
-                .iter()
+                .keys()
                 .map(|group| group.as_str().to_owned())
                 .collect(),
             pending_peer_messages: self
@@ -249,7 +249,10 @@ impl ReplayEpochContext {
                 .pending_execution_groups
                 .into_iter()
                 .map(ContextExecutionGroupId::new),
-        )?;
+        )?
+        .into_iter()
+        .map(|group| (group, ContextExecutionProtection::new()))
+        .collect();
         current_prefix.pending_peer_messages = sequences(checkpoint.pending_peer_messages)?;
         current_prefix.historical_instruction_events =
             sequences(checkpoint.historical_instruction_events)?;

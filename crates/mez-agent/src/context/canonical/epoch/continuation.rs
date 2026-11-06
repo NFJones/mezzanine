@@ -27,7 +27,9 @@ pub(in super::super) struct ReplayEpochContinuation {
     seals: Vec<EventSeal>,
     prelude_seals: BTreeMap<ContextEventSequence, EventSeal>,
     next_event_sequence: u64,
-    pending_groups: BTreeSet<ContextExecutionGroupId>,
+    pending_groups: BTreeMap<ContextExecutionGroupId, ContextExecutionProtection>,
+    /// Fences captured at typed body transfer or actual canonical append.
+    execution_frontiers: BTreeMap<ContextExecutionGroupId, ReplayExecutionOwner>,
     pending_peers: BTreeSet<ContextEventSequence>,
     historical_instructions: BTreeSet<ContextEventSequence>,
 }
@@ -58,9 +60,31 @@ impl EventSeal {
 impl ReplayEpochContinuation {
     /// Remembers actual re-protection immediately; stale body snapshots cannot
     /// erase it or reuse a closure witness from before this obligation.
-    pub(in super::super) fn protect_group(&mut self, group: &ContextExecutionGroupId) {
-        self.pending_groups.insert(group.clone());
+    pub(in super::super) fn protect_group(
+        &mut self,
+        group: &ContextExecutionGroupId,
+        protection: &ContextExecutionProtection,
+        renewed: bool,
+    ) -> AgentContextResult<()> {
+        if !renewed
+            && self
+                .pending_groups
+                .get(group)
+                .is_some_and(|held| held != protection)
+        {
+            return Err(invalid());
+        }
+        if self
+            .execution_frontiers
+            .get(group)
+            .is_some_and(|held| &held.protection != protection)
+        {
+            self.execution_frontiers.remove(group);
+        }
+        self.pending_groups
+            .insert(group.clone(), protection.clone());
         self.source_lifecycle.closed_groups.remove(group);
+        Ok(())
     }
 
     /// Keeps the exact peer protection fence and invalidates its former handoff.
@@ -114,6 +138,23 @@ impl ReplayEpochContext {
             accounting: _,
         } = self;
         let continuation = ReplayEpochContinuation {
+            execution_frontiers: context
+                .chronology
+                .iter()
+                .filter_map(|event| {
+                    let group = event.execution_group_id()?;
+                    let protection = context.pending_execution_groups.get(group)?;
+                    Some((
+                        group.clone(),
+                        ReplayExecutionOwner {
+                            owner_identity: owner_identity.clone(),
+                            protection: protection.clone(),
+                            group: group.clone(),
+                            frontier: event.sequence(),
+                        },
+                    ))
+                })
+                .collect(),
             owner_identity,
             conversation,
             revision,
@@ -149,9 +190,9 @@ impl ReplayEpochContext {
         context.validate_durable()?;
         if state.conversation != conversation
             || context.next_event_sequence < state.next_event_sequence
-            || !state
-                .pending_groups
-                .is_subset(&context.pending_execution_groups)
+            || state.pending_groups.iter().any(|(group, protection)| {
+                context.pending_execution_groups.get(group) != Some(protection)
+            })
             || !state
                 .pending_peers
                 .is_subset(&context.pending_peer_messages)
@@ -188,7 +229,10 @@ impl ReplayEpochContext {
                     inserted_preludes.insert(event.record().occurrence_id());
                 }
                 if let Some(group) = event.execution_group_id() {
-                    context.pending_execution_groups.insert(group.clone());
+                    context
+                        .pending_execution_groups
+                        .entry(group.clone())
+                        .or_insert_with(ContextExecutionProtection::new);
                 }
                 if event.block.source == ContextSourceKind::PeerMessage {
                     context.pending_peer_messages.insert(event.sequence());
@@ -243,22 +287,54 @@ impl ReplayEpochContext {
 impl AgentContext {
     /// Applies conservative protection at actual live admission, before either
     /// legacy readers or a later checked owner conversion can observe the body.
-    pub(in super::super) fn protect_replay_arrival(&mut self, event: &ConversationEvent) {
+    pub(in super::super) fn protect_replay_arrival(
+        &mut self,
+        event: &ConversationEvent,
+    ) -> AgentContextResult<()> {
+        if self.replay_continuation.is_none() {
+            return Ok(());
+        }
+        let protection = event
+            .execution_group_id()
+            .map(|group| self.activate_execution_protection(group))
+            .transpose()?;
         if let Some(continuation) = &mut self.replay_continuation {
-            if let Some(group) = event.execution_group_id() {
-                self.pending_execution_groups.insert(group.clone());
-                continuation.protect_group(group);
+            if let (Some(group), Some(protection)) = (event.execution_group_id(), protection) {
+                continuation.execution_frontiers.insert(
+                    group.clone(),
+                    ReplayExecutionOwner {
+                        owner_identity: continuation.owner_identity.clone(),
+                        protection,
+                        group: group.clone(),
+                        frontier: event.sequence(),
+                    },
+                );
             }
             if event.block.source == ContextSourceKind::PeerMessage {
                 self.pending_peer_messages.insert(event.sequence());
                 continuation.protect_peer(event.sequence(), event.record().occurrence_id());
             }
         }
+        Ok(())
     }
 
     /// Reports an actual retained live incarnation, never inferred from a summary.
     pub fn has_replay_owner(&self) -> bool {
         self.replay_continuation.is_some()
+    }
+
+    /// Borrows an original source fence captured at typed body transfer or actual
+    /// append. Runtime admission/result owners must retain their own clone before
+    /// yielding; a later callback must not replace its fence with this latest one.
+    /// This grants no execution, retirement, publication or durability authority.
+    pub fn replay_execution_append_owner(
+        &self,
+        group: &ContextExecutionGroupId,
+    ) -> Option<&ReplayExecutionOwner> {
+        self.replay_continuation
+            .as_ref()?
+            .execution_frontiers
+            .get(group)
     }
 
     /// Applies a typed lifecycle/publication mutation to the actual retained

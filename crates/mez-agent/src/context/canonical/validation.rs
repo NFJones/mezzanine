@@ -353,7 +353,7 @@ impl super::AgentContext {
         }
         if self
             .pending_execution_groups
-            .iter()
+            .keys()
             .any(|group| !assistant_execution_groups.contains(group))
         {
             return Err(AgentContextError::new(

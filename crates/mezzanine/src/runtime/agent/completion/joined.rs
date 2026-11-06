@@ -25,6 +25,40 @@ pub(super) struct RetainedJoinedExecution {
     failure_context: Option<mez_agent::AgentContext>,
 }
 
+impl RetainedJoinedExecution {
+    /// Validates a candidate append before its body or retirement fence changes.
+    pub(super) fn ensure_replay_append_source(
+        &self,
+        before: Option<&mez_agent::ReplayExecutionOwner>,
+    ) -> Result<()> {
+        if self
+            .group
+            .as_ref()
+            .is_some_and(|group| group.replay_owner.as_ref() != before)
+        {
+            return Err(MezError::conflict(
+                "retained joined replay append source changed",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Advances only the original completion group's actual append fence.
+    /// Logical joined sources without a physical group retain their existing
+    /// ownership path; they cannot manufacture a native completion receipt.
+    pub(super) fn record_replay_append(
+        &mut self,
+        before: Option<&mez_agent::ReplayExecutionOwner>,
+        after: mez_agent::ReplayExecutionOwner,
+    ) -> Result<()> {
+        self.ensure_replay_append_source(before)?;
+        if let Some(group) = self.group.as_mut() {
+            group.replay_owner = Some(after);
+        }
+        Ok(())
+    }
+}
+
 impl fmt::Debug for RetainedJoinedExecution {
     /// Shows identity/counts only, never task text, provider payloads or output.
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {

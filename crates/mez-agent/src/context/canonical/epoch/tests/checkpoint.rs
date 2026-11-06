@@ -216,7 +216,13 @@ fn checkpoint_preserves_native_source_and_requires_actual_closure() {
         .unwrap();
     let old_fence = source.capture_execution_owner(&group, ids[0]).unwrap();
     let mut restored = restore(&source);
-    assert_eq!(restored.context(), source.context());
+    assert_eq!(restored.checkpoint().unwrap(), source.checkpoint().unwrap());
+    assert_eq!(restored.context().blocks(), source.context().blocks());
+    assert_eq!(restored.context().metadata(), source.context().metadata());
+    assert_ne!(
+        restored.context.pending_execution_groups.get(&group),
+        source.context.pending_execution_groups.get(&group)
+    );
     assert!(restored.finish_execution_group(&old_fence).is_err());
     assert_eq!(
         restored

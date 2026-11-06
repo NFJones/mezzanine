@@ -317,9 +317,20 @@ impl RuntimeSessionService {
                 true,
             ));
         }
+        let replay_before = context.replay_execution_append_owner(&group_id).cloned();
         context
             .append_conversation_events(appended_events)
             .map_err(|error| MezError::invalid_state(error.to_string()))?;
+        let replay_after = context.replay_execution_append_owner(&group_id).cloned();
+        // A response with no actions or native calls has no outstanding effect
+        // owner. Close only its actual new source fence, before any callback.
+        if action_ids.is_empty() && provider_tool_calls.is_empty() && context.has_replay_owner() {
+            let receipt = replay_after.as_ref().ok_or_else(|| {
+                MezError::invalid_state("provider response replay fence is unavailable")
+            })?;
+            context.update_replay_owner(|owner| owner.finish_execution_group(receipt))?;
+        }
+        self.record_replay_execution_append(&turn.turn_id, &group_id, replay_before, replay_after)?;
         self.agent_turn_contexts_mut()
             .insert(turn.turn_id.clone(), context);
         self.retain_agent_provider_request_chain(turn, execution.request.clone());

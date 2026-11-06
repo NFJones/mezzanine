@@ -895,6 +895,7 @@ impl RuntimeSessionService {
             identity.clone(),
             group.group.clone(),
         ));
+        self.finish_completion_replay_group(&dispatch.turn.turn_id)?;
         // No fallible operation follows source qualification and installation.
         if let Some(group) = self
             .agent

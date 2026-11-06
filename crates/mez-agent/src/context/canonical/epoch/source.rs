@@ -15,9 +15,16 @@ use super::*;
 pub(super) struct ReplaySourceLifecycle {
     pub(super) completed_instructions: BTreeSet<ContextBlockOccurrenceId>,
     pub(super) handed_off_peers: BTreeSet<ContextBlockOccurrenceId>,
-    pub(super) closed_groups: BTreeMap<ContextExecutionGroupId, ContextEventSequence>,
+    pub(super) closed_groups: BTreeMap<ContextExecutionGroupId, ReplayExecutionClosure>,
     /// Actual prompt-boundary insertions, qualified before owner reacquisition.
     pub(super) inserted_preludes: BTreeSet<ContextBlockOccurrenceId>,
+}
+
+/// Exact completed protection interval, never rebuilt from descriptive bytes.
+#[derive(Clone, PartialEq, Eq)]
+pub(super) struct ReplayExecutionClosure {
+    pub(super) frontier: ContextEventSequence,
+    pub(super) protection: ContextExecutionProtection,
 }
 
 impl ReplayEpochContext {
@@ -102,10 +109,13 @@ impl ReplayEpochContext {
             }
         }
         let frontiers = group_frontiers(events);
-        for group in &previous.context.pending_execution_groups {
+        for group in previous.context.pending_execution_groups.keys() {
             if !self.context.execution_group_is_pending(group)
                 && frontiers.get(group).is_none_or(|frontier| {
-                    self.source_lifecycle.closed_groups.get(group) != Some(frontier)
+                    self.source_lifecycle
+                        .closed_groups
+                        .get(group)
+                        .is_none_or(|closed| &closed.frontier != frontier)
                 })
             {
                 return Err(invalid());
@@ -132,11 +142,9 @@ impl ReplayEpochContext {
             .retain(|id| members.contains(id));
         let frontiers = group_frontiers(self.context.chronology());
         let pending = &self.context.pending_execution_groups;
-        self.source_lifecycle
-            .closed_groups
-            .retain(|group, frontier| {
-                !pending.contains(group) && frontiers.get(group) == Some(frontier)
-            });
+        self.source_lifecycle.closed_groups.retain(|group, closed| {
+            !pending.contains_key(group) && frontiers.get(group) == Some(&closed.frontier)
+        });
     }
 }
 

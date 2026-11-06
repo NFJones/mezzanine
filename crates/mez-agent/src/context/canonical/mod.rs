@@ -35,6 +35,7 @@ pub use epoch::*;
 mod history;
 mod messages;
 mod pending;
+use pending::ContextExecutionProtection;
 mod projection;
 mod request;
 mod validation;
@@ -1278,7 +1279,7 @@ pub struct AgentContext {
     metadata: ModelContextMetadata,
     /// Unresolved source protection, never projected. An explicit epoch
     /// checkpoint may preserve this descriptive state without execution rights.
-    pending_execution_groups: BTreeSet<ContextExecutionGroupId>,
+    pending_execution_groups: BTreeMap<ContextExecutionGroupId, ContextExecutionProtection>,
     /// Exact committed peer references awaiting local request handoff. Runtime
     /// protection only; checkpointing it grants no delivery or ACK rights.
     pending_peer_messages: BTreeSet<ContextEventSequence>,
@@ -1304,7 +1305,7 @@ impl AgentContext {
             block_metadata: Vec::new(),
             next_event_sequence: CONTEXT_EVENT_SEQUENCE_STRIDE,
             metadata: ModelContextMetadata::default(),
-            pending_execution_groups: BTreeSet::new(),
+            pending_execution_groups: BTreeMap::new(),
             pending_peer_messages: BTreeSet::new(),
             historical_instruction_events: BTreeSet::new(),
             replay_continuation: None,

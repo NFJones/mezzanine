@@ -143,6 +143,7 @@ impl RuntimeSessionService {
             .iter()
             .map(|(id, _, _)| id.clone())
             .collect::<Vec<_>>();
+        let retained_replay_owner = group.replay_owner.clone();
         let context = group
             .failed_backing
             .as_mut()
@@ -153,17 +154,34 @@ impl RuntimeSessionService {
             .ok_or_else(|| {
                 MezError::invalid_state("completion original captured context unavailable")
             })?;
-        context
+        let replay_before = context
+            .replay_execution_append_owner(expected_group)
+            .cloned();
+        let mut candidate = context.clone();
+        candidate
             .commit_settled_action_results_in_group(
                 std::slice::from_ref(result),
                 expected_group.clone(),
             )
             .map_err(|error| MezError::invalid_state(error.to_string()))?;
         super::super::outcome::append_provider_tool_results_in_group(
-            context,
+            &mut candidate,
             expected_group,
             &action_ids,
             &group.provider_calls,
-        )
+        )?;
+        let replay_after = candidate
+            .replay_execution_append_owner(expected_group)
+            .cloned();
+        if replay_before != replay_after && retained_replay_owner != replay_before {
+            return Err(MezError::conflict(
+                "completion failed-backing replay source changed",
+            ));
+        }
+        *context = candidate;
+        if replay_before != replay_after {
+            group.replay_owner = replay_after;
+        }
+        Ok(())
     }
 }

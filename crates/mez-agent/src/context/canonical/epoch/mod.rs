@@ -16,9 +16,9 @@
 
 use super::{
     AgentContext, AgentContextError, AgentContextResult, ContextBlock, ContextBlockOccurrenceId,
-    ContextConversationAppend, ContextEventSequence, ContextExecutionGroupId, ContextPlacement,
-    ContextRetention, ContextSourceKind, ConversationEvent, StableContextBlock,
-    context_block_is_compaction_summary,
+    ContextConversationAppend, ContextEventSequence, ContextExecutionGroupId,
+    ContextExecutionProtection, ContextPlacement, ContextRetention, ContextSourceKind,
+    ConversationEvent, StableContextBlock, context_block_is_compaction_summary,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -38,7 +38,7 @@ mod native_groups;
 mod planning;
 mod publication;
 mod source;
-use source::ReplaySourceLifecycle;
+use source::{ReplayExecutionClosure, ReplaySourceLifecycle};
 #[cfg(test)]
 mod tests;
 
@@ -208,7 +208,8 @@ impl ReplayEpochContext {
 
     /// Captures an exact pending group's admitted source frontier. The caller
     /// supplies the occurrence from its actual append/restore receipt, not a
-    /// guessed latest generation. This fence is not execution/reap evidence.
+    /// guessed latest generation. The handle also binds the current protection
+    /// allocation. This fence is not execution/reap evidence.
     pub fn capture_execution_owner(
         &self,
         group: &ContextExecutionGroupId,
@@ -223,6 +224,14 @@ impl ReplayEpochContext {
         }
         Ok(ReplayExecutionOwner {
             owner_identity: self.owner_identity.clone(),
+            protection: self
+                .context
+                .pending_execution_groups
+                .get(group)
+                .cloned()
+                .ok_or_else(|| {
+                    AgentContextError::new("pending execution allocation is unavailable")
+                })?,
             group: group.clone(),
             frontier,
         })
@@ -230,13 +239,14 @@ impl ReplayEpochContext {
 
     /// Releases group protection only for the captured source incarnation after
     /// runtime retirement and complete native pairing. A later append invalidates
-    /// an older closure. This supplies no native launch/reap/worker authority.
+    /// an older closure, as does renewed protection at the same frontier. This
+    /// supplies no native launch/reap/worker authority.
     pub fn finish_execution_group(
         &mut self,
         owner: &ReplayExecutionOwner,
     ) -> AgentContextResult<()> {
         if owner.owner_identity != self.owner_identity
-            || !self.context.execution_group_is_pending(&owner.group)
+            || self.context.pending_execution_groups.get(&owner.group) != Some(&owner.protection)
             || self.group_frontier(&owner.group) != Some(owner.frontier)
         {
             return Err(AgentContextError::new(
@@ -248,14 +258,34 @@ impl ReplayEpochContext {
         candidate
             .context
             .release_pending_execution_group(&owner.group);
-        candidate
-            .source_lifecycle
-            .closed_groups
-            .insert(owner.group.clone(), owner.frontier);
+        candidate.source_lifecycle.closed_groups.insert(
+            owner.group.clone(),
+            ReplayExecutionClosure {
+                frontier: owner.frontier,
+                protection: owner.protection.clone(),
+            },
+        );
         candidate.refresh_accounting_group(&owner.group)?;
         candidate.validate_membership()?;
         *self = candidate;
         Ok(())
+    }
+
+    /// Verifies an exact already-completed controller source fence for an
+    /// idempotent local retirement retry. Cold descriptive completion, a foreign
+    /// incarnation, reopened source or a newer frontier cannot satisfy it.
+    /// This grants no native worker, child result or persistence acknowledgment.
+    pub fn execution_group_finished(&self, owner: &ReplayExecutionOwner) -> bool {
+        owner.owner_identity == self.owner_identity
+            && !self.context.execution_group_is_pending(&owner.group)
+            && self.group_frontier(&owner.group) == Some(owner.frontier)
+            && self
+                .source_lifecycle
+                .closed_groups
+                .get(&owner.group)
+                .is_some_and(|closed| {
+                    closed.frontier == owner.frontier && closed.protection == owner.protection
+                })
     }
 
     /// Reads the last original occurrence of one group without changing it.

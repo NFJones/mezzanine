@@ -10894,6 +10894,23 @@ Actual admission or renewed retention MUST update the private pending protection
 fence immediately and invalidate prior release witnesses. A stale body rebase
 MUST NOT erase that protection even when event bytes and ordering are unchanged.
 
+Actual canonical append and typed-body transfer MUST retain the source fence used
+by runtime completion owners. An admitted completion group MUST copy its original
+fence; only an actual result append whose preceding fence matches that retained
+source MAY advance it. A no-op duplicate result MUST NOT adopt a newer frontier.
+Ordinary provider handoff and terminal completion MUST use the retained fence
+after their existing required publication/retirement gates. A callback MUST NOT
+resample the latest body to refresh a stale fence. Moved failed backing MUST keep
+its original source; missing, plain or cold-recreated replacements MUST refuse
+that retirement. An exact already-completed private fence MAY verify a local retry
+without reissuing effects or acknowledging ordinary transcript durability.
+Each protection interval MUST also own an opaque in-memory allocation identity.
+Re-protection after release MUST allocate a new identity even when source bytes
+and frontier are unchanged. Retired handles and completed-source proofs MUST NOT
+close or verify the renewed interval. Repeated retention of a still-pending
+interval MUST remain idempotent. Cold checkpoints MUST mint fresh pending
+allocations rather than serializing or reconstructing these live tokens.
+
 The single-head storage boundary uses version four of the same authoritative
 compaction sidecar, with an exact parent/publication identity and integrity-bound
 checkpoint references. The storage CAS revision MUST remain distinct from the

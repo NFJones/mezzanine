@@ -19,6 +19,7 @@ use super::{
     runtime_failure_feedback_status_line, runtime_mezzanine_error_code,
     runtime_provider_audit_error_message,
 };
+use std::collections::BTreeMap;
 
 /// Collects newly terminal action results in the order the actor observes
 /// terminal transitions.
@@ -648,11 +649,22 @@ impl RuntimeSessionService {
             .iter()
             .map(|result| action_ownership.get(&result.action_id).cloned())
             .collect::<Vec<_>>();
-        let context = self
-            .agent_turn_contexts_mut()
-            .get_mut(turn_id)
+        let mut context = self
+            .agent_turn_contexts()
+            .get(turn_id)
+            .cloned()
             .ok_or_else(|| MezError::invalid_state("runtime agent turn context is unavailable"))?;
         let mut committed = 0usize;
+        let mut replay_before = execution_groups
+            .iter()
+            .flatten()
+            .map(|group| {
+                (
+                    group.clone(),
+                    context.replay_execution_append_owner(group).cloned(),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
         let mut touched_groups = Vec::new();
         for (result, execution_group) in results.iter().zip(execution_groups) {
             if let Some(group) = execution_group.as_ref()
@@ -717,17 +729,40 @@ impl RuntimeSessionService {
                 }
             }
         }
-        for group in touched_groups {
-            let Some(tool_calls) = provider_tool_calls.get(&group) else {
+        for group in &touched_groups {
+            let Some(tool_calls) = provider_tool_calls.get(group) else {
                 continue;
             };
             let owned_action_ids = action_ownership
                 .iter()
-                .filter(|(_, owner)| *owner == &group)
+                .filter(|(_, owner)| *owner == group)
                 .map(|(action_id, _)| action_id.clone())
                 .collect::<Vec<_>>();
-            append_provider_tool_results_in_group(context, &group, &owned_action_ids, tool_calls)?;
+            append_provider_tool_results_in_group(
+                &mut context,
+                group,
+                &owned_action_ids,
+                tool_calls,
+            )?;
         }
+        let replay_changes = touched_groups
+            .into_iter()
+            .map(|group| {
+                let before = replay_before.remove(&group).flatten();
+                let after = context.replay_execution_append_owner(&group).cloned();
+                (group, before, after)
+            })
+            .collect::<Vec<_>>();
+        for (group, before, after) in &replay_changes {
+            if before != after {
+                self.ensure_replay_execution_append_source(turn_id, group, before.as_ref())?;
+            }
+        }
+        for (group, before, after) in replay_changes {
+            self.record_replay_execution_append(turn_id, &group, before, after)?;
+        }
+        self.agent_turn_contexts_mut()
+            .insert(turn_id.to_string(), context);
         Ok(committed)
     }
 

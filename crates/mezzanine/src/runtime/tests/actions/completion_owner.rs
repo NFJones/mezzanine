@@ -15,6 +15,7 @@ mod native_pause;
 mod pane_retention;
 mod progress_retirement;
 mod progress_transactions;
+mod replay_retirement;
 mod scope_retention;
 mod shutdown_retention;
 
@@ -1159,11 +1160,33 @@ impl CompletionFixture {
     /// Uses only actual source admission and provider-result predecessor APIs;
     /// store replacement grants no execution or receipt-transfer authority.
     async fn admit_prepared_with_store_replacement(
+        service: RuntimeSessionService,
+        primary: mez_core::ids::ClientId,
+        root: CompletionRoot,
+        final_turn: bool,
+        replace_before_group: bool,
+    ) -> Self {
+        Box::pin(Self::admit_prepared_with_replay(
+            service,
+            primary,
+            root,
+            final_turn,
+            replace_before_group,
+            false,
+        ))
+        .await
+    }
+
+    /// Selects actual live replay ownership before provider/action admission.
+    /// This fixture keeps the same real claim, hook, publication and cleanup
+    /// predecessors; it does not install completion flags or execute network I/O.
+    async fn admit_prepared_with_replay(
         mut service: RuntimeSessionService,
         primary: mez_core::ids::ClientId,
         root: CompletionRoot,
         final_turn: bool,
         replace_before_group: bool,
+        replay: bool,
     ) -> Self {
         service
             .agent_shell_store_mut()
@@ -1182,6 +1205,20 @@ impl CompletionFixture {
             .turn(&started.turn_id)
             .unwrap()
             .clone();
+        if replay {
+            let context = service
+                .agent_turn_contexts_mut()
+                .remove(&turn.turn_id)
+                .unwrap();
+            let source = mez_agent::ReplayEpochContext::new(
+                mez_agent::ReplayConversationId::new(&turn.conversation_id).unwrap(),
+                context,
+            )
+            .unwrap();
+            service
+                .agent_turn_contexts_mut()
+                .insert(turn.turn_id.clone(), source.into_owned_context());
+        }
         if replace_before_group {
             service.set_agent_transcript_store(AgentTranscriptStore::new(
                 root.0.join("replacement-repository"),
@@ -1197,7 +1234,7 @@ impl CompletionFixture {
         };
         let action = fetch("completed-fetch", "completed-owner");
         let sibling = fetch("pending-sibling", "pending-owner");
-        let execution = AgentTurnExecution {
+        let mut execution = AgentTurnExecution {
             request: runtime_model_request_fixture_for_agent(&turn.turn_id, &turn.agent_id),
             response: mez_agent::ModelResponse {
                 provider: "runtime-batch".into(),
@@ -1228,6 +1265,23 @@ impl CompletionFixture {
             final_turn,
             terminal_state: AgentTurnState::Running,
         };
+        if replay {
+            let owner = mez_agent::ProviderContinuityOwner::new(
+                mez_agent::ProviderApiCompatibility::OpenAiChatCompletions,
+                "runtime-batch",
+            )
+            .unwrap();
+            execution.response.provider_transcript_events = vec![
+                mez_agent::ProviderTranscriptEvent::validated_openai_chat_completions_assistant_tool_call(
+                    "runtime-batch".into(), "original native batch".into(),
+                    vec![serde_json::json!({"id":"owned-runtime-call", "type":"function",
+                        "function":{"name":mez_agent::MAAP_ACTION_BATCH_TOOL_NAME, "arguments":"{}"}})]
+                ).unwrap()
+            ];
+            service
+                .append_agent_execution_chronology_for_provider(&turn, &execution, Some(&owner))
+                .unwrap();
+        }
         service
             .apply_agent_provider_completed_event(
                 &AgentId::opaque(turn.agent_id.clone()).unwrap(),
