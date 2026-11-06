@@ -91,7 +91,7 @@ impl RuntimeSessionService {
         let transcript_high_water = session.transcript_high_water;
         let visibility = session.visibility;
         self.prepare_agent_context_prerequisites(pane_id, true)?;
-        let permit = self.reserve_manual_compaction_preparation()?;
+        let permit = self.reserve_agent_source_preparation()?;
         let process = self.steering_process_binding(pane_id)?;
         let store = self.persistence.transcript_store().cloned();
         let work = RuntimeManualCompactionPreparation {

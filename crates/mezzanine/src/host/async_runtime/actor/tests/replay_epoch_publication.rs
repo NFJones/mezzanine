@@ -21,7 +21,7 @@ struct Case {
     before: AgentContext,
 }
 
-fn setup() -> (
+pub(super) fn setup() -> (
     Fixture,
     crate::runtime::RuntimeSessionService,
     mez_core::ids::ClientId,

@@ -54,7 +54,7 @@ fn runtime_manual_compaction_preparation_refreshes_project_policy() {
             .agent_shell_store_mut()
             .bind_conversation("%1", "project-compact", 3)
             .unwrap();
-        service.use_manual_compaction_preparation_adapter();
+        service.use_agent_source_preparation_adapter();
         let primary = service
             .attach_primary("project-compact", true, Size::new(100, 30).unwrap(), 1)
             .unwrap();

@@ -270,7 +270,7 @@ fn runtime_manual_compaction_no_work_worker_retires_without_provider() {
         "exact retained source".into(),
     )];
     let (mut service, primary, store) = setup("worker-no-prefix", &rows, 1);
-    service.use_manual_compaction_preparation_adapter();
+    service.use_agent_source_preparation_adapter();
     let response = service
         .execute_agent_shell_command(&primary, "/compact")
         .unwrap();

@@ -87,7 +87,7 @@ fn runtime_manual_compaction_preparation_preserves_bookkeeping_admission_fence()
                 );
             }
         }
-        service.use_manual_compaction_preparation_adapter();
+        service.use_agent_source_preparation_adapter();
         let primary = service
             .attach_primary("fence-test", true, Size::new(80, 24).unwrap(), 121)
             .unwrap();
@@ -116,7 +116,7 @@ fn runtime_manual_compaction_preparation_rechecks_bookkeeping_at_adoption() {
         .take_bookkeeping_candidate(work.candidate.generation)
         .unwrap();
     seed_compaction_prefix(&mut service, &store, &conversation);
-    service.use_manual_compaction_preparation_adapter();
+    service.use_agent_source_preparation_adapter();
     let primary = service
         .attach_primary("late-fence-test", true, Size::new(80, 24).unwrap(), 121)
         .unwrap();
@@ -137,6 +137,111 @@ fn runtime_manual_compaction_preparation_rechecks_bookkeeping_at_adoption() {
     service.terminate_all_pane_processes().unwrap();
 }
 
+/// A genuine candidate may arrive after the loop worker captured history while
+/// the binding counters remain unchanged. Both the original parent and a
+/// count-only NoStore source must still fence adoption in every loop mode.
+/// Queued, claimed and blocked candidates remain owned; no target or provider
+/// turn may be created from the earlier shorter projection.
+#[test]
+fn runtime_loop_source_preparation_rechecks_late_bookkeeping_at_adoption() {
+    for no_store in [false, true] {
+        for mode in ["", "--fork", "--new"] {
+            for phase in ["queued", "claimed", "blocked"] {
+                let (mut service, store, conversation) = stopped_candidate_fixture("late-loop");
+                let candidate_work = service.claim_bookkeeping_candidates().pop().unwrap();
+                let candidate = service
+                    .persistence
+                    .take_bookkeeping_candidate(candidate_work.candidate.generation)
+                    .unwrap();
+                seed_compaction_prefix(&mut service, &store, &conversation);
+                if no_store {
+                    service
+                        .agent_shell_store_mut()
+                        .bind_ephemeral_conversation_with_lineage_and_transcript_source(
+                            "%1",
+                            "original-unsaved-loop-parent",
+                            0,
+                            None,
+                            Some(conversation.clone()),
+                            3,
+                        )
+                        .unwrap();
+                }
+                let before = service
+                    .agent_shell_store()
+                    .get("%1")
+                    .unwrap()
+                    .session_id
+                    .clone();
+                let turns = service.agent_turn_ledger().turns().len();
+                service.use_agent_source_preparation_adapter();
+                let primary = service
+                    .attach_primary("late-loop-fence", true, Size::new(80, 24).unwrap(), 121)
+                    .unwrap();
+                service
+                    .execute_agent_shell_command(
+                        &primary,
+                        &format!("/loop {mode} inspect original history"),
+                    )
+                    .unwrap();
+                let dispatch = service
+                    .take_pending_deferred_agent_commands()
+                    .pop()
+                    .unwrap();
+                let work = service
+                    .claim_agent_command_work(
+                        &dispatch.primary_client_id,
+                        &dispatch.pane_id,
+                        &dispatch.command,
+                        &dispatch.input,
+                        dispatch.claim_generation,
+                        &dispatch.conversation_id,
+                    )
+                    .unwrap()
+                    .unwrap();
+                let result = RuntimeSessionService::execute_deferred_agent_command(&work);
+                assert!(
+                    matches!(
+                        result,
+                        crate::runtime::RuntimeAgentCommandAsyncOutcome::LoopSource(_)
+                    ),
+                    "{result:?}"
+                );
+                service.persistence.queue_bookkeeping_candidate(candidate);
+                if phase != "queued" {
+                    let candidate_work = service.claim_bookkeeping_candidates().pop().unwrap();
+                    if phase == "blocked" {
+                        assert!(
+                            service
+                                .complete_bookkeeping_candidate(
+                                    candidate_work,
+                                    Err(MezError::invalid_state("original candidate blocked"))
+                                )
+                                .is_err()
+                        );
+                    }
+                }
+                assert!(service.complete_agent_command_work(&work, result).unwrap());
+                assert!(service.persistence.bookkeeping_pending(&conversation));
+                assert!(
+                    service.agent_loop_state("%1").is_none(),
+                    "no_store={no_store} mode={mode} phase={phase}"
+                );
+                assert_eq!(
+                    service.agent_shell_store().get("%1").unwrap().session_id,
+                    before
+                );
+                assert_eq!(service.agent_turn_ledger().turns().len(), turns);
+                assert_eq!(
+                    service.agent_command_lifecycle_phase_for_tests("%1"),
+                    Some(crate::runtime::RuntimeAgentCommandLifecyclePhase::Failed)
+                );
+                service.terminate_all_pane_processes().unwrap();
+            }
+        }
+    }
+}
+
 /// Unchecked chronology arriving after context capture must still fence the
 /// final rendered request. This places a genuine retained candidate between
 /// the two worker callbacks and verifies no model task or epoch is adopted.
@@ -151,7 +256,7 @@ fn runtime_manual_compaction_request_rechecks_late_bookkeeping() {
     service.replace_config_layers(vec![ConfigLayer {name:"late-request-bookkeeping".into(),path:None,format:ConfigFormat::Toml,scope:ConfigScope::Primary,trusted:true,
         text:"[agents]\ndefault_provider=\"openai\"\ndefault_model_profile=\"default\"\n[providers.openai]\nkind=\"openai\"\nmodels=[\"fixture-model\"]\ndefault_model=\"fixture-model\"\n[model_profiles.default]\nprovider=\"openai\"\nmodel=\"fixture-model\"\ncontext_window_tokens=128000\n".into()}]).unwrap();
     seed_compaction_prefix(&mut service, &store, &conversation);
-    service.use_manual_compaction_preparation_adapter();
+    service.use_agent_source_preparation_adapter();
     let primary = service
         .attach_primary("late-request", true, Size::new(80, 24).unwrap(), 121)
         .unwrap();

@@ -531,6 +531,23 @@ impl RuntimeSessionService {
                 ));
             }
         }
+        if self.agent.loop_source_command_is_pending(&pane_id)
+            && slash_invocation
+                .as_ref()
+                .is_some_and(|invocation| invocation.name == "stop")
+        {
+            self.agent.cancel_agent_command(&pane_id);
+            let outcome = AgentShellCommandOutcome::Mutated {
+                command: "stop".into(),
+                body: "loop source preparation cancelled; no loop was started".into(),
+                visibility: AgentShellVisibility::Visible,
+            };
+            return Ok(runtime_agent_shell_command_response_json(
+                &pane_id,
+                input,
+                Some(&outcome),
+            ));
+        }
         if self.native_directory_command_is_pending(&pane_id) {
             if slash_invocation
                 .as_ref()

@@ -612,7 +612,7 @@ impl RuntimeSessionService {
                 "cannot compact while accepted command/history preparation is active",
             ));
         }
-        if self.manual_compaction_preparation_uses_adapter() {
+        if self.agent_source_preparation_uses_adapter() {
             return self.admit_manual_compaction_preparation(pane_id);
         }
         self.queue_agent_shell_compaction_with_model(pane_id, "manual", None, None)

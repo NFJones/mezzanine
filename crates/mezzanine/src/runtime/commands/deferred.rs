@@ -27,6 +27,8 @@ use crate::runtime::{
 /// Prepared-input family one moved slash command consumes off the actor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RuntimeAgentCommandFamily {
+    /// Loop parent source and stale-controller objective capture.
+    LoopSource,
     /// Native cwd, project configuration and instruction preparation.
     NativeDirectory,
     /// Captured status diagnostics and rolling accounting history.
@@ -73,6 +75,7 @@ pub(crate) fn off_actor_command_family(
     input: &str,
 ) -> Option<RuntimeAgentCommandFamily> {
     match command {
+        "loop" => Some(RuntimeAgentCommandFamily::LoopSource),
         "cd" => Some(RuntimeAgentCommandFamily::NativeDirectory),
         "status" | "agent-status" => Some(RuntimeAgentCommandFamily::Status),
         "reset-status" => Some(RuntimeAgentCommandFamily::ResetStatus),
@@ -143,6 +146,7 @@ impl RuntimeSessionService {
             return false;
         }
         match command {
+            "loop" => self.agent_source_preparation_uses_adapter(),
             "reset-status" => true,
             "status" => super::parse_slash_command(input)
                 .ok()
@@ -228,7 +232,19 @@ impl RuntimeSessionService {
         } else {
             None
         };
+        let loop_source = if command == "loop" {
+            // Share the existing finite history-reader pool. Its permit stays
+            // with worker clones even after this logical command is cancelled.
+            let permit = self.reserve_agent_source_preparation()?;
+            Some(self.capture_loop_source_work(pane_id, input, Some(permit))?)
+        } else {
+            None
+        };
         let claim_generation = self.begin_agent_command_claim(pane_id, &conversation_id)?;
+        if let Some(source) = loop_source {
+            self.agent
+                .retain_loop_source_work(pane_id, claim_generation, source);
+        }
         if let Some(navigation) = navigation {
             self.agent
                 .retain_native_directory_work(pane_id, claim_generation, navigation);
@@ -302,6 +318,26 @@ impl RuntimeSessionService {
         // Each family names exactly what the worker may read; a command with no
         // family has no off-actor executor yet and keeps executing inline.
         let prepared = match family {
+            RuntimeAgentCommandFamily::LoopSource => {
+                let source = self
+                    .agent
+                    .loop_source_work(pane_id, claim_generation)
+                    .ok_or_else(|| MezError::conflict("loop acceptance source is unavailable"))
+                    .and_then(|source| self.validate_loop_source_work(&source).map(|_| source));
+                match source {
+                    Ok(source) => RuntimeAgentCommandPrepared::LoopSource(source),
+                    Err(error) => {
+                        return self.fail_agent_command_before_claim(
+                            pane_id,
+                            conversation_id,
+                            command,
+                            input,
+                            claim_generation,
+                            error.message(),
+                        );
+                    }
+                }
+            }
             RuntimeAgentCommandFamily::NativeDirectory => {
                 match self.native_directory_work_for_claim(pane_id, claim_generation) {
                     Ok(work) => RuntimeAgentCommandPrepared::NativeDirectory(Box::new(work)),
@@ -748,6 +784,15 @@ impl RuntimeSessionService {
         work: &RuntimeAgentCommandAsyncWork,
     ) -> RuntimeAgentCommandAsyncOutcome {
         let body = match &work.prepared {
+            RuntimeAgentCommandPrepared::LoopSource(source) => {
+                return match source.execute() {
+                    Ok(read) => RuntimeAgentCommandAsyncOutcome::LoopSource(Box::new(read)),
+                    Err(error) => RuntimeAgentCommandAsyncOutcome::Failed {
+                        message: error.message().into(),
+                        kind: error.kind(),
+                    },
+                };
+            }
             RuntimeAgentCommandPrepared::NativeDirectory(navigation) => {
                 return match navigation.prepare() {
                     Ok(read) => RuntimeAgentCommandAsyncOutcome::NativeDirectory(Box::new(read)),
@@ -1140,6 +1185,7 @@ impl RuntimeSessionService {
         outcome: RuntimeAgentCommandAsyncOutcome,
     ) -> Result<RuntimeAgentCommandAsyncOutcome> {
         let (body, failed, record_browser) = match outcome {
+            source @ RuntimeAgentCommandAsyncOutcome::LoopSource(_) => return Ok(source),
             navigation @ RuntimeAgentCommandAsyncOutcome::NativeDirectory(_) => {
                 return Ok(navigation);
             }
@@ -1276,6 +1322,11 @@ impl RuntimeSessionService {
         } else {
             outcome
         };
+        let outcome = if let RuntimeAgentCommandAsyncOutcome::LoopSource(read) = outcome {
+            self.loop_source_command_response(work, &read)
+        } else {
+            outcome
+        };
         let outcome = if let RuntimeAgentCommandAsyncOutcome::NativeDirectory(read) = outcome {
             self.native_directory_command_response(work, &read)
         } else {
@@ -1285,6 +1336,9 @@ impl RuntimeSessionService {
         let parent_browser_stack = self
             .take_pending_record_browser_overlay_claim_stack(&work.pane_id, work.claim_generation);
         let body = match outcome {
+            RuntimeAgentCommandAsyncOutcome::LoopSource(_) => {
+                unreachable!("loop source adoption converted above")
+            }
             RuntimeAgentCommandAsyncOutcome::NativeDirectory(_) => {
                 unreachable!("native directory adoption converted above")
             }
@@ -1446,6 +1500,11 @@ impl RuntimeSessionService {
                 continue;
             };
             let outcome = RuntimeSessionService::execute_deferred_agent_command(&work);
+            let outcome = if let RuntimeAgentCommandAsyncOutcome::LoopSource(read) = outcome {
+                self.loop_source_command_response(&work, &read)
+            } else {
+                outcome
+            };
             let outcome = if let RuntimeAgentCommandAsyncOutcome::SavedFork(read) = outcome {
                 let adoption = self.adopt_saved_fork_command(&work, &read);
                 Self::finish_saved_fork_worker(&read, adoption)
@@ -1458,6 +1517,9 @@ impl RuntimeSessionService {
                 outcome
             };
             let body = match outcome {
+                RuntimeAgentCommandAsyncOutcome::LoopSource(_) => {
+                    unreachable!("loop source adoption converted above")
+                }
                 RuntimeAgentCommandAsyncOutcome::NativeDirectory(_) => {
                     unreachable!("native directory adoption converted above")
                 }

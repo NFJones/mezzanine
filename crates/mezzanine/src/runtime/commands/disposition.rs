@@ -121,7 +121,7 @@ pub(super) const COMMAND_EXECUTION_METADATA: &[CommandExecutionMetadata] = &[
     Entry::inline("name-session", None),
     Entry::deferred("reset-status", true, None),
     Entry::inline("log-level", None),
-    Entry::inline("loop", None),
+    Entry::deferred("loop", true, None),
     Entry::inline("clear", None),
     Entry::inline("new", None),
     Entry::inline("remember", Some(Awaited::Remember)),
@@ -299,6 +299,7 @@ mod tests {
             off_actor,
             BTreeSet::from([
                 "cd",
+                "loop",
                 "list-skills",
                 "list-macros",
                 "auth-status",

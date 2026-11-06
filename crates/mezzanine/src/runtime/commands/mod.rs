@@ -78,6 +78,8 @@ mod disposition;
 mod issues;
 pub(crate) mod list_agents;
 pub(crate) mod lists;
+mod loop_source;
+pub(crate) use loop_source::{LoopSourceRead, LoopSourceWork, RuntimeLoopHistory};
 mod model;
 mod model_catalog;
 mod overlay_refresh;
@@ -985,22 +987,26 @@ impl RuntimeSessionService {
         running_loop_turn_active || queued_loop_turn_active
     }
 
-    /// Clears stale loop controller metadata for a pane that no longer has active loop work.
-    fn clear_stale_agent_loop_state_for_pane(&mut self, pane_id: &str) -> Result<()> {
-        if let Some(state) = self.agent_loop_state(pane_id).cloned() {
-            let objective = self.preflight_agent_loop_parent_objective(&state)?;
-            self.restore_agent_loop_parent_conversation(pane_id, &state, objective.as_deref())?;
-            self.remove_agent_loop_state_by_id(&state.loop_id);
-        }
-        self.clear_agent_loop_turns_for_pane(pane_id);
-        Ok(())
-    }
-
     /// Starts a `/loop` command by creating the first loop-owned work turn.
     pub(super) fn execute_agent_shell_loop_command(
         &mut self,
         pane_id: &str,
         input: &str,
+    ) -> Result<AgentShellCommandOutcome> {
+        let work = self.capture_loop_source_work(pane_id, input, None)?;
+        let read = work.execute()?;
+        self.adopt_loop_source(&work, &read)
+    }
+
+    /// Starts only from an explicitly supplied source result. This boundary
+    /// never rereads source history after the worker has frozen it.
+    fn start_agent_loop_with_source(
+        &mut self,
+        pane_id: &str,
+        input: &str,
+        parent_frozen_replay: Option<crate::runtime::control::RuntimeFrozenReplayHistory>,
+        parent_history: Option<crate::runtime::control::RuntimeAgentTranscriptContext>,
+        parent_objective: Option<&str>,
     ) -> Result<AgentShellCommandOutcome> {
         let invocation = parse_slash_command(input)?.ok_or_else(|| {
             MezError::invalid_args("loop command must be submitted as an agent slash command")
@@ -1015,7 +1021,9 @@ impl RuntimeSessionService {
                     "an agent loop is already active for this pane",
                 ));
             }
-            self.clear_stale_agent_loop_state_for_pane(pane_id)?;
+            return Err(MezError::conflict(
+                "previous loop restoration has not settled",
+            ));
         }
         let parent_allowed_actions =
             self.capture_agent_session_allowed_actions_for_pane(pane_id)?;
@@ -1039,14 +1047,14 @@ impl RuntimeSessionService {
                 entries: parent_session.ephemeral_transcript_source_entries,
             }
         });
-        let parent_frozen_replay = if parsed.mode == RuntimeAgentLoopMode::ForkEachIteration
-            || parent_no_store_source.is_some()
-                && parsed.mode != RuntimeAgentLoopMode::ReuseCurrentConversation
+        if parent_frozen_replay
+            .as_ref()
+            .is_some_and(|source| source.conversation().as_str() != parent_conversation_id)
         {
-            self.freeze_agent_replay_history(pane_id)?
-        } else {
-            None
-        };
+            return Err(MezError::conflict(
+                "prepared loop source has a foreign conversation",
+            ));
+        }
         let parent_transcript_high_water = parent_frozen_replay
             .as_ref()
             .filter(|_| parent_no_store_source.is_none())
@@ -1058,6 +1066,10 @@ impl RuntimeSessionService {
         if parsed.mode != RuntimeAgentLoopMode::ReuseCurrentConversation {
             self.retain_agent_loop_parent_projection(&loop_id, pane_id);
         }
+        let parent_legacy_history = (parsed.mode == RuntimeAgentLoopMode::ForkEachIteration
+            && parent_frozen_replay.is_none())
+        .then(|| parent_history.clone().map(RuntimeLoopHistory::new))
+        .flatten();
         self.insert_agent_loop_state(RuntimeAgentLoopState {
             loop_id,
             operation_started_at_unix_seconds: current_unix_seconds(),
@@ -1072,6 +1084,7 @@ impl RuntimeSessionService {
             parent_transcript_entries,
             parent_transcript_high_water,
             parent_frozen_replay,
+            parent_legacy_history,
             parent_no_store_source,
             parent_allowed_actions,
             parent_display_name,
@@ -1087,16 +1100,11 @@ impl RuntimeSessionService {
             pane_id,
             mez_core::presentation::PresentationOccurrenceBasis::LocalAcceptance,
         );
-        let started = match self.start_agent_loop_work_turn(pane_id) {
+        let started = match self.start_agent_loop_work_turn_with_history(pane_id, parent_history) {
             Ok(started) => started,
             Err(error) => {
                 if let Some(state) = self.agent_loop_state(pane_id).cloned() {
-                    let objective = self.preflight_agent_loop_parent_objective(&state)?;
-                    self.restore_agent_loop_parent_conversation(
-                        pane_id,
-                        &state,
-                        objective.as_deref(),
-                    )?;
+                    self.restore_agent_loop_parent_conversation(pane_id, &state, parent_objective)?;
                     self.remove_agent_loop_state_by_id(&state.loop_id);
                 }
                 return Err(error);
@@ -1126,6 +1134,17 @@ impl RuntimeSessionService {
         &mut self,
         pane_id: &str,
     ) -> Result<RuntimeAgentPromptTurnStart> {
+        self.start_agent_loop_work_turn_with_history(pane_id, None)
+    }
+
+    /// The first iteration consumes the worker's admitted history. Isolated
+    /// iterations always use the original immutable source or explicit empty
+    /// history; reuse continuations retain the ordinary current-history path.
+    fn start_agent_loop_work_turn_with_history(
+        &mut self,
+        pane_id: &str,
+        initial_history: Option<crate::runtime::control::RuntimeAgentTranscriptContext>,
+    ) -> Result<RuntimeAgentPromptTurnStart> {
         let state = self
             .agent_loop_state(pane_id)
             .cloned()
@@ -1141,7 +1160,48 @@ impl RuntimeSessionService {
         let (session_id, transcript_entries) =
             self.prepare_agent_loop_work_conversation(pane_id, &state)?;
         let prompt = runtime_agent_loop_work_prompt(&state);
-        let started = self.start_agent_prompt_turn_inner(pane_id, &prompt, None, None, None)?;
+        let history = match state.mode {
+            RuntimeAgentLoopMode::ReuseCurrentConversation => initial_history,
+            RuntimeAgentLoopMode::ForkEachIteration => Some(
+                if let Some(frozen) = self.frozen_replay_binding(pane_id, &session_id) {
+                    frozen.history()
+                } else {
+                    state
+                        .parent_legacy_history
+                        .as_ref()
+                        .ok_or_else(|| {
+                            MezError::invalid_state("loop legacy source was not captured")
+                        })?
+                        .history()
+                },
+            ),
+            RuntimeAgentLoopMode::NewEachIteration => Some(
+                crate::runtime::control::execute_runtime_agent_prompt_history_work(
+                    crate::runtime::control::RuntimeAgentPromptHistoryWork {
+                        frozen_replay: None,
+                        memory_blocks: Vec::new(),
+                        transcript_work: None,
+                    },
+                )?,
+            ),
+        };
+        let started = if let Some(mut history) = history {
+            if state.mode != RuntimeAgentLoopMode::ReuseCurrentConversation {
+                history.source = Some(
+                    crate::runtime::control::RuntimeAgentHistorySource::with_target_policy(
+                        history.source.unwrap_or_else(
+                            crate::runtime::control::RuntimeAgentHistorySource::absent,
+                        ),
+                        true,
+                    ),
+                );
+            }
+            self.start_agent_prompt_turn_with_captured_history(
+                pane_id, &prompt, None, None, history,
+            )?
+        } else {
+            self.start_agent_prompt_turn_inner(pane_id, &prompt, None, None, None)?
+        };
         self.insert_agent_loop_turn(
             started.turn_id.clone(),
             RuntimeAgentLoopTurn {
@@ -2765,6 +2825,7 @@ mod tests {
             parent_transcript_entries: 0,
             parent_transcript_high_water: 0,
             parent_frozen_replay: None,
+            parent_legacy_history: None,
             parent_no_store_source: None,
             parent_allowed_actions: AllowedActionSet::say_only(),
             parent_prompt_cache_lineage_id: Some("lineage-1".to_string()),
@@ -2790,6 +2851,7 @@ mod tests {
             parent_transcript_entries: 0,
             parent_transcript_high_water: 0,
             parent_frozen_replay: None,
+            parent_legacy_history: None,
             parent_no_store_source: None,
             parent_allowed_actions: AllowedActionSet::say_only(),
             parent_prompt_cache_lineage_id: Some("lineage-1".to_string()),
@@ -2868,6 +2930,7 @@ mod tests {
             parent_transcript_entries: 0,
             parent_transcript_high_water: 0,
             parent_frozen_replay: None,
+            parent_legacy_history: None,
             parent_no_store_source: None,
             parent_allowed_actions: AllowedActionSet::say_only(),
             parent_display_name: None,

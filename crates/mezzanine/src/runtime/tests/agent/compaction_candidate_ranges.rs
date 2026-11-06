@@ -257,7 +257,7 @@ fn qualify_candidate_ranges(
         .bind_conversation("%1", &conversation, rows.len() as u64)
         .unwrap();
     if worker {
-        service.use_manual_compaction_preparation_adapter();
+        service.use_agent_source_preparation_adapter();
     }
     let queued = service.dispatch_runtime_control_body(
         &format!(r#"{{"jsonrpc":"2.0","id":"{name}","method":"agent/shell/command","params":{{"idempotency_key":"{name}","input":"/compact"}}}}"#),

@@ -8407,6 +8407,19 @@ the command is invoked with `--fork`, `/loop` MUST start every work iteration
 from a fresh context forked from the parent pane conversation that invoked the
 loop. Each fork MUST use the same parent conversation, so later fork-mode work
 turns cannot see prior `/loop` attempts or loop controller assessments.
+Before accepting the initial work turn, the async runtime MUST prepare its
+original history off the session actor using bounded source capacity. The
+returned history MUST enter turn admission without another source-history
+read. A forked loop MUST retain that exact typed checkpoint or admitted legacy
+projection for later isolated iterations, rather than selecting a later parent
+head. Cancellation or replacement of the accepted pane, configuration, process
+incarnation, or loop controller MUST prevent a late source result from starting
+a loop. Logical cancellation MUST NOT release capacity still owned by a physical
+source reader. `/stop` MUST also cancel source preparation before a loop work
+turn exists.
+Pending bookkeeping or canonical message receipts for the selected original
+parent and required source MUST fence both initial capture and result adoption,
+before any controller restoration, conversation switch, or turn creation.
 When the command is invoked with `--new`, `/loop` MUST start every work
 iteration in a fresh empty conversation instead of reusing the current pane
 conversation or forking the parent transcript. New-mode work conversations

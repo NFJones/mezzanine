@@ -56,7 +56,7 @@ impl RuntimeFrozenReplayHistory {
     pub(in crate::runtime) fn archive_frontier(&self) -> u64 {
         self.0.archive_frontier
     }
-    pub(super) fn history(&self) -> RuntimeAgentTranscriptContext {
+    pub(in crate::runtime) fn history(&self) -> RuntimeAgentTranscriptContext {
         self.0.history.clone()
     }
 
@@ -115,6 +115,7 @@ impl RuntimeFrozenReplayHistory {
 impl RuntimeSessionService {
     /// Captures once before an ephemeral source binding changes the pane.
     /// Legacy history returns None and keeps its existing explicit row contract.
+    #[cfg(test)]
     pub(crate) fn freeze_agent_replay_history(
         &self,
         pane: &str,

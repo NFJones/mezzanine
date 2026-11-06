@@ -147,9 +147,56 @@ impl AgentTranscriptStore {
             &ConversationReplaySnapshot,
         ) -> Result<(T, Vec<(u64, mez_agent::ContextBlockRecord)>)>,
     ) -> Result<(ConversationReplaySnapshot, T)> {
+        self.conversation_source_projection(
+            conversation_id,
+            pending,
+            frontier,
+            None,
+            select,
+            project,
+        )
+    }
+
+    /// Captures a loop's current typed head, or its admitted legacy raw window.
+    /// A pre-existing count-only NoStore binding still cannot select a typed
+    /// head; only a new durable-parent read may select that head explicitly.
+    pub(crate) fn conversation_loop_source_projection<T>(
+        &self,
+        conversation_id: &str,
+        pending: &[mez_agent::TranscriptEntry],
+        frozen_frontier: Option<u64>,
+        legacy_frontier: u64,
+        select: impl FnOnce(Option<&AgentCompactionEpoch>) -> Option<(ConversationTranscriptRead, bool)>,
+        project: impl FnOnce(
+            &ConversationReplaySnapshot,
+        ) -> Result<(T, Vec<(u64, mez_agent::ContextBlockRecord)>)>,
+    ) -> Result<(ConversationReplaySnapshot, T)> {
+        self.conversation_source_projection(
+            conversation_id,
+            pending,
+            frozen_frontier,
+            Some(legacy_frontier),
+            select,
+            project,
+        )
+    }
+
+    fn conversation_source_projection<T>(
+        &self,
+        conversation_id: &str,
+        pending: &[mez_agent::TranscriptEntry],
+        frozen_frontier: Option<u64>,
+        legacy_frontier: Option<u64>,
+        select: impl FnOnce(Option<&AgentCompactionEpoch>) -> Option<(ConversationTranscriptRead, bool)>,
+        project: impl FnOnce(
+            &ConversationReplaySnapshot,
+        ) -> Result<(T, Vec<(u64, mez_agent::ContextBlockRecord)>)>,
+    ) -> Result<(ConversationReplaySnapshot, T)> {
         let lease = self.acquire_conversation_lock(conversation_id)?;
         self.recover_accounted_appends_for_replay_locked(conversation_id, &lease)?;
         let mut replay = self.replay_epoch_snapshot_locked(conversation_id)?;
+        let frontier =
+            frozen_frontier.or_else(|| replay.is_none().then_some(legacy_frontier).flatten());
         let epoch = if replay.is_some() {
             None
         } else {

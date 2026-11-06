@@ -53,7 +53,7 @@ fn fixture_with_adapter(
         .bind_conversation("%1", "prepare-owned", 3)
         .unwrap();
     if adapter {
-        service.use_manual_compaction_preparation_adapter();
+        service.use_agent_source_preparation_adapter();
     }
     let primary = service
         .attach_primary("preparation", true, Size::new(80, 24).unwrap(), 1)
@@ -592,7 +592,7 @@ fn runtime_manual_compaction_preparation_capacity_survives_cancellation() {
                 .had_task()
         );
     }
-    assert!(service.reserve_manual_compaction_preparation().is_err());
+    assert!(service.reserve_agent_source_preparation().is_err());
     let denied = service
         .execute_agent_shell_command(&primary, "/compact")
         .unwrap();
@@ -605,10 +605,10 @@ fn runtime_manual_compaction_preparation_capacity_survives_cancellation() {
     assert!(admitted.contains("state=preparing"), "{admitted}");
     let new_work = service.take_manual_compaction_preparations().pop().unwrap();
     assert!(new_work.task_generation > workers.last().unwrap().task_generation);
-    assert!(service.reserve_manual_compaction_preparation().is_err());
+    assert!(service.reserve_agent_source_preparation().is_err());
     service.cancel_current_agent_compaction_task("%1");
     drop((new_work, workers));
-    assert!(service.reserve_manual_compaction_preparation().is_ok());
+    assert!(service.reserve_agent_source_preparation().is_ok());
     assert!(store.compaction_epoch("prepare-owned").unwrap().is_none());
 }
 

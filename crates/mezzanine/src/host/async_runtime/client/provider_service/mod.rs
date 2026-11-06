@@ -684,10 +684,10 @@ async fn execute_deferred_agent_command(
     let adoption_handle = handle.clone();
     let adoption_runtime = tokio::runtime::Handle::current();
     let mut execution = tokio::task::spawn_blocking(move || {
-        // The second fork-only probe proves the blocking owner actually started,
+        // The second source/fork probe proves the blocking owner actually started,
         // not merely that its async wrapper passed command claim.
         #[cfg(test)]
-        if execution_work.command == "fork"
+        if matches!(execution_work.command.as_str(), "fork" | "loop")
             && let Some(started) = &execution_work.deferred_agent_command_started
         {
             started.notify_one();

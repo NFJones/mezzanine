@@ -581,6 +581,9 @@ pub struct RuntimeAgentLoopState {
     /// Actual typed source captured before a forked NoStore iteration binds.
     /// This in-memory value is never reconstructed from the numeric frontier.
     pub(crate) parent_frozen_replay: Option<crate::runtime::control::RuntimeFrozenReplayHistory>,
+    /// Original legacy projection for isolated iterations, with no invented
+    /// typed head and no subsequent reads of the parent's later archive.
+    pub(crate) parent_legacy_history: Option<crate::runtime::commands::RuntimeLoopHistory>,
     /// Restoring an unsaved parent must preserve its policy and original source.
     pub(crate) parent_no_store_source: Option<RuntimeLoopNoStoreSource>,
     /// Immutable action catalog captured from the durable parent conversation.

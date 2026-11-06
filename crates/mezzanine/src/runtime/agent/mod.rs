@@ -391,6 +391,8 @@ pub(crate) struct RuntimeAgentComponent {
     native_directory_default_mode_epoch: std::sync::Arc<()>,
     /// Acceptance-frozen navigation inputs, bounded to one retained entry per pane.
     native_directory_commands: BTreeMap<String, crate::runtime::commands::NativeDirectoryWork>,
+    /// Exact accepted loop source work; worker clones retain physical capacity.
+    loop_source_commands: BTreeMap<String, crate::runtime::commands::LoopSourceWork>,
     /// Mode-specific startup state for runtime-created agent panes.
     agent_surface_startups: BTreeMap<String, startup::RuntimeAgentSurfaceStartup>,
     /// User-controlled host power policy for active agent turns.
@@ -631,7 +633,7 @@ pub(crate) struct RuntimeAgentComponent {
     /// alone never proves active work and a new operation replaces its entry.
     compaction_operation_starts: BTreeMap<String, (String, u64, u64)>,
     /// Finite actor-preparation admission, held until the actual source worker exits.
-    manual_compaction_preparation_slots: Option<std::sync::Arc<tokio::sync::Semaphore>>,
+    agent_source_preparation_slots: Option<std::sync::Arc<tokio::sync::Semaphore>>,
     /// Explicit preparation gate used only by deterministic actor regressions.
     #[cfg(test)]
     manual_compaction_preparation_probe: Option<(
@@ -1044,6 +1046,36 @@ impl RuntimeAgentComponent {
             && std::sync::Arc::ptr_eq(&self.native_directory_default_mode_epoch, default)
     }
 
+    pub(crate) fn retain_loop_source_work(
+        &mut self,
+        pane: &str,
+        generation: u64,
+        mut work: crate::runtime::commands::LoopSourceWork,
+    ) {
+        work.operation = generation;
+        self.loop_source_commands.insert(pane.into(), work);
+    }
+
+    pub(crate) fn loop_source_work(
+        &self,
+        pane: &str,
+        generation: u64,
+    ) -> Option<crate::runtime::commands::LoopSourceWork> {
+        self.loop_source_commands
+            .get(pane)
+            .filter(|work| work.operation == generation)
+            .cloned()
+    }
+
+    /// Pending source admission owns a command even before a loop exists.
+    pub(crate) fn loop_source_command_is_pending(&self, pane: &str) -> bool {
+        self.loop_source_commands.get(pane).is_some_and(|work| {
+            self.agent_command_lifecycles
+                .get(pane)
+                .is_some_and(|life| life.command_id == work.operation && !life.phase.is_terminal())
+        })
+    }
+
     /// Retains acceptance inputs under the exact newly allocated command claim.
     pub(crate) fn retain_native_directory_work(
         &mut self,
@@ -1233,6 +1265,7 @@ impl RuntimeAgentComponent {
         }
         lifecycle.phase = phase;
         self.native_directory_commands.remove(pane_id);
+        self.loop_source_commands.remove(pane_id);
         self.finish_deferred_steering_command(pane_id, conversation_id, command_id, phase);
         true
     }
@@ -1295,6 +1328,7 @@ impl RuntimeAgentComponent {
     /// Cancels any non-terminal command whose pane has been removed.
     pub(crate) fn cancel_agent_command(&mut self, pane_id: &str) -> bool {
         self.native_directory_commands.remove(pane_id);
+        self.loop_source_commands.remove(pane_id);
         self.pending_status_reports
             .retain(|(pane, _), _| pane != pane_id);
         let Some(lifecycle) = self.agent_command_lifecycles.get_mut(pane_id) else {
@@ -3291,16 +3325,19 @@ impl RuntimeSessionService {
             .insert(pane_id, task);
     }
 
-    /// Enables finite manual source preparation for an actor owner. Synchronous
-    /// callers retain their existing contract; this is not a user configuration.
-    pub(crate) fn use_manual_compaction_preparation_adapter(&mut self) {
-        self.agent.manual_compaction_preparation_slots =
-            Some(std::sync::Arc::new(tokio::sync::Semaphore::new(8)));
+    /// Enables the shared finite pool for manual compaction and loop source
+    /// preparation. Registration preserves permits retained by physical reads;
+    /// a replacement adapter cannot erase their occupancy. Direct synchronous
+    /// callers retain their contract; this is not a user configuration.
+    pub(crate) fn use_agent_source_preparation_adapter(&mut self) {
+        self.agent
+            .agent_source_preparation_slots
+            .get_or_insert_with(|| std::sync::Arc::new(tokio::sync::Semaphore::new(8)));
     }
 
-    /// Reports whether this service assigns manual source preparation to workers.
-    pub(crate) fn manual_compaction_preparation_uses_adapter(&self) -> bool {
-        self.agent.manual_compaction_preparation_slots.is_some()
+    /// Reports whether this service assigns source preparation to workers.
+    pub(crate) fn agent_source_preparation_uses_adapter(&self) -> bool {
+        self.agent.agent_source_preparation_slots.is_some()
     }
 
     /// Installs an explicit pre-source worker gate without changing production
@@ -3353,21 +3390,21 @@ impl RuntimeSessionService {
     /// Reserves finite source-worker capacity without waiting on the actor. The
     /// permit must remain with the owned work until its actual I/O ends, including
     /// after logical cancellation. Missing adapter or saturation rejects admission.
-    pub(crate) fn reserve_manual_compaction_preparation(
+    pub(crate) fn reserve_agent_source_preparation(
         &self,
     ) -> Result<std::sync::Arc<tokio::sync::OwnedSemaphorePermit>> {
         let slots = self
             .agent
-            .manual_compaction_preparation_slots
+            .agent_source_preparation_slots
             .as_ref()
             .ok_or_else(|| {
-                MezError::invalid_state("manual compaction preparation adapter unavailable")
+                MezError::invalid_state("agent source preparation adapter unavailable")
             })?;
         slots
             .clone()
             .try_acquire_owned()
             .map(std::sync::Arc::new)
-            .map_err(|_| MezError::conflict("manual compaction preparation capacity unavailable"))
+            .map_err(|_| MezError::conflict("agent source preparation capacity unavailable"))
     }
 
     /// Admits a logical compaction before source decoding. Generation and epoch

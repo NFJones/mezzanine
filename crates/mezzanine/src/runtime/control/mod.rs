@@ -747,13 +747,14 @@ impl RuntimeSessionService {
     /// injected automatically.
     ///
     /// # Parameters
-    /// - `pane_id`: The pane whose active agent conversation is being prepared.
-    fn model_context_memory_records_for_pane(&self, pane_id: &str) -> Vec<MemoryRecord> {
-        let Some(session) = self.agent_shell_store().get(pane_id) else {
-            return Vec::new();
-        };
+    /// - `conversation`: The selected conversation, including a captured loop
+    ///   parent that has not yet been rebound into its pane.
+    fn model_context_memory_records_for_conversation(
+        &self,
+        conversation: &str,
+    ) -> Vec<MemoryRecord> {
         let compact_memory_id =
-            mez_agent::memory::canonical_memory_uuid(&format!("compact-{}", session.session_id));
+            mez_agent::memory::canonical_memory_uuid(&format!("compact-{conversation}"));
         self.memory_records()
             .into_iter()
             .filter(|record| record.id == compact_memory_id)
@@ -836,19 +837,32 @@ impl RuntimeSessionService {
         &self,
         pane_id: &str,
     ) -> RuntimeAgentPromptHistoryWork {
-        if let Some(source) = self
-            .agent_shell_store()
-            .get(pane_id)
+        let session = self.agent_shell_store().get(pane_id);
+        let frozen = session
             .filter(|session| session.ephemeral)
             .and_then(|session| self.frozen_replay_binding(pane_id, &session.session_id))
-        {
+            .cloned();
+        self.prepare_prompt_history_for_binding(pane_id, session, frozen)
+    }
+
+    /// Captures a selected binding without pane mutation or store I/O. Loop
+    /// restoration supplies its original parent and immutable NoStore view.
+    pub(crate) fn prepare_prompt_history_for_binding(
+        &self,
+        pane_id: &str,
+        session: Option<&mez_agent::AgentShellSession>,
+        frozen: Option<RuntimeFrozenReplayHistory>,
+    ) -> RuntimeAgentPromptHistoryWork {
+        if let Some(source) = frozen {
             return RuntimeAgentPromptHistoryWork {
-                frozen_replay: Some(source.clone()),
+                frozen_replay: Some(source),
                 memory_blocks: Vec::new(),
                 transcript_work: None,
             };
         }
-        let context_memory_records = self.model_context_memory_records_for_pane(pane_id);
+        let context_memory_records = session.map_or_else(Vec::new, |session| {
+            self.model_context_memory_records_for_conversation(&session.session_id)
+        });
         let memory_blocks = memory_context_blocks(
             &context_memory_records
                 .iter()
@@ -865,7 +879,7 @@ impl RuntimeSessionService {
         })
         .collect();
 
-        let Some(session) = self.agent_shell_store().get(pane_id) else {
+        let Some(session) = session else {
             return RuntimeAgentPromptHistoryWork {
                 frozen_replay: None,
                 memory_blocks,

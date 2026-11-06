@@ -374,8 +374,91 @@ pub(crate) struct RuntimeAgentTranscriptSnapshot {
 }
 
 impl RuntimeAgentPromptHistoryWork {
+    /// Selects an actual typed head or the original admitted legacy window in
+    /// one leased read. A count-only NoStore source cannot select a typed head.
+    /// Legacy summaries crossing the window are refused rather than expanding
+    /// compacted raw material or importing later summaries into the loop.
+    pub(crate) fn execute_loop_history(
+        self,
+        legacy_frontier: u64,
+    ) -> Result<(
+        RuntimeAgentTranscriptContext,
+        Option<super::RuntimeFrozenReplayHistory>,
+    )> {
+        if let Some(frozen) = self.frozen_replay {
+            if self.transcript_work.is_some() {
+                return Err(crate::MezError::conflict(
+                    "frozen replay source has duplicate I/O ownership",
+                ));
+            }
+            return Ok((frozen.history(), Some(frozen)));
+        }
+        let Some(work) = self.transcript_work else {
+            let history = execute_runtime_agent_prompt_history_work(Self {
+                frozen_replay: None,
+                memory_blocks: self.memory_blocks,
+                transcript_work: None,
+            })?;
+            return Ok((history, None));
+        };
+        work.validate_pending_capture()?;
+        let (snapshot, (mut history, epoch)) = work.store.conversation_loop_source_projection(
+            &work.inputs.conversation_id,
+            work.inputs.pending_entries.entries(),
+            work.inputs.ephemeral_source_entries,
+            legacy_frontier,
+            |epoch| {
+                Some((
+                    ConversationTranscriptRead::All,
+                    epoch.is_some() || legacy_frontier > 0,
+                ))
+            },
+            |snapshot| {
+                let mut epoch = snapshot.epoch.clone();
+                if let Some(epoch) = &mut epoch {
+                    if epoch.through_sequence > legacy_frontier
+                        || epoch.ranges.iter().any(|range| {
+                            range.first_sequence <= legacy_frontier
+                                && range.through_sequence > legacy_frontier
+                        })
+                    {
+                        return Err(crate::MezError::conflict(
+                            "loop source epoch crossed its captured frontier",
+                        ));
+                    }
+                    epoch
+                        .retain_summary_ranges(|range| range.through_sequence <= legacy_frontier)?;
+                }
+                let history = runtime_agent_history_epoch_from_snapshot(
+                    work.inputs.clone(),
+                    epoch.clone(),
+                    snapshot.view.logical.clone(),
+                    Some(snapshot),
+                );
+                let records = history.records.committed_row_records(snapshot)?;
+                Ok(((history, epoch), records))
+            },
+        )?;
+        let frontier = snapshot
+            .view
+            .logical
+            .last()
+            .map_or(0, |row| row.sequence)
+            .max(
+                snapshot
+                    .replay
+                    .as_ref()
+                    .map_or(0, |snapshot| snapshot.covered_archive_frontier()),
+            );
+        super::RuntimeAgentHistorySource::attach(&mut history, work, epoch, snapshot.view.logical);
+        let history = runtime_agent_prompt_history_from_transcript(self.memory_blocks, history);
+        let frozen = super::RuntimeFrozenReplayHistory::from_history(history.clone(), frontier)?;
+        Ok((history, frozen))
+    }
+
     /// Captures typed source under its original leased projection. A legacy
     /// source is detected without decoding its archive or inventing a head.
+    #[cfg(test)]
     pub(crate) fn freeze_replay_history(self) -> Result<Option<super::RuntimeFrozenReplayHistory>> {
         if let Some(source) = self.frozen_replay {
             if self.transcript_work.is_some() {

@@ -115,6 +115,13 @@ Conversation continuity is not proof that a command completed or that the
 filesystem is unchanged: verify interrupted work before asking the agent to
 continue.
 
+The async runtime prepares `/loop` history on a bounded worker before starting
+its first turn. Forked iterations keep that original checkpoint or legacy
+history projection, so later parent changes do not enter the loop. `/stop` can
+cancel preparation before a work turn exists; a late result cannot start the
+cancelled loop. A reader that is still running keeps its worker capacity until
+it retires.
+
 Agent log entries retain presentation-only local occurrence evidence separately
 from saved-session creation and activity timestamps. Streamed components keep the
 time first observed locally; accepted prompts, steering and message receipts keep
