@@ -982,7 +982,7 @@ fn old_prototype_requires_explicit_original_source_transition() {
     let fixture = Fixture::new();
     let first = proposal(&fixture, &source(), None, "prototype head");
     fixture.store.publish_replay_epoch(&first).unwrap();
-    let mut old = first.envelope.clone();
+    let mut old = original_checkpoint_format(first.envelope.clone());
     old.manifest.version = 4;
     old.manifest.source_escrow = None;
     old.manifest.archive_cut = None;
@@ -1024,12 +1024,55 @@ fn old_prototype_requires_explicit_original_source_transition() {
 
 /// Genuine v5 retains its original digest framing and source receipt. A new
 /// qualified publication adds the cut without inventing escrow or model work.
+/// Retained MCP evidence from checkpoint one cannot revive an old grant.
 #[test]
 fn version_five_source_upgrades_through_qualified_publication() {
     let fixture = Fixture::new();
-    let first = proposal(&fixture, &source(), None, "version five head");
+    let mut current = source();
+    let frozen = plan(&current);
+    // This retained eligible prefix permits the next rewrite without skipping
+    // the later ungrouped MCP evidence, which remains a protected raw member.
+    current
+        .append_fact("retained", "next eligible source")
+        .unwrap();
+    let mut body = current.into_owned_context();
+    body.append_reference_event(
+        ContextSourceKind::McpRetrievedManifest,
+        "retrieved MCP manifest synthetic",
+        serde_json::json!({"version":"mez-mcp-retrieved-manifest/v1", "server_id":"synthetic",
+            "tools":[{"name":"echo", "description":"synthetic echo",
+                "input_schema":{"type":"object", "properties":{}}}]})
+        .to_string(),
+    )
+    .unwrap();
+    let original = body.chronology().last().unwrap().clone();
+    let summary = mez_agent::McpPromptSummary {
+        available_servers: Vec::new(),
+        available_tools: Vec::new(),
+        unavailable_servers: Vec::new(),
+    };
+    assert_eq!(
+        mez_agent::invoked_mcp_tools_for_context(&body, &summary).len(),
+        1
+    );
+    current = ReplayEpochContext::from_owned_context(
+        ReplayConversationId::new("conversation-a").unwrap(),
+        body,
+    )
+    .unwrap();
+    let first = fixture
+        .store
+        .prepare_replay_epoch(
+            origin().capture(None),
+            "conversation-a",
+            None,
+            &current,
+            frozen,
+            ReplayHeadPublication::Summary("version five head".into()),
+        )
+        .unwrap();
     fixture.store.publish_replay_epoch(&first).unwrap();
-    let mut old = first.envelope.clone();
+    let mut old = original_checkpoint_format(first.envelope.clone());
     old.manifest.version = 5;
     old.manifest.archive_cut = None;
     old.sha256 = digest(&encode(&old.manifest).unwrap());
@@ -1038,12 +1081,33 @@ fn version_five_source_upgrades_through_qualified_publication() {
     payload::publish(&directory, &digest(&bytes), &bytes, || Ok(())).unwrap();
     fs::write(directory.join(MANIFEST_NAME), bytes).unwrap();
     let (parent, mut current) = fixture.load();
+    assert_eq!(current.context().chronology().last(), Some(&original));
+    assert!(mez_agent::invoked_mcp_tools_for_context(current.context(), &summary).is_empty());
     current.append_fact("new", "new exact source").unwrap();
     let next = proposal(&fixture, &current, Some(parent), "version six head");
     assert_eq!(next.envelope.manifest.version, 6);
     assert!(next.envelope.manifest.archive_cut.is_some());
     fixture.store.publish_replay_epoch(&next).unwrap();
     assert_eq!(fixture.load().0, next.identity());
+}
+
+/// Reproduce the actual old nested format, rather than relabeling a current
+/// checkpoint. Skipping the absent field preserves immutable receipt hashes.
+fn original_checkpoint_format(mut envelope: Envelope) -> Envelope {
+    for checkpoint in [
+        &mut envelope.manifest.source_checkpoint,
+        &mut envelope.manifest.checkpoint,
+    ] {
+        let mut value = serde_json::to_value(&*checkpoint).unwrap();
+        value["version"] = serde_json::json!(1);
+        value
+            .as_object_mut()
+            .unwrap()
+            .remove("retired_mcp_retrievals");
+        *checkpoint = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(serde_json::to_value(&*checkpoint).unwrap(), value);
+    }
+    envelope
 }
 
 /// Correct outer checksums and source receipts cannot turn a missing v6 cut

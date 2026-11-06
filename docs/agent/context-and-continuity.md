@@ -422,6 +422,18 @@ checkpoint cannot recreate those witnesses. This is an implementation boundary;
 the actor publication lifecycle, complete arrival coverage, custody settlement,
 fork and migration support remain incomplete for this format.
 
+At this typed acceptance boundary, retained MCP retrieval evidence keeps its
+original bytes, identity and local cost, but stops granting callable tools.
+Retrievals arriving during publication are also revoked. Preparing a candidate
+or failing publication leaves live availability alone; a duplicate acknowledgment
+does not revoke a fresh retrieval made after acceptance. The provider's tool
+selector checks these restrictions on both the live body and cold history.
+Nested checkpoint version two persists restrictive retrieval IDs, including an
+explicit source-copy restriction before the first epoch. Original version-one
+checkpoints retain their receipt framing and derive older-epoch restrictions
+from their checked member births. These restrictions never grant action or
+permission rights; fresh retrieval still needs current registry validation.
+
 The current writer uses sidecar version six to carry original-source escrow
 across publications. If ordinary rows arrive after several summaries, replay
 checks their original turn, occurrence, bytes and native metadata before

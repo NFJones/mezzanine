@@ -5,6 +5,7 @@ use super::*;
 
 mod checkpoint;
 mod continuation;
+mod mcp_grants;
 mod publication;
 mod source;
 

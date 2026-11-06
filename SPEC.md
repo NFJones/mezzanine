@@ -10874,6 +10874,19 @@ group as settled. Stale estimates MUST be checked against actual bytes. This
 pure checkpoint contract does not itself install a product manifest, migrate
 transcript formats, or claim restart durability for unsaved conversations.
 
+An accepted replay rewrite MUST revoke all retained MCP retrieval grants,
+including retrievals arriving after preparation, without changing their original
+evidence, records, ordering or costs. Preparation or failed acceptance MUST NOT
+revoke live grants; duplicate adoption MUST preserve fresh post-acceptance
+retrievals. A fresh retrieval occurrence MAY grant tools again, subject to the
+current live registry and existing permission checks. Restrictive source-copy
+revocations MUST survive checkpoint restoration even at revision zero.
+Checkpoint version two MUST carry explicit revocation occurrence IDs and reject
+missing, duplicate, unknown or non-retrieval IDs and omitted older-epoch denials.
+Original version-one checkpoints MUST retain their original serialized framing
+and derive minimum denials from checked member birth revisions. A new source
+extending a committed parent MUST NOT remove the parent's retained denials.
+
 Moving a live replay owner's body into runtime `AgentContext` storage MUST retain
 its actual incarnation, task handles and private lifecycle witnesses as
 nonserialized metadata. This continuation MUST own no second history body and

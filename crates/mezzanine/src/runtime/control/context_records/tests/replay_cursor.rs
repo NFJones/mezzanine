@@ -234,6 +234,47 @@ fn replay_cursor_omits_large_indexed_prefix_through_actual_history_worker() {
     }
 }
 
+/// Retained retrieval evidence stays exact model data after a real head ACK,
+/// but the cold history/provider selector must not restore its older tool grant.
+#[test]
+fn replay_epoch_cold_history_revokes_retained_mcp_grants() {
+    let mut fixture = Fixture::new();
+    let summary = mez_agent::McpPromptSummary {
+        available_servers: Vec::new(),
+        available_tools: Vec::new(),
+        unavailable_servers: Vec::new(),
+    };
+    append_closed(&mut fixture.owner, "mcp-covered-source");
+    let frozen = plan(&fixture.owner);
+    let mut body = fixture.owner.clone().into_owned_context();
+    body.append_reference_event(
+        ContextSourceKind::McpRetrievedManifest,
+        "retrieved MCP manifest synthetic",
+        serde_json::json!({
+            "version": "mez-mcp-retrieved-manifest/v1",
+            "server_id": "synthetic",
+            "tools": [{"name":"echo", "description":"synthetic echo",
+                "input_schema":{"type":"object", "properties":{"value":{"type":"string"}}}}]
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let original = body.chronology().last().unwrap().clone();
+    assert_eq!(
+        mez_agent::invoked_mcp_tools_for_context(&body, &summary).len(),
+        1
+    );
+    fixture.owner =
+        ReplayEpochContext::from_owned_context(ReplayConversationId::new(CID).unwrap(), body)
+            .unwrap();
+    fixture.publish(frozen);
+    let history = execute_runtime_agent_history_epoch_work(fixture.work()).unwrap();
+    let restored = history.records.import_context(history.blocks).unwrap();
+    assert_eq!(restored.chronology().last(), Some(&original));
+    assert!(mez_agent::invoked_mcp_tools_for_context(&restored, &summary).is_empty());
+    assert!(mez_agent::invoked_mcp_tools_for_context(fixture.owner.context(), &summary).is_empty());
+}
+
 /// Already complete original accounting needs no replay repair. History leaves
 /// the original receipt with its actual owner instead of inventing an ACK from
 /// the cut; explicit settlement still checks the actual physical archive.

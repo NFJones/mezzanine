@@ -57,6 +57,10 @@ impl ReplayEpochContext {
             || self.context.next_event_sequence < previous.context.next_event_sequence
             || !previous
                 .context
+                .retired_mcp_retrievals
+                .is_subset(&self.context.retired_mcp_retrievals)
+            || !previous
+                .context
                 .historical_instruction_events
                 .is_subset(&self.context.historical_instruction_events)
         {

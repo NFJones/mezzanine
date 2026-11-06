@@ -1288,6 +1288,10 @@ pub struct AgentContext {
     /// remain immutable while their retention becomes historical. This typed
     /// lifecycle is not reconstructed from labels or bare block imports.
     historical_instruction_events: BTreeSet<ContextEventSequence>,
+    /// Restrictive tool-availability metadata for retained retrieval evidence.
+    /// Typed checkpoints preserve this set; source bytes and records do not
+    /// change, and an old occurrence cannot regain its grant through replay.
+    retired_mcp_retrievals: BTreeSet<ContextBlockOccurrenceId>,
     /// Actual live replay incarnation and source seals, never serialized/projected.
     replay_continuation: Option<Box<epoch::ReplayEpochContinuation>>,
 }
@@ -1309,6 +1313,7 @@ impl AgentContext {
             pending_execution_groups: BTreeMap::new(),
             pending_peer_messages: BTreeSet::new(),
             historical_instruction_events: BTreeSet::new(),
+            retired_mcp_retrievals: BTreeSet::new(),
             replay_continuation: None,
         }
     }
@@ -2107,6 +2112,7 @@ impl AgentContext {
 
     /// Rebuilds adapter projections from typed canonical storage.
     fn rebuild_projections(&mut self) {
+        self.prune_retired_mcp_retrievals();
         self.historical_instruction_events.retain(|sequence| {
             self.chronology.iter().any(|event| {
                 event.sequence == *sequence

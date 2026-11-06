@@ -425,11 +425,14 @@ pub fn mcp_retrieved_manifest_for_action_result(result: &ActionResult) -> Option
 }
 
 /// Reconstructs callable MCP tools from the newest durable retrieved manifest
-/// for each server in the current chronology.
+/// for each server in the current availability epoch. Revoked evidence remains
+/// model-visible but cannot restore tools after an accepted rewrite/source copy.
 pub fn mcp_retrieved_manifest_tools_for_context(context: &AgentContext) -> Vec<McpPromptTool> {
     let mut manifests = std::collections::BTreeMap::new();
-    for block in context.blocks() {
-        if block.source != ContextSourceKind::McpRetrievedManifest {
+    for (block, metadata) in context.blocks().iter().zip(context.block_metadata()) {
+        if block.source != ContextSourceKind::McpRetrievedManifest
+            || !context.mcp_retrieval_is_current(metadata.record().occurrence_id())
+        {
             continue;
         }
         let Some((server_id, tools)) = parse_mcp_retrieved_manifest(&block.content) else {

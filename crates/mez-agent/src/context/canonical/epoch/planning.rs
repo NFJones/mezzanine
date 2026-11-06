@@ -181,6 +181,7 @@ impl ReplayEpochContext {
                 "replay head or raw membership drifted from canonical context",
             ));
         }
+        self.validate_mcp_retrievals()?;
         self.validate_accounting()
     }
 

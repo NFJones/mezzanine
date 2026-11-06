@@ -6,8 +6,10 @@
 //! authority. Restoration checks membership, causal metadata and accounting and
 //! allocates a fresh owner incarnation. Current stable instructions and request
 //! metadata come from the caller; the checkpoint contains only stable accounting.
-//! Active task handles, process ownership, cache state and execution/peer rights
-//! never cross this boundary. Exact instructions can be bound to fresh tasks;
+//! Active task handles, process ownership, request-cache state and execution/peer
+//! rights never cross this boundary. Version two preserves restrictive MCP
+//! retrieval denials; original version-one imports derive the minimum denials
+//! from checked member births. Exact instructions can be bound to fresh tasks;
 //! pending flags preserve source protection, without reissuing effects or ACKs.
 
 use super::super::{
@@ -34,6 +36,10 @@ pub struct ReplayEpochCheckpoint<P = String> {
     pending_execution_groups: Vec<String>,
     pending_peer_messages: Vec<u64>,
     historical_instruction_events: Vec<u64>,
+    /// Version one omitted this restrictive state. Its minimum denials are
+    /// derived from actual member births when importing that original format.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    retired_mcp_retrievals: Option<Vec<ContextBlockOccurrenceId>>,
 }
 
 /// Ordered raw membership, including the birth revision of inherited tail.
@@ -138,6 +144,7 @@ impl<P> ReplayEpochCheckpoint<P> {
             pending_execution_groups: self.pending_execution_groups,
             pending_peer_messages: self.pending_peer_messages,
             historical_instruction_events: self.historical_instruction_events,
+            retired_mcp_retrievals: self.retired_mcp_retrievals,
         })
     }
 }
@@ -159,7 +166,7 @@ impl ReplayEpochContext {
     pub fn checkpoint(&self) -> AgentContextResult<ReplayEpochCheckpoint> {
         self.validate_membership()?;
         Ok(ReplayEpochCheckpoint {
-            version: 1,
+            version: 2,
             conversation: self.conversation.as_str().to_owned(),
             revision: self.revision.get(),
             policy: self.policy,
@@ -194,6 +201,13 @@ impl ReplayEpochContext {
                 .iter()
                 .map(|sequence| sequence.get())
                 .collect(),
+            retired_mcp_retrievals: Some(
+                self.context
+                    .retired_mcp_retrievals
+                    .iter()
+                    .copied()
+                    .collect(),
+            ),
         })
     }
 
@@ -217,7 +231,14 @@ impl ReplayEpochContext {
         if current_prefix.has_replay_owner() {
             return Err(invalid("checkpoint prefix already has a live owner"));
         }
-        if checkpoint.version != 1 || checkpoint.conversation != conversation.as_str() {
+        if !matches!(
+            (
+                checkpoint.version,
+                checkpoint.retired_mcp_retrievals.is_some()
+            ),
+            (1, false) | (2, true)
+        ) || checkpoint.conversation != conversation.as_str()
+        {
             return Err(invalid("unsupported format or foreign conversation"));
         }
         current_prefix
@@ -302,6 +323,14 @@ impl ReplayEpochContext {
         {
             return Err(invalid("head does not match revision and policy"));
         }
+        let retired = checkpoint
+            .retired_mcp_retrievals
+            .unwrap_or_else(|| owner.older_mcp_retrievals().into_iter().collect());
+        let unique = retired.iter().copied().collect::<BTreeSet<_>>();
+        if unique.len() != retired.len() {
+            return Err(invalid("duplicate MCP retrieval revocation"));
+        }
+        owner.context.retired_mcp_retrievals = unique;
         owner.initialize_accounting()?;
         owner.validate_membership()?;
         if let Some(head) = owner

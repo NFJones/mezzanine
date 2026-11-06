@@ -33,6 +33,7 @@ mod checkpoint;
 mod continuation;
 pub(super) use continuation::ReplayEpochContinuation;
 mod lifecycle;
+mod mcp_grants;
 pub use checkpoint::ReplayEpochCheckpoint;
 mod native_groups;
 mod planning;
