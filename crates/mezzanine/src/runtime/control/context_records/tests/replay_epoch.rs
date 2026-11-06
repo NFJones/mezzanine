@@ -221,3 +221,173 @@ fn replay_epoch_peer_task_cannot_retire_user_instruction() {
     );
     assert!(context.execution_group_is_pending(&fixture.group));
 }
+
+/// A frozen pending native declaration and its later result form one original
+/// execution group. Composition must validate the suffix against that actual
+/// base, preserve the frozen occurrence/owner, and append the exact accounted
+/// result rather than require a second assistant or flatten either source.
+#[test]
+fn replay_epoch_composition_continues_saved_native_group() {
+    let fixture = Fixture::new();
+    let mut history = execute_runtime_agent_history_epoch_work(work(&fixture, "new-pane")).unwrap();
+    let declaration = fixture.source.context().chronology().last().unwrap();
+    let native = mez_agent::ProviderTranscriptEvent::OpenAiChatCompletionsToolResult {
+        provider_id: "original-provider".into(),
+        tool_call_id: "original-call".into(),
+        content: "settled result supplied by the original append owner".into(),
+    };
+    let result = ContextBlock::reference_event(
+        ContextSourceKind::TranscriptTool,
+        "later native result",
+        native.to_transcript_content(),
+    );
+    let record = ContextBlockRecord::allocate(&result).unwrap();
+    let execution = mez_agent::ImportedExecutionEvent::new(
+        result.clone(),
+        fixture.group.clone(),
+        2,
+        declaration.provider_owner().cloned(),
+    )
+    .unwrap()
+    .with_record(record)
+    .unwrap();
+    history
+        .records
+        .push_indexed_record(history.blocks.len(), record);
+    let mut blocks = vec![guidance("current policy")];
+    blocks.extend(history.blocks);
+    blocks.push(result.clone());
+    blocks.push(ContextBlock::user_event(
+        "user prompt",
+        "continue after native settlement",
+    ));
+    let mut context = history
+        .records
+        .import_context_for_new_task(blocks, &[], &[execution])
+        .unwrap();
+    context.validate_durable().unwrap();
+    assert_eq!(context.chronology()[2], *declaration);
+    assert_eq!(context.chronology()[3].block(), &result);
+    assert_eq!(context.chronology()[3].record(), record);
+    assert_eq!(
+        context.chronology()[3].execution_group_id(),
+        Some(&fixture.group)
+    );
+    assert_eq!(
+        context.chronology()[3].provider_owner(),
+        declaration.provider_owner()
+    );
+    assert!(context.execution_group_is_pending(&fixture.group));
+    let actual_source = context
+        .replay_execution_append_owner(&fixture.group)
+        .unwrap()
+        .clone();
+    assert_eq!(actual_source.frontier(), context.chronology()[3].sequence());
+    context
+        .update_replay_owner(|owner| owner.finish_execution_group(&actual_source))
+        .unwrap();
+    assert!(!context.execution_group_is_pending(&fixture.group));
+    assert!(fixture.store.inspect(CONVERSATION).unwrap().is_empty());
+}
+
+/// The same real stored-epoch importer must reject missing ownership, ordinal
+/// gaps, orphan/foreign native results, duplicate occurrences/results and absent
+/// groups. Source failure cannot silently drop the new result or relabel frozen
+/// history as a substitute causal declaration.
+#[test]
+fn replay_epoch_composition_refuses_invalid_native_continuations() {
+    let fixture = Fixture::new();
+    for alteration in 0..7 {
+        let mut history =
+            execute_runtime_agent_history_epoch_work(work(&fixture, "new-pane")).unwrap();
+        let provider = if alteration == 3 {
+            "foreign-provider"
+        } else {
+            "original-provider"
+        };
+        let native = mez_agent::ProviderTranscriptEvent::OpenAiChatCompletionsToolResult {
+            provider_id: provider.into(),
+            tool_call_id: if alteration == 2 {
+                "missing-call"
+            } else {
+                "original-call"
+            }
+            .into(),
+            content: "actual later result".into(),
+        };
+        let block = ContextBlock::reference_event(
+            ContextSourceKind::TranscriptTool,
+            "later native result",
+            native.to_transcript_content(),
+        );
+        let record = if alteration == 6 {
+            fixture.source.context().chronology()[0]
+                .record()
+                .restored(&block)
+                .unwrap()
+        } else {
+            ContextBlockRecord::allocate(&block).unwrap()
+        };
+        let group = if alteration == 5 {
+            mez_agent::ContextExecutionGroupId::new("missing-group").unwrap()
+        } else {
+            fixture.group.clone()
+        };
+        let owner = mez_agent::ProviderContinuityOwner::new(
+            mez_agent::ProviderApiCompatibility::OpenAiChatCompletions,
+            provider,
+        )
+        .unwrap();
+        let ordinal = match alteration {
+            1 => 3,
+            5 => 1,
+            _ => 2,
+        };
+        let mut execution = vec![
+            mez_agent::ImportedExecutionEvent::new(
+                block.clone(),
+                group,
+                ordinal,
+                Some(owner.clone()),
+            )
+            .unwrap()
+            .with_record(record)
+            .unwrap(),
+        ];
+        history
+            .records
+            .push_indexed_record(history.blocks.len(), record);
+        let mut blocks = vec![guidance("current policy")];
+        blocks.extend(history.blocks);
+        blocks.push(block.clone());
+        if alteration == 0 {
+            execution.clear();
+        } else if alteration == 4 {
+            let record = ContextBlockRecord::allocate(&block).unwrap();
+            history
+                .records
+                .push_indexed_record(blocks.len() - 1, record);
+            blocks.push(block.clone());
+            execution.push(
+                mez_agent::ImportedExecutionEvent::new(
+                    block,
+                    fixture.group.clone(),
+                    3,
+                    Some(owner),
+                )
+                .unwrap()
+                .with_record(record)
+                .unwrap(),
+            );
+        }
+        blocks.push(ContextBlock::user_event("user prompt", "current task"));
+        assert!(
+            history
+                .records
+                .import_context_for_new_task(blocks, &[], &execution)
+                .is_err(),
+            "alteration={alteration}"
+        );
+    }
+    assert!(fixture.store.inspect(CONVERSATION).unwrap().is_empty());
+}

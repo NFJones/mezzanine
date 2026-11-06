@@ -33,6 +33,7 @@ mod epoch;
 mod errors;
 pub use epoch::*;
 mod history;
+mod imported_history;
 mod messages;
 mod pending;
 use pending::ContextExecutionProtection;
@@ -1371,40 +1372,7 @@ impl AgentContext {
             return Ok(());
         }
         let mut candidate = self.clone();
-        let mut search_start = 0usize;
-        let mut group_ordinals = BTreeMap::<ContextExecutionGroupId, u64>::new();
-        for record in imported {
-            let previous = group_ordinals
-                .insert(record.execution_group_id.clone(), record.ordinal)
-                .unwrap_or(0);
-            if record.ordinal != previous.saturating_add(1) {
-                return Err(AgentContextError::new(
-                    "imported execution-group ordinals must be contiguous and start at one",
-                ));
-            }
-            let Some(relative_index) =
-                candidate.chronology[search_start..]
-                    .iter()
-                    .position(|event| {
-                        event.block == record.block
-                            && record.record.is_none_or(|stored| {
-                                stored.occurrence_id() == event.record.occurrence_id()
-                            })
-                    })
-            else {
-                return Err(AgentContextError::new(
-                    "imported execution metadata has no matching chronological block",
-                ));
-            };
-            let index = search_start.saturating_add(relative_index);
-            let event = &mut candidate.chronology[index];
-            event.semantic_kind = record.block.semantic_kind();
-            event.retention = ContextRetention::ExecutionGroup;
-            event.execution_group_id = Some(record.execution_group_id.clone());
-            event.provider_owner = record.provider_owner.clone();
-            event.recoverable_for_compaction = true;
-            search_start = index.saturating_add(1);
-        }
+        candidate.restore_imported_metadata(imported, 0, BTreeMap::new())?;
         candidate.rebuild_projections();
         candidate.validate_durable()?;
         *self = candidate;

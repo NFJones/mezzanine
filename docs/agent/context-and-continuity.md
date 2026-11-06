@@ -422,6 +422,14 @@ checkpoint cannot recreate those witnesses. This is an implementation boundary;
 the actor publication lifecycle, ordinary archive arrivals, custody settlement,
 fork and migration support remain incomplete for this format.
 
+Native suffix composition can now join a saved pending call to its later result
+using the original execution group and provider. It preserves the saved source
+and the new result's occurrence and cost; it does not repeat the call or invent a
+second assistant. Missing metadata, broken ordinal order, mismatched providers
+and orphan or duplicate results refuse composition. Unanswered calls remain
+protected. This prepares the typed import boundary for archive-arrival custody;
+it does not yet enable unqualified ordinary archive or ephemeral arrivals.
+
 The context percentage is the latest positive ordinary execution sample divided
 by the model's context-window budget, not the size of a newly rebuilt request or
 its `max_input_tokens` limit. Below 100% therefore does not establish that the

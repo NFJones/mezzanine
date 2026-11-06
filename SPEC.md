@@ -10975,6 +10975,18 @@ those instructions. Late task preludes MUST target the current exact user prompt
 not historical user instructions. Execution metadata for newly assembled suffix
 events MUST NOT rewrite frozen native ownership.
 
+Qualified suffix import MUST seed execution-group ordinals from the actual
+unchanged canonical base. A later native result MAY continue a saved pending
+declaration without introducing a duplicate assistant or restarting its ordinal.
+Imported metadata MUST match only new suffix occurrences, preserving their
+original records/costs and allocating only local ordering sequences. Native rows
+MUST carry explicit execution metadata. API/provider/call validation MUST inspect
+the combined group: orphan/repeated results and repeated unanswered declarations
+MUST refuse atomically, while genuinely unanswered calls remain protected. New
+source MUST advance only its actual append fence and MUST NOT release unrelated
+pending groups, mint completion/ACK rights or infer archive custody. This boundary
+MUST NOT weaken the frozen archive-arrival guard described below.
+
 This frozen-reader stage does not yet qualify ordinary archive arrivals or a
 bounded ephemeral source against version-four authority. Until the original
 source frontier and custody bridge are connected, those combinations MUST refuse

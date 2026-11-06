@@ -511,11 +511,8 @@ impl RuntimeContextRecords {
                 .filter(|(index, _)| *index >= replay.blocks)
                 .map(|(index, record)| (index - replay.blocks, *record))
                 .collect::<Vec<_>>();
-            let mut appended =
-                AgentContext::import_durable_blocks_with_records(suffix, &suffix_records, &[])?;
-            appended.restore_imported_execution_events(execution)?;
             let mut context = owner.into_owned_context();
-            context.append_imported_history(&appended)?;
+            context.append_imported_history_with_execution(suffix, &suffix_records, execution)?;
             return Ok(context);
         }
         let records = self.indices_with_offset(prefix)?;

@@ -1,6 +1,6 @@
-//! Native declaration/result closure on exact API/provider/call identities.
-//! Runtime retirement alone cannot make unmatched serialized native calls safe
-//! to summarize. Validation observes canonical source without executing it.
+//! Native source and closure validation on exact API/provider/call identities.
+//! Incremental history may retain unanswered calls; final retirement requires
+//! complete pairs. Neither path executes source or invents completion evidence.
 
 use super::*;
 use crate::ProviderTranscriptEvent;
@@ -21,9 +21,21 @@ impl ReplayEpochContext {
         &self,
         group: &ContextExecutionGroupId,
     ) -> AgentContextResult<()> {
+        self.context.validate_native_group_source(group, true)
+    }
+}
+
+impl AgentContext {
+    /// Checks actual native identities over one combined canonical group.
+    /// Open-source admission allows unanswered declarations; retirement does
+    /// not. Orphan/repeated results and duplicate pending calls always fail.
+    pub(in super::super) fn validate_native_group_source(
+        &self,
+        group: &ContextExecutionGroupId,
+        require_closed: bool,
+    ) -> AgentContextResult<()> {
         let mut owners = BTreeMap::<(&'static str, String), NativeGroupCalls>::new();
         for event in self
-            .context
             .chronology()
             .iter()
             .filter(|event| event.execution_group_id() == Some(group))
@@ -82,7 +94,7 @@ impl ReplayEpochContext {
                 ));
             }
         }
-        if owners.values().any(|state| !state.pending.is_empty()) {
+        if require_closed && owners.values().any(|state| !state.pending.is_empty()) {
             return Err(AgentContextError::new(
                 "native group still has unanswered declarations",
             ));
