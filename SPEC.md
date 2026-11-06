@@ -11004,13 +11004,47 @@ publication preparation so their producer cannot become a later publisher's
 turn/agent/pane. The proposal MUST bind those exact original rows to actual source
 before persisting their escrow. Unaccounted semantic rows, unsupported controls,
 duplicates or unqualified earlier reservations MUST continue to refuse. The v4 prototype remains a frozen
-empty-archive reader, without an old-format writer; a v5 publication from v4
+empty-archive reader, without an old-format writer; a newer publication from v4
 MUST visibly require an explicit original-source escrow transition instead of
 inventing missing earlier originals or calling a model on resume. Missing v5
-escrow MUST NOT default to a successful migration. Receipt-qualified escrow
-retirement and the bounded archive cursor remain required implementation work;
-until connected, references are retained and publication refuses the above
-resource bounds rather than silently discarding unsettled source.
+escrow MUST NOT default to a successful migration.
+
+Version six adds a required immutable archive cut to that same manifest and is
+the only one-head format written. A valid version-five source escrow MAY advance
+through the qualified publication path without a provider call. Preparation MUST
+qualify the actual newly observed archive rows against original source and the
+production zero-model renderer, then advance only through a contiguous prefix
+with original append-accounting full-row images. The cut binds the physical byte
+offset, logical row frontier, complete prefix SHA-256, bounded boundary anchor
+and exact last indexed occurrence/image. It MUST NOT infer model membership or
+ordinary append acknowledgment. Publication MUST recheck the frozen complete
+prefix, original index/source qualifications and expected parent under its held
+lease, then sync the archive before latest-authority replacement and acknowledgment.
+No changed old prefix may be recertified while extending a cut.
+
+Ordinary typed history reads MUST validate the committed cut's boundary and
+required index references, then decode only its later archive tail. Current
+model payloads and unsettled original backing remain required independently of
+the physical cut. These bounded reads do not audit arbitrary older covered raw
+bytes; full-prefix integrity is rechecked before a later publication. Truncation,
+changed boundary, missing required indexed images, or malformed/foreign/gapped
+tail MUST refuse rather than fall back to an empty head or lifetime scan.
+Omitted old pending rows require both exact full-field index equality and that
+original captured batch's occurrence proposals. An archived occurrence MUST NOT
+reenter as a new later authored event through either durable or pending rows.
+Both paths MUST use the same guard. A surviving original placement inside the
+cut whose required fingerprint disappeared MUST refuse, never become evidence
+that the occurrence is new. Pending receipts are unchanged.
+
+Only an original occurrence proved inside the committed indexed cut MAY cease
+requiring its older payload as active escrow backing. Retirement MUST preserve
+the current pre-rewrite source and all unsettled originals, and MUST retain
+whole execution groups while any member is still required, preserving original
+ordinal baselines. This retirement does not delete archive, receipt or payload
+files, nor grant execution rights. Final active escrow retains the above logical
+and manifest bounds; an exceeded bound MUST refuse rather than discard unsettled
+source. Ordinary receipt recovery and settlement still require their own bounded
+cursor integration; the typed history optimization alone does not establish it.
 
 The typed runtime reader MUST capture the committed identity and
 checked checkpoint under the same conversation lease. Pane display counts MUST
@@ -11139,11 +11173,11 @@ another selected row lacks an index entry. Conflicting/malformed fingerprints or
 placement MUST refuse locally and preserve any original accepted receipt.
 Actual content edits, resequencing and replacement fork/initial placement MUST
 invalidate obsolete images without changing surviving occurrences. These are
-lookup metadata, not a second raw journal, model source, replay cursor, execution
-authority or ordinary append acknowledgment. A bounded replay reader MUST still
-qualify its archive cut and required index membership before omitting older I/O;
-cursor publication and receipt-qualified escrow retirement remain separate
-required integration work.
+lookup metadata, not a second raw journal, model source, execution authority or
+ordinary append acknowledgment. A bounded replay reader MUST qualify its
+manifest-bound archive cut and required index membership before omitting older
+I/O; the presence of fingerprints alone MUST NOT authorize that omission or
+escrow retirement.
 
 Repaired authored estimates MUST use that same occurrence-bound cost projection
 on subsequent replay. The raw envelope's format and occurrence remain validated

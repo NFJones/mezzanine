@@ -985,6 +985,7 @@ fn old_prototype_requires_explicit_original_source_transition() {
     let mut old = first.envelope.clone();
     old.manifest.version = 4;
     old.manifest.source_escrow = None;
+    old.manifest.archive_cut = None;
     old.sha256 = digest(&encode(&old.manifest).unwrap());
     let directory = fixture.root.join("conversation-a");
     let bytes = encode(&old).unwrap();
@@ -1011,6 +1012,52 @@ fn old_prototype_requires_explicit_original_source_transition() {
     old.manifest.version = 5;
     old.sha256 = digest(&encode(&old.manifest).unwrap());
     let bytes = encode(&old).unwrap();
+    payload::publish(&directory, &digest(&bytes), &bytes, || Ok(())).unwrap();
+    fs::write(directory.join(MANIFEST_NAME), bytes).unwrap();
+    assert!(
+        fixture
+            .store
+            .load_replay_epoch("conversation-a", prefix())
+            .is_err()
+    );
+}
+
+/// Genuine v5 retains its original digest framing and source receipt. A new
+/// qualified publication adds the cut without inventing escrow or model work.
+#[test]
+fn version_five_source_upgrades_through_qualified_publication() {
+    let fixture = Fixture::new();
+    let first = proposal(&fixture, &source(), None, "version five head");
+    fixture.store.publish_replay_epoch(&first).unwrap();
+    let mut old = first.envelope.clone();
+    old.manifest.version = 5;
+    old.manifest.archive_cut = None;
+    old.sha256 = digest(&encode(&old.manifest).unwrap());
+    let directory = fixture.root.join("conversation-a");
+    let bytes = encode(&old).unwrap();
+    payload::publish(&directory, &digest(&bytes), &bytes, || Ok(())).unwrap();
+    fs::write(directory.join(MANIFEST_NAME), bytes).unwrap();
+    let (parent, mut current) = fixture.load();
+    current.append_fact("new", "new exact source").unwrap();
+    let next = proposal(&fixture, &current, Some(parent), "version six head");
+    assert_eq!(next.envelope.manifest.version, 6);
+    assert!(next.envelope.manifest.archive_cut.is_some());
+    fixture.store.publish_replay_epoch(&next).unwrap();
+    assert_eq!(fixture.load().0, next.identity());
+}
+
+/// Correct outer checksums and source receipts cannot turn a missing v6 cut
+/// into a valid older manifest. Required format fields fail before adoption.
+#[test]
+fn version_six_requires_its_archive_cut() {
+    let fixture = Fixture::new();
+    let first = proposal(&fixture, &source(), None, "current head");
+    fixture.store.publish_replay_epoch(&first).unwrap();
+    let mut broken = first.envelope.clone();
+    broken.manifest.archive_cut = None;
+    broken.sha256 = digest(&encode(&broken.manifest).unwrap());
+    let directory = fixture.root.join("conversation-a");
+    let bytes = encode(&broken).unwrap();
     payload::publish(&directory, &digest(&bytes), &bytes, || Ok(())).unwrap();
     fs::write(directory.join(MANIFEST_NAME), bytes).unwrap();
     assert!(
@@ -1165,8 +1212,23 @@ fn publication_refuses_unqualified_existing_archive_before_acknowledgment() {
             row.content =
                 mez_agent::TranscriptContextEvent::McpCompactionEpoch.to_transcript_content();
         }
-        fixture.store.append(&row).unwrap();
         let prepared = proposal(&fixture, &original, None, "must not hide earlier source");
+        fixture.store.append(&row).unwrap();
+        // Existing unqualified rows refuse during cut capture. The retained
+        // earlier proposal must also refuse rows arriving after preparation.
+        assert!(
+            fixture
+                .store
+                .prepare_replay_epoch(
+                    origin().capture(None),
+                    "conversation-a",
+                    None,
+                    &original,
+                    plan(&original),
+                    ReplayHeadPublication::Summary("must not capture invalid source".into()),
+                )
+                .is_err()
+        );
         assert!(
             fixture.store.publish_replay_epoch(&prepared).is_err(),
             "alteration={alteration}"

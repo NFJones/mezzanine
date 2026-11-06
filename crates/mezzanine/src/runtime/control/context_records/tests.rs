@@ -13,6 +13,7 @@ mod authored_cache;
 mod cache;
 mod pending_ownership;
 mod replay_arrivals;
+mod replay_cursor;
 mod replay_epoch;
 mod stable_scope;
 

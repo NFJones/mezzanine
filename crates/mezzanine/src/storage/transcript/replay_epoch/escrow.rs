@@ -3,9 +3,10 @@
 //! This is per-publication audit escrow, not selectable model history or an
 //! append journal. Covered source remains available to recognize its later
 //! ordinary row without restoring it to the model. Original turn provenance,
-//! occurrence, canonical framing and group ordinal must all agree. Settlement
-//! and cursor integration must qualify retirement; until then references remain
-//! required and bounded rather than being guessed away from pane counts.
+//! occurrence, canonical framing and group ordinal must all agree. Only actual
+//! original append images inside the committed archive cut qualify retirement;
+//! current source and whole still-required groups retain their backing. This
+//! does not acknowledge pending receipts or remove archive/payload files.
 
 use super::{Payload, SOURCE_LIMIT, context_error, invalid};
 use crate::Result;
@@ -69,6 +70,9 @@ pub(super) struct EscrowOccurrence {
     ordinal: Option<u64>,
     provider: Option<(String, String)>,
     origin: ReplaySourceOrigin,
+    /// Original ordinary image is covered by this manifest's durable cut.
+    #[serde(default, skip_serializing_if = "is_false")]
+    archived: bool,
 }
 
 impl std::fmt::Debug for EscrowOccurrence {
@@ -79,12 +83,22 @@ impl std::fmt::Debug for EscrowOccurrence {
 
 /// Retains inherited originals and adds only actual current raw occurrences.
 /// Inherited origin and ordinal cannot be reassigned by a newer caller. No
-/// settlement claim is inferred here; a future receipt-qualified cut retires it.
+/// settlement claim is inferred here; publication qualifies retirement separately.
 pub(super) fn extend(
     inherited: &[EscrowOccurrence],
     source: &ReplayEpochContext,
     origin: &ReplaySourceOrigin,
     captured_rows: &[TranscriptEntry],
+) -> Result<Vec<EscrowOccurrence>> {
+    extend_with_limit(inherited, source, origin, captured_rows, SOURCE_LIMIT)
+}
+
+fn extend_with_limit(
+    inherited: &[EscrowOccurrence],
+    source: &ReplayEpochContext,
+    origin: &ReplaySourceOrigin,
+    captured_rows: &[TranscriptEntry],
+    limit: usize,
 ) -> Result<Vec<EscrowOccurrence>> {
     validate(inherited)?;
     origin.validate()?;
@@ -126,12 +140,14 @@ pub(super) fn extend(
                 || Ok(origin.clone()),
                 |(row, _)| ReplaySourceOrigin::new(&row.turn_id, &row.agent_id, &row.pane_id),
             )?,
+            archived: false,
         };
         match originals.get(&item.record.occurrence_id()) {
             Some(previous) => {
                 let mut expected = item;
                 expected.origin = previous.origin.clone();
                 expected.ordinal = previous.ordinal;
+                expected.archived = previous.archived;
                 if &expected != previous {
                     return Err(invalid("replay escrow original occurrence changed"));
                 }
@@ -156,7 +172,7 @@ pub(super) fn extend(
             item.ordinal = Some(*ordinal);
         }
     }
-    validate(&result)?;
+    validate_with_limit(&result, limit)?;
     if !captured.is_empty() {
         let by_id = result
             .iter()
@@ -185,6 +201,10 @@ pub(super) fn extend(
 
 /// Validates bounded metadata before payload lookup or canonical row matching.
 pub(super) fn validate(items: &[EscrowOccurrence]) -> Result<()> {
+    validate_with_limit(items, SOURCE_LIMIT)
+}
+
+fn validate_with_limit(items: &[EscrowOccurrence], limit: usize) -> Result<()> {
     let mut ids = BTreeSet::new();
     let mut sequence = 0;
     let mut bytes = 0usize;
@@ -195,7 +215,7 @@ pub(super) fn validate(items: &[EscrowOccurrence]) -> Result<()> {
         item.content.validate_format()?;
         bytes = bytes
             .checked_add(item.content.bytes)
-            .filter(|bytes| *bytes <= SOURCE_LIMIT)
+            .filter(|bytes| *bytes <= limit)
             .ok_or_else(|| invalid("unsettled replay source exceeds backing limit"))?;
         if !ids.insert(item.record.occurrence_id())
             || item.sequence == 0
@@ -253,6 +273,9 @@ pub(super) fn validate_current(
 }
 
 impl EscrowOccurrence {
+    pub(super) fn is_archived(&self) -> bool {
+        self.archived
+    }
     pub(super) fn occurrence_id(&self) -> ContextBlockOccurrenceId {
         self.record.occurrence_id()
     }
@@ -361,6 +384,74 @@ impl EscrowOccurrence {
             _ => false,
         }
     }
+}
+
+/// An unpublished union may contain the already bounded parent backing plus
+/// already bounded current source while an actual archive cut is qualified.
+/// It is never serialized or acknowledged at this temporary two-source bound.
+pub(super) fn qualification_source(
+    inherited: &[EscrowOccurrence],
+    source: &ReplayEpochContext,
+    origin: &ReplaySourceOrigin,
+    captured: &[TranscriptEntry],
+) -> Result<Vec<EscrowOccurrence>> {
+    validate(inherited)?;
+    let mut inherited = inherited.to_vec();
+    retire_archived(&mut inherited, source);
+    extend_with_limit(&inherited, source, origin, captured, SOURCE_LIMIT * 2)
+}
+
+/// Retires only originals actually qualified by the frozen archive cut. Current
+/// pre-rewrite source remains backed. Whole groups retain their ordinal baseline
+/// until every old member is archived and none belongs to the current source.
+pub(super) fn publication_source(
+    inherited: &[EscrowOccurrence],
+    source: &ReplayEpochContext,
+    origin: &ReplaySourceOrigin,
+    captured: &[TranscriptEntry],
+    archived: &BTreeSet<ContextBlockOccurrenceId>,
+) -> Result<Vec<EscrowOccurrence>> {
+    let mut items = qualification_source(inherited, source, origin, captured)?;
+    let ids = items
+        .iter()
+        .map(EscrowOccurrence::occurrence_id)
+        .collect::<BTreeSet<_>>();
+    if archived.iter().any(|id| !ids.contains(id)) {
+        return Err(invalid("archive cut names unknown source"));
+    }
+    for item in &mut items {
+        item.archived |= archived.contains(&item.occurrence_id());
+    }
+    retire_archived(&mut items, source);
+    validate(&items)?;
+    Ok(items)
+}
+
+fn retire_archived(items: &mut Vec<EscrowOccurrence>, source: &ReplayEpochContext) {
+    let required = source
+        .context()
+        .chronology()
+        .iter()
+        .skip(usize::from(source.head().is_some()))
+        .map(|event| event.record().occurrence_id())
+        .collect::<BTreeSet<_>>();
+    let groups = items
+        .iter()
+        .filter(|item| !item.archived || required.contains(&item.occurrence_id()))
+        .filter_map(|item| item.group.clone())
+        .collect::<BTreeSet<_>>();
+    items.retain(|item| {
+        !item.archived
+            || required.contains(&item.occurrence_id())
+            || item
+                .group
+                .as_ref()
+                .is_some_and(|group| groups.contains(group))
+    });
+}
+
+fn is_false(value: &bool) -> bool {
+    !value
 }
 
 /// Whether classification is preparing new authored source or checking a
@@ -483,6 +574,84 @@ pub(super) fn qualify_rows(
 mod tests {
     use super::*;
     use mez_agent::{AgentContext, ReplayConversationId};
+
+    /// Partially archived groups keep their original ordinal baseline. Even a
+    /// fully archived group stays while it backs the current pre-rewrite source.
+    #[test]
+    fn escrow_retirement_requires_whole_groups_and_preserves_current_source() {
+        let origin = ReplaySourceOrigin::new("turn", "agent", "pane").unwrap();
+        let mut source = ReplayEpochContext::new(
+            ReplayConversationId::new("group-escrow").unwrap(),
+            AgentContext::empty(),
+        )
+        .unwrap();
+        let group = mez_agent::ContextExecutionGroupId::new("original-group").unwrap();
+        source
+            .append_execution_events([
+                mez_agent::ContextConversationAppend::assistant("one", "first", group.clone()),
+                mez_agent::ContextConversationAppend::assistant("two", "second", group),
+            ])
+            .unwrap();
+        let items = extend(&[], &source, &origin, &[]).unwrap();
+        let first = BTreeSet::from([items[0].occurrence_id()]);
+        let empty = ReplayEpochContext::new(
+            ReplayConversationId::new("group-escrow").unwrap(),
+            AgentContext::empty(),
+        )
+        .unwrap();
+        let partial = publication_source(&items, &empty, &origin, &[], &first).unwrap();
+        assert_eq!(partial.len(), 2);
+        assert_eq!(partial[0].ordinal, Some(1));
+        assert_eq!(partial[1].ordinal, Some(2));
+        assert!(partial[0].is_archived());
+        assert!(!partial[1].is_archived());
+        let all = items.iter().map(EscrowOccurrence::occurrence_id).collect();
+        let current = publication_source(&items, &source, &origin, &[], &all).unwrap();
+        assert_eq!(current.len(), 2);
+        assert!(current.iter().all(EscrowOccurrence::is_archived));
+        assert!(
+            publication_source(&partial, &empty, &origin, &[], &all)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    /// Descriptor-only bounds must allow qualifying a bounded parent plus new
+    /// current source before retirement, but never publish that larger union.
+    #[test]
+    fn escrow_temporary_union_does_not_weaken_final_unsettled_limit() {
+        let origin = ReplaySourceOrigin::new("turn", "agent", "pane").unwrap();
+        let mut source = ReplayEpochContext::new(
+            ReplayConversationId::new("bounded-escrow").unwrap(),
+            AgentContext::empty(),
+        )
+        .unwrap();
+        source.append_fact("old", "old source").unwrap();
+        let mut old = extend(&[], &source, &origin, &[]).unwrap();
+        // Synthetic declared size exercises metadata admission without allocating
+        // 64 MiB. This helper test does not establish physical payload custody.
+        old[0].content.bytes = SOURCE_LIMIT;
+        let mut current = ReplayEpochContext::new(
+            ReplayConversationId::new("bounded-escrow").unwrap(),
+            AgentContext::empty(),
+        )
+        .unwrap();
+        current.append_fact("new", "new source").unwrap();
+        assert_eq!(
+            qualification_source(&old, &current, &origin, &[])
+                .unwrap()
+                .len(),
+            2
+        );
+        assert!(publication_source(&old, &current, &origin, &[], &BTreeSet::new()).is_err());
+        let settled = BTreeSet::from([old[0].occurrence_id()]);
+        let final_source = publication_source(&old, &current, &origin, &[], &settled).unwrap();
+        assert_eq!(final_source.len(), 1);
+        assert_eq!(
+            final_source[0].occurrence_id(),
+            current.context().chronology()[0].record().occurrence_id()
+        );
+    }
 
     /// Equal text remains separate backing; inherited provenance cannot be
     /// rebound to the next turn, and the logical backing limit is checked from

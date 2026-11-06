@@ -92,6 +92,8 @@ pub(super) fn encode_transcript_entry(entry: &TranscriptEntry) -> Result<String>
 
 /// Decodes one canonical transcript entry from the durable TSV format.
 pub(super) fn decode_transcript_entry(line: &str) -> Result<TranscriptEntry> {
+    #[cfg(test)]
+    TRANSCRIPT_DECODE_COUNT.with(|count| count.set(count.get().saturating_add(1)));
     let nul_version = line.starts_with(&format!("{TRANSCRIPT_NUL_VERSION}\t"));
     if line.contains('\0') {
         return Err(MezError::invalid_args(
@@ -117,6 +119,19 @@ pub(super) fn decode_transcript_entry(line: &str) -> Result<TranscriptEntry> {
     };
     entry.validate()?;
     Ok(entry)
+}
+
+#[cfg(test)]
+std::thread_local! {
+    /// Physical TSV decoding attempts on this caller, independent of other
+    /// test threads or model/source-envelope decoding.
+    static TRANSCRIPT_DECODE_COUNT: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// Measures actual physical archive/receipt row decoding at a production edge.
+#[cfg(test)]
+pub(crate) fn transcript_decode_count() -> u64 {
+    TRANSCRIPT_DECODE_COUNT.with(std::cell::Cell::get)
 }
 
 impl AgentPresentationEntry {

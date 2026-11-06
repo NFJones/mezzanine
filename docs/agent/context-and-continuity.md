@@ -422,7 +422,7 @@ checkpoint cannot recreate those witnesses. This is an implementation boundary;
 the actor publication lifecycle, complete arrival coverage, custody settlement,
 fork and migration support remain incomplete for this format.
 
-The current writer uses sidecar version five to carry original-source escrow
+The current writer uses sidecar version six to carry original-source escrow
 across publications. If ordinary rows arrive after several summaries, replay
 checks their original turn, occurrence, bytes and native metadata before
 deduplicating them. Earlier covered source and display copies do not reenter
@@ -436,9 +436,26 @@ not yet settled. It does not acknowledge that append, complete old tasks, or
 execute native work. Duplicates, broken native order/providers, unowned pending
 rows and rewound sequence reservations refuse the read. Unaccounted legacy
 semantic arrivals and unsupported controls still require their own custody
-integration. Required escrow backing
-is bounded and retained until its receipt-qualified settlement/cursor integration
-is complete; a full bound produces an explicit refusal rather than lost source.
+integration. An immutable indexed archive cut now lets typed history reads skip
+the covered physical prefix while preserving every current model member,
+including exact raw tail members inside that cut. Preparation and publication
+verify original append row images and the complete frozen prefix; reads check a
+bounded boundary anchor and required index references before decoding the tail.
+These reads do not audit arbitrary damage in older covered archive bytes.
+Missing required current backing, a broken boundary or required index, and a
+retired occurrence reintroduced after the cut refuse explicitly. That guard
+also checks pending arrivals and surviving original placements whose required
+fingerprint is missing. Old pending
+overlaps still need their original batch IDs and complete row-image equality.
+
+Older covered escrow backing can retire only after its actual indexed archive
+placement is inside the cut. Current pre-rewrite source, unsettled originals and
+whole still-required execution groups remain backed. This does not delete files
+or acknowledge pending appends. Active escrow remains bounded; a full bound
+produces an explicit refusal rather than lost source. Ordinary receipt recovery
+and settlement still use their existing archive validation and need separate
+bounded cursor integration. Valid version-five escrow can upgrade through this
+publication path without a model call.
 The earlier version-four prototype still supports frozen empty-archive reads,
 but writing a new epoch requires an explicit original-source escrow transition.
 Resume never asks a model to invent that missing backing. Older prefix/selective

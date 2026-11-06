@@ -32,6 +32,7 @@ use std::{
     os::unix::fs::OpenOptionsExt,
 };
 
+mod cursor;
 mod escrow;
 mod payload;
 pub(crate) use escrow::ReplaySourceOrigin;
@@ -69,6 +70,7 @@ pub(crate) struct ReplayEpochSnapshot {
     /// Original new authored rows from this same checked logical view. The
     /// runtime must qualify pending accounting/native source before adoption.
     arrivals: Vec<mez_agent::TranscriptEntry>,
+    archive_cut: Option<cursor::ArchiveCut>,
 }
 
 impl ReplayEpochSnapshot {
@@ -124,6 +126,8 @@ struct Manifest {
     /// Absent only in the old v4 prototype, which has no inherited escrow proof.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     source_escrow: Option<Vec<escrow::EscrowOccurrence>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    archive_cut: Option<cursor::ArchiveCut>,
 }
 
 /// Integrity covers all semantic framing, source references and membership.
@@ -159,6 +163,7 @@ struct OriginalSourceBacking {
     origin: ReplaySourceOrigin,
     inherited: Vec<escrow::EscrowOccurrence>,
     arrivals: Vec<mez_agent::TranscriptEntry>,
+    archive: cursor::ArchiveCapture,
 }
 
 impl ReplaySourceOrigin {
@@ -271,7 +276,7 @@ impl ReplayEpochPublication {
             &mut payloads,
         )?;
         let manifest = Manifest {
-            version: 5,
+            version: 6,
             conversation_id: conversation_id.to_owned(),
             epoch_revision: candidate.revision().get(),
             revision: expected_parent
@@ -287,12 +292,14 @@ impl ReplayEpochPublication {
             frozen_arrival_frontier: frontier,
             source_checkpoint,
             checkpoint,
-            source_escrow: Some(escrow::extend(
+            source_escrow: Some(escrow::publication_source(
                 &backing.inherited,
                 source,
                 &backing.origin,
                 &backing.arrivals,
+                &backing.archive.archived,
             )?),
+            archive_cut: Some(backing.archive.cut.clone()),
         };
         let envelope = Envelope {
             sha256: digest(&encode(&manifest)?),
@@ -431,10 +438,14 @@ impl AgentTranscriptStore {
         plan: ReplayCompactionPlan,
         summary: ReplayHeadPublication,
     ) -> Result<ReplayEpochPublication> {
-        let _lease = expected_parent
-            .as_ref()
-            .map(|_| self.acquire_conversation_lock(conversation_id))
+        let has_archive = self.existing_transcript_path_for(conversation_id)?.exists();
+        let has_existing_state = has_archive || self.root.join(conversation_id).exists();
+        let lease = (expected_parent.is_some() || has_existing_state)
+            .then(|| self.acquire_conversation_lock(conversation_id))
             .transpose()?;
+        if let Some(lease) = &lease {
+            self.recover_accounted_appends_for_replay_locked(conversation_id, lease)?;
+        }
         let current = if expected_parent.is_some() {
             self.read_replay_envelope_locked(conversation_id)?
         } else {
@@ -460,6 +471,21 @@ impl AgentTranscriptStore {
                 }
                 None => &[],
             };
+        let arrivals = capture
+            .history
+            .map_or_else(Vec::new, |capture| capture.arrivals.clone());
+        let source_backing =
+            escrow::qualification_source(inherited, source, &capture.origin, &arrivals)?;
+        let archive = cursor::ArchiveCapture::prepare(
+            self,
+            conversation_id,
+            current
+                .as_ref()
+                .and_then(|current| current.manifest.archive_cut.as_ref()),
+            &source_backing,
+            source,
+            expected_parent.is_none() && !has_archive,
+        )?;
         ReplayEpochPublication::prepare(
             conversation_id,
             expected_parent,
@@ -469,9 +495,8 @@ impl AgentTranscriptStore {
             OriginalSourceBacking {
                 origin: capture.origin,
                 inherited: inherited.to_vec(),
-                arrivals: capture
-                    .history
-                    .map_or_else(Vec::new, |capture| capture.arrivals.clone()),
+                arrivals,
+                archive,
             },
         )
     }
@@ -515,10 +540,21 @@ impl AgentTranscriptStore {
             .ok_or_else(|| invalid("required replay authority disappeared"))?;
         let directory = self.root.join(conversation_id);
         envelope.verify_receipt(&directory)?;
-        envelope.verify_escrow_payloads(&directory)?;
         let owner = envelope.restore(AgentContext::empty(), |reference| {
             payload::read(&directory, &reference)
         })?;
+        envelope.verify_escrow_payloads(&directory)?;
+        if let Some(cut) = &envelope.manifest.archive_cut {
+            cut.verify_archived(
+                self,
+                conversation_id,
+                envelope
+                    .manifest
+                    .source_escrow
+                    .as_deref()
+                    .unwrap_or_default(),
+            )?;
+        }
         let checkpoint = owner
             .checkpoint()
             .map_err(context_error)?
@@ -534,6 +570,7 @@ impl AgentTranscriptStore {
             escrow: envelope.manifest.source_escrow.clone(),
             qualified_rows: BTreeSet::new(),
             arrivals: Vec::new(),
+            archive_cut: envelope.manifest.archive_cut.clone(),
         }))
     }
 
@@ -598,8 +635,19 @@ impl AgentTranscriptStore {
         };
         let directory = self.ensure_session_dir(conversation_id)?;
         envelope.verify_receipt(&directory)?;
-        envelope.verify_escrow_payloads(&directory)?;
         let owner = envelope.restore(prefix, |reference| payload::read(&directory, &reference))?;
+        envelope.verify_escrow_payloads(&directory)?;
+        if let Some(cut) = &envelope.manifest.archive_cut {
+            cut.verify_archived(
+                self,
+                conversation_id,
+                envelope
+                    .manifest
+                    .source_escrow
+                    .as_deref()
+                    .unwrap_or_default(),
+            )?;
+        }
         // A prior worker may have died after the durable latest swap but before
         // its required-state marker. Complete that same publication's durability
         // before exposing it, so later sidecar loss cannot look like raw absence.
@@ -665,14 +713,44 @@ impl AgentTranscriptStore {
                 ));
             }
         }
+        if manifest.archive_cut.as_ref() != Some(&proposal.backing.archive.cut)
+            || !exact_retry
+                && current
+                    .as_ref()
+                    .and_then(|current| current.manifest.archive_cut.as_ref())
+                    != proposal.backing.archive.previous.as_ref()
+        {
+            return Err(invalid("publication changed its frozen archive cut"));
+        }
+        let source_backing = escrow::qualification_source(
+            &proposal.backing.inherited,
+            proposal.prepared.source(),
+            &proposal.backing.origin,
+            &proposal.backing.arrivals,
+        )?;
+        proposal.backing.archive.verify(
+            self,
+            &manifest.conversation_id,
+            &source_backing,
+            |reference| {
+                if let Some(content) = proposal.payloads.get(&reference.sha256) {
+                    reference.validate(content.as_bytes())?;
+                    Ok(content.clone())
+                } else {
+                    payload::read(&directory, reference)
+                }
+            },
+            manifest.expected_parent.is_none(),
+        )?;
         if manifest.expected_parent.is_none() && !proposal.backing.inherited.is_empty()
             || manifest.source_escrow.as_deref()
                 != Some(
-                    escrow::extend(
+                    escrow::publication_source(
                         &proposal.backing.inherited,
                         proposal.prepared.source(),
                         &proposal.backing.origin,
                         &proposal.backing.arrivals,
+                        &proposal.backing.archive.archived,
                     )?
                     .as_slice(),
                 )
@@ -681,13 +759,23 @@ impl AgentTranscriptStore {
                 "replay publication has unqualified original-source escrow",
             ));
         }
-        for item in manifest.source_escrow.as_deref().unwrap_or_default() {
+        for item in manifest
+            .source_escrow
+            .as_deref()
+            .unwrap_or_default()
+            .iter()
+            .filter(|item| !item.is_archived())
+        {
             if !proposal.payloads.contains_key(&item.payload().sha256) {
                 payload::read(&directory, item.payload())?;
             }
         }
         self.recover_accounted_appends_for_replay_locked(&manifest.conversation_id, lease)?;
-        let rows = match self.inspect_validated_transcript(&manifest.conversation_id) {
+        let rows = match self.replay_archive_tail_locked(
+            &manifest.conversation_id,
+            &proposal.backing.archive.cut,
+            manifest.expected_parent.is_none(),
+        ) {
             Ok(rows) => rows,
             Err(error)
                 if manifest.expected_parent.is_none()
@@ -730,7 +818,13 @@ impl AgentTranscriptStore {
             })?;
         }
         let mut inherited_payloads = BTreeSet::new();
-        for item in manifest.source_escrow.as_deref().unwrap_or_default() {
+        for item in manifest
+            .source_escrow
+            .as_deref()
+            .unwrap_or_default()
+            .iter()
+            .filter(|item| !item.is_archived())
+        {
             let reference = item.payload();
             if !proposal.payloads.contains_key(&reference.sha256)
                 && inherited_payloads.insert(&reference.sha256)
@@ -758,7 +852,9 @@ impl AgentTranscriptStore {
             .open(&archive)
         {
             Ok(file) => file.sync_all()?,
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                fs::File::open(&archive)?.sync_all()?;
+            }
             Err(error) => return Err(error.into()),
         }
         if !exact_retry {
@@ -814,7 +910,14 @@ impl Envelope {
     /// retire them. Validate unique payloads without decoding old model history.
     fn verify_escrow_payloads(&self, directory: &std::path::Path) -> Result<()> {
         let mut checked = BTreeSet::new();
-        for item in self.manifest.source_escrow.as_deref().unwrap_or_default() {
+        for item in self
+            .manifest
+            .source_escrow
+            .as_deref()
+            .unwrap_or_default()
+            .iter()
+            .filter(|item| !item.is_archived())
+        {
             if checked.insert(&item.payload().sha256) {
                 payload::read(directory, item.payload())?;
             }
@@ -834,8 +937,12 @@ impl Envelope {
     fn validate(&self, conversation_id: &str) -> Result<()> {
         let manifest = &self.manifest;
         if !matches!(
-            (manifest.version, manifest.source_escrow.is_some()),
-            (4, false) | (5, true)
+            (
+                manifest.version,
+                manifest.source_escrow.is_some(),
+                manifest.archive_cut.is_some()
+            ),
+            (4, false, false) | (5, true, false) | (6, true, true)
         ) || manifest.conversation_id != conversation_id
             || manifest.revision == 0
             || manifest.epoch_revision == 0
@@ -866,6 +973,14 @@ impl Envelope {
         }
         if let Some(escrow) = &manifest.source_escrow {
             escrow::validate(escrow)?;
+            if manifest.version < 6 && escrow.iter().any(escrow::EscrowOccurrence::is_archived) {
+                return Err(invalid(
+                    "legacy source escrow cannot claim archive settlement",
+                ));
+            }
+        }
+        if let Some(cut) = &manifest.archive_cut {
+            cut.validate()?;
         }
         Ok(())
     }

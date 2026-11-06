@@ -22,6 +22,7 @@ use std::{collections::BTreeMap, fs, io::Read, path::Path};
 mod costs;
 pub(crate) use costs::TranscriptRowRecords;
 mod images;
+pub(super) use images::IndexedRowImage;
 pub(super) use images::forget_row_digests;
 
 /// Exact archive sequence to original legacy occurrence for one frozen read.

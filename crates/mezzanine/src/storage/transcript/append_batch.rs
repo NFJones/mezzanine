@@ -208,6 +208,7 @@ impl TranscriptAppendBatch {
                     .map(super::TranscriptStableSnapshot::from_initial),
                 epoch: self.initial_compaction_epoch.clone(),
                 replay: None,
+                settled_pending_origins: Default::default(),
                 view: super::store::ConversationTranscriptView {
                     committed: Vec::new(),
                     logical: self.entries.clone(),

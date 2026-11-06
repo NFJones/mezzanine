@@ -89,6 +89,13 @@ impl RuntimePendingTranscriptContext {
     ) -> Result<(TranscriptRowOrigins, TranscriptRowRecords)> {
         let mut origins = snapshot.row_origins.clone();
         let mut records = snapshot.row_records.clone();
+        for (sequence, original) in &snapshot.settled_pending_origins {
+            if self.origins.get(sequence) != Some(original) {
+                return Err(MezError::conflict(
+                    "old pending replay row has a different original append owner",
+                ));
+            }
+        }
         let selected = snapshot
             .view
             .logical

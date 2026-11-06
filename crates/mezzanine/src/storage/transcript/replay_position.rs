@@ -11,11 +11,13 @@
 //! their payload but do not retain the mutation lane beyond the coherent read.
 //!
 //! A frozen one-head source carries its own checked identity and membership;
-//! pane row counts cannot select a different projection. Version-five escrow
+//! pane row counts cannot select a different projection. Original-source escrow
 //! qualifies exact delayed source copies under this lease and captures original
 //! new authored rows for the runtime's accounting/native-source gate. Unaccounted
-//! or unsupported semantic source still refuses. Pinned
-//! ephemeral captures and settled archive cursors remain separate integration.
+//! or unsupported semantic source still refuses. Version-six archive cuts omit
+//! qualified physical prefixes independently of model membership, checking old
+//! pending rows against full-field images plus their captured original IDs.
+//! Pinned ephemeral captures and ordinary receipt recovery remain separate work.
 
 use super::store::{ConversationTranscriptRead, ConversationTranscriptView};
 use super::{AgentCompactionEpoch, AgentPresentationEntry, AgentTranscriptStore};
@@ -50,6 +52,9 @@ pub(crate) struct ConversationReplaySnapshot {
     pub(crate) stable_records: Option<super::TranscriptStableSnapshot>,
     /// Receipt-owned baseline before row one, retained for bounded fork copies.
     pub(crate) initial_stable_records: Option<super::TranscriptStableSnapshot>,
+    /// Exact old pending rows omitted only after cut/index validation. Runtime
+    /// still requires the captured original append proposal's same occurrences.
+    pub(crate) settled_pending_origins: super::TranscriptRowOrigins,
 }
 
 impl ConversationReplaySnapshot {
@@ -161,24 +166,35 @@ impl AgentTranscriptStore {
         } else {
             select(epoch.as_ref())
         };
-        let mut view = match read {
-            Some((read, required)) => self
-                .conversation_transcript_view_with_stable_records_locked(
-                    conversation_id,
-                    read,
-                    required,
-                    pending,
-                    &lease,
-                    if replay.is_none() {
-                        Some(&mut stable)
-                    } else {
-                        None
-                    },
-                )?,
-            None => ConversationTranscriptView {
-                committed: Vec::new(),
-                logical: Vec::new(),
-            },
+        let cursor_view = replay
+            .as_ref()
+            .map(|snapshot| self.replay_cursor_view_locked(conversation_id, snapshot, pending))
+            .transpose()?
+            .flatten();
+        let mut settled_pending_origins = super::TranscriptRowOrigins::new();
+        let mut view = if let Some((view, origins)) = cursor_view {
+            settled_pending_origins = origins;
+            view
+        } else {
+            match read {
+                Some((read, required)) => self
+                    .conversation_transcript_view_with_stable_records_locked(
+                        conversation_id,
+                        read,
+                        required,
+                        pending,
+                        &lease,
+                        if replay.is_none() {
+                            Some(&mut stable)
+                        } else {
+                            None
+                        },
+                    )?,
+                None => ConversationTranscriptView {
+                    committed: Vec::new(),
+                    logical: Vec::new(),
+                },
+            }
         };
         if let Some(frontier) = frontier {
             view.committed.retain(|row| row.sequence <= frontier);
@@ -204,7 +220,12 @@ impl AgentTranscriptStore {
         } else {
             None
         };
-        let stable_records = stable.finish().or_else(|| initial_stable_records.clone());
+        let stable_records = stable.finish().or_else(|| {
+            replay
+                .is_none()
+                .then(|| initial_stable_records.clone())
+                .flatten()
+        });
         let row_origins = self.transcript_row_origins_locked(conversation_id, &view.logical)?;
         if let Some(snapshot) = &stable_records
             && let Some(origin) = snapshot.occurrence
@@ -224,6 +245,7 @@ impl AgentTranscriptStore {
             row_records,
             stable_records,
             initial_stable_records,
+            settled_pending_origins,
         };
         let (value, records) = project(&snapshot)?;
         self.save_rendered_row_records_locked(conversation_id, &snapshot, &records)?;

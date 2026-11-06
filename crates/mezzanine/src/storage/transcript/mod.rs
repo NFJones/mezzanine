@@ -49,6 +49,8 @@ pub(crate) use compaction_records::{
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 mod encoding;
+#[cfg(test)]
+pub(crate) use encoding::transcript_decode_count;
 mod entry_identity;
 pub(crate) use entry_identity::canonical_transcript_entry_identity;
 /// Exposes the fs module boundary.
