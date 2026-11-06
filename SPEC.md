@@ -11125,6 +11125,26 @@ failed projections MUST NOT publish durable costs. Unchanged reads MUST NOT
 rewrite valid costs. Saved forks and survivor resequencing retain original
 records, and deleting a row retires its unused cost cache.
 
+Projection version 4 adds full-entry SHA-256 fingerprints in that same SQLite
+accounting transaction, bound to each original ordinary append occurrence. The
+fingerprint MUST cover every canonical persisted field, not only visible text or
+model-cost framing. Existing version-1/2/3 rows MUST NOT receive guessed images
+during lookup. An actual original append owner MAY migrate the schema and index
+its exact rows; an empty initial-inheritance table MUST NOT imply inherited
+authority. Version 4 MUST explicitly retain whether initial accounting is
+required: migration from version 3 preserves that requirement and original
+marker; a missing required marker or inconsistent requirement MUST refuse.
+Selected-row lookup MUST validate every present claim even when
+another selected row lacks an index entry. Conflicting/malformed fingerprints or
+placement MUST refuse locally and preserve any original accepted receipt.
+Actual content edits, resequencing and replacement fork/initial placement MUST
+invalidate obsolete images without changing surviving occurrences. These are
+lookup metadata, not a second raw journal, model source, replay cursor, execution
+authority or ordinary append acknowledgment. A bounded replay reader MUST still
+qualify its archive cut and required index membership before omitting older I/O;
+cursor publication and receipt-qualified escrow retirement remain separate
+required integration work.
+
 Repaired authored estimates MUST use that same occurrence-bound cost projection
 on subsequent replay. The raw envelope's format and occurrence remain validated
 before cache selection; cached costs MUST be checked against actual rendering.

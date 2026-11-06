@@ -232,6 +232,16 @@ impl AgentTranscriptStore {
         if version < 3 {
             return Ok(None);
         }
+        if version == 4 {
+            let required: bool = connection.query_row(
+                "SELECT initial_required FROM row_digest_meta WHERE singleton=1",
+                [],
+                |row| row.get(0),
+            )?;
+            if !required {
+                return Ok(None);
+            }
+        }
         let encoded: Option<String> = connection
             .query_row(
                 "SELECT payload FROM initial_inheritance WHERE singleton=1",
@@ -296,6 +306,7 @@ impl AgentTranscriptStore {
         }
         if existing.is_none() {
             transaction.execute("DELETE FROM origins", [])?;
+            super::row_origins::forget_row_digests(&transaction, None)?;
             for (sequence, origin) in &payload.origins {
                 transaction.execute(
                     "INSERT INTO origins VALUES (?1, ?2)",
@@ -309,6 +320,12 @@ impl AgentTranscriptStore {
             let encoded = serde_json::to_string(payload)
                 .map_err(|_| MezError::invalid_state("initial row accounting encode failed"))?;
             transaction.execute("INSERT INTO initial_inheritance VALUES (1, ?1)", [encoded])?;
+            if version == 4 {
+                transaction.execute(
+                    "UPDATE row_digest_meta SET initial_required=1 WHERE singleton=1",
+                    [],
+                )?;
+            }
         }
         for (sequence, record) in &payload.records {
             if !costs.contains_key(sequence) {

@@ -207,6 +207,7 @@ impl AgentTranscriptStore {
                 )?;
             }
         }
+        self.publish_row_digests_in_transaction(&transaction, batch)?;
         transaction.commit()?;
         self.require_row_origins_locked(batch.conversation_id())?;
         if batch.entries().iter().any(|entry| {
@@ -245,6 +246,14 @@ impl AgentTranscriptStore {
         {
             return Err(MezError::invalid_state(
                 "ordinary append cost publication is incomplete",
+            ));
+        }
+        if self
+            .indexed_row_origins_locked(batch.conversation_id(), batch.entries())?
+            .is_some_and(|origins| origins != *accounting.origins())
+        {
+            return Err(MezError::invalid_state(
+                "ordinary append fingerprint owner changed",
             ));
         }
         Ok(())

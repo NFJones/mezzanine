@@ -84,6 +84,26 @@ fn ordinary_accounted_receipt_binds_original_proposal_through_commit_and_retry()
     );
     assert!(store.pending_append_receipts().unwrap().is_empty());
     let raw = fs::read(store.transcript_path(original.conversation_id()).unwrap()).unwrap();
+    // A future bounded replay can verify a lagging original proposal without
+    // trusting text or an occurrence alone: the existing accounting owner must
+    // durably bind every persisted field to that same original occurrence.
+    let index = rusqlite::Connection::open(
+        root.join(original.conversation_id())
+            .join("row-origins.sqlite3"),
+    )
+    .unwrap();
+    for row in original.entries() {
+        let (origin, digest): (String, String) = index
+            .query_row(
+                "SELECT origin, digest FROM row_digests WHERE sequence=?1",
+                [row.sequence.to_string()],
+                |value| Ok((value.get(0)?, value.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(origin, String::from(origins[&row.sequence]));
+        assert_eq!(digest, store.transcript_entry_revision(row).unwrap());
+    }
+    drop(index);
     assert_eq!(
         store.inspect(original.conversation_id()).unwrap(),
         original.entries()

@@ -21,6 +21,8 @@ use std::{collections::BTreeMap, fs, io::Read, path::Path};
 
 mod costs;
 pub(crate) use costs::TranscriptRowRecords;
+mod images;
+pub(super) use images::forget_row_digests;
 
 /// Exact archive sequence to original legacy occurrence for one frozen read.
 pub(crate) type TranscriptRowOrigins = BTreeMap<u64, ContextBlockOccurrenceId>;
@@ -78,10 +80,37 @@ impl AgentTranscriptStore {
             OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
         )?;
         let version: u32 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-        if !matches!(version, 1..=3) {
+        if !matches!(version, 1..=4) {
             return Err(MezError::invalid_state(
                 "unsupported transcript row origins version",
             ));
+        }
+        let (images, image_meta): (bool, bool) = connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='row_digests'), EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='row_digest_meta')",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        if images != (version == 4) || image_meta != (version == 4) {
+            return Err(MezError::invalid_state(
+                "transcript row fingerprint schema conflicts with its version",
+            ));
+        }
+        if version == 4 {
+            let required: u32 = connection.query_row(
+                "SELECT initial_required FROM row_digest_meta WHERE singleton=1",
+                [],
+                |row| row.get(0),
+            )?;
+            let inherited: bool = connection.query_row(
+                "SELECT EXISTS(SELECT 1 FROM initial_inheritance WHERE singleton=1)",
+                [],
+                |row| row.get(0),
+            )?;
+            if required > 1 || inherited != (required == 1) {
+                return Err(MezError::invalid_state(
+                    "transcript inherited accounting requirement is inconsistent",
+                ));
+            }
         }
         connection.execute_batch("PRAGMA synchronous=FULL;")?;
         let namespace: String = connection.query_row(
@@ -186,11 +215,14 @@ impl AgentTranscriptStore {
                 "transcript edit cannot replace row occurrence",
             ));
         }
-        let connection = self.open_row_origins_locked(&original.conversation_id)?;
-        connection.execute(
+        let mut connection = self.open_row_origins_locked(&original.conversation_id)?;
+        let transaction = connection.transaction()?;
+        transaction.execute(
             "INSERT INTO origins VALUES (?1, ?2) ON CONFLICT(sequence) DO UPDATE SET origin=excluded.origin",
             params![original.sequence.to_string(), String::from(origin)],
         )?;
+        forget_row_digests(&transaction, Some(original.sequence))?;
+        transaction.commit()?;
         Ok(())
     }
 
@@ -205,6 +237,7 @@ impl AgentTranscriptStore {
         let mut connection = self.open_row_origins_locked(conversation)?;
         let transaction = connection.transaction()?;
         transaction.execute("DELETE FROM origins", [])?;
+        forget_row_digests(&transaction, None)?;
         insert_origins(&transaction, "INSERT INTO origins VALUES (?1, ?2)", origins)?;
         transaction.execute(
             "UPDATE origin_meta SET namespace=?1 WHERE singleton=1",
@@ -300,12 +333,13 @@ impl AgentTranscriptStore {
             )?;
             let version: u32 =
                 transaction.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-            if matches!(version, 2 | 3) {
+            if matches!(version, 2..=4) {
                 transaction.execute(
                     "DELETE FROM row_costs WHERE origin NOT IN (SELECT origin FROM origins)",
                     [],
                 )?;
             }
+            forget_row_digests(&transaction, None)?;
         }
         transaction.execute_batch("DELETE FROM rewrite_origins; DELETE FROM rewrite_intent;")?;
         transaction.commit()?;

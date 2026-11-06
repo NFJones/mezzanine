@@ -21,6 +21,8 @@ mod prefix_seal;
 mod receipt_admission;
 /// Epoch and row windows share one native mutation lane and pending-row check.
 mod replay_snapshot;
+/// Full-row fingerprints share original append accounting and edit ownership.
+mod row_images;
 /// Content edits cannot invalidate an authoritative selective compaction summary.
 mod selective_edit_fence;
 /// Held sequence lookups and competing appends preserve mutation ownership.
