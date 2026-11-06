@@ -310,6 +310,7 @@ impl RuntimeSessionService {
         turn_id: &str,
     ) -> Result<()> {
         self.retain_routed_context_before_cleanup(turn_id);
+        self.retain_ephemeral_replay_before_cleanup(turn_id)?;
         if self.provider_refusal_is_armed(turn_id) {
             self.validate_provider_refusal_cleanup_before_cancellation(turn_id)?;
         }
@@ -655,6 +656,7 @@ impl RuntimeSessionService {
         if self
             .agent_shell_store()
             .get(&turn.pane_id)
+            .filter(|session| session.session_id == turn.conversation_id)
             .and_then(|session| session.running_turn_id.as_deref())
             == Some(turn.turn_id.as_str())
         {

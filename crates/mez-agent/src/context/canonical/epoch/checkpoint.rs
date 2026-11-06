@@ -370,6 +370,27 @@ impl ReplayEpochContext {
     }
 }
 
+impl ReplayEpochCheckpoint {
+    /// Copies checked replay into a distinct conversation scope without changing
+    /// source bytes, occurrence records, costs, membership or birth revisions.
+    /// The copy grants no task, process, execution, peer or publication rights.
+    /// Retrieval evidence is explicitly revoked, including at revision zero;
+    /// current trusted instructions and request metadata remain caller inputs.
+    pub fn for_conversation_copy(self, target: ReplayConversationId) -> AgentContextResult<Self> {
+        let stable = self.stable_records.clone();
+        let original = ReplayConversationId::new(self.conversation.clone())?;
+        let mut owner = ReplayEpochContext::from_checkpoint(original, self, AgentContext::empty())?;
+        owner.revoke_retrieved_mcp_grants();
+        owner.conversation = target.clone();
+        if let Some(head) = owner.head.as_mut() {
+            head.conversation = target;
+        }
+        owner.bind_mcp_retrieval_scope();
+        owner.validate_membership()?;
+        owner.checkpoint()?.with_stable_records(stable)
+    }
+}
+
 impl Event<String> {
     /// Copies only immutable source metadata, excluding live process ownership.
     fn capture(event: &ConversationEvent) -> Self {

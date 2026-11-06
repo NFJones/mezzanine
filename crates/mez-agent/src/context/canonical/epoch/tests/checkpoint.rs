@@ -4,6 +4,99 @@
 use super::*;
 use serde_json::{Value, json};
 
+/// A conversation copy carries exact descriptive source and accounting, while
+/// its new incarnation rejects every original controller handle and proposal.
+#[test]
+fn checkpoint_conversation_copy_preserves_source_without_controller_rights() {
+    let mut source = owner();
+    source.append_fact("covered", "older source").unwrap();
+    let frozen = plan(&source);
+    source
+        .append_fact("tail", "original retained bytes")
+        .unwrap();
+    source
+        .publish_compaction(frozen, ReplayHeadPublication::Summary("head".into()))
+        .unwrap();
+    let stale_plan = plan(&source);
+    let task = source.begin_instruction_task().unwrap();
+    source
+        .append_instruction(&task, ContextBlock::user_event("prompt", "pending task"))
+        .unwrap();
+    let original = source.checkpoint().unwrap();
+    for target in ["conversation-a", "conversation-copy"] {
+        let target = ReplayConversationId::new(target).unwrap();
+        let copied = original
+            .clone()
+            .for_conversation_copy(target.clone())
+            .unwrap();
+        assert_eq!(copied.stable_records(), original.stable_records());
+        let prefix = AgentContext::new(vec![ContextBlock::stable_instruction(
+            ContextSourceKind::System,
+            "policy",
+            "current trusted policy",
+        )])
+        .unwrap()
+        .with_metadata(crate::ModelContextMetadata::new(
+            Some("new-session"),
+            Some("new-cache"),
+        ));
+        let mut restored =
+            ReplayEpochContext::from_checkpoint(target.clone(), copied, prefix.clone()).unwrap();
+        assert_eq!(restored.conversation_id(), &target);
+        assert_eq!(restored.revision(), source.revision());
+        assert_eq!(
+            restored.head().unwrap().occurrence_id(),
+            source.head().unwrap().occurrence_id()
+        );
+        assert_eq!(restored.members(), source.members());
+        assert_eq!(
+            restored.context().chronology(),
+            source.context().chronology()
+        );
+        assert_eq!(restored.context().metadata(), prefix.metadata());
+        assert_eq!(
+            restored.context().stable_slots()[0]
+                .record()
+                .occurrence_id(),
+            source.context().stable_slots()[0].record().occurrence_id()
+        );
+        let unchanged = restored.clone();
+        assert!(restored.complete_instruction_task(&task).is_err());
+        assert!(
+            restored
+                .publish_compaction(
+                    stale_plan.clone(),
+                    ReplayHeadPublication::Summary("stale".into())
+                )
+                .is_err()
+        );
+        assert_eq!(restored, unchanged);
+    }
+}
+
+/// Copying must validate the original scope and membership before rebinding;
+/// changing a target cannot launder a malformed source checkpoint.
+#[test]
+fn checkpoint_conversation_copy_refuses_invalid_source() {
+    let mut source = owner();
+    source.append_fact("source", "retained source").unwrap();
+    let original = serde_json::to_value(source.checkpoint().unwrap()).unwrap();
+    for field in ["conversation", "members"] {
+        let mut invalid = original.clone();
+        invalid[field] = if field == "conversation" {
+            json!("")
+        } else {
+            json!([])
+        };
+        let checkpoint: ReplayEpochCheckpoint = serde_json::from_value(invalid).unwrap();
+        assert!(
+            checkpoint
+                .for_conversation_copy(ReplayConversationId::new("copy").unwrap())
+                .is_err()
+        );
+    }
+}
+
 /// Uses a new stable-only owner as the live caller, then restores serialized
 /// source. This exercises serde as well as the production adoption boundary.
 fn restore(source: &ReplayEpochContext) -> ReplayEpochContext {

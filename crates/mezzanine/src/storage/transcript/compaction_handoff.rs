@@ -301,7 +301,7 @@ impl AgentTranscriptStore {
         &self,
         conversation_id: &str,
     ) -> Result<()> {
-        if self.has_replay_manifest_locked(conversation_id)? {
+        if self.has_replay_manifest(conversation_id)? {
             // Legacy witnesses cannot publish another authority over a typed
             // epoch. The shared typed reader verifies the current source next.
             return Ok(());

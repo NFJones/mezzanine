@@ -68,7 +68,9 @@ mod cd;
 pub(crate) use cd::{NativeDirectoryRead, NativeDirectoryWork};
 mod compaction;
 pub(crate) use compaction::{
-    RuntimeManualCompactionPreparation, RuntimeManualCompactionRequestWork,
+    RuntimeCompactionReplaySource, RuntimeManualCompactionPreparation,
+    RuntimeManualCompactionRequestWork, RuntimeReplayEpochAttempt, RuntimeReplayEpochCompletion,
+    RuntimeReplayEpochPublication,
 };
 mod context_documents;
 mod deferred;
@@ -1029,6 +1031,28 @@ impl RuntimeSessionService {
         let parent_transcript_high_water = parent_session.transcript_high_water;
         let parent_display_name = parent_session.display_name.clone();
         let parent_prompt_cache_lineage_id = parent_session.prompt_cache_lineage_id.clone();
+        let parent_no_store_source = parent_session.ephemeral.then(|| {
+            crate::runtime::agent_state::RuntimeLoopNoStoreSource {
+                conversation_id: parent_session
+                    .ephemeral_transcript_source_conversation_id
+                    .clone(),
+                entries: parent_session.ephemeral_transcript_source_entries,
+            }
+        });
+        let parent_frozen_replay = if parsed.mode == RuntimeAgentLoopMode::ForkEachIteration
+            || parent_no_store_source.is_some()
+                && parsed.mode != RuntimeAgentLoopMode::ReuseCurrentConversation
+        {
+            self.freeze_agent_replay_history(pane_id)?
+        } else {
+            None
+        };
+        let parent_transcript_high_water = parent_frozen_replay
+            .as_ref()
+            .filter(|_| parent_no_store_source.is_none())
+            .map_or(parent_transcript_high_water, |source| {
+                source.archive_frontier()
+            });
         let max_iterations = parsed.max_iterations.unwrap_or(self.agent_loop_limit());
         let loop_id = format!("loop-{}", Self::runtime_new_agent_conversation_id());
         if parsed.mode != RuntimeAgentLoopMode::ReuseCurrentConversation {
@@ -1047,6 +1071,8 @@ impl RuntimeSessionService {
             work_conversation_id: None,
             parent_transcript_entries,
             parent_transcript_high_water,
+            parent_frozen_replay,
+            parent_no_store_source,
             parent_allowed_actions,
             parent_display_name,
             parent_prompt_cache_lineage_id: Some(parent_prompt_cache_lineage_id),
@@ -1174,35 +1200,49 @@ impl RuntimeSessionService {
             .get(pane_id)
             .cloned()
             .ok_or_else(|| MezError::invalid_state("loop work shell is unavailable"))?;
+        let previous_frozen = self
+            .frozen_replay_binding(pane_id, &previous.session_id)
+            .cloned();
         let target = Self::runtime_new_agent_conversation_id();
         let initial_cleanup = self.prepare_initial_loop_cleanup_rebind(state, &target)?;
         let fork = state.mode == RuntimeAgentLoopMode::ForkEachIteration;
-        let bound = self
-            .agent_shell_store_mut()
-            .bind_ephemeral_conversation_with_lineage_and_transcript_source(
-                pane_id,
-                &target,
-                0,
-                if fork {
-                    state.parent_prompt_cache_lineage_id.clone()
-                } else {
-                    None
-                },
-                fork.then(|| state.parent_conversation_id.clone()),
-                if fork {
-                    state.parent_transcript_high_water
-                } else {
-                    0
-                },
-            )
-            .map(|session| (session.session_id.clone(), session.transcript_entries));
+        let bound: Result<(String, u64)> =
+            if let Some(source) = state.parent_frozen_replay.as_ref().filter(|_| fork) {
+                self.bind_ephemeral_replay_history(
+                    pane_id,
+                    &target,
+                    source,
+                    state.parent_prompt_cache_lineage_id.clone(),
+                )
+            } else {
+                self.agent_shell_store_mut()
+                    .bind_ephemeral_conversation_with_lineage_and_transcript_source(
+                        pane_id,
+                        &target,
+                        0,
+                        if fork {
+                            state.parent_prompt_cache_lineage_id.clone()
+                        } else {
+                            None
+                        },
+                        fork.then(|| state.parent_conversation_id.clone()),
+                        if fork {
+                            state.parent_transcript_high_water
+                        } else {
+                            0
+                        },
+                    )
+                    .map(|session| (session.session_id.clone(), session.transcript_entries))
+                    .map_err(MezError::from)
+            };
         let binding = match bound {
             Ok(binding) => binding,
             Err(error) => {
                 // Lower binding validation can fail after partial mutation.
                 self.agent_shell_store_mut()
                     .restore_session(pane_id, previous)?;
-                return Err(error.into());
+                self.set_frozen_replay_binding(pane_id, previous_frozen);
+                return Err(error);
             }
         };
         if let Some(cleanup) = cleanup
@@ -1210,6 +1250,7 @@ impl RuntimeSessionService {
         {
             self.agent_shell_store_mut()
                 .restore_session(pane_id, previous)?;
+            self.set_frozen_replay_binding(pane_id, previous_frozen);
             return Err(error);
         }
         if let Some(cleanup) = initial_cleanup
@@ -1217,6 +1258,7 @@ impl RuntimeSessionService {
         {
             self.agent_shell_store_mut()
                 .restore_session(pane_id, previous)?;
+            self.set_frozen_replay_binding(pane_id, previous_frozen);
             return Err(error);
         }
         self.agent_shell_store_mut()
@@ -1260,6 +1302,9 @@ impl RuntimeSessionService {
                 .get(pane_id)
                 .cloned()
                 .ok_or_else(|| MezError::invalid_state("routed parent shell is unavailable"))?;
+            let previous_frozen = self
+                .frozen_replay_binding(pane_id, &previous.session_id)
+                .cloned();
             if let Err(error) = self
                 .agent_shell_store_mut()
                 .restore_conversation_for_running_turn_with_lineage(
@@ -1272,10 +1317,14 @@ impl RuntimeSessionService {
                     },
                     state.parent_prompt_cache_lineage_id.clone(),
                 )
+                .map(|_| ())
+                .map_err(MezError::from)
+                .and_then(|_| self.restore_agent_loop_parent_replay_binding(pane_id, state))
             {
                 self.agent_shell_store_mut()
                     .restore_session(pane_id, previous)?;
-                return Err(error.into());
+                self.set_frozen_replay_binding(pane_id, previous_frozen);
+                return Err(error);
             }
             if let Some(cleanup) = cleanup
                 && let Err(error) = self
@@ -1283,6 +1332,7 @@ impl RuntimeSessionService {
             {
                 self.agent_shell_store_mut()
                     .restore_session(pane_id, previous)?;
+                self.set_frozen_replay_binding(pane_id, previous_frozen);
                 return Err(error);
             }
             Self::acknowledge_completion_provider_loop_restore(completion_restore);
@@ -1306,18 +1356,33 @@ impl RuntimeSessionService {
             .get(pane_id)
             .cloned()
             .ok_or_else(|| MezError::invalid_state("loop restoration shell is unavailable"))?;
+        let previous_frozen = self
+            .frozen_replay_binding(pane_id, &previous.session_id)
+            .cloned();
         #[cfg(test)]
         let expected_rollback = previous.clone();
         let binding = if let Some(restore) = completion_restore.as_ref() {
             self.restore_completion_provider_loop_parent(restore)
         } else {
-            self.agent_shell_store_mut()
-                .bind_conversation_with_lineage(
+            let binding = if let Some(source) = &state.parent_no_store_source {
+                self.agent_shell_store_mut()
+                    .bind_ephemeral_conversation_with_lineage_and_transcript_source(
+                        pane_id,
+                        &state.parent_conversation_id,
+                        state.parent_transcript_entries,
+                        state.parent_prompt_cache_lineage_id.clone(),
+                        source.conversation_id.clone(),
+                        source.entries,
+                    )
+            } else {
+                self.agent_shell_store_mut().bind_conversation_with_lineage(
                     pane_id,
                     &state.parent_conversation_id,
                     state.parent_transcript_entries,
                     state.parent_prompt_cache_lineage_id.clone(),
                 )
+            };
+            binding
                 .map(|_| ())
                 .and_then(|_| {
                     self.agent_shell_store_mut()
@@ -1332,6 +1397,8 @@ impl RuntimeSessionService {
                 })
                 .map_err(MezError::from)
         };
+        let binding =
+            binding.and_then(|_| self.restore_agent_loop_parent_replay_binding(pane_id, state));
         if let Err(error) = binding {
             let _rolled_back = self
                 .agent_shell_store_mut()
@@ -1341,6 +1408,7 @@ impl RuntimeSessionService {
                 completion_restore.as_ref(),
                 _rolled_back == &expected_rollback,
             );
+            self.set_frozen_replay_binding(pane_id, previous_frozen);
             return Err(error);
         }
         if let Some(cleanup) = cleanup {
@@ -1365,6 +1433,7 @@ impl RuntimeSessionService {
                     completion_restore.as_ref(),
                     _rolled_back == &expected_rollback,
                 );
+                self.set_frozen_replay_binding(pane_id, previous_frozen);
                 return Err(error);
             }
         }
@@ -2695,6 +2764,8 @@ mod tests {
             work_conversation_id: None,
             parent_transcript_entries: 0,
             parent_transcript_high_water: 0,
+            parent_frozen_replay: None,
+            parent_no_store_source: None,
             parent_allowed_actions: AllowedActionSet::say_only(),
             parent_prompt_cache_lineage_id: Some("lineage-1".to_string()),
             iteration: 1,
@@ -2718,6 +2789,8 @@ mod tests {
             work_conversation_id: None,
             parent_transcript_entries: 0,
             parent_transcript_high_water: 0,
+            parent_frozen_replay: None,
+            parent_no_store_source: None,
             parent_allowed_actions: AllowedActionSet::say_only(),
             parent_prompt_cache_lineage_id: Some("lineage-1".to_string()),
             iteration: 3,
@@ -2794,6 +2867,8 @@ mod tests {
             work_conversation_id: None,
             parent_transcript_entries: 0,
             parent_transcript_high_water: 0,
+            parent_frozen_replay: None,
+            parent_no_store_source: None,
             parent_allowed_actions: AllowedActionSet::say_only(),
             parent_display_name: None,
             parent_prompt_cache_lineage_id: Some("lineage-1".to_string()),

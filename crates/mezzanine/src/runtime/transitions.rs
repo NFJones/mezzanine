@@ -618,6 +618,11 @@ pub enum AsyncHookEvent {
 /// Event emitted by an async persistence worker.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PersistenceEvent {
+    /// Actual worker receipt for one retained canonical head publication.
+    ReplayEpochCompleted {
+        /// Opaque original work and joined outcome, never a decoded ACK.
+        completion: crate::runtime::RuntimeReplayEpochCompletion,
+    },
     /// Observation of the original opaque audit receipt, never caller status.
     AuditAppendObserved {
         /// Exact allocation with actual shared physical evidence.
@@ -1263,6 +1268,11 @@ pub enum RuntimeSideEffect {
         path: PathBuf,
         /// Complete validated initial payload; must carry an initial epoch.
         batch: crate::storage::transcript::TranscriptAppendBatch,
+    },
+    /// Publish one frozen canonical head through the existing ordered lane.
+    PersistReplayEpoch {
+        /// Physical attempt guard retained through actual blocking retirement.
+        attempt: crate::runtime::RuntimeReplayEpochAttempt,
     },
     /// Replace one active-session metadata checkpoint on the persistence worker.
     PersistAgentSessionMetadata {

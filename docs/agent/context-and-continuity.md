@@ -419,8 +419,8 @@ preserves subsequent work; a wrong archive, replacement owner, changed protected
 selection or newer head refuses the stale adoption. Arrivals keep their original
 birth revisions, with live-only witnesses for subsequent publication. A cold
 checkpoint cannot recreate those witnesses. This is an implementation boundary;
-the actor publication lifecycle, complete arrival coverage, custody settlement,
-fork and migration support remain incomplete for this format.
+initial raw/manual cutover, complete arrival custody settlement, saved/subagent
+forks and legacy migration remain incomplete for this format.
 
 At this typed acceptance boundary, retained MCP retrieval evidence keeps its
 original bytes, identity and local cost, but stops granting callable tools.
@@ -442,6 +442,33 @@ persisted after the head write still cannot grant tools on cold replay. Missing
 or mismatched scope after a rewrite requires fresh retrieval. Original unscoped
 manifests remain evidence and can grant before the first rewrite. This framing
 changes neither configuration nor the enclosing transcript-record version.
+
+Active turns that already own a typed head now keep their compactor claim until
+the storage worker returns and the actor accepts its exact receipt. Storage
+recovery retains the same prepared summary for at most three attempts; it does
+not ask the model to summarize again. A lost callback can recover the actual
+worker result. Cancellation fences an outstanding writer, and exhausted recovery
+fails the waiting turn while unrelated runtime work remains available. Only an
+accepted rewrite resets provider request chains and the session's cache lineage.
+
+Typed NoStore copies capture the original head and exact raw membership before
+the conversation binding changes. Later parent changes and replacement stores
+do not alter that capture. Each target uses its own conversation scope, current
+trusted instructions and fresh controller ownership; copied MCP retrievals must
+be retrieved again. Fork-each-iteration loops reuse the original captured parent.
+Both isolated loop modes return to the same unsaved parent view and cache
+lineage. Their session checkpoint keeps only the original saved ancestor, if
+one exists; it does not turn the temporary parent into saved history.
+Accepted in-memory compaction and terminal cleanup retain the latest target
+body for its next turn, including arrivals after the compaction acknowledgment.
+This continuity lasts in the current runtime and does not establish restart
+durability or saved-fork support for the typed format.
+
+An empty audit archive can still have a typed head and retained model members.
+Presentation writes and saved-session discovery recognize that state while
+keeping the archive entry count at zero. Discovery checks the saved header and
+its original receipt; actual replay independently checks the required source and
+payloads before admitting a request.
 
 The current writer uses sidecar version six to carry original-source escrow
 across publications. If ordinary rows arrive after several summaries, replay

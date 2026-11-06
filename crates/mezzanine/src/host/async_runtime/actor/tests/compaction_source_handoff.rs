@@ -202,7 +202,7 @@ async fn manual_compaction_completion_drives_two_phase_worker_under_pressure() {
     Box::pin(
         actor.handle_request(AsyncRuntimeRequest::CompleteManualCompactionPreparation {
             work,
-            result,
+            result: Box::new(result),
         }),
     )
     .await;
@@ -323,7 +323,7 @@ async fn manual_compaction_completion_worker_errors_do_not_enrol_dispatch() {
                 .remove(0);
             AsyncRuntimeRequest::CompleteManualCompactionPreparation {
                 work,
-                result: Err(failure),
+                result: Box::new(Err(failure)),
             }
         } else {
             let work = prepare_manual_request(&mut actor, &primary);
@@ -377,7 +377,7 @@ async fn manual_compaction_completion_stale_callbacks_do_not_enrol_replacement()
         let request = if source_phase {
             AsyncRuntimeRequest::CompleteManualCompactionPreparation {
                 work: old_source,
-                result: old_source_result,
+                result: Box::new(old_source_result),
             }
         } else {
             AsyncRuntimeRequest::CompleteManualCompactionRequest {

@@ -38,6 +38,12 @@ pub(crate) struct Fixture {
 
 impl Fixture {
     pub(crate) fn new() -> Self {
+        Self::with_instruction(OLD_PROMPT)
+    }
+
+    /// Controls use a longer original task to exercise real configured raw-tail
+    /// retention without invalid test-only percentages or tiny model windows.
+    pub(crate) fn with_instruction(instruction_text: &str) -> Self {
         let root = std::env::temp_dir().canonicalize().unwrap().join(format!(
             "mez-runtime-epoch-{}",
             String::from(mez_agent::ContextBlockOccurrenceId::allocate())
@@ -84,7 +90,7 @@ impl Fixture {
                     source
                         .append_instruction(
                             &task,
-                            ContextBlock::user_event("user prompt", OLD_PROMPT),
+                            ContextBlock::user_event("user prompt", instruction_text),
                         )
                         .unwrap(),
                 );

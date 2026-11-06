@@ -15,6 +15,48 @@ fn tools(context: &AgentContext) -> Vec<crate::McpPromptTool> {
     )
 }
 
+/// Copying revokes even revision-zero evidence in the same namespace; a fresh
+/// retrieval for the copied scope grants normally and survives later restore.
+#[test]
+fn mcp_grants_conversation_copy_revokes_inherited_evidence_once() {
+    let mut source = owner();
+    let original = retrieve(&mut source);
+    assert_eq!(tools(source.context()).len(), 1);
+    for target in ["conversation-a", "conversation-copy"] {
+        let target = ReplayConversationId::new(target).unwrap();
+        let checkpoint = source
+            .checkpoint()
+            .unwrap()
+            .for_conversation_copy(target.clone())
+            .unwrap();
+        let copied =
+            ReplayEpochContext::from_checkpoint(target.clone(), checkpoint, AgentContext::empty())
+                .unwrap();
+        assert_eq!(copied.context().chronology().last(), Some(&original));
+        assert!(tools(copied.context()).is_empty());
+        let mut body = copied.into_owned_context();
+        let (_, fresh) =
+            crate::mcp_retrieved_manifest_for_action_result(&retrieval_result("copy-get"), &body)
+                .unwrap();
+        body.append_reference_event(
+            ContextSourceKind::McpRetrievedManifest,
+            "fresh copy retrieval",
+            fresh,
+        )
+        .unwrap();
+        assert_eq!(tools(&body).len(), 1);
+        let live = ReplayEpochContext::from_owned_context(target.clone(), body).unwrap();
+        let restored = ReplayEpochContext::from_checkpoint(
+            target,
+            live.checkpoint().unwrap(),
+            AgentContext::empty(),
+        )
+        .unwrap();
+        assert_eq!(tools(restored.context()).len(), 1);
+        assert_eq!(tools(source.context()).len(), 1);
+    }
+}
+
 fn retrieval_result(action_id: &str) -> crate::ActionResult {
     crate::ActionResult {
         protocol: "maap/1".into(),

@@ -2178,6 +2178,7 @@ fn runtime_routed_child_malformed_compaction_completion_recovers_parent() {
         worker_turn.pane_id.clone(),
         RuntimeAgentCompactionTask {
             source_owner: None,
+            replay_source: None,
             summary_proposal: None,
             frozen_compaction_epoch: None,
             task_generation: 0,
@@ -2268,6 +2269,7 @@ fn runtime_routed_child_post_summary_compaction_failure_recovers_parent() {
         worker_turn.pane_id.clone(),
         RuntimeAgentCompactionTask {
             source_owner: None,
+            replay_source: None,
             summary_proposal: None,
             frozen_compaction_epoch: None,
             task_generation: 0,

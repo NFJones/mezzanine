@@ -352,6 +352,8 @@ pub(in crate::runtime) fn runtime_agent_history_epoch_from_snapshot(
 /// actor-owned after the worker returns.
 #[derive(Debug, Clone)]
 pub(crate) struct RuntimeAgentPromptHistoryWork {
+    /// Exact already-captured NoStore source; mutually exclusive with new I/O.
+    pub(crate) frozen_replay: Option<super::RuntimeFrozenReplayHistory>,
     /// Compact-memory blocks already captured from actor-owned memory state.
     pub(crate) memory_blocks: Vec<ContextBlock>,
     /// Durable transcript work, omitted when the pane has no retained rows.
@@ -372,6 +374,62 @@ pub(crate) struct RuntimeAgentTranscriptSnapshot {
 }
 
 impl RuntimeAgentPromptHistoryWork {
+    /// Captures typed source under its original leased projection. A legacy
+    /// source is detected without decoding its archive or inventing a head.
+    pub(crate) fn freeze_replay_history(self) -> Result<Option<super::RuntimeFrozenReplayHistory>> {
+        if let Some(source) = self.frozen_replay {
+            if self.transcript_work.is_some() {
+                return Err(crate::MezError::conflict(
+                    "frozen replay source has duplicate I/O ownership",
+                ));
+            }
+            return Ok(Some(source));
+        }
+        let Some(work) = self.transcript_work else {
+            return Ok(None);
+        };
+        work.validate_pending_capture()?;
+        let (snapshot, history) = work.store.conversation_replay_projection_with_frontier(
+            &work.inputs.conversation_id,
+            work.inputs.pending_entries.entries(),
+            work.inputs.ephemeral_source_entries,
+            |_| None,
+            |snapshot| {
+                if snapshot.replay.is_none() {
+                    return Ok((None, Vec::new()));
+                }
+                let history = runtime_agent_history_epoch_from_snapshot(
+                    work.inputs.clone(),
+                    None,
+                    snapshot.view.logical.clone(),
+                    Some(snapshot),
+                );
+                let records = history.records.committed_row_records(snapshot)?;
+                Ok((Some(history), records))
+            },
+        )?;
+        let Some(mut history) = history else {
+            return Ok(None);
+        };
+        let frontier = snapshot
+            .view
+            .logical
+            .last()
+            .map_or(0, |row| row.sequence)
+            .max(
+                snapshot
+                    .replay
+                    .as_ref()
+                    .map_or(0, |snapshot| snapshot.covered_archive_frontier()),
+            );
+        super::RuntimeAgentHistorySource::attach(
+            &mut history,
+            work,
+            snapshot.epoch,
+            snapshot.view.logical,
+        );
+        super::RuntimeFrozenReplayHistory::from_history(history, frontier)
+    }
     /// Reads source and context under one lease through an admitted frontier.
     /// Captured store/conversation mismatch, absent high-water, corrupt required
     /// history and conflicting pending rows fail before any model dispatch.
@@ -383,6 +441,11 @@ impl RuntimeAgentPromptHistoryWork {
         conversation_id: &str,
         high_water: u64,
     ) -> Result<RuntimeAgentTranscriptSnapshot> {
+        if self.frozen_replay.is_some() {
+            return Err(crate::MezError::conflict(
+                "frozen replay source requires canonical compaction input, not a new row-window read",
+            ));
+        }
         let empty = |blocks| RuntimeAgentTranscriptContext {
             source: Some(super::RuntimeAgentHistorySource::absent()),
             blocks,
@@ -470,6 +533,14 @@ impl RuntimeAgentPromptHistoryWork {
 pub(crate) fn execute_runtime_agent_prompt_history_work(
     work: RuntimeAgentPromptHistoryWork,
 ) -> Result<RuntimeAgentTranscriptContext> {
+    if let Some(frozen) = work.frozen_replay {
+        if work.transcript_work.is_some() {
+            return Err(crate::MezError::conflict(
+                "frozen replay source has duplicate I/O ownership",
+            ));
+        }
+        return Ok(frozen.history());
+    }
     let blocks = work.memory_blocks;
     let Some(transcript_work) = work.transcript_work else {
         return Ok(RuntimeAgentTranscriptContext {
@@ -492,10 +563,11 @@ fn runtime_agent_prompt_history_from_transcript(
     mut blocks: Vec<ContextBlock>,
     transcript: RuntimeAgentTranscriptContext,
 ) -> RuntimeAgentTranscriptContext {
-    if transcript
-        .source
-        .as_ref()
-        .is_some_and(|source| source.replay.is_some())
+    if transcript.records.replay_conversation().is_some()
+        || transcript
+            .source
+            .as_ref()
+            .is_some_and(|source| source.replay.is_some())
         || transcript
             .blocks
             .iter()

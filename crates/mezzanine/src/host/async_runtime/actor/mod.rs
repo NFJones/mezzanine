@@ -80,6 +80,7 @@ pub(super) mod message_custody;
 mod provider_handoff;
 mod provider_retry_handoff;
 mod queue;
+mod replay_epoch_publication;
 mod requests;
 pub(super) mod routes;
 pub(super) mod snapshot_resume;

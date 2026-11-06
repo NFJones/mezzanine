@@ -101,6 +101,17 @@ impl ReplayEpochContext {
         plan: ReplayCompactionPlan,
         publication: ReplayHeadPublication,
     ) -> AgentContextResult<ReplayEpochRevision> {
+        self.validate_compaction_source(&plan)?;
+        self.publish_validated_compaction(plan, publication)
+    }
+
+    /// Rechecks frozen selection and actual live protection without allocating
+    /// a replacement head. Actor admission and bounded output correction can
+    /// refuse stale work before dispatching a persistence worker.
+    pub fn validate_compaction_source(
+        &self,
+        plan: &ReplayCompactionPlan,
+    ) -> AgentContextResult<()> {
         self.validate_membership()?;
         if plan.owner_identity != self.owner_identity
             || plan.conversation != self.conversation
@@ -118,7 +129,15 @@ impl ReplayEpochContext {
                 "replay publication has a stale parent or frozen source",
             ));
         }
-        self.validate_publication_selection(&plan)?;
+        self.validate_publication_selection(plan)
+    }
+
+    /// Publication follows the same checked source contract as actor preflight.
+    fn publish_validated_compaction(
+        &mut self,
+        plan: ReplayCompactionPlan,
+        publication: ReplayHeadPublication,
+    ) -> AgentContextResult<ReplayEpochRevision> {
         let summary = match (self.policy, publication) {
             (ReplayHeadPolicy::Summary, ReplayHeadPublication::Summary(text)) => {
                 crate::context_compaction::validate_model_compaction_summary(

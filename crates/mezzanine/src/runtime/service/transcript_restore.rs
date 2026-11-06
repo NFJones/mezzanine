@@ -846,18 +846,37 @@ impl RuntimeSessionService {
                         .is_some()
                     || self.agent_loop_is_active(&session.pane_id)
             })
+            .filter(|session| {
+                !session.ephemeral
+                    || self
+                        .agent_loop_state(&session.pane_id)
+                        .and_then(|state| state.parent_no_store_source.as_ref())
+                        .is_none_or(|source| source.conversation_id.is_some())
+            })
             .map(|session| {
                 let fallback_parent = self.agent_loop_state(&session.pane_id);
-                let conversation_id = session
-                    .ephemeral_transcript_source_conversation_id
+                let no_store_parent = fallback_parent
+                    .filter(|_| session.ephemeral)
+                    .and_then(|state| state.parent_no_store_source.as_ref());
+                // A loop inside an unsaved copy must still checkpoint only its
+                // original saved anchor, never the unsaved intermediate CID.
+                let saved_source = no_store_parent.map_or_else(
+                    || session.ephemeral_transcript_source_conversation_id.clone(),
+                    |source| source.conversation_id.clone(),
+                );
+                let conversation_id = saved_source
                     .clone()
                     .or_else(|| fallback_parent.map(|state| state.parent_conversation_id.clone()))
                     .unwrap_or_else(|| session.session_id.clone());
                 let transcript_entries = if session.ephemeral {
-                    session
-                        .ephemeral_transcript_source_conversation_id
+                    saved_source
                         .as_ref()
-                        .map(|_| session.ephemeral_transcript_source_entries)
+                        .map(|_| {
+                            no_store_parent
+                                .map_or(session.ephemeral_transcript_source_entries, |source| {
+                                    source.entries
+                                })
+                        })
                         .or_else(|| fallback_parent.map(|state| state.parent_transcript_entries))
                         .unwrap_or(session.transcript_entries)
                 } else {

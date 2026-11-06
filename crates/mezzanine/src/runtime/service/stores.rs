@@ -129,6 +129,9 @@ impl RuntimeSessionService {
         let mut redispatch_presentation_resizes = false;
         let mut render_overlay = true;
         let payload = match event {
+            crate::runtime::PersistenceEvent::ReplayEpochCompleted { completion } => {
+                return self.apply_replay_epoch_completion(completion);
+            }
             crate::runtime::PersistenceEvent::AuditAppendObserved { receipt } => {
                 let state = match self.observe_native_filesystem_audit(&receipt) {
                     Ok(true) => "accepted",

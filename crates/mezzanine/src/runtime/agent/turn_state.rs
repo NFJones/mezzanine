@@ -121,6 +121,7 @@ impl RuntimeSessionService {
                 .agent_turn_history_sources
                 .get(&turn_id)
                 .and_then(|original| original.ephemeral())
+                .or_else(|| source.ephemeral())
                 .or_else(|| {
                     self.agent_turn_ledger().turn(&turn_id).and_then(|turn| {
                         self.agent_shell_store()

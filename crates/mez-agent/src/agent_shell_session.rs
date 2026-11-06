@@ -843,6 +843,25 @@ impl AgentShellStore {
         Ok(session)
     }
 
+    /// Starts a cache epoch for the exact bound conversation, including while
+    /// its turn is running. A replaced binding is rejected without mutation.
+    pub fn set_prompt_cache_lineage_for_conversation(
+        &mut self,
+        pane_id: &str,
+        conversation_id: &str,
+        lineage: String,
+    ) -> AgentShellSessionResult<()> {
+        validate_agent_shell_required("prompt cache lineage", &lineage)?;
+        let session = self.session_mut(pane_id)?;
+        if session.session_id != conversation_id {
+            return Err(AgentShellSessionError::conflict(
+                "prompt cache lineage conversation changed",
+            ));
+        }
+        session.prompt_cache_lineage_id = lineage;
+        Ok(())
+    }
+
     /// Runs the set log level operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in

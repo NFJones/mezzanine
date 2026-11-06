@@ -1317,6 +1317,26 @@ where
                         },
                     ));
                 }
+                RuntimeSideEffect::PersistReplayEpoch { attempt } => {
+                    let work = attempt.work().clone();
+                    let number = attempt.number();
+                    let completion =
+                        match tokio::task::spawn_blocking(move || attempt.execute()).await {
+                            Ok(completion) => completion,
+                            Err(error) => work.failed(
+                                number,
+                                format!("canonical publication worker failed: {error}"),
+                            ),
+                        };
+                    if completion.error().is_some() {
+                        report.failed = report.failed.saturating_add(1);
+                    } else {
+                        report.completed = report.completed.saturating_add(1);
+                    }
+                    batch.push(RuntimeEvent::Persistence(
+                        PersistenceEvent::ReplayEpochCompleted { completion },
+                    ));
+                }
                 RuntimeSideEffect::PersistTranscriptEntries {
                     store,
                     path,

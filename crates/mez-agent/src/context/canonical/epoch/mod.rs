@@ -149,6 +149,11 @@ impl ReplayEpochContext {
     pub fn context(&self) -> &AgentContext {
         &self.context
     }
+    /// Returns the original conversation bound to this canonical owner.
+    /// This descriptive identity grants no publication or execution authority.
+    pub fn conversation_id(&self) -> &ReplayConversationId {
+        &self.conversation
+    }
     /// Returns the committed replay revision, independent of attempt generations.
     pub fn revision(&self) -> ReplayEpochRevision {
         self.revision

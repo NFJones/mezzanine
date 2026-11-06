@@ -109,6 +109,15 @@ impl RuntimeSessionService {
                 .finish_turn(&turn.pane_id, &turn.turn_id);
         }
         self.retain_routed_context_before_cleanup(&turn.turn_id);
+        if let Err(retention_error) = self.retain_ephemeral_replay_before_cleanup(&turn.turn_id) {
+            let _ = self.append_agent_error_text_to_terminal_buffer(
+                &turn.pane_id,
+                &format!(
+                    "agent: NoStore continuation could not be retained: {}",
+                    retention_error.message()
+                ),
+            );
+        }
         self.agent_turn_contexts_mut().remove(&turn.turn_id);
         self.agent_turn_executions_mut().remove(&turn.turn_id);
         self.agent

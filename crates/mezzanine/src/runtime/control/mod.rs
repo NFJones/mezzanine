@@ -100,6 +100,7 @@ pub(crate) use context::{
     runtime_owned_bridge_message, runtime_peer_message_block_label,
     runtime_peer_message_context_content, runtime_peer_message_logged_payload,
 };
+mod frozen_replay;
 mod history_source;
 pub(crate) use context::{
     RuntimeAgentHistoryEpochInputs, RuntimeAgentHistoryEpochWork, RuntimeAgentPromptHistoryWork,
@@ -111,6 +112,7 @@ pub(crate) use external_enrollment::ExternalSourceEndWork;
 pub(crate) use external_enrollment::ExternalSourceRenewalWork;
 pub(crate) use external_enrollment::ExternalSourceRetirementWork;
 pub(crate) use external_usage::ExternalUsageWork;
+pub(crate) use frozen_replay::RuntimeFrozenReplayHistory;
 pub(crate) use history_source::RuntimeAgentHistorySource;
 mod external_usage_requests;
 pub(crate) use external_usage_requests::ExternalUsageBeginWork;
@@ -787,7 +789,11 @@ impl RuntimeSessionService {
                     || session
                         .ephemeral_transcript_source_conversation_id
                         .as_deref()
-                        .is_some_and(|cid| self.persistence.bookkeeping_pending(cid))
+                        .is_some_and(|cid| {
+                            self.frozen_replay_binding(pane_id, &session.session_id)
+                                .is_none()
+                                && self.persistence.bookkeeping_pending(cid)
+                        })
             })
         {
             return Err(MezError::conflict(
@@ -805,6 +811,9 @@ impl RuntimeSessionService {
         turn_id: &str,
     ) -> Result<RuntimeAgentPromptHistoryWork> {
         let mut work = self.prepare_runtime_agent_prompt_history_work(pane_id);
+        if work.frozen_replay.is_some() {
+            return Ok(work);
+        }
         if let Some(source) = self.agent_turn_history_source(turn_id) {
             let Some(mut transcript) = source.work.clone() else {
                 work.transcript_work = None;
@@ -827,6 +836,18 @@ impl RuntimeSessionService {
         &self,
         pane_id: &str,
     ) -> RuntimeAgentPromptHistoryWork {
+        if let Some(source) = self
+            .agent_shell_store()
+            .get(pane_id)
+            .filter(|session| session.ephemeral)
+            .and_then(|session| self.frozen_replay_binding(pane_id, &session.session_id))
+        {
+            return RuntimeAgentPromptHistoryWork {
+                frozen_replay: Some(source.clone()),
+                memory_blocks: Vec::new(),
+                transcript_work: None,
+            };
+        }
         let context_memory_records = self.model_context_memory_records_for_pane(pane_id);
         let memory_blocks = memory_context_blocks(
             &context_memory_records
@@ -846,12 +867,14 @@ impl RuntimeSessionService {
 
         let Some(session) = self.agent_shell_store().get(pane_id) else {
             return RuntimeAgentPromptHistoryWork {
+                frozen_replay: None,
                 memory_blocks,
                 transcript_work: None,
             };
         };
         let Some(store) = self.persistence.transcript_store() else {
             return RuntimeAgentPromptHistoryWork {
+                frozen_replay: None,
                 memory_blocks,
                 transcript_work: None,
             };
@@ -872,6 +895,7 @@ impl RuntimeSessionService {
                 .is_none()
         {
             return RuntimeAgentPromptHistoryWork {
+                frozen_replay: None,
                 memory_blocks,
                 transcript_work: None,
             };
@@ -887,6 +911,7 @@ impl RuntimeSessionService {
             Err(error) => (Default::default(), Some(error.message().to_string())),
         };
         RuntimeAgentPromptHistoryWork {
+            frozen_replay: None,
             memory_blocks,
             transcript_work: Some(RuntimeAgentHistoryEpochWork {
                 pending_capture_error,

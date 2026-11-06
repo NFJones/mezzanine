@@ -748,6 +748,8 @@ impl AgentTranscriptStore {
             #[cfg(test)]
             fail_compaction_epoch_write: Arc::new(AtomicBool::new(false)),
             #[cfg(test)]
+            replay_epoch_fault: Arc::new(Mutex::new(None)),
+            #[cfg(test)]
             fail_compaction_epoch_before_rename: Arc::new(AtomicBool::new(false)),
             #[cfg(test)]
             fail_compaction_epoch_before_marker: Arc::new(AtomicBool::new(false)),
@@ -797,6 +799,7 @@ impl AgentTranscriptStore {
             receipt_enumeration_barrier: Arc::new(Mutex::new(None)),
             fail_agent_session_metadata_write: Arc::new(AtomicBool::new(false)),
             fail_compaction_epoch_write: Arc::new(AtomicBool::new(false)),
+            replay_epoch_fault: Arc::new(Mutex::new(None)),
             active_metadata_fault: Arc::new(AtomicU8::new(0)),
             fail_compaction_epoch_before_rename: Arc::new(AtomicBool::new(false)),
             fail_compaction_epoch_before_marker: Arc::new(AtomicBool::new(false)),
@@ -4465,13 +4468,15 @@ impl AgentTranscriptStore {
         if !archive.is_file() || archive.metadata()?.len() != 0 {
             return Ok(None);
         }
-        let Some(epoch) = self.read_compaction_epoch_unmigrated(conversation_id)? else {
-            return Ok(None);
-        };
-        if epoch.through_sequence != 0 {
-            return Err(MezError::invalid_state(
-                "empty archive has a nonempty compaction boundary",
-            ));
+        if !self.has_empty_replay_discovery(conversation_id)? {
+            let Some(epoch) = self.read_compaction_epoch_unmigrated(conversation_id)? else {
+                return Ok(None);
+            };
+            if epoch.through_sequence != 0 {
+                return Err(MezError::invalid_state(
+                    "empty archive has a nonempty compaction boundary",
+                ));
+            }
         }
         if !self.compaction_epoch_marker_is_committed(conversation_id)? {
             return Err(MezError::invalid_state(

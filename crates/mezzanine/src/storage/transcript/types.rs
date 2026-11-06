@@ -376,6 +376,9 @@ pub struct AgentTranscriptStore {
     pub(super) active_metadata_fault: Arc<AtomicU8>,
     #[cfg(test)]
     pub(super) fail_compaction_epoch_write: Arc<AtomicBool>,
+    /// Per-store actor-worker fault at an actual replay publication phase.
+    #[cfg(test)]
+    pub(super) replay_epoch_fault: Arc<Mutex<Option<(super::replay_epoch::Phase, u8, bool)>>>,
     /// One-shot failure at the first-epoch rename boundary.
     #[cfg(test)]
     pub(super) fail_compaction_epoch_before_rename: Arc<AtomicBool>,

@@ -233,6 +233,7 @@ mod config_change;
 mod context_documents;
 mod discovery;
 mod failures;
+mod frozen_replay;
 mod issues;
 mod joined_custody;
 mod lifecycle;
@@ -680,6 +681,12 @@ pub(crate) struct RuntimeAgentComponent {
     /// In-flight compaction tasks retained by pane and generation until each
     /// worker settles, including tasks superseded by a newer pane generation.
     claimed_agent_compaction_tasks: BTreeMap<(String, u64), RuntimeAgentCompactionTask>,
+    /// Exact prepared head/receipt retained until actor adoption or cancellation.
+    replay_epoch_publications:
+        BTreeMap<(String, u64), crate::runtime::RuntimeReplayEpochPublication>,
+    /// One immutable current NoStore view per pane; the target CID qualifies
+    /// access and replacement drops the prior view rather than growing a log.
+    frozen_replay_bindings: BTreeMap<String, crate::runtime::control::RuntimeFrozenReplayHistory>,
     /// Issued compactor expense survives content claim retirement.
     compaction_accounting_owners:
         BTreeMap<(String, u64), project_accounting::AuxiliaryAccountingOwner>,
@@ -3503,6 +3510,20 @@ impl RuntimeSessionService {
             .map(|task| task.task_generation)
     }
 
+    /// Reports whether this exact compactor still owns the pane's slot, even
+    /// when its conversation binding has changed. Used only to retire its old
+    /// waiting turn; an older callback cannot retire a replacement compactor.
+    pub(crate) fn agent_compaction_generation_is_current(
+        &self,
+        pane: &str,
+        generation: u64,
+    ) -> bool {
+        self.agent
+            .agent_compaction_task_owners
+            .get(pane)
+            .is_some_and(|(current, _)| *current == generation)
+    }
+
     /// Reports whether a generation still owns the pane’s current conversation.
     pub(crate) fn agent_compaction_task_is_current(
         &self,
@@ -3530,6 +3551,37 @@ impl RuntimeSessionService {
         self.agent
             .claimed_agent_compaction_tasks
             .contains_key(&(pane_id.to_string(), task_generation))
+    }
+
+    pub(crate) fn claimed_agent_compaction_task(
+        &self,
+        pane: &str,
+        generation: u64,
+    ) -> Option<&RuntimeAgentCompactionTask> {
+        self.agent
+            .claimed_agent_compaction_tasks
+            .get(&(pane.to_owned(), generation))
+    }
+
+    /// Retains the original opaque publication, never a replacement from a reply.
+    pub(crate) fn install_replay_epoch_publication(
+        &mut self,
+        work: crate::runtime::RuntimeReplayEpochPublication,
+    ) {
+        self.agent
+            .replay_epoch_publications
+            .insert((work.pane().to_owned(), work.generation()), work);
+    }
+
+    pub(crate) fn replay_epoch_publication(
+        &self,
+        pane: &str,
+        generation: u64,
+    ) -> Option<crate::runtime::RuntimeReplayEpochPublication> {
+        self.agent
+            .replay_epoch_publications
+            .get(&(pane.to_owned(), generation))
+            .cloned()
     }
 
     /// Returns the generation currently claimed by a provider worker.
@@ -3595,6 +3647,13 @@ impl RuntimeSessionService {
         pane_id: &str,
         task_generation: u64,
     ) -> Option<RuntimeAgentCompactionTask> {
+        if let Some(work) = self
+            .agent
+            .replay_epoch_publications
+            .remove(&(pane_id.to_owned(), task_generation))
+        {
+            work.cancel();
+        }
         let task = self
             .agent
             .claimed_agent_compaction_tasks
@@ -3658,6 +3717,13 @@ impl RuntimeSessionService {
         pane_id: &str,
         task_generation: u64,
     ) -> RuntimeAgentCompactionFailureState {
+        if let Some(work) = self
+            .agent
+            .replay_epoch_publications
+            .remove(&(pane_id.to_owned(), task_generation))
+        {
+            work.cancel();
+        }
         let pending = self
             .agent
             .pending_agent_compaction_tasks

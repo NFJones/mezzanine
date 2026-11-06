@@ -49,6 +49,11 @@ pub(super) use input::CompactionTranscriptSource;
 mod preparation;
 /// Original accepted summary records retained across previews and publication.
 mod records;
+mod replay_epoch;
+pub(crate) use replay_epoch::{
+    RuntimeCompactionReplaySource, RuntimeReplayEpochAttempt, RuntimeReplayEpochCompletion,
+    RuntimeReplayEpochPublication,
+};
 mod selection;
 mod source;
 mod summary_correction;
@@ -905,6 +910,7 @@ impl RuntimeSessionService {
             .map(|message| message.content.clone());
         self.queue_agent_compaction_task(RuntimeAgentCompactionTask {
             source_owner: None,
+            replay_source: None,
             summary_proposal: None,
             frozen_compaction_epoch: (source == "manual").then(|| projection.clone()),
             task_generation: 0,
@@ -1017,7 +1023,12 @@ impl RuntimeSessionService {
         if turn.state != AgentTurnState::Running || self.agent_is_compacting(&turn.pane_id) {
             return Ok(false);
         }
-        if !plan.changes_context() {
+        if !plan.changes_context()
+            && self
+                .agent_turn_contexts()
+                .get(turn_id)
+                .is_none_or(|context| !context.has_replay_owner())
+        {
             return Ok(false);
         }
         let (conversation_id, transcript_entries) = self
@@ -1028,7 +1039,17 @@ impl RuntimeSessionService {
                 MezError::invalid_state("active-turn compaction pane session is unavailable")
             })?;
         let allowed_actions = self.capture_agent_session_allowed_actions_for_pane(&turn.pane_id)?;
-        let mut current_blocks = runtime_redact_compaction_blocks(plan.replacement_blocks());
+        let replay_source = match self.prepare_active_replay_compaction(&turn, &model_profile)? {
+            replay_epoch::Preparation::Unowned => None,
+            replay_epoch::Preparation::NoWork => return Ok(false),
+            replay_epoch::Preparation::Ready(source) => Some(source),
+        };
+        let selected = replay_source.as_ref().map(|source| source.input_blocks());
+        let mut current_blocks = runtime_redact_compaction_blocks(
+            selected
+                .as_deref()
+                .unwrap_or_else(|| plan.replacement_blocks()),
+        );
         let mut pending_blocks = Vec::new();
         let recovery_attempt = match trigger {
             RuntimeActiveTurnCompactionTrigger::ProviderContextLimit { attempt } => attempt,
@@ -1084,7 +1105,8 @@ impl RuntimeSessionService {
         }
         self.refresh_project_trust_store_from_disk_if_changed()?;
         self.queue_agent_compaction_task(RuntimeAgentCompactionTask {
-            source_owner: None,
+            source_owner: replay_source.as_ref().map(|source| source.original.clone()),
+            replay_source,
             summary_proposal: None,
             frozen_compaction_epoch: None,
             task_generation: 0,
@@ -1121,7 +1143,9 @@ impl RuntimeSessionService {
                 RuntimeActiveTurnCompactionTrigger::ProviderContextLimit { .. } => 0,
                 RuntimeActiveTurnCompactionTrigger::ObservedInputLimit { .. } => transcript_entries,
             },
-            summarized_entries: plan.replacement_blocks().len(),
+            summarized_entries: selected
+                .as_ref()
+                .map_or_else(|| plan.replacement_blocks().len(), Vec::len),
             model_profile_name,
             model_profile,
             request,
@@ -1516,9 +1540,24 @@ impl RuntimeSessionService {
         task_generation: u64,
         response: ModelResponse,
     ) -> Result<bool> {
+        if self
+            .replay_epoch_publication(pane_id, task_generation)
+            .is_some()
+        {
+            return Ok(false);
+        }
         let current_conversation = self.agent_compaction_task_is_current(pane_id, task_generation);
         self.record_compaction_failure_usage(pane_id, task_generation, response.usage);
-        let Some(mut task) = self.finish_agent_compaction_task(pane_id, task_generation) else {
+        let retained = self
+            .claimed_agent_compaction_task(pane_id, task_generation)
+            .is_some_and(|task| task.replay_source.is_some());
+        let claimed = if retained {
+            self.claimed_agent_compaction_task(pane_id, task_generation)
+                .cloned()
+        } else {
+            self.finish_agent_compaction_task(pane_id, task_generation)
+        };
+        let Some(mut task) = claimed else {
             return Ok(false);
         };
         self.record_agent_provider_quota_usage_for_conversation(
@@ -1527,9 +1566,15 @@ impl RuntimeSessionService {
             &response.quota_usage,
         );
         if !current_conversation {
+            if retained {
+                self.finish_agent_compaction_task(pane_id, task_generation);
+            }
             return Ok(false);
         }
         let application = (|| -> Result<()> {
+            if task.replay_source.is_some() {
+                self.validate_replay_compaction_task(&task)?;
+            }
             let summary = self.validate_or_correct_compaction_summary(&mut task, &response)?;
             let Some(summary) = summary else {
                 return Ok(());
@@ -1617,6 +1662,10 @@ impl RuntimeSessionService {
                         "recursive context compaction completed without a final summary",
                     )
                 })?;
+                if task.replay_source.is_some() {
+                    self.queue_replay_epoch_publication(&task, final_summary)?;
+                    return Ok(());
+                }
                 let (
                     turn_id,
                     trigger,
@@ -2435,6 +2484,13 @@ impl RuntimeSessionService {
             }
             Ok(())
         })();
+        if retained
+            && self
+                .replay_epoch_publication(pane_id, task_generation)
+                .is_none()
+        {
+            self.finish_agent_compaction_task(pane_id, task_generation);
+        }
         if let Err(error) = application {
             let error = if error.compaction_failure().is_some() {
                 error

@@ -23,6 +23,64 @@ fn work(fixture: &Fixture, pane: &str) -> RuntimeAgentHistoryEpochWork {
     }
 }
 
+/// Pure NoStore history has no durable snapshot fallback. Extending its typed
+/// chronology must still retain the original stable occurrence accounting for
+/// a current trusted prefix, without copying saved instruction bytes.
+#[test]
+fn replay_epoch_no_store_arrivals_preserve_stable_accounting_without_snapshot() {
+    let fixture = Fixture::new();
+    let target = mez_agent::ReplayConversationId::new("ephemeral-copy").unwrap();
+    let checkpoint = fixture
+        .source
+        .checkpoint()
+        .unwrap()
+        .for_conversation_copy(target.clone())
+        .unwrap();
+    let (mut records, _) =
+        RuntimeContextRecords::from_replay_checkpoint(target.clone(), checkpoint, None).unwrap();
+    let arrival = ContextBlock::reference_event(
+        ContextSourceKind::RuntimeHint,
+        "later reference",
+        "original later bytes",
+    );
+    let arrival_record = ContextBlockRecord::allocate(&arrival).unwrap();
+    let mut arrivals = RuntimeContextRecords::default();
+    arrivals.push_indexed_record(0, arrival_record);
+    let blocks = records
+        .append_replay_arrivals(vec![arrival.clone()], &arrivals, &[])
+        .unwrap();
+    let mut current = vec![ContextBlock::stable_instruction(
+        ContextSourceKind::System,
+        "policy",
+        "current trusted policy",
+    )];
+    current.extend(blocks);
+    let body = records.import_context(current).unwrap();
+    assert_eq!(body.stable_slots().len(), 1);
+    assert_eq!(
+        body.stable_slots()[0].block().content,
+        "current trusted policy"
+    );
+    assert_eq!(
+        body.stable_slots()[0].record().occurrence_id(),
+        fixture.source.context().stable_slots()[0]
+            .record()
+            .occurrence_id()
+    );
+    assert!(
+        body.chronology()
+            .starts_with(fixture.source.context().chronology())
+    );
+    assert_eq!(
+        body.chronology().len(),
+        fixture.source.context().chronology().len() + 1
+    );
+    assert_eq!(body.chronology().last().unwrap().block(), &arrival);
+    assert_eq!(body.chronology().last().unwrap().record(), arrival_record);
+    assert!(mez_agent::ReplayEpochContext::from_owned_context(target, body).is_ok());
+    assert!(records.replay_snapshot().is_none());
+}
+
 /// Zero pane counts cannot hide an authoritative head/raw tail. Cold history in
 /// different panes preserves sparse sequences, original IDs/costs, native
 /// ownership and pending protection, with no covered ancestor expansion.

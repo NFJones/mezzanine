@@ -54,7 +54,22 @@ impl RuntimeSessionService {
                 estimated_tokens: tokens,
             })
         } else {
-            validate_model_compaction_summary(&summary, budget, tokens)
+            if task.replay_source.is_some() {
+                validate_model_compaction_summary(&summary, usize::MAX, false).map_err(
+                    |mut rejected| {
+                        rejected.budget = budget;
+                        rejected.estimated_tokens = tokens;
+                        rejected.cost = if tokens {
+                            mez_agent::provider_text_input_token_estimate(&summary)
+                        } else {
+                            model_context_text_word_count(&summary)
+                        };
+                        rejected
+                    },
+                )
+            } else {
+                validate_model_compaction_summary(&summary, budget, tokens)
+            }
         };
         // A frozen-valid summary MUST reach the existing complete-candidate
         // owner, even above its advisory replan target. Only that owner measures
@@ -171,6 +186,9 @@ impl RuntimeSessionService {
         &self,
         task: &RuntimeAgentCompactionTask,
     ) -> Result<()> {
+        if task.replay_source.is_some() {
+            return self.validate_replay_compaction_task(task);
+        }
         match &task.target {
             RuntimeAgentCompactionTarget::ActiveTurn {
                 turn_id,

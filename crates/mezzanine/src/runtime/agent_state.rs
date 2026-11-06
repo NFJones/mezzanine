@@ -535,6 +535,14 @@ pub struct RuntimeAgentLoopCompletion {
     pub child_display_name: Option<String>,
 }
 
+/// Original NoStore parent policy, independent of its copied work conversation.
+/// This describes a saved source window only; it grants no execution rights.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RuntimeLoopNoStoreSource {
+    pub(crate) conversation_id: Option<String>,
+    pub(crate) entries: u64,
+}
+
 /// Runtime-owned state for one active `/loop` command.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuntimeAgentLoopState {
@@ -570,6 +578,11 @@ pub struct RuntimeAgentLoopState {
     pub parent_transcript_entries: u64,
     /// Frozen logical archive frontier, independent of retained replay rows.
     pub parent_transcript_high_water: u64,
+    /// Actual typed source captured before a forked NoStore iteration binds.
+    /// This in-memory value is never reconstructed from the numeric frontier.
+    pub(crate) parent_frozen_replay: Option<crate::runtime::control::RuntimeFrozenReplayHistory>,
+    /// Restoring an unsaved parent must preserve its policy and original source.
+    pub(crate) parent_no_store_source: Option<RuntimeLoopNoStoreSource>,
     /// Immutable action catalog captured from the durable parent conversation.
     ///
     /// Ephemeral loop iterations clear their pane-local catalog as a new
@@ -658,6 +671,8 @@ pub(crate) struct RuntimeCompactionSourceOwner {
 pub struct RuntimeAgentCompactionTask {
     /// Original source/store capture; once present even missing storage is frozen.
     pub(crate) source_owner: Option<std::sync::Arc<RuntimeCompactionSourceOwner>>,
+    /// Exact canonical prefix frozen before rendering the actual provider input.
+    pub(crate) replay_source: Option<std::sync::Arc<crate::runtime::RuntimeCompactionReplaySource>>,
     /// Original accepted summary record, retained through sizing and I/O retry.
     pub(crate) summary_proposal: Option<RuntimeCompactionSummaryProposal>,
     /// Unique queued/claimed task generation used to reject stale worker outcomes.

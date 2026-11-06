@@ -4877,6 +4877,7 @@ impl RuntimeSessionService {
         self.presentation.remove_agent_presentation_state(pane_id);
         self.clear_received_peer_message_presentations_for_pane(pane_id);
         self.discard_agent_loop_parent_projections_for_pane(pane_id);
+        self.set_frozen_replay_binding(pane_id, None);
         if let Some(conversation_id) = self
             .agent_shell_store()
             .get(pane_id)

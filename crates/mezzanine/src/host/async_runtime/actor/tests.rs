@@ -23,6 +23,7 @@ mod joined_dialogue;
 mod provider_retry_handoff;
 mod provider_source_handoff;
 mod remember_source_handoff;
+mod replay_epoch_publication;
 mod request_custody;
 mod side_effect_capacity_overshoot;
 mod steering_display_retry;

@@ -1,7 +1,7 @@
 //! Immutable single-head source backing and expected-parent publication.
 //!
 //! The existing conversation mutation lease serializes this writer with archive,
-//! editing and persistence owners. Version five extends the same authoritative
+//! editing and persistence owners. Version six extends the same authoritative
 //! compaction sidecar, never a parallel selectable history. Payloads are private,
 //! content-addressed immutable files; retained bytes are reused across epochs.
 //! A prepared proposal retains its original publication identity and summary so
@@ -15,8 +15,9 @@
 //! its frozen empty-archive boundary and requires an explicit escrow transition.
 //! Checked authored arrivals retain original producer rows through replay and
 //! subsequent publication; source classification never grants append rights.
-//! Actual actor lifecycle, remaining arrival owners, cursor/settlement, legacy
-//! migration and cleanup remain consumers; legacy-only APIs refuse these formats.
+//! Typed actor publication and NoStore copies share the canonical owner. Initial
+//! raw/manual cutover, remaining arrival custody, saved forks, legacy migration
+//! and cleanup remain consumers; legacy-only APIs refuse these formats.
 
 use super::AgentTranscriptStore;
 use crate::{MezError, Result};
@@ -74,6 +75,12 @@ pub(crate) struct ReplayEpochSnapshot {
 }
 
 impl ReplayEpochSnapshot {
+    /// Original indexed archive frontier, not a count of current model members.
+    pub(crate) fn covered_archive_frontier(&self) -> u64 {
+        self.archive_cut
+            .as_ref()
+            .map_or(0, |cut| cut.through_sequence())
+    }
     /// Original conversation captured with the parent, independent of row count.
     pub(crate) fn conversation_id(&self) -> &str {
         &self.conversation_id
@@ -188,6 +195,35 @@ pub(crate) struct ReplayEpochCommit {
 }
 
 impl ReplayEpochCommit {
+    /// Captures the exact acknowledged base for later source qualification.
+    /// Uses only this receipt's immutable proposal; no latest-parent reread or
+    /// cold-owner replacement can retarget the live actor after the write.
+    pub(crate) fn snapshot(
+        &self,
+        store: &AgentTranscriptStore,
+        proposal: &ReplayEpochPublication,
+    ) -> Result<ReplayEpochSnapshot> {
+        if self.root != store.root || self.identity != proposal.identity() {
+            return Err(invalid(
+                "replay snapshot does not match acknowledged proposal",
+            ));
+        }
+        Ok(ReplayEpochSnapshot {
+            root: self.root.clone(),
+            conversation_id: proposal.envelope.manifest.conversation_id.clone(),
+            identity: self.identity.clone(),
+            checkpoint: proposal
+                .prepared
+                .candidate()
+                .checkpoint()
+                .map_err(context_error)?,
+            escrow: proposal.envelope.manifest.source_escrow.clone(),
+            qualified_rows: BTreeSet::new(),
+            arrivals: Vec::new(),
+            archive_cut: proposal.envelope.manifest.archive_cut.clone(),
+        })
+    }
+
     /// Borrows the exact committed publication identity for owner bookkeeping.
     pub(crate) fn identity(&self) -> &ReplayEpochIdentity {
         &self.identity
@@ -220,7 +256,7 @@ impl ReplayEpochCommit {
 
 /// Fault boundaries mirror actual ordered storage transitions, not dispatch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Phase {
+pub(crate) enum Phase {
     BeforePayloadSync,
     BeforeSourceReceiptSync,
     BeforeManifestSwap,
@@ -501,10 +537,10 @@ impl AgentTranscriptStore {
         )
     }
 
-    /// Identifies the one-head format under the caller's existing mutation
-    /// lease. This probe neither resolves source nor grants adoption; the typed
-    /// loader still validates the complete authority and required backing.
-    pub(super) fn has_replay_manifest_locked(&self, conversation_id: &str) -> Result<bool> {
+    /// Read-only bounded format probe, without source resolution or adoption.
+    /// Canonical consumers call it under their existing mutation lease; public
+    /// discovery may probe an atomic header without acquiring a recursive lock.
+    pub(super) fn has_replay_manifest(&self, conversation_id: &str) -> Result<bool> {
         mez_agent::transcript::validate_conversation_id(conversation_id)?;
         let bytes = match bounded_read(
             &self.root.join(conversation_id).join(MANIFEST_NAME),
@@ -525,6 +561,30 @@ impl AgentTranscriptStore {
         Ok(probe.manifest.is_some())
     }
 
+    /// Qualifies typed discovery for an actually empty physical archive. This
+    /// reads only the atomic header and its exact immutable receipt; it neither
+    /// adopts history nor certifies replay payload/cut readiness. The canonical
+    /// loader still checks those independently. No mutation or flock acquisition
+    /// occurs, including when presentation/catalog upkeep already holds it.
+    pub(super) fn has_empty_replay_discovery(&self, conversation_id: &str) -> Result<bool> {
+        if !self.has_replay_manifest(conversation_id)? {
+            return Ok(false);
+        }
+        let envelope = self
+            .read_replay_envelope_locked(conversation_id)?
+            .ok_or_else(|| invalid("typed discovery authority disappeared"))?;
+        envelope.verify_receipt(&self.root.join(conversation_id))?;
+        if envelope
+            .manifest
+            .archive_cut
+            .as_ref()
+            .is_some_and(|cut| cut.through_sequence() > 0)
+        {
+            return Err(invalid("empty archive lost its committed indexed prefix"));
+        }
+        Ok(true)
+    }
+
     /// Captures a checked current checkpoint without copying saved instructions.
     /// Only called with the existing conversation lease; source resolution and
     /// marker recovery use that same lease and never recursively acquire flock.
@@ -532,7 +592,7 @@ impl AgentTranscriptStore {
         &self,
         conversation_id: &str,
     ) -> Result<Option<ReplayEpochSnapshot>> {
-        if !self.has_replay_manifest_locked(conversation_id)? {
+        if !self.has_replay_manifest(conversation_id)? {
             return Ok(None);
         }
         let envelope = self
@@ -613,12 +673,69 @@ impl AgentTranscriptStore {
         &self,
         proposal: &ReplayEpochPublication,
     ) -> Result<ReplayEpochCommit> {
+        self.publish_replay_epoch_with_cancellation(proposal, None)
+    }
+
+    /// Checks logical cancellation while holding the actual mutation lease.
+    /// Once commit begins, ordinary old-or-new recovery still applies; a queued
+    /// cancelled writer cannot change authority after a newer reader passes it.
+    pub(crate) fn publish_replay_epoch_unless_cancelled(
+        &self,
+        proposal: &ReplayEpochPublication,
+        cancelled: &std::sync::atomic::AtomicBool,
+    ) -> Result<ReplayEpochCommit> {
+        self.publish_replay_epoch_with_cancellation(proposal, Some(cancelled))
+    }
+
+    fn publish_replay_epoch_with_cancellation(
+        &self,
+        proposal: &ReplayEpochPublication,
+        cancelled: Option<&std::sync::atomic::AtomicBool>,
+    ) -> Result<ReplayEpochCommit> {
         let _lease = self.acquire_conversation_lock(&proposal.envelope.manifest.conversation_id)?;
-        let identity = self.publish_replay_epoch_locked(proposal, &_lease, |_| Ok(()))?;
+        if cancelled.is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Acquire)) {
+            return Err(MezError::conflict(
+                "canonical publication cancelled before commit",
+            ));
+        }
+        let identity = self.publish_replay_epoch_locked(proposal, &_lease, |_phase| {
+            #[cfg(test)]
+            self.apply_replay_epoch_fault(_phase)?;
+            Ok(())
+        })?;
         Ok(ReplayEpochCommit {
             identity,
             root: self.root.clone(),
         })
+    }
+
+    /// Installs a bounded fault shared only by this store's physical clones.
+    /// Tests consume it at the real writer boundary, never fabricate an ACK.
+    #[cfg(test)]
+    pub(crate) fn inject_replay_epoch_fault(&self, phase: Phase, attempts: u8, panic: bool) {
+        *self.replay_epoch_fault.lock().unwrap() = Some((phase, attempts, panic));
+    }
+
+    #[cfg(test)]
+    fn apply_replay_epoch_fault(&self, phase: Phase) -> Result<()> {
+        let panic = {
+            let mut fault = self.replay_epoch_fault.lock().unwrap();
+            match fault.as_mut() {
+                Some((selected, remaining, panic)) if *selected == phase && *remaining > 0 => {
+                    *remaining -= 1;
+                    Some(*panic)
+                }
+                _ => None,
+            }
+        };
+        match panic {
+            Some(true) => panic!("injected replay publication worker panic at {phase:?}"),
+            Some(false) => Err(MezError::new(
+                crate::MezErrorKind::Io,
+                format!("injected replay publication failure at {phase:?}"),
+            )),
+            None => Ok(()),
+        }
     }
 
     /// Loads only current referenced source, checking required-state, integrity

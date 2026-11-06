@@ -733,6 +733,25 @@ impl RuntimeSessionService {
         }
     }
 
+    /// Selects original canonical backing for terminal NoStore continuation.
+    /// A captured absence is final and must not borrow a later live value.
+    pub(in crate::runtime::agent) fn completion_replay_context_for_retirement(
+        &self,
+        turn_id: &str,
+    ) -> Option<&mez_agent::AgentContext> {
+        if let Some(backing) = self
+            .agent
+            .completion_settlements
+            .groups
+            .get(turn_id)
+            .and_then(|group| group.failed_backing.as_ref())
+            && let CompletionCapture::Captured(context) = &backing.context
+        {
+            return context.as_ref();
+        }
+        self.agent_turn_contexts().get(turn_id)
+    }
+
     /// Moves failed backing before any bypass clear can destroy it. A second
     /// cleanup cannot overwrite the original owner or create another timeline.
     pub(in crate::runtime::agent) fn detach_failed_completion_backing(&mut self, turn_id: &str) {

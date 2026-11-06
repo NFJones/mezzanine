@@ -10936,8 +10936,8 @@ close or verify the renewed interval. Repeated retention of a still-pending
 interval MUST remain idempotent. Cold checkpoints MUST mint fresh pending
 allocations rather than serializing or reconstructing these live tokens.
 
-The single-head storage writer uses version five of the same authoritative
-compaction sidecar, with an exact parent/publication identity and integrity-bound
+The single-head storage format extends the same authoritative compaction
+sidecar, with an exact parent/publication identity and integrity-bound
 checkpoint references. The storage CAS revision MUST remain distinct from the
 canonical compaction epoch revision so later raw edits need not invent epochs.
 Encoded metadata MUST fit 16 MiB; each logical source or current replay payload
@@ -10974,8 +10974,54 @@ and birth revisions. Adoption MAY mint private source witnesses for those exact
 carried arrivals so a later publication can qualify them against the persisted
 head; deserializing their descriptive state MUST NOT mint those witnesses.
 Such witnesses MUST be bounded by retained membership and pruned when covered.
-These receipts do not yet connect the actor publication lifecycle, fork,
+For an active context already carrying a typed replay owner, compaction MUST
+freeze its canonical prefix before rendering inference input. The admitted
+compactor claim MUST remain owned through off-actor publication and receipt
+adoption on the existing ordered persistence lane. This work MUST NOT fabricate
+an ordinary append claim or acknowledgment. The exact prepared proposal MUST
+survive storage retries and joined worker failures; storage recovery is bounded
+to three attempts without another provider request or action replay. A lost
+callback MAY recover the actual retained receipt. Logical cancellation MUST
+fence commit under the conversation mutation lease without releasing physical
+worker ownership early. Stale callbacks MUST NOT adopt into a replacement turn,
+conversation, source, process, profile or configuration generation. Exhaustion
+MUST fail only the original waiting turn with diagnostics.
+
+Only accepted adoption MUST reset provider request chains, displayed context
+usage and cache lineage. The actual shell-session lineage and live request
+metadata MUST advance together; native session identity, cumulative expense and
+consumed-pressure fences remain distinct. Pure NoStore publication MUST use
+the same canonical prepare/adopt contract without a durable head or receipt.
+These consumers do not complete initial raw/manual/legacy cutover, saved forks,
 migration or source-custody settlement.
+
+A typed NoStore source binding MUST capture its original checked head, exact
+members, records and accounting before changing the pane binding. A numeric
+parent row frontier alone MUST NOT identify a typed checkpoint. The target MUST
+receive its own conversation scope and fresh owner incarnation, without inherited
+task/native/peer rights or retrieved MCP grants, including before the first
+compaction. Current trusted instructions and request metadata remain caller
+inputs. Later reads MUST use the captured source rather than resample later
+parent appends, a replacement store or a later parent manifest. A loop that
+forks each iteration MUST reuse its original parent capture for every iteration.
+Both isolated loop modes MUST restore an unsaved parent's original NoStore
+policy, source window and exact captured view without another source-copy
+revocation. Rollback MUST restore the previous binding and its frozen selection
+together. Active binding checkpoints MAY refer to its actual saved ancestor, but
+MUST NOT promote an unsaved intermediate conversation to restart authority.
+Accepted NoStore rewrites and terminal cleanup MUST retain the latest exact
+in-memory body for later turns in that target, including post-ACK arrivals and
+fresh retrievals. This descriptive continuation MUST NOT claim restart
+durability or ordinary transcript append success.
+
+An empty raw archive MAY still have a typed head and retained canonical members.
+Catalog/presentation upkeep MUST recognize that authority without invoking the
+legacy epoch decoder or reacquiring its held conversation lock. Empty-archive
+discovery MUST retain an archive entry count of zero, check the typed header and
+its exact immutable receipt and required marker, and refuse a committed nonzero
+archive cut against an empty file. Discovery MUST NOT imply context adoption or
+replay readiness; the canonical loader independently validates current payloads,
+source and cut references before a request may use them.
 
 Independent source backing
 MUST NOT imply ordinary transcript append acknowledgment. Storage qualification

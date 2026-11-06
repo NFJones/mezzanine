@@ -43,6 +43,10 @@ pub(in crate::storage::transcript) struct ArchiveCut {
 }
 
 impl ArchiveCut {
+    /// Physical frontier captured with this epoch, independent of raw members.
+    pub(super) fn through_sequence(&self) -> u64 {
+        self.through_sequence
+    }
     fn empty() -> Self {
         Self {
             through_sequence: 0,

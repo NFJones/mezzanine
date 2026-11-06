@@ -691,7 +691,10 @@ impl AsyncRuntimeSessionActor {
                     .and_then(|result| result);
                 let _ = sender
                     .send(AsyncRuntimeRequestEnvelope::new(
-                        AsyncRuntimeRequest::CompleteManualCompactionPreparation { work, result },
+                        AsyncRuntimeRequest::CompleteManualCompactionPreparation {
+                            work,
+                            result: Box::new(result),
+                        },
                     ))
                     .await;
             });
@@ -2936,7 +2939,7 @@ impl AsyncRuntimeSessionActor {
                 let pane_id = work.pane_id.clone();
                 let applied = self
                     .service
-                    .complete_manual_compaction_preparation(&work, result);
+                    .complete_manual_compaction_preparation(&work, *result);
                 #[cfg(test)]
                 if let Some((_, _, completed)) = work.probe.as_ref() {
                     completed.notify_one();

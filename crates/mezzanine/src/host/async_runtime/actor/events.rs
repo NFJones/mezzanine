@@ -480,6 +480,15 @@ impl AsyncRuntimeSessionActor {
                 let mut transition = self
                     .service
                     .apply_agent_compaction_transition(compaction_event)?;
+                if self
+                    .service
+                    .replay_epoch_publication(&pane_id, generation)
+                    .is_some()
+                {
+                    transition
+                        .side_effects
+                        .extend(self.refresh_replay_epoch_publication_timer(&pane_id, generation));
+                }
                 // Admit backoff before returning other effects. A full queue
                 // settles the exact undispatched task instead of orphaning it.
                 if let Some(index) = transition.side_effects.iter().position(|effect| {
@@ -896,6 +905,27 @@ impl AsyncRuntimeSessionActor {
                 if !self.timers.compaction_claim.remove(&timer.key) {
                     self.record_ignored_timer_event();
                     return Ok(RuntimeTransition::default());
+                }
+                if self
+                    .service
+                    .replay_epoch_publication(&timer.key.owner_id, timer.key.generation)
+                    .is_some()
+                {
+                    let mut transition = self
+                        .service
+                        .poll_replay_epoch_publication(&timer.key.owner_id, timer.key.generation)?;
+                    transition
+                        .side_effects
+                        .extend(self.refresh_replay_epoch_publication_timer(
+                            &timer.key.owner_id,
+                            timer.key.generation,
+                        ));
+                    if transition.applied {
+                        transition
+                            .side_effects
+                            .extend(self.pending_provider_dispatch_side_effects()?);
+                    }
+                    return Ok(transition);
                 }
                 let applied = self.service.expire_claimed_agent_compaction_task(
                     &timer.key.owner_id,
@@ -1654,6 +1684,28 @@ impl AsyncRuntimeSessionActor {
         let (persistence_event, claim_id) = match persistence_event {
             PersistenceEvent::TranscriptClaim { claim_id, outcome } => (*outcome, Some(claim_id)),
             event => (event, None),
+        };
+        let persistence_event = match persistence_event {
+            PersistenceEvent::ReplayEpochCompleted { completion } => {
+                if claim_id.is_some() {
+                    return Ok(RuntimeTransition::default());
+                }
+                let pane = completion.pane().to_owned();
+                let generation = completion.generation();
+                let mut transition = self.service.apply_persistence_transition(
+                    PersistenceEvent::ReplayEpochCompleted { completion },
+                )?;
+                transition
+                    .side_effects
+                    .extend(self.refresh_replay_epoch_publication_timer(&pane, generation));
+                if transition.applied {
+                    transition
+                        .side_effects
+                        .extend(self.pending_provider_dispatch_side_effects()?);
+                }
+                return Ok(transition);
+            }
+            event => event,
         };
         if matches!(
             &persistence_event,

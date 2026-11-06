@@ -52,7 +52,9 @@ pub(in crate::runtime) struct RuntimeContextRecords {
 #[derive(Debug, Clone)]
 struct ReplayHistory {
     conversation: mez_agent::ReplayConversationId,
-    snapshot: std::sync::Arc<crate::storage::transcript::replay_epoch::ReplayEpochSnapshot>,
+    /// An actual durable source when present. Pure NoStore checkpoints must not
+    /// fabricate a committed identity merely to reuse canonical composition.
+    snapshot: Option<std::sync::Arc<crate::storage::transcript::replay_epoch::ReplayEpochSnapshot>>,
     /// Original head/tail plus checked new arrivals, without mutating the
     /// committed parent snapshot used for publication CAS and source custody.
     checkpoint: mez_agent::ReplayEpochCheckpoint,
@@ -75,9 +77,25 @@ impl RuntimeContextRecords {
         snapshot: crate::storage::transcript::replay_epoch::ReplayEpochSnapshot,
     ) -> Result<(Self, Vec<ContextBlock>)> {
         let conversation = mez_agent::ReplayConversationId::new(conversation_id)?;
+        Self::from_replay_checkpoint(
+            conversation,
+            snapshot.checkpoint().clone(),
+            Some(std::sync::Arc::new(snapshot)),
+        )
+    }
+
+    /// Composes a checked pure checkpoint with optional original durable source.
+    /// Descriptive NoStore state remains distinct from a publication receipt.
+    pub(super) fn from_replay_checkpoint(
+        conversation: mez_agent::ReplayConversationId,
+        checkpoint: mez_agent::ReplayEpochCheckpoint,
+        snapshot: Option<
+            std::sync::Arc<crate::storage::transcript::replay_epoch::ReplayEpochSnapshot>,
+        >,
+    ) -> Result<(Self, Vec<ContextBlock>)> {
         let owner = mez_agent::ReplayEpochContext::from_checkpoint(
             conversation.clone(),
-            snapshot.checkpoint().clone(),
+            checkpoint.clone(),
             AgentContext::empty(),
         )?;
         let blocks = owner.context().blocks().to_vec();
@@ -92,8 +110,8 @@ impl RuntimeContextRecords {
                 records,
                 replay: Some(ReplayHistory {
                     conversation,
-                    checkpoint: snapshot.checkpoint().clone(),
-                    snapshot: std::sync::Arc::new(snapshot),
+                    checkpoint,
+                    snapshot,
                     blocks: blocks.len(),
                 }),
                 ..Self::default()
@@ -133,7 +151,12 @@ impl RuntimeContextRecords {
         body.append_imported_replay_arrivals(blocks, &arrivals.records, execution, &sequences)?;
         let owner =
             mez_agent::ReplayEpochContext::from_owned_context(replay.conversation.clone(), body)?;
-        let checkpoint = owner.checkpoint()?;
+        // Restoration used an empty trusted prefix, so the temporary owner has
+        // no stable slots. Preserve the earlier checked accounting separately;
+        // only an explicitly later arrivals snapshot may supersede it below.
+        let checkpoint = owner
+            .checkpoint()?
+            .with_stable_records(replay.checkpoint.stable_records().to_vec())?;
         let blocks = owner.context().blocks().to_vec();
         self.records = owner
             .context()
@@ -158,7 +181,32 @@ impl RuntimeContextRecords {
     pub(super) fn replay_snapshot(
         &self,
     ) -> Option<std::sync::Arc<crate::storage::transcript::replay_epoch::ReplayEpochSnapshot>> {
-        self.replay.as_ref().map(|history| history.snapshot.clone())
+        self.replay
+            .as_ref()
+            .and_then(|history| history.snapshot.clone())
+    }
+
+    pub(super) fn replay_conversation(&self) -> Option<&mez_agent::ReplayConversationId> {
+        self.replay.as_ref().map(|history| &history.conversation)
+    }
+
+    /// Rebinds only an explicitly copied immutable source. Original checkpoint
+    /// validation and restrictive retrieval retirement precede any new admission.
+    pub(super) fn rebind_replay_copy(
+        &mut self,
+        target: mez_agent::ReplayConversationId,
+    ) -> Result<()> {
+        self.ensure_valid()?;
+        let replay = self
+            .replay
+            .as_mut()
+            .ok_or_else(|| MezError::conflict("source copy has no original replay checkpoint"))?;
+        replay.checkpoint = replay
+            .checkpoint
+            .clone()
+            .for_conversation_copy(target.clone())?;
+        replay.conversation = target;
+        Ok(())
     }
 
     /// Captures original placement and descriptive costs before rendering any
@@ -538,7 +586,7 @@ impl RuntimeContextRecords {
             let stable = self
                 .stable
                 .as_deref()
-                .unwrap_or_else(|| replay.snapshot.checkpoint().stable_records());
+                .unwrap_or_else(|| replay.checkpoint.stable_records());
             let checkpoint = replay
                 .checkpoint
                 .clone()

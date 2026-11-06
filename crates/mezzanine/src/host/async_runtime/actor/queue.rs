@@ -738,6 +738,7 @@ impl AsyncRuntimeSessionActor {
                 | RuntimeSideEffect::PersistTrackedAuditLog { .. }
                 | RuntimeSideEffect::PersistTranscriptEntries { .. }
                 | RuntimeSideEffect::PersistInitialTranscript { .. }
+                | RuntimeSideEffect::PersistReplayEpoch { .. }
                 | RuntimeSideEffect::PersistAgentSessionMetadata { .. }
                 | RuntimeSideEffect::PersistPresentationEntries { .. }
                 | RuntimeSideEffect::PersistSteeringPresentation { .. }

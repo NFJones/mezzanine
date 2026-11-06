@@ -1,0 +1,296 @@
+//! Actor-only publication admission, bounded recovery and receipt adoption.
+//! Only an accepted original receipt resets request/cache state. A stale or
+//! failed callback cannot clear a replacement task or replay provider actions.
+
+use super::*;
+use crate::runtime::{RuntimeSideEffect, RuntimeTransition};
+
+impl RuntimeSessionService {
+    pub(in crate::runtime::commands::compaction) fn validate_replay_compaction_task(
+        &self,
+        task: &crate::runtime::RuntimeAgentCompactionTask,
+    ) -> Result<()> {
+        let source = task
+            .replay_source
+            .as_ref()
+            .ok_or_else(|| MezError::invalid_state("canonical compaction source missing"))?;
+        source.validate_live(self, &task.pane_id, task.task_generation)
+    }
+
+    /// Retains the provider claim until the physical write and actual adoption.
+    /// No ordinary transcript append claim or result is created by this effect.
+    pub(in crate::runtime::commands::compaction) fn queue_replay_epoch_publication(
+        &mut self,
+        task: &crate::runtime::RuntimeAgentCompactionTask,
+        summary: String,
+    ) -> Result<()> {
+        self.validate_replay_compaction_task(task)?;
+        if self
+            .replay_epoch_publication(&task.pane_id, task.task_generation)
+            .is_some()
+        {
+            return Err(MezError::conflict(
+                "canonical compaction publication already admitted",
+            ));
+        }
+        let source = task
+            .replay_source
+            .clone()
+            .ok_or_else(|| MezError::invalid_state("canonical source missing"))?;
+        let body = self
+            .agent_turn_contexts()
+            .get(&source.turn_id)
+            .ok_or_else(|| MezError::conflict("canonical publication live source disappeared"))?;
+        let publication_source = ReplayEpochContext::from_owned_context(
+            ReplayConversationId::new(task.conversation_id.clone())?,
+            body.clone(),
+        )?;
+        let work = RuntimeReplayEpochPublication::new(
+            task.pane_id.clone(),
+            task.task_generation,
+            source,
+            publication_source,
+            summary,
+        );
+        let attempt = work
+            .claim_attempt()
+            .ok_or_else(|| MezError::invalid_state("canonical publication attempt unavailable"))?;
+        self.install_replay_epoch_publication(work);
+        self.persistence
+            .queue_transcript(RuntimeSideEffect::PersistReplayEpoch { attempt });
+        Ok(())
+    }
+
+    /// Observes only the exact retained opaque work. Lost callbacks recover its
+    /// actual receipt; idle I/O failures retry its original proposal at most three
+    /// times, after all physical attempt guards retire. No provider redispatch.
+    pub(crate) fn poll_replay_epoch_publication(
+        &mut self,
+        pane: &str,
+        generation: u64,
+    ) -> Result<RuntimeTransition> {
+        let Some(work) = self.replay_epoch_publication(pane, generation) else {
+            return Ok(RuntimeTransition::default());
+        };
+        if work.busy() {
+            return Ok(RuntimeTransition::default());
+        }
+        if let Some(completion) = work.completed()
+            && work.mark_handled(completion.attempt)
+        {
+            return self.apply_replay_epoch_completion_inner(completion);
+        }
+        if !self.agent_compaction_task_is_current(pane, generation) {
+            self.fail_replay_epoch_publication(
+                &work,
+                &MezError::conflict("canonical publication conversation binding changed"),
+            )?;
+            return Ok(self.runtime_pane_transition_with_render(
+                pane,
+                true,
+                Some(crate::runtime::RenderInvalidationReason::FullRedraw),
+            ));
+        }
+        if let Err(error) = work.source().validate_live(self, pane, generation) {
+            self.fail_replay_epoch_publication(&work, &error)?;
+            return Ok(self.runtime_pane_transition_with_render(
+                pane,
+                true,
+                Some(crate::runtime::RenderInvalidationReason::FullRedraw),
+            ));
+        }
+        if work.attempts() >= worker::MAX_ATTEMPTS {
+            self.fail_replay_epoch_publication(
+                &work,
+                &MezError::invalid_state("canonical publication exhausted storage recovery"),
+            )?;
+        } else if let Some(attempt) = work.claim_attempt() {
+            self.persistence
+                .queue_transcript(RuntimeSideEffect::PersistReplayEpoch { attempt });
+        }
+        Ok(self.runtime_pane_transition_with_render(
+            pane,
+            true,
+            Some(crate::runtime::RenderInvalidationReason::FullRedraw),
+        ))
+    }
+
+    /// Actual host callbacks and lost-callback polling use the same actor owner.
+    pub(crate) fn apply_replay_epoch_completion(
+        &mut self,
+        completion: RuntimeReplayEpochCompletion,
+    ) -> Result<RuntimeTransition> {
+        let Some(work) = self.replay_epoch_publication(completion.pane(), completion.generation())
+        else {
+            return Ok(RuntimeTransition::default());
+        };
+        if work != completion.work || work.busy() || !work.mark_handled(completion.attempt) {
+            return Ok(RuntimeTransition::default());
+        }
+        self.apply_replay_epoch_completion_inner(completion)
+    }
+
+    fn apply_replay_epoch_completion_inner(
+        &mut self,
+        completion: RuntimeReplayEpochCompletion,
+    ) -> Result<RuntimeTransition> {
+        let work = &completion.work;
+        let pane = work.pane().to_owned();
+        let generation = work.generation();
+        // Polling must retain the same allocation as a direct callback.
+        if self.replay_epoch_publication(&pane, generation).as_ref() != Some(work) {
+            return Ok(RuntimeTransition::default());
+        }
+        if !self.agent_compaction_task_is_current(&pane, generation) {
+            self.fail_replay_epoch_publication(
+                work,
+                &MezError::conflict("canonical publication conversation binding changed"),
+            )?;
+            return Ok(self.runtime_pane_transition_with_render(
+                &pane,
+                true,
+                Some(crate::runtime::RenderInvalidationReason::FullRedraw),
+            ));
+        }
+        let result = (|| {
+            work.source().validate_live(self, &pane, generation)?;
+            if let Some(error) = completion.error() {
+                if error.kind() == crate::error::MezErrorKind::Io
+                    && work.attempts() < worker::MAX_ATTEMPTS
+                {
+                    let _ = self.append_agent_status_text_to_terminal_buffer(&pane,
+                        &format!("agent: canonical compaction publication requires storage recovery; retaining original proposal: {}", error.message()));
+                    return Ok(());
+                }
+                return Err(MezError::invalid_state(format!(
+                    "canonical compaction publication failed: {}",
+                    error.message()
+                )));
+            }
+            let turn_id = &work.source().turn_id;
+            let mut body = self
+                .agent_turn_contexts()
+                .get(turn_id)
+                .cloned()
+                .ok_or_else(|| {
+                    MezError::conflict("canonical compaction live context disappeared")
+                })?;
+            let history = completion
+                .history()
+                .map(|snapshot| {
+                    crate::runtime::control::RuntimeAgentHistorySource::with_replay_publication(
+                        work.source().original.history.as_ref(),
+                        work.source().original.store.clone().ok_or_else(|| {
+                            MezError::invalid_state("canonical original store disappeared")
+                        })?,
+                        &pane,
+                        snapshot.clone(),
+                        work.source().ephemeral,
+                    )
+                })
+                .transpose()?;
+            completion.adopt(&mut body)?;
+            // Session/native identities survive; provider cache routing starts
+            // a distinct epoch only after actual receipt acceptance.
+            let mut metadata = body.metadata().clone();
+            let lineage = format!(
+                "compaction-{}",
+                String::from(mez_agent::ContextBlockOccurrenceId::allocate())
+            );
+            metadata.prompt_cache_lineage_id = Some(lineage.clone());
+            body.set_metadata(metadata);
+            if work.source().ephemeral {
+                self.retain_ephemeral_replay_body(
+                    &pane,
+                    work.source().owner.conversation_id().as_str(),
+                    &body,
+                    work.source().original.history.clone(),
+                )?;
+            }
+            self.agent_shell_store_mut()
+                .set_prompt_cache_lineage_for_conversation(
+                    &pane,
+                    work.source().owner.conversation_id().as_str(),
+                    lineage,
+                )?;
+            self.agent_turn_contexts_mut().insert(turn_id.clone(), body);
+            if let Some(history) = history {
+                self.set_agent_turn_history_source(turn_id.clone(), Some(history));
+            }
+            self.clear_agent_turn_provider_request_chain(turn_id);
+            self.clear_agent_conversation_provider_request_chain(
+                work.source().owner.conversation_id().as_str(),
+            );
+            self.checkpoint_compaction_replacement_usage(
+                work.source().owner.conversation_id().as_str(),
+            )?;
+            self.queue_agent_provider_recovery_task_after_compaction(
+                turn_id,
+                "canonical_epoch_compaction",
+            )?;
+            self.finish_agent_compaction_task(&pane, generation);
+            let _ = self.append_agent_status_text_to_terminal_buffer(
+                &pane,
+                "agent: canonical compaction head accepted",
+            );
+            self.resume_agent_compaction_steering(&pane)?;
+            Ok(())
+        })();
+        if let Err(error) = result {
+            self.fail_replay_epoch_publication(work, &error)?;
+        }
+        Ok(self.runtime_pane_transition_with_render(
+            &pane,
+            true,
+            Some(crate::runtime::RenderInvalidationReason::FullRedraw),
+        ))
+    }
+
+    /// Failure is confined to the original waiting turn. Durable receipts remain
+    /// with their conversation and no replacement pane owner is touched.
+    fn fail_replay_epoch_publication(
+        &mut self,
+        work: &RuntimeReplayEpochPublication,
+        error: &MezError,
+    ) -> Result<()> {
+        let current = self.agent_compaction_task_is_current(work.pane(), work.generation());
+        let owns_generation =
+            self.agent_compaction_generation_is_current(work.pane(), work.generation());
+        self.fail_agent_compaction_task(work.pane(), work.generation());
+        if current {
+            self.fail_running_turn_after_compaction_error(
+                &work.source().turn_id,
+                "canonical_epoch_compaction",
+                error,
+            )?;
+            let _ = self.append_agent_error_text_to_terminal_buffer(work.pane(), error.message());
+            self.resume_agent_compaction_steering(work.pane())?;
+        } else if owns_generation
+            && let Some(turn) = self
+                .agent_turn_ledger()
+                .turn(&work.source().turn_id)
+                .cloned()
+            && turn.state == mez_agent::AgentTurnState::Running
+            && turn.pane_id == work.pane()
+            && turn.conversation_id == work.source().owner.conversation_id().as_str()
+        {
+            // The binding has moved, but this exact logical compactor still
+            // held its original turn. Retire that waiting turn through the
+            // detached path; do not paint or mutate the replacement binding.
+            let _ = self.append_agent_trace_turn_event(
+                &turn.pane_id,
+                &turn.turn_id,
+                &format!(
+                    "canonical publication retired after binding replacement: {}",
+                    error.message()
+                ),
+            );
+            self.complete_running_agent_turn_and_start_ready(
+                &turn,
+                mez_agent::AgentTurnState::Failed,
+                "canonical_publication_binding_replaced",
+            )?;
+        }
+        Ok(())
+    }
+}

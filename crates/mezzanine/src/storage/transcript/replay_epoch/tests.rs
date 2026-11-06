@@ -97,6 +97,47 @@ fn proposal(
         .unwrap()
 }
 
+/// Discovery describes the genuine archive count, independent of typed raw
+/// membership. It checks the exact header/receipt without adopting a new owner.
+/// A damaged authority must not fall through the legacy decoder or disappear.
+#[test]
+fn empty_replay_discovery_preserves_authority_and_refuses_broken_receipt() {
+    let fixture = Fixture::new();
+    let mut owner = source();
+    let frozen = plan(&owner);
+    owner
+        .append_fact("tail", "retained exact raw member")
+        .unwrap();
+    let prepared = fixture
+        .store
+        .prepare_replay_epoch(
+            origin().capture(None),
+            "conversation-a",
+            None,
+            &owner,
+            frozen,
+            ReplayHeadPublication::Summary("head".into()),
+        )
+        .unwrap();
+    fixture.store.publish_replay_epoch(&prepared).unwrap();
+    let path = fixture.root.join("conversation-a").join(MANIFEST_NAME);
+    let original = fs::read(&path).unwrap();
+    let summary = fixture.store.summary("conversation-a").unwrap().unwrap();
+    assert_eq!(summary.entries, 0);
+    assert_eq!(fixture.load().1.members().len(), 1);
+    assert_eq!(fs::read(&path).unwrap(), original);
+    assert!(fixture.store.compaction_epoch("conversation-a").is_err());
+    fs::write(&path, b"{\"manifest\":{\"invalid\":true}}").unwrap();
+    assert!(fixture.store.summary("conversation-a").is_err());
+    fs::write(&path, &original).unwrap();
+    let receipt = fixture
+        .root
+        .join("conversation-a/epoch-payloads")
+        .join(digest(&original));
+    fs::remove_file(receipt).unwrap();
+    assert!(fixture.store.summary("conversation-a").is_err());
+}
+
 /// The very first live source has no ordinary archive. Publication persists
 /// head/tail independently, creates only a genuine zero-row archive, and a cold
 /// store restores original canonical IDs/costs without fabricating append ACKs.

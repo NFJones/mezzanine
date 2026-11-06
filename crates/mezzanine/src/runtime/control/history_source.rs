@@ -33,6 +33,43 @@ pub(crate) struct RuntimeAgentHistorySource {
 }
 
 impl RuntimeAgentHistorySource {
+    /// Advances only the acknowledged replay base while keeping original row
+    /// images, store and admitted target policy. This descriptor does not adopt
+    /// a cold owner into the actor's live model context or grant append rights.
+    pub(in crate::runtime) fn with_replay_publication(
+        original: Option<&Arc<Self>>,
+        store: crate::storage::transcript::AgentTranscriptStore,
+        pane: &str,
+        snapshot: Arc<crate::storage::transcript::replay_epoch::ReplayEpochSnapshot>,
+        ephemeral: bool,
+    ) -> Result<Arc<Self>> {
+        let mut source = original.cloned().unwrap_or_else(Self::absent);
+        let source_mut = Arc::make_mut(&mut source);
+        if let Some(work) = source_mut.work.as_ref() {
+            if work.store != store || work.inputs.conversation_id != snapshot.conversation_id() {
+                return Err(MezError::conflict(
+                    "acknowledged replay history has a foreign original store",
+                ));
+            }
+        } else {
+            source_mut.work = Some(RuntimeAgentHistoryEpochWork {
+                pending_capture_error: None,
+                store,
+                inputs: super::RuntimeAgentHistoryEpochInputs {
+                    pane_id: pane.to_owned(),
+                    conversation_id: snapshot.conversation_id().to_owned(),
+                    ephemeral_source_entries: None,
+                    active_entries: Some(0),
+                    pending_entries: Default::default(),
+                },
+            });
+        }
+        source_mut.epoch = None;
+        source_mut.replay = Some(snapshot);
+        source_mut.target_ephemeral = Some(ephemeral);
+        Ok(source)
+    }
+
     /// Clones the original store handle without sampling installation state.
     pub(in crate::runtime) fn store(
         &self,

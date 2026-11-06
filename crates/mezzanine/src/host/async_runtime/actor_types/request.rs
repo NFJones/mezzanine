@@ -970,7 +970,7 @@ pub(in crate::host::async_runtime) enum AsyncRuntimeRequest {
         /// Captured preparation identity and finite worker ownership.
         work: crate::runtime::RuntimeManualCompactionPreparation,
         /// Worker-decoded durable source and captured history projection.
-        result: Result<crate::runtime::RuntimeAgentTranscriptSnapshot>,
+        result: Box<Result<crate::runtime::RuntimeAgentTranscriptSnapshot>>,
     },
     /// Adopts immutable compactor request rendering under its original owner.
     CompleteManualCompactionRequest {

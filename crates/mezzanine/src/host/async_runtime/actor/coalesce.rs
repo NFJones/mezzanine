@@ -426,6 +426,7 @@ pub(super) fn runtime_side_effect_is_durable_persistence(effect: &RuntimeSideEff
             | RuntimeSideEffect::PersistTrackedAuditLog { .. }
             | RuntimeSideEffect::PersistTranscriptEntries { .. }
             | RuntimeSideEffect::PersistInitialTranscript { .. }
+            | RuntimeSideEffect::PersistReplayEpoch { .. }
             | RuntimeSideEffect::PersistAgentSessionMetadata { .. }
             | RuntimeSideEffect::PersistPresentationEntries { .. }
             | RuntimeSideEffect::PersistSteeringPresentation { .. }
@@ -479,6 +480,7 @@ pub(super) fn runtime_side_effect_kind(effect: &RuntimeSideEffect) -> &'static s
         RuntimeSideEffect::PersistTrackedAuditLog { .. } => "persist-tracked-audit-log",
         RuntimeSideEffect::PersistTranscriptEntries { .. } => "persist-transcript",
         RuntimeSideEffect::PersistInitialTranscript { .. } => "persist-initial-transcript",
+        RuntimeSideEffect::PersistReplayEpoch { .. } => "persist-replay-epoch",
         RuntimeSideEffect::PersistAgentSessionMetadata { .. } => "persist-agent-session-metadata",
         RuntimeSideEffect::PersistPresentationEntries { .. } => "persist-presentation",
         RuntimeSideEffect::PersistSteeringPresentation { .. } => "persist-steering-presentation",
