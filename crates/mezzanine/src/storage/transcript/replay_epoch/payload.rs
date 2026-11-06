@@ -32,7 +32,7 @@ impl Payload {
     }
 
     /// Rejects malformed references before allocating memory or joining paths.
-    fn validate_format(&self) -> Result<()> {
+    pub(super) fn validate_format(&self) -> Result<()> {
         if self.bytes > SOURCE_LIMIT
             || self.sha256.len() != 64
             || !self

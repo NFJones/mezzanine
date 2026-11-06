@@ -115,6 +115,54 @@ fn runtime_peer_context_preserves_single_head_user_task() {
     service.terminate_all_pane_processes().unwrap();
 }
 
+/// The real pane prompt entry point must keep one head and exact retained native
+/// source after older covered rows and display copies finally append. Zero pane
+/// counts cannot hide the epoch or cause those delayed originals to reenter.
+#[test]
+fn runtime_prompt_deduplicates_delayed_original_epoch_rows() {
+    let fixture = Fixture::new();
+    for row in fixture.delayed_original_rows() {
+        fixture.store.append(&row).unwrap();
+    }
+    let mut service = test_runtime_service();
+    service.set_agent_transcript_store(fixture.store.clone());
+    service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .bind_conversation("%1", CONVERSATION, 0)
+        .unwrap();
+    let context = service
+        .agent_context_for_pane_prompt("%1", "CURRENT_NEW_TASK", 0)
+        .unwrap();
+    assert_eq!(
+        context.chronology()[0],
+        fixture.source.context().chronology()[0]
+    );
+    assert_eq!(
+        context.chronology()[2],
+        fixture.source.context().chronology()[2]
+    );
+    assert!(context.execution_group_is_pending(&fixture.group));
+    assert!(
+        !context
+            .blocks()
+            .iter()
+            .any(|block| block.content.contains("COVERED_SOURCE_SENTINEL")
+                || block.content.contains("MUST_NOT_REENTER"))
+    );
+    assert_eq!(
+        context.chronology().last().unwrap().block().content,
+        "CURRENT_NEW_TASK"
+    );
+    service.terminate_all_pane_processes().unwrap();
+}
+
 /// A real admitted context must retain the supersession witness needed by the
 /// existing durable publisher. Cold reconstruction of identical descriptive
 /// state cannot substitute for that live transition against the pending parent.
@@ -122,12 +170,14 @@ fn runtime_peer_context_preserves_single_head_user_task() {
 /// remain exact and no ordinary append or provider/action is manufactured.
 #[test]
 fn runtime_admitted_epoch_keeps_live_witness_for_durable_publication() {
-    use crate::storage::transcript::replay_epoch::ReplayEpochPublication;
+    use crate::test_support::replay_epoch::source_origin;
     use mez_agent::{
         AgentContext, ReplayCompactionPreparation, ReplayConversationId, ReplayEpochContext,
         ReplayHeadPublication, ReplayTailPolicy,
     };
     let fixture = Fixture::new();
+    let delayed = fixture.delayed_original_rows();
+    fixture.store.append_many(&delayed).unwrap();
     let mut service = test_runtime_service();
     service.set_agent_transcript_store(fixture.store.clone());
     service
@@ -174,14 +224,17 @@ fn runtime_admitted_epoch_keeps_live_witness_for_durable_publication() {
             ReplayCompactionPreparation::Ready(plan) => plan,
             other => panic!("expected historical intent, got {other:?}"),
         };
-        ReplayEpochPublication::prepare(
-            CONVERSATION,
-            Some(fixture.identity.clone()),
-            source,
-            plan,
-            ReplayHeadPublication::Summary("model head 4".into()),
-        )
-        .unwrap()
+        fixture
+            .store
+            .prepare_replay_epoch(
+                source_origin(),
+                CONVERSATION,
+                Some(fixture.identity.clone()),
+                source,
+                plan,
+                ReplayHeadPublication::Summary("model head 4".into()),
+            )
+            .unwrap()
     };
     assert!(fixture.store.publish_replay_epoch(&prepare(&cold)).is_err());
     let proposal = prepare(&live);
@@ -245,6 +298,6 @@ fn runtime_admitted_epoch_keeps_live_witness_for_durable_publication() {
             .content,
         "CURRENT_NEW_TASK"
     );
-    assert!(fixture.store.inspect(CONVERSATION).unwrap().is_empty());
+    assert_eq!(fixture.store.inspect(CONVERSATION).unwrap(), delayed);
     service.terminate_all_pane_processes().unwrap();
 }

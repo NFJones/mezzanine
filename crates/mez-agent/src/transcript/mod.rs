@@ -9,6 +9,8 @@ mod context_event;
 mod context_record;
 mod error;
 mod records;
+mod replay_projection;
+pub use replay_projection::{transcript_display_copy_indices, transcript_zero_projection_indices};
 mod steering;
 mod summary;
 mod terminal_handoff;

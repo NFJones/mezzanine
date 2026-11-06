@@ -11,9 +11,10 @@
 //! their payload but do not retain the mutation lane beyond the coherent read.
 //!
 //! A frozen one-head source carries its own checked identity and membership;
-//! pane row counts cannot select a different projection. Until archive-arrival
-//! custody and pinned ephemeral checkpoints are connected, the typed branch
-//! rejects those unqualified combinations instead of reconstructing raw history.
+//! pane row counts cannot select a different projection. Version-five escrow
+//! qualifies exact delayed source copies under this lease. Runtime projection
+//! must still refuse genuinely new semantic rows without arrival custody; pinned
+//! ephemeral captures and settled archive cursors remain separate integration.
 
 use super::store::{ConversationTranscriptRead, ConversationTranscriptView};
 use super::{AgentCompactionEpoch, AgentPresentationEntry, AgentTranscriptStore};
@@ -142,7 +143,7 @@ impl AgentTranscriptStore {
     ) -> Result<(ConversationReplaySnapshot, T)> {
         let lease = self.acquire_conversation_lock(conversation_id)?;
         self.recover_accounted_appends_for_replay_locked(conversation_id, &lease)?;
-        let replay = self.replay_epoch_snapshot_locked(conversation_id)?;
+        let mut replay = self.replay_epoch_snapshot_locked(conversation_id)?;
         let epoch = if replay.is_some() {
             None
         } else {
@@ -167,7 +168,11 @@ impl AgentTranscriptStore {
                     required,
                     pending,
                     &lease,
-                    Some(&mut stable),
+                    if replay.is_none() {
+                        Some(&mut stable)
+                    } else {
+                        None
+                    },
                 )?,
             None => ConversationTranscriptView {
                 committed: Vec::new(),
@@ -178,13 +183,15 @@ impl AgentTranscriptStore {
             view.committed.retain(|row| row.sequence <= frontier);
             view.logical.retain(|row| row.sequence <= frontier);
         }
-        if replay.is_some() && !view.logical.is_empty() {
-            // The existing v4 storage checkpoint does not yet contain an archive
-            // arrival frontier. Never flatten/resubmit covered rows as fallback;
-            // the original source/custody bridge must qualify those arrivals.
-            return Err(MezError::conflict(
-                "replay archive arrivals lack their original source frontier",
-            ));
+        if let Some(replay) = &mut replay {
+            self.qualify_replay_source_copies_locked(conversation_id, replay, &view.logical)?;
+            // A delayed copy is not a later stable producer. Only genuinely new
+            // rows can supersede the checkpoint's descriptive baseline.
+            for row in &view.logical {
+                if !replay.row_is_qualified_copy(row.sequence) {
+                    stable.observe(row);
+                }
+            }
         }
         let initial_stable_records = if read.is_some() {
             self.initial_row_accounting_locked(conversation_id)?

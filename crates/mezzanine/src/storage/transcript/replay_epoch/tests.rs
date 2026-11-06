@@ -52,6 +52,10 @@ fn prefix() -> AgentContext {
     .unwrap()
 }
 
+fn origin() -> ReplaySourceOrigin {
+    ReplaySourceOrigin::new("original-turn", "original-agent", "original-pane").unwrap()
+}
+
 fn source() -> ReplayEpochContext {
     let mut owner = ReplayEpochContext::new(
         ReplayConversationId::new("conversation-a").unwrap(),
@@ -75,18 +79,22 @@ fn plan(owner: &ReplayEpochContext) -> ReplayCompactionPlan {
 }
 
 fn proposal(
+    fixture: &Fixture,
     owner: &ReplayEpochContext,
     parent: Option<ReplayEpochIdentity>,
     text: &str,
 ) -> ReplayEpochPublication {
-    ReplayEpochPublication::prepare(
-        "conversation-a",
-        parent,
-        owner,
-        plan(owner),
-        ReplayHeadPublication::Summary(text.into()),
-    )
-    .unwrap()
+    fixture
+        .store
+        .prepare_replay_epoch(
+            origin(),
+            "conversation-a",
+            parent,
+            owner,
+            plan(owner),
+            ReplayHeadPublication::Summary(text.into()),
+        )
+        .unwrap()
 }
 
 /// The very first live source has no ordinary archive. Publication persists
@@ -101,14 +109,17 @@ fn first_live_epoch_is_durable_without_ordinary_append() {
         .append_fact("arrival", "retained original bytes")
         .unwrap();
     let unchanged = owner.clone();
-    let prepared = ReplayEpochPublication::prepare(
-        "conversation-a",
-        None,
-        &owner,
-        frozen,
-        ReplayHeadPublication::Summary("original model head".into()),
-    )
-    .unwrap();
+    let prepared = fixture
+        .store
+        .prepare_replay_epoch(
+            origin(),
+            "conversation-a",
+            None,
+            &owner,
+            frozen,
+            ReplayHeadPublication::Summary("original model head".into()),
+        )
+        .unwrap();
     assert!(!fixture.root.join("conversation-a").exists());
     let expected = ReplayEpochPublication::validate_candidate(
         &prepared.envelope,
@@ -181,7 +192,7 @@ fn first_live_epoch_is_durable_without_ordinary_append() {
 fn acknowledged_head_adopts_live_arrivals_and_settles_lost_reply() {
     let fixture = Fixture::new();
     let owner = source();
-    let prepared = proposal(&owner, None, "exact first head");
+    let prepared = proposal(&fixture, &owner, None, "exact first head");
     let mut body = owner.into_owned_context();
     std::thread::scope(|scope| {
         scope
@@ -192,7 +203,7 @@ fn acknowledged_head_adopts_live_arrivals_and_settles_lost_reply() {
                     .unwrap();
                 fixture
                     .store
-                    .publish_replay_epoch_locked(&prepared, |phase| {
+                    .publish_replay_epoch_locked(&prepared, &_lease, |phase| {
                         if phase == Phase::BeforeAcknowledgment {
                             Err(invalid("injected lost reply after commit"))
                         } else {
@@ -220,6 +231,7 @@ fn acknowledged_head_adopts_live_arrivals_and_settles_lost_reply() {
     assert!(ack.adopt(&other.store, &prepared, &mut body).is_err());
     assert_eq!(body, before);
     let competing = proposal(
+        &fixture,
         prepared.prepared.source(),
         None,
         "same epoch different proposal",
@@ -255,7 +267,12 @@ fn acknowledged_head_adopts_live_arrivals_and_settles_lost_reply() {
     )
     .unwrap();
     assert_eq!(live.members()[0].born_in().get(), 0);
-    let second = proposal(&live, Some(ack.identity().clone()), "exact second head");
+    let second = proposal(
+        &fixture,
+        &live,
+        Some(ack.identity().clone()),
+        "exact second head",
+    );
     let mut body = live.into_owned_context();
     let second_ack = fixture.store.publish_replay_epoch(&second).unwrap();
     second_ack
@@ -287,7 +304,7 @@ fn every_publication_fault_preserves_old_or_new_and_exact_retry() {
         ] {
             let fixture = Fixture::new();
             let (parent, mut owner) = if old_exists {
-                let first = proposal(&source(), None, "old head");
+                let first = proposal(&fixture, &source(), None, "old head");
                 fixture.store.publish_replay_epoch(&first).unwrap();
                 let (id, mut owner) = fixture.load();
                 owner.append_fact("new", "new closed source").unwrap();
@@ -299,14 +316,17 @@ fn every_publication_fault_preserves_old_or_new_and_exact_retry() {
             owner
                 .append_fact("arrival", "post-frontier original bytes")
                 .unwrap();
-            let prepared = ReplayEpochPublication::prepare(
-                "conversation-a",
-                parent.clone(),
-                &owner,
-                frozen,
-                ReplayHeadPublication::Summary("next head".into()),
-            )
-            .unwrap();
+            let prepared = fixture
+                .store
+                .prepare_replay_epoch(
+                    origin(),
+                    "conversation-a",
+                    parent.clone(),
+                    &owner,
+                    frozen,
+                    ReplayHeadPublication::Summary("next head".into()),
+                )
+                .unwrap();
             {
                 let _lease = fixture
                     .store
@@ -315,7 +335,7 @@ fn every_publication_fault_preserves_old_or_new_and_exact_retry() {
                 assert!(
                     fixture
                         .store
-                        .publish_replay_epoch_locked(&prepared, |phase| {
+                        .publish_replay_epoch_locked(&prepared, &_lease, |phase| {
                             if phase == fault {
                                 Err(invalid("injected publication failure"))
                             } else {
@@ -370,14 +390,17 @@ fn three_epochs_reuse_payloads_without_collapsing_occurrences() {
         let frozen = plan(&owner);
         owner.append_fact("arrival", "equal payload bytes").unwrap();
         owner.append_fact("arrival", "equal payload bytes").unwrap();
-        let prepared = ReplayEpochPublication::prepare(
-            "conversation-a",
-            parent,
-            &owner,
-            frozen,
-            ReplayHeadPublication::Summary(format!("head {revision}")),
-        )
-        .unwrap();
+        let prepared = fixture
+            .store
+            .prepare_replay_epoch(
+                origin(),
+                "conversation-a",
+                parent,
+                &owner,
+                frozen,
+                ReplayHeadPublication::Summary(format!("head {revision}")),
+            )
+            .unwrap();
         fixture.store.publish_replay_epoch(&prepared).unwrap();
         if first_receipt.is_none() {
             first_receipt = Some(Payload::new(&encode(&prepared.envelope).unwrap()));
@@ -435,8 +458,8 @@ fn three_epochs_reuse_payloads_without_collapsing_occurrences() {
 fn competing_and_late_publications_are_fenced_by_exact_parent() {
     let fixture = Fixture::new();
     let owner = source();
-    let first = proposal(&owner, None, "same model text");
-    let competing = proposal(&owner, None, "same model text");
+    let first = proposal(&fixture, &owner, None, "same model text");
+    let competing = proposal(&fixture, &owner, None, "same model text");
     assert_ne!(first.identity(), competing.identity());
     let barrier = Arc::new(Barrier::new(2));
     let results = std::thread::scope(|scope| {
@@ -466,7 +489,7 @@ fn competing_and_late_publications_are_fenced_by_exact_parent() {
     );
     let (identity, mut owner) = fixture.load();
     owner.append_fact("next", "new source").unwrap();
-    let second = proposal(&owner, Some(identity), "second head");
+    let second = proposal(&fixture, &owner, Some(identity), "second head");
     fixture.store.publish_replay_epoch(&second).unwrap();
     assert!(fixture.store.publish_replay_epoch(winner).is_err());
     assert_eq!(fixture.load().0, second.identity());
@@ -479,7 +502,7 @@ fn competing_and_late_publications_are_fenced_by_exact_parent() {
 #[test]
 fn damaged_required_source_is_explicit_and_exact_missing_payload_can_recover() {
     let fixture = Fixture::new();
-    let prepared = proposal(&source(), None, "actual head bytes");
+    let prepared = proposal(&fixture, &source(), None, "actual head bytes");
     fixture.store.publish_replay_epoch(&prepared).unwrap();
     let directory = fixture.root.join("conversation-a");
     let path = directory
@@ -548,7 +571,7 @@ fn legacy_authority_requires_explicit_transition() {
         .unwrap();
     let path = fixture.root.join("conversation-a").join(MANIFEST_NAME);
     let original = fs::read(&path).unwrap();
-    let prepared = proposal(&source(), None, "new head");
+    let prepared = proposal(&fixture, &source(), None, "new head");
     assert!(fixture.store.publish_replay_epoch(&prepared).is_err());
     assert!(
         fixture
@@ -574,7 +597,7 @@ fn legacy_authority_requires_explicit_transition() {
 fn payload_paths_bounds_and_permissions_are_checked() {
     use std::os::unix::fs::PermissionsExt;
     let fixture = Fixture::new();
-    let prepared = proposal(&source(), None, "private head");
+    let prepared = proposal(&fixture, &source(), None, "private head");
     fixture.store.publish_replay_epoch(&prepared).unwrap();
     let directory = fixture.root.join("conversation-a");
     assert_eq!(
@@ -626,29 +649,36 @@ fn payload_paths_bounds_and_permissions_are_checked() {
 /// rejected during preparation, before any durable mutation can occur.
 #[test]
 fn header_semantics_and_source_namespace_are_checked() {
+    let fixture = Fixture::new();
     let owner = source();
     assert!(
-        ReplayEpochPublication::prepare(
-            "foreign",
-            None,
-            &owner,
-            plan(&owner),
-            ReplayHeadPublication::Summary("head".into())
-        )
-        .is_err()
+        fixture
+            .store
+            .prepare_replay_epoch(
+                origin(),
+                "foreign",
+                None,
+                &owner,
+                plan(&owner),
+                ReplayHeadPublication::Summary("head".into())
+            )
+            .is_err()
     );
     let mut live = owner;
     let frozen = plan(&live);
     live.append_fact("arrival", "original retained tail")
         .unwrap();
-    let prepared = ReplayEpochPublication::prepare(
-        "conversation-a",
-        None,
-        &live,
-        frozen,
-        ReplayHeadPublication::Summary("head".into()),
-    )
-    .unwrap();
+    let prepared = fixture
+        .store
+        .prepare_replay_epoch(
+            origin(),
+            "conversation-a",
+            None,
+            &live,
+            frozen,
+            ReplayHeadPublication::Summary("head".into()),
+        )
+        .unwrap();
     for corrupt in 0..5 {
         let mut envelope = prepared.envelope.clone();
         match corrupt {
@@ -673,7 +703,7 @@ fn header_semantics_and_source_namespace_are_checked() {
 #[test]
 fn required_payload_symlinks_are_refused() {
     let fixture = Fixture::new();
-    let prepared = proposal(&source(), None, "private head");
+    let prepared = proposal(&fixture, &source(), None, "private head");
     fixture.store.publish_replay_epoch(&prepared).unwrap();
     let directory = fixture.root.join("conversation-a");
     let path = directory
@@ -698,7 +728,7 @@ fn required_payload_symlinks_are_refused() {
 #[test]
 fn immutable_source_receipt_is_required_and_exact_retry_settles_it() {
     let fixture = Fixture::new();
-    let prepared = proposal(&source(), None, "durable head");
+    let prepared = proposal(&fixture, &source(), None, "durable head");
     fixture.store.publish_replay_epoch(&prepared).unwrap();
     let bytes = encode(&prepared.envelope).unwrap();
     let path = fixture
@@ -740,7 +770,7 @@ fn immutable_source_receipt_is_required_and_exact_retry_settles_it() {
 #[test]
 fn cold_adoption_finishes_required_marker_after_uncertain_swap() {
     let fixture = Fixture::new();
-    let prepared = proposal(&source(), None, "committed without ACK");
+    let prepared = proposal(&fixture, &source(), None, "committed without ACK");
     {
         let _lease = fixture
             .store
@@ -749,7 +779,7 @@ fn cold_adoption_finishes_required_marker_after_uncertain_swap() {
         assert!(
             fixture
                 .store
-                .publish_replay_epoch_locked(&prepared, |phase| {
+                .publish_replay_epoch_locked(&prepared, &_lease, |phase| {
                     if phase == Phase::BeforeRequiredMarker {
                         Err(invalid("lost worker before marker"))
                     } else {
@@ -812,14 +842,17 @@ fn committed_parent_source_cannot_be_substituted_or_dropped() {
     original
         .append_fact("tail two", "second original retained bytes")
         .unwrap();
-    let first = ReplayEpochPublication::prepare(
-        "conversation-a",
-        None,
-        &original,
-        frozen,
-        ReplayHeadPublication::Summary("original committed head".into()),
-    )
-    .unwrap();
+    let first = fixture
+        .store
+        .prepare_replay_epoch(
+            origin(),
+            "conversation-a",
+            None,
+            &original,
+            frozen,
+            ReplayHeadPublication::Summary("original committed head".into()),
+        )
+        .unwrap();
     fixture.store.publish_replay_epoch(&first).unwrap();
     let (parent, owner) = fixture.load();
     let directory = fixture.root.join("conversation-a");
@@ -848,13 +881,18 @@ fn committed_parent_source_cannot_be_substituted_or_dropped() {
             prefix(),
         )
         .unwrap();
-        let branch = proposal(
-            &altered,
+        let branch = fixture.store.prepare_replay_epoch(
+            origin(),
+            "conversation-a",
             Some(parent.clone()),
-            "self-consistent branch head",
+            &altered,
+            plan(&altered),
+            ReplayHeadPublication::Summary("self-consistent branch head".into()),
         );
         assert!(
-            fixture.store.publish_replay_epoch(&branch).is_err(),
+            branch
+                .and_then(|branch| fixture.store.publish_replay_epoch(&branch))
+                .is_err(),
             "accepted altered committed source case {alteration}"
         );
         assert_eq!(publication_files(&directory), before);
@@ -864,7 +902,7 @@ fn committed_parent_source_cannot_be_substituted_or_dropped() {
     extended
         .append_fact("genuine arrival", "actual extension bytes")
         .unwrap();
-    let next = proposal(&extended, Some(parent), "genuine second epoch");
+    let next = proposal(&fixture, &extended, Some(parent), "genuine second epoch");
     fixture.store.publish_replay_epoch(&next).unwrap();
     assert_eq!(fixture.load().0, next.identity());
 }
@@ -888,14 +926,17 @@ fn actual_lifecycle_extension_is_accepted_but_deserialized_claims_are_refused() 
     let peer = original
         .append_pending_peer("peer", "original peer reference")
         .unwrap();
-    let first = ReplayEpochPublication::prepare(
-        "conversation-a",
-        None,
-        &original,
-        frozen,
-        ReplayHeadPublication::Summary("prior head".into()),
-    )
-    .unwrap();
+    let first = fixture
+        .store
+        .prepare_replay_epoch(
+            origin(),
+            "conversation-a",
+            None,
+            &original,
+            frozen,
+            ReplayHeadPublication::Summary("prior head".into()),
+        )
+        .unwrap();
     fixture.store.publish_replay_epoch(&first).unwrap();
     let (parent, mut current) = fixture.load();
     let live_task = current.begin_instruction_task().unwrap();
@@ -913,6 +954,7 @@ fn actual_lifecycle_extension_is_accepted_but_deserialized_claims_are_refused() 
     assert_eq!(imported.context(), current.context());
     let before = publication_files(&fixture.root.join("conversation-a"));
     let claimed = proposal(
+        &fixture,
         &imported,
         Some(parent.clone()),
         "unwitnessed lifecycle claim",
@@ -922,7 +964,221 @@ fn actual_lifecycle_extension_is_accepted_but_deserialized_claims_are_refused() 
         publication_files(&fixture.root.join("conversation-a")),
         before
     );
-    let actual = proposal(&current, Some(parent), "actual completed lifecycle");
+    let actual = proposal(
+        &fixture,
+        &current,
+        Some(parent),
+        "actual completed lifecycle",
+    );
     fixture.store.publish_replay_epoch(&actual).unwrap();
     assert_eq!(fixture.load().0, actual.identity());
+}
+
+/// The v4 prototype can still expose its frozen empty-archive source, but a
+/// writer cannot invent its missing inherited escrow. V5 also refuses missing
+/// required escrow instead of treating that field as an empty migration.
+#[test]
+fn old_prototype_requires_explicit_original_source_transition() {
+    let fixture = Fixture::new();
+    let first = proposal(&fixture, &source(), None, "prototype head");
+    fixture.store.publish_replay_epoch(&first).unwrap();
+    let mut old = first.envelope.clone();
+    old.manifest.version = 4;
+    old.manifest.source_escrow = None;
+    old.sha256 = digest(&encode(&old.manifest).unwrap());
+    let directory = fixture.root.join("conversation-a");
+    let bytes = encode(&old).unwrap();
+    payload::publish(&directory, &digest(&bytes), &bytes, || Ok(())).unwrap();
+    fs::write(directory.join(MANIFEST_NAME), bytes).unwrap();
+    let (parent, mut restored) = fixture.load();
+    restored.append_fact("new", "new source").unwrap();
+    let before = publication_files(&directory);
+    let result = fixture.store.prepare_replay_epoch(
+        origin(),
+        "conversation-a",
+        Some(parent),
+        &restored,
+        plan(&restored),
+        ReplayHeadPublication::Summary("must not invent old backing".into()),
+    );
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("explicit original-source escrow migration")
+    );
+    assert_eq!(publication_files(&directory), before);
+    old.manifest.version = 5;
+    old.sha256 = digest(&encode(&old.manifest).unwrap());
+    let bytes = encode(&old).unwrap();
+    payload::publish(&directory, &digest(&bytes), &bytes, || Ok(())).unwrap();
+    fs::write(directory.join(MANIFEST_NAME), bytes).unwrap();
+    assert!(
+        fixture
+            .store
+            .load_replay_epoch("conversation-a", prefix())
+            .is_err()
+    );
+}
+
+/// The later writer cannot drop older unsettled occurrences even when its own
+/// summary and current source checkpoint are internally valid. Refusal precedes
+/// new backing writes and leaves the original authority unchanged.
+#[test]
+fn publication_cannot_omit_inherited_unsettled_escrow() {
+    let fixture = Fixture::new();
+    let first = proposal(&fixture, &source(), None, "first head");
+    fixture.store.publish_replay_epoch(&first).unwrap();
+    let (parent, mut current) = fixture.load();
+    current.append_fact("new", "second source").unwrap();
+    let mut next = proposal(&fixture, &current, Some(parent.clone()), "second head");
+    next.envelope
+        .manifest
+        .source_escrow
+        .as_mut()
+        .unwrap()
+        .remove(0);
+    next.envelope.sha256 = digest(&encode(&next.envelope.manifest).unwrap());
+    let directory = fixture.root.join("conversation-a");
+    let before = publication_files(&directory);
+    assert!(fixture.store.publish_replay_epoch(&next).is_err());
+    assert_eq!(publication_files(&directory), before);
+    assert_eq!(fixture.load().0, parent);
+}
+
+/// Reusing a covered local ordering slot for a genuine late task prelude must
+/// not collapse the old occurrence or erase its backing. The actual insertion
+/// and task-completion witnesses qualify the source; the next real publication
+/// retains both distinct originals under their IDs, then reopens one new head.
+#[test]
+fn source_escrow_distinguishes_covered_slots_from_completed_late_preludes() {
+    let fixture = Fixture::new();
+    let mut original = source();
+    for _ in 0..3 {
+        original.append_fact("old", "covered original").unwrap();
+    }
+    let old = original.context().chronology()[2].clone();
+    let first = proposal(&fixture, &original, None, "first head");
+    let ack = fixture.store.publish_replay_epoch(&first).unwrap();
+    let mut body = original.into_owned_context();
+    ack.adopt(&fixture.store, &first, &mut body).unwrap();
+    let task = body
+        .update_replay_owner(|owner| {
+            let task = owner.begin_instruction_task()?;
+            owner.append_instruction(&task, ContextBlock::user_event("user prompt", "new task"))?;
+            Ok(task)
+        })
+        .unwrap();
+    body.insert_task_preludes_before_active_user(vec![ContextBlock::task_prelude(
+        ContextSourceKind::SkillInstruction,
+        "late skill",
+        "actual late prelude",
+    )])
+    .unwrap();
+    let mut current = ReplayEpochContext::from_owned_context(
+        ReplayConversationId::new("conversation-a").unwrap(),
+        body,
+    )
+    .unwrap();
+    let prelude = current.context().chronology()[1].clone();
+    assert_eq!(prelude.sequence(), old.sequence());
+    assert_ne!(
+        prelude.record().occurrence_id(),
+        old.record().occurrence_id()
+    );
+    current
+        .bind_instruction_occurrences(&task, &[prelude.sequence()])
+        .unwrap();
+    current.complete_instruction_task(&task).unwrap();
+    let next = proposal(
+        &fixture,
+        &current,
+        Some(ack.identity().clone()),
+        "next head",
+    );
+    fixture.store.publish_replay_epoch(&next).unwrap();
+    let backing = next.envelope.manifest.source_escrow.as_ref().unwrap();
+    assert!(
+        backing
+            .iter()
+            .any(|item| item.occurrence_id() == old.record().occurrence_id())
+    );
+    assert!(
+        backing
+            .iter()
+            .any(|item| item.occurrence_id() == prelude.record().occurrence_id())
+    );
+    assert!(fixture.load().1.members().is_empty());
+    assert!(fixture.store.inspect("conversation-a").unwrap().is_empty());
+}
+
+/// An existing archive that is absent from the actual original source cannot
+/// be hidden behind an acknowledged new head. Unknown user/control source and
+/// a known occurrence from the wrong producer all refuse before backing writes.
+#[test]
+fn publication_refuses_unqualified_existing_archive_before_acknowledgment() {
+    for alteration in 0..3 {
+        let fixture = Fixture::new();
+        let mut original = source();
+        let group = mez_agent::ContextExecutionGroupId::new("original-group").unwrap();
+        let frontier = original
+            .append_execution_events([mez_agent::ContextConversationAppend::assistant(
+                "assistant",
+                "actual source",
+                group.clone(),
+            )])
+            .unwrap()[0];
+        let capture = original.capture_execution_owner(&group, frontier).unwrap();
+        original.finish_execution_group(&capture).unwrap();
+        let event = original.context().chronology().last().unwrap();
+        let mut row = mez_agent::TranscriptEntry {
+            conversation_id: "conversation-a".into(),
+            sequence: 1,
+            created_at_unix_seconds: 1,
+            role: mez_agent::TranscriptRole::User,
+            turn_id: "original-turn".into(),
+            agent_id: "original-agent".into(),
+            pane_id: "original-pane".into(),
+            content: "unqualified earlier user source".into(),
+        };
+        if alteration == 1 {
+            row.role = mez_agent::TranscriptRole::System;
+            row.agent_id = "replacement-agent".into();
+            row.content = mez_agent::transcript::TranscriptContextRecord::new(
+                mez_agent::TranscriptContextEvent::execution_block_with_metadata(
+                    event.block().source,
+                    event.block().label.clone(),
+                    event.block().content.clone(),
+                    group,
+                    1,
+                    None,
+                )
+                .unwrap(),
+                event.record(),
+                None,
+            )
+            .unwrap()
+            .to_transcript_content()
+            .unwrap();
+        } else if alteration == 2 {
+            row.role = mez_agent::TranscriptRole::System;
+            row.content =
+                mez_agent::TranscriptContextEvent::McpCompactionEpoch.to_transcript_content();
+        }
+        fixture.store.append(&row).unwrap();
+        let prepared = proposal(&fixture, &original, None, "must not hide earlier source");
+        assert!(
+            fixture.store.publish_replay_epoch(&prepared).is_err(),
+            "alteration={alteration}"
+        );
+        assert!(
+            !fixture
+                .root
+                .join("conversation-a")
+                .join(MANIFEST_NAME)
+                .exists()
+        );
+        assert!(!fixture.root.join("conversation-a/epoch-payloads").exists());
+        assert_eq!(fixture.store.inspect("conversation-a").unwrap(), vec![row]);
+    }
 }

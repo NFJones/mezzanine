@@ -138,3 +138,55 @@ fn source_lifecycle_transitions_require_actual_controller_witnesses() {
     assert!(pending.source_lifecycle.handed_off_peers.is_empty());
     assert!(pending.source_lifecycle.closed_groups.is_empty());
 }
+
+/// A real late prelude may use a covered local sequence slot. Completing its
+/// actual task before the next publication must preserve insertion evidence;
+/// descriptive completed checkpoint metadata alone cannot recreate that proof.
+#[test]
+fn completed_late_prelude_keeps_qualified_reserved_slot_source() {
+    let mut current = owner();
+    for _ in 0..4 {
+        current.append_fact("old", "covered original").unwrap();
+    }
+    let reused = current.context().chronology()[2].sequence();
+    current
+        .publish_compaction(
+            plan(&current),
+            ReplayHeadPublication::Summary("first head".into()),
+        )
+        .unwrap();
+    let parent = current.clone();
+    let task = current.begin_instruction_task().unwrap();
+    current
+        .append_instruction(
+            &task,
+            ContextBlock::user_event("user prompt", "actual task"),
+        )
+        .unwrap();
+    let mut body = current.into_owned_context();
+    body.insert_task_preludes_before_active_user(vec![ContextBlock::task_prelude(
+        ContextSourceKind::SkillInstruction,
+        "late skill",
+        "actual late task prelude",
+    )])
+    .unwrap();
+    let mut current = ReplayEpochContext::from_owned_context(
+        ReplayConversationId::new("conversation-a").unwrap(),
+        body,
+    )
+    .unwrap();
+    assert_eq!(current.context().chronology()[1].sequence(), reused);
+    current.validate_source_extension(&parent).unwrap();
+    current
+        .bind_instruction_occurrences(&task, &[reused])
+        .unwrap();
+    current.complete_instruction_task(&task).unwrap();
+    current.validate_source_extension(&parent).unwrap();
+    let cold = ReplayEpochContext::from_checkpoint(
+        ReplayConversationId::new("conversation-a").unwrap(),
+        current.checkpoint().unwrap(),
+        owner().context().clone(),
+    )
+    .unwrap();
+    assert!(cold.validate_source_extension(&parent).is_err());
+}

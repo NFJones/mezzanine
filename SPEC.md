@@ -10911,7 +10911,7 @@ close or verify the renewed interval. Repeated retention of a still-pending
 interval MUST remain idempotent. Cold checkpoints MUST mint fresh pending
 allocations rather than serializing or reconstructing these live tokens.
 
-The single-head storage boundary uses version four of the same authoritative
+The single-head storage writer uses version five of the same authoritative
 compaction sidecar, with an exact parent/publication identity and integrity-bound
 checkpoint references. The storage CAS revision MUST remain distinct from the
 canonical compaction epoch revision so later raw edits need not invent epochs.
@@ -10950,7 +10950,7 @@ carried arrivals so a later publication can qualify them against the persisted
 head; deserializing their descriptive state MUST NOT mint those witnesses.
 Such witnesses MUST be bounded by retained membership and pruned when covered.
 These receipts do not yet connect the actor publication lifecycle or qualify
-ordinary archive arrivals, fork, migration or source-custody settlement.
+genuinely new archive arrivals, fork, migration or source-custody settlement.
 
 Independent source backing
 MUST NOT imply ordinary transcript append acknowledgment. Storage qualification
@@ -10960,10 +10960,42 @@ ordinary archival appends are pending. Such receipts are audit evidence, not a
 second selectable history; ordinary replay MUST resolve only current members.
 Receipt capture is per compaction, not a continuously written second journal.
 Product loader/migration adoption follows storage qualification: legacy authority
-requires an explicit transition, and old readers/writers MUST refuse version
-four rather than silently treating it as raw-history absence.
+requires an explicit transition, and legacy readers/writers MUST refuse the
+one-head formats rather than silently treating them as raw-history absence.
 
-The frozen version-four runtime reader MUST capture the committed identity and
+Version five adds required integrity-bound original-source escrow to that same
+manifest. Preparation MUST capture the actual parent's escrow under the existing
+conversation lease; first no-archive preparation MAY remain pure. Publication
+MUST recover accepted ordinary accounting and qualify existing archive rows
+against the proposed original-source backing before acknowledgment or new payload
+writes. All helpers MUST reuse the held conversation lease. Display suppression
+MUST share the production renderer's original-producer classification, including
+conversation, turn, agent and pane; a matching turn spelling alone is insufficient.
+Publication MUST preserve inherited unsettled occurrences and add only actual current raw
+source, retaining the original turn/agent/pane, occurrence, framing, bytes/costs,
+provider and group ordinal. A newer turn MUST NOT rebind inherited provenance.
+Source escrow MUST exclude model summary occurrences, remain outside provider
+messages, and reuse immutable payload references. Its logical payload bound is
+64 MiB and its metadata shares the 16 MiB manifest bound. Missing/corrupt required
+backing or incomplete inherited escrow MUST refuse rather than acknowledge loss.
+This is per-publication audit backing, not a continuously written second journal.
+
+Late ordinary rows MAY be deduplicated only after exact original provenance,
+occurrence/record, semantic bytes and group/provider/ordinal qualification under
+the same replay lease. The production semantic renderer MUST independently prove
+that remaining display/audit rows contribute no new model blocks. Known copies
+MUST NOT replace the current head/raw chronology, refresh native ownership or
+become later stable-slot producers. Unknown semantic source MUST continue to
+refuse until its arrival custody is connected. The v4 prototype remains a frozen
+empty-archive reader, without an old-format writer; a v5 publication from v4
+MUST visibly require an explicit original-source escrow transition instead of
+inventing missing earlier originals or calling a model on resume. Missing v5
+escrow MUST NOT default to a successful migration. Receipt-qualified escrow
+retirement and the bounded archive cursor remain required implementation work;
+until connected, references are retained and publication refuses the above
+resource bounds rather than silently discarding unsettled source.
+
+The typed runtime reader MUST capture the committed identity and
 checked checkpoint under the same conversation lease. Pane display counts MUST
 NOT trim its canonical membership. Prompt composition MUST preserve the head and
 raw occurrences, including original ordering, accounting and pending native
@@ -10987,9 +11019,9 @@ source MUST advance only its actual append fence and MUST NOT release unrelated
 pending groups, mint completion/ACK rights or infer archive custody. This boundary
 MUST NOT weaken the frozen archive-arrival guard described below.
 
-This frozen-reader stage does not yet qualify ordinary archive arrivals or a
-bounded ephemeral source against version-four authority. Until the original
-source frontier and custody bridge are connected, those combinations MUST refuse
+This reader stage qualifies only exact backed source copies in version five,
+not genuinely new archive arrivals or bounded ephemeral source. Until the
+original source frontier and custody bridge are connected, those combinations MUST refuse
 the affected context read rather than flatten covered source, guess a frontier
 from pane counts, or silently choose a newer parent checkpoint. This restriction
 is an implementation gap, not completion of arrival, fork or migration support.

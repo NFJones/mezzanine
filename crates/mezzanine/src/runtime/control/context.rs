@@ -219,6 +219,41 @@ pub(in crate::runtime) fn runtime_agent_history_epoch_from_snapshot(
     accounting: Option<&crate::storage::transcript::ConversationReplaySnapshot>,
 ) -> RuntimeAgentTranscriptContext {
     if let Some(snapshot) = accounting.and_then(|snapshot| snapshot.replay.as_ref()) {
+        let validation = (|| -> Result<()> {
+            let rendered = runtime_agent_transcript_context_with_ranges_and_mcp_epoch(
+                &inputs.pane_id,
+                &entries,
+                &[],
+                None,
+                false,
+                accounting,
+                Some(&inputs.pending_entries),
+            );
+            rendered.records.ensure_valid()?;
+            if rendered.provider_history_repair_identity.is_some()
+                || !rendered
+                    .records
+                    .rendered_row_records()?
+                    .iter()
+                    .all(|(sequence, _)| snapshot.row_is_qualified_copy(*sequence))
+            {
+                return Err(crate::MezError::conflict(
+                    "new replay archive source requires original arrival custody",
+                ));
+            }
+            Ok(())
+        })();
+        if let Err(error) = validation {
+            let mut records = RuntimeContextRecords::default();
+            records.reject_source(&error);
+            return RuntimeAgentTranscriptContext {
+                source: None,
+                blocks: Vec::new(),
+                records,
+                execution_events: Vec::new(),
+                provider_history_repair_identity: None,
+            };
+        }
         return match RuntimeContextRecords::from_replay_snapshot(
             &inputs.conversation_id,
             snapshot.clone(),
@@ -633,11 +668,7 @@ fn runtime_agent_transcript_context_with_ranges_and_mcp_epoch(
     let mut execution_groups_with_assistant = BTreeSet::new();
     let mut excluded_execution_groups = BTreeSet::new();
     let mut repaired_execution_groups = BTreeSet::new();
-    let mut execution_turns = BTreeSet::new();
     for (index, event) in transcript_events.iter().enumerate() {
-        if matches!(event, Some(TranscriptContextEvent::ExecutionBlock { .. })) {
-            execution_turns.insert(entries[index].turn_id.as_str());
-        }
         let Some(TranscriptContextEvent::ExecutionBlock {
             source,
             execution_group_id: Some(execution_group_id),
@@ -647,6 +678,14 @@ fn runtime_agent_transcript_context_with_ranges_and_mcp_epoch(
         else {
             continue;
         };
+        if accounting
+            .and_then(|snapshot| snapshot.replay.as_ref())
+            .is_some_and(|snapshot| snapshot.row_is_qualified_copy(entries[index].sequence))
+        {
+            // The escrow already checked this exact original ordinal/provider.
+            // It is a source copy, not a new native admission into the base.
+            continue;
+        }
         let previous_ordinal = latest_execution_group_ordinals
             .insert(execution_group_id.clone(), *ordinal)
             .unwrap_or(0_u64);
@@ -671,33 +710,15 @@ fn runtime_agent_transcript_context_with_ranges_and_mcp_epoch(
             Some(TranscriptContextEvent::ExecutionBlock {
                 execution_group_id: Some(group),
                 ..
-            }) if !excluded_execution_groups.contains(group) => Some(group),
+            }) if !excluded_execution_groups.contains(group) => Some(group.clone()),
             _ => None,
         })
         .collect::<BTreeSet<_>>();
-    let mut suppressed_display_entries = BTreeSet::new();
-    let mut seen_execution_groups = BTreeSet::new();
-    let mut last_execution_by_turn = BTreeMap::<&str, usize>::new();
-    for (index, entry) in entries.iter().enumerate() {
-        let Some(TranscriptContextEvent::ExecutionBlock {
-            execution_group_id, ..
-        }) = transcript_events[index].as_ref()
-        else {
-            continue;
-        };
-        if execution_group_id.as_ref().is_some_and(|group| {
-            exact_execution_groups.contains(group) && seen_execution_groups.insert(group.clone())
-        }) {
-            let display_start = last_execution_by_turn
-                .get(entry.turn_id.as_str())
-                .map_or(0, |previous| previous.saturating_add(1));
-            suppressed_display_entries.extend(
-                (display_start..index)
-                    .filter(|candidate| entries[*candidate].turn_id == entry.turn_id),
-            );
-        }
-        last_execution_by_turn.insert(entry.turn_id.as_str(), index);
-    }
+    let suppressed_display_entries = mez_agent::transcript::transcript_zero_projection_indices(
+        entries,
+        &transcript_events,
+        &exact_execution_groups,
+    );
     for (index, entry) in entries.iter().enumerate() {
         if let Some((range_index, range)) = ranges
             .iter()
@@ -833,12 +854,7 @@ fn runtime_agent_transcript_context_with_ranges_and_mcp_epoch(
             records.push_block(&mut blocks, block, entry, source_record, stable);
             continue;
         }
-        if (suppressed_display_entries.contains(&index)
-            && matches!(entry.role, TranscriptRole::Assistant | TranscriptRole::Tool))
-            || (execution_turns.contains(entry.turn_id.as_str())
-                && entry.role == TranscriptRole::System
-                && ProviderTranscriptEvent::from_transcript_content(&entry.content).is_some())
-        {
+        if suppressed_display_entries.contains(&index) {
             continue;
         }
         let Some(content) = runtime_transcript_entry_context_content(entry) else {
@@ -1289,6 +1305,72 @@ mod tests {
     };
     use crate::runtime::{TranscriptEntry, TranscriptRole};
     use crate::storage::transcript::AgentTranscriptStore;
+
+    /// Opaque provider evidence is display-only only beside a valid execution
+    /// from its complete original producer. A repaired/excluded group provides
+    /// no such proof, so its provider evidence must remain in model history.
+    #[test]
+    fn provider_display_requires_valid_group_and_complete_original_producer() {
+        let provider = mez_agent::ProviderTranscriptEvent::OpenAiFunctionCallOutput {
+            call_id: "original-call".into(),
+            output: "original provider evidence".into(),
+        };
+        let expected = provider
+            .sanitized_for_historical_replay()
+            .unwrap()
+            .to_transcript_content();
+        for excluded in [false, true] {
+            for changed_field in [
+                None,
+                Some("conversation"),
+                Some("turn"),
+                Some("agent"),
+                Some("pane"),
+            ] {
+                let mut provider_row = TranscriptEntry {
+                    conversation_id: "conversation".into(),
+                    sequence: 1,
+                    created_at_unix_seconds: 1,
+                    role: TranscriptRole::System,
+                    turn_id: "turn".into(),
+                    agent_id: "agent".into(),
+                    pane_id: "pane".into(),
+                    content: provider.to_transcript_content(),
+                };
+                let execution_row = TranscriptEntry {
+                    sequence: 2,
+                    content: mez_agent::TranscriptContextEvent::execution_block_with_metadata(
+                        mez_agent::ContextSourceKind::TranscriptAssistant,
+                        "assistant",
+                        "canonical assistant",
+                        mez_agent::ContextExecutionGroupId::new("group").unwrap(),
+                        if excluded { 2 } else { 1 },
+                        None,
+                    )
+                    .unwrap()
+                    .to_transcript_content(),
+                    ..provider_row.clone()
+                };
+                match changed_field {
+                    Some("conversation") => provider_row.conversation_id = "other".into(),
+                    Some("turn") => provider_row.turn_id = "other".into(),
+                    Some("agent") => provider_row.agent_id = "other".into(),
+                    Some("pane") => provider_row.pane_id = "other".into(),
+                    _ => {}
+                }
+                let context =
+                    super::runtime_agent_transcript_context("pane", &[provider_row, execution_row]);
+                let retained = context.blocks.iter().any(|block| block.content == expected);
+                assert_eq!(
+                    retained,
+                    excluded || changed_field.is_some(),
+                    "{excluded:?}/{changed_field:?}"
+                );
+                assert_eq!(context.execution_events.len(), usize::from(!excluded));
+                assert_eq!(context.provider_history_repair_identity.is_some(), excluded);
+            }
+        }
+    }
 
     /// Summarized typed events still own and suppress their duplicate display
     /// rows, while exact raw rows in later turns retain their original role.

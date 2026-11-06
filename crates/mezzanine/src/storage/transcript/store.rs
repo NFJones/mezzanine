@@ -3179,7 +3179,10 @@ impl AgentTranscriptStore {
 
     /// Reads a complete committed archive once while validating its chronology.
     /// The caller holds the conversation lock through this scan and merge.
-    fn inspect_validated_transcript(&self, conversation_id: &str) -> Result<Vec<TranscriptEntry>> {
+    pub(super) fn inspect_validated_transcript(
+        &self,
+        conversation_id: &str,
+    ) -> Result<Vec<TranscriptEntry>> {
         let path = self.existing_transcript_path_for(conversation_id)?;
         if !path.exists() {
             return Err(MezError::new(

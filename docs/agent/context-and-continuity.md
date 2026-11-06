@@ -411,7 +411,7 @@ occurrence encoding and handoff representation remain at their existing version.
 These guarantees do not assert that every old session is
 compactable, or that a larger follow-up prompt cannot legitimately need recovery.
 
-The version-four publisher now returns a private acknowledgment for its exact
+The typed epoch publisher returns a private acknowledgment for its exact
 prepared summary and original archive. Its live adoption boundary installs that
 same summary occurrence while retaining current instructions, request metadata,
 pending native ownership and source received during the write. A duplicate reply
@@ -421,6 +421,19 @@ birth revisions, with live-only witnesses for subsequent publication. A cold
 checkpoint cannot recreate those witnesses. This is an implementation boundary;
 the actor publication lifecycle, ordinary archive arrivals, custody settlement,
 fork and migration support remain incomplete for this format.
+
+The current writer uses sidecar version five to carry original-source escrow
+across publications. If ordinary rows arrive after several summaries, replay
+checks their original turn, occurrence, bytes and native metadata before
+deduplicating them. Earlier covered source and display copies do not reenter
+the model, and a delayed stable snapshot does not override the frozen baseline.
+Unknown semantic arrivals still require custody support. Required escrow backing
+is bounded and retained until its receipt-qualified settlement/cursor integration
+is complete; a full bound produces an explicit refusal rather than lost source.
+The earlier version-four prototype still supports frozen empty-archive reads,
+but writing a new epoch requires an explicit original-source escrow transition.
+Resume never asks a model to invent that missing backing. Older prefix/selective
+migration, actual actor publication and fork/cleanup integration remain unfinished.
 
 Native suffix composition can now join a saved pending call to its later result
 using the original execution group and provider. It preserves the saved source

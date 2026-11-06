@@ -75,12 +75,7 @@ impl ReplayEpochContext {
             })
             || events.iter().skip(old_events.len()).any(|arrival| {
                 arrival.sequence().get() < previous.context.next_event_sequence
-                    && !(arrival.semantic_kind() == super::super::ContextSemanticKind::TaskPrelude
-                        && arrival.retention() == ContextRetention::Exact
-                        && self
-                            .source_lifecycle
-                            .inserted_preludes
-                            .contains(&arrival.record().occurrence_id()))
+                    && !self.is_witnessed_late_prelude(arrival)
             })
         {
             return Err(invalid());
@@ -131,6 +126,27 @@ impl ReplayEpochContext {
             }
         }
         Ok(())
+    }
+
+    /// Actual insertion remains qualified after this owner's actual task
+    /// completion. Both private witnesses and historical membership are needed;
+    /// deserializing a summarizable prelude cannot mint either transition.
+    fn is_witnessed_late_prelude(&self, event: &ConversationEvent) -> bool {
+        event.semantic_kind() == super::super::ContextSemanticKind::TaskPrelude
+            && self
+                .source_lifecycle
+                .inserted_preludes
+                .contains(&event.record().occurrence_id())
+            && (event.retention() == ContextRetention::Exact
+                || event.retention() == ContextRetention::Summarizable
+                    && self
+                        .source_lifecycle
+                        .completed_instructions
+                        .contains(&event.record().occurrence_id())
+                    && self
+                        .context
+                        .historical_instruction_events
+                        .contains(&event.sequence()))
     }
 
     /// Keeps ephemeral source proofs bounded by actual retained occurrences.
