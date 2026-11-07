@@ -11240,6 +11240,10 @@ establish its independent restart durability. The parent
 remains unsaved. A changed live owner, including new task admission after an
 idle capture, MUST invalidate adoption of a frozen worker result; deletion of an
 older saved ancestor MUST NOT change the captured source.
+Retained peer inputs without an original authored wire image MUST copy as exact
+descriptive peer references. Original captured native input images MUST remain
+intact; neither projection may synthesize native receive evidence or transport
+acknowledgments.
 Before a source has its first head, a NoStore child MUST instead receive the
 original accounted raw projection and qualified zero-model lifecycle controls
 through its initial copy owner. It MUST remain at canonical epoch zero

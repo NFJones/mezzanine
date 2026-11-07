@@ -563,6 +563,9 @@ A saved `/fork <new-conversation>` uses that same NoStore capture and the existi
 fork transaction to make only its child durable. It does not need the older
 saved ancestor, and does not save the parent. A changed source rejects adoption;
 uncertain adoption retains the target for recovery.
+New peer inputs keep their exact identities and contents in both raw and
+compacted copies. Saving or replaying them does not acknowledge their transport
+again.
 A NoStore source before its first compaction copies accounted raw records and
 their task and execution lifecycle metadata through the initial copy owner. The
 child remains without a summary or compaction manifest until a real rewrite.

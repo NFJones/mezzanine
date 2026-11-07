@@ -393,7 +393,8 @@ pub(super) fn validate_current(
 impl EscrowOccurrence {
     /// Projects an original, still-unarchived occurrence into a copied child's
     /// physical raw history. This is descriptive source, never parent append
-    /// settlement. Native records require their actual captured wire image.
+    /// settlement. Peer references carry no transport authority; actual native
+    /// evidence is preserved only by copying its captured authored wire image.
     pub(super) fn copy_row(&self, content: String, conversation: &str) -> Result<TranscriptEntry> {
         let event = match self.source {
             ContextSourceKind::UserInstruction | ContextSourceKind::TranscriptUser => {
@@ -412,6 +413,7 @@ impl EscrowOccurrence {
                 TranscriptContextEvent::mcp_catalog_snapshot(content, self.sequence)
             }
             ContextSourceKind::LocalMessage
+            | ContextSourceKind::PeerMessage
             | ContextSourceKind::Policy
             | ContextSourceKind::Configuration
             | ContextSourceKind::RuntimeHint

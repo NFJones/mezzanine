@@ -872,6 +872,189 @@ fn nostore_saved_fork_before_first_head_cold_replays_raw_lifecycle() {
     });
 }
 
+/// Two actual arrivals with equal payloads remain distinct untrusted source.
+/// Neither raw nor headed NoStore copies may need a nonexistent parent row or
+/// recover their source from an older saved ancestor after worker dispatch.
+#[test]
+fn nostore_saved_fork_preserves_original_peer_occurrences() {
+    use mez_agent::messaging::Recipient;
+    use mez_agent::transcript::{TranscriptContextEvent, TranscriptContextRecord};
+
+    for headed in [false, true] {
+        let (mut service, store, parent_turn, ancestor) = published_source();
+        native_scenario(&mut service, |service| {
+            if headed {
+                prepare_nostore_parent(service, &store, &parent_turn, &ancestor);
+            } else {
+                let profile = service
+                    .agent_turn_model_profile(&parent_turn)
+                    .unwrap()
+                    .clone();
+                service
+                    .execute_agent_turn_with_provider(
+                        &parent_turn,
+                        &RuntimeBatchProvider {
+                            response: runtime_say_response(
+                                &parent_turn,
+                                "saved ancestor completed",
+                                true,
+                            ),
+                        },
+                        profile,
+                    )
+                    .unwrap();
+                service
+                    .agent_shell_store_mut()
+                    .bind_ephemeral_conversation_with_lineage("%1", "nostore-parent", 0, None)
+                    .unwrap();
+            }
+            let turn = service
+                .start_agent_prompt_turn("%1", "receive peer inputs before copying")
+                .unwrap();
+            let now = crate::runtime::current_unix_millis();
+            let recipient = service
+                .ensure_runtime_message_identity(
+                    "agent-%1",
+                    mez_core::ids::PaneId::opaque("%1"),
+                    "agent",
+                    &[],
+                    now,
+                )
+                .unwrap();
+            service
+                .message_service_mut()
+                .subscribe_from_retained_start(&recipient.agent_id)
+                .unwrap();
+            let sender = service
+                .ensure_runtime_message_identity("agent-copy-source", None, "agent", &[], now)
+                .unwrap();
+            // This isolated fixture exercises actual in-memory receive, not a
+            // manufactured native-root receipt or durable transport ACK.
+            assert!(!service.native_input_storage_required());
+            for ordinal in 1..=2 {
+                service
+                    .message_service_mut()
+                    .accept_at_with_scope(
+                        &sender.agent_id,
+                        Envelope {
+                            protocol: "mmp/1",
+                            id: format!("copy-peer-{ordinal}"),
+                            message_type: "send".into(),
+                            time: format!("runtime:{now}"),
+                            sender: sender.clone(),
+                            recipient: Recipient::Agent(recipient.agent_id.clone()),
+                            correlation_id: None,
+                            ttl_ms: None,
+                            content_type: "text/plain; charset=utf-8".into(),
+                            payload: "identical original peer payload".into(),
+                            extension_fields: Vec::new(),
+                        },
+                        MessageScope::Session,
+                        now,
+                    )
+                    .unwrap();
+            }
+            assert_eq!(
+                service.deliver_pending_runtime_agent_messages(now).unwrap(),
+                2
+            );
+            let profile = service
+                .agent_turn_model_profile(&turn.turn_id)
+                .unwrap()
+                .clone();
+            service
+                .execute_agent_turn_with_provider(
+                    &turn.turn_id,
+                    &RuntimeBatchProvider {
+                        response: runtime_say_response(&turn.turn_id, "peer source settled", true),
+                    },
+                    profile,
+                )
+                .unwrap();
+            let expected = service
+                .frozen_replay_binding("%1", "nostore-parent")
+                .unwrap()
+                .history()
+                .replay_owner()
+                .unwrap()
+                .unwrap();
+            assert_eq!(expected.head().is_some(), headed);
+            let peers = expected
+                .context()
+                .chronology()
+                .iter()
+                .filter(|event| event.block().source == ContextSourceKind::PeerMessage)
+                .collect::<Vec<_>>();
+            assert_eq!(peers.len(), 2);
+            assert_ne!(
+                peers[0].record().occurrence_id(),
+                peers[1].record().occurrence_id()
+            );
+            store.delete(&ancestor).unwrap();
+            service.start_initial_pane_process(Some("cat")).unwrap();
+            let primary = service
+                .session
+                .clients()
+                .iter()
+                .find(|client| service.session.is_attached_primary(&client.id))
+                .unwrap()
+                .id
+                .clone();
+            service
+                .execute_agent_shell_command(&primary, "/fork peer-memory-child")
+                .unwrap();
+            let outcome = service
+                .run_pending_deferred_agent_command_for_tests()
+                .unwrap()
+                .unwrap();
+            assert!(
+                outcome.contains("forked=true"),
+                "headed={headed}: {outcome}"
+            );
+            let count = store.summary("peer-memory-child").unwrap().unwrap().entries;
+            let cold = history_with_count(&store, "peer-memory-child", count.try_into().unwrap());
+            assert_eq!(cold.head().is_some(), headed);
+            assert_eq!(cold.context().chronology(), expected.context().chronology());
+            let mut references = 0;
+            for row in store.inspect("peer-memory-child").unwrap() {
+                if row.role != mez_agent::TranscriptRole::System {
+                    continue;
+                }
+                let Some(record) =
+                    TranscriptContextRecord::from_transcript_content(&row.content).unwrap()
+                else {
+                    continue;
+                };
+                assert!(!matches!(
+                    record.event(),
+                    TranscriptContextEvent::NativePeerMessage { .. }
+                ));
+                if matches!(
+                    record.event(),
+                    TranscriptContextEvent::PromptBoundary {
+                        source: ContextSourceKind::PeerMessage,
+                        ..
+                    }
+                ) {
+                    references += 1;
+                    assert!(peers.iter().any(|peer| peer.record() == record.record()));
+                    assert_eq!(row.turn_id, turn.turn_id);
+                    assert_eq!(row.agent_id, "agent-%1");
+                    assert_eq!(row.pane_id, "%1");
+                }
+            }
+            assert_eq!(references, 2);
+            assert!(service.agent_shell_store().get("%1").unwrap().ephemeral);
+            assert!(
+                !store
+                    .root()
+                    .join("nostore-parent/compaction-epoch.json")
+                    .exists()
+            );
+        });
+    }
+}
+
 /// A subagent's actual first request must inherit the same typed head and raw
 /// records; a zero display count cannot erase its parent's durable authority.
 #[test]
