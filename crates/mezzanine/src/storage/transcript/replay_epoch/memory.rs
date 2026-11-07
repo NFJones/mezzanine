@@ -3,7 +3,8 @@
 //! This immutable value has no files, append owner or execution capability.
 //! Current raw metadata keeps its actual original producer across memory-only
 //! rewrites and turn cleanup. An explicit fork projects those originals into
-//! independent child rows; only that child's initial receipt grants durability.
+//! independent child rows; only that child's actual initial publication owner
+//! (an initial receipt or saved-fork generation) grants durability.
 
 use super::*;
 use mez_agent::{TranscriptEntry, TranscriptRole, transcript::TranscriptContextRecord};

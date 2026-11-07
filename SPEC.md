@@ -11235,14 +11235,23 @@ version-nine memory-origin root binds the source conversation, canonical epoch,
 head and immutable capture identity; it MUST NOT invent a committed source
 publication identity or acknowledge the parent's ordinary appends. Durable and
 memory origins are mutually exclusive. Only the child's actual initial receipt
-and persistence gates establish its independent restart durability. The parent
-remains unsaved. A changed live owner MUST invalidate adoption of a frozen worker
-result; deletion of an older saved ancestor MUST NOT change the captured source.
+and persistence gates, or the existing worker-owned saved-fork generation,
+establish its independent restart durability. The parent
+remains unsaved. A changed live owner, including new task admission after an
+idle capture, MUST invalidate adoption of a frozen worker result; deletion of an
+older saved ancestor MUST NOT change the captured source.
 Before a source has its first head, a NoStore child MUST instead receive the
 original accounted raw projection and qualified zero-model lifecycle controls
-through its initial append receipt. It MUST remain at canonical epoch zero
+through its initial copy owner. It MUST remain at canonical epoch zero
 without a compaction manifest; task boundaries and execution intervals MUST
 survive cold replay without executing the recorded work.
+An explicit saved `/fork` from NoStore MUST use the same frozen source as a
+subagent copy. Its existing fork generation MUST own the child's initial rows,
+accounting, immutable payloads and root under one target mutation lease and the
+existing rollback intent. It MUST NOT create a pretend committed source or an
+unnecessary second append journal. Target collision, cancellation and stale
+actor source MUST preserve the unsaved parent and compensate only the newly
+owned target when non-adoption is proven.
 
 Ordinary typed history reads MUST validate the committed cut's boundary and
 required index references, then decode only its later archive tail. Current

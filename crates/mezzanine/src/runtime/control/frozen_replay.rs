@@ -14,6 +14,139 @@ use std::sync::Arc;
 #[derive(Clone)]
 pub(crate) struct RuntimeFrozenReplayHistory(Arc<Frozen>);
 
+/// Exact NoStore selection shared by saved and subagent copy workers. The
+/// original binding and immutable live checkpoint fence adoption independently
+/// of archive counts. This value grants no execution or persistence authority.
+#[derive(Clone, PartialEq, Eq)]
+pub(crate) struct RuntimeFrozenReplayCopySource {
+    pub(in crate::runtime::control) selected: RuntimeFrozenReplayHistory,
+    binding: Option<RuntimeFrozenReplayHistory>,
+    live: Option<(String, mez_agent::ReplayEpochCheckpoint)>,
+    epoch: u64,
+}
+
+impl std::fmt::Debug for RuntimeFrozenReplayCopySource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("RuntimeFrozenReplayCopySource")
+    }
+}
+
+impl RuntimeFrozenReplayCopySource {
+    /// Captures only actual NoStore ownership, without filesystem access. Raw
+    /// legacy source remains on its existing explicit migration/read path.
+    pub(in crate::runtime) fn capture(
+        service: &RuntimeSessionService,
+        pane: &str,
+    ) -> Result<Option<Self>> {
+        let session = service
+            .agent_shell_store()
+            .get(pane)
+            .ok_or_else(|| MezError::invalid_state("fork source session is unavailable"))?;
+        if !session.ephemeral {
+            return Ok(None);
+        }
+        let binding = service
+            .frozen_replay_binding(pane, &session.session_id)
+            .cloned();
+        let mut live = None;
+        let selected = if let Some(turn_id) = session.running_turn_id.as_deref() {
+            let turn = service
+                .agent_turn_ledger()
+                .turn(turn_id)
+                .filter(|turn| turn.conversation_id == session.session_id)
+                .ok_or_else(|| MezError::conflict("NoStore fork lost its actual active turn"))?;
+            let body = service.agent_turn_replay_context(turn_id).ok_or_else(|| {
+                MezError::conflict("NoStore fork actual live source is unavailable")
+            })?;
+            if body.has_replay_owner() {
+                let selected = RuntimeFrozenReplayHistory::from_live(
+                    ReplayConversationId::new(&session.session_id)?,
+                    body,
+                    service.agent_turn_history_source(turn_id).cloned(),
+                    binding
+                        .as_ref()
+                        .map_or(0, |source| source.archive_frontier()),
+                    binding.as_ref(),
+                    Some((
+                        crate::storage::transcript::replay_epoch::ReplaySourceOrigin::new(
+                            &turn.turn_id,
+                            &turn.agent_id,
+                            &turn.pane_id,
+                        )?,
+                        service.agent_turn_imported_history_sequence_high_water(turn_id),
+                    )),
+                )?;
+                live = Some((
+                    turn_id.to_owned(),
+                    ReplayEpochContext::from_owned_context(
+                        ReplayConversationId::new(&session.session_id)?,
+                        body.clone(),
+                    )?
+                    .checkpoint()?,
+                ));
+                Some(selected)
+            } else if binding.is_some() {
+                return Err(MezError::conflict(
+                    "NoStore live source lost its original canonical owner",
+                ));
+            } else {
+                None
+            }
+        } else {
+            binding.clone()
+        };
+        selected
+            .map(|selected| {
+                Ok::<_, MezError>(Self {
+                    selected: selected.freeze_for_fork()?,
+                    binding,
+                    live,
+                    epoch: service.agent_compaction_epoch(pane),
+                })
+            })
+            .transpose()
+    }
+
+    /// Detects text, lifecycle, turn identity, binding or epoch changes after
+    /// capture, including a new admission while the original parent was idle.
+    /// It does not borrow mutable protection handles as an equality witness.
+    pub(in crate::runtime) fn is_current(
+        &self,
+        service: &RuntimeSessionService,
+        pane: &str,
+    ) -> bool {
+        let conversation = self.selected.conversation();
+        service
+            .agent_shell_store()
+            .get(pane)
+            .is_some_and(|session| {
+                session.ephemeral
+                    && session.session_id == conversation.as_str()
+                    && session.running_turn_id.as_deref()
+                        == self.live.as_ref().map(|(turn, _)| turn.as_str())
+            })
+            && service.agent_compaction_epoch(pane) == self.epoch
+            && service.frozen_replay_binding(pane, conversation.as_str()) == self.binding.as_ref()
+            && self.live.as_ref().is_none_or(|(turn, expected)| {
+                service
+                    .agent_turn_replay_context(turn)
+                    .and_then(|body| {
+                        ReplayEpochContext::from_owned_context(conversation.clone(), body.clone())
+                            .and_then(|owner| owner.checkpoint())
+                            .ok()
+                    })
+                    .as_ref()
+                    == Some(expected)
+            })
+    }
+
+    pub(in crate::runtime) fn fork_source(
+        &self,
+    ) -> Result<crate::storage::transcript::replay_epoch::ReplayForkSource> {
+        self.selected.fork_source()
+    }
+}
+
 struct Frozen {
     conversation: ReplayConversationId,
     history: RuntimeAgentTranscriptContext,

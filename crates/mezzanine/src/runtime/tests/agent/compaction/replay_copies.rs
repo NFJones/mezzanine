@@ -487,6 +487,391 @@ fn saved_replay_fork_command_adopts_a_typed_child_without_authority_or_usage() {
     });
 }
 
+/// Explicitly saving a NoStore fork must use its current frozen body after
+/// deletion of the older saved ancestor, without saving the parent itself.
+#[test]
+fn nostore_saved_fork_command_publishes_latest_frozen_source() {
+    let (mut service, store, parent_turn, ancestor) = published_source();
+    native_scenario(&mut service, |service| {
+        let (expected, _) = prepare_nostore_parent(service, &store, &parent_turn, &ancestor);
+        store.delete(&ancestor).unwrap();
+        service.start_initial_pane_process(Some("cat")).unwrap();
+        let primary = service
+            .session
+            .clients()
+            .iter()
+            .find(|client| service.session.is_attached_primary(&client.id))
+            .unwrap()
+            .id
+            .clone();
+        let parent_actions = service
+            .agent_shell_store()
+            .get("%1")
+            .unwrap()
+            .allowed_actions
+            .clone();
+        service.set_agent_enabled_actions(mez_agent::AllowedActionSet::say_only());
+        service
+            .execute_agent_shell_command(&primary, "/fork saved-memory-copy")
+            .unwrap();
+        let settled = service
+            .run_pending_deferred_agent_command_for_tests()
+            .unwrap()
+            .unwrap();
+        assert!(settled.contains("forked=true"), "{settled}");
+        let child = service
+            .agent_shell_store()
+            .sessions()
+            .find(|session| session.session_id == "saved-memory-copy")
+            .unwrap()
+            .clone();
+        assert!(!child.ephemeral);
+        assert_eq!(
+            child.allowed_actions,
+            Some(mez_agent::AllowedActionSet::say_only())
+        );
+        assert_eq!(
+            service
+                .agent_shell_store()
+                .get("%1")
+                .unwrap()
+                .allowed_actions,
+            parent_actions
+        );
+        assert!(
+            service
+                .agent_token_usage_for_conversation("saved-memory-copy")
+                .is_empty()
+        );
+        let current = execute_runtime_agent_prompt_history_work(
+            service.prepare_runtime_agent_prompt_history_work(&child.pane_id),
+        )
+        .unwrap()
+        .replay_owner()
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            current.context().chronology(),
+            expected.context().chronology()
+        );
+        assert_eq!(
+            history(&store, "saved-memory-copy").context().chronology(),
+            expected.context().chronology()
+        );
+        assert!(
+            !store
+                .root()
+                .join("nostore-parent/compaction-epoch.json")
+                .exists()
+        );
+        assert!(service.agent_shell_store().get("%1").unwrap().ephemeral);
+    });
+}
+
+/// Uses the real deferred command claim and worker, leaving its original
+/// adoption lease alive for the caller's second-round-trip assertions.
+fn publish_nostore_saved_command(
+    service: &mut RuntimeSessionService,
+    primary: &mez_core::ids::ClientId,
+) -> (
+    crate::runtime::RuntimeAgentCommandAsyncWork,
+    std::sync::Arc<crate::runtime::commands::SavedForkRead>,
+) {
+    service
+        .execute_agent_shell_command(primary, "/fork pending-memory-copy")
+        .unwrap();
+    let dispatch = service
+        .take_pending_deferred_agent_commands()
+        .pop()
+        .unwrap();
+    let work = service
+        .claim_agent_command_work(
+            &dispatch.primary_client_id,
+            &dispatch.pane_id,
+            &dispatch.command,
+            &dispatch.input,
+            dispatch.claim_generation,
+            &dispatch.conversation_id,
+        )
+        .unwrap()
+        .unwrap();
+    let crate::runtime::RuntimeAgentCommandAsyncOutcome::SavedFork(read) =
+        RuntimeSessionService::execute_deferred_agent_command(&work)
+    else {
+        panic!("original saved-fork worker must publish")
+    };
+    (work, read)
+}
+
+/// Equal text and conversation IDs do not make a replacement NoStore binding
+/// the original command's source. Proven non-adoption rolls back only its child.
+#[test]
+fn nostore_saved_fork_stale_binding_compensates_only_its_target() {
+    let (mut service, store, parent_turn, ancestor) = published_source();
+    native_scenario(&mut service, |service| {
+        let (expected, _) = prepare_nostore_parent(service, &store, &parent_turn, &ancestor);
+        service.start_initial_pane_process(Some("cat")).unwrap();
+        let primary = service
+            .session
+            .clients()
+            .iter()
+            .find(|client| service.session.is_attached_primary(&client.id))
+            .unwrap()
+            .id
+            .clone();
+        let (work, read) = publish_nostore_saved_command(service, &primary);
+        let original = service
+            .frozen_replay_binding("%1", "nostore-parent")
+            .unwrap()
+            .clone();
+        service
+            .bind_ephemeral_replay_history("%1", "nostore-parent", &original, None)
+            .unwrap();
+        let reply = service.complete_agent_command_work(
+            &work,
+            crate::runtime::RuntimeAgentCommandAsyncOutcome::SavedFork(read.clone()),
+        );
+        let outcome = RuntimeSessionService::finish_saved_fork_worker(&read, reply);
+        assert!(matches!(
+            outcome,
+            crate::runtime::RuntimeAgentCommandAsyncOutcome::Failed { .. }
+        ));
+        let projected =
+            RuntimeSessionService::project_deferred_agent_command_outcome(&work, outcome).unwrap();
+        service
+            .complete_agent_command_work(&work, projected)
+            .unwrap();
+        assert!(!store.root().join("pending-memory-copy").exists());
+        assert_eq!(
+            service
+                .frozen_replay_binding("%1", "nostore-parent")
+                .unwrap()
+                .history()
+                .replay_owner()
+                .unwrap()
+                .unwrap()
+                .context()
+                .chronology(),
+            expected.context().chronology()
+        );
+        assert!(
+            !store
+                .root()
+                .join("nostore-parent/compaction-epoch.json")
+                .exists()
+        );
+        assert!(store.root().join(ancestor).exists());
+    });
+}
+
+/// Starting a real new task advances an idle parent's canonical source without
+/// replacing its retained frozen binding or performing another compaction.
+/// Both copy consumers must fence that transition before actor adoption.
+#[test]
+fn nostore_saved_fork_parent_admission_invalidates_idle_capture() {
+    let (mut service, store, parent_turn, ancestor) = published_source();
+    native_scenario(&mut service, |service| {
+        prepare_nostore_parent(service, &store, &parent_turn, &ancestor);
+        service.start_initial_pane_process(Some("cat")).unwrap();
+        let primary = service
+            .session
+            .clients()
+            .iter()
+            .find(|client| service.session.is_attached_primary(&client.id))
+            .unwrap()
+            .id
+            .clone();
+        assert!(
+            service
+                .agent_shell_store()
+                .get("%1")
+                .unwrap()
+                .running_turn_id
+                .is_none()
+        );
+        let (work, read) = publish_nostore_saved_command(service, &primary);
+        let original = service
+            .frozen_replay_binding("%1", "nostore-parent")
+            .unwrap()
+            .clone();
+        let epoch = service.agent_compaction_epoch("%1");
+        let next = service
+            .start_agent_prompt_turn("%1", "NEW_TASK_AFTER_FORK_CAPTURE")
+            .unwrap();
+        assert!(service.frozen_replay_binding("%1", "nostore-parent") == Some(&original));
+        assert_eq!(service.agent_compaction_epoch("%1"), epoch);
+        let reply = service.complete_agent_command_work(
+            &work,
+            crate::runtime::RuntimeAgentCommandAsyncOutcome::SavedFork(read.clone()),
+        );
+        let outcome = RuntimeSessionService::finish_saved_fork_worker(&read, reply);
+        assert!(matches!(
+            outcome,
+            crate::runtime::RuntimeAgentCommandAsyncOutcome::Failed { .. }
+        ));
+        let projected =
+            RuntimeSessionService::project_deferred_agent_command_outcome(&work, outcome).unwrap();
+        service
+            .complete_agent_command_work(&work, projected)
+            .unwrap();
+        assert!(!store.root().join("pending-memory-copy").exists());
+        assert!(
+            service.agent_turn_contexts()[&next.turn_id]
+                .chronology()
+                .iter()
+                .any(|event| event.block().content == "NEW_TASK_AFTER_FORK_CAPTURE")
+        );
+        assert!(!store.root().join("nostore-parent").exists());
+    });
+}
+
+/// A lost actor reply cannot prove non-adoption. The exact saved child remains
+/// readable and the duplicate fence refuses a late attempt to allocate a pane.
+#[test]
+fn nostore_saved_fork_lost_reply_retains_independent_history() {
+    let (mut service, store, parent_turn, ancestor) = published_source();
+    native_scenario(&mut service, |service| {
+        let (expected, _) = prepare_nostore_parent(service, &store, &parent_turn, &ancestor);
+        service.start_initial_pane_process(Some("cat")).unwrap();
+        let primary = service
+            .session
+            .clients()
+            .iter()
+            .find(|client| service.session.is_attached_primary(&client.id))
+            .unwrap()
+            .id
+            .clone();
+        let (work, read) = publish_nostore_saved_command(service, &primary);
+        let outcome = RuntimeSessionService::finish_saved_fork_worker(
+            &read,
+            Err(MezError::invalid_state("synthetic lost actor reply")),
+        );
+        assert!(matches!(
+            outcome,
+            crate::runtime::RuntimeAgentCommandAsyncOutcome::Failed { .. }
+        ));
+        assert!(
+            service
+                .complete_agent_command_work(
+                    &work,
+                    crate::runtime::RuntimeAgentCommandAsyncOutcome::SavedFork(read)
+                )
+                .is_err()
+        );
+        service.agent.cancel_agent_command("%1");
+        store.delete(&ancestor).unwrap();
+        assert_eq!(
+            history(&store, "pending-memory-copy")
+                .context()
+                .chronology(),
+            expected.context().chronology()
+        );
+        assert!(
+            !store
+                .root()
+                .join("nostore-parent/compaction-epoch.json")
+                .exists()
+        );
+    });
+}
+
+/// Before any summary exists, the saved command must persist the actual raw
+/// task and original closed execution state, without inventing a summary head.
+#[test]
+fn nostore_saved_fork_before_first_head_cold_replays_raw_lifecycle() {
+    let (mut service, store, turn) =
+        provider_limit_replay::recovery_source("old saved task", "old saved final", 10);
+    native_scenario(&mut service, |service| {
+        let profile = service.agent_turn_model_profile(&turn).unwrap().clone();
+        service
+            .execute_agent_turn_with_provider(
+                &turn,
+                &RuntimeBatchProvider {
+                    response: runtime_say_response(&turn, "saved ancestor completed", true),
+                },
+                profile,
+            )
+            .unwrap();
+        service
+            .agent_shell_store_mut()
+            .bind_ephemeral_conversation_with_lineage("%1", "raw-command-parent", 0, None)
+            .unwrap();
+        let memory = service
+            .start_agent_prompt_turn("%1", "RAW_MEMORY_TASK")
+            .unwrap();
+        let profile = service
+            .agent_turn_model_profile(&memory.turn_id)
+            .unwrap()
+            .clone();
+        service
+            .execute_agent_turn_with_provider(
+                &memory.turn_id,
+                &RuntimeBatchProvider {
+                    response: runtime_say_response(&memory.turn_id, "RAW_MEMORY_FINAL", true),
+                },
+                profile,
+            )
+            .unwrap();
+        let expected = service
+            .frozen_replay_binding("%1", "raw-command-parent")
+            .unwrap()
+            .history()
+            .replay_owner()
+            .unwrap()
+            .unwrap();
+        assert!(expected.head().is_none());
+        service.start_initial_pane_process(Some("cat")).unwrap();
+        let primary = service
+            .session
+            .clients()
+            .iter()
+            .find(|client| service.session.is_attached_primary(&client.id))
+            .unwrap()
+            .id
+            .clone();
+        service
+            .execute_agent_shell_command(&primary, "/fork raw-memory-child")
+            .unwrap();
+        let outcome = service
+            .run_pending_deferred_agent_command_for_tests()
+            .unwrap()
+            .unwrap();
+        assert!(outcome.contains("forked=true"), "{outcome}");
+        let count = store
+            .summary("raw-memory-child")
+            .unwrap()
+            .unwrap()
+            .entries
+            .try_into()
+            .unwrap();
+        let cold = history_with_count(&store, "raw-memory-child", count);
+        assert!(cold.head().is_none());
+        assert_eq!(cold.context().chronology(), expected.context().chronology());
+        assert!(
+            cold.checkpoint()
+                .unwrap()
+                .with_stable_records(Vec::new())
+                .unwrap()
+                == expected
+                    .checkpoint()
+                    .unwrap()
+                    .for_conversation_copy(
+                        mez_agent::ReplayConversationId::new("raw-memory-child").unwrap()
+                    )
+                    .unwrap()
+                    .with_stable_records(Vec::new())
+                    .unwrap()
+        );
+        assert!(
+            !store
+                .root()
+                .join("raw-memory-child/compaction-epoch.json")
+                .exists()
+        );
+        assert!(!store.root().join("raw-command-parent").exists());
+    });
+}
+
 /// A subagent's actual first request must inherit the same typed head and raw
 /// records; a zero display count cannot erase its parent's durable authority.
 #[test]

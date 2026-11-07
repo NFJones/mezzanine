@@ -280,15 +280,15 @@ impl AgentTranscriptStore {
 
     /// Publishes a child's actual initial rows, original accounting and
     /// full row/execution images in one SQL transaction. The caller has synced
-    /// these exact rows under its retained initial receipt and conversation
-    /// lease. This grants no acknowledgment of the parent's ordinary append.
-    pub(super) fn publish_initial_receipt_accounting_locked(
+    /// these exact rows under its initial receipt or saved-fork generation and
+    /// conversation lease. It never acknowledges the parent's ordinary append.
+    pub(super) fn publish_initial_copy_accounting_locked(
         &self,
         batch: &super::TranscriptAppendBatch,
     ) -> Result<()> {
         let payload = batch
             .initial_row_accounting()
-            .ok_or_else(|| MezError::invalid_state("initial receipt row accounting is missing"))?;
+            .ok_or_else(|| MezError::invalid_state("initial copy row accounting is missing"))?;
         self.publish_initial_accounting_locked(
             batch.conversation_id(),
             batch.entries(),

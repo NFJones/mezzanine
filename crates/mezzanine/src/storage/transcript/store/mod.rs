@@ -6,6 +6,8 @@
 //! once an epoch represents a prefix or selective range, its raw source cannot
 //! change independently of that authoritative replay projection.
 
+mod frozen_copy;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self as std_fs, OpenOptions};
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
@@ -4780,16 +4782,7 @@ impl AgentTranscriptStore {
         // Both identities are locked, so receipt admission/retirement cannot
         // race this fence. Settlement belongs to the existing persistence owner.
         self.ensure_fork_receipts_settled(source_conversation_id, target_conversation_id)?;
-        if self.conversation_exists(target_conversation_id)?
-            || self.fork_target_recovery_artifacts_exist(target_conversation_id)?
-            || (catalog::catalog_path(self).exists()
-                && catalog::record_for_mutation(self, target_conversation_id)?.is_some())
-            || self
-                .read_named_sessions_index()?
-                .contains_key(target_conversation_id)
-        {
-            return Err(MezError::conflict("target conversation already exists"));
-        }
+        self.check_fork_target_available_locked(target_conversation_id)?;
         if self.active_delete_pending(source_conversation_id)? {
             return Err(MezError::invalid_state(
                 "source conversation publication or deletion is incomplete",

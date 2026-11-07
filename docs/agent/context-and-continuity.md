@@ -559,10 +559,14 @@ permissions and starts without its parent's incurred usage. Its own initial
 persistence gates establish independent saved history; deleting the parent's
 older saved ancestor does not invalidate the child. Later parent progress
 invalidates a pending capture's adoption rather than leaking into its contents.
+A saved `/fork <new-conversation>` uses that same NoStore capture and the existing
+fork transaction to make only its child durable. It does not need the older
+saved ancestor, and does not save the parent. A changed source rejects adoption;
+uncertain adoption retains the target for recovery.
 A NoStore source before its first compaction copies accounted raw records and
-their task and execution lifecycle metadata through the initial receipt. The
+their task and execution lifecycle metadata through the initial copy owner. The
 child remains without a summary or compaction manifest until a real rewrite.
-Its initial receipt commits full row fingerprints with the original accounting,
+Its initial publication commits row fingerprints with the original accounting,
 so the first rewrite can index those rows and later history reads can skip them.
 
 An empty audit archive can still have a typed head and retained model members.

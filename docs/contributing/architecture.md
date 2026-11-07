@@ -109,7 +109,7 @@ Optional display caches such as the published agent objective use a separate
 nonessential ownership boundary. `runtime/persistence/objective_mirrors.rs`
 keeps the actor-side coalescing queue of bounded newest values, revision
 tokens, clone-local deletion fences, and content-free status;
-`storage/transcript/store.rs` retains unchanged suppression, recovery, atomic
+`storage/transcript/store/mod.rs` retains unchanged suppression, recovery, atomic
 write, and finite nonblocking lock admission; and
 `host/async_runtime/side_effects.rs` polls the lane from the existing
 persistence service without awaiting it inside essential settlement. At most one

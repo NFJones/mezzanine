@@ -51,22 +51,7 @@ pub(crate) struct RuntimeSubagentForkReadWork {
     ephemeral_source: bool,
     pending: crate::runtime::persistence::RuntimePendingTranscriptContext,
     prompt_cache_lineage_id: String,
-    memory: Option<std::sync::Arc<RuntimeSubagentForkMemorySource>>,
-}
-
-/// Actual NoStore selection and its actor freshness fences. No source store is
-/// read, and current live ownership is frozen to descriptive data before work.
-#[derive(Clone, PartialEq, Eq)]
-struct RuntimeSubagentForkMemorySource {
-    selected: super::super::RuntimeFrozenReplayHistory,
-    binding: Option<super::super::RuntimeFrozenReplayHistory>,
-    live: Option<(String, mez_agent::ReplayEpochCheckpoint)>,
-}
-
-impl std::fmt::Debug for RuntimeSubagentForkMemorySource {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("RuntimeSubagentForkMemorySource")
-    }
+    memory: Option<std::sync::Arc<super::super::RuntimeFrozenReplayCopySource>>,
 }
 
 impl PartialEq for RuntimeSubagentForkReadWork {
@@ -122,24 +107,10 @@ impl RuntimeSubagentForkReadWork {
             })
             || service.agent_compaction_epoch(&self.parent_pane_id) != self.parent_compaction_epoch
             || service.persistence.cloned_transcript_store().as_ref() != Some(&self.store)
-            || self.memory.as_ref().is_some_and(|memory| {
-                service.frozen_replay_binding(&self.parent_pane_id, &self.parent_conversation_id)
-                    != memory.binding.as_ref()
-                    || memory.live.as_ref().is_some_and(|(turn, body)| {
-                        service
-                            .agent_turn_replay_context(turn)
-                            .and_then(|current| {
-                                mez_agent::ReplayEpochContext::from_owned_context(
-                                    memory.selected.conversation().clone(),
-                                    current.clone(),
-                                )
-                                .and_then(|owner| owner.checkpoint())
-                                .ok()
-                            })
-                            .as_ref()
-                            != Some(body)
-                    })
-            })
+            || self
+                .memory
+                .as_ref()
+                .is_some_and(|memory| !memory.is_current(service, &self.parent_pane_id))
         {
             return Err(MezError::invalid_state(
                 "fork parent conversation changed or history advanced before snapshot acceptance",
@@ -438,71 +409,9 @@ impl RuntimeSessionService {
             .ephemeral_transcript_source_conversation_id
             .clone()
             .unwrap_or_else(|| parent_session.session_id.clone());
-        let memory = if parent_session.ephemeral {
-            let binding = self
-                .frozen_replay_binding(parent_pane_id.as_str(), &parent_session.session_id)
-                .cloned();
-            let mut live = None;
-            let selected = if let Some(turn_id) = parent_session.running_turn_id.as_deref() {
-                let turn = self
-                    .agent_turn_ledger()
-                    .turn(turn_id)
-                    .filter(|turn| turn.conversation_id == parent_session.session_id)
-                    .ok_or_else(|| {
-                        MezError::conflict("NoStore fork lost its actual active turn")
-                    })?;
-                let body = self.agent_turn_replay_context(turn_id).ok_or_else(|| {
-                    MezError::conflict("NoStore fork actual live source is unavailable")
-                })?;
-                if body.has_replay_owner() {
-                    let selected = super::super::RuntimeFrozenReplayHistory::from_live(
-                        mez_agent::ReplayConversationId::new(&parent_session.session_id)?,
-                        body,
-                        self.agent_turn_history_source(turn_id).cloned(),
-                        binding
-                            .as_ref()
-                            .map_or(0, |source| source.archive_frontier()),
-                        binding.as_ref(),
-                        Some((
-                            crate::storage::transcript::replay_epoch::ReplaySourceOrigin::new(
-                                &turn.turn_id,
-                                &turn.agent_id,
-                                &turn.pane_id,
-                            )?,
-                            self.agent_turn_imported_history_sequence_high_water(turn_id),
-                        )),
-                    )?;
-                    live = Some((
-                        turn_id.to_owned(),
-                        mez_agent::ReplayEpochContext::from_owned_context(
-                            mez_agent::ReplayConversationId::new(&parent_session.session_id)?,
-                            body.clone(),
-                        )?
-                        .checkpoint()?,
-                    ));
-                    Some(selected)
-                } else if binding.is_some() {
-                    return Err(MezError::conflict(
-                        "NoStore live source lost its original canonical owner",
-                    ));
-                } else {
-                    None
-                }
-            } else {
-                binding.clone()
-            };
-            selected
-                .map(|selected| {
-                    Ok::<_, MezError>(std::sync::Arc::new(RuntimeSubagentForkMemorySource {
-                        selected: selected.freeze_for_fork()?,
-                        binding,
-                        live,
-                    }))
-                })
-                .transpose()?
-        } else {
-            None
-        };
+        let memory =
+            super::super::RuntimeFrozenReplayCopySource::capture(self, parent_pane_id.as_str())?
+                .map(std::sync::Arc::new);
         if memory.is_none()
             && self
                 .persistence
@@ -621,31 +530,7 @@ impl RuntimeSubagentForkSnapshot {
         created_at: u64,
     ) -> Result<Option<crate::storage::transcript::TranscriptAppendBatch>> {
         if let Some(replay) = &self.replay {
-            let rows = self
-                .entries
-                .iter()
-                .cloned()
-                .enumerate()
-                .map(|(index, mut row)| {
-                    row.conversation_id = child_cid.into();
-                    row.sequence = index as u64 + 1;
-                    row.created_at_unix_seconds = created_at;
-                    row
-                })
-                .collect();
-            return Ok(Some(
-                crate::storage::transcript::TranscriptAppendBatch::initial_replay(
-                    replay.for_target(child_cid)?,
-                    rows,
-                )?
-                .with_initial_row_accounting(
-                    crate::storage::transcript::InitialTranscriptRowAccounting::new(
-                        self.row_origins.clone(),
-                        self.row_records.clone(),
-                    )
-                    .with_stable_records(self.stable_records.clone())?,
-                )?,
-            ));
+            return Ok(Some(replay.initial_batch(child_cid, created_at)?));
         }
         let prefix = self
             .compaction_epoch

@@ -112,7 +112,7 @@ pub(crate) use external_enrollment::ExternalSourceEndWork;
 pub(crate) use external_enrollment::ExternalSourceRenewalWork;
 pub(crate) use external_enrollment::ExternalSourceRetirementWork;
 pub(crate) use external_usage::ExternalUsageWork;
-pub(crate) use frozen_replay::RuntimeFrozenReplayHistory;
+pub(crate) use frozen_replay::{RuntimeFrozenReplayCopySource, RuntimeFrozenReplayHistory};
 pub(crate) use history_source::RuntimeAgentHistorySource;
 mod external_usage_requests;
 pub(crate) use external_usage_requests::ExternalUsageBeginWork;

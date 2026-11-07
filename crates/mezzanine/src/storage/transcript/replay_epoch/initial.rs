@@ -13,6 +13,7 @@ use mez_agent::{TranscriptEntry, TranscriptRole};
 /// Pure worker capture before the actor allocates a child conversation.
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) struct ReplayForkSource {
+    conversation: String,
     origin: Option<ForkOrigin>,
     checkpoint: ReplayEpochCheckpoint,
     escrow: Vec<escrow::EscrowOccurrence>,
@@ -198,6 +199,7 @@ impl ReplayForkSource {
             rows.push(row);
         }
         Ok(ReplayForkSource {
+            conversation: owner.conversation_id().as_str().into(),
             origin,
             checkpoint: owner.checkpoint()?,
             escrow: items,
@@ -209,6 +211,57 @@ impl ReplayForkSource {
 }
 
 impl ReplayForkSource {
+    /// The captured conversation is descriptive provenance, never a promise
+    /// that an unsaved source has storage or restart authority.
+    pub(crate) fn conversation_id(&self) -> &str {
+        &self.conversation
+    }
+
+    /// Builds one independent initial copy from this immutable selection.
+    /// Canonical members keep their IDs/costs; controls get only structural
+    /// row placement. The caller's real persistence owner must commit it.
+    pub(crate) fn initial_batch(
+        &self,
+        target: &str,
+        created_at: u64,
+    ) -> Result<super::super::TranscriptAppendBatch> {
+        use super::super::{InitialTranscriptRowAccounting, TranscriptAppendBatch};
+        if target == self.conversation {
+            return Err(MezError::conflict(
+                "fork target must differ from its source",
+            ));
+        }
+        let mut origins = BTreeMap::new();
+        let mut records = BTreeMap::new();
+        let mut rows = Vec::with_capacity(self.rows.len());
+        for original in &self.rows {
+            let mut row = original.clone();
+            row.conversation_id = target.into();
+            row.created_at_unix_seconds = created_at;
+            if let Some(record) = TranscriptContextRecord::from_transcript_content(&row.content)? {
+                origins.insert(row.sequence, record.record().occurrence_id());
+                records.insert(row.sequence, record.record());
+            } else {
+                origins.insert(
+                    row.sequence,
+                    *self
+                        .control_origins
+                        .get(&row.sequence)
+                        .ok_or_else(|| invalid("copied raw control placement is missing"))?,
+                );
+            }
+            rows.push(row);
+        }
+        let accounting = InitialTranscriptRowAccounting::new(origins, records)
+            .with_stable_records(Some(self.checkpoint.stable_records().to_vec()))?;
+        let batch = if self.has_head() {
+            TranscriptAppendBatch::initial_replay(self.for_target(target)?, rows)?
+        } else {
+            TranscriptAppendBatch::rows(rows)?
+        };
+        batch.with_initial_row_accounting(accounting)
+    }
+
     /// A raw capture has no summary identity or compaction manifest to copy.
     pub(crate) fn has_head(&self) -> bool {
         self.origin.is_some()

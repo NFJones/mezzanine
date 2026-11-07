@@ -99,10 +99,10 @@ impl AgentTranscriptStore {
         Ok(())
     }
 
-    /// Reconciles a journal-owned initial bundle without releasing its mutation
-    /// lane. Ordinary batches remain journal-only until their usual worker
-    /// appends them. No historical actions or terminal handoffs are executed.
-    pub(super) fn reconcile_initial_projection_locked(
+    /// Reconciles an initial receipt or saved-fork-owned bundle without releasing
+    /// its mutation lane. Ordinary batches remain journal-only until their
+    /// usual worker appends them. No historical actions or handoffs execute.
+    pub(in crate::storage::transcript) fn reconcile_initial_projection_locked(
         &self,
         batch: &TranscriptAppendBatch,
         lease: &File,
@@ -126,7 +126,7 @@ impl AgentTranscriptStore {
             ));
         }
         if batch.initial_replay_epoch().is_some() {
-            // The durable receipt already owns this fresh target. Guard it
+            // The initial receipt or fork generation owns this fresh target. Guard it
             // before any partial rows: losing that required owner must refuse
             // replay rather than silently select an incomplete raw archive.
             self.require_compaction_epoch_locked(batch.conversation_id())?;
@@ -134,11 +134,11 @@ impl AgentTranscriptStore {
         let rows = batch.entries().iter().collect::<Vec<_>>();
         self.append_conversation_rows_locked(batch.conversation_id(), &rows, lease)?;
         if let Some(initial) = batch.initial_replay_epoch() {
-            self.publish_initial_receipt_accounting_locked(batch)?;
+            self.publish_initial_copy_accounting_locked(batch)?;
             return self.publish_initial_replay_locked(initial);
         }
         if batch.initial_row_accounting().is_some() {
-            self.publish_initial_receipt_accounting_locked(batch)?;
+            self.publish_initial_copy_accounting_locked(batch)?;
         }
         let Some(epoch) = batch.initial_compaction_epoch() else {
             return Ok(());
@@ -160,7 +160,7 @@ impl AgentTranscriptStore {
 
     /// Requires both exact replay bytes and the durable required-state marker
     /// before retiring initial ownership, including a metadata-only receipt.
-    pub(super) fn verify_initial_projection_committed_locked(
+    pub(in crate::storage::transcript) fn verify_initial_projection_committed_locked(
         &self,
         batch: &TranscriptAppendBatch,
     ) -> Result<()> {
