@@ -1,7 +1,7 @@
 //! Immutable single-head source backing and expected-parent publication.
 //!
 //! The existing conversation mutation lease serializes this writer with archive,
-//! editing and persistence owners. Version seven extends the same authoritative
+//! editing and persistence owners. Version nine extends the same authoritative
 //! compaction sidecar, never a parallel selectable history. Payloads are private,
 //! content-addressed immutable files; retained bytes are reused across epochs.
 //! A prepared proposal retains its original publication identity and summary so
@@ -15,8 +15,8 @@
 //! its frozen empty-archive boundary and requires an explicit escrow transition.
 //! Checked authored arrivals retain original producer rows through replay and
 //! subsequent publication; source classification never grants append rights.
-//! Typed actor publication and NoStore copies share the canonical owner. Initial
-//! raw/manual cutover, remaining arrival custody, saved forks, legacy migration
+//! Typed actor publication and NoStore copies share the canonical owner. Explicit
+//! legacy raw/manual migration, remaining arrival custody
 //! and cleanup remain consumers; legacy-only APIs refuse these formats.
 
 use super::AgentTranscriptStore;
@@ -33,10 +33,37 @@ use std::{
     os::unix::fs::OpenOptionsExt,
 };
 
+mod copy;
+mod initial;
+pub(crate) use initial::{InitialReplayEpoch, ReplayForkSource};
+mod memory;
+pub(crate) use memory::ReplayMemorySource;
 mod cursor;
 mod escrow;
 mod payload;
 pub(crate) use escrow::ReplaySourceOrigin;
+/// Qualifies recorded lifecycle metadata from the actual leased raw/typed view.
+/// Covered source remains escrow proof only, never selected model membership.
+pub(crate) fn qualify_execution_controls(
+    snapshot: Option<&ReplayEpochSnapshot>,
+    conversation: &str,
+    rows: &[mez_agent::TranscriptEntry],
+) -> Result<Vec<mez_agent::ReplayExecutionState>> {
+    if snapshot.is_some_and(|snapshot| snapshot.conversation_id() != conversation) {
+        return Err(invalid("execution control has a foreign replay snapshot"));
+    }
+    let empty = BTreeMap::new();
+    escrow::qualify_controls(
+        snapshot
+            .and_then(|snapshot| snapshot.escrow.as_deref())
+            .unwrap_or_default(),
+        conversation,
+        rows,
+        snapshot
+            .map(|snapshot| &snapshot.execution_sources)
+            .unwrap_or(&empty),
+    )
+}
 use payload::{Payload, bounded_read, digest, sync_directory};
 #[cfg(test)]
 mod tests;
@@ -60,18 +87,36 @@ pub(crate) struct ReplayEpochIdentity {
 
 /// Coherent committed identity and checked source from one mutation lease.
 /// It is immutable history, not a live owner or an execution capability.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub(crate) struct ReplayEpochSnapshot {
     root: std::path::PathBuf,
     conversation_id: String,
     identity: ReplayEpochIdentity,
+    /// A planned initial receipt is descriptive source, not a durable ACK.
+    /// Preparation must recover that exact receipt and check its real parent.
+    pending_initial: bool,
     checkpoint: ReplayEpochCheckpoint,
     escrow: Option<Vec<escrow::EscrowOccurrence>>,
+    /// Immutable source-only copy dependencies resolved by the original worker.
+    copy_backing: BTreeMap<String, String>,
     qualified_rows: BTreeSet<u64>,
     /// Original new authored rows from this same checked logical view. The
     /// runtime must qualify pending accounting/native source before adoption.
     arrivals: Vec<mez_agent::TranscriptEntry>,
     archive_cut: Option<cursor::ArchiveCut>,
+    /// Bounded original execution descriptors checked under this snapshot's
+    /// mutation lease and archive cut. They cannot select covered model source.
+    execution_sources:
+        BTreeMap<ContextBlockOccurrenceId, super::row_origins::IndexedExecutionSource>,
+}
+
+impl std::fmt::Debug for ReplayEpochSnapshot {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ReplayEpochSnapshot")
+            .field("conversation_id", &self.conversation_id)
+            .field("identity", &self.identity)
+            .finish_non_exhaustive()
+    }
 }
 
 impl ReplayEpochSnapshot {
@@ -130,11 +175,23 @@ struct Manifest {
     /// Ordinary replay never expands these covered occurrences into raw input.
     source_checkpoint: ReplayEpochCheckpoint<Payload>,
     checkpoint: ReplayEpochCheckpoint<Payload>,
+    /// A new conversation's independently backed root, never a summary rewrite.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    copy_origin: Option<copy::CopyOrigin>,
+    /// Frozen in-memory source; never a committed parent publication identity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    memory_copy_origin: Option<copy::MemoryCopyOrigin>,
     /// Absent only in the old v4 prototype, which has no inherited escrow proof.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     source_escrow: Option<Vec<escrow::EscrowOccurrence>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     archive_cut: Option<cursor::ArchiveCut>,
+}
+
+impl Manifest {
+    fn is_copy(&self) -> bool {
+        self.copy_origin.is_some() || self.memory_copy_origin.is_some()
+    }
 }
 
 /// Integrity covers all semantic framing, source references and membership.
@@ -162,6 +219,7 @@ pub(crate) struct ReplayEpochPublication {
 pub(crate) struct ReplaySourceCapture<'a> {
     origin: ReplaySourceOrigin,
     history: Option<&'a ReplayEpochSnapshot>,
+    raw_rows: &'a [mez_agent::TranscriptEntry],
 }
 
 /// Exact backing inputs retained with the proposal through uncertain I/O.
@@ -181,6 +239,22 @@ impl ReplaySourceOrigin {
         ReplaySourceCapture {
             origin: self,
             history,
+            raw_rows: &[],
+        }
+    }
+
+    /// Captures original accounted raw images before a first head exists.
+    /// Preparation verifies their framing against current canonical members and
+    /// the physical archive under the existing mutation lease. This does not
+    /// settle pending ordinary appends or grant execution completion.
+    pub(crate) fn capture_raw(
+        self,
+        rows: &[mez_agent::TranscriptEntry],
+    ) -> ReplaySourceCapture<'_> {
+        ReplaySourceCapture {
+            origin: self,
+            history: None,
+            raw_rows: rows,
         }
     }
 }
@@ -212,15 +286,39 @@ impl ReplayEpochCommit {
             root: self.root.clone(),
             conversation_id: proposal.envelope.manifest.conversation_id.clone(),
             identity: self.identity.clone(),
+            pending_initial: false,
             checkpoint: proposal
                 .prepared
                 .candidate()
                 .checkpoint()
                 .map_err(context_error)?,
             escrow: proposal.envelope.manifest.source_escrow.clone(),
+            copy_backing: escrow::copy_backing(
+                proposal
+                    .envelope
+                    .manifest
+                    .source_escrow
+                    .as_deref()
+                    .unwrap_or_default(),
+                proposal.prepared.candidate(),
+                |reference| {
+                    proposal
+                        .payloads
+                        .get(&reference.sha256)
+                        .cloned()
+                        .map(Ok)
+                        .unwrap_or_else(|| {
+                            payload::read(
+                                &self.root.join(&proposal.envelope.manifest.conversation_id),
+                                reference,
+                            )
+                        })
+                },
+            )?,
             qualified_rows: BTreeSet::new(),
             arrivals: Vec::new(),
             archive_cut: proposal.envelope.manifest.archive_cut.clone(),
+            execution_sources: BTreeMap::new(),
         })
     }
 
@@ -312,7 +410,7 @@ impl ReplayEpochPublication {
             &mut payloads,
         )?;
         let manifest = Manifest {
-            version: 7,
+            version: 9,
             conversation_id: conversation_id.to_owned(),
             epoch_revision: candidate.revision().get(),
             revision: expected_parent
@@ -328,6 +426,8 @@ impl ReplayEpochPublication {
             frozen_arrival_frontier: frontier,
             source_checkpoint,
             checkpoint,
+            copy_origin: None,
+            memory_copy_origin: None,
             source_escrow: Some(escrow::publication_source(
                 &backing.inherited,
                 source,
@@ -373,6 +473,11 @@ impl ReplayEpochPublication {
             Ok(content.clone())
         };
         let candidate = envelope.restore(prefix, resolve)?;
+        if envelope.manifest.is_copy() {
+            // Header validation binds both checkpoints to the same frozen
+            // copied projection. A copy performs no semantic replacement.
+            return Ok(candidate);
+        }
         let mut source_bytes = 0usize;
         let source = ReplayEpochContext::from_checkpoint(
             ReplayConversationId::new(envelope.manifest.conversation_id.clone())
@@ -488,7 +593,16 @@ impl AgentTranscriptStore {
             None
         };
         if current.as_ref().map(Envelope::identity) != expected_parent {
-            return Err(MezError::conflict("replay preparation parent changed"));
+            return Err(MezError::conflict(
+                if capture
+                    .history
+                    .is_some_and(|history| history.pending_initial)
+                {
+                    "initial replay receipt has not established its planned parent"
+                } else {
+                    "replay preparation parent changed"
+                },
+            ));
         }
         if capture.history.is_some_and(|capture| {
             capture.root != self.root || Some(&capture.identity) != expected_parent.as_ref()
@@ -507,9 +621,21 @@ impl AgentTranscriptStore {
                 }
                 None => &[],
             };
-        let arrivals = capture
-            .history
-            .map_or_else(Vec::new, |capture| capture.arrivals.clone());
+        if !capture.raw_rows.is_empty()
+            && (expected_parent.is_some()
+                || capture
+                    .raw_rows
+                    .iter()
+                    .any(|row| row.conversation_id != conversation_id))
+        {
+            return Err(MezError::conflict(
+                "raw replay capture has a different conversation or parent",
+            ));
+        }
+        let arrivals = capture.history.map_or_else(
+            || capture.raw_rows.to_vec(),
+            |capture| capture.arrivals.clone(),
+        );
         let source_backing =
             escrow::qualification_source(inherited, source, &capture.origin, &arrivals)?;
         let archive = cursor::ArchiveCapture::prepare(
@@ -626,11 +752,22 @@ impl AgentTranscriptStore {
             root: self.root.clone(),
             conversation_id: conversation_id.to_owned(),
             identity: envelope.identity(),
+            pending_initial: false,
             checkpoint,
             escrow: envelope.manifest.source_escrow.clone(),
+            copy_backing: escrow::copy_backing(
+                envelope
+                    .manifest
+                    .source_escrow
+                    .as_deref()
+                    .unwrap_or_default(),
+                &owner,
+                |reference| payload::read(&directory, reference),
+            )?,
             qualified_rows: BTreeSet::new(),
             arrivals: Vec::new(),
             archive_cut: envelope.manifest.archive_cut.clone(),
+            execution_sources: BTreeMap::new(),
         }))
     }
 
@@ -653,15 +790,22 @@ impl AgentTranscriptStore {
             }
             return Ok(());
         };
+        let execution_sources = self.indexed_execution_sources_locked(
+            conversation_id,
+            rows,
+            snapshot.covered_archive_frontier(),
+        )?;
         let qualified = escrow::qualify_rows(
             escrow,
             conversation_id,
             rows,
+            &execution_sources,
             escrow::RowAdmission::AuthoredArrivals,
             |reference| payload::read(&self.root.join(conversation_id), reference),
         )?;
         snapshot.qualified_rows = qualified.copies;
         snapshot.arrivals = qualified.arrivals;
+        snapshot.execution_sources = execution_sources;
         Ok(())
     }
 
@@ -902,10 +1046,16 @@ impl AgentTranscriptStore {
             }
             Err(error) => return Err(error),
         };
+        let execution_sources = self.indexed_execution_sources_locked(
+            &manifest.conversation_id,
+            &rows,
+            proposal.backing.archive.cut.through_sequence(),
+        )?;
         escrow::qualify_rows(
             manifest.source_escrow.as_deref().unwrap_or_default(),
             &manifest.conversation_id,
             &rows,
+            &execution_sources,
             escrow::RowAdmission::KnownCopies,
             |reference| {
                 if let Some(content) = proposal.payloads.get(&reference.sha256) {
@@ -1027,13 +1177,29 @@ impl Envelope {
     /// retire them. Validate unique payloads without decoding old model history.
     fn verify_escrow_payloads(&self, directory: &std::path::Path) -> Result<()> {
         let mut checked = BTreeSet::new();
-        for item in self
-            .manifest
-            .source_escrow
-            .as_deref()
-            .unwrap_or_default()
+        let items = self.manifest.source_escrow.as_deref().unwrap_or_default();
+        let mut current = BTreeSet::new();
+        self.manifest
+            .checkpoint
+            .clone()
+            .try_map_payloads(|id, payload| {
+                if id != self.manifest.head {
+                    current.insert(id);
+                }
+                Ok::<_, MezError>(payload)
+            })?;
+        let dependencies = if items.is_empty() {
+            Vec::new()
+        } else {
+            escrow::copy_selection(items, &current)?
+        };
+        let required = dependencies
             .iter()
-            .filter(|item| !item.is_archived())
+            .map(|item| item.occurrence_id())
+            .collect::<BTreeSet<_>>();
+        for item in items
+            .iter()
+            .filter(|item| !item.is_archived() || required.contains(&item.occurrence_id()))
         {
             if checked.insert(&item.payload().sha256) {
                 payload::read(directory, item.payload())?;
@@ -1053,13 +1219,30 @@ impl Envelope {
     /// Verifies complete header integrity and expected-parent revision shape.
     fn validate(&self, conversation_id: &str) -> Result<()> {
         let manifest = &self.manifest;
+        if let Some(origin) = &manifest.copy_origin {
+            origin.validate(manifest)?;
+        }
+        if let Some(origin) = &manifest.memory_copy_origin {
+            origin.validate(manifest)?;
+        }
+        let initial_epoch = manifest
+            .copy_origin
+            .as_ref()
+            .map(copy::CopyOrigin::epoch_revision)
+            .or_else(|| {
+                manifest
+                    .memory_copy_origin
+                    .as_ref()
+                    .map(|origin| origin.epoch_revision)
+            })
+            .unwrap_or(1);
         if !matches!(
             (
                 manifest.version,
                 manifest.source_escrow.is_some(),
                 manifest.archive_cut.is_some()
             ),
-            (4, false, false) | (5, true, false) | (6 | 7, true, true)
+            (4, false, false) | (5, true, false) | (6..=9, true, true)
         ) || manifest.conversation_id != conversation_id
             || manifest.revision == 0
             || manifest.epoch_revision == 0
@@ -1072,13 +1255,15 @@ impl Envelope {
             || manifest
                 .expected_parent
                 .as_ref()
-                .map_or(Some(1), |parent| parent.epoch_revision.checked_add(1))
+                .map_or(Some(initial_epoch), |parent| {
+                    parent.epoch_revision.checked_add(1)
+                })
                 != Some(manifest.epoch_revision)
             || manifest
                 .frozen_arrival_frontier
                 .is_none_or(|frontier| frontier == 0)
             || manifest.expected_parent.is_some() != manifest.parent_head.is_some()
-            || manifest.covered.is_empty()
+            || (manifest.covered.is_empty() && !manifest.is_copy())
             || manifest
                 .covered
                 .iter()

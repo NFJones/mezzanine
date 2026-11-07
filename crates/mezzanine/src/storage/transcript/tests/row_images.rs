@@ -96,6 +96,48 @@ fn row_images_bind_every_original_field_after_actual_receipt_settlement() {
     );
 }
 
+/// A raw initial receipt owns exact child images without a summary manifest.
+/// A cold lookup must retain every source field, including the original turn.
+#[test]
+fn initial_raw_receipt_publishes_original_images_without_a_summary_head() {
+    let fixture = Fixture::new();
+    let original = fixture.batch(1);
+    let initial = TranscriptAppendBatch::rows(original.entries().to_vec())
+        .unwrap()
+        .with_initial_row_accounting(
+            crate::storage::transcript::InitialTranscriptRowAccounting::new(
+                original.row_accounting().unwrap().origins().clone(),
+                BTreeMap::new(),
+            ),
+        )
+        .unwrap();
+    fixture
+        .store
+        .accept_transcript_append_receipt(&initial, 1)
+        .unwrap();
+    fixture
+        .store
+        .settle_transcript_append_receipt(&initial, 1)
+        .unwrap();
+    let cold = AgentTranscriptStore::new(&fixture.root);
+    let _lease = cold.acquire_conversation_lock(CID).unwrap();
+    assert_eq!(
+        cold.indexed_row_origins_locked(CID, initial.entries())
+            .unwrap(),
+        Some(initial.initial_row_accounting().unwrap().origins().clone())
+    );
+    let mut changed = initial.entries()[0].clone();
+    changed.turn_id = "different-source-producer".into();
+    assert!(cold.indexed_row_origins_locked(CID, &[changed]).is_err());
+    assert!(
+        !fixture
+            .root
+            .join(CID)
+            .join("compaction-epoch.json")
+            .exists()
+    );
+}
+
 /// Old persisted placement/cost/initial schemas acquire no guessed fingerprints
 /// during lookup. A new real receipt migrates only its actual rows, leaving old
 /// unindexed rows explicitly unavailable for a future bounded source proof.
@@ -160,6 +202,13 @@ fn row_images_migrate_old_schemas_only_through_original_append_ownership() {
     fixture
         .store
         .settle_transcript_append_receipt(&initial, 1)
+        .unwrap();
+    // Materialize the actual old schema. New initial receipts now own full
+    // images; removing their index is explicit fixture construction, never a
+    // production lookup or an inferred backfill of legacy source.
+    fixture
+        .index()
+        .execute_batch("DROP TABLE row_digests; DROP TABLE row_digest_meta; PRAGMA user_version=3;")
         .unwrap();
     assert_eq!(
         fixture

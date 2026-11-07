@@ -61,10 +61,7 @@ impl RuntimeSessionService {
         {
             return Ok(());
         }
-        let Some(body) = self
-            .completion_replay_context_for_retirement(turn_id)
-            .cloned()
-        else {
+        let Some(body) = self.agent_turn_replay_context(turn_id).cloned() else {
             return Ok(());
         };
         self.retain_ephemeral_replay_body(
@@ -72,6 +69,15 @@ impl RuntimeSessionService {
             &turn.conversation_id,
             &body,
             self.agent_turn_history_source(turn_id).cloned(),
+            Some((
+                crate::storage::transcript::replay_epoch::ReplaySourceOrigin::new(
+                    &turn.turn_id,
+                    &turn.agent_id,
+                    &turn.pane_id,
+                )?,
+                self.agent_turn_imported_history_sequence_high_water(turn_id),
+            )),
+            None,
         )
     }
 

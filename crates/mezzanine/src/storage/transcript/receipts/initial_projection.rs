@@ -30,7 +30,16 @@ impl AgentTranscriptStore {
         }
         let epoch = batch.initial_compaction_epoch();
         let accounting = batch.initial_row_accounting();
-        let current = self.compaction_epoch_locked(batch.conversation_id())?;
+        let initial = batch.initial_replay_epoch();
+        let typed_committed = initial
+            .map(|initial| self.initial_replay_matches_locked(initial))
+            .transpose()?
+            .unwrap_or(false);
+        let current = if initial.is_some() {
+            None
+        } else {
+            self.compaction_epoch_locked(batch.conversation_id())?
+        };
         if current
             .as_ref()
             .is_some_and(|existing| epoch.is_none_or(|epoch| !existing.matches_expected(epoch)))
@@ -43,6 +52,7 @@ impl AgentTranscriptStore {
             receipt.conversation_id == batch.conversation_id()
                 && receipt.has_initial_authority()
                 && (receipt.compaction_epoch.as_ref() != epoch
+                    || receipt.initial_replay_epoch.as_ref() != initial
                     || receipt.initial_row_accounting.as_ref() != accounting
                     || rows != batch.entries())
         }) {
@@ -53,9 +63,19 @@ impl AgentTranscriptStore {
         let owned_partial = pending.iter().any(|(_, receipt, rows)| {
             receipt.conversation_id == batch.conversation_id()
                 && receipt.compaction_epoch.as_ref() == epoch
+                && receipt.initial_replay_epoch.as_ref() == initial
                 && receipt.initial_row_accounting.as_ref() == accounting
                 && rows == batch.entries()
         });
+        if initial.is_some()
+            && !typed_committed
+            && !owned_partial
+            && self.compaction_epoch_marker_is_committed(batch.conversation_id())?
+        {
+            return Err(MezError::conflict(
+                "required initial typed root has lost its original receipt",
+            ));
+        }
         let current_accounting =
             self.preflight_initial_row_accounting_locked(batch.conversation_id(), accounting)?;
         let durable_initial = if accounting.is_some() {
@@ -90,7 +110,12 @@ impl AgentTranscriptStore {
         if !batch.has_initial_authority() {
             return Ok(());
         }
-        let previous = self.compaction_epoch_locked(batch.conversation_id())?;
+        let previous = if let Some(initial) = batch.initial_replay_epoch() {
+            self.initial_replay_matches_locked(initial)?;
+            None
+        } else {
+            self.compaction_epoch_locked(batch.conversation_id())?
+        };
         if previous.as_ref().is_some_and(|existing| {
             batch
                 .initial_compaction_epoch()
@@ -100,14 +125,20 @@ impl AgentTranscriptStore {
                 "initial transcript projection changed before publication",
             ));
         }
+        if batch.initial_replay_epoch().is_some() {
+            // The durable receipt already owns this fresh target. Guard it
+            // before any partial rows: losing that required owner must refuse
+            // replay rather than silently select an incomplete raw archive.
+            self.require_compaction_epoch_locked(batch.conversation_id())?;
+        }
         let rows = batch.entries().iter().collect::<Vec<_>>();
         self.append_conversation_rows_locked(batch.conversation_id(), &rows, lease)?;
-        if let Some(accounting) = batch.initial_row_accounting() {
-            self.publish_initial_row_accounting_locked(
-                batch.conversation_id(),
-                batch.entries(),
-                accounting,
-            )?;
+        if let Some(initial) = batch.initial_replay_epoch() {
+            self.publish_initial_receipt_accounting_locked(batch)?;
+            return self.publish_initial_replay_locked(initial);
+        }
+        if batch.initial_row_accounting().is_some() {
+            self.publish_initial_receipt_accounting_locked(batch)?;
         }
         let Some(epoch) = batch.initial_compaction_epoch() else {
             return Ok(());
@@ -133,6 +164,9 @@ impl AgentTranscriptStore {
         &self,
         batch: &TranscriptAppendBatch,
     ) -> Result<()> {
+        if let Some(initial) = batch.initial_replay_epoch() {
+            self.verify_initial_replay_locked(initial)?;
+        }
         if let Some(accounting) = batch.initial_row_accounting() {
             self.verify_initial_row_accounting_locked(
                 batch.conversation_id(),
@@ -164,6 +198,7 @@ impl AgentTranscriptStore {
         for (_, receipt, rows) in receipts {
             let payload = (
                 receipt.compaction_epoch.as_ref(),
+                receipt.initial_replay_epoch.as_ref(),
                 receipt.initial_row_accounting.as_ref(),
                 rows,
             );
@@ -177,9 +212,11 @@ impl AgentTranscriptStore {
                 ));
             }
         }
-        for (conversation_id, (epoch, accounting, _)) in projections {
+        for (conversation_id, (epoch, initial, accounting, _)) in projections {
             let _lease = self.acquire_conversation_lock(conversation_id)?;
-            if self
+            if let Some(initial) = initial {
+                self.initial_replay_matches_locked(initial)?;
+            } else if self
                 .compaction_epoch_locked(conversation_id)?
                 .as_ref()
                 .is_some_and(|current| epoch.is_none_or(|epoch| !current.matches_expected(epoch)))

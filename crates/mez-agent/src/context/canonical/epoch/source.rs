@@ -120,6 +120,19 @@ impl ReplayEpochContext {
             }
         }
         let frontiers = group_frontiers(events);
+        if previous
+            .context
+            .execution_intervals
+            .iter()
+            .any(|(group, interval)| {
+                self.context
+                    .execution_intervals
+                    .get(group)
+                    .is_none_or(|current| !current.extends(interval))
+            })
+        {
+            return Err(invalid());
+        }
         for group in previous.context.pending_execution_groups.keys() {
             if !self.context.execution_group_is_pending(group)
                 && frontiers.get(group).is_none_or(|frontier| {

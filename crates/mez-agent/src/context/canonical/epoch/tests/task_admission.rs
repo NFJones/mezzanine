@@ -2,6 +2,52 @@
 
 use super::*;
 
+/// Original live task input must be usable by immutable publication backing
+/// after explicit supersession. It remains exact while active, and an unfinished
+/// execution still stops the prefix at its own source boundary.
+#[test]
+fn live_task_supersession_makes_only_the_completed_instruction_prefix_backable() {
+    let mut source = owner();
+    source
+        .admit_instruction_task(
+            vec![ContextBlock::user_event("user prompt", "first live task")],
+            &[],
+            &[],
+            0,
+        )
+        .unwrap();
+    assert!(matches!(
+        source
+            .prepare_compaction(ReplayTailPolicy::new(1000, 0).unwrap())
+            .unwrap(),
+        ReplayCompactionPreparation::NoWork(ReplayCompactionNoWork::ProtectedPrefix)
+    ));
+    let group = ContextExecutionGroupId::new("unfinished-original-execution").unwrap();
+    source
+        .append_execution_events([ContextConversationAppend::assistant(
+            "assistant",
+            "still pending",
+            group.clone(),
+        )])
+        .unwrap();
+    source
+        .admit_instruction_task(
+            vec![ContextBlock::user_event("user prompt", "second live task")],
+            &[],
+            &[],
+            0,
+        )
+        .unwrap();
+    let frozen = plan(&source);
+    assert_eq!(frozen.summary_input().len(), 1);
+    assert_eq!(frozen.summary_input()[0].block().content, "first live task");
+    assert!(source.context().execution_group_is_pending(&group));
+    assert_eq!(
+        source.context().chronology()[2].retention(),
+        ContextRetention::Exact
+    );
+}
+
 #[test]
 fn recorded_task_admission_preserves_original_source_and_native_protection() {
     let mut body = owner().into_owned_context();
@@ -53,8 +99,8 @@ fn recorded_task_admission_preserves_original_source_and_native_protection() {
         .restore_instruction_task(suffix, &records, &[], 1, &sequences)
         .unwrap();
     restored.validate_source_extension(&base).unwrap();
-    // A checked cold source is recoverable for publication; ordinary live
-    // admission alone does not yet establish that physical backing.
+    // Actual live admission and checked cold source can both supply immutable
+    // publication backing; neither claims ordinary append acknowledgment.
     for (live, restored) in live
         .context()
         .chronology()

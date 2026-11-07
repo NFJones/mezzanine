@@ -18,7 +18,15 @@ struct Frozen {
     conversation: ReplayConversationId,
     history: RuntimeAgentTranscriptContext,
     archive_frontier: u64,
+    /// Fork provenance is optional capability data. A local capture rejection
+    /// must not discard valid NoStore model continuity or fail another rewrite.
+    memory: Option<FrozenMemoryCapture>,
 }
+
+type FrozenMemoryCapture = std::result::Result<
+    Arc<crate::storage::transcript::replay_epoch::ReplayMemorySource>,
+    (crate::MezErrorKind, String),
+>;
 
 impl std::fmt::Debug for RuntimeFrozenReplayHistory {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -47,6 +55,7 @@ impl RuntimeFrozenReplayHistory {
             conversation,
             history,
             archive_frontier,
+            memory: None,
         }))))
     }
 
@@ -58,6 +67,54 @@ impl RuntimeFrozenReplayHistory {
     }
     pub(in crate::runtime) fn history(&self) -> RuntimeAgentTranscriptContext {
         self.0.history.clone()
+    }
+
+    /// Uses this exact immutable in-memory selection. No count, later manifest
+    /// or replacement store may supply missing source or restart authority.
+    pub(in crate::runtime) fn fork_source(
+        &self,
+    ) -> Result<crate::storage::transcript::replay_epoch::ReplayForkSource> {
+        let owner = self.0.history.replay_owner()?.ok_or_else(|| {
+            MezError::invalid_state("frozen fork has no original canonical source")
+        })?;
+        match &self.0.memory {
+            Some(Ok(source)) => source.fork_source(&owner),
+            Some(Err((kind, diagnostic))) => Err(MezError::new(*kind, diagnostic.clone())),
+            None => {
+                let source = self.0.history.source.as_deref();
+                crate::storage::transcript::replay_epoch::ReplayMemorySource::capture(
+                    &owner,
+                    None,
+                    source.and_then(|source| source.replay.as_deref()),
+                    None,
+                    source.map_or(&[], RuntimeAgentHistorySource::original_rows),
+                )?
+                .fork_source(&owner)
+            }
+        }
+    }
+
+    /// Freezes descriptive lifecycle data before the worker can run. Parent
+    /// protection handles cannot advance this capture through shared live Arcs.
+    pub(in crate::runtime) fn freeze_for_fork(&self) -> Result<Self> {
+        let mut history = self.history();
+        let owner = history
+            .replay_owner()?
+            .ok_or_else(|| MezError::invalid_state("fork source lost its canonical owner"))?;
+        let (records, blocks) =
+            super::context_records::RuntimeContextRecords::from_replay_checkpoint(
+                self.0.conversation.clone(),
+                owner.checkpoint()?,
+                history.records.replay_snapshot(),
+            )?;
+        history.records = records;
+        history.blocks = blocks;
+        Ok(Self(Arc::new(Frozen {
+            conversation: self.0.conversation.clone(),
+            history,
+            archive_frontier: self.0.archive_frontier,
+            memory: self.0.memory.clone(),
+        })))
     }
 
     /// A new binding is a source copy, even if its caller chooses the same CID.
@@ -75,6 +132,7 @@ impl RuntimeFrozenReplayHistory {
             conversation: target,
             history,
             archive_frontier: self.0.archive_frontier,
+            memory: self.0.memory.clone(),
         })))
     }
 
@@ -85,9 +143,30 @@ impl RuntimeFrozenReplayHistory {
         body: &AgentContext,
         source: Option<Arc<RuntimeAgentHistorySource>>,
         archive_frontier: u64,
+        previous: Option<&Self>,
+        producer: Option<(
+            crate::storage::transcript::replay_epoch::ReplaySourceOrigin,
+            u64,
+        )>,
     ) -> Result<Self> {
         let owner = ReplayEpochContext::from_owned_context(conversation.clone(), body.clone())?;
         let snapshot = source.as_ref().and_then(|source| source.replay.clone());
+        let memory = crate::storage::transcript::replay_epoch::ReplayMemorySource::capture(
+            &owner,
+            previous
+                .and_then(|previous| previous.0.memory.as_ref())
+                .and_then(|capture| capture.as_ref().ok())
+                .map(Arc::as_ref),
+            snapshot.as_deref(),
+            producer
+                .as_ref()
+                .map(|(origin, boundary)| (origin, *boundary)),
+            source
+                .as_deref()
+                .map_or(&[], RuntimeAgentHistorySource::original_rows),
+        )
+        .map(Arc::new)
+        .map_err(|error| (error.kind(), error.message().to_owned()));
         let (records, blocks) = super::context_records::RuntimeContextRecords::from_replay_owner(
             conversation.clone(),
             owner,
@@ -100,6 +179,7 @@ impl RuntimeFrozenReplayHistory {
         Ok(Self(Arc::new(Frozen {
             conversation,
             archive_frontier,
+            memory: Some(memory),
             history: RuntimeAgentTranscriptContext {
                 source: Some(source),
                 blocks,
@@ -170,6 +250,11 @@ impl RuntimeSessionService {
         conversation: &str,
         body: &AgentContext,
         source: Option<Arc<RuntimeAgentHistorySource>>,
+        producer: Option<(
+            crate::storage::transcript::replay_epoch::ReplaySourceOrigin,
+            u64,
+        )>,
+        before_rewrite: Option<&AgentContext>,
     ) -> Result<()> {
         if !body.has_replay_owner() {
             return Ok(());
@@ -179,14 +264,34 @@ impl RuntimeSessionService {
             .get(pane)
             .filter(|session| session.ephemeral && session.session_id == conversation)
             .ok_or_else(|| MezError::conflict("ephemeral replay target changed"))?;
-        let frontier = self
+        let previous = self
             .frozen_replay_binding(pane, &session.session_id)
+            .cloned();
+        let frontier = previous
+            .as_ref()
             .map_or(0, |source| source.archive_frontier());
+        // Capture original boundary bytes before a rewrite removes them from
+        // model membership. This remains local until accepted adoption; no
+        // intermediate binding or persistence acknowledgment is installed.
+        let before = before_rewrite
+            .map(|body| {
+                RuntimeFrozenReplayHistory::from_live(
+                    ReplayConversationId::new(conversation)?,
+                    body,
+                    source.clone(),
+                    frontier,
+                    previous.as_ref(),
+                    producer.clone(),
+                )
+            })
+            .transpose()?;
         let frozen = RuntimeFrozenReplayHistory::from_live(
             ReplayConversationId::new(conversation)?,
             body,
             source,
             frontier,
+            before.as_ref().or(previous.as_ref()),
+            producer,
         )?;
         self.set_frozen_replay_binding(pane, Some(frozen));
         Ok(())

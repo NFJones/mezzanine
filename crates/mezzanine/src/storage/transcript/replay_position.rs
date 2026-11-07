@@ -57,6 +57,13 @@ pub(crate) struct ConversationReplaySnapshot {
     pub(crate) settled_pending_origins: super::TranscriptRowOrigins,
 }
 
+/// Pinned bounds, legacy bounds and explicit fork wire capture are distinct.
+struct SourceProjectionFrontiers {
+    frozen: Option<u64>,
+    legacy: Option<u64>,
+    fork: Option<u64>,
+}
+
 impl ConversationReplaySnapshot {
     /// Selects the baseline preceding the physical tail from already checked
     /// rows. Reuses the latest capture when possible; otherwise probes only the
@@ -150,10 +157,13 @@ impl AgentTranscriptStore {
         self.conversation_source_projection(
             conversation_id,
             pending,
-            frontier,
-            None,
+            SourceProjectionFrontiers {
+                frozen: frontier,
+                legacy: None,
+                fork: None,
+            },
             select,
-            project,
+            |snapshot, _| project(snapshot),
         )
     }
 
@@ -174,8 +184,39 @@ impl AgentTranscriptStore {
         self.conversation_source_projection(
             conversation_id,
             pending,
-            frozen_frontier,
-            Some(legacy_frontier),
+            SourceProjectionFrontiers {
+                frozen: frozen_frontier,
+                legacy: Some(legacy_frontier),
+                fork: None,
+            },
+            select,
+            |snapshot, _| project(snapshot),
+        )
+    }
+
+    /// Fork capture also retains original raw wire images under this same
+    /// lease. This explicit copy operation may inspect the frozen archive;
+    /// ordinary history reads continue to use their bounded manifest cursor.
+    pub(crate) fn conversation_fork_source_projection<T>(
+        &self,
+        conversation_id: &str,
+        pending: &[mez_agent::TranscriptEntry],
+        frozen_frontier: Option<u64>,
+        legacy_frontier: u64,
+        select: impl FnOnce(Option<&AgentCompactionEpoch>) -> Option<(ConversationTranscriptRead, bool)>,
+        project: impl FnOnce(
+            &ConversationReplaySnapshot,
+            &[mez_agent::TranscriptEntry],
+        ) -> Result<(T, Vec<(u64, mez_agent::ContextBlockRecord)>)>,
+    ) -> Result<(ConversationReplaySnapshot, T)> {
+        self.conversation_source_projection(
+            conversation_id,
+            pending,
+            SourceProjectionFrontiers {
+                frozen: frozen_frontier,
+                legacy: Some(legacy_frontier),
+                fork: Some(legacy_frontier),
+            },
             select,
             project,
         )
@@ -185,18 +226,19 @@ impl AgentTranscriptStore {
         &self,
         conversation_id: &str,
         pending: &[mez_agent::TranscriptEntry],
-        frozen_frontier: Option<u64>,
-        legacy_frontier: Option<u64>,
+        frontiers: SourceProjectionFrontiers,
         select: impl FnOnce(Option<&AgentCompactionEpoch>) -> Option<(ConversationTranscriptRead, bool)>,
         project: impl FnOnce(
             &ConversationReplaySnapshot,
+            &[mez_agent::TranscriptEntry],
         ) -> Result<(T, Vec<(u64, mez_agent::ContextBlockRecord)>)>,
     ) -> Result<(ConversationReplaySnapshot, T)> {
         let lease = self.acquire_conversation_lock(conversation_id)?;
         self.recover_accounted_appends_for_replay_locked(conversation_id, &lease)?;
         let mut replay = self.replay_epoch_snapshot_locked(conversation_id)?;
-        let frontier =
-            frozen_frontier.or_else(|| replay.is_none().then_some(legacy_frontier).flatten());
+        let frontier = frontiers
+            .frozen
+            .or_else(|| replay.is_none().then_some(frontiers.legacy).flatten());
         let epoch = if replay.is_some() {
             None
         } else {
@@ -294,7 +336,20 @@ impl AgentTranscriptStore {
             initial_stable_records,
             settled_pending_origins,
         };
-        let (value, records) = project(&snapshot)?;
+        let fork_rows = if let Some(frontier) = frontiers.fork.filter(|_| snapshot.replay.is_some())
+        {
+            self.conversation_transcript_view_locked(
+                conversation_id,
+                ConversationTranscriptRead::Through(frontier),
+                true,
+                pending,
+                &lease,
+            )?
+            .logical
+        } else {
+            Vec::new()
+        };
+        let (value, records) = project(&snapshot, &fork_rows)?;
         self.save_rendered_row_records_locked(conversation_id, &snapshot, &records)?;
         Ok((snapshot, value))
     }

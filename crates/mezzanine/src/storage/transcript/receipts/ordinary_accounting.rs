@@ -311,22 +311,22 @@ impl AgentTranscriptStore {
         .map_err(|_| MezError::invalid_state("ordinary transcript byte count overflow"))
     }
 
-    /// Repairs this conversation's unfinished ordinary accounting before
+    /// Repairs this conversation's unfinished ordinary or typed-initial accounting before
     /// canonical replay. Complete original accounting wholly inside a
     /// validated typed cut needs no replay repair; leave those receipts with the
     /// actual ordinary settlement owner rather than derive ACK from that cut.
-    /// No candidate, native action or unrelated archive is published. An unsafe
-    /// partial source remains a local explicit error.
+    /// A typed initial receipt reconciles its exact original root before source
+    /// selection. No new candidate, native action or unrelated archive is
+    /// published. An unsafe partial source remains a local explicit error.
     pub(in crate::storage::transcript) fn recover_accounted_appends_for_replay_locked(
         &self,
         cid: &str,
         lease: &File,
     ) -> Result<()> {
         let mut receipts = self.read_locked_append_receipts(&[cid])?;
-        if !receipts
-            .iter()
-            .any(|(_, receipt, _)| receipt.row_accounting.is_some())
-        {
+        if !receipts.iter().any(|(_, receipt, _)| {
+            receipt.row_accounting.is_some() || receipt.initial_replay_epoch.is_some()
+        }) {
             return Ok(());
         }
         let claimed = ordinary_receipt_claims(&receipts)?;
@@ -346,9 +346,9 @@ impl AgentTranscriptStore {
             // Actual off-actor settlement still validates exact archive bytes.
             return Ok(());
         }
-        match self.inspect(cid) {
+        let committed_count = match self.inspect(cid) {
             Ok(rows) => {
-                self.validate_restored_transcript(cid)?;
+                let count = self.validate_restored_transcript(cid)?;
                 if rows.iter().any(|row| {
                     claimed
                         .get(&(cid, row.sequence))
@@ -358,13 +358,30 @@ impl AgentTranscriptStore {
                         "replay recovery receipt conflicts with durable source",
                     ));
                 }
+                count
             }
-            Err(error) if error.kind() == crate::MezErrorKind::NotFound => {}
+            Err(error) if error.kind() == crate::MezErrorKind::NotFound => 0,
             Err(error) => return Err(error),
+        };
+        // Preflight every typed initial claim before changing rows or roots.
+        // These helpers share this held lease; global preflight would reacquire
+        // it and deadlock. Only the exact retained receipt owns partial writes.
+        for (_, receipt, _) in &receipts {
+            if receipt.initial_replay_epoch.is_some() {
+                self.check_initial_projection_admission_locked(
+                    &receipt.batch()?,
+                    &receipts,
+                    committed_count,
+                )?;
+            }
         }
         receipts.sort_by_key(|(_, receipt, _)| (receipt.first_sequence, receipt.generation));
         for (_, receipt, _) in receipts {
-            if receipt.row_accounting.is_some() {
+            if receipt.initial_replay_epoch.is_some() {
+                let batch = receipt.batch()?;
+                self.reconcile_initial_projection_locked(&batch, lease)?;
+                self.settle_prepared_transcript_receipt_locked(&batch, &receipt, lease)?;
+            } else if receipt.row_accounting.is_some() {
                 let batch = receipt.batch()?;
                 self.reconcile_ordinary_accounting_locked(&batch, lease)?;
                 self.settle_prepared_transcript_receipt_locked(&batch, &receipt, lease)?;

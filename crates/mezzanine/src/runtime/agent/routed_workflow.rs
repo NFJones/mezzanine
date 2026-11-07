@@ -32,6 +32,8 @@ use std::sync::Arc;
 #[derive(Debug, Clone)]
 pub(super) struct RuntimeRoutedContextSeed {
     turn_id: String,
+    /// Original sealed-body scope; a later child binding cannot supply it.
+    conversation_id: String,
     context: AgentContext,
     source: Arc<RuntimeAgentHistorySource>,
     imported_history_high_water: u64,
@@ -56,6 +58,11 @@ impl RuntimeSessionService {
     fn routed_context_seed(&self, turn_id: &str) -> Option<RuntimeRoutedContextSeed> {
         Some(RuntimeRoutedContextSeed {
             turn_id: turn_id.to_string(),
+            conversation_id: self
+                .agent_turn_ledger()
+                .turn(turn_id)?
+                .conversation_id
+                .clone(),
             context: self.agent_turn_contexts().get(turn_id)?.clone(),
             source: self.agent_turn_history_source(turn_id)?.clone(),
             imported_history_high_water: *self
@@ -383,12 +390,14 @@ impl RuntimeSessionService {
             .cloned()
             .ok_or_else(|| MezError::invalid_state("routed parent context is unavailable"))?;
         let original_user_prompt = parent_context
-            .blocks()
+            .chronology()
             .iter()
-            .find(|block| {
-                block.source == ContextSourceKind::UserInstruction && block.label == "user prompt"
+            .find(|event| {
+                event.block().source == ContextSourceKind::UserInstruction
+                    && event.block().label == "user prompt"
+                    && event.retention() == mez_agent::ContextRetention::Exact
             })
-            .map(|block| block.content.clone())
+            .map(|event| event.block().content.clone())
             .ok_or_else(|| MezError::invalid_state("routed parent prompt is unavailable"))?;
         let mut worker_seed_context = self.routed_context_seed(turn_id).ok_or_else(|| {
             MezError::invalid_state("routed parent source metadata is unavailable")
@@ -955,6 +964,7 @@ impl RuntimeSessionService {
                 } else {
                     RuntimeRoutedContextSeed {
                         turn_id: turn.turn_id.clone(),
+                        conversation_id: turn.conversation_id.clone(),
                         context: AgentContext::import_durable_blocks(context_blocks)?,
                         source: RuntimeAgentHistorySource::absent(),
                         imported_history_high_water: 0,
@@ -1604,10 +1614,39 @@ impl RuntimeSessionService {
         );
         let RuntimeRoutedContextSeed {
             mut context,
+            conversation_id: source_conversation,
             source,
-            imported_history_high_water,
+            mut imported_history_high_water,
             ..
         } = seed_context;
+        let (conversation_id, ephemeral) = self
+            .agent_shell_store()
+            .get(child_pane_id)
+            .map(|session| (session.session_id.clone(), session.ephemeral))
+            .ok_or_else(|| MezError::invalid_state("routed turn conversation is unavailable"))?;
+        if context.has_replay_owner() {
+            let owner = mez_agent::ReplayEpochContext::from_owned_context(
+                mez_agent::ReplayConversationId::new(&source_conversation)?,
+                context,
+            )?;
+            context = if source_conversation == conversation_id {
+                owner.into_owned_context()
+            } else {
+                let target = mez_agent::ReplayConversationId::new(&conversation_id)?;
+                let checkpoint = owner.checkpoint()?.for_conversation_copy(target.clone())?;
+                mez_agent::ReplayEpochContext::from_checkpoint(
+                    target,
+                    checkpoint,
+                    AgentContext::empty(),
+                )?
+                .into_owned_context()
+            };
+            // This whole sealed body is inherited source for the new turn.
+            // Advancing its local import boundary does not acknowledge any
+            // ordinary append; original archive/receipt owners remain retained.
+            imported_history_high_water = context.event_sequence_high_water_mark();
+        }
+        let source = RuntimeAgentHistorySource::with_target_policy(source, ephemeral);
         context.append_reference_event(
             ContextSourceKind::LocalMessage,
             "routed controller task",
@@ -1626,11 +1665,6 @@ impl RuntimeSessionService {
         );
         context.validate_durable()?;
         let turn_id = self.next_agent_turn_id();
-        let conversation_id = self
-            .agent_shell_store()
-            .get(child_pane_id)
-            .map(|session| session.session_id.clone())
-            .ok_or_else(|| MezError::invalid_state("routed turn conversation is unavailable"))?;
         let turn = AgentTurnRecord {
             turn_id: turn_id.clone(),
             conversation_id: conversation_id.clone(),

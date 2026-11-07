@@ -1,8 +1,9 @@
 //! Immutable row and initial-projection ownership for transcript admission.
 //!
 //! A forked child owns new row sequences independently of its parent's archive.
-//! Its inherited prefix is therefore a zero-boundary summary, with selective
-//! ranges mapped over the child's raw rows. The batch keeps that authority with
+//! Legacy prefixes use a zero-boundary summary, with selective ranges mapped
+//! over child rows. Typed copies retain their canonical epoch in an independent
+//! planned storage root. The batch keeps either authority with
 //! the rows throughout admission, recovery and settlement. Empty rows are valid
 //! only when a nonempty authoritative projection supplies the conversation id;
 //! sequence zero denotes that metadata-only receipt, never a transcript row.
@@ -25,6 +26,8 @@ pub(crate) struct TranscriptAppendBatch {
     entries: Vec<TranscriptEntry>,
     /// Optional zero-boundary prefix and selective authority for a new child.
     initial_compaction_epoch: Option<AgentCompactionEpoch>,
+    /// Exact planned typed root, owned by the same initial receipt as its rows.
+    initial_replay_epoch: Option<std::sync::Arc<super::replay_epoch::InitialReplayEpoch>>,
     /// Original raw occurrences/caches, independent of optional summary authority.
     initial_row_accounting: Option<std::sync::Arc<super::InitialTranscriptRowAccounting>>,
     /// Once-allocated ordinary occurrences; absent only at explicit raw imports.
@@ -52,7 +55,7 @@ impl TranscriptAppendBatch {
             })?
             .conversation_id
             .clone();
-        Self::validated(conversation_id, entries, None)
+        Self::validated(conversation_id, entries, None, None)
     }
 
     /// Captures a child-owned initial projection and its complete raw archive.
@@ -63,7 +66,20 @@ impl TranscriptAppendBatch {
         epoch: AgentCompactionEpoch,
         entries: Vec<TranscriptEntry>,
     ) -> Result<Self> {
-        Self::validated(epoch.conversation_id.clone(), entries, Some(epoch))
+        Self::validated(epoch.conversation_id.clone(), entries, Some(epoch), None)
+    }
+
+    /// Binds independent raw placement to one immutable planned typed root.
+    pub(crate) fn initial_replay(
+        initial: super::replay_epoch::InitialReplayEpoch,
+        entries: Vec<TranscriptEntry>,
+    ) -> Result<Self> {
+        Self::validated(
+            initial.conversation_id().into(),
+            entries,
+            None,
+            Some(initial),
+        )
     }
 
     /// Validates common row identity before checking optional initial authority.
@@ -71,6 +87,7 @@ impl TranscriptAppendBatch {
         conversation_id: String,
         entries: Vec<TranscriptEntry>,
         initial_compaction_epoch: Option<AgentCompactionEpoch>,
+        initial_replay_epoch: Option<super::replay_epoch::InitialReplayEpoch>,
     ) -> Result<Self> {
         validate_conversation_id(&conversation_id)?;
         for entry in &entries {
@@ -89,7 +106,16 @@ impl TranscriptAppendBatch {
                 "transcript append requires contiguous ordered rows",
             ));
         }
-        if let Some(epoch) = initial_compaction_epoch.as_ref() {
+        if let Some(initial) = &initial_replay_epoch {
+            if initial_compaction_epoch.is_some()
+                || entries.first().is_some_and(|row| row.sequence != 1)
+            {
+                return Err(MezError::invalid_args(
+                    "initial typed projection has invalid row origin",
+                ));
+            }
+            initial.validate_rows(&entries)?;
+        } else if let Some(epoch) = initial_compaction_epoch.as_ref() {
             if epoch.conversation_id != conversation_id
                 || epoch.through_sequence != 0
                 || !matches!(epoch.version, 1..=3)
@@ -142,6 +168,7 @@ impl TranscriptAppendBatch {
             conversation_id,
             entries,
             initial_compaction_epoch,
+            initial_replay_epoch: initial_replay_epoch.map(std::sync::Arc::new),
             initial_row_accounting: None,
             row_accounting: None,
         })
@@ -191,7 +218,9 @@ impl TranscriptAppendBatch {
 
     /// Identifies initial publication even when the source has no summary head.
     pub(crate) fn has_initial_authority(&self) -> bool {
-        self.initial_compaction_epoch.is_some() || self.initial_row_accounting.is_some()
+        self.initial_compaction_epoch.is_some()
+            || self.initial_replay_epoch.is_some()
+            || self.initial_row_accounting.is_some()
     }
 
     /// Constructs a pure initial render source. No rows are claimed committed;
@@ -237,5 +266,9 @@ impl TranscriptAppendBatch {
     /// Borrows initial replay authority; ordinary appends carry none.
     pub(crate) fn initial_compaction_epoch(&self) -> Option<&AgentCompactionEpoch> {
         self.initial_compaction_epoch.as_ref()
+    }
+
+    pub(crate) fn initial_replay_epoch(&self) -> Option<&super::replay_epoch::InitialReplayEpoch> {
+        self.initial_replay_epoch.as_deref()
     }
 }

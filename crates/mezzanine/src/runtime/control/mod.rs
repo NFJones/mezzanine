@@ -531,7 +531,14 @@ impl RuntimeSessionService {
             })
             .unwrap_or_default();
         let context = imported_records
-            .import_context_for_new_task(blocks, &stable_sources, &imported_execution_events)?
+            .import_context_for_new_task(
+                blocks,
+                &stable_sources,
+                &imported_execution_events,
+                self.agent_shell_store()
+                    .get(pane_id)
+                    .map(|session| (session.session_id.as_str(), imported_history_block_count)),
+            )?
             .with_metadata(metadata);
         let imported_history_sequence_high_water = imported_history_block_count
             .checked_sub(1)
@@ -648,7 +655,14 @@ impl RuntimeSessionService {
             })
             .unwrap_or_default();
         let context = imported_records
-            .import_context_for_peer_task(blocks, &stable_sources, &imported_execution_events)?
+            .import_context_for_peer_task(
+                blocks,
+                &stable_sources,
+                &imported_execution_events,
+                self.agent_shell_store()
+                    .get(pane_id)
+                    .map(|session| (session.session_id.as_str(), imported_history_block_count)),
+            )?
             .with_metadata(metadata);
         let imported_history_sequence_high_water = imported_history_block_count
             .checked_sub(1)

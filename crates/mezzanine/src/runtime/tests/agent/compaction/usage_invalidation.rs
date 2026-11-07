@@ -1,18 +1,15 @@
 //! Execution display invalidation belongs to an accepted context replacement,
-//! not auxiliary expense or continuation diagnostics. Exercise the unpublished
-//! first-turn path and exact completion ownership without calling a provider.
+//! not auxiliary expense or continuation diagnostics. An actual earlier task
+//! supplies raw source; display changes require the canonical storage receipt.
 
 use super::*;
 use crate::runtime::AgentCompactionEvent;
 
-/// Creates a first-turn observed-input compaction with no publishable archive,
-/// positive ordinary usage, and separately retained cumulative expense. The
-/// closed live group can be replaced, while its raw history remains authoritative.
+/// Completes an earlier task with an offline provider, then admits its actual
+/// successor. The old instruction becomes eligible through real task admission;
+/// no sealed chronology is replaced to fabricate source or execution closure.
 fn local_usage_compaction() -> (RuntimeSessionService, AgentTranscriptStore, String) {
     let mut service = test_runtime_service();
-    service
-        .start_initial_pane_process(Some("cat >/dev/null"))
-        .unwrap();
     let store = AgentTranscriptStore::new(temp_root("local-compaction-usage"));
     service.set_agent_transcript_store(store.clone());
     service.replace_config_layers(vec![ConfigLayer {
@@ -21,7 +18,7 @@ fn local_usage_compaction() -> (RuntimeSessionService, AgentTranscriptStore, Str
         format: ConfigFormat::Toml,
         scope: ConfigScope::Primary,
         trusted: true,
-        text: "[agents]\ndefault_provider = \"runtime-batch\"\ndefault_model_profile = \"local-usage\"\n[providers.runtime-batch]\nkind = \"openai\"\nmodels = [\"test\"]\ndefault_model = \"test\"\n[model_profiles.local-usage]\nprovider = \"runtime-batch\"\nmodel = \"test\"\ncontext_window_tokens = 40000\nmax_input_tokens = 20000\n".into(),
+        text: "[agents]\ndefault_provider = \"runtime-batch\"\ndefault_model_profile = \"local-usage\"\nshell_mode = \"pane\"\ncompaction_raw_retention_percent = 1\n[providers.runtime-batch]\nkind = \"openai\"\nmodels = [\"test\"]\ndefault_model = \"test\"\n[model_profiles.local-usage]\nprovider = \"runtime-batch\"\nmodel = \"test\"\ncontext_window_tokens = 40000\nmax_input_tokens = 20000\n".into(),
     }]).unwrap();
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
@@ -30,28 +27,43 @@ fn local_usage_compaction() -> (RuntimeSessionService, AgentTranscriptStore, Str
         .agent_shell_store_mut()
         .enter_or_resume("%1")
         .unwrap();
+    let earlier = service
+        .start_agent_prompt_turn("%1", &"completed earlier task ".repeat(250))
+        .unwrap();
+    let profile = service
+        .agent_turn_model_profile(&earlier.turn_id)
+        .unwrap()
+        .clone();
+    let provider = RuntimeBatchProvider {
+        response: runtime_say_response(&earlier.turn_id, "earlier task completed", true),
+    };
+    let execution = service
+        .execute_agent_turn_with_provider(&earlier.turn_id, &provider, profile)
+        .unwrap();
+    assert_eq!(execution.terminal_state, AgentTurnState::Completed);
+    // Pane-local expense requires the actual current process incarnation. Start
+    // it after the old task so its real environment remains a protected suffix,
+    // while the earlier user occurrence supplies the eligible prefix.
+    service
+        .start_initial_pane_process(Some("cat >/dev/null"))
+        .unwrap();
     let start = service.dispatch_runtime_control_body(
         r#"{"jsonrpc":"2.0","id":"local-usage","method":"agent/shell/command","params":{"idempotency_key":"local-usage","input":"continue"}}"#,
         &primary,
     );
     assert!(start.contains(r#""state":"running""#), "{start}");
-    let turn_id = "turn-1";
-    let context = service.agent_turn_contexts_mut().get_mut(turn_id).unwrap();
-    context
-        .replace_after_compaction(vec![
-            ContextBlock::assistant_event("closed decision", "decision ".repeat(200)),
-            ContextBlock::evidence_event(
-                ContextSourceKind::ActionResult,
-                "closed result",
-                "result ".repeat(200),
-            ),
-            ContextBlock::user_event("exact steering", "preserve this instruction"),
-        ])
+    let turn_id = service
+        .agent_shell_store()
+        .get("%1")
+        .unwrap()
+        .running_turn_id
+        .clone()
         .unwrap();
-    let context = service.agent_turn_contexts().get(turn_id).unwrap();
+    let context = service.agent_turn_contexts().get(&turn_id).unwrap();
+    assert!(context.has_replay_owner());
     let plan = mez_agent::plan_model_context_compaction_for_provider_tokens(
         context,
-        100,
+        20_000,
         0,
         context.event_sequence_high_water_mark(),
         mez_agent::ProviderBudgetProjection::new(
@@ -61,7 +73,7 @@ fn local_usage_compaction() -> (RuntimeSessionService, AgentTranscriptStore, Str
     )
     .unwrap();
     assert!(plan.changes_context());
-    let profile = service.agent_turn_model_profile(turn_id).unwrap().clone();
+    let profile = service.agent_turn_model_profile(&turn_id).unwrap().clone();
     let sample = mez_agent::ModelTokenUsage {
         input_tokens: 20_000,
         output_tokens: 40,
@@ -71,13 +83,42 @@ fn local_usage_compaction() -> (RuntimeSessionService, AgentTranscriptStore, Str
     };
     service.record_agent_provider_token_usage_with_profile("%1", sample, sample, Some(&profile));
     assert!(service.queue_agent_active_turn_compaction(
-        turn_id, "local-usage".into(), profile,
+        &turn_id, "local-usage".into(), profile,
         crate::runtime::agent_state::RuntimeActiveTurnCompactionTrigger::ObservedInputLimit {
             observed_input_tokens: 20_000, max_input_tokens: 20_000,
         }, plan,
     ).unwrap());
     service.checkpoint_agent_session_metadata().unwrap();
-    (service, store, turn_id.into())
+    assert!(
+        service
+            .pending_agent_compaction_task_for_tests("%1")
+            .unwrap()
+            .replay_source
+            .is_some()
+    );
+    (service, store, turn_id)
+}
+
+/// Runs the actual frozen storage attempt and original callback. Auxiliary
+/// metadata effects retain their ordering/coalescing owner; neither the model
+/// response nor physical publication alone may clear the ordinary usage sample.
+fn publish_usage_compaction(service: &mut RuntimeSessionService) {
+    let conversation = service
+        .agent_shell_store()
+        .get("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    let before = service.agent_context_usage_display(&conversation);
+    assert!(before.is_some());
+    let completion = super::replay_publication::execute_pending_publication(service);
+    assert_eq!(service.agent_context_usage_display(&conversation), before);
+    assert!(
+        service
+            .apply_replay_epoch_completion(completion)
+            .unwrap()
+            .applied
+    );
 }
 
 /// Checks every execution presentation owner, not just raw accounting: frame,
@@ -106,7 +147,7 @@ fn assert_unknown(service: &mut RuntimeSessionService, conversation: &str) {
     assert!(!status.contains("50%"), "{status}");
 }
 
-/// A successful unpublished replacement clears positive ordinary context/cache
+/// A successful accepted replacement clears positive ordinary context/cache
 /// samples and checkpoints unknown without resetting any cumulative expense.
 /// Auxiliary expense and omitted/zero ordinary usage cannot revive the sample;
 /// a later positive ordinary response owns the new display and cache ratio.
@@ -148,9 +189,17 @@ fn local_compaction_usage_success_clears_display_and_metadata() {
             .unwrap()
             .applied
     );
+    publish_usage_compaction(&mut service);
     assert_unknown(&mut service, &conversation);
-    assert_eq!(store.compaction_epoch(&conversation).unwrap(), None);
-    assert!(!store.transcript_path(&conversation).unwrap().exists());
+    let (_, published) = store
+        .load_replay_epoch(&conversation, mez_agent::AgentContext::empty())
+        .unwrap()
+        .unwrap();
+    assert_eq!(published.revision().get(), 1);
+    assert_eq!(
+        published.context().chronology()[0].block().content,
+        "closed work summarized"
+    );
     assert!(service.agent_provider_task_is_pending(&turn_id));
     assert_eq!(service.pending_agent_provider_tasks().len(), 1);
     let key = mez_agent::ModelTokenUsageKey::new("runtime-batch", "test");
@@ -273,6 +322,7 @@ fn local_compaction_usage_checkpoint_failure_precedes_recovery_admission() {
             .unwrap()
             .applied
     );
+    publish_usage_compaction(&mut service);
     let trace = service.agent_pane_trace_log_text("%1").unwrap_or_default();
     assert!(
         !trace.contains("observed input limit turn local compaction"),
@@ -429,6 +479,7 @@ fn local_compaction_usage_deferred_checkpoint_retry_keeps_exact_owner() {
         .clone();
     service.use_transcript_effect_adapter();
     complete_runtime_test_compaction(&mut service, "%1", "closed work summarized");
+    publish_usage_compaction(&mut service);
     assert_unknown(&mut service, &conversation);
     assert_eq!(service.pending_agent_provider_tasks().len(), 1);
     let effect = service

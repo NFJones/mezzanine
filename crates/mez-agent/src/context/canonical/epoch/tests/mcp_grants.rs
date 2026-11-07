@@ -324,7 +324,7 @@ fn mcp_grants_checkpoint_v1_import_and_v2_required_denials_are_checked() {
         .publish_compaction(frozen, ReplayHeadPublication::Summary("head".into()))
         .unwrap();
     let value = serde_json::to_value(source.checkpoint().unwrap()).unwrap();
-    assert_eq!(value["version"], 2);
+    assert_eq!(value["version"], 3);
     assert_eq!(value["retired_mcp_retrievals"].as_array().unwrap().len(), 1);
     let restore = |value| {
         ReplayEpochContext::from_checkpoint(
@@ -335,6 +335,7 @@ fn mcp_grants_checkpoint_v1_import_and_v2_required_denials_are_checked() {
     };
     let mut old = value.clone();
     old["version"] = serde_json::json!(1);
+    old.as_object_mut().unwrap().remove("execution_intervals");
     old.as_object_mut()
         .unwrap()
         .remove("retired_mcp_retrievals");
@@ -343,6 +344,18 @@ fn mcp_grants_checkpoint_v1_import_and_v2_required_denials_are_checked() {
     let cold = restore(old).unwrap();
     assert!(tools(cold.context()).is_empty());
     assert_eq!(cold.context().chronology().last(), Some(&evidence));
+    let mut version_two = value.clone();
+    version_two["version"] = serde_json::json!(2);
+    version_two
+        .as_object_mut()
+        .unwrap()
+        .remove("execution_intervals");
+    assert!(tools(restore(version_two.clone()).unwrap().context()).is_empty());
+    version_two
+        .as_object_mut()
+        .unwrap()
+        .remove("retired_mcp_retrievals");
+    assert!(restore(version_two).is_err());
     let mut missing = value.clone();
     missing
         .as_object_mut()
@@ -387,8 +400,24 @@ fn mcp_grants_explicit_revision_zero_denials_survive_checkpoint_and_source_check
     .unwrap();
     assert!(tools(cold.context()).is_empty());
     assert_eq!(cold.context().chronology().last(), Some(&evidence));
+    // Isolate revocation downgrade from execution-format migration: interval
+    // identity remains identical, so only the removed explicit denial differs.
+    let mut revived = value.clone();
+    revived["retired_mcp_retrievals"] = serde_json::json!([]);
+    let revived = ReplayEpochContext::from_checkpoint(
+        source.conversation_id().clone(),
+        serde_json::from_value(revived).unwrap(),
+        AgentContext::empty(),
+    )
+    .unwrap();
+    assert_eq!(tools(revived.context()).len(), 1);
+    assert!(revived.validate_source_extension(&source).is_err());
     let mut downgraded = value;
     downgraded["version"] = serde_json::json!(1);
+    downgraded
+        .as_object_mut()
+        .unwrap()
+        .remove("execution_intervals");
     downgraded
         .as_object_mut()
         .unwrap()

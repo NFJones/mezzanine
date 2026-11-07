@@ -213,8 +213,23 @@ impl RuntimeReplayEpochAttempt {
                                 .history
                                 .as_ref()
                                 .and_then(|history| history.replay.as_deref());
+                            let raw_rows = source
+                                .original
+                                .history
+                                .as_ref()
+                                .filter(|original| original.replay.is_none())
+                                .map(|original| {
+                                    original.raw_replay_rows(&work.0.publication_source)
+                                })
+                                .transpose()?
+                                .unwrap_or_default();
+                            let capture = if history.is_some() {
+                                source.origin.clone().capture(history)
+                            } else {
+                                source.origin.clone().capture_raw(&raw_rows)
+                            };
                             Prepared::Durable(Arc::new(store.prepare_replay_epoch(
-                                source.origin.clone().capture(history),
+                                capture,
                                 source.owner.conversation_id().as_str(),
                                 history.map(|history| history.identity().clone()),
                                 &work.0.publication_source,

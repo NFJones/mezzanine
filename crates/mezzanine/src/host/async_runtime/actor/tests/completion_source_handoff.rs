@@ -341,7 +341,7 @@ async fn accepted_history_completion_available_capacity_and_duplicate_are_exact(
 
 /// Collects only an actual worker's bounded-ingress completion, with a
 /// registered notifier and finite outer watchdog rather than polling or sleeps.
-async fn next_completion(actor: &mut AsyncRuntimeSessionActor) -> AsyncRuntimeRequest {
+pub(super) async fn next_completion(actor: &mut AsyncRuntimeSessionActor) -> AsyncRuntimeRequest {
     tokio::time::timeout(std::time::Duration::from_secs(5), async {
         loop {
             let notify = actor.request_ingress_notify.clone();

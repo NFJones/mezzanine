@@ -37,13 +37,10 @@ impl RuntimeSessionService {
             .replay_source
             .clone()
             .ok_or_else(|| MezError::invalid_state("canonical source missing"))?;
-        let body = self
-            .agent_turn_contexts()
-            .get(&source.turn_id)
-            .ok_or_else(|| MezError::conflict("canonical publication live source disappeared"))?;
+        let body = source.current_body(self)?;
         let publication_source = ReplayEpochContext::from_owned_context(
             ReplayConversationId::new(task.conversation_id.clone())?,
-            body.clone(),
+            body,
         )?;
         let work = RuntimeReplayEpochPublication::new(
             task.pane_id.clone(),
@@ -167,14 +164,8 @@ impl RuntimeSessionService {
                     error.message()
                 )));
             }
-            let turn_id = &work.source().turn_id;
-            let mut body = self
-                .agent_turn_contexts()
-                .get(turn_id)
-                .cloned()
-                .ok_or_else(|| {
-                    MezError::conflict("canonical compaction live context disappeared")
-                })?;
+            let turn_id = work.source().turn_id();
+            let mut body = work.source().current_body(self)?;
             let history = completion
                 .history()
                 .map(|snapshot| {
@@ -189,6 +180,7 @@ impl RuntimeSessionService {
                     )
                 })
                 .transpose()?;
+            let before_rewrite = work.source().ephemeral.then(|| body.clone());
             completion.adopt(&mut body)?;
             // Session/native identities survive; provider cache routing starts
             // a distinct epoch only after actual receipt acceptance.
@@ -200,11 +192,19 @@ impl RuntimeSessionService {
             metadata.prompt_cache_lineage_id = Some(lineage.clone());
             body.set_metadata(metadata);
             if work.source().ephemeral {
+                let producer = turn_id.map(|turn| {
+                    (
+                        work.source().origin.clone(),
+                        self.agent_turn_imported_history_sequence_high_water(turn),
+                    )
+                });
                 self.retain_ephemeral_replay_body(
                     &pane,
                     work.source().owner.conversation_id().as_str(),
                     &body,
                     work.source().original.history.clone(),
+                    producer,
+                    before_rewrite.as_ref(),
                 )?;
             }
             self.agent_shell_store_mut()
@@ -213,21 +213,21 @@ impl RuntimeSessionService {
                     work.source().owner.conversation_id().as_str(),
                     lineage,
                 )?;
-            self.agent_turn_contexts_mut().insert(turn_id.clone(), body);
-            if let Some(history) = history {
-                self.set_agent_turn_history_source(turn_id.clone(), Some(history));
+            if let Some(turn_id) = turn_id {
+                self.agent_turn_contexts_mut()
+                    .insert(turn_id.to_owned(), body);
+                if let Some(history) = history {
+                    self.set_agent_turn_history_source(turn_id.to_owned(), Some(history));
+                }
+                self.clear_agent_turn_provider_request_chain(turn_id);
             }
-            self.clear_agent_turn_provider_request_chain(turn_id);
             self.clear_agent_conversation_provider_request_chain(
                 work.source().owner.conversation_id().as_str(),
             );
             self.checkpoint_compaction_replacement_usage(
                 work.source().owner.conversation_id().as_str(),
             )?;
-            self.queue_agent_provider_recovery_task_after_compaction(
-                turn_id,
-                "canonical_epoch_compaction",
-            )?;
+            work.source().resume_after_publication(self, &pane)?;
             self.finish_agent_compaction_task(&pane, generation);
             let _ = self.append_agent_status_text_to_terminal_buffer(
                 &pane,
@@ -258,17 +258,20 @@ impl RuntimeSessionService {
             self.agent_compaction_generation_is_current(work.pane(), work.generation());
         self.fail_agent_compaction_task(work.pane(), work.generation());
         if current {
-            self.fail_running_turn_after_compaction_error(
-                &work.source().turn_id,
-                "canonical_epoch_compaction",
-                error,
-            )?;
+            if let Some(turn) = work.source().turn_id() {
+                self.fail_running_turn_after_compaction_error(
+                    turn,
+                    "canonical_epoch_compaction",
+                    error,
+                )?;
+            }
             let _ = self.append_agent_error_text_to_terminal_buffer(work.pane(), error.message());
             self.resume_agent_compaction_steering(work.pane())?;
         } else if owns_generation
-            && let Some(turn) = self
-                .agent_turn_ledger()
-                .turn(&work.source().turn_id)
+            && let Some(turn) = work
+                .source()
+                .turn_id()
+                .and_then(|turn| self.agent_turn_ledger().turn(turn))
                 .cloned()
             && turn.state == mez_agent::AgentTurnState::Running
             && turn.pane_id == work.pane()

@@ -37,11 +37,21 @@ impl RuntimeSessionService {
                 continue;
             }
             let canonical = match block.source {
-                ContextSourceKind::UserInstruction => TranscriptContextEvent::user_event(
-                    event.sequence().get(),
-                    block.label.clone(),
-                    block.content.clone(),
-                ),
+                ContextSourceKind::UserInstruction => {
+                    match context.replay_task_admission_start(event.record().occurrence_id()) {
+                        Some(start) => TranscriptContextEvent::task_admission(
+                            event.sequence().get(),
+                            start,
+                            block.label.clone(),
+                            block.content.clone(),
+                        ),
+                        None => TranscriptContextEvent::user_event(
+                            event.sequence().get(),
+                            block.label.clone(),
+                            block.content.clone(),
+                        ),
+                    }
+                }
                 ContextSourceKind::Configuration if block.label == "task environment snapshot" => {
                     TranscriptContextEvent::environment_snapshot(block.content.clone())
                 }

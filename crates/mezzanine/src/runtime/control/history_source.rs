@@ -33,6 +33,25 @@ pub(crate) struct RuntimeAgentHistorySource {
 }
 
 impl RuntimeAgentHistorySource {
+    /// Checks a mixed inherited/new group against original captured images and
+    /// escrow before ordinary bookkeeping claims this producer. No store read,
+    /// effect receipt or source-copy permission is inferred from matching text.
+    pub(in crate::runtime) fn qualify_execution_control_append(
+        &self,
+        entries: &[mez_agent::TranscriptEntry],
+        control: &mez_agent::TranscriptEntry,
+    ) -> Result<()> {
+        let mut rows = self.rows.to_vec();
+        rows.extend_from_slice(entries);
+        rows.push(control.clone());
+        crate::storage::transcript::replay_epoch::qualify_execution_controls(
+            self.replay.as_deref(),
+            &control.conversation_id,
+            &rows,
+        )?;
+        Ok(())
+    }
+
     /// Advances only the acknowledged replay base while keeping original row
     /// images, store and admitted target policy. This descriptor does not adopt
     /// a cold owner into the actor's live model context or grant append rights.
@@ -75,6 +94,11 @@ impl RuntimeAgentHistorySource {
         &self,
     ) -> Option<crate::storage::transcript::AgentTranscriptStore> {
         self.work.as_ref().map(|work| work.store.clone())
+    }
+
+    /// Original checked wire images, retained independently of later stores.
+    pub(in crate::runtime) fn original_rows(&self) -> &[mez_agent::TranscriptEntry] {
+        &self.rows
     }
 
     /// Identifies the archive that actually supplied these imported events.
@@ -180,5 +204,47 @@ impl RuntimeAgentHistorySource {
             ));
         }
         Ok(captured)
+    }
+
+    /// Retains original authored images for a first head over checked raw
+    /// history. Only current members are selected; display/audit rows do not
+    /// enter escrow. New live members keep their actual turn's provenance.
+    pub(in crate::runtime) fn raw_replay_rows(
+        &self,
+        owner: &mez_agent::ReplayEpochContext,
+    ) -> Result<Vec<mez_agent::TranscriptEntry>> {
+        if self.replay.is_some() || self.epoch.is_some() {
+            return Err(MezError::conflict(
+                "raw replay capture already has a summary epoch",
+            ));
+        }
+        let needed = owner
+            .context()
+            .chronology()
+            .iter()
+            .map(|event| event.record().occurrence_id())
+            .collect::<BTreeSet<_>>();
+        let mut found = BTreeSet::new();
+        let mut result = Vec::new();
+        for row in self
+            .rows
+            .iter()
+            .filter(|row| row.role == TranscriptRole::System)
+        {
+            if let Some(record) =
+                mez_agent::transcript::TranscriptContextRecord::from_transcript_content(
+                    &row.content,
+                )?
+                && needed.contains(&record.record().occurrence_id())
+            {
+                if !found.insert(record.record().occurrence_id()) {
+                    return Err(MezError::conflict(
+                        "raw replay capture repeats an original occurrence",
+                    ));
+                }
+                result.push(row.clone());
+            }
+        }
+        Ok(result)
     }
 }

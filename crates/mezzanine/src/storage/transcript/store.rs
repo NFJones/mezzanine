@@ -3644,6 +3644,23 @@ impl AgentTranscriptStore {
         if current_revision != expected_revision {
             return Ok(CompareAndSwapTranscriptEntryResult::Stale { current_revision });
         }
+        // Lifecycle rows are original producer records, not editable model
+        // text. Ordinary CAS cannot create or revise a closure claim, including
+        // before the first head exists. User-role literal text stays ordinary.
+        if entry.role == mez_agent::TranscriptRole::System
+            && (mez_agent::transcript::TranscriptExecutionStateRecord::from_transcript_content(
+                &entry.content,
+            )?
+            .is_some()
+                || mez_agent::transcript::TranscriptExecutionStateRecord::from_transcript_content(
+                    &content,
+                )?
+                .is_some())
+        {
+            return Err(MezError::invalid_state(
+                "cannot edit original execution lifecycle control records",
+            ));
+        }
         let original = entry.clone();
         entry.content = content;
         entry.validate()?;
@@ -4784,12 +4801,21 @@ impl AgentTranscriptStore {
                 "saved fork archive does not cover accepted source chronology",
             ));
         }
-        if entries.is_empty() {
+        let replay_copy = self.prepare_replay_copy_locked(
+            source_conversation_id,
+            target_conversation_id,
+            &entries,
+        )?;
+        if entries.is_empty() && replay_copy.is_none() {
             return Err(MezError::invalid_state(
                 "source conversation has no entries",
             ));
         }
-        let epoch = self.compaction_epoch_locked(source_conversation_id)?;
+        let epoch = if replay_copy.is_some() {
+            None
+        } else {
+            self.compaction_epoch_locked(source_conversation_id)?
+        };
         let row_origins = self.transcript_row_origins_locked(source_conversation_id, &entries)?;
         let row_records =
             self.transcript_row_records_locked(source_conversation_id, &row_origins)?;
@@ -4797,12 +4823,14 @@ impl AgentTranscriptStore {
             .initial_row_accounting_locked(source_conversation_id)?
             .and_then(|accounting| accounting.stable_records().map(Vec::from));
         let presentations = self.inspect_presentation_unlocked(source_conversation_id)?;
-        let fallback_source = if presentations.is_empty() {
-            Some(super::fallback::Source::from_records(&entries)?.encode()?)
+        let fallback_source = if presentations.is_empty() && !entries.is_empty() {
+            Some((
+                super::fallback::Source::from_records(&entries)?.encode()?,
+                entries[0].pane_id.clone(),
+            ))
         } else {
             None
         };
-        let fallback_pane = entries[0].pane_id.clone();
         let fork_result = (|| {
             // The existing active-delete journal owns compensation until all
             // target payloads and its authoritative projection are durable.
@@ -4851,7 +4879,7 @@ impl AgentTranscriptStore {
             // Transcript creation time remains fork-local. Only a genuinely
             // transcript-only source needs original bounded record evidence in
             // the existing presentation channel; later forks copy it unchanged.
-            if let Some(source) = fallback_source {
+            if let Some((source, fallback_pane)) = fallback_source {
                 self.append_presentation_locked(&AgentPresentationEntry {
                     conversation_id: target_conversation_id.to_string(),
                     sequence: 1,
@@ -4894,7 +4922,9 @@ impl AgentTranscriptStore {
                 }
                 self.append_presentation_locked(&forked)?;
             }
-            if let Some(mut epoch) = epoch {
+            if let Some(copy) = replay_copy {
+                self.publish_replay_copy_locked(copy, &copied_entries, cancelled)?;
+            } else if let Some(mut epoch) = epoch {
                 epoch.retarget_summary_records(target_conversation_id)?;
                 // Complete rows have qualified initial accounting. Reuse that
                 // allocation for selective proof instead of cloning raw source.
@@ -5735,8 +5765,10 @@ impl AgentTranscriptStore {
         Ok(())
     }
 
-    /// Requires the existing epoch sidecar after its payload and directory are
-    /// durable. This helper shares held ownership; it never reacquires flock.
+    /// Requires the epoch sidecar without granting a publication acknowledgment.
+    /// Normal writers mark durable authority; an exact typed initial receipt
+    /// also guards its target before partial rows exist. Only that retained
+    /// owner can repair its absent first manifest. Never reacquires flock.
     pub(super) fn require_compaction_epoch_locked(&self, conversation_id: &str) -> Result<()> {
         let mut metadata = self.read_conversation_metadata_locked(conversation_id)?;
         if !metadata.compaction_epoch_required {

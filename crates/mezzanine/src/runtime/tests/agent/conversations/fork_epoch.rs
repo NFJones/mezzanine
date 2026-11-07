@@ -6,6 +6,7 @@
 use super::*;
 
 mod fixture_cleanup;
+use crate::runtime::tests::agent::fixture_teardown;
 
 /// Fork-only asynchronous control admission must not defer unrelated inline
 /// status reads or bypass the existing visible-shell and attached-primary gates.
@@ -411,7 +412,7 @@ fn runtime_saved_fork_mcp_invalidation_keeps_usage_and_authority_independent() {
     );
     assert!(service.pending_agent_provider_tasks().is_empty());
     assert_eq!(store.inspect("fork-target").unwrap().len(), 4);
-    fixture_cleanup::settle(&mut service).unwrap();
+    fixture_teardown::settle(&mut service).unwrap();
     let mut reopened = test_runtime_service();
     reopened.set_agent_transcript_store(AgentTranscriptStore::new(root.clone()));
     let primary = reopened

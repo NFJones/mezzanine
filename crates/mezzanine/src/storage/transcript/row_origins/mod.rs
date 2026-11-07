@@ -21,6 +21,8 @@ use std::{collections::BTreeMap, fs, io::Read, path::Path};
 
 mod costs;
 pub(crate) use costs::TranscriptRowRecords;
+mod execution;
+pub(super) use execution::IndexedExecutionSource;
 mod images;
 pub(super) use images::IndexedRowImage;
 pub(super) use images::forget_row_digests;
@@ -81,7 +83,7 @@ impl AgentTranscriptStore {
             OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
         )?;
         let version: u32 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-        if !matches!(version, 1..=4) {
+        if !matches!(version, 1..=5) {
             return Err(MezError::invalid_state(
                 "unsupported transcript row origins version",
             ));
@@ -91,12 +93,22 @@ impl AgentTranscriptStore {
             [],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )?;
-        if images != (version == 4) || image_meta != (version == 4) {
+        if images != (version >= 4) || image_meta != (version >= 4) {
             return Err(MezError::invalid_state(
                 "transcript row fingerprint schema conflicts with its version",
             ));
         }
-        if version == 4 {
+        let execution: bool = connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='execution_sources')",
+            [],
+            |row| row.get(0),
+        )?;
+        if execution != (version == 5) {
+            return Err(MezError::invalid_state(
+                "transcript execution source schema conflicts with its version",
+            ));
+        }
+        if version >= 4 {
             let required: u32 = connection.query_row(
                 "SELECT initial_required FROM row_digest_meta WHERE singleton=1",
                 [],
@@ -334,7 +346,7 @@ impl AgentTranscriptStore {
             )?;
             let version: u32 =
                 transaction.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-            if matches!(version, 2..=4) {
+            if matches!(version, 2..=5) {
                 transaction.execute(
                     "DELETE FROM row_costs WHERE origin NOT IN (SELECT origin FROM origins)",
                     [],

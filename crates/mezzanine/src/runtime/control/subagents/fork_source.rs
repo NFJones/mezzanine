@@ -4,7 +4,9 @@
 //! reading storage. The worker captures the authoritative epoch and checked rows
 //! in one mutation lease, rejects summaries that cross its cutoff, and returns
 //! owned data. Freshness checks use the original actor binding independently of
-//! archived/display counts. This module does not publish child history or grant
+//! archived/display counts. Typed captures carry their checkpoint and original
+//! raw escrow; numeric cutoffs select only legacy history. This module does not
+//! publish child history or grant
 //! execution authority; child persistence owns translation and durable admission.
 
 use super::{MezError, Result, RuntimeSessionService, pane_id_from_runtime_agent_id};
@@ -22,6 +24,8 @@ pub(crate) struct RuntimeSubagentForkSnapshot {
     pub(crate) entries: Vec<mez_agent::TranscriptEntry>,
     /// Source authority captured with the rows; this is not child publication.
     pub(crate) compaction_epoch: Option<crate::storage::transcript::AgentCompactionEpoch>,
+    /// Typed current head/raw capture, distinct from a legacy row cutoff.
+    replay: Option<std::sync::Arc<crate::storage::transcript::replay_epoch::ReplayForkSource>>,
     /// Frozen parent logical frontier, independent of raw-tail cardinality.
     pub(crate) source_high_water: u64,
     /// Original raw placement and available validated costs from that same lease.
@@ -47,6 +51,22 @@ pub(crate) struct RuntimeSubagentForkReadWork {
     ephemeral_source: bool,
     pending: crate::runtime::persistence::RuntimePendingTranscriptContext,
     prompt_cache_lineage_id: String,
+    memory: Option<std::sync::Arc<RuntimeSubagentForkMemorySource>>,
+}
+
+/// Actual NoStore selection and its actor freshness fences. No source store is
+/// read, and current live ownership is frozen to descriptive data before work.
+#[derive(Clone, PartialEq, Eq)]
+struct RuntimeSubagentForkMemorySource {
+    selected: super::super::RuntimeFrozenReplayHistory,
+    binding: Option<super::super::RuntimeFrozenReplayHistory>,
+    live: Option<(String, mez_agent::ReplayEpochCheckpoint)>,
+}
+
+impl std::fmt::Debug for RuntimeSubagentForkMemorySource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("RuntimeSubagentForkMemorySource")
+    }
 }
 
 impl PartialEq for RuntimeSubagentForkReadWork {
@@ -61,6 +81,7 @@ impl PartialEq for RuntimeSubagentForkReadWork {
             && self.ephemeral_source == other.ephemeral_source
             && self.pending == other.pending
             && self.prompt_cache_lineage_id == other.prompt_cache_lineage_id
+            && self.memory == other.memory
     }
 }
 
@@ -83,6 +104,7 @@ impl RuntimeSubagentForkReadWork {
             .get(&self.parent_pane_id)
             .is_none_or(|session| {
                 session.session_id != self.parent_conversation_id
+                    || (self.memory.is_some() && !session.ephemeral)
                     || session.prompt_cache_lineage_id != self.prompt_cache_lineage_id
                     || session
                         .ephemeral_transcript_source_conversation_id
@@ -100,6 +122,24 @@ impl RuntimeSubagentForkReadWork {
             })
             || service.agent_compaction_epoch(&self.parent_pane_id) != self.parent_compaction_epoch
             || service.persistence.cloned_transcript_store().as_ref() != Some(&self.store)
+            || self.memory.as_ref().is_some_and(|memory| {
+                service.frozen_replay_binding(&self.parent_pane_id, &self.parent_conversation_id)
+                    != memory.binding.as_ref()
+                    || memory.live.as_ref().is_some_and(|(turn, body)| {
+                        service
+                            .agent_turn_replay_context(turn)
+                            .and_then(|current| {
+                                mez_agent::ReplayEpochContext::from_owned_context(
+                                    memory.selected.conversation().clone(),
+                                    current.clone(),
+                                )
+                                .and_then(|owner| owner.checkpoint())
+                                .ok()
+                            })
+                            .as_ref()
+                            != Some(body)
+                    })
+            })
         {
             return Err(MezError::invalid_state(
                 "fork parent conversation changed or history advanced before snapshot acceptance",
@@ -110,6 +150,18 @@ impl RuntimeSubagentForkReadWork {
 
     /// Checks the captured history without accessing live runtime state.
     pub(crate) fn execute(&self) -> Result<RuntimeSubagentForkSnapshot> {
+        if let Some(memory) = &self.memory {
+            let replay = memory.selected.fork_source()?;
+            let owner = memory.selected.history().replay_owner()?.ok_or_else(|| {
+                MezError::invalid_state("frozen subagent source lost its canonical owner")
+            })?;
+            return RuntimeSubagentForkSnapshot::from_replay_source(
+                self.prompt_cache_lineage_id.clone(),
+                replay,
+                self.source_high_water,
+                owner.context().stable_block_records(),
+            );
+        }
         let pending_count = self
             .pending
             .iter()
@@ -119,10 +171,11 @@ impl RuntimeSubagentForkReadWork {
             .len() as u64;
         let (_, source) = self
             .store
-            .conversation_replay_projection_with_frontier(
+            .conversation_fork_source_projection(
                 &self.source_conversation_id,
                 self.pending.entries(),
-                Some(self.source_high_water),
+                self.ephemeral_source.then_some(self.source_high_water),
+                self.source_high_water,
                 |epoch| {
                     if self.source_high_water > 0 {
                         Some((
@@ -135,7 +188,7 @@ impl RuntimeSubagentForkReadWork {
                         epoch.map(|_| (ConversationTranscriptRead::All, true))
                     }
                 },
-                |snapshot| self.capture_from_replay(snapshot),
+                |snapshot, rows| self.capture_from_replay(snapshot, rows),
             )
             .map_err(|error| {
                 // An existing epoch reads its archive frontier before the row-view
@@ -159,10 +212,38 @@ impl RuntimeSubagentForkReadWork {
     fn capture_from_replay(
         &self,
         source: &crate::storage::transcript::ConversationReplaySnapshot,
+        original_rows: &[mez_agent::TranscriptEntry],
     ) -> Result<(
         RuntimeSubagentForkSnapshot,
         Vec<(u64, mez_agent::ContextBlockRecord)>,
     )> {
+        if let Some(replay) = &source.replay {
+            let history = super::super::context::runtime_agent_history_epoch_from_snapshot(
+                super::super::context::RuntimeAgentHistoryEpochInputs {
+                    pane_id: self.parent_pane_id.clone(),
+                    conversation_id: self.source_conversation_id.clone(),
+                    ephemeral_source_entries: None,
+                    active_entries: None,
+                    pending_entries: self.pending.clone(),
+                },
+                None,
+                source.view.logical.clone(),
+                Some(source),
+            );
+            let owner = history.replay_owner()?.ok_or_else(|| {
+                MezError::invalid_state("fork source lost its original typed checkpoint")
+            })?;
+            let replay = replay.fork_source(&owner, original_rows)?;
+            return Ok((
+                RuntimeSubagentForkSnapshot::from_replay_source(
+                    self.prompt_cache_lineage_id.clone(),
+                    replay,
+                    self.source_high_water,
+                    owner.context().stable_block_records(),
+                )?,
+                Vec::new(),
+            ));
+        }
         let mut compaction_epoch = source.epoch.clone();
         if let Some(epoch) = compaction_epoch.as_mut() {
             if epoch.through_sequence > self.source_high_water {
@@ -279,6 +360,7 @@ impl RuntimeSubagentForkReadWork {
                 prompt_cache_lineage_id: self.prompt_cache_lineage_id.clone(),
                 entries,
                 compaction_epoch,
+                replay: None,
                 source_high_water: self.source_high_water,
                 row_origins,
                 row_records,
@@ -327,6 +409,7 @@ impl RuntimeSessionService {
                     prompt_cache_lineage_id: session.prompt_cache_lineage_id.clone(),
                     entries: Vec::new(),
                     compaction_epoch: None,
+                    replay: None,
                     source_high_water: 0,
                     row_origins: Default::default(),
                     row_records: Default::default(),
@@ -355,9 +438,75 @@ impl RuntimeSessionService {
             .ephemeral_transcript_source_conversation_id
             .clone()
             .unwrap_or_else(|| parent_session.session_id.clone());
-        if self
-            .persistence
-            .bookkeeping_pending(&source_conversation_id)
+        let memory = if parent_session.ephemeral {
+            let binding = self
+                .frozen_replay_binding(parent_pane_id.as_str(), &parent_session.session_id)
+                .cloned();
+            let mut live = None;
+            let selected = if let Some(turn_id) = parent_session.running_turn_id.as_deref() {
+                let turn = self
+                    .agent_turn_ledger()
+                    .turn(turn_id)
+                    .filter(|turn| turn.conversation_id == parent_session.session_id)
+                    .ok_or_else(|| {
+                        MezError::conflict("NoStore fork lost its actual active turn")
+                    })?;
+                let body = self.agent_turn_replay_context(turn_id).ok_or_else(|| {
+                    MezError::conflict("NoStore fork actual live source is unavailable")
+                })?;
+                if body.has_replay_owner() {
+                    let selected = super::super::RuntimeFrozenReplayHistory::from_live(
+                        mez_agent::ReplayConversationId::new(&parent_session.session_id)?,
+                        body,
+                        self.agent_turn_history_source(turn_id).cloned(),
+                        binding
+                            .as_ref()
+                            .map_or(0, |source| source.archive_frontier()),
+                        binding.as_ref(),
+                        Some((
+                            crate::storage::transcript::replay_epoch::ReplaySourceOrigin::new(
+                                &turn.turn_id,
+                                &turn.agent_id,
+                                &turn.pane_id,
+                            )?,
+                            self.agent_turn_imported_history_sequence_high_water(turn_id),
+                        )),
+                    )?;
+                    live = Some((
+                        turn_id.to_owned(),
+                        mez_agent::ReplayEpochContext::from_owned_context(
+                            mez_agent::ReplayConversationId::new(&parent_session.session_id)?,
+                            body.clone(),
+                        )?
+                        .checkpoint()?,
+                    ));
+                    Some(selected)
+                } else if binding.is_some() {
+                    return Err(MezError::conflict(
+                        "NoStore live source lost its original canonical owner",
+                    ));
+                } else {
+                    None
+                }
+            } else {
+                binding.clone()
+            };
+            selected
+                .map(|selected| {
+                    Ok::<_, MezError>(std::sync::Arc::new(RuntimeSubagentForkMemorySource {
+                        selected: selected.freeze_for_fork()?,
+                        binding,
+                        live,
+                    }))
+                })
+                .transpose()?
+        } else {
+            None
+        };
+        if memory.is_none()
+            && self
+                .persistence
+                .bookkeeping_pending(&source_conversation_id)
         {
             return Err(MezError::conflict(
                 "conversation bookkeeping must settle before fork capture",
@@ -382,17 +531,21 @@ impl RuntimeSessionService {
             parent_session.transcript_high_water
         };
         let Some(store) = self.persistence.cloned_transcript_store() else {
-            if source_entries == 0 && source_high_water == 0 {
+            if memory.is_none() && source_entries == 0 && source_high_water == 0 {
                 return Ok(None);
             }
             return Err(MezError::invalid_state(
                 "forked subagent sessions require the parent durable transcript store",
             ));
         };
-        let pending = self.persistence.pending_transcript_context_at_path(
-            &store.transcript_path(&source_conversation_id)?,
-            &source_conversation_id,
-        )?;
+        let pending = if memory.is_some() {
+            Default::default()
+        } else {
+            self.persistence.pending_transcript_context_at_path(
+                &store.transcript_path(&source_conversation_id)?,
+                &source_conversation_id,
+            )?
+        };
         Ok(Some(RuntimeSubagentForkReadWork {
             store,
             #[cfg(test)]
@@ -409,11 +562,54 @@ impl RuntimeSessionService {
                     .is_some(),
             pending,
             prompt_cache_lineage_id: parent_session.prompt_cache_lineage_id,
+            memory,
         }))
     }
 }
 
 impl RuntimeSubagentForkSnapshot {
+    fn from_replay_source(
+        prompt_cache_lineage_id: String,
+        replay: crate::storage::transcript::replay_epoch::ReplayForkSource,
+        source_high_water: u64,
+        stable: Vec<mez_agent::StableContextBlockRecord>,
+    ) -> Result<Self> {
+        let entries = replay.rows().to_vec();
+        let mut origins = crate::storage::transcript::TranscriptRowOrigins::new();
+        let mut records = crate::storage::transcript::TranscriptRowRecords::new();
+        for row in &entries {
+            let record = mez_agent::transcript::TranscriptContextRecord::from_transcript_content(
+                &row.content,
+            )?;
+            if let Some(record) = record {
+                origins.insert(row.sequence, record.record().occurrence_id());
+                records.insert(row.sequence, record.record());
+            } else {
+                origins.insert(
+                    row.sequence,
+                    *replay.control_origins().get(&row.sequence).ok_or_else(|| {
+                        MezError::invalid_state("fork raw control placement is missing")
+                    })?,
+                );
+            }
+        }
+        let has_head = replay.has_head();
+        let source_high_water = if has_head {
+            source_high_water
+        } else {
+            entries.len() as u64
+        };
+        Ok(Self {
+            prompt_cache_lineage_id,
+            entries,
+            compaction_epoch: None,
+            replay: has_head.then(|| std::sync::Arc::new(replay)),
+            source_high_water,
+            row_origins: origins,
+            row_records: records,
+            stable_records: Some(stable),
+        })
+    }
     /// Rebinds a checked source into independently sequenced child ownership.
     /// Prefix-covered raw rows stay excluded; complete selective anchors shift
     /// with the physical tail. Terminal witnesses become inert provenance only
@@ -424,6 +620,33 @@ impl RuntimeSubagentForkSnapshot {
         child_pane: &str,
         created_at: u64,
     ) -> Result<Option<crate::storage::transcript::TranscriptAppendBatch>> {
+        if let Some(replay) = &self.replay {
+            let rows = self
+                .entries
+                .iter()
+                .cloned()
+                .enumerate()
+                .map(|(index, mut row)| {
+                    row.conversation_id = child_cid.into();
+                    row.sequence = index as u64 + 1;
+                    row.created_at_unix_seconds = created_at;
+                    row
+                })
+                .collect();
+            return Ok(Some(
+                crate::storage::transcript::TranscriptAppendBatch::initial_replay(
+                    replay.for_target(child_cid)?,
+                    rows,
+                )?
+                .with_initial_row_accounting(
+                    crate::storage::transcript::InitialTranscriptRowAccounting::new(
+                        self.row_origins.clone(),
+                        self.row_records.clone(),
+                    )
+                    .with_stable_records(self.stable_records.clone())?,
+                )?,
+            ));
+        }
         let prefix = self
             .compaction_epoch
             .as_ref()
@@ -540,6 +763,39 @@ pub(super) fn child_history(
     batch: &crate::storage::transcript::TranscriptAppendBatch,
     store: Option<crate::storage::transcript::AgentTranscriptStore>,
 ) -> Result<crate::runtime::control::RuntimeAgentTranscriptContext> {
+    if let Some(initial) = batch.initial_replay_epoch() {
+        let snapshot = store
+            .as_ref()
+            .map(|store| initial.pending_snapshot(store))
+            .transpose()?
+            .map(std::sync::Arc::new);
+        let (records, blocks) =
+            super::super::context_records::RuntimeContextRecords::from_replay_owner(
+                mez_agent::ReplayConversationId::new(batch.conversation_id())?,
+                initial.owner()?,
+                snapshot,
+            )?;
+        let mut history = crate::runtime::control::RuntimeAgentTranscriptContext {
+            source: None,
+            blocks,
+            records,
+            execution_events: Vec::new(),
+            provider_history_repair_identity: None,
+        };
+        if let Some(store) = store {
+            super::super::RuntimeAgentHistorySource::attach(
+                &mut history, super::super::RuntimeAgentHistoryEpochWork {
+                    store, pending_capture_error: None,
+                    inputs: super::super::context::RuntimeAgentHistoryEpochInputs {
+                        pane_id: pane_id.into(), conversation_id: batch.conversation_id().into(),
+                        ephemeral_source_entries: None, active_entries: Some(batch.entries().len()),
+                        pending_entries: crate::runtime::persistence::RuntimePendingTranscriptContext::from_batch(batch)?,
+                    },
+                }, None, batch.entries().to_vec(),
+            );
+        }
+        return Ok(history);
+    }
     let inputs = super::super::context::RuntimeAgentHistoryEpochInputs {
         pane_id: pane_id.into(),
         conversation_id: batch.conversation_id().into(),

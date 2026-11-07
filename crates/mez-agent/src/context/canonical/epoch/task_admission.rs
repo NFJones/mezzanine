@@ -83,7 +83,7 @@ impl ReplayEpochContext {
                 body.append_imported_replay_arrivals(blocks, records, execution, sequences)?;
             }
             None => {
-                body.append_imported_history_with_execution(blocks, records, execution)?;
+                body.append_live_task_source(blocks, records, execution)?;
             }
         }
         let first = body.chronology()[start].record().occurrence_id();

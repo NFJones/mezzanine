@@ -352,6 +352,81 @@ mod settlement {
         context.validate_placement_order().unwrap();
     }
 
+    /// Different executions may reuse a local action id and even identical
+    /// evidence. Settlement must preserve the earlier sealed occurrence and
+    /// append one distinct result for the new group, idempotently within it.
+    #[test]
+    fn settled_results_preserve_same_action_id_in_other_execution_groups() {
+        for text in ["finished", "different result"] {
+            let mut context = crate::ReplayEpochContext::new(
+                crate::ReplayConversationId::new("result-group-ownership").unwrap(),
+                AgentContext::empty(),
+            )
+            .unwrap()
+            .into_owned_context();
+            let first_group = ContextExecutionGroupId::new("first execution").unwrap();
+            context
+                .append_assistant_event("assistant", "first response", first_group.clone())
+                .unwrap();
+            context
+                .commit_settled_action_results_in_group(
+                    &[action_result(
+                        "action-1",
+                        ActionStatus::Succeeded,
+                        "finished",
+                    )],
+                    first_group.clone(),
+                )
+                .unwrap();
+            let fence = context
+                .replay_execution_append_owner(&first_group)
+                .unwrap()
+                .clone();
+            context
+                .update_replay_owner(|owner| owner.finish_execution_group(&fence))
+                .unwrap();
+            let earlier = context.chronology().to_vec();
+
+            let second_group = ContextExecutionGroupId::new("second execution").unwrap();
+            context
+                .append_assistant_event("assistant", "second response", second_group.clone())
+                .unwrap();
+            let result = action_result("action-1", ActionStatus::Succeeded, text);
+            assert_eq!(
+                context
+                    .commit_settled_action_results_in_group(
+                        std::slice::from_ref(&result),
+                        second_group.clone(),
+                    )
+                    .unwrap(),
+                1,
+                "another group's result cannot satisfy this execution"
+            );
+            assert_eq!(&context.chronology()[..earlier.len()], earlier);
+            assert_eq!(context.chronology().len(), earlier.len() + 2);
+            assert_ne!(
+                context.chronology()[1].record(),
+                context.chronology().last().unwrap().record(),
+            );
+            let before_duplicate = context.clone();
+            assert_eq!(
+                context
+                    .commit_settled_action_results_in_group(&[result], second_group.clone())
+                    .unwrap(),
+                0,
+            );
+            assert_eq!(context, before_duplicate);
+            let fence = context
+                .replay_execution_append_owner(&second_group)
+                .unwrap()
+                .clone();
+            context
+                .update_replay_owner(|owner| owner.finish_execution_group(&fence))
+                .unwrap();
+            assert_eq!(&context.chronology()[..earlier.len()], earlier);
+        }
+    }
+
     /// Verifies a batch containing unresolved controller state is rejected
     /// before any otherwise terminal sibling can mutate chronology.
     #[test]

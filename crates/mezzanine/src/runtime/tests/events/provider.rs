@@ -1632,7 +1632,8 @@ fn runtime_transcript_persistence_preserves_interleaved_user_steering_order() {
         .filter_map(|(index, entry)| {
             matches!(
                 mez_agent::TranscriptContextEvent::from_transcript_content(&entry.content),
-                Some(mez_agent::TranscriptContextEvent::UserEvent { content, .. })
+                Some(mez_agent::TranscriptContextEvent::UserEvent { content, .. }
+                    | mez_agent::TranscriptContextEvent::TaskAdmission { content, .. })
                     if content == "repeat this instruction exactly"
             )
             .then_some(index)
@@ -1878,7 +1879,8 @@ fn runtime_terminal_execution_transcript_persistence_is_idempotent() {
         .position(|entry| {
             matches!(
                 mez_agent::TranscriptContextEvent::from_transcript_content(&entry.content),
-                Some(mez_agent::TranscriptContextEvent::UserEvent { label, .. })
+                Some(mez_agent::TranscriptContextEvent::UserEvent { label, .. }
+                    | mez_agent::TranscriptContextEvent::TaskAdmission { label, .. })
                     if label == "user prompt"
             )
         })
@@ -2296,7 +2298,8 @@ fn runtime_routed_handoff_summary_persists_once_and_rehydrates_with_parent_answe
         .position(|entry| {
             matches!(
                 mez_agent::TranscriptContextEvent::from_transcript_content(&entry.content),
-                Some(mez_agent::TranscriptContextEvent::UserEvent { label, .. })
+                Some(mez_agent::TranscriptContextEvent::UserEvent { label, .. }
+                    | mez_agent::TranscriptContextEvent::TaskAdmission { label, .. })
                     if label == "user prompt"
             )
         })

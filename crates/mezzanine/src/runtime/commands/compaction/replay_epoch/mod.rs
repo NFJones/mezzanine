@@ -11,6 +11,8 @@ use mez_agent::{AgentContext, ReplayConversationId, ReplayEpochContext, ReplayHe
 use std::sync::Arc;
 
 mod adoption;
+mod manual;
+pub(in crate::runtime::commands::compaction) use manual::manual_replay_task;
 mod source;
 mod worker;
 pub(super) use source::Preparation;

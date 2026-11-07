@@ -8,6 +8,7 @@
 
 mod completion;
 mod context;
+mod inline_replay;
 mod loop_control;
 mod persistence;
 mod recovery;

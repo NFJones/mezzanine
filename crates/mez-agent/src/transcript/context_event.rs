@@ -246,7 +246,9 @@ impl TranscriptContextEvent {
     ) -> Option<Self> {
         let label = label.into();
         let content = content.into();
-        if !valid_prompt_boundary(source, &label, &content) {
+        if source == ContextSourceKind::RuntimeHint
+            || !valid_prompt_boundary(source, &label, &content)
+        {
             return None;
         }
         Some(Self::PromptBoundary {
@@ -603,6 +605,8 @@ impl TranscriptContextEvent {
                 let label = value.get("label")?.as_str()?;
                 let content = value.get("content")?.as_str()?;
                 if !valid_prompt_boundary(source, label, content)
+                    || (source == ContextSourceKind::RuntimeHint
+                        && event_sequence.is_none_or(|sequence| sequence == 0))
                     || prompt_boundary_sha256(source, event_sequence, label, content)
                         != projection_sha256
                 {
@@ -748,6 +752,7 @@ fn prompt_boundary_source_name(source: ContextSourceKind) -> &'static str {
         ContextSourceKind::PeerMessage => "peer_message",
         ContextSourceKind::Policy => "policy",
         ContextSourceKind::Configuration => "configuration",
+        ContextSourceKind::RuntimeHint => "runtime_hint",
         _ => "unsupported",
     }
 }
@@ -760,6 +765,7 @@ fn prompt_boundary_source(source: &str) -> Option<ContextSourceKind> {
         "peer_message" => Some(ContextSourceKind::PeerMessage),
         "policy" => Some(ContextSourceKind::Policy),
         "configuration" => Some(ContextSourceKind::Configuration),
+        "runtime_hint" => Some(ContextSourceKind::RuntimeHint),
         _ => None,
     }
 }
@@ -932,6 +938,34 @@ fn provider_owner_hash_material(owner: &ProviderContinuityOwner) -> String {
 
 #[cfg(test)]
 mod tests {
+    /// Neutral facts keep chronology without acquiring instruction or native rights.
+    #[test]
+    fn runtime_fact_boundary_requires_original_sequence_and_round_trips() {
+        use super::*;
+        assert!(
+            TranscriptContextEvent::prompt_boundary(
+                ContextSourceKind::RuntimeHint,
+                "fact",
+                "original fact",
+            )
+            .is_none()
+        );
+        let event = TranscriptContextEvent::prompt_boundary_with_event_sequence(
+            ContextSourceKind::RuntimeHint,
+            7,
+            "fact",
+            "original fact",
+        )
+        .unwrap();
+        assert_eq!(
+            TranscriptContextEvent::from_transcript_content(&event.to_transcript_content()),
+            Some(event.clone())
+        );
+        let mut value = event.to_record_value();
+        value["event_sequence"] = Value::Null;
+        assert!(TranscriptContextEvent::from_record_value(&value).is_none());
+    }
+
     use super::*;
 
     /// Verifies routed-handoff context survives an exact typed transcript

@@ -312,10 +312,10 @@ impl RuntimeSessionService {
         .max(1);
         let configured_tail_percent = self.agent_compaction_raw_retention_percent();
         let provider_projection = self.agent_provider_budget_projection(&model_profile);
-        // An authoritative provider rejection can invalidate the optional raw
-        // reservation even when the ordinary planner selected no replacement.
-        // Replan locally without another provider request, never below the
-        // planner's mandatory one-percent complete-group suffix.
+        // Legacy projections can lower their optional reservation. Canonical
+        // owners instead use the configured policy and oldest-closed-unit
+        // progress rule at queue admission; this legacy projection cannot veto
+        // that decision or change its retained tail.
         let mut retained_tail_percent = configured_tail_percent;
         let mut plan = self.plan_agent_context_compaction(
             provider_projection,
@@ -324,20 +324,22 @@ impl RuntimeSessionService {
             retained_tail_percent,
             consumed_sequence_high_water,
         )?;
-        for percent in [5, 2, 1] {
-            if plan.changes_context() || percent >= retained_tail_percent {
-                continue;
+        if !context.has_replay_owner() {
+            for percent in [5, 2, 1] {
+                if plan.changes_context() || percent >= retained_tail_percent {
+                    continue;
+                }
+                retained_tail_percent = percent;
+                plan = self.plan_agent_context_compaction(
+                    provider_projection,
+                    &context,
+                    recovery_budget_words,
+                    retained_tail_percent,
+                    consumed_sequence_high_water,
+                )?;
             }
-            retained_tail_percent = percent;
-            plan = self.plan_agent_context_compaction(
-                provider_projection,
-                &context,
-                recovery_budget_words,
-                retained_tail_percent,
-                consumed_sequence_high_water,
-            )?;
         }
-        if !plan.changes_context() {
+        if !plan.changes_context() && !context.has_replay_owner() {
             self.append_agent_trace_turn_event(
                 &turn.pane_id,
                 turn_id,

@@ -8,6 +8,9 @@ use std::{
     sync::{Arc, Barrier},
 };
 
+mod initial;
+mod memory;
+
 /// Owns an isolated physical temporary directory on Linux and macOS, removed
 /// after every scenario. Source and archive bytes are synthetic and task-owned.
 struct Fixture {
@@ -136,6 +139,66 @@ fn empty_replay_discovery_preserves_authority_and_refuses_broken_receipt() {
         .join(digest(&original));
     fs::remove_file(receipt).unwrap();
     assert!(fixture.store.summary("conversation-a").is_err());
+}
+
+/// Copied roots cannot masquerade as rewrite proposals or advance a new CAS
+/// chain. Resealed malformed headers still fail before payload adoption; the
+/// actual fork integration separately qualifies independent physical backing.
+#[test]
+fn copied_root_rejects_resealed_provenance_and_membership_changes() {
+    let fixture = Fixture::new();
+    let prepared = proposal(&fixture, &source(), None, "original model head");
+    fixture.store.publish_replay_epoch(&prepared).unwrap();
+    let _source_lease = fixture
+        .store
+        .acquire_conversation_lock("conversation-a")
+        .unwrap();
+    let _target_lease = fixture
+        .store
+        .acquire_conversation_lock("conversation-b")
+        .unwrap();
+    let copy = fixture
+        .store
+        .prepare_replay_copy_locked("conversation-a", "conversation-b", &[])
+        .unwrap()
+        .unwrap();
+    let (envelope, payloads) = copy
+        .into_envelope(prepared.envelope.manifest.archive_cut.clone().unwrap())
+        .unwrap();
+    let restored =
+        ReplayEpochPublication::validate_candidate(&envelope, &payloads, AgentContext::empty())
+            .unwrap();
+    assert_eq!(
+        restored.head().unwrap().conversation().as_str(),
+        "conversation-b"
+    );
+    let mutations: [fn(&mut serde_json::Value); 10] = [
+        |manifest| manifest["version"] = serde_json::json!(7),
+        |manifest| manifest["revision"] = serde_json::json!(2),
+        |manifest| manifest["copy_origin"]["conversation"] = serde_json::json!("conversation-b"),
+        |manifest| manifest["copy_origin"]["identity"]["epoch_revision"] = serde_json::json!(2),
+        |manifest| manifest["copy_origin"]["identity"]["sha256"] = serde_json::json!("invalid"),
+        |manifest| {
+            manifest["copy_origin"]["head"] =
+                serde_json::json!(ContextBlockOccurrenceId::allocate())
+        },
+        |manifest| manifest["covered"] = serde_json::json!([ContextBlockOccurrenceId::allocate()]),
+        |manifest| manifest["copy_origin"] = serde_json::Value::Null,
+        |manifest| manifest["expected_parent"] = manifest["copy_origin"]["identity"].clone(),
+        |manifest| {
+            manifest["source_checkpoint"]["next_event_sequence"] = serde_json::json!(999_999)
+        },
+    ];
+    for mutate in mutations {
+        let mut value = serde_json::to_value(&envelope).unwrap();
+        mutate(&mut value["manifest"]);
+        let mut altered: Envelope = serde_json::from_value(value).unwrap();
+        altered.sha256 = digest(&encode(&altered.manifest).unwrap());
+        assert!(
+            ReplayEpochPublication::validate_candidate(&altered, &payloads, AgentContext::empty(),)
+                .is_err()
+        );
+    }
 }
 
 /// The very first live source has no ordinary archive. Publication persists
@@ -1126,14 +1189,14 @@ fn version_five_source_upgrades_through_qualified_publication() {
     assert!(mez_agent::invoked_mcp_tools_for_context(current.context(), &summary).is_empty());
     current.append_fact("new", "new exact source").unwrap();
     let next = proposal(&fixture, &current, Some(parent), "current version head");
-    assert_eq!(next.envelope.manifest.version, 7);
+    assert_eq!(next.envelope.manifest.version, 9);
     assert!(next.envelope.manifest.archive_cut.is_some());
     fixture.store.publish_replay_epoch(&next).unwrap();
     assert_eq!(fixture.load().0, next.identity());
 }
 
 /// The version-six wire shape is unchanged when no task-boundary field exists.
-/// A cold reader may load it, then the sole writer advances to version seven.
+/// A cold reader may load it, then the sole writer advances to its current version.
 #[test]
 fn version_six_source_upgrades_without_reinterpreting_task_lifecycle() {
     let fixture = Fixture::new();
@@ -1151,7 +1214,7 @@ fn version_six_source_upgrades_without_reinterpreting_task_lifecycle() {
         .append_fact("arrival", "original arrival bytes")
         .unwrap();
     let next = proposal(&fixture, &current, Some(parent), "new head");
-    assert_eq!(next.envelope.manifest.version, 7);
+    assert_eq!(next.envelope.manifest.version, 9);
     fixture.store.publish_replay_epoch(&next).unwrap();
     assert_eq!(fixture.load().0, next.identity());
 }
@@ -1189,6 +1252,7 @@ fn original_checkpoint_format(mut envelope: Envelope) -> Envelope {
     ] {
         let mut value = serde_json::to_value(&*checkpoint).unwrap();
         value["version"] = serde_json::json!(1);
+        value.as_object_mut().unwrap().remove("execution_intervals");
         value
             .as_object_mut()
             .unwrap()

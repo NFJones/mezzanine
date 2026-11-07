@@ -37,6 +37,8 @@ pub(crate) struct RuntimeManualCompactionPreparation {
     pub(crate) transcript_entries: u64,
     /// Frozen logical frontier, independent of the retained raw row count.
     pub(crate) transcript_high_water: u64,
+    /// Save policy belongs to the admitted source, even at equal zero counts.
+    pub(crate) ephemeral: bool,
     /// Original kernel pane incarnation, when a local root exists.
     pub(crate) process: Option<crate::runtime::processes::RuntimePaneProcessIdentity>,
     /// Installed store identity/settings captured before worker I/O.
@@ -67,6 +69,28 @@ impl RuntimeManualCompactionPreparation {
 }
 
 impl RuntimeSessionService {
+    /// Distinguishes actual source absence from a zero display count. Saved
+    /// bindings still need their typed-head probe. An explicitly empty NoStore
+    /// window without a frozen owner must not inherit a saved namesake's head.
+    pub(super) fn manual_source_is_known_empty(&self, pane: &str) -> bool {
+        let Some(session) = self.agent_shell_store().get(pane) else {
+            return false;
+        };
+        if session.ephemeral
+            && self
+                .frozen_replay_binding(pane, &session.session_id)
+                .is_some()
+        {
+            return false;
+        }
+        self.persistence.transcript_store().is_none()
+            || session.ephemeral
+                && session.ephemeral_transcript_source_entries == 0
+                && session
+                    .ephemeral_transcript_source_conversation_id
+                    .is_none()
+    }
+
     /// Admits exact preparation ownership before durable decoding. Empty logical
     /// history retains the synchronous no-work response; other operations become
     /// visibly preparing while worker admission and source I/O are outstanding.
@@ -78,7 +102,7 @@ impl RuntimeSessionService {
             .agent_shell_store()
             .get(pane_id)
             .ok_or_else(|| MezError::invalid_state("manual compaction session unavailable"))?;
-        if session.transcript_entries == 0 {
+        if session.transcript_entries == 0 && self.manual_source_is_known_empty(pane_id) {
             return self.queue_agent_shell_compaction_with_model(pane_id, "manual", None, None);
         }
         if session.running_turn_id.is_some() || self.agent_is_compacting(pane_id) {
@@ -89,6 +113,7 @@ impl RuntimeSessionService {
         let conversation_id = session.session_id.clone();
         let transcript_entries = session.transcript_entries;
         let transcript_high_water = session.transcript_high_water;
+        let ephemeral = session.ephemeral;
         let visibility = session.visibility;
         self.prepare_agent_context_prerequisites(pane_id, true)?;
         let permit = self.reserve_agent_source_preparation()?;
@@ -103,6 +128,7 @@ impl RuntimeSessionService {
             config_layers: self.integration.config_layers().to_vec(),
             transcript_entries,
             transcript_high_water,
+            ephemeral,
             process,
             store,
             source: source::ManualCompactionSourceWork::capture(
@@ -179,11 +205,17 @@ impl RuntimeSessionService {
             .get(&work.pane_id)
             .ok_or_else(|| MezError::conflict("compaction conversation was removed"))?;
         if session.session_id != work.conversation_id
+            || session.ephemeral != work.ephemeral
             || session.transcript_entries != work.transcript_entries
             || session.transcript_high_water != work.transcript_high_water
             || self.session.config_generation != work.config_generation
             || self.integration.config_layers() != work.config_layers.as_slice()
             || self.persistence.transcript_store() != work.store.as_ref()
+            || session
+                .ephemeral
+                .then(|| self.frozen_replay_binding(&work.pane_id, &session.session_id))
+                .flatten()
+                != work.history.frozen_replay.as_ref()
         {
             return Err(MezError::conflict("compaction preparation became stale"));
         }

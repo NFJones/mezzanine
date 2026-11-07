@@ -28,6 +28,8 @@ pub(crate) struct RuntimeManualCompactionRequestWork {
     source_epoch: Option<crate::storage::transcript::AgentCompactionEpoch>,
     retained_entries: u64,
     origin: crate::storage::token_usage::AccountingOrigin,
+    /// Canonical source selected before rendering; legacy rows cannot replace it.
+    replay_source: Option<std::sync::Arc<RuntimeCompactionReplaySource>>,
     /// Independent request-rendering barrier, absent from production work.
     #[cfg(test)]
     pub(crate) probe: Option<(
@@ -71,9 +73,20 @@ impl RuntimeManualCompactionRequestWork {
             source_epoch,
             retained_entries,
             origin,
+            replay_source: None,
             #[cfg(test)]
             probe: None,
         }
+    }
+
+    /// Selects original canonical input before the existing rendering phase.
+    /// Neither legacy rows nor the temporary request prompt enter that source.
+    pub(in crate::runtime::commands::compaction) fn with_replay_source(
+        mut self,
+        source: std::sync::Arc<RuntimeCompactionReplaySource>,
+    ) -> Self {
+        self.replay_source = Some(source);
+        self
     }
 
     /// Adds an explicit fixture gate while leaving immutable product inputs
@@ -95,6 +108,18 @@ impl RuntimeManualCompactionRequestWork {
     /// lookup, I/O, provider call or publication occurs. Existing request errors
     /// propagate and the caller must validate original ownership before queuing.
     pub(crate) fn execute_request(&self) -> Result<RuntimeAgentCompactionTask> {
+        if let Some(source) = &self.replay_source {
+            return replay_epoch::manual_replay_task(
+                &self.owner.pane_id,
+                &self.profile_name,
+                &self.profile,
+                source.clone(),
+                self.owner.compaction_epoch,
+                self.owner.transcript_entries,
+                self.origin.clone(),
+                self.allowed_actions.clone(),
+            );
+        }
         let source = if self.selective_history {
             CompactionTranscriptSource::projected(&self.entries, &self.ranges)?
         } else {

@@ -10960,6 +10960,36 @@ and frontier are unchanged. Retired handles and completed-source proofs MUST NOT
 close or verify the renewed interval. Repeated retention of a still-pending
 interval MUST remain idempotent. Cold checkpoints MUST mint fresh pending
 allocations rather than serializing or reconstructing these live tokens.
+Nested replay checkpoints MUST write version three descriptive execution
+intervals for retained groups. Each actual new interval has a fresh UUID and a
+checked, increasing per-group generation, independent of event, epoch and
+dispatch numbers. This metadata MUST remain distinct from the live allocation:
+restoring matching bytes MUST still invalidate original live handles. Pending
+and closed retained groups MUST preserve their latest descriptive interval;
+covered groups MUST shed it. Source extension MUST NOT rewind known ancestry.
+Version-one and version-two checkpoints MUST import missing intervals as
+explicit unknown ancestry. Unknown imported groups MUST stay protected and MUST
+NOT export an original producer closure claim. Reusing a closed unknown interval
+MUST require explicit original-source qualification rather than guessing a new
+generation. Exhausted generations MUST refuse renewal without changing source.
+A pending descriptor MUST NOT reopen closed unknown ancestry before its original
+closed interval has been qualified.
+Passive imported source extending a closed group MUST retain the last known
+interval only as a provisional lower bound and allocate fresh live protection.
+It MUST NOT invent the original producer's renewal UUID. This provisional state
+MUST survive checkpointing without exporting a producer claim; only a qualified
+newer original interval may bind its actual identity.
+Qualification that only refines this provisional description MUST preserve its
+already admitted live allocation and captured source fence. Genuine protection
+renewal MUST continue to allocate a distinct live token.
+A replay lifecycle port MUST independently qualify original producer custody
+before accepting a state descriptor. It MUST match exact original member IDs,
+order and event sequences, reject equal-generation identity conflicts, keep
+later source and renewed intervals protected against stale closures, and require
+complete original native pairing. Decoding a closed checkpoint or reapplying a
+same-interval pending descriptor MUST NOT manufacture a private closure proof or
+reopen a closed interval. These versions change replay metadata only, not the
+configuration schema or original effect/persistence receipts.
 
 The single-head storage format extends the same authoritative compaction
 sidecar, with an exact parent/publication identity and integrity-bound
@@ -11076,6 +11106,21 @@ messages, and reuse immutable payload references. Its logical payload bound is
 backing or incomplete inherited escrow MUST refuse rather than acknowledge loss.
 This is per-publication audit backing, not a continuously written second journal.
 
+Active-turn publication MUST retain the original compaction trigger and bounded
+provider-retry attempt through inference, storage recovery and acknowledgment.
+Only accepted adoption MAY resume that exact retry. Provider-context recovery
+MUST complete its existing recovery/timer/dispatch reducer boundaries once;
+setting a generic provider-ready flag MUST NOT leave the original attempt in
+recovery or change its diagnostic reason. Observed-input recovery retains its
+own reason. Idle manual publication MUST NOT create a provider continuation.
+Canonical provider-context recovery MUST reach the shared prefix planner even
+when an older projection reports no work. It MUST keep the configured raw-tail
+policy rather than lower that reservation by trigger. When the reservation fits
+all closed source, the oldest eligible complete unit still permits progress;
+protected active instructions and unfinished groups remain exact. An inapplicable
+projection's zero summary allowance MUST NOT become a zero-output instruction
+for independently selected canonical work.
+
 Late ordinary rows MAY be deduplicated only after exact original provenance,
 occurrence/record, semantic bytes and group/provider/ordinal qualification under
 the same replay lease. The production semantic renderer MUST independently prove
@@ -11106,9 +11151,27 @@ execution ownership and ordinary append receipts remain independently enforced.
 Actual lifecycle witnesses MUST survive in-memory history preparation/composition
 so a subsequent publication can qualify its extension against the committed parent;
 a descriptive checkpoint alone MUST NOT mint those witnesses.
-Checked arrival source MAY be marked recoverable for immutable publication
-backing, but eligibility MUST still require its actual exact/pending lifecycle
+An execution containing only successful local `say` actions and no asynchronous
+completion owner MUST release its replay protection after actual presentation
+succeeds. The producer MUST capture its exact fence when the action results
+are newly appended, before presentation. Duplicate result application MUST NOT
+acquire a newer fence. Failed presentation, a changed source frontier, or renewed
+protection MUST leave that protection intact. Mixed batches and asynchronous
+completion groups MUST retain their existing independent retirement gates.
+Original task input admitted by its actual live controller and checked arrival
+source MAY be marked recoverable for immutable publication backing before its
+ordinary append settles, but eligibility MUST still require its actual exact/pending lifecycle
 gates; a recoverability flag alone MUST NOT retire protected source.
+Ordinary persistence MUST record original execution interval and closure metadata
+as zero-model System controls using the strict `mez-transcript-context-record/v2`
+envelope. A control MUST preserve its original group, interval, full member prefix,
+canonical sequences and producer. It MUST NOT allocate a model occurrence, cost,
+stable snapshot, execution capability or append acknowledgment. Replay MUST first
+qualify its original source custody; malformed, foreign or contradictory controls
+MUST refuse. User or display text MUST NOT acquire this meaning. Controls for
+already covered source MUST NOT restore that source to model history.
+Ordinary content edits MUST NOT introduce or modify lifecycle control records;
+User-role literal text remains ordinary editable content.
 The original-store/parent history capture MUST accompany imported arrivals into
 publication preparation so their producer cannot become a later publisher's
 turn/agent/pane. The proposal MUST bind those exact original rows to actual source
@@ -11121,8 +11184,10 @@ escrow MUST NOT default to a successful migration.
 
 Version six adds a required immutable archive cut to that same manifest.
 Version seven additionally binds explicit task-suffix boundaries in original
-source escrow and is the only one-head format written. Valid version-five and
-version-six sources MAY advance
+source escrow. Version eight adds independently backed saved-copy roots.
+Version nine additionally distinguishes frozen memory-source copies from
+copies of committed publications and is the only one-head format written.
+Valid version-five through version-eight sources MAY advance
 through the qualified publication path without a provider call. Preparation MUST
 qualify the actual newly observed archive rows against original source and the
 production zero-model renderer, then advance only through a contiguous prefix
@@ -11138,6 +11203,46 @@ Its original first occurrence MUST remain backed while its root remains required
 or unsettled, even if that earlier occurrence already entered the archive cut.
 Earlier manifests MUST NOT carry version-seven boundary metadata. This changes
 conversation persistence only and does not change the configuration schema.
+
+A saved copy MUST preserve the selected head occurrence, canonical epoch and raw
+membership while rebinding conversation ownership and revoking retrieved MCP
+grants. Its copied root MUST start a distinct storage CAS chain, bind
+the original conversation/publication identity, and claim no summary rewrite or
+new covered membership. Current and still-required unsettled payloads MUST be
+independently durable in the target. Parent deletion MUST NOT invalidate them.
+The fork transaction MUST retain its existing ordered conversation leases and
+generation-safe compensation. It MUST rebind only the original logical archive
+cut to copied physical bytes; later copied rows remain arrivals rather than
+being silently hidden by an extended cut. No model call, effect replay, ordinary
+append acknowledgment, current permission or incurred expense is inherited.
+An empty audit archive MUST NOT erase valid typed source or prevent nested saved
+copies; the target still owns a real empty archive. A retained task root's
+earlier covered boundary and required original group framing MUST remain
+independently backed in a copy without reentering the child's model membership.
+Frozen source MUST retain those dependency bytes before a NoStore rewrite can
+remove them from model history; copying MUST NOT reread a later parent binding.
+The saved-fork generation MUST validate its source's complete committed cut and
+original row fingerprints under the held source lease, then bind only those
+genuine images to the actual copied child rows. Child image and execution-index
+publication MUST share a transaction before the copied cut is acknowledged.
+Missing legacy images MUST NOT be inferred from equal bytes or newly indexed as
+source proof. This is the fork's own publication, not an append receipt.
+
+A copy of a NoStore source MUST freeze its actual owned head and raw members,
+including unsaved current-turn arrivals, before worker dispatch. It MUST retain
+each original producer rather than borrow a later turn's identity. Its
+version-nine memory-origin root binds the source conversation, canonical epoch,
+head and immutable capture identity; it MUST NOT invent a committed source
+publication identity or acknowledge the parent's ordinary appends. Durable and
+memory origins are mutually exclusive. Only the child's actual initial receipt
+and persistence gates establish its independent restart durability. The parent
+remains unsaved. A changed live owner MUST invalidate adoption of a frozen worker
+result; deletion of an older saved ancestor MUST NOT change the captured source.
+Before a source has its first head, a NoStore child MUST instead receive the
+original accounted raw projection and qualified zero-model lifecycle controls
+through its initial append receipt. It MUST remain at canonical epoch zero
+without a compaction manifest; task boundaries and execution intervals MUST
+survive cold replay without executing the recorded work.
 
 Ordinary typed history reads MUST validate the committed cut's boundary and
 required index references, then decode only its later archive tail. Current
@@ -11171,6 +11276,55 @@ exact physical source and preserve receipts on corruption. Uncovered/incomplete
 receipts retain their actual recovery path. General bounded ordinary admission,
 recovery and physical settlement still require separate cursor integration.
 
+A task admitted with genuinely empty captured history MUST establish its
+initial canonical owner before provider execution, using the actual conversation
+binding and current trusted prefix. Its revision is zero and it has no summary
+head. A preview without conversation ownership MUST NOT invent that binding.
+Actual user admission MUST retain its exact task suffix boundary; peer admission
+MUST NOT invent a user task. Subsequent execution and peer events MUST acquire
+their existing original lifecycle fences at append, not reconstructed later at
+compaction. This in-memory initialization MUST NOT claim an archive append,
+durable head or restart continuity. First publication MUST use the same source
+backing, expected-absence CAS, bounded storage recovery and actual receipt
+adoption as later epochs. Protected raw members MUST survive even when no
+ordinary archive row exists. Nonempty unowned raw source and legacy summary
+migration still require their independent original-source qualification.
+
+Before a first head exists, the shared leased history reader MAY reconstruct
+canonical revision-zero ownership from fully accounted raw members and their
+explicit original task admissions. Every emitted member MUST resolve to its
+original authored occurrence. Task-start references MUST resolve inside the
+captured projection, in original order, under the same original turn, agent and
+pane as their user root. Reconstruction MUST preserve occurrence IDs, costs,
+sequence reservations and task boundaries; it MUST NOT infer native completion
+or peer handoff from terminal-looking source. Imported execution groups remain
+protected absent an actual qualified lifecycle transition. Legacy or mixed raw
+source lacking complete authored custody requires its explicit migration rather
+than acquiring another task's provenance. First durable publication over this
+raw history MUST retain the captured original producer rows, validate them against
+canonical members and the archive under the mutation lease, and distinguish them
+from source newly authored by the publishing turn. Reading raw history MUST NOT
+acknowledge pending ordinary appends or invent a committed summary head.
+An early canonical prefix emitted before a peer-message custody boundary MUST
+retain the same recorded task-admission framing and original occurrence as its
+later terminal projection. It MUST NOT downgrade that original admission to an
+ordinary user event under the same occurrence identity.
+
+Manual compaction of owned history MUST use that same canonical planner and
+publication/receipt path, including saved history with zero pane display counts
+and a frozen NoStore body with no ordinary archive. It MUST NOT admit a synthetic
+user task, retire the source's exact instructions, infer native completion or
+substitute an archive-row projection. Current trusted stable slots are composed
+separately from the unchanged source. The original idle binding, configuration,
+model, store and physical pane incarnation MUST remain current through acceptance;
+a frozen NoStore view additionally retains its exact captured identity. Accepted
+NoStore publication MUST retain the new in-memory body without claiming restart
+durability. A manual receipt MUST clear only its original compactor and reset
+cache/usage state only on accepted rewrite; it MUST NOT queue an ordinary provider
+continuation or create/complete/fail an unrelated agent turn. Failure remains
+scoped to the original command, retaining an uncertain publication for bounded
+recovery through the same source and proposal.
+
 The typed runtime reader MUST capture the committed identity and
 checked checkpoint under the same conversation lease. Pane display counts MUST
 NOT trim its canonical membership. Prompt composition MUST preserve the head and
@@ -11182,6 +11336,14 @@ their source bytes or occurrence identities. A peer-triggered turn MUST preserve
 those instructions. Late task preludes MUST target the current exact user prompt,
 not historical user instructions. Execution metadata for newly assembled suffix
 events MUST NOT rewrite frozen native ownership.
+An owned routed-worker seed MUST preserve that complete chronological source;
+policy filtering MUST NOT remove members behind its source seal. A genuine child
+copy MUST bind its actual target conversation, revoke inherited retrieval grants
+and establish a fresh descriptive incarnation rather than inherit parent task or
+effect handles. Same-conversation continuation MUST retain its current owner.
+Current child policy and request/cache metadata remain live inputs. The inherited
+body's original import boundary MUST prevent reattributing parent or earlier
+worker occurrences to a later turn; it MUST NOT claim their archive append ACK.
 
 Qualified suffix import MUST seed execution-group ordinals from the actual
 unchanged canonical base. A later native result MAY continue a saved pending
@@ -11304,6 +11466,29 @@ manifest-bound archive cut and required index membership before omitting older
 I/O; the presence of fingerprints alone MUST NOT authorize that omission or
 escrow retirement.
 
+Projection version 5 retains original execution group/ordinal/producer framing
+beside its complete row fingerprint, in the same original accounting
+transaction. This metadata MUST NOT retain duplicate source payloads or grant
+execution/closure authority. A late original lifecycle control MAY use bounded
+member lookups after its source escrow retires, only under the same mutation
+lease and a separately verified manifest-bound archive cut. Descriptor integrity,
+original placement and full fingerprint MUST agree; missing required schema,
+damaged metadata, conflicting placement or missing images MUST refuse locally.
+Versions 1–4 MUST NOT receive guessed descriptors during lookup; actual original
+append accounting MAY migrate and populate only its own exact rows.
+Version-5 raw initial receipts and version-7 typed initial receipts publish
+their child's actual row images
+and execution framing in the same transaction as the initial placement/cost
+proposal. These are independent committed child rows, never acknowledgment of
+the parent's ordinary append. Direct legacy copy proposals and missing old indexes
+MUST NOT receive guessed backfills. A later epoch MUST be able to advance its
+archive cut over these actual indexed initial rows before omitting their I/O.
+Existing qualified source escrow remains usable without that migration. Edits, deletion,
+resequence and replacement placement MUST invalidate obsolete descriptors along
+with their fingerprints. These descriptors MUST travel with saved conversation
+state; they MUST NOT permit lifetime archive decoding or covered-source expansion
+as a fallback.
+
 Repaired authored estimates MUST use that same occurrence-bound cost projection
 on subsequent replay. The raw envelope's format and occurrence remain validated
 before cache selection; cached costs MUST be checked against actual rendering.
@@ -11333,6 +11518,34 @@ those states without publishing repairs. Missing costs and incomplete required
 markers remain recoverable by the original owner. The exact receipt retains ownership through raw, ledger, epoch
 and required-marker failure windows. Valid later cache revisions MUST NOT be
 overwritten by a retry of an older initial proposal.
+
+Typed subagent forks use version-7 initial append receipts. This distinct digest
+domain MUST bind the complete planned typed root, independent payload backing,
+original raw rows and initial accounting proposal. Versions 1–6 retain their
+actual original encodings and recovery domains. A child preserves the captured
+head, canonical epoch, raw occurrence IDs, costs and birth/order metadata while
+starting its own storage CAS root. Its raw rows MUST be independently sequenced
+from one; only a genuinely head-only capture may have no physical raw rows.
+The initial receipt MUST publish rows, accounting, payloads, the exact root and
+required marker before readiness. Recovery MUST reuse that root's original
+publication identity, including after manifest swap or lost acknowledgment.
+A planned initial root is descriptive source, never an ordinary append ACK or
+proof of durability. A subsequent publication MUST recover the exact initial
+receipt and check its actual durable parent before proceeding. A late initial
+retry MUST NOT overwrite a newer or unrelated child root. Native source copies
+require their original checked wire framing; copying never grants execution,
+transport acknowledgment, current permissions or inherited expense.
+An original neutral runtime fact may use the existing authored prompt-boundary
+record with source `runtime_hint` and a positive original event sequence. It
+remains reference data; an unsequenced hint MUST NOT acquire that framing.
+Normal cold replay MUST recover an interrupted typed initial receipt under its
+existing conversation lease before selecting history; it MUST NOT expose the
+partial raw archive while waiting for a separate global recovery scan.
+The existing required-epoch marker MUST guard a typed initial target before
+partial raw writes. While its first manifest is absent, only the exact retained
+initial receipt may repair that target. Losing the required receipt MUST refuse
+replay instead of treating the partial raw archive as complete history. The
+marker alone MUST NOT acknowledge publication or grant readiness.
 
 Version-2 initial accounting additionally retains the original stable snapshot
 preceding the child's physically copied tail. It is a descriptive baseline
@@ -11556,13 +11769,17 @@ the complete source epoch, including qualified absence, across worker and retry
 boundaries. Publication MUST compare that epoch and the selected committed rows
 under the same mutation lease before absorbing ranges. An epoch-only edit MUST
 invalidate an older completion even when every frozen raw row still matches.
-Manual compaction preparation MUST freeze its logical source frontier separately
+Manual compaction preparation over legacy raw row windows MUST freeze its logical source frontier separately
 from the active raw row count. Source rows and canonical history MUST derive from
 one checked snapshot through that frontier. Later durable appends MUST NOT enter
 the admitted source; adoption MUST reject a changed frontier even when the raw
 count is unchanged. A missing captured high-water row or an epoch beyond the
 captured frontier MUST fail before provider dispatch, rather than shorten or
-widen the source.
+widen the source. For canonical owned history, the same leased read MUST instead
+freeze the typed head, exact raw members and qualified arrivals. Pane display
+counts and raw high-water counters MUST NOT trim that membership or classify it
+as empty. Those counters remain actor freshness checks, independently of the
+committed parent/source CAS checked by the storage worker.
 Ordinary model replay MUST capture its authoritative compaction epoch and
 checked transcript window under one conversation mutation lease, then render
 from that immutable snapshot without rereading storage. Pending rows MUST be
@@ -11572,9 +11789,10 @@ previews MUST use the same canonical renderer without publishing the proposal.
 These runtime counters introduce no persisted field or configuration item;
 existing versioned transcript and checkpoint codecs remain authoritative.
 
-The currently wired product prefix/selective adapters have not yet cut over to
-the shared canonical replay-epoch API. The following range, fit and correction
-rules describe those adapters, not the new foundation's source-tail or summary
+Legacy prefix/selective histories still use adapters awaiting explicit migration.
+Owned active-turn and manual history use the shared canonical replay-epoch API.
+The following legacy range, fit and correction rules describe the remaining
+adapters, not the canonical source-tail or summary
 acceptance contract above. Adapter cutover is separate work and MUST NOT become
 a user-selectable old/new engine compatibility switch.
 
@@ -12114,6 +12332,10 @@ encounters an `id` field in model output, Mezzanine MUST ignore it and use the
 locally synthesized identity instead. Future action types that need to
 reference another model-proposed action MUST define explicit action data for
 that reference rather than relying on model-generated bookkeeping identifiers.
+Canonical result settlement MUST bind deduplication and volatile-result
+replacement to the owning execution group. A matching local action identifier
+or identical result text in another execution MUST NOT remove, replace or
+satisfy that group's result occurrence.
 
 The baseline action types are:
 
@@ -15379,6 +15601,11 @@ The baseline command capabilities are:
   version 2 with `compaction_epoch` in their domain-separated digest. Initial raw
   accounting uses version 5, binding the complete original placement/cost proposal
   and its future namespace together with exact rows and the optional epoch.
+  Reconciliation MUST publish full row images and original execution framing in
+  the same accounting transaction, including children without a summary head.
+  Typed initial copies use version 7, binding the complete immutable root and
+  payloads with exact raw rows and initial accounting in their own digest domain.
+  They MUST NOT carry legacy epoch, ordinary append or native custody authority.
   Versions 1–5 retain their original recovery validation/digests without rewriting
   accepted journals; native custody versions 3–4 cannot grant inherited authority.
   Version/shape mismatches and unknown versions MUST fail closed. Existing

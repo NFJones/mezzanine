@@ -24,6 +24,7 @@ mod loop_reuse_continuation;
 mod loop_source_admission;
 mod provider_retry_handoff;
 mod provider_source_handoff;
+mod raw_replay_bootstrap;
 mod remember_source_handoff;
 mod replay_epoch_publication;
 mod request_custody;

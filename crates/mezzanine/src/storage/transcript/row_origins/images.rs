@@ -31,10 +31,31 @@ impl AgentTranscriptStore {
         transaction: &Transaction<'_>,
         batch: &super::super::TranscriptAppendBatch,
     ) -> Result<()> {
-        let accounting = batch
-            .row_accounting()
-            .ok_or_else(|| invalid("missing original append accounting"))?;
-        accounting.validate(batch.entries())?;
+        let origins = if let Some(accounting) = batch.row_accounting() {
+            accounting.validate(batch.entries())?;
+            accounting.origins()
+        } else if let Some(accounting) = batch.initial_row_accounting() {
+            accounting.validate(batch.entries())?;
+            accounting.origins()
+        } else {
+            return Err(invalid("missing original append accounting"));
+        };
+        self.publish_owned_row_images_in_transaction(
+            transaction,
+            &batch.entries().iter().collect::<Vec<_>>(),
+            origins,
+        )
+    }
+
+    /// The caller owns either an accepted append receipt or the existing saved
+    /// fork generation with independently checked original row fingerprints.
+    /// This shared SQL primitive never creates that ownership or an append ACK.
+    fn publish_owned_row_images_in_transaction(
+        &self,
+        transaction: &Transaction<'_>,
+        rows: &[&TranscriptEntry],
+        origins: &TranscriptRowOrigins,
+    ) -> Result<()> {
         let version: u32 = transaction.query_row("PRAGMA user_version", [], |row| row.get(0))?;
         if version < 4 {
             if version == 3 {
@@ -67,9 +88,8 @@ impl AgentTranscriptStore {
                 [u32::from(version == 3)],
             )?;
         }
-        for row in batch.entries() {
-            let origin = accounting
-                .origins()
+        for row in rows {
+            let origin = origins
                 .get(&row.sequence)
                 .ok_or_else(|| invalid("missing original row occurrence"))?;
             let placed: String = transaction.query_row(
@@ -97,6 +117,37 @@ impl AgentTranscriptStore {
             "CREATE INDEX IF NOT EXISTS row_digests_origin ON row_digests(origin);
              CREATE INDEX IF NOT EXISTS origins_origin ON origins(origin);",
         )?;
+        self.publish_execution_sources_in_transaction(transaction, rows)?;
+        Ok(())
+    }
+
+    /// Rebinds only genuine source images to the fork generation's actual
+    /// copied bytes. Source and target leases, original fingerprint validation
+    /// and generation-safe rollback belong to the enclosing fork transaction.
+    /// Missing legacy images remain absent; no original append is acknowledged.
+    pub(in crate::storage::transcript) fn install_copied_row_images_locked(
+        &self,
+        conversation: &str,
+        rows: &[TranscriptEntry],
+        originals: &TranscriptRowOrigins,
+    ) -> Result<()> {
+        if rows.iter().any(|row| row.conversation_id != conversation) {
+            return Err(invalid("copied row image has a foreign target"));
+        }
+        let selected = rows
+            .iter()
+            .filter(|row| originals.contains_key(&row.sequence))
+            .collect::<Vec<_>>();
+        if selected.len() != originals.len() {
+            return Err(invalid("copied row image lost its original placement"));
+        }
+        if selected.is_empty() {
+            return Ok(());
+        }
+        let mut connection = self.open_row_origins_locked(conversation)?;
+        let transaction = connection.transaction()?;
+        self.publish_owned_row_images_in_transaction(&transaction, &selected, originals)?;
+        transaction.commit()?;
         Ok(())
     }
 
@@ -170,7 +221,7 @@ impl AgentTranscriptStore {
         }
         let connection = self.open_row_origins_locked(conversation)?;
         let version: u32 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-        if version == 4 {
+        if version >= 4 {
             connection.execute_batch(
                 "CREATE INDEX IF NOT EXISTS row_digests_origin ON row_digests(origin);
                  CREATE INDEX IF NOT EXISTS origins_origin ON origins(origin);",
@@ -271,6 +322,16 @@ pub(in crate::storage::transcript) fn forget_row_digests(
 ) -> Result<()> {
     let version: u32 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
     if version >= 4 {
+        if version >= 5 {
+            if let Some(sequence) = sequence {
+                connection.execute(
+                    "DELETE FROM execution_sources WHERE sequence=?1",
+                    [sequence.to_string()],
+                )?;
+            } else {
+                connection.execute("DELETE FROM execution_sources", [])?;
+            }
+        }
         if let Some(sequence) = sequence {
             connection.execute(
                 "DELETE FROM row_digests WHERE sequence=?1",
@@ -285,7 +346,7 @@ pub(in crate::storage::transcript) fn forget_row_digests(
 
 /// An index row must still describe the actual occurrence placement. Canonical
 /// lower-case SHA-256 framing is checked before comparison or future selection.
-fn indexed_row(
+pub(super) fn indexed_row(
     connection: &Connection,
     sequence: u64,
 ) -> Result<Option<(ContextBlockOccurrenceId, String)>> {

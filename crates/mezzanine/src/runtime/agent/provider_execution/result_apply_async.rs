@@ -608,12 +608,15 @@ impl RuntimeSessionService {
         let shell_actions_dispatched =
             self.dispatch_running_shell_actions_to_panes(turn, &mut execution)?;
         terminal_observations.observe(&execution);
-        if !terminal_observations.results().is_empty() {
+        let committed = if !terminal_observations.results().is_empty() {
             self.commit_settled_action_results_context(
                 &turn.turn_id,
                 terminal_observations.results(),
-            )?;
-        }
+            )?
+        } else {
+            0
+        };
+        let inline_replay = self.capture_settled_inline_say_replay(turn, &execution, committed)?;
         self.append_agent_trace_maap_action_results(
             &turn.pane_id,
             &turn.turn_id,
@@ -644,7 +647,7 @@ impl RuntimeSessionService {
             &mut execution,
             "provider_execution_failed_action",
         )?;
-        self.present_deferred_agent_say_actions_to_terminal_buffer(&turn.pane_id, &execution)?;
+        self.present_settled_inline_say_execution(turn, &execution, inline_replay.as_ref())?;
         let actions_executed =
             shell_actions_dispatched.saturating_add(actions_executed_before_shell);
         let needs_bookkeeping = failure_feedback == CompletionSettlementDisposition::Declined

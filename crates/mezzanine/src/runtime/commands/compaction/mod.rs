@@ -665,7 +665,10 @@ impl RuntimeSessionService {
             )));
         }
         let _ = self.runtime_prune_expired_persistent_memory_best_effort();
-        if transcript_entries == 0 {
+        if transcript_entries == 0
+            && prepared.is_none()
+            && self.manual_source_is_known_empty(pane_id)
+        {
             let reason = NoWorkReason::NoTranscriptEntries;
             self.append_agent_status_text_to_terminal_buffer(
                 pane_id,
@@ -720,6 +723,32 @@ impl RuntimeSessionService {
                     None,
                 )
             };
+        if source == "manual"
+            && let Some(history) = prepared_history.as_ref()
+            && let Some(owner) = history.replay_owner()?
+        {
+            return self.queue_manual_replay_compaction(
+                pane_id,
+                owner,
+                history.clone(),
+                prepared_owner,
+            );
+        }
+        if transcript_entries == 0 {
+            let reason = NoWorkReason::NoTranscriptEntries;
+            self.append_agent_status_text_to_terminal_buffer(pane_id, reason.status())?;
+            self.record_manual_compaction_no_work(pane_id, &conversation_id, reason, source)?;
+            return Ok(AgentShellCommandOutcome::Display {
+                command: "compact".into(),
+                body: format!(
+                    "pane={} conversation={} previous_transcript_entries=0 summarized_entries=0 compacted=false reason={} source=model-compact trigger={}",
+                    json_escape(pane_id),
+                    json_escape(&conversation_id),
+                    reason.code(),
+                    json_escape(source)
+                ),
+            });
+        }
         if let Some(epoch) = projection.as_ref() {
             transcript_records.retain(|row| row.sequence > epoch.through_sequence);
         }
@@ -1039,11 +1068,12 @@ impl RuntimeSessionService {
                 MezError::invalid_state("active-turn compaction pane session is unavailable")
             })?;
         let allowed_actions = self.capture_agent_session_allowed_actions_for_pane(&turn.pane_id)?;
-        let replay_source = match self.prepare_active_replay_compaction(&turn, &model_profile)? {
-            replay_epoch::Preparation::Unowned => None,
-            replay_epoch::Preparation::NoWork => return Ok(false),
-            replay_epoch::Preparation::Ready(source) => Some(source),
-        };
+        let replay_source =
+            match self.prepare_active_replay_compaction(&turn, &model_profile, trigger)? {
+                replay_epoch::Preparation::Unowned => None,
+                replay_epoch::Preparation::NoWork => return Ok(false),
+                replay_epoch::Preparation::Ready(source) => Some(source),
+            };
         let selected = replay_source.as_ref().map(|source| source.input_blocks());
         let mut current_blocks = runtime_redact_compaction_blocks(
             selected
@@ -1069,12 +1099,16 @@ impl RuntimeSessionService {
             &current_blocks,
             allowed_actions.clone(),
         )?;
-        runtime_limit_compaction_summary_output(&mut request, plan.summary_budget_words());
-        summary_correction::communicate_summary_target(
-            &mut request,
-            plan.summary_budget_words(),
-            plan.planning_budget().1,
-        );
+        // A legacy no-work projection has no summary allowance. Independently
+        // selected canonical work must not inherit its zero-output guidance.
+        if plan.summary_budget_words() > 0 {
+            runtime_limit_compaction_summary_output(&mut request, plan.summary_budget_words());
+            summary_correction::communicate_summary_target(
+                &mut request,
+                plan.summary_budget_words(),
+                plan.planning_budget().1,
+            );
+        }
         if let (Some(rejected_bytes), Some(stream)) =
             (rejected_request_bytes, rejected_request_stream)
         {
@@ -1095,12 +1129,17 @@ impl RuntimeSessionService {
                     &current_blocks,
                     allowed_actions.clone(),
                 )?;
-                runtime_limit_compaction_summary_output(&mut request, plan.summary_budget_words());
-                summary_correction::communicate_summary_target(
-                    &mut request,
-                    plan.summary_budget_words(),
-                    plan.planning_budget().1,
-                );
+                if plan.summary_budget_words() > 0 {
+                    runtime_limit_compaction_summary_output(
+                        &mut request,
+                        plan.summary_budget_words(),
+                    );
+                    summary_correction::communicate_summary_target(
+                        &mut request,
+                        plan.summary_budget_words(),
+                        plan.planning_budget().1,
+                    );
+                }
             }
         }
         self.refresh_project_trust_store_from_disk_if_changed()?;
@@ -1611,6 +1650,12 @@ impl RuntimeSessionService {
                     self.queue_agent_compaction_task(task.clone());
                     return Ok(());
                 }
+            }
+            if task.replay_source.is_some()
+                && matches!(task.target, RuntimeAgentCompactionTarget::Conversation)
+            {
+                self.queue_replay_epoch_publication(&task, summary)?;
+                return Ok(());
             }
             if matches!(task.target, RuntimeAgentCompactionTarget::ActiveTurn { .. }) {
                 let (next_blocks, final_summary) = {

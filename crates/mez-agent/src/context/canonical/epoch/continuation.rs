@@ -28,6 +28,7 @@ pub(in super::super) struct ReplayEpochContinuation {
     prelude_seals: BTreeMap<ContextEventSequence, EventSeal>,
     next_event_sequence: u64,
     pending_groups: BTreeMap<ContextExecutionGroupId, ContextExecutionProtection>,
+    execution_intervals: BTreeMap<ContextExecutionGroupId, ExecutionInterval>,
     /// Fences captured at typed body transfer or actual canonical append.
     execution_frontiers: BTreeMap<ContextExecutionGroupId, ReplayExecutionOwner>,
     pending_peers: BTreeSet<ContextEventSequence>,
@@ -72,7 +73,7 @@ impl ReplayEpochContinuation {
                 .get(group)
                 .is_some_and(|held| held != protection)
         {
-            return Err(invalid());
+            return Err(invalid_source("pending execution allocation changed"));
         }
         if self
             .execution_frontiers
@@ -83,6 +84,8 @@ impl ReplayEpochContinuation {
         }
         self.pending_groups
             .insert(group.clone(), protection.clone());
+        self.execution_intervals
+            .insert(group.clone(), protection.interval().clone());
         self.source_lifecycle.closed_groups.remove(group);
         Ok(())
     }
@@ -169,6 +172,7 @@ impl ReplayEpochContext {
             prelude_seals: BTreeMap::new(),
             next_event_sequence: context.next_event_sequence,
             pending_groups: context.pending_execution_groups.clone(),
+            execution_intervals: context.execution_intervals.clone(),
             pending_peers: context.pending_peer_messages.clone(),
             historical_instructions: context.historical_instruction_events.clone(),
         };
@@ -186,19 +190,37 @@ impl ReplayEpochContext {
         conversation: ReplayConversationId,
         mut context: AgentContext,
     ) -> AgentContextResult<Self> {
-        let state = *context.replay_continuation.take().ok_or_else(invalid)?;
+        let state = *context
+            .replay_continuation
+            .take()
+            .ok_or_else(|| invalid_source("live owner is missing"))?;
         context.validate_durable()?;
-        if state.conversation != conversation
-            || context.next_event_sequence < state.next_event_sequence
-            || state.pending_groups.iter().any(|(group, protection)| {
-                context.pending_execution_groups.get(group) != Some(protection)
-            })
-            || !state
-                .pending_peers
-                .is_subset(&context.pending_peer_messages)
-            || state.historical_instructions != context.historical_instruction_events
+        if state.conversation != conversation {
+            return Err(invalid_source("conversation binding changed"));
+        }
+        if context.next_event_sequence < state.next_event_sequence {
+            return Err(invalid_source("source reservation moved backward"));
+        }
+        if state.pending_groups.iter().any(|(group, protection)| {
+            context.pending_execution_groups.get(group) != Some(protection)
+        }) {
+            return Err(invalid_source("pending execution protection changed"));
+        }
+        if state
+            .execution_intervals
+            .iter()
+            .any(|(group, interval)| context.execution_intervals.get(group) != Some(interval))
         {
-            return Err(invalid());
+            return Err(invalid_source("execution interval changed"));
+        }
+        if !state
+            .pending_peers
+            .is_subset(&context.pending_peer_messages)
+        {
+            return Err(invalid_source("pending peer protection changed"));
+        }
+        if state.historical_instructions != context.historical_instruction_events {
+            return Err(invalid_source("instruction lifecycle changed"));
         }
         let mut original = state.seals.iter().peekable();
         let mut preludes = state.prelude_seals.clone();
@@ -216,25 +238,31 @@ impl ReplayEpochContext {
                 .is_some_and(|saved| saved.metadata.event_sequence == Some(event.sequence()));
             if existing {
                 if original.next() != Some(&seal) {
-                    return Err(invalid());
+                    return Err(invalid_source("previous source occurrence changed"));
                 }
             } else {
                 let prelude = preludes.remove(&event.sequence());
-                if prelude.as_ref().is_some_and(|saved| saved != &seal)
-                    || (prelude.is_none() && event.sequence().get() < state.next_event_sequence)
-                {
-                    return Err(invalid());
+                if prelude.as_ref().is_some_and(|saved| saved != &seal) {
+                    return Err(invalid_source("admitted prompt prelude changed"));
+                }
+                if prelude.is_none() && event.sequence().get() < state.next_event_sequence {
+                    return Err(invalid_source("new source precedes its reserved frontier"));
                 }
                 if prelude.is_some() {
                     inserted_preludes.insert(event.record().occurrence_id());
                 }
                 if let Some(group) = event.execution_group_id()
                     && !context.execution_group_is_observational(group)
+                    && !context.pending_execution_groups.contains_key(group)
                 {
+                    let interval =
+                        ExecutionInterval::after(context.execution_intervals.get(group))?;
+                    context
+                        .execution_intervals
+                        .insert(group.clone(), interval.clone());
                     context
                         .pending_execution_groups
-                        .entry(group.clone())
-                        .or_insert_with(ContextExecutionProtection::new);
+                        .insert(group.clone(), ContextExecutionProtection::new(interval));
                 }
                 if event.block.source == ContextSourceKind::PeerMessage {
                     context.pending_peer_messages.insert(event.sequence());
@@ -257,7 +285,9 @@ impl ReplayEpochContext {
             });
         }
         if original.next().is_some() || !preludes.is_empty() {
-            return Err(invalid());
+            return Err(invalid_source(
+                "previous source or admitted prelude is missing",
+            ));
         }
         let mut owner = Self {
             context,
@@ -375,7 +405,7 @@ impl AgentContext {
         let conversation = self
             .replay_continuation
             .as_ref()
-            .ok_or_else(invalid)?
+            .ok_or_else(|| invalid_source("live update owner is missing"))?
             .conversation
             .clone();
         let mut owner = ReplayEpochContext::from_owned_context(conversation, self.clone())?;
@@ -385,7 +415,9 @@ impl AgentContext {
     }
 }
 
-/// Refuses only this ownership conversion without disclosing source or handles.
-fn invalid() -> AgentContextError {
-    AgentContextError::new("live replay continuation does not match its original source")
+/// Reports only the violated invariant, never source bytes, IDs or live fences.
+fn invalid_source(reason: &'static str) -> AgentContextError {
+    AgentContextError::new(format!(
+        "live replay continuation does not match its original source: {reason}"
+    ))
 }

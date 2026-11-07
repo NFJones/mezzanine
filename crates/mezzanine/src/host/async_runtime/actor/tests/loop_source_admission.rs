@@ -295,7 +295,21 @@ async fn loop_source_admission_adopts_prepared_history_without_source_read() {
             );
             if mode == "--new" {
                 assert!(!contents.contains("original legacy loop source"));
-                assert!(!context.has_replay_owner());
+                assert!(context.has_replay_owner());
+                let conversation = actor
+                    .service
+                    .agent_shell_store()
+                    .get("%1")
+                    .unwrap()
+                    .session_id
+                    .clone();
+                let owner = mez_agent::ReplayEpochContext::from_owned_context(
+                    mez_agent::ReplayConversationId::new(conversation).unwrap(),
+                    context.clone(),
+                )
+                .unwrap();
+                assert_eq!(owner.revision().get(), 0);
+                assert!(owner.head().is_none());
             } else if legacy {
                 assert!(contents.contains("original legacy loop source"));
                 assert!(!context.has_replay_owner());

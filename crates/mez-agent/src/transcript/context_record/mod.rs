@@ -139,6 +139,9 @@ impl TranscriptContextRecord {
     /// callers must not quietly replay a partial source after such a failure.
     /// Cached costs remain descriptive until checked against actual rendering.
     pub fn from_transcript_content(content: &str) -> Result<Option<Self>, TranscriptContractError> {
+        if super::TranscriptExecutionStateRecord::from_transcript_content(content)?.is_some() {
+            return Ok(None);
+        }
         if !is_accounted_context_record(content) {
             return Ok(None);
         }
@@ -176,6 +179,9 @@ impl TranscriptContextRecord {
     /// payloads or snapshots. True identifies a candidate requiring full decode;
     /// false proves no stable claim, never that the model source is valid.
     pub fn has_stable_snapshot(content: &str) -> Result<bool, TranscriptContractError> {
+        if super::TranscriptExecutionStateRecord::from_transcript_content(content)?.is_some() {
+            return Ok(false);
+        }
         if !is_accounted_context_record(content) {
             return Ok(false);
         }

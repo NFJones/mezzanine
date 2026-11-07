@@ -1380,6 +1380,41 @@ fn runtime_routed_loop_transfers_work_turn_ownership_to_selected_worker() {
         Some(parent_turn_id.as_str())
     );
     assert_eq!(state.routed_worker_profile.as_ref(), Some(&parent_profile));
+    // The routed child is a source copy with its own canonical incarnation,
+    // not the parent's live replay owner under different request metadata.
+    let parent = service.agent_turn_ledger().turn(&parent_turn_id).unwrap();
+    let child = service.agent_turn_ledger().turn(&child_turn_id).unwrap();
+    assert_ne!(parent.conversation_id, child.conversation_id);
+    let parent_context = &service.agent_turn_contexts()[&parent_turn_id];
+    let child_context = &service.agent_turn_contexts()[&child_turn_id];
+    let original = parent_context
+        .chronology()
+        .iter()
+        .find(|event| {
+            event.block().source == ContextSourceKind::UserInstruction
+                && event.block().label == "user prompt"
+        })
+        .unwrap();
+    let copied = child_context
+        .chronology()
+        .iter()
+        .find(|event| event.record().occurrence_id() == original.record().occurrence_id())
+        .unwrap();
+    assert_eq!(copied, original);
+    assert!(
+        mez_agent::ReplayEpochContext::from_owned_context(
+            mez_agent::ReplayConversationId::new(&child.conversation_id).unwrap(),
+            child_context.clone(),
+        )
+        .is_ok()
+    );
+    assert!(
+        mez_agent::ReplayEpochContext::from_owned_context(
+            mez_agent::ReplayConversationId::new(&parent.conversation_id).unwrap(),
+            child_context.clone(),
+        )
+        .is_err()
+    );
 }
 
 /// Verifies a routed `/loop` continues when a worker applies a patch before a

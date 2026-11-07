@@ -733,9 +733,9 @@ impl RuntimeSessionService {
         }
     }
 
-    /// Selects original canonical backing for terminal NoStore continuation.
+    /// Borrows original canonical backing for continuation or a source copy.
     /// A captured absence is final and must not borrow a later live value.
-    pub(in crate::runtime::agent) fn completion_replay_context_for_retirement(
+    pub(in crate::runtime) fn agent_turn_replay_context(
         &self,
         turn_id: &str,
     ) -> Option<&mez_agent::AgentContext> {

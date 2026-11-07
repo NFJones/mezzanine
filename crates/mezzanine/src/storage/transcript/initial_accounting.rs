@@ -232,7 +232,7 @@ impl AgentTranscriptStore {
         if version < 3 {
             return Ok(None);
         }
-        if version == 4 {
+        if version >= 4 {
             let required: bool = connection.query_row(
                 "SELECT initial_required FROM row_digest_meta WHERE singleton=1",
                 [],
@@ -274,6 +274,38 @@ impl AgentTranscriptStore {
         conversation: &str,
         rows: &[TranscriptEntry],
         payload: &InitialTranscriptRowAccounting,
+    ) -> Result<()> {
+        self.publish_initial_accounting_locked(conversation, rows, payload, None)
+    }
+
+    /// Publishes a child's actual initial rows, original accounting and
+    /// full row/execution images in one SQL transaction. The caller has synced
+    /// these exact rows under its retained initial receipt and conversation
+    /// lease. This grants no acknowledgment of the parent's ordinary append.
+    pub(super) fn publish_initial_receipt_accounting_locked(
+        &self,
+        batch: &super::TranscriptAppendBatch,
+    ) -> Result<()> {
+        let payload = batch
+            .initial_row_accounting()
+            .ok_or_else(|| MezError::invalid_state("initial receipt row accounting is missing"))?;
+        self.publish_initial_accounting_locked(
+            batch.conversation_id(),
+            batch.entries(),
+            payload,
+            Some(batch),
+        )
+    }
+
+    /// Direct legacy copy proposals retain their original absence of index
+    /// proof. Actual initial receipts supply exact row images, including raw
+    /// children before their first head. Lookup never backfills old images.
+    fn publish_initial_accounting_locked(
+        &self,
+        conversation: &str,
+        rows: &[TranscriptEntry],
+        payload: &InitialTranscriptRowAccounting,
+        receipt: Option<&super::TranscriptAppendBatch>,
     ) -> Result<()> {
         payload.validate(rows)?;
         let existing = self.initial_row_accounting_locked(conversation)?;
@@ -320,7 +352,7 @@ impl AgentTranscriptStore {
             let encoded = serde_json::to_string(payload)
                 .map_err(|_| MezError::invalid_state("initial row accounting encode failed"))?;
             transaction.execute("INSERT INTO initial_inheritance VALUES (1, ?1)", [encoded])?;
-            if version == 4 {
+            if version >= 4 {
                 transaction.execute(
                     "UPDATE row_digest_meta SET initial_required=1 WHERE singleton=1",
                     [],
@@ -336,6 +368,9 @@ impl AgentTranscriptStore {
                     params![String::from(record.occurrence_id()), encoded],
                 )?;
             }
+        }
+        if let Some(batch) = receipt {
+            self.publish_row_digests_in_transaction(&transaction, batch)?;
         }
         transaction.commit()?;
         self.require_row_origins_locked(conversation)

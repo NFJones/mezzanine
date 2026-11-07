@@ -272,6 +272,88 @@ fn validate_with_limit(items: &[EscrowOccurrence], limit: usize) -> Result<()> {
     Ok(())
 }
 
+/// Selects current raw members and their source-only dependencies. Task roots
+/// may retain an earlier covered suffix boundary; group metadata must keep its
+/// original ordinal baseline. Neither dependency becomes model membership.
+pub(super) fn copy_selection(
+    items: &[EscrowOccurrence],
+    current: &BTreeSet<ContextBlockOccurrenceId>,
+) -> Result<Vec<EscrowOccurrence>> {
+    let by_id = items
+        .iter()
+        .map(|item| (item.occurrence_id(), item))
+        .collect::<BTreeMap<_, _>>();
+    let mut groups = BTreeMap::<&str, Vec<ContextBlockOccurrenceId>>::new();
+    for item in items {
+        if let Some(group) = item.group.as_deref() {
+            groups.entry(group).or_default().push(item.occurrence_id());
+        }
+    }
+    let mut needed = current.clone();
+    let mut expanded_groups = BTreeSet::new();
+    let mut pending = current
+        .iter()
+        .copied()
+        .collect::<std::collections::VecDeque<_>>();
+    while let Some(id) = pending.pop_front() {
+        let item = by_id
+            .get(&id)
+            .ok_or_else(|| invalid("copy source dependency is missing"))?;
+        if let Some(first) = item.task_start
+            && needed.insert(first)
+        {
+            pending.push_back(first);
+        }
+        if let Some(group) = item.group.as_deref()
+            && expanded_groups.insert(group)
+        {
+            for dependency in &groups[group] {
+                if needed.insert(*dependency) {
+                    pending.push_back(*dependency);
+                }
+            }
+        }
+    }
+    let selected = items
+        .iter()
+        .filter(|item| needed.contains(&item.occurrence_id()))
+        .cloned()
+        .collect::<Vec<_>>();
+    validate(&selected)?;
+    Ok(selected)
+}
+
+/// Freezes only non-model copy dependencies on the storage worker. No later
+/// actor read or parent-store lookup may be needed after a NoStore binding.
+pub(super) fn copy_backing(
+    items: &[EscrowOccurrence],
+    owner: &ReplayEpochContext,
+    mut resolve: impl FnMut(&Payload) -> Result<String>,
+) -> Result<BTreeMap<String, String>> {
+    // Original v4 readers have no escrow. Copy admission still requires its
+    // explicit migration; this optional capture must not invent old backing.
+    if items.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+    let current = owner
+        .context()
+        .chronology()
+        .iter()
+        .skip(usize::from(owner.head().is_some()))
+        .map(|event| event.record().occurrence_id())
+        .collect::<BTreeSet<_>>();
+    let mut payloads = BTreeMap::new();
+    for item in copy_selection(items, &current)? {
+        if !current.contains(&item.occurrence_id()) && !payloads.contains_key(&item.content.sha256)
+        {
+            let content = resolve(&item.content)?;
+            item.content.validate(content.as_bytes())?;
+            payloads.insert(item.content.sha256.clone(), content);
+        }
+    }
+    Ok(payloads)
+}
+
 /// Every current raw member must already have its exact original backing.
 /// A summary anchor is not an original source identity or a second membership.
 pub(super) fn validate_current(
@@ -279,6 +361,15 @@ pub(super) fn validate_current(
     source: &ReplayEpochContext,
     covered: &[ContextBlockOccurrenceId],
 ) -> Result<()> {
+    // A copied head-only root has no covered or retained originals to back.
+    // Ordinary rewrites still require escrow for their covered membership.
+    if items.is_empty()
+        && covered.is_empty()
+        && source.head().is_some()
+        && source.context().chronology().len() == 1
+    {
+        return Ok(());
+    }
     let first = items
         .first()
         .ok_or_else(|| invalid("required source escrow is empty"))?;
@@ -300,6 +391,107 @@ pub(super) fn validate_current(
 }
 
 impl EscrowOccurrence {
+    /// Projects an original, still-unarchived occurrence into a copied child's
+    /// physical raw history. This is descriptive source, never parent append
+    /// settlement. Native records require their actual captured wire image.
+    pub(super) fn copy_row(&self, content: String, conversation: &str) -> Result<TranscriptEntry> {
+        let event = match self.source {
+            ContextSourceKind::UserInstruction | ContextSourceKind::TranscriptUser => {
+                if let Some(start) = self.task_start {
+                    TranscriptContextEvent::task_admission(
+                        self.sequence,
+                        start,
+                        self.label.clone(),
+                        content,
+                    )
+                } else {
+                    TranscriptContextEvent::user_event(self.sequence, self.label.clone(), content)
+                }
+            }
+            ContextSourceKind::McpCatalogSnapshot => {
+                TranscriptContextEvent::mcp_catalog_snapshot(content, self.sequence)
+            }
+            ContextSourceKind::LocalMessage
+            | ContextSourceKind::Policy
+            | ContextSourceKind::Configuration
+            | ContextSourceKind::RuntimeHint
+                if self.group.is_none() =>
+            {
+                TranscriptContextEvent::prompt_boundary_with_event_sequence(
+                    self.source,
+                    self.sequence,
+                    self.label.clone(),
+                    content,
+                )
+            }
+            _ => match (&self.group, self.ordinal) {
+                (Some(group), Some(ordinal)) => {
+                    let provider = self
+                        .provider
+                        .as_ref()
+                        .map(|(api, id)| {
+                            mez_agent::ProviderApiCompatibility::from_id(api)
+                                .and_then(|api| {
+                                    mez_agent::ProviderContinuityOwner::new(api, id.clone())
+                                })
+                                .ok_or_else(|| invalid("fork source provider owner is invalid"))
+                        })
+                        .transpose()?;
+                    TranscriptContextEvent::execution_block_with_metadata(
+                        self.source,
+                        self.label.clone(),
+                        content,
+                        mez_agent::ContextExecutionGroupId::new(group.clone())?,
+                        ordinal,
+                        provider,
+                    )
+                }
+                (None, None) => TranscriptContextEvent::execution_block(
+                    self.source,
+                    self.label.clone(),
+                    content,
+                ),
+                _ => None,
+            },
+        }
+        .ok_or_else(|| invalid("fork source requires its original authored wire image"))?;
+        let authored = TranscriptContextRecord::new(event, self.record, None)?;
+        let row = TranscriptEntry {
+            conversation_id: conversation.into(),
+            sequence: self.sequence,
+            created_at_unix_seconds: 1,
+            role: TranscriptRole::System,
+            turn_id: self.origin.turn_id.clone(),
+            agent_id: self.origin.agent_id.clone(),
+            pane_id: self.origin.pane_id.clone(),
+            content: authored.to_transcript_content()?,
+        };
+        row.validate()?;
+        let actual = match authored.event() {
+            TranscriptContextEvent::ExecutionBlock { content, .. }
+            | TranscriptContextEvent::UserEvent { content, .. }
+            | TranscriptContextEvent::TaskAdmission { content, .. }
+            | TranscriptContextEvent::PromptBoundary { content, .. }
+            | TranscriptContextEvent::McpCatalogSnapshot { content, .. } => content,
+            _ => return Err(invalid("fork source projection changed semantic framing")),
+        };
+        if !self.matches(&row, &authored, actual) {
+            return Err(invalid(
+                "fork source projection changed original occurrence",
+            ));
+        }
+        Ok(row)
+    }
+
+    pub(super) fn original_origin(&self) -> &ReplaySourceOrigin {
+        &self.origin
+    }
+
+    pub(super) fn for_unsettled_copy(mut self) -> Self {
+        self.archived = false;
+        self
+    }
+
     pub(super) fn has_task_admission(&self) -> bool {
         self.task_start.is_some()
     }
@@ -522,6 +714,144 @@ pub(super) struct QualifiedRows {
     pub(super) arrivals: Vec<TranscriptEntry>,
 }
 
+/// Qualifies zero-model lifecycle controls against original escrow and actual
+/// authored rows in this same frozen logical view. New rows must precede their
+/// control; an escrow-backed member may still await ordinary append. Every
+/// descriptor names the complete ordinal prefix of its original producer group.
+/// This proves source custody, never an effect or ordinary append receipt.
+pub(super) fn qualify_controls(
+    items: &[EscrowOccurrence],
+    conversation: &str,
+    rows: &[TranscriptEntry],
+    indexed: &BTreeMap<ContextBlockOccurrenceId, super::super::row_origins::IndexedExecutionSource>,
+) -> Result<Vec<mez_agent::ReplayExecutionState>> {
+    struct Member {
+        group: String,
+        ordinal: u64,
+        sequence: Option<u64>,
+        physical: Option<u64>,
+        origin: ReplaySourceOrigin,
+    }
+    let mut members = items
+        .iter()
+        .filter_map(|item| {
+            Some((
+                item.occurrence_id(),
+                Member {
+                    group: item.group.clone()?,
+                    ordinal: item.ordinal?,
+                    sequence: Some(item.sequence),
+                    physical: None,
+                    origin: item.origin.clone(),
+                },
+            ))
+        })
+        .collect::<BTreeMap<_, _>>();
+    for (id, source) in indexed {
+        let origin = ReplaySourceOrigin::new(&source.turn_id, &source.agent_id, &source.pane_id)?;
+        if let Some(member) = members.get_mut(id) {
+            if member.group != source.group
+                || member.ordinal != source.ordinal
+                || member.origin != origin
+            {
+                return Err(invalid("indexed execution conflicts with original escrow"));
+            }
+            member.physical = Some(source.image.sequence);
+        } else {
+            members.insert(
+                *id,
+                Member {
+                    group: source.group.clone(),
+                    ordinal: source.ordinal,
+                    sequence: None,
+                    physical: Some(source.image.sequence),
+                    origin,
+                },
+            );
+        }
+    }
+    let mut seen = BTreeSet::new();
+    let mut controls = Vec::new();
+    for row in rows {
+        if row.conversation_id != conversation {
+            return Err(invalid(
+                "execution control source has a foreign conversation",
+            ));
+        }
+        if row.role != TranscriptRole::System {
+            continue;
+        }
+        if let Some(control) =
+            mez_agent::transcript::TranscriptExecutionStateRecord::from_transcript_content(
+                &row.content,
+            )?
+        {
+            controls.push((row, control));
+            continue;
+        }
+        let Some(record) = TranscriptContextRecord::from_transcript_content(&row.content)? else {
+            continue;
+        };
+        let TranscriptContextEvent::ExecutionBlock {
+            execution_group_id: Some(group),
+            ordinal: Some(ordinal),
+            ..
+        } = record.event()
+        else {
+            continue;
+        };
+        let id = record.record().occurrence_id();
+        if !seen.insert(id) {
+            return Err(invalid("execution control source repeats an occurrence"));
+        }
+        let origin = ReplaySourceOrigin::new(&row.turn_id, &row.agent_id, &row.pane_id)?;
+        if let Some(original) = members.get(&id) {
+            if original.group != group.as_str()
+                || original.ordinal != *ordinal
+                || original.origin != origin
+            {
+                return Err(invalid(
+                    "execution control source changed original ownership",
+                ));
+            }
+        } else {
+            members.insert(
+                id,
+                Member {
+                    group: group.as_str().into(),
+                    ordinal: *ordinal,
+                    sequence: None,
+                    physical: Some(row.sequence),
+                    origin,
+                },
+            );
+        }
+    }
+    let mut result = Vec::new();
+    for (row, control) in controls {
+        let origin = ReplaySourceOrigin::new(&row.turn_id, &row.agent_id, &row.pane_id)?;
+        for (index, (id, sequence)) in control.state().members().iter().enumerate() {
+            let original = members
+                .get(id)
+                .ok_or_else(|| invalid("execution control has no original member custody"))?;
+            if original.group != control.state().group()
+                || original.ordinal != index as u64 + 1
+                || original.origin != origin
+                || original.sequence.is_some_and(|actual| actual != *sequence)
+                || original
+                    .physical
+                    .is_some_and(|physical| physical >= row.sequence)
+            {
+                return Err(invalid(
+                    "execution control changed original group frontier or producer",
+                ));
+            }
+        }
+        result.push(control.state().clone());
+    }
+    Ok(result)
+}
+
 /// Checks original semantic copies and zero-model display/audit rows from one
 /// already validated archive view. The resolver uses proposed bytes before
 /// publication or required immutable files during replay; no lock is acquired.
@@ -529,6 +859,7 @@ pub(super) fn qualify_rows(
     items: &[EscrowOccurrence],
     conversation: &str,
     rows: &[TranscriptEntry],
+    indexed: &BTreeMap<ContextBlockOccurrenceId, super::super::row_origins::IndexedExecutionSource>,
     admission: RowAdmission,
     mut resolve: impl FnMut(&Payload) -> Result<String>,
 ) -> Result<QualifiedRows> {
@@ -542,11 +873,29 @@ pub(super) fn qualify_rows(
     let mut groups = BTreeSet::new();
     let mut arrivals = Vec::new();
     let mut arrival_sequences = BTreeSet::new();
+    if rows.iter().any(|row| {
+        row.role == TranscriptRole::System
+            && row
+                .content
+                .starts_with(mez_agent::transcript::EXECUTION_STATE_RECORD_MARKER)
+    }) {
+        drop(qualify_controls(items, conversation, rows, indexed)?);
+    }
+    let mut control_sequences = BTreeSet::new();
     for row in rows {
         if row.conversation_id != conversation {
             return Err(invalid("replay source copy has a foreign conversation"));
         }
         if row.role != TranscriptRole::System {
+            events.push(None);
+            continue;
+        }
+        if mez_agent::transcript::TranscriptExecutionStateRecord::from_transcript_content(
+            &row.content,
+        )?
+        .is_some()
+        {
+            control_sequences.insert(row.sequence);
             events.push(None);
             continue;
         }
@@ -614,6 +963,7 @@ pub(super) fn qualify_rows(
     if rows.iter().enumerate().any(|(index, row)| {
         !qualified.contains(&row.sequence)
             && !arrival_sequences.contains(&row.sequence)
+            && !control_sequences.contains(&row.sequence)
             && !zero.contains(&index)
     }) {
         return Err(invalid("replay archive has unqualified model source"));

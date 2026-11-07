@@ -1281,6 +1281,9 @@ pub struct AgentContext {
     /// Unresolved source protection, never projected. An explicit epoch
     /// checkpoint may preserve this descriptive state without execution rights.
     pending_execution_groups: BTreeMap<ContextExecutionGroupId, ContextExecutionProtection>,
+    /// Latest descriptive original interval, retained while its raw group exists.
+    /// Cold restore creates fresh live allocations even when this metadata matches.
+    execution_intervals: BTreeMap<ContextExecutionGroupId, epoch::ExecutionInterval>,
     /// Exact committed peer references awaiting local request handoff. Runtime
     /// protection only; checkpointing it grants no delivery or ACK rights.
     pending_peer_messages: BTreeSet<ContextEventSequence>,
@@ -1314,6 +1317,7 @@ impl AgentContext {
             next_event_sequence: CONTEXT_EVENT_SEQUENCE_STRIDE,
             metadata: ModelContextMetadata::default(),
             pending_execution_groups: BTreeMap::new(),
+            execution_intervals: BTreeMap::new(),
             pending_peer_messages: BTreeSet::new(),
             historical_instruction_events: BTreeSet::new(),
             retired_mcp_retrievals: BTreeSet::new(),
@@ -2117,6 +2121,13 @@ impl AgentContext {
     /// Rebuilds adapter projections from typed canonical storage.
     fn rebuild_projections(&mut self) {
         self.prune_retired_mcp_retrievals();
+        let groups = self
+            .chronology
+            .iter()
+            .filter_map(|event| event.execution_group_id().cloned())
+            .collect::<BTreeSet<_>>();
+        self.execution_intervals
+            .retain(|group, _| groups.contains(group));
         self.historical_instruction_events.retain(|sequence| {
             self.chronology.iter().any(|event| {
                 event.sequence == *sequence
@@ -2170,6 +2181,9 @@ impl AgentContext {
 
     /// Atomically promotes deterministic action results into one explicit
     /// assistant execution group in caller-supplied observation order.
+    /// Deduplication and volatile-result replacement apply only within that
+    /// group; matching local action ids in other executions retain their exact
+    /// occurrences, even when their model-visible evidence is identical.
     pub fn commit_settled_action_results_in_group(
         &mut self,
         results: &[ActionResult],
@@ -2196,17 +2210,18 @@ impl AgentContext {
             let label = format!("action result {}", result.action_id);
             let content = crate::action_result_context_content(result);
             let exact_block = candidate
-                .blocks
+                .chronology
                 .iter()
-                .find(|block| {
-                    block.source == ContextSourceKind::ActionResult
-                        && block.placement == ContextPlacement::ConversationAppend
-                        && block.label == label
-                        && block.content == content
+                .find(|event| {
+                    event.execution_group_id() == Some(&execution_group_id)
+                        && event.block.source == ContextSourceKind::ActionResult
+                        && event.block.label == label
+                        && event.block.content == content
                 })
-                .cloned();
-            candidate.retain_blocks(|block| {
-                let same_action = block.source == ContextSourceKind::ActionResult
+                .map(|event| event.block.clone());
+            candidate.retain_blocks_with_metadata(|block, metadata| {
+                let same_action = metadata.execution_group_id.as_ref() == Some(&execution_group_id)
+                    && block.source == ContextSourceKind::ActionResult
                     && action_result_block_id(block).is_some_and(|id| id == result.action_id);
                 !same_action || exact_block.as_ref().is_some_and(|exact| exact == block)
             })?;

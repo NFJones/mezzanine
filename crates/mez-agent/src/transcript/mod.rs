@@ -8,6 +8,8 @@ mod checkpoint;
 mod context_event;
 mod context_record;
 mod error;
+mod execution_state;
+pub use execution_state::{EXECUTION_STATE_RECORD_MARKER, TranscriptExecutionStateRecord};
 mod records;
 mod replay_projection;
 pub use replay_projection::{transcript_display_copy_indices, transcript_zero_projection_indices};

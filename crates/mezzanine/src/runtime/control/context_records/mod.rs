@@ -24,6 +24,9 @@ use mez_agent::{
     StableContextBlockRecord,
 };
 
+mod bootstrap;
+mod execution_controls;
+mod raw_history;
 mod replay_arrivals;
 
 /// Non-model-visible records for the exact projected history prefix.
@@ -45,6 +48,10 @@ pub(in crate::runtime) struct RuntimeContextRecords {
         std::collections::BTreeMap<ContextBlockOccurrenceId, mez_agent::ContextEventSequence>,
     /// Explicit recorded task roots and their first original suffix occurrences.
     task_admissions: std::collections::BTreeMap<ContextBlockOccurrenceId, ContextBlockOccurrenceId>,
+    /// Actual zero-model control rows need independent custody before replay.
+    control_sequences: std::collections::BTreeSet<u64>,
+    execution_controls: Vec<mez_agent::ReplayExecutionState>,
+    controls_qualified: bool,
     /// Frozen typed history; never rebuilt from its read-only flat projection.
     replay: Option<ReplayHistory>,
     #[cfg(test)]
@@ -379,6 +386,27 @@ impl RuntimeContextRecords {
                 stable: None,
             };
         }
+        match mez_agent::transcript::TranscriptExecutionStateRecord::from_transcript_content(
+            &entry.content,
+        ) {
+            Ok(Some(_)) => {
+                self.control_sequences.insert(entry.sequence);
+                return DecodedContextRow {
+                    event: None,
+                    record: None,
+                    stable: None,
+                };
+            }
+            Err(_) => {
+                self.invalid = true;
+                return DecodedContextRow {
+                    event: None,
+                    record: None,
+                    stable: None,
+                };
+            }
+            Ok(None) => {}
+        }
         match TranscriptContextRecord::from_transcript_content(&entry.content) {
             Ok(Some(record)) => {
                 let (event, record, stable) = record.into_parts();
@@ -556,33 +584,40 @@ impl RuntimeContextRecords {
         blocks: Vec<ContextBlock>,
         sources: &[(usize, mez_agent::StableContextSlotId)],
     ) -> Result<AgentContext> {
-        self.import_composed_context(blocks, sources, &[], false)
+        self.import_composed_context(blocks, sources, &[], false, None)
     }
 
     /// Builds a new user task over frozen history. Only this explicit user
     /// boundary retires prior exact task instructions; history-only import keeps
     /// their original protection. Imported execution metadata is applied solely
     /// to the newly composed suffix, never to frozen native history.
+    /// `admission` supplies the actual bound conversation and captured model
+    /// history length. None is an unbound preview; frozen replay already carries
+    /// its original scope. These are structural inputs, not archive ACKs.
     pub(in crate::runtime) fn import_context_for_new_task(
         &self,
         blocks: Vec<ContextBlock>,
         sources: &[(usize, mez_agent::StableContextSlotId)],
         execution: &[mez_agent::ImportedExecutionEvent],
+        admission: Option<(&str, usize)>,
     ) -> Result<AgentContext> {
-        self.import_composed_context(blocks, sources, execution, true)
+        self.import_composed_context(blocks, sources, execution, true, admission)
     }
 
     /// Composes a peer-triggered turn without retiring the user's protected
     /// instructions. Receiving lower-priority peer data is not task completion
     /// or authority to supersede user intent. Execution ownership stays scoped
     /// to the new suffix just as at ordinary user admission.
+    /// An explicit empty-history admission establishes ownership before new
+    /// peer input is appended; it creates neither a user root nor a handoff ACK.
     pub(in crate::runtime) fn import_context_for_peer_task(
         &self,
         blocks: Vec<ContextBlock>,
         sources: &[(usize, mez_agent::StableContextSlotId)],
         execution: &[mez_agent::ImportedExecutionEvent],
+        admission: Option<(&str, usize)>,
     ) -> Result<AgentContext> {
-        self.import_composed_context(blocks, sources, execution, false)
+        self.import_composed_context(blocks, sources, execution, false, admission)
     }
 
     /// Composes trusted current prefix and suffix around the immutable canonical
@@ -594,13 +629,33 @@ impl RuntimeContextRecords {
         sources: &[(usize, mez_agent::StableContextSlotId)],
         execution: &[mez_agent::ImportedExecutionEvent],
         new_task: bool,
+        admission: Option<(&str, usize)>,
     ) -> Result<AgentContext> {
         self.ensure_valid()?;
         let prefix = blocks
             .iter()
             .take_while(|block| block.placement == mez_agent::ContextPlacement::StablePrefix)
             .count();
+        if let Some((conversation, history)) = admission {
+            mez_agent::ReplayConversationId::new(conversation)?;
+            if prefix
+                .checked_add(history)
+                .is_none_or(|end| end > blocks.len())
+                || history == 0 && !self.records.is_empty()
+            {
+                return Err(MezError::conflict(
+                    "task admission history boundary is invalid",
+                ));
+            }
+        }
         if let Some(replay) = &self.replay {
+            if admission.is_some_and(|(conversation, history)| {
+                conversation != replay.conversation.as_str() || history != replay.blocks
+            }) {
+                return Err(MezError::conflict(
+                    "task admission does not match its captured history",
+                ));
+            }
             let history_end = prefix
                 .checked_add(replay.blocks)
                 .filter(|end| *end <= blocks.len())
@@ -651,6 +706,26 @@ impl RuntimeContextRecords {
             context.append_imported_history_with_execution(suffix, &suffix_records, execution)?;
             return Ok(context);
         }
+        if let Some((conversation, 0)) = admission
+            && self.records.is_empty()
+        {
+            if blocks
+                .iter()
+                .any(mez_agent::context_block_is_compaction_summary)
+            {
+                return Err(MezError::conflict(
+                    "initial empty history contains summary source",
+                ));
+            }
+            return bootstrap::fresh_context(
+                self,
+                blocks,
+                sources,
+                execution,
+                new_task,
+                conversation,
+            );
+        }
         let records = self.indices_with_offset(prefix)?;
         let mut context = AgentContext::import_durable_blocks_with_stable_sources(
             blocks,
@@ -670,7 +745,7 @@ impl RuntimeContextRecords {
                 format!("transcript accounting: {message}"),
             ));
         }
-        if self.invalid {
+        if self.invalid || !self.control_sequences.is_empty() && !self.controls_qualified {
             return Err(invalid());
         }
         Ok(())

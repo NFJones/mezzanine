@@ -11,6 +11,8 @@
 //! retrieval denials; original version-one imports derive the minimum denials
 //! from checked member births. Exact instructions can be bound to fresh tasks;
 //! pending flags preserve source protection, without reissuing effects or ACKs.
+//! Version three also retains descriptive execution intervals. Live allocation
+//! identities and controller-minted closure witnesses still never deserialize.
 
 use super::super::{
     ContextBlockRecord, ContextSemanticKind, ProviderContinuityOwner, StableContextBlockRecord,
@@ -34,6 +36,10 @@ pub struct ReplayEpochCheckpoint<P = String> {
     next_event_sequence: u64,
     stable_records: Vec<StableContextBlockRecord>,
     pending_execution_groups: Vec<String>,
+    /// Version three original intervals, including closed retained groups.
+    /// Older formats remain explicit unknown ancestry rather than guessed IDs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    execution_intervals: Option<Vec<(String, ExecutionInterval)>>,
     pending_peer_messages: Vec<u64>,
     historical_instruction_events: Vec<u64>,
     /// Version one omitted this restrictive state. Its minimum denials are
@@ -142,6 +148,7 @@ impl<P> ReplayEpochCheckpoint<P> {
             next_event_sequence: self.next_event_sequence,
             stable_records: self.stable_records,
             pending_execution_groups: self.pending_execution_groups,
+            execution_intervals: self.execution_intervals,
             pending_peer_messages: self.pending_peer_messages,
             historical_instruction_events: self.historical_instruction_events,
             retired_mcp_retrievals: self.retired_mcp_retrievals,
@@ -166,7 +173,7 @@ impl ReplayEpochContext {
     pub fn checkpoint(&self) -> AgentContextResult<ReplayEpochCheckpoint> {
         self.validate_membership()?;
         Ok(ReplayEpochCheckpoint {
-            version: 2,
+            version: 3,
             conversation: self.conversation.as_str().to_owned(),
             revision: self.revision.get(),
             policy: self.policy,
@@ -189,6 +196,13 @@ impl ReplayEpochContext {
                 .keys()
                 .map(|group| group.as_str().to_owned())
                 .collect(),
+            execution_intervals: Some(
+                self.context
+                    .execution_intervals
+                    .iter()
+                    .map(|(group, interval)| (group.as_str().into(), interval.clone()))
+                    .collect(),
+            ),
             pending_peer_messages: self
                 .context
                 .pending_peer_messages
@@ -234,9 +248,10 @@ impl ReplayEpochContext {
         if !matches!(
             (
                 checkpoint.version,
-                checkpoint.retired_mcp_retrievals.is_some()
+                checkpoint.retired_mcp_retrievals.is_some(),
+                checkpoint.execution_intervals.is_some()
             ),
-            (1, false) | (2, true)
+            (1, false, false) | (2, true, false) | (3, true, true)
         ) || checkpoint.conversation != conversation.as_str()
         {
             return Err(invalid("unsupported format or foreign conversation"));
@@ -265,15 +280,53 @@ impl ReplayEpochContext {
             .map(Event::restore)
             .collect::<AgentContextResult<_>>()?;
         current_prefix.next_event_sequence = checkpoint.next_event_sequence;
-        current_prefix.pending_execution_groups = unique(
+        current_prefix.execution_intervals = if let Some(intervals) = checkpoint.execution_intervals
+        {
+            let mut restored = BTreeMap::new();
+            for (group, interval) in intervals {
+                interval.validate()?;
+                if restored
+                    .insert(ContextExecutionGroupId::new(group)?, interval)
+                    .is_some()
+                {
+                    return Err(invalid("duplicate execution interval"));
+                }
+            }
+            restored
+        } else {
+            current_prefix
+                .chronology
+                .iter()
+                .filter_map(|event| event.execution_group_id().cloned())
+                .map(|group| (group, ExecutionInterval::unknown()))
+                .collect()
+        };
+        if current_prefix
+            .chronology
+            .iter()
+            .filter(|event| !super::super::pending::observation_only_event(event))
+            .filter_map(|event| event.execution_group_id())
+            .any(|group| !current_prefix.execution_intervals.contains_key(group))
+        {
+            return Err(invalid("missing original execution interval"));
+        }
+        let pending = unique(
             checkpoint
                 .pending_execution_groups
                 .into_iter()
                 .map(ContextExecutionGroupId::new),
-        )?
-        .into_iter()
-        .map(|group| (group, ContextExecutionProtection::new()))
-        .collect();
+        )?;
+        current_prefix.pending_execution_groups = pending
+            .into_iter()
+            .map(|group| {
+                let interval = current_prefix
+                    .execution_intervals
+                    .get(&group)
+                    .ok_or_else(|| invalid("missing pending execution interval"))?
+                    .clone();
+                Ok((group, ContextExecutionProtection::new(interval)))
+            })
+            .collect::<AgentContextResult<_>>()?;
         current_prefix.pending_peer_messages = sequences(checkpoint.pending_peer_messages)?;
         current_prefix.historical_instruction_events =
             sequences(checkpoint.historical_instruction_events)?;
@@ -281,8 +334,11 @@ impl ReplayEpochContext {
         // source. At an import boundary, such pruning would hide malformed
         // persisted state, so require the complete witness set to survive.
         let historical_count = current_prefix.historical_instruction_events.len();
+        let interval_count = current_prefix.execution_intervals.len();
         current_prefix.rebuild_projections();
-        if current_prefix.historical_instruction_events.len() != historical_count {
+        if current_prefix.historical_instruction_events.len() != historical_count
+            || current_prefix.execution_intervals.len() != interval_count
+        {
             return Err(invalid(
                 "historical instruction witness has no matching source",
             ));

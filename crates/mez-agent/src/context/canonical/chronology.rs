@@ -43,6 +43,9 @@ impl AgentContext {
             .pending_execution_groups
             .clone_from(&live.pending_execution_groups);
         candidate
+            .execution_intervals
+            .clone_from(&live.execution_intervals);
+        candidate
             .pending_peer_messages
             .clone_from(&live.pending_peer_messages);
         candidate.next_event_sequence = candidate.next_event_sequence.max(live.next_event_sequence);

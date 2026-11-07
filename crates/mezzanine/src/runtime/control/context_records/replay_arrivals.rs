@@ -100,5 +100,19 @@ pub(super) fn append(
             owner = mez_agent::ReplayEpochContext::from_owned_context(conversation.clone(), body)?;
         }
     }
+    let current = owner
+        .context()
+        .chronology()
+        .iter()
+        .map(|event| event.record().occurrence_id())
+        .collect::<std::collections::BTreeSet<_>>();
+    for state in &arrivals.execution_controls {
+        // Escrow independently qualified fully covered original source. Its
+        // delayed control cannot restore old raw membership behind this head.
+        if state.members().iter().all(|(id, _)| !current.contains(id)) {
+            continue;
+        }
+        owner.restore_execution_state(state)?;
+    }
     Ok(owner)
 }

@@ -38,6 +38,19 @@ impl AgentContext {
         self.append_imported_source(blocks, records, imported, &[], false)
     }
 
+    /// Admits original controller-owned task input that immutable publication
+    /// can back before its ordinary append settles. Only actual task admission
+    /// uses this port; unqualified imported history retains its conservative
+    /// default. Recoverability grants neither task completion nor durability.
+    pub(super) fn append_live_task_source(
+        &mut self,
+        blocks: Vec<ContextBlock>,
+        records: &[(usize, ContextBlockRecord)],
+        imported: &[ImportedExecutionEvent],
+    ) -> AgentContextResult<usize> {
+        self.append_imported_source(blocks, records, imported, &[], true)
+    }
+
     /// Imports checked arrivals while preserving explicit original sequence
     /// reservations supplied by typed user/prompt/catalog records. Hints address
     /// only this suffix, must be unique, and may advance but never rewind the
@@ -137,7 +150,16 @@ impl AgentContext {
         {
             candidate.validate_native_group_source(&group, false)?;
             if !candidate.execution_group_is_observational(&group) {
-                candidate.retain_pending_execution_group(&group)?;
+                if self
+                    .chronology
+                    .iter()
+                    .any(|event| event.execution_group_id() == Some(&group))
+                    && self.execution_group_is_pending(&group)
+                {
+                    candidate.retain_pending_execution_group(&group)?;
+                } else {
+                    candidate.protect_unqualified_imported_group(&group)?;
+                }
             }
         }
         for index in start..candidate.chronology.len() {

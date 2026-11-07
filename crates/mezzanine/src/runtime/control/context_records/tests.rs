@@ -10,8 +10,10 @@ use std::os::unix::fs::DirBuilderExt;
 use std::path::PathBuf;
 
 mod authored_cache;
+mod bootstrap;
 mod cache;
 mod pending_ownership;
+mod raw_history;
 mod recorded_tasks;
 mod replay_arrivals;
 mod replay_cursor;

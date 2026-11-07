@@ -62,6 +62,21 @@ pub(crate) struct RuntimeAgentTranscriptContext {
     pub(super) provider_history_repair_identity: Option<String>,
 }
 
+impl RuntimeAgentTranscriptContext {
+    /// Returns only the canonical owner carried by this checked projection.
+    /// Flat legacy blocks or summary labels cannot manufacture its source seal.
+    pub(in crate::runtime) fn replay_owner(&self) -> Result<Option<mez_agent::ReplayEpochContext>> {
+        let Some(conversation) = self.records.replay_conversation().cloned() else {
+            self.records.ensure_valid()?;
+            return Ok(None);
+        };
+        Ok(Some(mez_agent::ReplayEpochContext::from_owned_context(
+            conversation,
+            self.records.import_context(self.blocks.clone())?,
+        )?))
+    }
+}
+
 /// Immutable inputs required to build one canonical transcript-history epoch.
 ///
 /// The actor captures pending persistence entries and the session's retained
@@ -220,7 +235,7 @@ pub(in crate::runtime) fn runtime_agent_history_epoch_from_snapshot(
 ) -> RuntimeAgentTranscriptContext {
     if let Some(snapshot) = accounting.and_then(|snapshot| snapshot.replay.as_ref()) {
         let projection = (|| -> Result<(RuntimeContextRecords, Vec<ContextBlock>)> {
-            let rendered = runtime_agent_transcript_context_with_ranges_and_mcp_epoch(
+            let mut rendered = runtime_agent_transcript_context_with_ranges_and_mcp_epoch(
                 &inputs.pane_id,
                 &entries,
                 &[],
@@ -229,6 +244,11 @@ pub(in crate::runtime) fn runtime_agent_history_epoch_from_snapshot(
                 accounting,
                 Some(&inputs.pending_entries),
             );
+            rendered.records.qualify_execution_controls(
+                Some(snapshot),
+                &inputs.conversation_id,
+                &entries,
+            )?;
             rendered.records.ensure_valid()?;
             if rendered.provider_history_repair_identity.is_some() {
                 return Err(crate::MezError::conflict(
@@ -513,21 +533,34 @@ impl RuntimeAgentPromptHistoryWork {
         );
         super::RuntimeFrozenReplayHistory::from_history(history, frontier)
     }
-    /// Reads source and context under one lease through an admitted frontier.
-    /// Captured store/conversation mismatch, absent high-water, corrupt required
-    /// history and conflicting pending rows fail before any model dispatch.
-    /// A missing installed store remains an honest no-source outcome. Existing
-    /// settled terminal handoffs reconcile before the coherent snapshot read.
+    /// Reads source and context under one lease, or uses an already captured
+    /// NoStore body without I/O. Typed membership and qualified arrivals are not
+    /// trimmed by pane counters. Legacy raw windows retain their explicit
+    /// frontier; a missing positive high-water, foreign store/conversation,
+    /// corrupt required source or conflicting pending rows fails before model
+    /// dispatch. A genuinely empty raw window uses the existing no-read path.
+    /// Settled terminal handoffs reconcile before a stored snapshot read.
     pub(crate) fn execute_source_snapshot(
         self,
         store: Option<&crate::storage::transcript::AgentTranscriptStore>,
         conversation_id: &str,
         high_water: u64,
     ) -> Result<RuntimeAgentTranscriptSnapshot> {
-        if self.frozen_replay.is_some() {
-            return Err(crate::MezError::conflict(
-                "frozen replay source requires canonical compaction input, not a new row-window read",
-            ));
+        if let Some(frozen) = self.frozen_replay {
+            if self.transcript_work.is_some() || frozen.conversation().as_str() != conversation_id {
+                return Err(crate::MezError::conflict(
+                    "manual frozen replay source changed",
+                ));
+            }
+            let history = frozen.history();
+            history.replay_owner()?.ok_or_else(|| {
+                crate::MezError::conflict("manual frozen source has no canonical owner")
+            })?;
+            return Ok(RuntimeAgentTranscriptSnapshot {
+                rows: Vec::new(),
+                epoch: None,
+                history,
+            });
         }
         let empty = |blocks| RuntimeAgentTranscriptContext {
             source: Some(super::RuntimeAgentHistorySource::absent()),
@@ -565,15 +598,20 @@ impl RuntimeAgentPromptHistoryWork {
             conversation_id,
             work.inputs.pending_entries.entries(),
             |_| {
-                Some((
+                (high_water > 0).then_some((
                     ConversationTranscriptRead::Through(high_water),
                     high_water > pending_count,
                 ))
             },
             |snapshot| {
                 let mut rows = snapshot.view.logical.clone();
-                rows.retain(|row| row.sequence <= high_water);
-                if high_water > 0 && rows.last().is_none_or(|row| row.sequence != high_water) {
+                if snapshot.replay.is_none() {
+                    rows.retain(|row| row.sequence <= high_water);
+                }
+                if snapshot.replay.is_none()
+                    && high_water > 0
+                    && rows.last().is_none_or(|row| row.sequence != high_water)
+                {
                     return Err(crate::MezError::invalid_state(
                         "manual source is missing its captured high-water row",
                     ));
@@ -695,7 +733,7 @@ fn runtime_agent_history_epoch_from_selected_entries(
             provider_history_repair_identity: None,
         };
     }
-    runtime_agent_transcript_context_with_ranges_and_mcp_epoch(
+    let mut history = runtime_agent_transcript_context_with_ranges_and_mcp_epoch(
         &inputs.pane_id,
         &entries,
         &[],
@@ -703,7 +741,25 @@ fn runtime_agent_history_epoch_from_selected_entries(
         false,
         accounting,
         Some(&inputs.pending_entries),
-    )
+    );
+    // Only the actual checked read can qualify original raw custody. Preview
+    // renderers and repaired/legacy execution projections do not mint owners.
+    if accounting.is_some() && history.provider_history_repair_identity.is_none() {
+        match history.records.qualify_raw_history(
+            &inputs.conversation_id,
+            history.blocks.clone(),
+            &history.execution_events,
+            &entries,
+        ) {
+            Ok(Some(blocks)) => {
+                history.blocks = blocks;
+                history.execution_events.clear();
+            }
+            Ok(None) => {}
+            Err(error) => history.records.reject_source(&error),
+        }
+    }
+    history
 }
 
 /// Builds exact model context and typed execution ownership from transcripts.
@@ -892,6 +948,13 @@ fn runtime_agent_transcript_context_with_ranges_and_mcp_epoch(
         &transcript_events,
         &exact_execution_groups,
     );
+    // Original accounted task events retain their authored user framing before
+    // a first head, too. Explicit admissions reconstruct retirement separately;
+    // legacy text cannot supply a task boundary or borrow this source identity.
+    let raw_tasks = accounting.is_some_and(|snapshot| snapshot.epoch.is_none())
+        && transcript_events
+            .iter()
+            .any(|event| matches!(event, Some(TranscriptContextEvent::TaskAdmission { .. })));
     for (index, entry) in entries.iter().enumerate() {
         if accounting
             .and_then(|snapshot| snapshot.replay.as_ref())
@@ -939,7 +1002,9 @@ fn runtime_agent_transcript_context_with_ranges_and_mcp_epoch(
                 TranscriptContextEvent::UserEvent { label, content, .. }
                 | TranscriptContextEvent::TaskAdmission { label, content, .. },
             ) => Some(ContextBlock {
-                source: if accounting.is_some_and(|snapshot| snapshot.replay.is_some()) {
+                source: if accounting.is_some_and(|snapshot| snapshot.replay.is_some())
+                    || raw_tasks && source_record.is_some()
+                {
                     ContextSourceKind::UserInstruction
                 } else {
                     ContextSourceKind::TranscriptUser

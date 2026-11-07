@@ -14,6 +14,10 @@
 //! including a genuine empty archive. Digests cover the complete v2 payload.
 //! The accumulated snapshot is preflighted in full before any archive is changed;
 //! new conversations discovered by a later scan remain for the next recovery.
+//! Typed initial v7 receipts bind independent raw rows, accounting and one exact
+//! planned root with its backing. Their original owner repairs interrupted
+//! publication before normal cold replay; missing required authority refuses
+//! the affected conversation rather than selecting partial raw-only history.
 
 use std::fs::{self, OpenOptions};
 use std::io::Write;
@@ -52,6 +56,8 @@ const HANDOFF_RECEIPT_VERSION: u64 = 4;
 const ACCOUNTED_INITIAL_RECEIPT_VERSION: u64 = 5;
 /// Ordinary producer identities survive pending cancellation, retries and commit.
 const ACCOUNTED_APPEND_RECEIPT_VERSION: u64 = 6;
+/// Typed root and independent raw placement share one original initial owner.
+const TYPED_INITIAL_RECEIPT_VERSION: u64 = 7;
 
 /// One-shot test handshake after receipt path enumeration, before opening files.
 #[cfg(test)]
@@ -81,6 +87,8 @@ pub(super) struct AppendReceipt {
     /// Version-six ordinary proposal; never initial or native replay authority.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     row_accounting: Option<super::TranscriptAppendAccounting>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    initial_replay_epoch: Option<super::replay_epoch::InitialReplayEpoch>,
     /// Original physical batch and source; never decoded as ACK authority.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     native_input: Option<CustodyAppendPlan>,
@@ -105,7 +113,15 @@ impl AppendReceipt {
         let compaction_epoch = batch.initial_compaction_epoch().cloned();
         let initial_row_accounting = batch.initial_row_accounting().cloned();
         let row_accounting = batch.row_accounting().cloned();
-        let version = if row_accounting.is_some() {
+        let initial_replay_epoch = batch.initial_replay_epoch().cloned();
+        if initial_replay_epoch.is_some() && initial_row_accounting.is_none() {
+            return Err(MezError::invalid_args(
+                "initial typed root requires complete raw accounting",
+            ));
+        }
+        let version = if initial_replay_epoch.is_some() {
+            TYPED_INITIAL_RECEIPT_VERSION
+        } else if row_accounting.is_some() {
             ACCOUNTED_APPEND_RECEIPT_VERSION
         } else if initial_row_accounting.is_some() {
             ACCOUNTED_INITIAL_RECEIPT_VERSION
@@ -120,6 +136,7 @@ impl AppendReceipt {
             None,
             initial_row_accounting.as_ref(),
             row_accounting.as_ref(),
+            initial_replay_epoch.as_ref(),
         )?;
         Ok(Self {
             version,
@@ -131,6 +148,7 @@ impl AppendReceipt {
             compaction_epoch,
             initial_row_accounting,
             row_accounting,
+            initial_replay_epoch,
             native_input: None,
             terminal_handoff: None,
         })
@@ -147,15 +165,26 @@ impl AppendReceipt {
                     | HANDOFF_RECEIPT_VERSION
                     | ACCOUNTED_INITIAL_RECEIPT_VERSION
                     | ACCOUNTED_APPEND_RECEIPT_VERSION
+                    | TYPED_INITIAL_RECEIPT_VERSION
             )
+            || (self.version != TYPED_INITIAL_RECEIPT_VERSION
+                && self.initial_replay_epoch.is_some())
+            || (self.version == TYPED_INITIAL_RECEIPT_VERSION
+                && (self.initial_replay_epoch.is_none()
+                    || self.initial_row_accounting.is_none()
+                    || self.compaction_epoch.is_some()
+                    || self.row_accounting.is_some()
+                    || self.custody_plan().is_some()))
             || (self.version != ACCOUNTED_APPEND_RECEIPT_VERSION && self.row_accounting.is_some())
             || (self.version == ACCOUNTED_APPEND_RECEIPT_VERSION
                 && (self.row_accounting.is_none()
                     || self.initial_row_accounting.is_some()
                     || self.compaction_epoch.is_some()
                     || self.custody_plan().is_some()))
-            || (self.version != ACCOUNTED_INITIAL_RECEIPT_VERSION
-                && self.initial_row_accounting.is_some())
+            || (!matches!(
+                self.version,
+                ACCOUNTED_INITIAL_RECEIPT_VERSION | TYPED_INITIAL_RECEIPT_VERSION
+            ) && self.initial_row_accounting.is_some())
             || (self.version == ACCOUNTED_INITIAL_RECEIPT_VERSION
                 && (self.initial_row_accounting.is_none() || self.custody_plan().is_some()))
             || (self.version == RECEIPT_VERSION
@@ -183,6 +212,7 @@ impl AppendReceipt {
                     self.custody_plan(),
                     self.initial_row_accounting.as_ref(),
                     self.row_accounting.as_ref(),
+                    self.initial_replay_epoch.as_ref(),
                 )?
         {
             return Err(MezError::invalid_state(
@@ -202,9 +232,13 @@ impl AppendReceipt {
                 ));
             }
         }
-        let mut batch = match self.compaction_epoch.as_ref() {
-            Some(epoch) => TranscriptAppendBatch::initial_projection(epoch.clone(), entries)?,
-            None => TranscriptAppendBatch::rows(entries)?,
+        let mut batch = if let Some(initial) = &self.initial_replay_epoch {
+            TranscriptAppendBatch::initial_replay(initial.clone(), entries)?
+        } else {
+            match self.compaction_epoch.as_ref() {
+                Some(epoch) => TranscriptAppendBatch::initial_projection(epoch.clone(), entries)?,
+                None => TranscriptAppendBatch::rows(entries)?,
+            }
         };
         if let Some(accounting) = &self.initial_row_accounting {
             batch = batch.with_initial_row_accounting(accounting.clone())?;
@@ -238,7 +272,9 @@ impl AppendReceipt {
         }
         if matches!(
             self.version,
-            PROJECTION_RECEIPT_VERSION | ACCOUNTED_INITIAL_RECEIPT_VERSION
+            PROJECTION_RECEIPT_VERSION
+                | ACCOUNTED_INITIAL_RECEIPT_VERSION
+                | TYPED_INITIAL_RECEIPT_VERSION
         ) && self.first_sequence == 0
         {
             return format!(
@@ -261,7 +297,9 @@ impl AppendReceipt {
 
     /// Identifies complete initial owners independently of physical row count.
     fn has_initial_authority(&self) -> bool {
-        self.compaction_epoch.is_some() || self.initial_row_accounting.is_some()
+        self.compaction_epoch.is_some()
+            || self.initial_row_accounting.is_some()
+            || self.initial_replay_epoch.is_some()
     }
 }
 
@@ -286,7 +324,24 @@ fn digest_payload(
     native: Option<&CustodyAppendPlan>,
     accounting: Option<&super::InitialTranscriptRowAccounting>,
     append_accounting: Option<&super::TranscriptAppendAccounting>,
+    initial_replay: Option<&super::replay_epoch::InitialReplayEpoch>,
 ) -> Result<String> {
+    if let Some(initial) = initial_replay {
+        let mut digest = Sha256::new();
+        digest.update(b"mezzanine-initial-typed-replay-v7\0");
+        digest.update(digest_rows(rows).as_bytes());
+        for encoded in [serde_json::to_vec(initial), serde_json::to_vec(&accounting)] {
+            let encoded = encoded
+                .map_err(|_| MezError::invalid_state("initial typed receipt encode failed"))?;
+            digest.update((encoded.len() as u64).to_be_bytes());
+            digest.update(encoded);
+        }
+        return Ok(digest
+            .finalize()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect());
+    }
     if let Some(accounting) = append_accounting {
         let encoded = serde_json::to_vec(accounting)
             .map_err(|_| MezError::invalid_state("ordinary append accounting encode failed"))?;
@@ -764,6 +819,7 @@ impl AgentTranscriptStore {
                     && existing.compaction_epoch == receipt.compaction_epoch
                     && existing.initial_row_accounting == receipt.initial_row_accounting
                     && existing.row_accounting == receipt.row_accounting
+                    && existing.initial_replay_epoch == receipt.initial_replay_epoch
                 {
                     let directory = self.append_receipt_directory();
                     set_private_dir_permissions(&directory)?;

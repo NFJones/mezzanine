@@ -142,7 +142,7 @@ fn replay_epoch_new_task_composition_preserves_history_and_supersedes_instructio
     blocks.push(ContextBlock::user_event("user prompt", "new exact task"));
     let context = history
         .records
-        .import_context_for_new_task(blocks, &[], &history.execution_events)
+        .import_context_for_new_task(blocks, &[], &history.execution_events, None)
         .unwrap();
     context.validate_durable().unwrap();
     for (old, current) in fixture
@@ -208,7 +208,7 @@ fn replay_epoch_composition_refuses_frozen_projection_edits() {
     assert!(
         history
             .records
-            .import_context_for_new_task(blocks, &[], &[metadata])
+            .import_context_for_new_task(blocks, &[], &[metadata], None)
             .is_err()
     );
 }
@@ -263,7 +263,7 @@ fn replay_epoch_peer_task_cannot_retire_user_instruction() {
     ));
     let context = history
         .records
-        .import_context_for_peer_task(blocks, &[], &[])
+        .import_context_for_peer_task(blocks, &[], &[], None)
         .unwrap();
     assert_eq!(
         context.chronology()[..3],
@@ -321,7 +321,7 @@ fn replay_epoch_composition_continues_saved_native_group() {
     ));
     let mut context = history
         .records
-        .import_context_for_new_task(blocks, &[], &[execution])
+        .import_context_for_new_task(blocks, &[], &[execution], None)
         .unwrap();
     context.validate_durable().unwrap();
     assert_eq!(context.chronology()[2], *declaration);
@@ -442,7 +442,7 @@ fn replay_epoch_composition_refuses_invalid_native_continuations() {
         assert!(
             history
                 .records
-                .import_context_for_new_task(blocks, &[], &execution)
+                .import_context_for_new_task(blocks, &[], &execution, None)
                 .is_err(),
             "alteration={alteration}"
         );

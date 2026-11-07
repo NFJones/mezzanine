@@ -224,6 +224,14 @@ checks the original operation, conversation, configuration, store and pane befor
 adoption, captures current model/policy/context and eligible source, then renders
 the immutable context and request on a second worker under the same logical owner.
 Final adoption rechecks freshness before using the existing model compactor.
+For canonical history, source selection uses the saved head and exact members,
+including qualified later arrivals. Zero pane counts do not make this history
+empty. A frozen NoStore conversation can compact its owned body in memory;
+this does not save it or establish restart durability. Manual compaction preserves
+its exact task and native-group protection, adds no new task, and queues no
+ordinary provider continuation after accepting the storage or in-memory receipt.
+An explicitly empty NoStore binding with no captured source does not inherit a
+saved conversation merely because it has the same ID or a store is installed.
 Live context capture and source eligibility remain actor-owned; workers cannot
 rediscover or expand authority. A cancelled blocking source read or request worker
 can retain one of the finite slots until its actual work finishes.
@@ -431,8 +439,40 @@ preserves subsequent work; a wrong archive, replacement owner, changed protected
 selection or newer head refuses the stale adoption. Arrivals keep their original
 birth revisions, with live-only witnesses for subsequent publication. A cold
 checkpoint cannot recreate those witnesses. This is an implementation boundary;
-initial raw/manual cutover, complete arrival custody settlement, saved/subagent
-forks and legacy migration remain incomplete for this format.
+legacy raw/manual cutover, complete arrival custody settlement, subagent forks
+and legacy migration remain incomplete for this format.
+
+Saved forks copy a typed head and raw membership through the existing locked
+fork transaction. The child has independent payload backing and its own storage
+revision chain while preserving the canonical epoch, original occurrence IDs and
+costs. Its copied archive boundary retains the source's logical frontier, so
+later authored rows stay available as arrivals. Later parent activity and parent
+deletion cannot change the child's captured source. Copies retire retrieved MCP
+grants and carry no execution authority or current permissions; they do not run
+a compactor or acknowledge pending ordinary appends.
+
+Subagent forks carry the captured typed head through their existing initial
+append owner. Retained original raw occurrences receive independent contiguous
+child rows and keep their IDs, costs and canonical ordering. The initial receipt
+binds the planned root and all required payloads; interrupted publication recovers
+that exact root before readiness. Preparing a child history does not acknowledge
+the write. Subsequent compaction checks the actual parent after initial receipt
+recovery. An old initial retry cannot replace a later child head.
+The initial commit also indexes its own copied rows, allowing later compactions
+to skip already archived source during ordinary history reads. This does not
+acknowledge pending parent writes or infer missing indexes in legacy history.
+
+A provider-context rejection resumes its original bounded retry only after that
+acknowledgment is accepted. Inference completion and physical publication alone
+do not release the waiting provider. Recovery keeps its original diagnostic
+reason and completes the existing retry state; duplicate completion does not
+start another attempt. Observed-input compaction keeps its separate reason,
+and idle manual compaction creates no provider continuation.
+Canonical recovery keeps the configured raw-tail reservation. A small completed
+history can still make progress by summarizing its oldest eligible complete
+unit, even when the optional reservation could hold all closed source. Active
+instructions and unfinished groups remain protected. The recovery request does
+not ask for an empty summary because an older projection found no work.
 
 At this typed acceptance boundary, retained MCP retrieval evidence keeps its
 original bytes, identity and local cost, but stops granting callable tools.
@@ -440,11 +480,24 @@ Retrievals arriving during publication are also revoked. Preparing a candidate
 or failing publication leaves live availability alone; a duplicate acknowledgment
 does not revoke a fresh retrieval made after acceptance. The provider's tool
 selector checks these restrictions on both the live body and cold history.
-Nested checkpoint version two persists restrictive retrieval IDs, including an
+Nested checkpoint versions two and later persist restrictive retrieval IDs, including an
 explicit source-copy restriction before the first epoch. Original version-one
 checkpoints retain their receipt framing and derive older-epoch restrictions
 from their checked member births. These restrictions never grant action or
 permission rights; fresh retrieval still needs current registry validation.
+
+Nested checkpoint version three also preserves the original execution interval
+UUID and generation for retained groups. Cold restore allocates fresh live
+handles; matching descriptive identity cannot revive an old completion handle.
+An old closure cannot release a renewed interval, even when its source frontier
+is unchanged. Older checkpoints retain explicit unknown ancestry until original
+source qualification; they cannot guess a renewal or export a producer closure.
+Imported source extending a closed group keeps provisional protection until the
+original producer's renewed interval is qualified, including across restart.
+Ordinary saved rows carry original lifecycle controls separately from model
+blocks. Replay checks their complete original group membership, producer and
+interval before applying closure; a displayed response or matching group name
+cannot substitute. The controls create no model occurrence or execution rights.
 
 New retrieval evidence also keeps its original turn/action identity and replay
 scope in the version-two manifest. An identical fresh retrieval is therefore
@@ -455,7 +508,32 @@ or mismatched scope after a rewrite requires fresh retrieval. Original unscoped
 manifests remain evidence and can grant before the first rewrite. This framing
 changes neither configuration nor the enclosing transcript-record version.
 
-Active turns that already own a typed head now keep their compactor claim until
+Tasks admitted with empty captured history establish canonical ownership before
+provider execution. They start at revision zero without a summary head; this
+does not save a new archive or acknowledge an append. First compaction backs its
+actual source and retains the exact user instruction even if no ordinary archive
+exists. Before the first summary, fully accounted saved raw history can restore
+the same original occurrences and recorded task boundaries in a new runtime.
+This read creates no summary or append acknowledgment. Imported execution groups
+stay protected; terminal-looking text cannot supply their completion receipts.
+Live responses containing only successful local `say` actions retire their
+execution fence after actual presentation. They capture that fence at the new
+result append, so a duplicate response cannot close a later source or renewed
+protection interval. Mixed batches and asynchronous completion owners keep their
+own retirement gates. NoStore continuation retains this actual live closure;
+saved raw replay restores it only from qualified original lifecycle records.
+Original task input can be backed by immutable publication before its ordinary
+append settles. Its active instructions and unfinished execution remain protected.
+First publication keeps the original producer of each imported member. Legacy
+or mixed raw archives and older summaries still need their explicit source
+transition.
+Routed workers keep the complete owned chronology while rebuilding current child
+policy. A child copy gets its own conversation scope and fresh controller
+ownership; continued work in the same conversation retains its existing owner.
+Imported parent and earlier worker occurrences keep their original IDs and costs
+and are not reattributed to the new worker turn.
+
+Active turns with canonical ownership keep their compactor claim until
 the storage worker returns and the actor accepts its exact receipt. Storage
 recovery retains the same prepared summary for at most three attempts; it does
 not ask the model to summarize again. A lost callback can recover the actual
@@ -474,16 +552,37 @@ one exists; it does not turn the temporary parent into saved history.
 Accepted in-memory compaction and terminal cleanup retain the latest target
 body for its next turn, including arrivals after the compaction acknowledgment.
 This continuity lasts in the current runtime and does not establish restart
-durability or saved-fork support for the typed format.
+durability for the unsaved parent. A subagent fork from that compacted NoStore
+body captures its exact current head, raw members and original producers,
+including unsaved arrivals from a running task. The child gets current
+permissions and starts without its parent's incurred usage. Its own initial
+persistence gates establish independent saved history; deleting the parent's
+older saved ancestor does not invalidate the child. Later parent progress
+invalidates a pending capture's adoption rather than leaking into its contents.
+A NoStore source before its first compaction copies accounted raw records and
+their task and execution lifecycle metadata through the initial receipt. The
+child remains without a summary or compaction manifest until a real rewrite.
+Its initial receipt commits full row fingerprints with the original accounting,
+so the first rewrite can index those rows and later history reads can skip them.
 
 An empty audit archive can still have a typed head and retained model members.
 Presentation writes and saved-session discovery recognize that state while
 keeping the archive entry count at zero. Discovery checks the saved header and
 its original receipt; actual replay independently checks the required source and
 payloads before admitting a request.
+Saved typed sources can be forked repeatedly even with no audit rows. Each
+target owns a genuine empty archive and its independent head. If a retained task
+root still references an earlier covered prelude, that original backing travels
+with the copy without returning the prelude to the model. Removing required
+boundary backing is corruption, even when those bytes are outside model history.
+Saved copies validate the original indexed cut and bind those row fingerprints
+to the child's actual copied bytes before publishing its independent root.
 
-The current writer uses sidecar version seven to carry original-source escrow
-across publications. If ordinary rows arrive after several summaries, replay
+The current writer uses sidecar version nine. It retains version-seven
+original-source escrow and version-eight independently backed saved-copy roots,
+and adds a distinct memory-origin root for frozen NoStore copies. A memory
+origin records a capture identity rather than claiming a saved parent publication.
+If ordinary rows arrive after several summaries, replay
 checks their original turn, occurrence, bytes and native metadata before
 deduplicating them. Earlier covered source and display copies do not reenter
 the model, and a delayed stable snapshot does not override the frozen baseline.
@@ -520,7 +619,14 @@ Older covered escrow backing can retire only after its actual indexed archive
 placement is inside the cut. Current pre-rewrite source, unsettled originals and
 whole still-required execution groups remain backed. This does not delete files
 or acknowledge pending appends. Active escrow remains bounded; a full bound
-produces an explicit refusal rather than lost source. Ordinary receipt recovery
+produces an explicit refusal rather than lost source. Original append accounting
+retains compact execution framing in the existing row-accounting index.
+A delayed lifecycle control can therefore be checked after later heads retire
+that group's escrow, without scanning or restoring the covered model history.
+Missing required descriptors, changed producer framing or missing original row
+fingerprints refuse explicitly. Older indexes can still use current qualified
+escrow; reads do not invent or backfill older execution descriptors.
+Ordinary receipt recovery
 and settlement still use their existing archive validation. When all retained
 ordinary receipts already have complete original accounting inside the cut,
 history verifies their original row images, IDs, costs and required state, then

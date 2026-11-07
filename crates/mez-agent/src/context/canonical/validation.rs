@@ -360,6 +360,28 @@ impl super::AgentContext {
                 "context mutation removed a pending execution group",
             ));
         }
+        let original_groups = self
+            .chronology
+            .iter()
+            .filter_map(|event| event.execution_group_id())
+            .collect::<std::collections::BTreeSet<_>>();
+        for (group, interval) in &self.execution_intervals {
+            interval.validate()?;
+            if !original_groups.contains(group) {
+                return Err(AgentContextError::new(
+                    "execution interval has no original source",
+                ));
+            }
+        }
+        if self
+            .pending_execution_groups
+            .iter()
+            .any(|(group, protection)| {
+                self.execution_intervals.get(group) != Some(protection.interval())
+            })
+        {
+            return Err(AgentContextError::new("pending execution interval changed"));
+        }
         if self.pending_peer_messages.iter().any(|sequence| {
             !self.chronology.iter().any(|event| {
                 event.sequence() == *sequence

@@ -13,11 +13,11 @@
 //! regression proves a reachable concurrent creator, not the historical failed
 //! run's writer identity or the cause of its ENOTEMPTY receipt.
 
-use std::any::Any;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use super::RuntimeSessionService;
+use crate::runtime::tests::agent::fixture_teardown::{CleanupFailure, settle};
 
 static NEXT_FORK_ROOT: AtomicU64 = AtomicU64::new(1);
 
@@ -53,30 +53,6 @@ pub(super) fn exclusive_root(label: &str) -> std::io::Result<PathBuf> {
     }))
 }
 
-/// Cleanup failures retain actual typed native/I/O errors and panic ownership.
-pub(super) enum CleanupFailure {
-    Native(crate::MezError),
-    Panic(&'static str, Box<dyn Any + Send>),
-    Boundary(&'static str),
-    Filesystem(std::io::Error),
-}
-
-impl std::fmt::Debug for CleanupFailure {
-    /// Formats bounded fixture diagnostics without interpreting opaque payloads.
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Native(error) => formatter.debug_tuple("Native").field(error).finish(),
-            Self::Panic(stage, payload) => formatter
-                .debug_tuple("Panic")
-                .field(stage)
-                .field(&payload.as_ref().type_id())
-                .finish(),
-            Self::Boundary(reason) => formatter.debug_tuple("Boundary").field(reason).finish(),
-            Self::Filesystem(error) => formatter.debug_tuple("Filesystem").field(error).finish(),
-        }
-    }
-}
-
 /// Attempts independent existing native and selector teardown before deletion.
 /// Any failure preserves storage. The boundary callback is a test observation
 /// seam after joins, not permission to repair/retry a failed deletion.
@@ -90,30 +66,6 @@ pub(super) fn settle_and_remove(
         return Err(vec![CleanupFailure::Boundary(reason)]);
     }
     std::fs::remove_dir_all(root).map_err(|error| vec![CleanupFailure::Filesystem(error)])
-}
-
-/// Retires one original service without deleting storage needed for reopen.
-/// This is the same independent native/selector barrier used before removal.
-pub(super) fn settle(service: &mut RuntimeSessionService) -> Result<(), Vec<CleanupFailure>> {
-    let mut failures = Vec::new();
-    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        service.terminate_all_pane_processes()
-    })) {
-        Ok(Ok(_)) => {}
-        Ok(Err(error)) => failures.push(CleanupFailure::Native(error)),
-        Err(payload) => failures.push(CleanupFailure::Panic("native fixture cleanup", payload)),
-    }
-    // A failed native stage must not skip the independent filesystem writer.
-    if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        service.clear_agent_prompt_inputs()
-    })) {
-        failures.push(CleanupFailure::Panic("selector fixture cleanup", payload));
-    }
-    if failures.is_empty() {
-        Ok(())
-    } else {
-        Err(failures)
-    }
 }
 
 #[test]

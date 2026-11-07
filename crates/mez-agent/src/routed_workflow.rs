@@ -372,11 +372,19 @@ pub fn routed_child_output_for_execution(execution: &AgentTurnExecution) -> Stri
 /// leak into a new routed job.
 /// Surviving occurrences retain their records, ordering anchors and native
 /// ownership. Invalid retained ownership returns a context error.
+/// An owned epoch keeps its complete immutable chronology; only current stable
+/// slots are removed for child policy assembly. Its original user instructions
+/// and historical handoffs cannot be filtered out of a sealed source. The
+/// product must explicitly rebind a genuine copy to the child conversation.
 pub fn routed_worker_seed_context(
     parent_context: &AgentContext,
     original_user_prompt: &str,
 ) -> crate::AgentContextResult<AgentContext> {
     let mut seed = parent_context.clone();
+    if seed.has_replay_owner() {
+        seed.replace_stable_slots(Vec::new())?;
+        return Ok(seed);
+    }
     seed.retain_blocks_with_metadata(|block, _| {
         if block.source == ContextSourceKind::UserInstruction
             && block.label == "user prompt"
@@ -876,6 +884,28 @@ mod tests {
         seed.append_reference_event(ContextSourceKind::LocalMessage, "controller", "route me")
             .unwrap();
         assert!(seed.chronology().last().unwrap().sequence() > old_high_water);
+    }
+
+    #[test]
+    fn routed_owned_seed_keeps_original_chronology_and_source_seal() {
+        let parent = AgentContext::new_durable(vec![
+            ContextBlock::stable_instruction(ContextSourceKind::System, "policy", "parent policy"),
+            ContextBlock::reference_event(
+                ContextSourceKind::Configuration,
+                "environment",
+                "original environment",
+            ),
+            ContextBlock::user_event("user prompt", "route the actual task"),
+        ])
+        .unwrap();
+        let conversation = crate::ReplayConversationId::new("parent-scope").unwrap();
+        let parent = crate::ReplayEpochContext::new(conversation.clone(), parent)
+            .unwrap()
+            .into_owned_context();
+        let seed = routed_worker_seed_context(&parent, "route the actual task").unwrap();
+        assert!(seed.stable_slots().is_empty());
+        assert_eq!(seed.chronology(), parent.chronology());
+        assert!(crate::ReplayEpochContext::from_owned_context(conversation, seed).is_ok());
     }
 
     /// Verifies worker seed projection keeps conversational evidence while

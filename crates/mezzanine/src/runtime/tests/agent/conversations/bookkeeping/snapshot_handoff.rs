@@ -38,10 +38,8 @@ fn admitted_fixture_prompt(
     service: &RuntimeSessionService,
     turn_id: &str,
 ) -> mez_agent::TranscriptContextEvent {
-    let event = service
-        .agent_turn_contexts()
-        .get(turn_id)
-        .unwrap()
+    let context = service.agent_turn_contexts().get(turn_id).unwrap();
+    let event = context
         .chronology()
         .iter()
         .find(|event| {
@@ -53,11 +51,19 @@ fn admitted_fixture_prompt(
         event.block().content,
         "native-free retained candidate prompt"
     );
-    mez_agent::TranscriptContextEvent::user_event(
-        event.sequence().get(),
-        event.block().label.clone(),
-        event.block().content.clone(),
-    )
+    match context.replay_task_admission_start(event.record().occurrence_id()) {
+        Some(first) => mez_agent::TranscriptContextEvent::task_admission(
+            event.sequence().get(),
+            first,
+            event.block().label.clone(),
+            event.block().content.clone(),
+        ),
+        None => mez_agent::TranscriptContextEvent::user_event(
+            event.sequence().get(),
+            event.block().label.clone(),
+            event.block().content.clone(),
+        ),
+    }
     .unwrap()
 }
 
@@ -194,6 +200,54 @@ fn native_free_frozen_candidate(
     assert!(!service.persistence.bookkeeping_pending(&conversation));
     assert!(service.tracked_runtime_pane_process_ids().is_empty());
     (service, candidate)
+}
+
+/// The actual pre-message prefix and terminal producer must encode one root
+/// identically. Different event framing under the same occurrence would reject
+/// a later exact append or lose its original task boundary during cold replay.
+#[test]
+fn runtime_completion_handoff_message_prefix_preserves_original_task_admission() {
+    let root = NativeFreeBookkeepingRoot::new("message-prefix-task-admission");
+    let (service, candidate) = native_free_frozen_candidate(&root);
+    let context = &service.agent_turn_contexts()[&candidate.turn.turn_id];
+    let expected = candidate
+        .entries
+        .iter()
+        .find_map(|row| {
+            let record = mez_agent::transcript::TranscriptContextRecord::from_transcript_content(
+                &row.content,
+            )
+            .ok()??;
+            matches!(
+                record.event(),
+                mez_agent::TranscriptContextEvent::TaskAdmission { .. }
+            )
+            .then_some(record)
+        })
+        .unwrap();
+    let prefix = service
+        .project_canonical_message_prefix(
+            &candidate.turn,
+            context,
+            0,
+            context.event_sequence_high_water_mark() + 1,
+        )
+        .unwrap();
+    let actual = prefix
+        .iter()
+        .find_map(|row| {
+            let record = mez_agent::transcript::TranscriptContextRecord::from_transcript_content(
+                &row.content,
+            )
+            .ok()??;
+            (record.record().occurrence_id() == expected.record().occurrence_id()).then_some(record)
+        })
+        .unwrap();
+    assert_eq!(
+        actual, expected,
+        "an early canonical prefix must not change the terminal producer's event framing"
+    );
+    assert!(service.tracked_runtime_pane_process_ids().is_empty());
 }
 
 /// Both accepted namespaces must remain bound to the exact original turn. A

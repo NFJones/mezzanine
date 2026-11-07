@@ -32,6 +32,9 @@ pub use accounting::{
 mod checkpoint;
 mod continuation;
 pub(super) use continuation::ReplayEpochContinuation;
+mod execution_state;
+pub(super) use execution_state::ExecutionInterval;
+pub use execution_state::ReplayExecutionState;
 mod lifecycle;
 mod mcp_grants;
 mod task_admission;
@@ -255,24 +258,31 @@ impl ReplayEpochContext {
         &mut self,
         owner: &ReplayExecutionOwner,
     ) -> AgentContextResult<()> {
+        let stale =
+            || AgentContextError::new("execution closure has a stale owner or source frontier");
+        let protection = self
+            .context
+            .pending_execution_groups
+            .get(&owner.group)
+            .ok_or_else(stale)?
+            .clone();
         if owner.owner_identity != self.owner_identity
-            || self.context.pending_execution_groups.get(&owner.group) != Some(&owner.protection)
+            || protection != owner.protection
             || self.group_frontier(&owner.group) != Some(owner.frontier)
         {
-            return Err(AgentContextError::new(
-                "execution closure has a stale owner or source frontier",
-            ));
+            return Err(stale());
         }
         self.validate_native_group_closure(&owner.group)?;
         let mut candidate = self.clone();
         candidate
             .context
-            .release_pending_execution_group(&owner.group);
+            .pending_execution_groups
+            .remove(&owner.group);
         candidate.source_lifecycle.closed_groups.insert(
             owner.group.clone(),
             ReplayExecutionClosure {
                 frontier: owner.frontier,
-                protection: owner.protection.clone(),
+                protection,
             },
         );
         candidate.refresh_accounting_group(&owner.group)?;

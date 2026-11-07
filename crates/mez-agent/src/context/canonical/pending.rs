@@ -5,9 +5,11 @@
 //! retires. In-memory allocations survive checked clones and preparation; a new
 //! protection interval receives a fresh allocation even with unchanged source.
 //! The map preserves idempotent retention within the current interval,
-//! but supplies no action, provider or completion authority and is never part of
-//! persisted transcript metadata or model-visible messages.
+//! but supplies no action, provider or completion authority. Descriptive interval
+//! identity may be checkpointed; the live allocation never crosses persistence
+//! or appears in model-visible messages.
 
+use super::epoch::ExecutionInterval;
 use super::{
     AgentContext, AgentContextError, AgentContextResult, ContextEventSequence,
     ContextExecutionGroupId, ContextSemanticKind, ContextSourceKind, ConversationEvent,
@@ -23,21 +25,40 @@ pub(super) fn observation_only_event(event: &ConversationEvent) -> bool {
 
 /// One opaque in-memory protection interval. Clones share its allocation;
 /// renewing protection after release allocates another one even at the same
-/// frontier. It is never persisted, projected or interpreted as effect authority.
+/// frontier. Its allocation is never persisted or interpreted as effect authority.
 #[derive(Debug, Clone)]
-pub(super) struct ContextExecutionProtection(std::sync::Arc<()>);
+pub(super) struct ContextExecutionProtection {
+    allocation: std::sync::Arc<()>,
+    interval: ExecutionInterval,
+}
 
 impl ContextExecutionProtection {
-    /// Allocates a distinct interval without a reusable numeric generation.
-    pub(super) fn new() -> Self {
-        Self(std::sync::Arc::new(()))
+    /// Restores descriptive identity inside a fresh, non-reusable live allocation.
+    pub(super) fn new(interval: ExecutionInterval) -> Self {
+        Self {
+            allocation: std::sync::Arc::new(()),
+            interval,
+        }
+    }
+
+    pub(super) fn interval(&self) -> &ExecutionInterval {
+        &self.interval
+    }
+
+    /// Original-source qualification refines a provisional description, not the
+    /// already admitted live protection interval. Its captured fence stays valid.
+    pub(super) fn with_interval(&self, interval: ExecutionInterval) -> Self {
+        Self {
+            allocation: self.allocation.clone(),
+            interval,
+        }
     }
 }
 
 impl PartialEq for ContextExecutionProtection {
     /// Compares the original allocation, not its unit payload or public labels.
     fn eq(&self, other: &Self) -> bool {
-        std::sync::Arc::ptr_eq(&self.0, &other.0)
+        std::sync::Arc::ptr_eq(&self.allocation, &other.allocation)
     }
 }
 impl Eq for ContextExecutionProtection {}
@@ -124,13 +145,38 @@ impl AgentContext {
     ) -> AgentContextResult<ContextExecutionProtection> {
         let previous = self.pending_execution_groups.get(group).cloned();
         let renewed = previous.is_none();
-        let protection = previous.unwrap_or_else(ContextExecutionProtection::new);
+        let protection = match previous {
+            Some(previous) => previous,
+            None => ContextExecutionProtection::new(ExecutionInterval::after(
+                self.execution_intervals.get(group),
+            )?),
+        };
         if let Some(continuation) = &mut self.replay_continuation {
             continuation.protect_group(group, &protection, renewed)?;
         }
         self.pending_execution_groups
             .insert(group.clone(), protection.clone());
+        self.execution_intervals
+            .insert(group.clone(), protection.interval().clone());
         Ok(protection)
+    }
+
+    /// Imported source has no local producer interval until separately qualified
+    /// lifecycle metadata binds it. Keep a fresh live protection allocation;
+    /// arbitrary imported bytes cannot export a new original completion claim.
+    pub(super) fn protect_unqualified_imported_group(
+        &mut self,
+        group: &ContextExecutionGroupId,
+    ) -> AgentContextResult<()> {
+        let interval = ExecutionInterval::unqualified_after(self.execution_intervals.get(group));
+        let protection = ContextExecutionProtection::new(interval.clone());
+        if let Some(continuation) = &mut self.replay_continuation {
+            continuation.protect_group(group, &protection, true)?;
+        }
+        self.execution_intervals.insert(group.clone(), interval);
+        self.pending_execution_groups
+            .insert(group.clone(), protection);
+        Ok(())
     }
 
     /// Releases protection after the runtime owner retires the group's final
@@ -144,7 +190,13 @@ impl AgentContext {
         if self.has_replay_owner() {
             return false;
         }
-        self.pending_execution_groups.remove(group).is_some()
+        let released = self.pending_execution_groups.remove(group).is_some();
+        if released {
+            // Unowned compatibility context has no canonical producer receipt.
+            // Fenced epoch retirement retains descriptive ancestry separately.
+            self.execution_intervals.remove(group);
+        }
+        released
     }
 
     /// Reports runtime-owned pending protection without inspecting model text.

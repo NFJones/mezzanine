@@ -160,6 +160,12 @@ impl<'a> RuntimeTranscriptProjection<'a> {
             created_at_unix_seconds,
             turn,
         )?;
+        self.append_execution_state_controls(
+            &mut execution_entries,
+            conversation_id,
+            created_at_unix_seconds,
+            turn,
+        )?;
         if execution.terminal_state == mez_agent::AgentTurnState::Completed
             && self.routed_presentation
             && let Some(content) = self.routed_handoff_transcript_content()
@@ -558,6 +564,61 @@ impl<'a> RuntimeTranscriptProjection<'a> {
             entry.validate()?;
             entries.push(entry);
             sequence = sequence.saturating_add(1);
+        }
+        Ok(())
+    }
+
+    /// Captures actual producer lifecycle after exact source rows. Imported
+    /// groups cannot borrow this turn's origin; mixed old/new groups require
+    /// the original captured history to qualify that origin independently.
+    fn append_execution_state_controls(
+        &self,
+        entries: &mut Vec<TranscriptEntry>,
+        conversation: &str,
+        created_at_unix_seconds: u64,
+        turn: &AgentTurnRecord,
+    ) -> Result<()> {
+        let Some(context) = self.context.filter(|context| context.has_replay_owner()) else {
+            return Ok(());
+        };
+        let owner = mez_agent::ReplayEpochContext::from_owned_context(
+            mez_agent::ReplayConversationId::new(conversation)?,
+            context.clone(),
+        )?;
+        for state in owner.execution_states()? {
+            if state
+                .members()
+                .iter()
+                .all(|(_, sequence)| *sequence <= self.imported_history_high_water)
+            {
+                continue;
+            }
+            let inherited = state
+                .members()
+                .iter()
+                .any(|(_, sequence)| *sequence <= self.imported_history_high_water);
+            let row = TranscriptEntry {
+                conversation_id: conversation.into(),
+                sequence: entries
+                    .last()
+                    .map_or(1, |entry| entry.sequence.saturating_add(1)),
+                created_at_unix_seconds,
+                role: TranscriptRole::System,
+                turn_id: turn.turn_id.clone(),
+                agent_id: turn.agent_id.clone(),
+                pane_id: turn.pane_id.clone(),
+                content: mez_agent::transcript::TranscriptExecutionStateRecord::new(state)?
+                    .to_transcript_content()?,
+            };
+            row.validate()?;
+            if inherited {
+                self.history_source
+                    .ok_or_else(|| {
+                        MezError::conflict("execution control original history is unavailable")
+                    })?
+                    .qualify_execution_control_append(entries, &row)?;
+            }
+            entries.push(row);
         }
         Ok(())
     }

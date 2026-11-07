@@ -47,7 +47,62 @@ impl ArchiveCut {
     pub(super) fn through_sequence(&self) -> u64 {
         self.through_sequence
     }
-    fn empty() -> Self {
+
+    /// Rebinds the same logical cut to a newly copied archive's physical bytes.
+    /// The held fork leases and existing row-image installer own both archives.
+    /// Later copied rows remain arrivals; they cannot be hidden by this cut.
+    pub(super) fn for_copied_archive(
+        store: &AgentTranscriptStore,
+        cid: &str,
+        through_sequence: u64,
+    ) -> Result<Self> {
+        if through_sequence == 0 {
+            return Ok(Self::empty());
+        }
+        let mut file =
+            open_archive(store, cid, false)?.ok_or_else(|| invalid("copied archive is missing"))?;
+        let mut offset = 0u64;
+        let mut last = None;
+        {
+            let mut reader = BufReader::new(&mut file);
+            let mut line = String::new();
+            for sequence in 1..=through_sequence {
+                line.clear();
+                let bytes = reader.read_line(&mut line)?;
+                if bytes == 0 || !line.ends_with('\n') {
+                    return Err(invalid("copied archive does not cover its original cut"));
+                }
+                let row = decode_archive_transcript_entry(line.trim_end_matches(['\r', '\n']))?;
+                if row.conversation_id != cid || row.sequence != sequence {
+                    return Err(invalid("copied archive cut has foreign or unordered rows"));
+                }
+                offset = offset
+                    .checked_add(bytes as u64)
+                    .ok_or_else(|| invalid("copied archive offset exhausted"))?;
+                last = Some(row);
+            }
+        }
+        let row = last.ok_or_else(|| invalid("copied archive cut has no final row"))?;
+        let indexed = store
+            .indexed_row_reference_locked(cid, through_sequence)?
+            .ok_or_else(|| invalid("copied archive cut has no original row image"))?;
+        if indexed.digest != store.transcript_entry_revision(&row)? {
+            return Err(invalid(
+                "copied archive cut does not match its indexed image",
+            ));
+        }
+        let cut = Self {
+            through_sequence,
+            byte_offset: offset,
+            prefix_sha256: prefix_digest(&mut file, &Self::empty(), offset)?,
+            anchor_sha256: anchor(&mut file, offset)?,
+            last_row: Some(indexed),
+        };
+        cut.validate()?;
+        Ok(cut)
+    }
+
+    pub(super) fn empty() -> Self {
         Self {
             through_sequence: 0,
             byte_offset: 0,
@@ -85,6 +140,16 @@ impl ArchiveCut {
             return Err(invalid("archive cut has no exact final row"));
         }
         Ok(())
+    }
+
+    /// Explicit saved copies validate the complete original prefix before
+    /// rebinding physical bytes; ordinary history keeps its bounded checks.
+    pub(super) fn verify_complete_source(
+        &self,
+        store: &AgentTranscriptStore,
+        cid: &str,
+    ) -> Result<()> {
+        self.verify(store, cid, true, false)
     }
 
     fn verify(
@@ -204,10 +269,13 @@ impl ArchiveCapture {
                 )
             })
             .collect::<BTreeMap<_, _>>();
+        let execution_sources =
+            store.indexed_execution_sources_locked(cid, &window.rows, base.through_sequence)?;
         let qualified = escrow::qualify_rows(
             items,
             cid,
             &window.rows,
+            &execution_sources,
             escrow::RowAdmission::KnownCopies,
             |reference| {
                 if let Some(content) = current.get(&reference.sha256) {
@@ -273,10 +341,13 @@ impl ArchiveCapture {
         }) {
             return Err(invalid("archive cut rewound its original source"));
         }
+        let execution_sources =
+            store.indexed_execution_sources_locked(cid, &self.rows, self.cut.through_sequence)?;
         let qualified = escrow::qualify_rows(
             items,
             cid,
             &self.rows,
+            &execution_sources,
             escrow::RowAdmission::KnownCopies,
             resolve,
         )?;

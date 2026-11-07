@@ -13,6 +13,7 @@ mod compaction_identity;
 mod context;
 mod context_guidance;
 mod conversations;
+mod fixture_teardown;
 mod macros;
 mod mcp_schema;
 mod model_selection;
