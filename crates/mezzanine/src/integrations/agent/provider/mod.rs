@@ -8,7 +8,7 @@ use super::{BTreeMap, ExposeSecret, MaapBatch, MezError, Result, SecretString};
 use sha2::{Digest, Sha256};
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -469,6 +469,7 @@ mod anthropic;
 mod chat_completions;
 mod deepseek;
 mod errors;
+mod observation_delivery;
 mod openai_chat_completions;
 use crate::integrations::http::AsyncProviderHttpTransport;
 #[cfg(test)]
@@ -504,6 +505,7 @@ use mez_agent::{
     provider_error_detail as openai_provider_error_detail,
     provider_failure_json_with_retry_headers as openai_provider_failure_json_with_retry_headers,
 };
+pub(crate) use observation_delivery::PendingProviderWireObservations;
 use openai_chat_completions::OpenAiChatCompletionsDialect;
 
 use mez_agent::{CHATGPT_RESPONSES_ENDPOINT, OPENAI_RESPONSES_ENDPOINT};
@@ -550,7 +552,7 @@ impl ProviderRequestPurpose {
 pub struct ProviderWireRequestObservation {
     /// Monotonic identity within the owning worker dispatch.
     pub request_id: String,
-    /// Issued execution claim, when this observation can checkpoint expense.
+    /// Issued execution or compaction claim that owns checkpointed expense.
     /// This identity never authorizes response content or replacement work.
     pub claim_generation: Option<u64>,
     /// One-based wire-attempt ordinal within the logical provider call.
@@ -682,14 +684,6 @@ pub struct OpenAiResponseDiagnostics {
 /// content-free reply metadata from the received transport response.
 type OpenAiResponsesCompleted = (Result<ModelResponse>, OpenAiResponseDiagnostics);
 
-/// Actor-bound observation sink shared by every provider call in one worker.
-/// Undelivered content-free observations retained across cancellation of send.
-/// The monitor acknowledges entries only after actor application and drains
-/// the remainder after joining its aborted producer; existing wire IDs dedup.
-pub(crate) type PendingProviderWireObservations = std::sync::Arc<
-    std::sync::Mutex<std::collections::BTreeMap<String, ProviderWireRequestObservation>>,
->;
-
 /// Constant-space expense retained when an auxiliary response cannot be adopted.
 /// Normal outcome accounting remains authoritative; this snapshot is used only
 /// after its producer is destroyed and the terminal outcome is unavailable.
@@ -713,6 +707,9 @@ pub struct ProviderWireRequestObserver {
     claim_generation: Option<u64>,
     pending: Option<PendingProviderWireObservations>,
     reported: Option<SharedProviderReportedUsage>,
+    /// A required compaction receipt lost its actor delivery channel. The
+    /// observed adapter must fail locally instead of advancing private work.
+    delivery_failed: AtomicBool,
 }
 
 /// Process-local monotonic identity for concrete provider requests.
@@ -733,10 +730,11 @@ impl ProviderWireRequestObserver {
             claim_generation: None,
             pending: None,
             reported: None,
+            delivery_failed: AtomicBool::new(false),
         }
     }
 
-    /// Associates execution observations with the immutable issued expense owner.
+    /// Associates observations with the immutable issued expense owner.
     pub fn with_claim_generation(mut self, generation: u64) -> Self {
         self.claim_generation = Some(generation);
         self
@@ -927,15 +925,22 @@ impl<'a> ProviderWireObservationContext<'a> {
             reported.usage.add_assign(usage);
             reported.known_observations = reported.known_observations.saturating_add(1);
         }
+        let id = observation.request_id.clone();
         if let Some(pending) = &self.observer.pending {
-            // Poison recovery preserves already incurred expense; a panic in
-            // presentation delivery must not erase this content-free evidence.
-            pending
-                .lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .insert(observation.request_id.clone(), observation.clone());
+            pending.retain(observation.clone());
         }
-        let _ = self.observer.sender.send(observation).await;
+        let requires_checkpoint = self.purpose == ProviderRequestPurpose::Compaction
+            && self.observer.claim_generation.is_some()
+            && self.observer.pending.is_some();
+        if self.observer.sender.send(observation).await.is_err() {
+            if requires_checkpoint {
+                self.observer.delivery_failed.store(true, Ordering::Release);
+            }
+            return;
+        }
+        if requires_checkpoint && let Some(pending) = &self.observer.pending {
+            pending.wait_for_acknowledgment(&id).await;
+        }
     }
 }
 
@@ -1650,14 +1655,41 @@ impl<P: AsyncModelProvider> AsyncModelProvider for ObservedAsyncModelProvider<'_
         request: &'a ModelRequest,
         progress: Option<tokio::sync::mpsc::Sender<mez_agent::StreamingSayEvent>>,
     ) -> Pin<Box<dyn Future<Output = Result<ModelResponse>> + Send + 'a>> {
+        if self.purpose == ProviderRequestPurpose::Compaction
+            && self.observer.delivery_failed.load(Ordering::Acquire)
+        {
+            return Box::pin(async {
+                Err(MezError::invalid_state(
+                    "compaction usage acknowledgment unavailable",
+                ))
+            });
+        }
         let observation = ProviderWireObservationContext::new(
             self.observer,
             self.purpose,
             self.provider.cache_namespace(),
             self.provider.prompt_cache_diagnostics(request),
         );
-        self.provider
-            .send_request_async_with_progress_and_observation(request, progress, Some(observation))
+        let call = self
+            .provider
+            .send_request_async_with_progress_and_observation(request, progress, Some(observation));
+        Box::pin(async move {
+            let result = call.await;
+            if self.purpose == ProviderRequestPurpose::Compaction
+                && self.observer.delivery_failed.load(Ordering::Acquire)
+            {
+                return match result {
+                    // Receipt delivery is secondary to an original provider
+                    // failure. Preserve its typed cause and incurred expense.
+                    Err(error) => Err(error),
+                    Ok(response) => Err(MezError::invalid_state(
+                        "compaction usage acknowledgment unavailable",
+                    )
+                    .with_provider_incurred_usage(response.usage)),
+                };
+            }
+            result
+        })
     }
 }
 

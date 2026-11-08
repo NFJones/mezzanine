@@ -1030,14 +1030,14 @@ async fn max_messages_service_stop_flushes_backpressured_wire_journal() {
         reached.notified().await;
         // The producer records its second observation synchronously before
         // yielding on the full channel; this bounded handoff is not a delay.
-        while pending.lock().unwrap().len() < 2 {
+        while pending.len() < 2 {
             tokio::task::yield_now().await;
         }
         abort_agent_provider_workers(&mut workers, &handle, &drains, &mut owners)
             .await
             .unwrap();
         let _ = producer.await;
-        assert!(pending.lock().unwrap().is_empty());
+        assert!(pending.is_empty());
         handle.shutdown().await.unwrap();
     };
     let ((), exit) = tokio::join!(client, actor.run());

@@ -1785,10 +1785,7 @@ async fn submit_pending_provider_observation(
 ) -> Result<()> {
     let id = observation.request_id.clone();
     submit_provider_wire_request_observation(handle, observation).await?;
-    pending
-        .lock()
-        .unwrap_or_else(|error| error.into_inner())
-        .remove(&id);
+    pending.acknowledge(&id);
     Ok(())
 }
 
@@ -1798,12 +1795,7 @@ async fn flush_pending_provider_observations(
     handle: &AsyncRuntimeSessionHandle,
     pending: &PendingProviderWireObservations,
 ) -> Result<()> {
-    let observations: Vec<_> = pending
-        .lock()
-        .unwrap_or_else(|error| error.into_inner())
-        .values()
-        .cloned()
-        .collect();
+    let observations = pending.snapshot();
     for observation in observations {
         submit_pending_provider_observation(handle, pending, observation).await?;
     }
@@ -1872,6 +1864,7 @@ where
         tokio::sync::mpsc::channel(STREAMING_SAY_PROGRESS_CHANNEL_CAPACITY);
     let observer =
         ProviderWireRequestObserver::new(conversation_id, pane_id.clone(), observation_sender)
+            .with_claim_generation(task_generation)
             .with_pending_observations(pending.clone())
             .with_reported_usage(reported.clone());
     let (completed_sender, completed) = tokio::sync::oneshot::channel();

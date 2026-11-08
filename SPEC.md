@@ -2593,6 +2593,13 @@ memory and title expense when their terminal result is unavailable. Normal
 returned outcomes remain authoritative and MUST NOT add the same wire totals
 again. Retained auxiliary counters MUST use bounded storage and frozen expense
 provenance. Request-local join failures MUST retain reported expense as well.
+Reported compaction wire usage MUST checkpoint against its original issued
+generation, conversation, request identity and model before private work advances.
+The producer MUST await actor acknowledgment of its retained receipt; cancelling
+that wait MUST preserve evidence for the existing retirement owner. Duplicate
+wire IDs MUST be inert, and terminal or cancellation settlement MUST charge only
+the uncheckpointed remainder. A billing checkpoint MUST NOT authorize summary
+publication or a new provider request.
 Shared monitor loss remains service-fatal; sibling cleanup MUST still be
 attempted, with the original typed failure preserved if cleanup also fails.
 Title diagnostics MUST retain bounded worker/monitor panic and cancellation

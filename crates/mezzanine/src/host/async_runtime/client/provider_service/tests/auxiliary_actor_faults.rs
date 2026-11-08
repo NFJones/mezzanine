@@ -8,6 +8,120 @@
 
 use super::*;
 
+/// Concrete compactor wire receipts charge their original issued owner before
+/// a terminal outcome. Repeated receipts and late cancellation cannot double
+/// charge, and mismatched metadata cannot poison a later genuine receipt.
+#[tokio::test]
+async fn auxiliary_compaction_wire_checkpoints_conserve_cancelled_and_final_usage() {
+    fn usage(service: &RuntimeSessionService, conversation: &str) -> (u64, u64) {
+        service
+            .agent_token_usage_for_conversation(conversation)
+            .get(&mez_agent::ModelTokenUsageKey::new("local-chat", "test"))
+            .map(|usage| (usage.input_tokens, usage.output_tokens))
+            .unwrap_or_default()
+    }
+
+    for cancel in [false, true] {
+        let (_root, mut service, _primary, conversation) = queued_fixture(Family::Compaction);
+        let generation = service
+            .pending_agent_compaction_task_generation("%1")
+            .unwrap();
+        let dispatch = service
+            .claim_agent_compaction_task("%1", generation)
+            .unwrap()
+            .unwrap();
+        let (sender, mut receiver) = tokio::sync::mpsc::channel(4);
+        let observer = ProviderWireRequestObserver::new(&conversation, "%1", sender)
+            .with_claim_generation(generation);
+        let provider = ReportedMemoryProvider(Default::default());
+        let mut observations = Vec::new();
+        let mut incurred = mez_agent::ModelTokenUsage::default();
+        // Both requests are genuinely observed while the claim is live. Only
+        // delivery of the second receipt is delayed across cancellation.
+        for _ in 0..2 {
+            let response = observed_provider_request(
+                &provider,
+                &observer,
+                ProviderRequestPurpose::Compaction,
+                &dispatch.task.request,
+            )
+            .await
+            .unwrap();
+            incurred.add_assign(response.usage);
+            observations.push(receiver.recv().await.unwrap());
+        }
+        let first = &observations[0];
+        for field in [
+            "generation",
+            "conversation",
+            "pane",
+            "agent",
+            "turn",
+            "provider",
+            "model",
+        ] {
+            let mut wrong = first.clone();
+            match field {
+                "generation" => wrong.claim_generation = Some(generation + 1),
+                "conversation" => wrong.conversation_id = "foreign-conversation".into(),
+                "pane" => wrong.pane_id = "%foreign".into(),
+                "agent" => wrong.agent_id = "foreign-agent".into(),
+                "turn" => wrong.turn_id = "foreign-turn".into(),
+                "provider" => wrong.provider = "foreign-provider".into(),
+                "model" => wrong.model = "foreign-model".into(),
+                _ => unreachable!(),
+            }
+            service
+                .apply_provider_wire_request_observation(wrong)
+                .unwrap();
+            assert_eq!(usage(&service, &conversation), (0, 0), "wrong {field}");
+        }
+        service
+            .apply_provider_wire_request_observation(first.clone())
+            .unwrap();
+        assert_eq!(
+            usage(&service, &conversation),
+            (17, 3),
+            "wire checkpoint before terminal outcome"
+        );
+        service
+            .apply_provider_wire_request_observation(first.clone())
+            .unwrap();
+        assert_eq!(usage(&service, &conversation), (17, 3), "duplicate receipt");
+        if cancel {
+            service.cancel_current_agent_compaction_task("%1");
+        }
+        service
+            .apply_provider_wire_request_observation(observations[1].clone())
+            .unwrap();
+        assert_eq!(
+            usage(&service, &conversation),
+            (34, 6),
+            "late receipt keeps original expense owner"
+        );
+        let terminal = crate::runtime::AgentCompactionEvent::Failed {
+            pane_id: "%1".into(),
+            task_generation: generation,
+            usage: incurred,
+            kind: "forbidden".into(),
+            message: "checkpoint fixture owner ended".into(),
+            provider_failure_json: None,
+            provider_raw_text: None,
+        };
+        service
+            .apply_agent_compaction_transition(terminal.clone())
+            .unwrap();
+        service.apply_agent_compaction_transition(terminal).unwrap();
+        assert_eq!(
+            usage(&service, &conversation),
+            (34, 6),
+            "terminal remainder settles once"
+        );
+        assert!(!service.agent_is_compacting("%1"));
+        service.terminate_all_pane_processes().unwrap();
+    }
+}
+
 /// Stop retires the original compaction producer without shutting down its
 /// actor. Its completed wire receipt must survive cancellation of the pending
 /// terminal outcome, and the actor must remain available for another command.

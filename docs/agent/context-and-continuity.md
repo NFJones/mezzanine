@@ -367,7 +367,11 @@ termination and settles the original claim. A completed result still follows
 normal actor validation; cleanup does not substitute a cancellation for it.
 Reported auxiliary usage survives cancellation or a request panic, including
 when response content was never published. Normal returned usage is not charged
-again from the retained counters. Inference keeps its wire checkpoints. Cleanup
+again from the retained counters. Inference keeps its wire checkpoints.
+Compaction checkpoints each reported request before continuing private work;
+final or cancellation settlement adds only the remaining reported usage.
+Duplicate receipts are ignored, and these accounting checkpoints do not publish
+summary content or authorize another request. Cleanup
 preserves the first failure if another retirement step also fails; shared monitor
 failures remain fatal to their owning service. Existing title retry bounds still
 apply, and no settled action or provider request is replayed by retirement.

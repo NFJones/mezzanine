@@ -44,6 +44,23 @@ pub(super) struct AuxiliaryAccountingOwner {
     pub(super) observation: String,
 }
 
+/// One compaction dispatch's existing expense owner and reported wire prefix.
+/// Receipt IDs live only until this issued generation settles. The bounded
+/// compaction work graph bounds the number of concrete requests in a dispatch.
+#[derive(Debug, Clone)]
+pub(super) struct CompactionAccountingOwner {
+    /// Immutable project/conversation/model and durable receipt namespace.
+    pub(super) provenance: AuxiliaryAccountingOwner,
+    /// Original request identity, independent of visible task state.
+    pub(super) request_agent_id: String,
+    pub(super) request_turn_id: String,
+    /// Wire receipts already admitted by the actor; malformed scopes cannot
+    /// reserve an ID and suppress a later genuine receipt.
+    pub(super) checkpoint_ids: std::collections::BTreeSet<String>,
+    /// Disjoint reported amounts already charged under this owner.
+    pub(super) checkpoint_usage: ModelTokenUsage,
+}
+
 /// Adds a disjoint observation to one normalized project/model partition.
 fn add_partition(
     rows: &mut Vec<ProjectTokenUsage>,
@@ -69,6 +86,24 @@ fn add_partition(
     }
 }
 
+/// Returns the uncheckpointed portion without inventing optional cache counts.
+/// A smaller final aggregate cannot reverse already accepted expense evidence.
+fn uncheckpointed_usage(total: ModelTokenUsage, charged: ModelTokenUsage) -> ModelTokenUsage {
+    ModelTokenUsage {
+        input_tokens: total.input_tokens.saturating_sub(charged.input_tokens),
+        output_tokens: total.output_tokens.saturating_sub(charged.output_tokens),
+        reasoning_tokens: total
+            .reasoning_tokens
+            .saturating_sub(charged.reasoning_tokens),
+        cached_input_tokens: total
+            .cached_input_tokens
+            .map(|value| value.saturating_sub(charged.cached_input_tokens.unwrap_or(0))),
+        cache_write_input_tokens: total
+            .cache_write_input_tokens
+            .map(|value| value.saturating_sub(charged.cache_write_input_tokens.unwrap_or(0))),
+    }
+}
+
 impl RuntimeSessionService {
     /// Checkpoints one reported wire expense without consuming the issued
     /// owner. Cancellation cannot erase this expense, and final settlement
@@ -78,6 +113,10 @@ impl RuntimeSessionService {
         observation: &crate::integrations::agent::provider::ProviderWireRequestObservation,
     ) {
         use crate::integrations::agent::provider::ProviderRequestPurpose;
+        if observation.purpose == ProviderRequestPurpose::Compaction {
+            self.checkpoint_compaction_wire_usage(observation);
+            return;
+        }
         let (Some(generation), Some(usage)) = (observation.claim_generation, observation.usage)
         else {
             return;
@@ -129,6 +168,42 @@ impl RuntimeSessionService {
         );
     }
 
+    /// Admits actual reported compactor expense before private reduction
+    /// advances. Content cancellation does not retire this billing identity.
+    fn checkpoint_compaction_wire_usage(
+        &mut self,
+        observation: &crate::integrations::agent::provider::ProviderWireRequestObservation,
+    ) {
+        let (Some(generation), Some(usage)) = (observation.claim_generation, observation.usage)
+        else {
+            return;
+        };
+        let Some(owner) = self
+            .agent
+            .compaction_accounting_owners
+            .get_mut(&(observation.pane_id.clone(), generation))
+        else {
+            return;
+        };
+        if owner.provenance.conversation != observation.conversation_id
+            || owner.request_agent_id != observation.agent_id
+            || owner.request_turn_id != observation.turn_id
+            || owner.provenance.model
+                != ModelTokenUsageKey::new(&observation.provider, &observation.model)
+            || !owner.checkpoint_ids.insert(observation.request_id.clone())
+        {
+            return;
+        }
+        owner.checkpoint_usage.add_assign(usage);
+        // Clone only immutable provenance, never the growing receipt-ID set.
+        let mut provenance = owner.provenance.clone();
+        provenance.observation = format!(
+            "compaction:{}:wire:{}",
+            provenance.observation, observation.request_id
+        );
+        self.record_auxiliary_usage(provenance, usage);
+    }
+
     /// Refuses new auxiliary requests rather than evicting unsettled expense evidence.
     pub(in crate::runtime) fn require_auxiliary_accounting_capacity(
         &self,
@@ -157,7 +232,8 @@ impl RuntimeSessionService {
         else {
             return;
         };
-        self.record_auxiliary_usage(task, usage);
+        let remainder = uncheckpointed_usage(usage, task.checkpoint_usage);
+        self.record_auxiliary_usage(task.provenance, remainder);
     }
 
     /// Records reported memory failure expense before exact observation retirement.
@@ -235,19 +311,7 @@ impl RuntimeSessionService {
                 .get(model)
                 .copied()
                 .unwrap_or_default();
-            let remainder = ModelTokenUsage {
-                input_tokens: counters.input_tokens.saturating_sub(charged.input_tokens),
-                output_tokens: counters.output_tokens.saturating_sub(charged.output_tokens),
-                reasoning_tokens: counters
-                    .reasoning_tokens
-                    .saturating_sub(charged.reasoning_tokens),
-                cached_input_tokens: counters
-                    .cached_input_tokens
-                    .map(|total| total.saturating_sub(charged.cached_input_tokens.unwrap_or(0))),
-                cache_write_input_tokens: counters.cache_write_input_tokens.map(|total| {
-                    total.saturating_sub(charged.cache_write_input_tokens.unwrap_or(0))
-                }),
-            };
+            let remainder = uncheckpointed_usage(*counters, charged);
             self.record_native_usage_observation(
                 &owner.turn.conversation_id,
                 pane.then_some(owner.turn.pane_id.as_str()),

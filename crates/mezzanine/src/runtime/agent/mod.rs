@@ -691,7 +691,7 @@ pub(crate) struct RuntimeAgentComponent {
     frozen_replay_bindings: BTreeMap<String, crate::runtime::control::RuntimeFrozenReplayHistory>,
     /// Issued compactor expense survives content claim retirement.
     compaction_accounting_owners:
-        BTreeMap<(String, u64), project_accounting::AuxiliaryAccountingOwner>,
+        BTreeMap<(String, u64), project_accounting::CompactionAccountingOwner>,
     /// Panes currently running model-backed durable-memory generation.
     agent_remembering_panes: BTreeMap<String, u64>,
     /// Durable-memory generation tasks waiting for provider dispatch.
@@ -3751,16 +3751,22 @@ impl RuntimeSessionService {
         self.agent
             .compaction_accounting_owners
             .entry((task.pane_id.clone(), task.task_generation))
-            .or_insert_with(|| project_accounting::AuxiliaryAccountingOwner {
-                pane: task.pane_id.clone(),
-                conversation: task.conversation_id.clone(),
-                origin: task.accounting_origin.clone(),
-                model: ModelTokenUsageKey::new(
-                    &task.model_profile.provider,
-                    &task.model_profile.model,
-                ),
-                process,
-                observation: crate::storage::token_usage::new_token_usage_event_id(),
+            .or_insert_with(|| project_accounting::CompactionAccountingOwner {
+                provenance: project_accounting::AuxiliaryAccountingOwner {
+                    pane: task.pane_id.clone(),
+                    conversation: task.conversation_id.clone(),
+                    origin: task.accounting_origin.clone(),
+                    model: ModelTokenUsageKey::new(
+                        &task.model_profile.provider,
+                        &task.model_profile.model,
+                    ),
+                    process,
+                    observation: crate::storage::token_usage::new_token_usage_event_id(),
+                },
+                request_agent_id: task.request.agent_id.clone(),
+                request_turn_id: task.request.turn_id.clone(),
+                checkpoint_ids: Default::default(),
+                checkpoint_usage: Default::default(),
             });
         self.agent
             .claimed_agent_compaction_tasks
