@@ -437,13 +437,18 @@ fn custody_original_group(
     service: &RuntimeSessionService,
     parent: &str,
 ) -> mez_agent::ContextExecutionGroupId {
+    let frontier = service
+        .completion_replay_owner_for_tests(parent)
+        .unwrap()
+        .frontier();
     service
         .agent_turn_contexts()
         .get(parent)
         .unwrap()
         .chronology()
         .iter()
-        .find_map(|event| event.execution_group_id().cloned())
+        .find(|event| event.sequence() == frontier)
+        .and_then(|event| event.execution_group_id().cloned())
         .unwrap()
 }
 
@@ -525,13 +530,13 @@ fn runtime_joined_pending_group_survives_first_child_and_releases_after_last() {
     service.terminate_all_pane_processes().unwrap();
 }
 
-/// Session-wide dependency reset and terminal parent ownership cleanup both
-/// release their own context protection. No protected execution is left behind
-/// after its exact controller owner has deliberately retired the obligation.
+/// Administrative cleanup releases joined custody without inventing completed
+/// execution. The original canonical fence survives until real terminal
+/// retirement disposes of that source; no abandoned controller source leaks.
 #[test]
 fn runtime_joined_pending_group_cleanup_releases_protection() {
     for reset_all in [true, false] {
-        let (mut service, parent, _, _) = custody_fixture();
+        let (mut service, parent, dependency, _) = custody_fixture();
         let group = custody_original_group(&service, &parent.turn_id);
         assert!(
             service
@@ -545,13 +550,19 @@ fn runtime_joined_pending_group_cleanup_releases_protection() {
         } else {
             service.clear_agent_execution_group_ownership_for_turn(&parent.turn_id);
         }
+        assert_eq!(
+            service.retained_joined_spawn_action(&dependency).unwrap(),
+            None
+        );
         assert!(
-            !service
+            service
                 .agent_turn_contexts()
                 .get(&parent.turn_id)
                 .unwrap()
                 .execution_group_is_pending(&group)
         );
+        service.stop_agent_turn_for_pane("%1").unwrap();
+        assert!(!service.agent_turn_contexts().contains_key(&parent.turn_id));
         service.clear_all_joined_subagent_dependencies();
         service.terminate_all_pane_processes().unwrap();
     }

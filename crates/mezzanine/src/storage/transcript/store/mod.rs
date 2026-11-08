@@ -7,6 +7,8 @@
 //! change independently of that authoritative replay projection.
 
 mod frozen_copy;
+#[cfg(test)]
+mod legacy_fixtures;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self as std_fs, OpenOptions};
@@ -1296,15 +1298,15 @@ impl AgentTranscriptStore {
                 &_conversation_lock,
             )?);
             // Terminal audit evidence is durable now, but is not itself a
-            // replay epoch. Publish its distinct source-proven transition
-            // outside the append lock; publication reacquires that lock and
-            // checks the exact baseline and frozen rows independently.
+            // replay epoch. Validate original coverage outside the append lock;
+            // this cannot publish another selective replacement. A pending old
+            // transition keeps its receipt until explicit normalization.
             drop(_conversation_lock);
             if entries.iter().any(|entry| {
                 entry.role == mez_agent::transcript::TranscriptRole::System
                     && entry.content.starts_with(super::compaction_handoff::MARKER)
             }) {
-                self.publish_terminal_compaction_handoffs(&conversation_id)?;
+                self.validate_terminal_compaction_handoffs(&conversation_id)?;
             }
         }
         Ok(bytes)
@@ -1467,6 +1469,7 @@ impl AgentTranscriptStore {
     ///
     /// A malformed, mismatched, unsupported, or oversized sidecar is an error;
     /// callers must not silently replay only a shortened transcript suffix.
+    #[cfg(test)]
     pub fn compaction_epoch(
         &self,
         conversation_id: &str,
@@ -1524,7 +1527,7 @@ impl AgentTranscriptStore {
     /// Decodes semantic authority without mutation. Discovery needs no summary
     /// cache and may already hold a publication lease through catalog upkeep;
     /// canonical replay must use the leased accounting import above instead.
-    fn read_compaction_epoch_unmigrated(
+    pub(super) fn read_compaction_epoch_unmigrated(
         &self,
         conversation_id: &str,
     ) -> Result<Option<AgentCompactionEpoch>> {
@@ -1613,31 +1616,10 @@ impl AgentTranscriptStore {
         )
     }
 
-    /// Atomically publishes ordered selective replacements without altering the archive.
+    /// Accepts a legacy prefix proposal only while its frozen committed source
+    /// matches the archive. Nonempty selective ranges are retired and refuse
+    /// before allocating records or changing any conversation state.
     #[cfg(test)]
-    pub(crate) fn save_compaction_ranges(
-        &self,
-        conversation_id: &str,
-        through_sequence: u64,
-        summary: &str,
-        ranges: Vec<AgentCompactionRange>,
-    ) -> Result<()> {
-        self.save_compaction_projection(
-            AgentCompactionEpoch {
-                summary_records: None,
-                version: 2,
-                conversation_id: conversation_id.to_string(),
-                through_sequence,
-                summary: summary.to_string(),
-                ranges,
-            },
-            None,
-            None,
-        )
-    }
-
-    /// Publishes selected ranges only if their frozen committed source still
-    /// matches the archive under the same conversation lock as epoch writing.
     pub(crate) fn save_compaction_ranges_with_proof(
         &self,
         epoch: AgentCompactionEpoch,
@@ -1646,20 +1628,10 @@ impl AgentTranscriptStore {
         self.save_compaction_projection(epoch, Some(frozen_rows), None)
     }
 
-    /// Fences a distinct terminal handoff against its exact authoritative epoch
-    /// while its caller holds the conversation mutation lock.
-    pub(super) fn save_terminal_compaction_ranges_with_proof_locked(
-        &self,
-        epoch: AgentCompactionEpoch,
-        frozen_rows: &[TranscriptEntry],
-        baseline: &Option<AgentCompactionEpoch>,
-    ) -> Result<()> {
-        self.save_compaction_projection_locked(epoch, Some(frozen_rows), Some(baseline))
-    }
-
     /// Shares the crash-safe accounted publication boundary. Unaccounted direct
     /// producers establish their new records here; actual runtime proposals
     /// already carry their original accepted records.
+    #[cfg(test)]
     pub(crate) fn save_compaction_projection(
         &self,
         epoch: AgentCompactionEpoch,
@@ -1670,15 +1642,21 @@ impl AgentTranscriptStore {
         self.save_compaction_projection_locked(epoch, frozen_rows, baseline)
     }
 
-    /// Validates and publishes one epoch while the caller owns the conversation
-    /// mutation lock. Forks and terminal witnesses use the identical publication
-    /// contract without recursively acquiring an independent `flock` descriptor.
+    /// Validates and publishes a legacy prefix while the caller owns its mutation
+    /// lock. Selective publication is refused before mutation; typed epochs use
+    /// their canonical publisher. Never recursively acquires another flock.
     pub(super) fn save_compaction_projection_locked(
         &self,
         mut epoch: AgentCompactionEpoch,
         frozen_rows: Option<&[TranscriptEntry]>,
         baseline: Option<&Option<AgentCompactionEpoch>>,
     ) -> Result<()> {
+        if !epoch.ranges.is_empty() {
+            return Err(MezError::invalid_state(
+                "selective compaction publication is no longer supported; publish one canonical replay epoch",
+            ));
+        }
+        self.check_replay_compatibility_locked(&epoch.conversation_id)?;
         if matches!(epoch.version, 1 | 2) && epoch.summary_records.is_none() {
             epoch.allocate_summary_records()?;
         }
@@ -3622,6 +3600,16 @@ impl AgentTranscriptStore {
         if !existing_path.exists() {
             return Ok(CompareAndSwapTranscriptEntryResult::Deleted);
         }
+        if self.has_replay_manifest(conversation_id)? {
+            return self.compare_and_swap_replay_content_locked(
+                conversation_id,
+                sequence,
+                pane_id,
+                expected_revision,
+                content,
+                &_conversation_lock,
+            );
+        }
         if self
             .compaction_epoch_locked(conversation_id)?
             .is_some_and(|epoch| {
@@ -3688,6 +3676,12 @@ impl AgentTranscriptStore {
             ));
         }
         let _conversation_lock = self.acquire_conversation_lock(conversation_id)?;
+        if self.has_replay_manifest(conversation_id)? {
+            self.replay_epoch_snapshot_locked(conversation_id)?;
+            return Err(MezError::invalid_state(
+                "cannot renumber transcript sequences while a compaction epoch is committed",
+            ));
+        }
         if self.compaction_epoch_locked(conversation_id)?.is_some() {
             return Err(MezError::invalid_state(
                 "cannot renumber transcript sequences while a compaction epoch is committed",
@@ -3765,6 +3759,18 @@ impl AgentTranscriptStore {
             std_fs::remove_file(existing_path)?;
         }
 
+        self.finish_content_edit_metadata_locked(conversation_id, entries)
+    }
+
+    /// Rebuilds derived listing metadata only after an owned raw/typed edit has
+    /// installed its coherent source. Recovery retries this under the same
+    /// conversation lease before retiring the exact operation intent.
+    pub(super) fn finish_content_edit_metadata_locked(
+        &self,
+        conversation_id: &str,
+        entries: &[TranscriptEntry],
+    ) -> Result<()> {
+        let session_dir = self.ensure_session_dir(conversation_id)?;
         if let Some(summary) = summarize_conversation(entries.to_vec()) {
             self.write_summary_sidecar(&summary)?;
         } else {
@@ -4788,6 +4794,8 @@ impl AgentTranscriptStore {
                 "source conversation publication or deletion is incomplete",
             ));
         }
+        self.check_replay_compatibility_locked(source_conversation_id)?;
+        self.validate_terminal_compaction_handoffs_locked(source_conversation_id)?;
         let entries = self.inspect_validated_transcript(source_conversation_id)?;
         if (entries.len() as u64) < minimum_source_entries {
             return Err(MezError::conflict(
@@ -4931,7 +4939,7 @@ impl AgentTranscriptStore {
             // Reconcile only the new target. The existing owner validates the
             // translated baseline and exact copied occurrence payloads; it never
             // reconstructs summaries or executes historical actions.
-            self.publish_terminal_compaction_handoffs_locked(target_conversation_id)?;
+            self.validate_terminal_compaction_handoffs_locked(target_conversation_id)?;
             self.complete_fork_publication(target_conversation_id)?;
             self.upsert_catalog_from_files(target_conversation_id, None)?;
             let summary = self
@@ -5653,7 +5661,7 @@ impl AgentTranscriptStore {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    fn transcript_path_for(&self, conversation_id: &str) -> Result<PathBuf> {
+    pub(super) fn transcript_path_for(&self, conversation_id: &str) -> Result<PathBuf> {
         Ok(self
             .session_dir_for(conversation_id)?
             .join(SESSION_TRANSCRIPT_FILE_NAME))
@@ -5777,6 +5785,32 @@ impl AgentTranscriptStore {
         conversation_id: &str,
     ) -> Result<ConversationMetadata> {
         self.read_conversation_metadata(conversation_id)
+    }
+
+    /// Promotes the exact legacy archive selected for replay publication using
+    /// the existing metadata transaction and its lifecycle recovery journal.
+    /// The borrowed conversation lease stays with the publisher; this helper
+    /// never reacquires flock or acknowledges ordinary appends. Existing custody
+    /// must settle before the metadata owner can move the physical destination.
+    /// Complete payload/metadata promotion is synced before head publication;
+    /// later publication failure leaves a complete directory-format raw source.
+    pub(in crate::storage::transcript) fn migrate_replay_archive_layout_locked(
+        &self,
+        conversation_id: &str,
+        _lease: &std_fs::File,
+    ) -> Result<()> {
+        let transcript = self.transcript_path_for(conversation_id)?;
+        if self.existing_transcript_path_for(conversation_id)? == transcript {
+            return Ok(());
+        }
+        let metadata = self.read_conversation_metadata_locked(conversation_id)?;
+        self.write_conversation_metadata_locked(conversation_id, &metadata)?;
+        std_fs::File::open(&transcript)?.sync_all()?;
+        std_fs::File::open(self.session_dir_for(conversation_id)?)?.sync_all()?;
+        std_fs::File::open(&self.root)?.sync_all()?;
+        self.upsert_catalog_from_files(conversation_id, None)?;
+        self.remove_archive_recovery_journal(conversation_id)?;
+        Ok(())
     }
 
     /// Atomically replaces metadata while the caller owns the conversation lock.

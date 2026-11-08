@@ -43,6 +43,64 @@ pub(in crate::storage::transcript) struct ArchiveCut {
 }
 
 impl ArchiveCut {
+    /// Rebinds the original logical frontier to an owned content replacement.
+    /// Rows are already checked under the mutation lease; this computes only
+    /// the physical image that the staged encoder will write. Later rows stay
+    /// outside the cut. Original index ownership is supplied independently.
+    pub(super) fn for_revised_rows(
+        cid: &str,
+        rows: &[TranscriptEntry],
+        through_sequence: u64,
+        last_row: Option<IndexedRowImage>,
+    ) -> Result<Self> {
+        if through_sequence == 0 {
+            return Ok(Self::empty());
+        }
+        let mut prefix = Sha256::new();
+        let mut boundary = Vec::new();
+        let mut byte_offset = 0u64;
+        let mut count = 0u64;
+        for row in rows
+            .iter()
+            .take_while(|row| row.sequence <= through_sequence)
+        {
+            count += 1;
+            if row.conversation_id != cid || row.sequence != count {
+                return Err(invalid("revised cut has foreign or unordered rows"));
+            }
+            let mut bytes =
+                crate::storage::transcript::encoding::encode_transcript_entry(row)?.into_bytes();
+            bytes.push(b'\n');
+            byte_offset = byte_offset
+                .checked_add(bytes.len() as u64)
+                .ok_or_else(|| invalid("revised cut offset exhausted"))?;
+            prefix.update(&bytes);
+            if bytes.len() >= ANCHOR_BYTES as usize {
+                boundary = bytes[bytes.len() - ANCHOR_BYTES as usize..].to_vec();
+            } else {
+                boundary.extend_from_slice(&bytes);
+                let excess = boundary.len().saturating_sub(ANCHOR_BYTES as usize);
+                boundary.drain(..excess);
+            }
+        }
+        if count != through_sequence {
+            return Err(invalid("revised archive lost its original cut"));
+        }
+        let cut = Self {
+            through_sequence,
+            byte_offset,
+            prefix_sha256: prefix
+                .finalize()
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect(),
+            anchor_sha256: payload::digest(&boundary),
+            last_row,
+        };
+        cut.validate()?;
+        Ok(cut)
+    }
+
     /// Physical frontier captured with this epoch, independent of raw members.
     pub(super) fn through_sequence(&self) -> u64 {
         self.through_sequence
@@ -247,12 +305,54 @@ pub(super) struct ArchiveCapture {
 }
 
 impl ArchiveCapture {
+    /// Qualifies captured raw images against the window already read under
+    /// the current mutation lease, at preparation and publication. Semantic
+    /// equality cannot excuse a changed physical slot, timestamp or wire image.
+    /// Uncommitted captured rows remain escrow source when neither their slot
+    /// nor occurrence is present; this check does not acknowledge their append.
+    pub(super) fn validate_raw_capture(
+        rows: &[TranscriptEntry],
+        captured: &[TranscriptEntry],
+    ) -> Result<()> {
+        if captured.is_empty() {
+            return Ok(());
+        }
+        let mut by_occurrence = BTreeMap::new();
+        for row in rows {
+            if row.role == TranscriptRole::System
+                && let Some(record) =
+                    TranscriptContextRecord::from_transcript_content(&row.content)?
+            {
+                by_occurrence.insert(record.record().occurrence_id(), row);
+            }
+        }
+        for row in captured {
+            let record = TranscriptContextRecord::from_transcript_content(&row.content)?
+                .ok_or_else(|| invalid("captured raw source lost its original occurrence"))?;
+            let placed = rows
+                .binary_search_by_key(&row.sequence, |actual| actual.sequence)
+                .ok()
+                .map(|index| &rows[index]);
+            if placed.is_some_and(|actual| actual != row)
+                || by_occurrence
+                    .get(&record.record().occurrence_id())
+                    .is_some_and(|actual| *actual != row)
+            {
+                return Err(invalid(
+                    "captured raw source changed its original row image",
+                ));
+            }
+        }
+        Ok(())
+    }
+
     pub(super) fn prepare(
         store: &AgentTranscriptStore,
         cid: &str,
         previous: Option<&ArchiveCut>,
         items: &[escrow::EscrowOccurrence],
         source: &ReplayEpochContext,
+        covered: &[ContextBlockOccurrenceId],
         allow_absent: bool,
     ) -> Result<Self> {
         store.ensure_row_digest_lookup_index_locked(cid)?;
@@ -276,7 +376,7 @@ impl ArchiveCapture {
             cid,
             &window.rows,
             &execution_sources,
-            escrow::RowAdmission::KnownCopies,
+            escrow::RowAdmission::Publication { source, covered },
             |reference| {
                 if let Some(content) = current.get(&reference.sha256) {
                     reference.validate(content.as_bytes())?;
@@ -287,10 +387,17 @@ impl ArchiveCapture {
             },
         )?;
         let indexed = store.available_indexed_row_origins_locked(cid, &window.rows)?;
+        let unadopted = qualified
+            .arrivals
+            .iter()
+            .map(|row| row.sequence)
+            .collect::<BTreeSet<_>>();
         let prefix = window
             .rows
             .iter()
-            .take_while(|row| indexed.contains_key(&row.sequence))
+            .take_while(|row| {
+                indexed.contains_key(&row.sequence) && !unadopted.contains(&row.sequence)
+            })
             .count();
         let mut cut = base.clone();
         if prefix > 0 {
@@ -331,6 +438,7 @@ impl ArchiveCapture {
         store: &AgentTranscriptStore,
         cid: &str,
         items: &[escrow::EscrowOccurrence],
+        admission: escrow::RowAdmission<'_>,
         resolve: impl FnMut(&Payload) -> Result<String>,
         allow_absent: bool,
     ) -> Result<()> {
@@ -348,7 +456,7 @@ impl ArchiveCapture {
             cid,
             &self.rows,
             &execution_sources,
-            escrow::RowAdmission::KnownCopies,
+            admission,
             resolve,
         )?;
         let prefix = self

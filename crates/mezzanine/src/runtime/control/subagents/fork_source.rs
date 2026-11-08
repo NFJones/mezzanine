@@ -122,15 +122,17 @@ impl RuntimeSubagentForkReadWork {
     /// Checks the captured history without accessing live runtime state.
     pub(crate) fn execute(&self) -> Result<RuntimeSubagentForkSnapshot> {
         if let Some(memory) = &self.memory {
+            let stable = memory
+                .selected
+                .history()
+                .records
+                .stable_records_for_copy()?;
             let replay = memory.selected.fork_source()?;
-            let owner = memory.selected.history().replay_owner()?.ok_or_else(|| {
-                MezError::invalid_state("frozen subagent source lost its canonical owner")
-            })?;
             return RuntimeSubagentForkSnapshot::from_replay_source(
                 self.prompt_cache_lineage_id.clone(),
                 replay,
                 self.source_high_water,
-                owner.context().stable_block_records(),
+                stable,
             );
         }
         let pending_count = self
@@ -204,13 +206,16 @@ impl RuntimeSubagentForkReadWork {
             let owner = history.replay_owner()?.ok_or_else(|| {
                 MezError::invalid_state("fork source lost its original typed checkpoint")
             })?;
-            let replay = replay.fork_source(&owner, original_rows)?;
+            let stable = history.records.stable_records_for_copy()?;
+            let replay = replay
+                .fork_source(&owner, original_rows)?
+                .with_stable_records(stable.clone())?;
             return Ok((
                 RuntimeSubagentForkSnapshot::from_replay_source(
                     self.prompt_cache_lineage_id.clone(),
                     replay,
                     self.source_high_water,
-                    owner.context().stable_block_records(),
+                    stable,
                 )?,
                 Vec::new(),
             ));
@@ -655,9 +660,9 @@ pub(super) fn child_history(
             .transpose()?
             .map(std::sync::Arc::new);
         let (records, blocks) =
-            super::super::context_records::RuntimeContextRecords::from_replay_owner(
+            super::super::context_records::RuntimeContextRecords::from_replay_checkpoint(
                 mez_agent::ReplayConversationId::new(batch.conversation_id())?,
-                initial.owner()?,
+                initial.checkpoint()?,
                 snapshot,
             )?;
         let mut history = crate::runtime::control::RuntimeAgentTranscriptContext {

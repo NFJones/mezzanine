@@ -6,6 +6,23 @@
 use super::{RuntimePersistenceComponent, RuntimeSideEffect};
 use crate::storage::transcript::TranscriptAppendBatch;
 
+impl RuntimePersistenceComponent {
+    /// Selects the genuine queued epoch effect without dispatching unrelated
+    /// ordinary batches or creating in-flight owners for work that did not run.
+    pub(crate) fn take_replay_epoch_attempt_for_tests(
+        &mut self,
+    ) -> Option<crate::runtime::RuntimeReplayEpochAttempt> {
+        let index = self
+            .queued_transcript_effects
+            .iter()
+            .position(|effect| matches!(effect, RuntimeSideEffect::PersistReplayEpoch { .. }))?;
+        match self.queued_transcript_effects.remove(index) {
+            RuntimeSideEffect::PersistReplayEpoch { attempt } => Some(attempt),
+            _ => unreachable!("the selected queue position was an epoch attempt"),
+        }
+    }
+}
+
 /// Drains only the ordinary append fixtures used by the owning persistence
 /// tests. The returned batches are the actual source of subsequent receipts.
 pub(super) fn drain_batches(

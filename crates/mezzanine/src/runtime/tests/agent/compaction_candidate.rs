@@ -6,320 +6,728 @@
 use super::*;
 use crate::integrations::agent::context::assemble_model_request;
 
-/// A post-plan native call/result group in the pending append lane must keep
-/// its provider ownership and ordinals in the prospective candidate context.
-/// The same saved occurrence and cost records must survive candidate sizing and
-/// published replay without appearing in the actual serialized provider body.
-#[test]
-fn runtime_manual_compaction_candidate_retains_native_execution_ownership() {
-    let mut service = test_runtime_service();
-    service.replace_config_layers(vec![ConfigLayer {
-        name: "candidate-native".to_string(), path: None,
-        format: ConfigFormat::Toml, scope: ConfigScope::Primary, trusted: true,
-        text: "[agents]\ndefault_provider = \"openai\"\ndefault_model_profile = \"candidate-native\"\n[providers.openai]\nkind = \"openai\"\nmodels = [\"test\"]\ndefault_model = \"test\"\n[model_profiles.candidate-native]\nprovider = \"openai\"\nmodel = \"test\"\ncontext_window_tokens = 128000\n".to_string(),
-    }]).unwrap();
-    let store = AgentTranscriptStore::new(temp_root("candidate-native"));
-    let mut row = TranscriptEntry {
-        conversation_id: "candidate-native".to_string(),
-        sequence: 1,
-        created_at_unix_seconds: 1,
-        role: TranscriptRole::Assistant,
-        turn_id: "old-turn".to_string(),
-        agent_id: "agent-%1".to_string(),
-        pane_id: "%1".to_string(),
-        content: "old work to summarize".to_string(),
-    };
-    store.append(&row).unwrap();
-    service.set_agent_transcript_store(store.clone());
-    let primary = service
-        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
-        .unwrap();
-    service
-        .agent_shell_store_mut()
-        .enter_or_resume("%1")
-        .unwrap();
-    service
-        .agent_shell_store_mut()
-        .bind_conversation("%1", "candidate-native", 1)
-        .unwrap();
-    let response = service.dispatch_runtime_control_body(
-        r#"{"jsonrpc":"2.0","id":"candidate-native","method":"agent/shell/command","params":{"idempotency_key":"candidate-native","input":"/compact"}}"#,
-        &primary,
-    );
-    assert!(response.contains("state=queued"), "{response}");
-    let task = service
-        .pending_agent_compaction_task_for_tests("%1")
-        .unwrap()
-        .clone();
-    let group = mez_agent::ContextExecutionGroupId::new("retained-native").unwrap();
-    let owner = mez_agent::ProviderContinuityOwner::new(
-        mez_agent::ProviderApiCompatibility::OpenAiResponses,
-        "openai",
-    )
-    .unwrap();
-    let call = mez_agent::ProviderTranscriptEvent::validated_openai_response_output(vec![
-        serde_json::json!({
-            "type":"function_call", "id":"fc_retained", "call_id":"call_retained",
-            "name":"submit_maap_action_batch", "arguments":"{}"
-        }),
-    ])
-    .unwrap()
-    .to_transcript_content();
-    let result = mez_agent::ProviderTranscriptEvent::OpenAiFunctionCallOutput {
-        call_id: "call_retained".to_string(),
-        output: "exact native result".to_string(),
+/// Original pending native source uses either a real typed publication or the
+/// actual headless NoStore binding. No bare row or fabricated closure grants
+/// native authority. Both candidate modules use the actual command driver.
+pub(super) struct CanonicalManualFixture {
+    pub(super) service: RuntimeSessionService,
+    pub(super) store: AgentTranscriptStore,
+    pub(super) conversation: String,
+    pub(super) group: mez_agent::ContextExecutionGroupId,
+    pub(super) owner: mez_agent::ProviderContinuityOwner,
+    pub(super) original: mez_agent::ReplayEpochContext,
+    pub(super) source_records: Vec<mez_agent::ContextBlockRecord>,
+}
+
+impl CanonicalManualFixture {
+    pub(super) fn new(input_limit: Option<usize>, retention: u8, references: bool) -> Self {
+        Self::with_storage(input_limit, retention, references, true)
     }
-    .to_transcript_content();
-    let mut rows = Vec::new();
-    let mut retained_records = Vec::new();
-    for (index, (source, label, content, provider_owner)) in [
-        (
-            ContextSourceKind::TranscriptAssistant,
-            "assistant",
-            "retained assistant".to_string(),
-            None,
-        ),
-        (
-            ContextSourceKind::TranscriptTool,
-            "native call",
-            call,
-            Some(owner.clone()),
-        ),
-        (
-            ContextSourceKind::TranscriptTool,
-            "native result",
-            result,
-            Some(owner.clone()),
-        ),
-        (
-            ContextSourceKind::ActionResult,
-            "result",
-            "exact action result".to_string(),
-            None,
-        ),
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        row.sequence = index as u64 + 2;
-        row.role = TranscriptRole::System;
-        row.turn_id = "retained-turn".to_string();
-        let record = mez_agent::ContextBlockRecord::allocate(&ContextBlock {
-            source,
-            placement: mez_agent::ContextPlacement::ConversationAppend,
-            label: label.to_string(),
-            content: content.clone(),
-        })
-        .unwrap();
-        let event = mez_agent::TranscriptContextEvent::execution_block_with_metadata(
-            source,
-            label,
-            content,
-            group.clone(),
-            index as u64 + 1,
-            provider_owner,
+
+    pub(super) fn headless(references: bool) -> Self {
+        Self::with_storage(None, 1, references, false)
+    }
+
+    fn with_storage(
+        input_limit: Option<usize>,
+        retention: u8,
+        references: bool,
+        saved: bool,
+    ) -> Self {
+        let mut service = test_runtime_service();
+        let limit =
+            input_limit.map_or_else(String::new, |limit| format!("max_input_tokens={limit}\n"));
+        service.replace_config_layers(vec![ConfigLayer {
+            name: "canonical-manual-candidate".into(), path: None, format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary, trusted: true,
+            text: format!("[agents]\ndefault_provider=\"openai\"\ndefault_model_profile=\"candidate\"\ncompaction_raw_retention_percent={retention}\n[providers.openai]\nkind=\"openai\"\nmodels=[\"test\"]\ndefault_model=\"test\"\n[model_profiles.candidate]\nprovider=\"openai\"\nmodel=\"test\"\ncontext_window_tokens=128000\n{limit}"),
+        }]).unwrap();
+        let conversation = "canonical-manual-candidate".to_string();
+        let store = AgentTranscriptStore::new(temp_root("canonical-manual-candidate"));
+        let mut original = mez_agent::ReplayEpochContext::new(
+            mez_agent::ReplayConversationId::new(&conversation).unwrap(),
+            mez_agent::AgentContext::empty(),
         )
         .unwrap();
-        row.content = mez_agent::transcript::TranscriptContextRecord::new(event, record, None)
-            .unwrap()
-            .to_transcript_content()
+        original
+            .append_fact("initial covered source", "COVERED_RAW_MUST_NOT_REENTER")
             .unwrap();
-        retained_records.push(record);
-        rows.push(row.clone());
-    }
-    // Manual source selection requires an actual completed assistant row for
-    // this turn; descriptive native group metadata alone cannot close it.
-    row.sequence = 6;
-    row.role = TranscriptRole::Assistant;
-    row.content = "retained turn completed".to_string();
-    rows.push(row.clone());
-    service.persistence.enable_transcript_adapter();
-    let append =
-        crate::storage::transcript::TranscriptAppendBatch::owned_rows(rows.clone()).unwrap();
-    service
-        .persistence
-        .queue_transcript(RuntimeSideEffect::PersistTranscriptEntries {
-            path: store.transcript_path("candidate-native").unwrap(),
-            store: store.clone(),
-            batch: append.clone(),
-        });
-    service
-        .agent_shell_store_mut()
-        .record_transcript_entries("%1", rows.len())
-        .unwrap();
-    let candidate = service
-        .manual_compaction_candidate_context(&task, "short summary")
-        .unwrap();
-    let events = candidate
-        .chronology()
-        .iter()
-        .filter(|event| event.execution_group_id() == Some(&group))
-        .collect::<Vec<_>>();
-    assert_eq!(
-        events.len(),
-        4,
-        "candidate must retain canonical execution ownership"
-    );
-    assert_eq!(
-        events
-            .iter()
-            .map(|event| event.record())
-            .collect::<Vec<_>>(),
-        retained_records,
-        "candidate must reuse the exact committed occurrence and cost records"
-    );
-    assert_eq!(
-        events
-            .iter()
-            .filter(|event| event.provider_owner() == Some(&owner))
-            .count(),
-        2
-    );
-    candidate.validate_durable().unwrap();
-    let mut invalid_task = task.clone();
-    invalid_task.summary_correction.manual_words = Some(1);
-    assert!(
-        service
-            .manual_compaction_candidate_context(&invalid_task, "oversized summary")
-            .is_err()
-    );
-    assert!(
-        store
-            .compaction_epoch("candidate-native")
+        let first = match original
+            .prepare_compaction(mez_agent::ReplayTailPolicy::new(128_000, 0).unwrap())
             .unwrap()
-            .is_none(),
-        "candidate must not publish an epoch"
-    );
-    complete_runtime_test_compaction(&mut service, "%1", "short summary");
-    let complete_published = service
-        .agent_context_for_pane_prompt("%1", "Continue after conversation compaction.", 100)
-        .unwrap()
-        .with_metadata(candidate.metadata().clone());
-    let saved_epoch = store.compaction_epoch("candidate-native").unwrap().unwrap();
-    let saved_prefix = saved_epoch
-        .summary_records
-        .as_ref()
-        .unwrap()
-        .prefix
-        .unwrap();
-    assert_eq!(saved_epoch.version, 3);
-    assert_eq!(
-        complete_published
-            .chronology()
-            .iter()
-            .find(|event| event.block().source == ContextSourceKind::CompactionPrefix)
-            .unwrap()
-            .record(),
-        saved_prefix
-    );
-    assert_eq!(
-        AgentTranscriptStore::new(store.root())
-            .compaction_epoch("candidate-native")
-            .unwrap(),
-        Some(saved_epoch)
-    );
-    assert_eq!(
-        candidate.blocks(),
-        complete_published.blocks(),
-        "complete candidate context must match ordinary post-publication assembly"
-    );
-    assert_eq!(
-        complete_published
-            .chronology()
-            .iter()
-            .filter(|event| event.execution_group_id() == Some(&group))
-            .map(|event| event.record())
-            .collect::<Vec<_>>(),
-        retained_records,
-        "published replay must preserve the same retained records"
-    );
-    let turn = AgentTurnRecord {
-        turn_id: "parity-turn".to_string(),
-        conversation_id: "candidate-native".to_string(),
-        agent_id: "agent-%1".to_string(),
-        pane_id: "%1".to_string(),
-        trigger: mez_agent::AgentTurnTrigger::UserPrompt,
-        started_at_unix_seconds: 1,
-        deadline_at_unix_millis: 0,
-        policy_profile: "runtime".to_string(),
-        model_profile: task.model_profile_name.clone(),
-        parent_turn_id: None,
-        state: AgentTurnState::Queued,
-        cooperation_mode: None,
-        initial_capability: None,
-    };
-    for (provider, model) in [
-        ("openai", "test"),
-        ("openai", "switched-model"),
-        ("switched-openai", "test"),
-        ("switched-openai", "switched-model"),
-    ] {
-        let mut profile = task.model_profile.clone();
-        profile.provider = provider.to_string();
-        profile.model = model.to_string();
-        let api = mez_agent::ProviderApiCompatibility::OpenAiResponses;
-        let before = assemble_model_request(&profile, api, &turn, &candidate).unwrap();
-        let after = assemble_model_request(&profile, api, &turn, &complete_published).unwrap();
-        let before_body = mez_agent::openai_responses_request_body(&before).unwrap();
-        let after_body = mez_agent::openai_responses_request_body(&after).unwrap();
-        assert_eq!(before_body, after_body, "replay wire parity for {provider}");
-        for record in retained_records
-            .iter()
-            .chain(std::iter::once(&saved_prefix))
         {
-            let occurrence: String = record.occurrence_id().into();
-            assert!(!before_body.contains(&occurrence));
+            mez_agent::ReplayCompactionPreparation::Ready(plan) => plan,
+            other => panic!("expected original source: {other:?}"),
+        };
+        original
+            .append_fact("eligible old prefix", "ELIGIBLE_OLD_PREFIX ".repeat(1_000))
+            .unwrap();
+        original
+            .append_fact("retained fact", "RAW_RETAINED_FACT ".repeat(100))
+            .unwrap();
+        if references {
+            let mut body = original.into_owned_context();
+            body.append_reference_event(
+                ContextSourceKind::Memory,
+                format!("memory {} (note)", mez_agent::memory::new_memory_uuid()),
+                "ordinary optional memory",
+            )
+            .unwrap();
+            body.append_reference_event(
+                ContextSourceKind::PersistedContextDocument,
+                "candidate exact reference",
+                "preserve exact reference bytes",
+            )
+            .unwrap();
+            original = mez_agent::ReplayEpochContext::from_owned_context(
+                mez_agent::ReplayConversationId::new(&conversation).unwrap(),
+                body,
+            )
+            .unwrap();
         }
-        for metadata in [
+        let group = mez_agent::ContextExecutionGroupId::new("retained-native").unwrap();
+        let owner = mez_agent::ProviderContinuityOwner::new(
+            mez_agent::ProviderApiCompatibility::OpenAiResponses,
+            "openai",
+        )
+        .unwrap();
+        let call = mez_agent::ProviderTranscriptEvent::validated_openai_response_output(vec![
+            serde_json::json!({
+                "type":"function_call", "id":"fc_retained", "call_id":"call_retained",
+                "name":"submit_maap_action_batch", "arguments":"{}"
+            }),
+        ])
+        .unwrap()
+        .to_transcript_content();
+        let result = mez_agent::ProviderTranscriptEvent::OpenAiFunctionCallOutput {
+            call_id: "call_retained".into(),
+            output: "exact native result".into(),
+        }
+        .to_transcript_content();
+        original
+            .append_execution_events([
+                mez_agent::ContextConversationAppend::assistant(
+                    "assistant",
+                    "retained assistant",
+                    group.clone(),
+                ),
+                mez_agent::ContextConversationAppend::evidence(
+                    ContextSourceKind::TranscriptTool,
+                    "native call",
+                    call,
+                    group.clone(),
+                    Some(owner.clone()),
+                    true,
+                ),
+                mez_agent::ContextConversationAppend::evidence(
+                    ContextSourceKind::TranscriptTool,
+                    "native result",
+                    result,
+                    group.clone(),
+                    Some(owner.clone()),
+                    true,
+                ),
+                mez_agent::ContextConversationAppend::evidence(
+                    ContextSourceKind::ActionResult,
+                    "result",
+                    "exact action result",
+                    group.clone(),
+                    None,
+                    true,
+                ),
+            ])
+            .unwrap();
+        assert!(original.context().execution_group_is_pending(&group));
+        let source_records = original
+            .context()
+            .chronology()
+            .iter()
+            .map(|event| event.record())
+            .collect();
+        if saved {
+            let proposal = store
+                .prepare_replay_epoch(
+                    crate::storage::transcript::replay_epoch::ReplaySourceOrigin::new(
+                        "original-turn",
+                        "agent-%1",
+                        "%1",
+                    )
+                    .unwrap()
+                    .capture(None),
+                    &conversation,
+                    None,
+                    &original,
+                    first,
+                    mez_agent::ReplayHeadPublication::Summary("previous canonical head".into()),
+                )
+                .unwrap();
+            store.publish_replay_epoch(&proposal).unwrap();
+        }
+        service.set_agent_transcript_store(store.clone());
+        service
+            .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+            .unwrap();
+        service
+            .agent_shell_store_mut()
+            .enter_or_resume("%1")
+            .unwrap();
+        if saved {
+            service
+                .agent_shell_store_mut()
+                .bind_conversation("%1", &conversation, 0)
+                .unwrap();
+        } else {
+            service
+                .agent_shell_store_mut()
+                .bind_ephemeral_conversation_with_lineage("%1", &conversation, 0, None)
+                .unwrap();
+            service
+                .retain_ephemeral_replay_body(
+                    "%1",
+                    &conversation,
+                    &original.clone().into_owned_context(),
+                    None,
+                    Some((
+                        crate::storage::transcript::replay_epoch::ReplaySourceOrigin::new(
+                            "original-turn",
+                            "agent-%1",
+                            "%1",
+                        )
+                        .unwrap(),
+                        0,
+                    )),
+                    None,
+                )
+                .unwrap();
+        }
+        Self {
+            service,
+            store,
+            conversation,
+            group,
+            owner,
+            original,
+            source_records,
+        }
+    }
+
+    /// Runs actual inline or two-phase source/request workers; no synthetic
+    /// task or publication completion is inserted into the command path.
+    pub(super) fn queue(&mut self, worker: bool) -> crate::runtime::RuntimeAgentCompactionTask {
+        if worker {
+            self.service.use_agent_source_preparation_adapter();
+        }
+        let primary = self
+            .service
+            .session
+            .layout_owner_client_id()
+            .unwrap()
+            .clone();
+        let result = self
+            .service
+            .execute_agent_shell_command(&primary, "/compact")
+            .unwrap();
+        if worker {
+            assert!(result.contains("state=preparing"), "{result}");
+            let source = self
+                .service
+                .take_manual_compaction_preparations()
+                .pop()
+                .unwrap();
+            let captured = source.execute_source();
+            assert!(
+                self.service
+                    .complete_manual_compaction_preparation(&source, captured)
+                    .unwrap()
+            );
+            let request = self
+                .service
+                .take_manual_compaction_requests()
+                .pop()
+                .unwrap();
+            let rendered = request.execute_request();
+            assert!(
+                self.service
+                    .complete_manual_compaction_request(&request, rendered)
+                    .unwrap()
+            );
+        } else {
+            assert!(result.contains("state=queued"), "{result}");
+        }
+        self.service
+            .pending_agent_compaction_task_for_tests("%1")
+            .unwrap()
+            .clone()
+    }
+
+    pub(super) fn publish(&mut self, summary: &str) {
+        complete_runtime_test_compaction(&mut self.service, "%1", summary);
+        let receipt = crate::test_support::compaction_publication::execute_pending_publication(
+            &mut self.service,
+        );
+        assert!(self.service.pending_agent_provider_tasks().is_empty());
+        assert!(
+            self.service
+                .apply_replay_epoch_completion(receipt)
+                .unwrap()
+                .applied
+        );
+        assert!(self.service.pending_agent_provider_tasks().is_empty());
+        assert!(!self.service.agent_is_compacting("%1"));
+    }
+}
+
+/// Delayed ordinary rows for an epoch-owned native group remain exact in the
+/// preview and actual replay. Pending bytes never become an append receipt or
+/// another source occurrence, and source/cost wrappers never enter wire bodies.
+#[test]
+fn runtime_manual_compaction_candidate_retains_native_execution_ownership() {
+    for worker in [false, true] {
+        let mut fixture = CanonicalManualFixture::new(None, 1, false);
+        let task = fixture.queue(worker);
+        assert!(task.replay_source.is_some());
+        let before_identity = fixture
+            .store
+            .load_replay_epoch(&fixture.conversation, mez_agent::AgentContext::empty())
+            .unwrap()
+            .unwrap()
+            .0;
+        let native = fixture
+            .original
+            .context()
+            .chronology()
+            .iter()
+            .filter(|event| event.execution_group_id() == Some(&fixture.group))
+            .cloned()
+            .collect::<Vec<_>>();
+        assert_eq!(native.len(), 4);
+        let rows = native
+            .iter()
+            .enumerate()
+            .map(|(index, event)| {
+                let semantic = mez_agent::TranscriptContextEvent::execution_block_with_metadata(
+                    event.block().source,
+                    event.block().label.clone(),
+                    event.block().content.clone(),
+                    fixture.group.clone(),
+                    index as u64 + 1,
+                    event.provider_owner().cloned(),
+                )
+                .unwrap();
+                TranscriptEntry {
+                    conversation_id: fixture.conversation.clone(),
+                    sequence: index as u64 + 1,
+                    created_at_unix_seconds: 1,
+                    role: TranscriptRole::System,
+                    turn_id: "original-turn".into(),
+                    agent_id: "agent-%1".into(),
+                    pane_id: "%1".into(),
+                    content: mez_agent::transcript::TranscriptContextRecord::new(
+                        semantic,
+                        event.record(),
+                        None,
+                    )
+                    .unwrap()
+                    .to_transcript_content()
+                    .unwrap(),
+                }
+            })
+            .collect::<Vec<_>>();
+        let append =
+            crate::storage::transcript::TranscriptAppendBatch::owned_rows(rows.clone()).unwrap();
+        let path = fixture
+            .store
+            .transcript_path(&fixture.conversation)
+            .unwrap();
+        fixture.service.use_transcript_effect_adapter();
+        fixture
+            .service
+            .persistence
+            .queue_transcript(RuntimeSideEffect::PersistTranscriptEntries {
+                store: fixture.store.clone(),
+                path: path.clone(),
+                batch: append.clone(),
+            });
+        // These are delayed physical copies of already captured source. There
+        // is no new logical arrival or guessed pane-count admission to apply.
+        assert!(
+            fixture
+                .store
+                .inspect(&fixture.conversation)
+                .unwrap()
+                .is_empty()
+        );
+        let candidate = fixture
+            .service
+            .manual_compaction_candidate_context(&task, "short summary")
+            .unwrap();
+        candidate.validate_durable().unwrap();
+        let events = candidate
+            .chronology()
+            .iter()
+            .filter(|event| event.execution_group_id() == Some(&fixture.group))
+            .collect::<Vec<_>>();
+        assert_eq!(events.len(), native.len());
+        for (actual, original) in events.iter().zip(&native) {
+            assert_eq!(*actual, original);
+        }
+        assert!(candidate.execution_group_is_pending(&fixture.group));
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| event.provider_owner() == Some(&fixture.owner))
+                .count(),
+            2
+        );
+        let mut advisory = task.clone();
+        advisory.summary_correction.manual_words = Some(1);
+        assert!(
+            fixture
+                .service
+                .manual_compaction_candidate_context(&advisory, "two valid words")
+                .is_ok()
+        );
+        assert!(
+            fixture
+                .service
+                .manual_compaction_candidate_context(&task, "")
+                .is_err()
+        );
+        let mut stale = task.clone();
+        stale.task_generation += 1;
+        assert!(
+            fixture
+                .service
+                .manual_compaction_candidate_context(&stale, "short summary")
+                .is_err()
+        );
+        assert_eq!(
+            fixture
+                .store
+                .load_replay_epoch(&fixture.conversation, mez_agent::AgentContext::empty())
+                .unwrap()
+                .unwrap()
+                .0,
+            before_identity
+        );
+        fixture.publish("short summary");
+        let mut published = fixture
+            .service
+            .agent_context_for_pane_prompt("%1", "Continue after conversation compaction.", 100)
+            .unwrap();
+        published.set_metadata(candidate.metadata().clone());
+        assert_eq!(candidate.blocks(), published.blocks());
+        for (expected, actual) in candidate.chronology().iter().zip(published.chronology()) {
+            assert_eq!(expected.semantic_kind(), actual.semantic_kind());
+            assert_eq!(expected.retention(), actual.retention());
+            assert_eq!(expected.execution_group_id(), actual.execution_group_id());
+            assert_eq!(expected.provider_owner(), actual.provider_owner());
+        }
+        let (_, cold) = AgentTranscriptStore::new(fixture.store.root())
+            .load_replay_epoch(&fixture.conversation, mez_agent::AgentContext::empty())
+            .unwrap()
+            .unwrap();
+        assert_eq!(cold.revision().get(), 2);
+        assert_eq!(
+            cold.context().chronology()[0].block().content,
+            "short summary"
+        );
+        let turn = AgentTurnRecord {
+            turn_id: "parity-turn".into(),
+            conversation_id: fixture.conversation.clone(),
+            agent_id: "agent-%1".into(),
+            pane_id: "%1".into(),
+            trigger: mez_agent::AgentTurnTrigger::UserPrompt,
+            started_at_unix_seconds: 1,
+            deadline_at_unix_millis: 0,
+            policy_profile: "runtime".into(),
+            model_profile: task.model_profile_name.clone(),
+            parent_turn_id: None,
+            state: AgentTurnState::Queued,
+            cooperation_mode: None,
+            initial_capability: None,
+        };
+        for (provider, model) in [
+            ("openai", "test"),
+            ("openai", "switched-model"),
+            ("switched-openai", "test"),
+            ("switched-openai", "switched-model"),
+        ] {
+            let mut profile = task.model_profile.clone();
+            profile.provider = provider.into();
+            profile.model = model.into();
+            let api = mez_agent::ProviderApiCompatibility::OpenAiResponses;
+            let before = assemble_model_request(&profile, api, &turn, &candidate).unwrap();
+            let after = assemble_model_request(&profile, api, &turn, &published).unwrap();
+            let before = mez_agent::openai_responses_request_body(&before).unwrap();
+            let after = mez_agent::openai_responses_request_body(&after).unwrap();
+            assert_eq!(before, after, "wire parity for {provider}/{model}");
+            assert_eq!(
+                mez_agent::provider_request_input_estimate_from_body(&before),
+                mez_agent::provider_request_input_estimate_from_body(&after)
+            );
+            for record in &fixture.source_records {
+                assert!(!before.contains(&String::from(record.occurrence_id())));
+            }
+            for marker in [
+                "mez-transcript-context-record/",
+                "rendered_sha256",
+                "framed_input_tokens",
+            ] {
+                assert!(!before.contains(marker));
+            }
+            assert_eq!(before.contains("call_retained"), provider == "openai");
+        }
+        // Deliver the actual original append completion after publication. Its
+        // physical copy cannot duplicate or renumber the retained native source.
+        let mut writes = 0;
+        for effect in fixture
+            .service
+            .drain_transcript_persistence_transition()
+            .side_effects
+        {
+            match effect {
+                RuntimeSideEffect::PersistTranscriptEntries { store, batch, path } => {
+                    assert_eq!(
+                        batch, append,
+                        "dispatch must retain the original append owner"
+                    );
+                    let bytes = store.commit_accounted_transcript_batch(&batch, 1).unwrap();
+                    assert!(
+                        fixture
+                            .service
+                            .apply_persistence_transition(
+                                crate::runtime::PersistenceEvent::TranscriptCompleted {
+                                    conversation_id: fixture.conversation.clone(),
+                                    first_sequence: batch.first_sequence(),
+                                    batch,
+                                    path,
+                                    bytes,
+                                }
+                            )
+                            .unwrap()
+                            .applied
+                    );
+                    writes += 1;
+                }
+                RuntimeSideEffect::PersistAgentSessionMetadata {
+                    store,
+                    mezzanine_session_id,
+                    generation,
+                    records,
+                    ..
+                } => {
+                    let bytes = store
+                        .save_agent_session_metadata_checkpoint(&mezzanine_session_id, &records)
+                        .unwrap();
+                    fixture
+                        .service
+                        .apply_persistence_transition(
+                            crate::runtime::PersistenceEvent::AgentSessionMetadataCompleted {
+                                path: store
+                                    .agent_session_metadata_checkpoint_file(&mezzanine_session_id),
+                                mezzanine_session_id,
+                                generation,
+                                records: records.len(),
+                                bytes,
+                            },
+                        )
+                        .unwrap();
+                }
+                RuntimeSideEffect::PersistPresentationEntries {
+                    store,
+                    path,
+                    entries,
+                } => {
+                    let bytes = store.append_presentation_many(&entries).unwrap();
+                    fixture
+                        .service
+                        .apply_persistence_transition(
+                            crate::runtime::PersistenceEvent::PresentationCompleted {
+                                conversation_id: fixture.conversation.clone(),
+                                path,
+                                entries: entries.len(),
+                                bytes,
+                            },
+                        )
+                        .unwrap();
+                }
+                other => panic!("unexpected manual fixture persistence work: {other:?}"),
+            }
+        }
+        assert_eq!(writes, 1);
+        let after = fixture
+            .service
+            .agent_context_for_pane_prompt("%1", "Continue after conversation compaction.", 100)
+            .unwrap();
+        assert_eq!(after.blocks(), candidate.blocks());
+        let auxiliary = fixture.queue(worker);
+        let body = mez_agent::openai_responses_request_body(&auxiliary.request).unwrap();
+        assert!(body.contains("RAW_RETAINED_FACT"));
+        assert!(
+            !body.contains("call_retained"),
+            "protected native tail must stay outside selected input"
+        );
+        for record in &fixture.source_records {
+            assert!(!body.contains(&String::from(record.occurrence_id())));
+        }
+        for marker in [
             "mez-transcript-context-record/",
             "rendered_sha256",
             "framed_input_tokens",
         ] {
-            assert!(!before_body.contains(metadata), "{metadata}");
+            assert!(!body.contains(marker));
         }
-        assert_eq!(
-            mez_agent::provider_request_input_estimate_from_body(&before_body),
-            mez_agent::provider_request_input_estimate_from_body(&after_body)
-        );
-        assert_eq!(before_body.contains("call_retained"), provider == "openai");
-    }
-    // Commit the same pending occurrences, then capture a real next auxiliary
-    // task. Its frozen publication proof must retain the wrapper, while its
-    // actual provider request contains only the original semantic event.
-    store.commit_accounted_transcript_batch(&append, 1).unwrap();
-    let response = service.dispatch_runtime_control_body(
-        r#"{"jsonrpc":"2.0","id":"candidate-native-next","method":"agent/shell/command","params":{"idempotency_key":"candidate-native-next","input":"/compact"}}"#,
-        &primary,
-    );
-    assert!(response.contains("state=queued"), "{response}");
-    let auxiliary = service
-        .pending_agent_compaction_task_for_tests("%1")
-        .unwrap();
-    let body = mez_agent::openai_responses_request_body(&auxiliary.request).unwrap();
-    assert!(body.contains("exact action result"));
-    for record in &retained_records {
-        let occurrence: String = record.occurrence_id().into();
-        assert!(
-            auxiliary
-                .frozen_compaction_rows
-                .iter()
-                .any(|entry| entry.content.contains(&occurrence)),
-            "physical publication proof must retain each original record"
-        );
-        assert!(!body.contains(&occurrence), "auxiliary leaked {occurrence}");
-    }
-    for metadata in [
-        "mez-transcript-context-record/",
-        "rendered_sha256",
-        "framed_input_tokens",
-    ] {
-        assert!(!body.contains(metadata), "auxiliary leaked {metadata}");
     }
 }
 
-/// A virtual compaction boundary must invalidate complete manifest-bearing
-/// groups exactly as a published MCP epoch does, preserving exact barriers and
-/// excluding malformed groups rather than restoring partial native ownership.
+/// A complete candidate, rather than its advisory output target, decides the
+/// manual retry. Repeated oversize stops without another head; an independently
+/// fitting response publishes through the original worker and no ordinary turn.
+#[test]
+fn runtime_canonical_manual_candidate_requires_complete_size_progress() {
+    let large = "large-summary ".repeat(8_000);
+    let mut calibration = CanonicalManualFixture::new(None, 90, true);
+    let task = calibration.queue(false);
+    let small = calibration
+        .service
+        .manual_compaction_candidate_context(&task, "valid manual candidate")
+        .unwrap();
+    let (minimum, _, _) = calibration
+        .service
+        .manual_compaction_candidate_size_for_tests(&task, small)
+        .unwrap();
+    let big = calibration
+        .service
+        .manual_compaction_candidate_context(&task, &large)
+        .unwrap();
+    let (maximum, _, _) = calibration
+        .service
+        .manual_compaction_candidate_size_for_tests(&task, big)
+        .unwrap();
+    assert!(maximum > minimum + 1_000);
+    let cap = ((minimum + (maximum - minimum) / 2) * 20).div_ceil(19);
+    for worker in [false, true] {
+        for reduces in [false, true] {
+            let mut fixture = CanonicalManualFixture::new(Some(cap), 90, true);
+            let task = fixture.queue(worker);
+            let before = fixture
+                .store
+                .load_replay_epoch(&fixture.conversation, mez_agent::AgentContext::empty())
+                .unwrap()
+                .unwrap()
+                .0;
+            let small = fixture
+                .service
+                .manual_compaction_candidate_context(&task, "valid manual candidate")
+                .unwrap();
+            let (small_size, limit, _) = fixture
+                .service
+                .manual_compaction_candidate_size_for_tests(&task, small)
+                .unwrap();
+            let big = fixture
+                .service
+                .manual_compaction_candidate_context(&task, &large)
+                .unwrap();
+            let (big_size, _, _) = fixture
+                .service
+                .manual_compaction_candidate_size_for_tests(&task, big)
+                .unwrap();
+            assert!(small_size < limit && big_size > limit);
+            if reduces {
+                // Real output correction must remain visible across every
+                // complete-fit retry on this same original manual source.
+                complete_runtime_test_compaction(&mut fixture.service, "%1", "");
+                assert!(fixture.service.agent_is_compacting("%1"));
+            }
+            complete_runtime_test_compaction(&mut fixture.service, "%1", &large);
+            assert!(
+                fixture
+                    .service
+                    .take_replay_epoch_attempt_for_tests()
+                    .is_none()
+            );
+            assert_eq!(
+                fixture
+                    .store
+                    .load_replay_epoch(&fixture.conversation, mez_agent::AgentContext::empty())
+                    .unwrap()
+                    .unwrap()
+                    .0,
+                before
+            );
+            let retry = fixture
+                .service
+                .pending_agent_compaction_task_for_tests("%1")
+                .unwrap();
+            assert!(
+                retry
+                    .manual_final_retry
+                    .is_some_and(|(_, count)| count == 1)
+            );
+            assert!(fixture.service.pending_agent_provider_tasks().is_empty());
+            if reduces {
+                for (index, words) in [7_000, 6_000].into_iter().enumerate() {
+                    complete_runtime_test_compaction(
+                        &mut fixture.service,
+                        "%1",
+                        &"large-summary ".repeat(words),
+                    );
+                    assert!(
+                        fixture
+                            .service
+                            .take_replay_epoch_attempt_for_tests()
+                            .is_none()
+                    );
+                    let retry = fixture
+                        .service
+                        .pending_agent_compaction_task_for_tests("%1")
+                        .unwrap();
+                    assert_eq!(retry.manual_final_retry.unwrap().1, index as u32 + 2);
+                    assert_eq!(retry.summary_correction.corrections_admitted, 1);
+                    assert!(std::sync::Arc::ptr_eq(
+                        retry.replay_source.as_ref().unwrap(),
+                        task.replay_source.as_ref().unwrap()
+                    ));
+                }
+                fixture.publish("valid manual candidate");
+                let (_, cold) = fixture
+                    .store
+                    .load_replay_epoch(&fixture.conversation, mez_agent::AgentContext::empty())
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(
+                    cold.context().chronology()[0].block().content,
+                    "valid manual candidate"
+                );
+            } else {
+                complete_runtime_test_compaction(&mut fixture.service, "%1", &large);
+                assert!(!fixture.service.agent_is_compacting("%1"));
+                assert!(
+                    fixture
+                        .service
+                        .take_replay_epoch_attempt_for_tests()
+                        .is_none()
+                );
+                assert_eq!(
+                    fixture
+                        .store
+                        .load_replay_epoch(&fixture.conversation, mez_agent::AgentContext::empty())
+                        .unwrap()
+                        .unwrap()
+                        .0,
+                    before
+                );
+            }
+            assert!(fixture.service.agent_turn_ledger().turns().is_empty());
+            assert!(fixture.service.pending_agent_provider_tasks().is_empty());
+        }
+    }
+}
+
+/// Legacy reset decoding still excludes malformed/retired groups. Canonical
+/// manual preview and actual receipt adoption revoke the same original scoped
+/// retrieval while preserving its evidence and pending native source.
 #[test]
 fn runtime_compaction_candidate_mcp_epoch_matches_published_projection() {
     let group = mez_agent::ContextExecutionGroupId::new("manifest-group").unwrap();
@@ -377,14 +785,6 @@ fn runtime_compaction_candidate_mcp_epoch_matches_published_projection() {
             content,
         })
         .collect::<Vec<_>>();
-    let prospective = crate::runtime::control::runtime_agent_compaction_replay_context(
-        "%1",
-        &rows,
-        &[],
-        None,
-        None,
-        None,
-    );
     rows.push(TranscriptEntry {
         conversation_id: "projection-parity".to_string(),
         sequence: 5,
@@ -396,9 +796,95 @@ fn runtime_compaction_candidate_mcp_epoch_matches_published_projection() {
         content: mez_agent::TranscriptContextEvent::McpCompactionEpoch.to_transcript_content(),
     });
     let published = crate::runtime::control::runtime_agent_transcript_context("%1", &rows);
-    assert_eq!(prospective.blocks, published.blocks);
-    assert_eq!(prospective.execution_events, published.execution_events);
-    assert!(prospective.execution_events.is_empty());
-    assert_eq!(prospective.blocks.len(), 1);
-    assert_eq!(prospective.blocks[0].content, "Keep this exact barrier.");
+    assert!(published.execution_events.is_empty());
+    assert_eq!(published.blocks.len(), 1);
+    assert_eq!(published.blocks[0].content, "Keep this exact barrier.");
+    for worker in [false, true] {
+        let mut fixture = CanonicalManualFixture::headless(true);
+        let mut body = fixture.original.clone().into_owned_context();
+        let result = mez_agent::ActionResult {
+            protocol: "maap/1".into(), turn_id: "original-turn".into(), agent_id: "agent-%1".into(),
+            action_id: "original-discovery".into(), action_type: "mcp_server_get", status: mez_agent::ActionStatus::Succeeded,
+            content: Vec::new(), structured_content_json: Some(serde_json::json!({"server":{
+                "server_id":"manual-scope-fixture", "state":"available", "display_name":"Fixture",
+                "purpose":"manual preview parity", "usage_instructions":"Use echo", "tools":[{
+                    "name":"echo", "state":"available", "description":"fixture echo",
+                    "input_schema":{"type":"object","properties":{}}
+                }]
+            }}).to_string()), permission_evaluation: None, is_error: false, error: None,
+        };
+        let (server, content) =
+            mez_agent::mcp_retrieved_manifest_for_action_result(&result, &body).unwrap();
+        let group = mez_agent::ContextExecutionGroupId::new("original-discovery").unwrap();
+        body.append_assistant_event("discovery", "retrieve original manifest", group.clone())
+            .unwrap();
+        body.append_evidence_event(
+            ContextSourceKind::McpRetrievedManifest,
+            format!(
+                "{}{server}",
+                mez_agent::MCP_RETRIEVED_MANIFEST_CONTEXT_LABEL_PREFIX
+            ),
+            content,
+            group,
+            None,
+            true,
+        )
+        .unwrap();
+        let original = body.chronology().last().unwrap().clone();
+        fixture
+            .service
+            .retain_ephemeral_replay_body(
+                "%1",
+                &fixture.conversation,
+                &body,
+                None,
+                Some((
+                    crate::storage::transcript::replay_epoch::ReplaySourceOrigin::new(
+                        "original-turn",
+                        "agent-%1",
+                        "%1",
+                    )
+                    .unwrap(),
+                    0,
+                )),
+                None,
+            )
+            .unwrap();
+        let available = |context: &mez_agent::AgentContext| {
+            mez_agent::invoked_mcp_tools_for_context(
+                context,
+                &mez_agent::McpPromptSummary {
+                    available_servers: Vec::new(),
+                    available_tools: Vec::new(),
+                    unavailable_servers: Vec::new(),
+                },
+            )
+        };
+        assert_eq!(available(&body).len(), 1);
+        let task = fixture.queue(worker);
+        let candidate = fixture
+            .service
+            .manual_compaction_candidate_context(&task, "new manual head")
+            .unwrap();
+        assert!(available(&candidate).is_empty());
+        assert!(candidate.chronology().contains(&original));
+        let unchanged = fixture
+            .service
+            .runtime_agent_history_epoch_context("%1")
+            .unwrap()
+            .replay_owner()
+            .unwrap()
+            .unwrap();
+        assert_eq!(available(unchanged.context()).len(), 1);
+        fixture.publish("new manual head");
+        let accepted = fixture
+            .service
+            .agent_context_for_pane_prompt("%1", "Continue after conversation compaction.", 100)
+            .unwrap();
+        assert!(available(&accepted).is_empty());
+        assert!(accepted.chronology().contains(&original));
+        assert_eq!(candidate.blocks(), accepted.blocks());
+        assert!(accepted.execution_group_is_pending(&fixture.group));
+        assert!(fixture.service.agent_turn_ledger().turns().is_empty());
+    }
 }

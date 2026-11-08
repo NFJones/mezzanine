@@ -8,7 +8,9 @@
 
 use super::{RuntimeAgentHistoryEpochWork, RuntimeAgentTranscriptContext};
 use crate::{MezError, Result};
-use mez_agent::{ContextBlockOccurrenceId, TranscriptRole};
+#[cfg(test)]
+use mez_agent::ContextBlockOccurrenceId;
+use mez_agent::TranscriptRole;
 use std::{
     collections::{BTreeMap, BTreeSet},
     sync::Arc,
@@ -24,6 +26,12 @@ pub(crate) struct RuntimeAgentHistorySource {
     /// Typed source and committed parent captured in the same actual read.
     pub(in crate::runtime) replay:
         Option<Arc<crate::storage::transcript::replay_epoch::ReplayEpochSnapshot>>,
+    /// Exact memory-only source of an imported historical prefix. Live NoStore
+    /// continuation must keep this read's producers after flat transport ends.
+    pub(super) memory: Option<Arc<crate::storage::transcript::replay_epoch::ReplayMemorySource>>,
+    /// Original raw projection, distinct from a committed typed parent.
+    pub(in crate::runtime) raw:
+        Option<Arc<crate::storage::transcript::replay_epoch::ReplayRawHistorySource>>,
     /// Original checked logical window, shared through retries/interruption.
     rows: Arc<[mez_agent::TranscriptEntry]>,
     /// Original legacy positions from the same leased row read.
@@ -33,6 +41,50 @@ pub(crate) struct RuntimeAgentHistorySource {
 }
 
 impl RuntimeAgentHistorySource {
+    /// Requires saved archive projection to retain this read's accepted head.
+    /// Append-only work may advance raw source, but a locally valid unpublished
+    /// rewrite cannot replace the acknowledged publication. Restoring this
+    /// descriptive snapshot performs no I/O and grants no execution rights.
+    /// Memory-only rewrites have no durable publication base to acknowledge.
+    pub(in crate::runtime) fn validate_published_replay_head(
+        &self,
+        conversation: &str,
+        context: &mez_agent::AgentContext,
+    ) -> Result<()> {
+        let Some(snapshot) = self
+            .replay
+            .as_ref()
+            .filter(|_| self.ephemeral() != Some(true))
+        else {
+            return Ok(());
+        };
+        let conversation = mez_agent::ReplayConversationId::new(conversation)?;
+        let checkpoint = snapshot.checkpoint().clone();
+        let checkpoint = if snapshot.conversation_id() == conversation.as_str() {
+            checkpoint
+        } else {
+            checkpoint.for_conversation_copy(conversation.clone())?
+        };
+        let accepted = mez_agent::ReplayEpochContext::from_checkpoint(
+            conversation.clone(),
+            checkpoint,
+            mez_agent::AgentContext::empty(),
+        )?;
+        let current =
+            mez_agent::ReplayEpochContext::from_owned_context(conversation, context.clone())?;
+        if current.revision() != accepted.revision()
+            || current.head() != accepted.head()
+            || (accepted.head().is_some()
+                && current.context().chronology().first()
+                    != accepted.context().chronology().first())
+        {
+            return Err(MezError::conflict(
+                "transcript projection differs from original accepted replay head",
+            ));
+        }
+        Ok(())
+    }
+
     /// Checks a mixed inherited/new group against original captured images and
     /// escrow before ordinary bookkeeping claims this producer. No store read,
     /// effect receipt or source-copy permission is inferred from matching text.
@@ -85,6 +137,8 @@ impl RuntimeAgentHistorySource {
         }
         source_mut.epoch = None;
         source_mut.replay = Some(snapshot);
+        source_mut.memory = None;
+        source_mut.raw = None;
         source_mut.target_ephemeral = Some(ephemeral);
         Ok(source)
     }
@@ -102,6 +156,7 @@ impl RuntimeAgentHistorySource {
     }
 
     /// Identifies the archive that actually supplied these imported events.
+    #[cfg(test)]
     pub(in crate::runtime) fn conversation_id(&self) -> Option<&str> {
         self.work
             .as_ref()
@@ -132,6 +187,8 @@ impl RuntimeAgentHistorySource {
             work: None,
             epoch: None,
             replay: None,
+            memory: None,
+            raw: None,
             rows: Arc::from([]),
             row_origins: BTreeMap::new(),
             target_ephemeral: None,
@@ -147,10 +204,33 @@ impl RuntimeAgentHistorySource {
     ) {
         let row_origins = history.records.source_row_origins().clone();
         let replay = history.records.replay_snapshot();
+        let memory = history.records.replay_memory_source();
+        let raw = if history.records.legacy_raw {
+            let capture = history.replay_owner().and_then(|owner| {
+                crate::storage::transcript::replay_epoch::ReplayRawHistorySource::capture(
+                    &work.store,
+                    owner.ok_or_else(|| {
+                        MezError::invalid_state("raw source lost its canonical owner")
+                    })?,
+                    rows.clone(),
+                )
+            });
+            match capture {
+                Ok(source) => Some(Arc::new(source)),
+                Err(error) => {
+                    history.records.reject_source(&error);
+                    None
+                }
+            }
+        } else {
+            None
+        };
         history.source = Some(Arc::new(Self {
             work: Some(work),
             epoch,
             replay,
+            memory,
+            raw,
             rows: rows.into(),
             row_origins,
             target_ephemeral: None,
@@ -161,6 +241,7 @@ impl RuntimeAgentHistorySource {
     /// Legacy ordinary rows are explicitly present without typed ownership.
     /// Missing, duplicated or malformed typed sources fail without consulting a
     /// replacement archive or accepting content equality as occurrence identity.
+    #[cfg(test)]
     pub(in crate::runtime) fn selected_images(
         &self,
         needed: &BTreeSet<ContextBlockOccurrenceId>,

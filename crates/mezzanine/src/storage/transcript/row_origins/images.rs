@@ -21,6 +21,13 @@ pub(in crate::storage::transcript) struct IndexedRowImage {
     pub(in crate::storage::transcript) digest: String,
 }
 
+/// Fingerprints are descriptive source. Only original append/copy accounting
+/// may also import producer execution descriptors; prefix migration cannot.
+enum RowImageSource {
+    OriginalAccounting,
+    LegacyPrefixMigration,
+}
+
 impl AgentTranscriptStore {
     /// Writes full-row images with the same original occurrence/cost transaction.
     /// The caller has reconciled the accepted receipt's raw rows under the held
@@ -44,17 +51,19 @@ impl AgentTranscriptStore {
             transaction,
             &batch.entries().iter().collect::<Vec<_>>(),
             origins,
+            RowImageSource::OriginalAccounting,
         )
     }
 
-    /// The caller owns either an accepted append receipt or the existing saved
-    /// fork generation with independently checked original row fingerprints.
-    /// This shared SQL primitive never creates that ownership or an append ACK.
+    /// The caller owns original append/copy accounting or an explicit frozen
+    /// legacy-prefix migration. Source image capture never grants that ownership
+    /// or an append ACK; migration cannot add original execution descriptors.
     fn publish_owned_row_images_in_transaction(
         &self,
         transaction: &Transaction<'_>,
         rows: &[&TranscriptEntry],
         origins: &TranscriptRowOrigins,
+        source: RowImageSource,
     ) -> Result<()> {
         let version: u32 = transaction.query_row("PRAGMA user_version", [], |row| row.get(0))?;
         if version < 4 {
@@ -117,7 +126,9 @@ impl AgentTranscriptStore {
             "CREATE INDEX IF NOT EXISTS row_digests_origin ON row_digests(origin);
              CREATE INDEX IF NOT EXISTS origins_origin ON origins(origin);",
         )?;
-        self.publish_execution_sources_in_transaction(transaction, rows)?;
+        if matches!(source, RowImageSource::OriginalAccounting) {
+            self.publish_execution_sources_in_transaction(transaction, rows)?;
+        }
         Ok(())
     }
 
@@ -146,7 +157,65 @@ impl AgentTranscriptStore {
         }
         let mut connection = self.open_row_origins_locked(conversation)?;
         let transaction = connection.transaction()?;
-        self.publish_owned_row_images_in_transaction(&transaction, &selected, originals)?;
+        self.publish_owned_row_images_in_transaction(
+            &transaction,
+            &selected,
+            originals,
+            RowImageSource::OriginalAccounting,
+        )?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    /// Captures a checked complete durable prefix only for the explicit old
+    /// prefix-to-typed transition. The caller holds its old-authority CAS lease
+    /// and supplies actual archived rows, not pending reconstruction. Existing
+    /// image conflicts remain errors; a typed authority cannot use this path to
+    /// repair missing required evidence. No receipt is created or settled and
+    /// no producer execution state is inferred from historical text.
+    pub(in crate::storage::transcript) fn capture_legacy_prefix_images_locked(
+        &self,
+        conversation: &str,
+        rows: &[TranscriptEntry],
+    ) -> Result<()> {
+        if self.has_replay_manifest(conversation)? {
+            return Err(invalid("typed replay cannot recapture legacy row images"));
+        }
+        if rows.is_empty() {
+            return Ok(());
+        }
+        for (index, row) in rows.iter().enumerate() {
+            if row.conversation_id != conversation || row.sequence != index as u64 + 1 {
+                return Err(invalid(
+                    "legacy image capture is not a complete original prefix",
+                ));
+            }
+        }
+        let origins = self.transcript_row_origins_locked(conversation, rows)?;
+        let mut connection = self.open_row_origins_locked(conversation)?;
+        let transaction = connection.transaction()?;
+        for (sequence, origin) in &origins {
+            let previous: Option<String> = transaction
+                .query_row(
+                    "SELECT origin FROM origins WHERE sequence=?1",
+                    [sequence.to_string()],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            if previous.is_some_and(|old| old != String::from(*origin)) {
+                return Err(invalid("legacy image capture changed original placement"));
+            }
+            transaction.execute(
+                "INSERT INTO origins VALUES (?1, ?2) ON CONFLICT(sequence) DO NOTHING",
+                params![sequence.to_string(), String::from(*origin)],
+            )?;
+        }
+        self.publish_owned_row_images_in_transaction(
+            &transaction,
+            &rows.iter().collect::<Vec<_>>(),
+            &origins,
+            RowImageSource::LegacyPrefixMigration,
+        )?;
         transaction.commit()?;
         Ok(())
     }

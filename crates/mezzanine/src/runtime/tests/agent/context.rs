@@ -557,109 +557,109 @@ fn runtime_configured_mcp_catalog_snapshots_persist_replay_and_remove() {
     let _ = fs::remove_dir_all(transcript_root);
 }
 
-/// Verifies same-turn compaction refresh preserves the environment sampled at
-/// the prompt boundary even when the retained raw transcript drops its event.
-///
-/// Refresh must use the frozen turn value rather than re-probing the pane or
-/// leaving later retained transcript chronology without an environment baseline.
+/// Actual typed publication preserves the exact environment sampled at the
+/// prompt boundary while covering an older literal reference. Configuration
+/// remains mandatory raw source; a later probe or count trim cannot replace it.
 #[test]
 fn runtime_compaction_refresh_reintroduces_frozen_environment_snapshot() {
     let mut service = test_runtime_service();
     let transcript_root = temp_root("environment-snapshot-compaction");
-    let transcript_store = AgentTranscriptStore::new(transcript_root.clone());
-    service.set_agent_transcript_store(transcript_store.clone());
-    service
+    let environment_root = temp_root("environment-snapshot-compaction-root");
+    let store = AgentTranscriptStore::new(transcript_root.clone());
+    let conversation = service
         .agent_shell_store_mut()
         .enter_or_resume("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    store
+        .append(&TranscriptEntry {
+            conversation_id: conversation,
+            sequence: 1,
+            created_at_unix_seconds: 1,
+            role: TranscriptRole::User,
+            turn_id: "original-literal-reference".into(),
+            agent_id: "agent-%1".into(),
+            pane_id: "%1".into(),
+            content: "older literal reference ".repeat(3_000),
+        })
         .unwrap();
-    let environment_root = temp_root("environment-snapshot-compaction-root");
+    service
+        .agent_shell_store_mut()
+        .record_transcript_entries("%1", 1)
+        .unwrap();
     service.set_pane_environment_signature_for_tests(
         "%1",
         test_environment_signature(&environment_root),
     );
-    let baseline = service
-        .agent_context_for_pane_prompt("%1", "capture the baseline", 0)
-        .unwrap()
-        .blocks()
+    let (mut service, transcript_store, turn_id) =
+        crate::test_support::compaction_source::recovery_source(
+            service,
+            transcript_root.clone(),
+            "original environment-bound work",
+            "original environment-bound task completed",
+            1,
+        );
+    let baseline = service.agent_turn_contexts()[&turn_id]
+        .chronology()
         .iter()
-        .find(|block| block.label == "task environment snapshot")
+        .find(|event| event.block().label == "task environment snapshot")
         .unwrap()
-        .content
         .clone();
     let conversation_id = service
-        .agent_shell_store()
-        .get("%1")
+        .agent_turn_ledger()
+        .turn(&turn_id)
         .unwrap()
-        .session_id
+        .conversation_id
         .clone();
-    let historical = [
-        (
-            TranscriptRole::System,
-            mez_agent::TranscriptContextEvent::environment_snapshot(baseline.clone())
-                .unwrap()
-                .to_transcript_content(),
-            "historical-turn-1",
-        ),
-        (
-            TranscriptRole::User,
-            "first prompt".to_string(),
-            "historical-turn-1",
-        ),
-        (
-            TranscriptRole::Assistant,
-            "first answer".to_string(),
-            "historical-turn-1",
-        ),
-        (
-            TranscriptRole::User,
-            "second prompt".to_string(),
-            "historical-turn-2",
-        ),
-        (
-            TranscriptRole::Assistant,
-            "second answer".to_string(),
-            "historical-turn-2",
-        ),
-    ];
-    for (index, (role, content, turn_id)) in historical.into_iter().enumerate() {
-        transcript_store
-            .append(&TranscriptEntry {
-                conversation_id: conversation_id.clone(),
-                sequence: u64::try_from(index + 1).unwrap(),
-                created_at_unix_seconds: 1,
-                role,
-                turn_id: turn_id.to_string(),
-                agent_id: "agent-%1".to_string(),
-                pane_id: "%1".to_string(),
-                content,
-            })
-            .unwrap();
-    }
-    service
-        .agent_shell_store_mut()
-        .record_transcript_entries("%1", 5)
-        .unwrap();
-    let started = service
-        .start_agent_prompt_turn("%1", "continue after compaction")
-        .unwrap();
-    service
-        .agent_shell_store_mut()
-        .retain_recent_transcript_entries("%1", 2)
-        .unwrap();
-
+    let archive = transcript_store.inspect(&conversation_id).unwrap();
+    assert_eq!(
+        service.agent_turn_ledger().turn(&turn_id).unwrap().state,
+        AgentTurnState::Running,
+        "{:?}",
+        service.pane_screen("%1").unwrap().normal_content_lines()
+    );
+    let replacement_root = temp_root("environment-snapshot-replacement-root");
+    service.set_pane_environment_signature_for_tests(
+        "%1",
+        test_environment_signature(&replacement_root),
+    );
+    let error = MezError::invalid_state("provider context length exceeded")
+        .with_provider_failure_json(
+            r#"{"status_code":400,"error":{"code":"context_length_exceeded"}}"#,
+        );
     assert!(
         service
-            .refresh_running_turn_context_after_conversation_compaction(&started.turn_id)
+            .recover_agent_provider_context_limit_failure(
+                &AgentId::opaque("agent-%1").unwrap(),
+                &turn_id,
+                &error,
+                1,
+            )
             .unwrap()
     );
-    let refreshed = service.agent_turn_contexts().get(&started.turn_id).unwrap();
+    complete_runtime_test_compaction(&mut service, "%1", "environment-preserving summary");
+    let receipt =
+        crate::test_support::compaction_publication::execute_pending_publication(&mut service);
+    assert!(
+        service
+            .apply_replay_epoch_completion(receipt)
+            .unwrap()
+            .applied
+    );
+    assert_eq!(transcript_store.inspect(&conversation_id).unwrap(), archive);
+    let refreshed = service.agent_turn_contexts().get(&turn_id).unwrap();
+    assert_eq!(
+        refreshed.chronology()[0].block().content,
+        "environment-preserving summary"
+    );
     let snapshots = refreshed
-        .blocks()
+        .chronology()
         .iter()
-        .filter(|block| block.label == "task environment snapshot")
+        .filter(|event| event.block().label == "task environment snapshot")
         .collect::<Vec<_>>();
     assert_eq!(snapshots.len(), 1, "{:#?}", refreshed.blocks());
-    assert_eq!(snapshots[0].content, baseline);
+    assert_eq!(snapshots[0], &baseline);
     let snapshot_index = refreshed
         .blocks()
         .iter()
@@ -676,6 +676,7 @@ fn runtime_compaction_refresh_reintroduces_frozen_environment_snapshot() {
 
     let _ = fs::remove_dir_all(transcript_root);
     let _ = fs::remove_dir_all(environment_root);
+    let _ = fs::remove_dir_all(replacement_root);
 }
 
 /// Verifies pane plan mode appends one persistent state transition before the
@@ -2486,117 +2487,74 @@ fn runtime_frame_context_reports_last_provider_context_usage() {
     assert_eq!(service.agent_context_usage_snapshot(&conversation_id), None);
 }
 
-/// Verifies provider context-window wording also triggers active-turn
-/// compaction and retry before the turn is failed.
-///
-/// Some providers report the same rejection without the OpenAI-specific
-/// `context_length_exceeded` code. Runtime recovery should still classify the
-/// error as a context-limit failure when the diagnostic says the input exceeds
-/// the model context window.
+/// Provider context-window wording recovers the actual closed task prefix.
+/// Its current task stays exact, and provider retry waits for storage adoption.
 #[test]
 fn runtime_provider_context_window_error_compacts_context_and_retries() {
-    let mut service = test_runtime_service();
-    service
-        .replace_config_layers(vec![ConfigLayer {
-            name: "provider-context-window-recovery".to_string(),
-            path: None,
-            format: ConfigFormat::Toml,
-            scope: ConfigScope::Primary,
-            trusted: true,
-            text: r#"[agents]
-default_provider = "runtime-batch"
-default_model_profile = "provider-context-window-test"
-[providers.runtime-batch]
-kind = "openai"
-models = ["test"]
-default_model = "test"
-[model_profiles.provider-context-window-test]
-provider = "runtime-batch"
-model = "test"
-context_window_tokens = 40000
-"#
-            .to_string(),
-        }])
-        .unwrap();
-    let primary = service
-        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
-        .unwrap();
-    service
-        .agent_shell_store_mut()
-        .enter_or_resume("%1")
-        .unwrap();
-
-    let start = service.dispatch_runtime_control_body(
-        r#"{"jsonrpc":"2.0","id":"agent-prompt","method":"agent/shell/command","params":{"idempotency_key":"agent-context-window-recovery","input":"continue with the large observation"}}"#,
-        &primary,
+    let (mut service, _store, turn) = crate::test_support::compaction_source::recovery_source(
+        test_runtime_service(),
+        temp_root("provider-context-window-recovery"),
+        &format!("ORIGINAL_CONTEXT_WINDOW_SOURCE {}", "cw ".repeat(10_000)),
+        "ORIGINAL_CONTEXT_WINDOW_TAIL",
+        10,
     );
-    assert!(start.contains(r#""state":"running""#), "{start}");
-    let context = service.agent_turn_contexts_mut().get_mut("turn-1").unwrap();
-    insert_test_context_block(
-        context,
-        ContextBlock {
-            source: ContextSourceKind::ActionResult,
-            placement: mez_agent::ContextPlacement::ConversationAppend,
-            label: "synthetic provider-context-window action result".to_string(),
-            content: format!("provider-context-window- {}", "cw ".repeat(10_000)),
-        },
-    );
-    let before_context = service
-        .agent_turn_contexts()
-        .get("turn-1")
-        .unwrap()
-        .blocks()
-        .to_vec();
+    let before = service.agent_turn_contexts()[&turn].clone();
     let error = MezError::invalid_state(
         "Your input exceeds the context window of this model. Please adjust your input and try again.",
     );
-
     let transition = service
         .schedule_agent_provider_retry_transition(
             &AgentId::opaque("agent-%1").unwrap(),
-            "turn-1",
+            &turn,
             mez_agent::ProviderErrorRetryClass::ContextLimit,
             &error,
         )
         .unwrap()
         .expect("context-window recovery transition");
     assert!(transition.side_effects.iter().any(|effect| matches!(
-        effect,
-        RuntimeSideEffect::DispatchAgentCompaction { pane_id, .. } if pane_id == "%1"
+        effect, RuntimeSideEffect::DispatchAgentCompaction { pane_id, .. } if pane_id == "%1"
     )));
-    assert_eq!(
-        service
-            .agent_turn_contexts()
-            .get("turn-1")
-            .unwrap()
-            .blocks(),
-        before_context.as_slice()
-    );
-    assert!(!service.agent_provider_task_is_pending("turn-1"));
-
+    assert_eq!(service.agent_turn_contexts()[&turn], before);
+    assert!(!service.agent_provider_task_is_pending(&turn));
     complete_runtime_test_compaction(&mut service, "%1", "model-authored context-window summary");
-    let compacted_context = service
-        .agent_turn_contexts()
-        .get("turn-1")
-        .unwrap()
-        .blocks()
-        .iter()
-        .map(|block| block.content.as_str())
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert!(compacted_context.contains("model-authored context-window summary"));
-    assert!(service.agent_provider_task_is_pending("turn-1"));
-    let retry_notice = service
+    assert_eq!(service.agent_turn_contexts()[&turn], before);
+    assert!(!service.agent_provider_task_is_pending(&turn));
+    let completion =
+        crate::test_support::compaction_publication::execute_pending_publication(&mut service);
+    assert!(
+        service
+            .apply_replay_epoch_completion(completion)
+            .unwrap()
+            .applied
+    );
+    let compacted = &service.agent_turn_contexts()[&turn];
+    assert!(compacted.blocks().iter().any(|block| {
+        block.source == ContextSourceKind::CompactionPrefix
+            && block.content == "model-authored context-window summary"
+    }));
+    assert!(
+        compacted
+            .blocks()
+            .iter()
+            .any(|block| block.content.contains("ORIGINAL_CONTEXT_WINDOW_TAIL"))
+    );
+    assert!(
+        !compacted
+            .blocks()
+            .iter()
+            .any(|block| block.content.contains("ORIGINAL_CONTEXT_WINDOW_SOURCE"))
+    );
+    assert!(service.agent_provider_task_is_pending(&turn));
+    let notice = service
         .pane_screen("%1")
         .unwrap()
         .normal_content_lines()
         .join("\n");
-    let retry_notice_unwrapped = normalized_pane_log_text(&retry_notice);
     assert!(
-        retry_notice_unwrapped.contains(
+        normalized_pane_log_text(&notice).contains(
             "provider rejected context as too large; requesting model-backed context compaction"
         ),
-        "{retry_notice}"
+        "{notice}"
     );
 }
 

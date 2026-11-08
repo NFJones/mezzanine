@@ -123,7 +123,8 @@ pub enum TranscriptContextEvent {
         /// Exact model-visible block content.
         content: String,
     },
-    /// One exact cache-visible block from a completed execution group.
+    /// One exact cache-visible execution or historical user block. Historical
+    /// user data is always ungrouped and cannot admit a task or execution owner.
     ExecutionBlock {
         /// Original provider-neutral context provenance.
         source: ContextSourceKind,
@@ -293,7 +294,8 @@ impl TranscriptContextEvent {
 
     /// Builds one validated exact execution-block event.
     ///
-    /// Only execution-group source kinds are accepted. Labels and canonical
+    /// Execution/reference sources and ungrouped historical user data are
+    /// accepted. Labels and canonical
     /// content are bounded before durable storage so replay never has to
     /// rewrite bytes that previously entered cache-eligible context.
     pub fn execution_block(
@@ -328,7 +330,10 @@ impl TranscriptContextEvent {
     ) -> Option<Self> {
         let label = label.into();
         let content = content.into();
-        if !valid_execution_block(source, &label, &content) || ordinal == 0 {
+        if source == ContextSourceKind::TranscriptUser
+            || !valid_execution_block(source, &label, &content)
+            || ordinal == 0
+        {
             return None;
         }
         if provider_owner
@@ -643,7 +648,9 @@ impl TranscriptContextEvent {
                     None | Some(Value::Null) => None,
                     Some(value) => Some(provider_owner_from_json(value)?),
                 };
-                if provider_owner.is_some() && execution_group_id.is_none() {
+                if provider_owner.is_some() && execution_group_id.is_none()
+                    || source == ContextSourceKind::TranscriptUser && execution_group_id.is_some()
+                {
                     return None;
                 }
                 if let Some(owner) = provider_owner.as_ref()
@@ -819,6 +826,7 @@ fn execution_block_source_name(source: ContextSourceKind) -> &'static str {
     match source {
         ContextSourceKind::CommittedEvidence => "committed_evidence",
         ContextSourceKind::TranscriptAssistant => "transcript_assistant",
+        ContextSourceKind::TranscriptUser => "transcript_user",
         ContextSourceKind::TranscriptTool => "transcript_tool",
         ContextSourceKind::ActionResult => "action_result",
         ContextSourceKind::McpServerReference => "mcp_server_reference",
@@ -833,6 +841,7 @@ fn execution_block_source(source: &str) -> Option<ContextSourceKind> {
     match source {
         "committed_evidence" => Some(ContextSourceKind::CommittedEvidence),
         "transcript_assistant" => Some(ContextSourceKind::TranscriptAssistant),
+        "transcript_user" => Some(ContextSourceKind::TranscriptUser),
         "transcript_tool" => Some(ContextSourceKind::TranscriptTool),
         "action_result" => Some(ContextSourceKind::ActionResult),
         "mcp_server_reference" => Some(ContextSourceKind::McpServerReference),
@@ -1196,6 +1205,55 @@ mod tests {
             )
             .is_none()
         );
+    }
+
+    /// Historical user copies need an explicit source tag when genuine task
+    /// admissions share the same archive. Neither their source nor a valid hash
+    /// permits those literal bytes to acquire execution metadata.
+    #[test]
+    fn historical_user_block_round_trips_without_execution_rights() {
+        let event = TranscriptContextEvent::execution_block(
+            ContextSourceKind::TranscriptUser,
+            "original historical user",
+            "exact literal text",
+        )
+        .unwrap();
+        assert_eq!(
+            TranscriptContextEvent::from_transcript_content(&event.to_transcript_content()),
+            Some(event.clone())
+        );
+        let group = ContextExecutionGroupId::new("cannot-own-historical-user").unwrap();
+        assert!(
+            TranscriptContextEvent::execution_block_with_metadata(
+                ContextSourceKind::TranscriptUser,
+                "original historical user",
+                "exact literal text",
+                group.clone(),
+                1,
+                None,
+            )
+            .is_none()
+        );
+        let mut grouped = event.to_record_value();
+        grouped["execution_group_id"] = serde_json::json!(group.as_str());
+        grouped["ordinal"] = serde_json::json!(1);
+        grouped["projection_sha256"] = serde_json::json!(execution_block_sha256(
+            ContextSourceKind::TranscriptUser,
+            "original historical user",
+            "exact literal text",
+            Some(group.as_str()),
+            Some(1),
+            None,
+        ));
+        let encode = |value: Value| format!("{TRANSCRIPT_CONTEXT_EVENT_MARKER}{value}");
+        assert!(TranscriptContextEvent::from_transcript_content(&encode(grouped)).is_none());
+        let mut unknown = event.to_record_value();
+        unknown["source"] = serde_json::json!("user_instruction");
+        assert!(TranscriptContextEvent::from_transcript_content(&encode(unknown)).is_none());
+        let tampered = event
+            .to_transcript_content()
+            .replace("exact literal text", "changed literal text");
+        assert!(TranscriptContextEvent::from_transcript_content(&tampered).is_none());
     }
 
     /// A control-bearing shell observation must retain exact model-visible

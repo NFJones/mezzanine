@@ -58,7 +58,7 @@ use mez_agent::{
     ModelCatalogSelectionErrorKind, ModelCatalogSource, ModelInteractionKind, ModelMessage,
     ModelMessageRole, ModelRequest, ModelTokenUsage, ModelTokenUsageKey, ProviderApiCompatibility,
     ProviderCapabilities, ProviderModelCatalog, ProviderModelInfo, ProviderQuotaUsage,
-    append_mcp_context, normalize_model_catalog_values, resolve_provider_api,
+    normalize_model_catalog_values, resolve_provider_api,
 };
 
 mod activity;
@@ -111,9 +111,7 @@ use approval::{
 };
 #[cfg(test)]
 use compaction::{
-    runtime_compact_forced_retained_transcript_entries,
-    runtime_compact_retained_transcript_entries, runtime_compact_transcript_entries_for_summary,
-    runtime_model_compaction_request, runtime_model_compaction_summary_from_response,
+    runtime_model_compaction_request_for_blocks, runtime_model_compaction_summary_from_response,
 };
 pub(super) use model_catalog::RuntimeModelCatalog;
 use model_catalog::runtime_markdown_table;
@@ -131,8 +129,6 @@ use slash::{
 
 // Live terminal and agent shell command execution.
 
-/// Conservative per-entry overhead used when estimating transcript replay cost.
-const AGENT_COMPACT_TRANSCRIPT_ENTRY_CONTEXT_OVERHEAD_WORDS: usize = 16;
 /// Builds the provider-visible prompt for one `/loop` work iteration.
 fn runtime_agent_loop_work_prompt(state: &RuntimeAgentLoopState) -> String {
     let mut prompt = format!(
@@ -2438,12 +2434,10 @@ impl RuntimeSessionService {
 mod tests {
     use super::{
         AgentContext, BTreeMap, ContextBlock, ContextSourceKind, ModelInteractionKind,
-        ModelProfile, ModelResponse, RuntimeAgentLoopMode, RuntimeAgentLoopState, TranscriptEntry,
-        TranscriptRole, parse_agent_loop_args, runtime_agent_loop_work_prompt,
-        runtime_compact_forced_retained_transcript_entries,
-        runtime_compact_retained_transcript_entries,
-        runtime_compact_transcript_entries_for_summary, runtime_model_catalog_unavailable_reason,
-        runtime_model_compaction_request, runtime_model_compaction_summary_from_response,
+        ModelProfile, ModelResponse, RuntimeAgentLoopMode, RuntimeAgentLoopState,
+        parse_agent_loop_args, runtime_agent_loop_work_prompt,
+        runtime_model_catalog_unavailable_reason, runtime_model_compaction_request_for_blocks,
+        runtime_model_compaction_summary_from_response,
     };
     use mez_agent::{AgentAction, AllowedActionSet, MaapBatch};
 
@@ -2512,17 +2506,6 @@ mod tests {
             provider_options: BTreeMap::new(),
             safety_tier: None,
         };
-        let entries = vec![TranscriptEntry {
-            conversation_id: "as1".to_string(),
-            sequence: 1,
-            created_at_unix_seconds: 1,
-            role: TranscriptRole::User,
-            turn_id: "turn-1".to_string(),
-            agent_id: "agent-%1".to_string(),
-            pane_id: "%1".to_string(),
-            content: "Need a compact summary".to_string(),
-        }];
-
         let context = AgentContext::new(vec![ContextBlock {
             source: ContextSourceKind::UserInstruction,
             placement: mez_agent::ContextPlacement::ConversationAppend,
@@ -2531,13 +2514,11 @@ mod tests {
         }])
         .unwrap();
         let allowed_actions = AllowedActionSet::all_enabled();
-        let request = runtime_model_compaction_request(
+        let request = runtime_model_compaction_request_for_blocks(
             &profile,
             "%1",
             "as1",
-            1,
-            crate::runtime::commands::compaction::CompactionTranscriptSource::raw(&entries),
-            &context,
+            context.blocks(),
             allowed_actions.clone(),
         )
         .unwrap();
@@ -2551,261 +2532,6 @@ mod tests {
                 .any(|message| message.content.contains("Need a compact summary")),
             "{request:?}"
         );
-    }
-
-    /// Verifies the retained compaction tail is based on a percentage of model
-    /// context budget rather than a fixed entry count. This protects terse
-    /// follow-up prompts whose referenced list is recent in bytes but older
-    /// than the previous fixed eight-entry replay tail.
-    #[test]
-    fn runtime_compact_retained_transcript_entries_uses_context_budget_tail() {
-        let entries = runtime_compact_test_entries(12, 230);
-
-        let retained = runtime_compact_retained_transcript_entries(12, &entries, 20_000, 10);
-
-        assert_eq!(retained, 2);
-    }
-
-    /// A complete newest turn whose estimated replay tokens exactly exhaust
-    /// the optional tail budget is summarized rather than retained raw.
-    #[test]
-    fn runtime_compact_tail_excludes_equal_estimated_token_cost() {
-        let entries = runtime_compact_test_entries(1, 1);
-        let cost = super::compaction::runtime_compact_transcript_entry_context_words(&entries[0]);
-        assert_eq!(
-            runtime_compact_retained_transcript_entries(1, &entries, cost, 100),
-            0
-        );
-    }
-
-    /// Verifies the retained compaction tail percentage is configurable.
-    ///
-    /// Operators may need a larger exact recent suffix when their workflows rely
-    /// on terse follow-up references, so the helper must derive retention from
-    /// the configured percentage instead of a fixed built-in value.
-    #[test]
-    fn runtime_compact_retained_transcript_entries_honors_configured_tail_percent() {
-        let entries = runtime_compact_test_entries(12, 230);
-
-        let default_retained =
-            runtime_compact_retained_transcript_entries(12, &entries, 10_000, 10);
-        let larger_retained = runtime_compact_retained_transcript_entries(12, &entries, 10_000, 20);
-
-        assert!(larger_retained > default_retained);
-    }
-
-    /// Verifies forced compaction keeps normal retention when possible, but
-    /// shrinks an all-covering raw tail enough to leave summary input.
-    #[test]
-    fn runtime_compact_forced_retained_entries_leaves_summary_input() {
-        let entries = runtime_compact_test_entries(12, 230);
-
-        let retained = runtime_compact_forced_retained_transcript_entries(12, &entries, 20_000, 10);
-        let summarized = runtime_compact_transcript_entries_for_summary(12, &entries, retained);
-
-        assert_eq!(retained, 2);
-        assert_eq!(summarized.first().map(|entry| entry.sequence), Some(1));
-
-        let single_entry = runtime_compact_test_entries(1, 230);
-        let retained =
-            runtime_compact_forced_retained_transcript_entries(1, &single_entry, 20_000, 10);
-        let summarized = runtime_compact_transcript_entries_for_summary(1, &single_entry, retained);
-
-        assert_eq!(retained, 0);
-        assert_eq!(summarized.first().map(|entry| entry.sequence), Some(1));
-    }
-
-    /// Verifies compaction summarizes only the active transcript prefix outside
-    /// the retained raw tail. The retained suffix remains available verbatim to
-    /// later model turns and is not duplicated into the compacted summary input.
-    #[test]
-    fn runtime_compact_entries_for_summary_excludes_retained_tail() {
-        let entries = runtime_compact_test_entries(12, 230);
-
-        let retained = runtime_compact_retained_transcript_entries(12, &entries, 10_000, 10);
-        let summarized = runtime_compact_transcript_entries_for_summary(12, &entries, retained);
-
-        assert!(retained > 0, "{retained}");
-        assert!(retained < 12, "{retained}");
-        assert_eq!(summarized.first().map(|entry| entry.sequence), Some(1));
-        assert_eq!(
-            summarized.last().map(|entry| entry.sequence),
-            Some(12 - retained)
-        );
-    }
-
-    /// Verifies transcript compaction chooses only complete turn groups so
-    /// assistant output, provider-native events, and tool results cannot be
-    /// separated by the retained raw-tail boundary.
-    #[test]
-    fn runtime_compact_transcript_tail_preserves_complete_execution_groups() {
-        let roles = [
-            ("turn-1", TranscriptRole::User, "request one"),
-            ("turn-1", TranscriptRole::System, "native event one"),
-            ("turn-1", TranscriptRole::Assistant, "assistant one"),
-            ("turn-1", TranscriptRole::Tool, "result one"),
-            ("turn-2", TranscriptRole::User, "request two"),
-            ("turn-2", TranscriptRole::System, "native event two"),
-            ("turn-2", TranscriptRole::Assistant, "assistant two"),
-            ("turn-2", TranscriptRole::Tool, "result two"),
-        ];
-        let entries = roles
-            .into_iter()
-            .enumerate()
-            .map(|(index, (turn_id, role, content))| TranscriptEntry {
-                conversation_id: "compact-groups".to_string(),
-                sequence: u64::try_from(index).unwrap_or(0).saturating_add(1),
-                created_at_unix_seconds: 1,
-                role,
-                turn_id: turn_id.to_string(),
-                agent_id: "agent-%1".to_string(),
-                pane_id: "%1".to_string(),
-                content: content.to_string(),
-            })
-            .collect::<Vec<_>>();
-
-        let retained = runtime_compact_retained_transcript_entries(8, &entries, 1_000, 10);
-        let summarized = runtime_compact_transcript_entries_for_summary(8, &entries, retained);
-
-        assert_eq!(retained, 4);
-        assert_eq!(summarized, &entries[..4]);
-        assert_eq!(&entries[entries.len() - retained as usize..], &entries[4..]);
-    }
-
-    /// Verifies an oversized newest completed execution group is summarized
-    /// rather than bypassing the configured exact-tail budget.
-    #[test]
-    fn runtime_compact_retained_tail_does_not_exempt_oversized_newest_group() {
-        let entries = [
-            TranscriptEntry {
-                conversation_id: "oversized-newest-group".to_string(),
-                sequence: 1,
-                created_at_unix_seconds: 1,
-                role: TranscriptRole::User,
-                turn_id: "large-turn".to_string(),
-                agent_id: "agent-%1".to_string(),
-                pane_id: "%1".to_string(),
-                content: "oversized request ".repeat(20),
-            },
-            TranscriptEntry {
-                conversation_id: "oversized-newest-group".to_string(),
-                sequence: 2,
-                created_at_unix_seconds: 1,
-                role: TranscriptRole::Assistant,
-                turn_id: "large-turn".to_string(),
-                agent_id: "agent-%1".to_string(),
-                pane_id: "%1".to_string(),
-                content: "oversized response ".repeat(20),
-            },
-        ];
-
-        let retained = runtime_compact_retained_transcript_entries(2, &entries, 10, 10);
-        let summarized = runtime_compact_transcript_entries_for_summary(2, &entries, retained);
-
-        assert_eq!(retained, 0);
-        assert_eq!(summarized, &entries);
-    }
-
-    /// Verifies an incomplete durable turn remains entirely raw and cannot be
-    /// crossed by compaction even when a caller requests a smaller suffix.
-    #[test]
-    fn runtime_compact_transcript_summary_stops_before_open_execution_group() {
-        let mut entries = runtime_compact_test_entries(2, 8);
-        entries[0].turn_id = "closed-turn".to_string();
-        entries[0].role = TranscriptRole::Assistant;
-        entries[1].turn_id = "open-turn".to_string();
-        entries[1].role = TranscriptRole::User;
-
-        let summarized = runtime_compact_transcript_entries_for_summary(2, &entries, 0);
-        let forced = runtime_compact_forced_retained_transcript_entries(2, &entries, 100, 10);
-
-        assert_eq!(summarized, &entries[..1]);
-        assert_eq!(forced, 1);
-    }
-
-    /// Verifies the durable MCP epoch and its replacement catalog are compacted
-    /// as one control group so a later compaction cannot be blocked by its own
-    /// authorization-reset boundary.
-    #[test]
-    fn runtime_compact_transcript_summary_accepts_mcp_epoch_control_group() {
-        let entries = [
-            TranscriptEntry {
-                conversation_id: "compact-epoch".to_string(),
-                sequence: 1,
-                created_at_unix_seconds: 1,
-                role: TranscriptRole::System,
-                turn_id: "compact-epoch-1".to_string(),
-                agent_id: "agent-%1".to_string(),
-                pane_id: "%1".to_string(),
-                content: mez_agent::TranscriptContextEvent::McpCompactionEpoch
-                    .to_transcript_content(),
-            },
-            TranscriptEntry {
-                conversation_id: "compact-epoch".to_string(),
-                sequence: 2,
-                created_at_unix_seconds: 1,
-                role: TranscriptRole::System,
-                turn_id: "compact-epoch-1".to_string(),
-                agent_id: "agent-%1".to_string(),
-                pane_id: "%1".to_string(),
-                content: mez_agent::TranscriptContextEvent::mcp_catalog_snapshot(
-                    "available_servers=0 available_tools=0 unavailable_servers=0",
-                    2,
-                )
-                .unwrap()
-                .to_transcript_content(),
-            },
-            TranscriptEntry {
-                conversation_id: "compact-epoch".to_string(),
-                sequence: 3,
-                created_at_unix_seconds: 1,
-                role: TranscriptRole::System,
-                turn_id: "compact-epoch-1".to_string(),
-                agent_id: "agent-%1".to_string(),
-                pane_id: "%1".to_string(),
-                content: mez_agent::TranscriptContextEvent::prompt_boundary(
-                    ContextSourceKind::Configuration,
-                    "MCP compaction re-retrieval guidance",
-                    "Retrieve the server again with mcp_server_get.",
-                )
-                .unwrap()
-                .to_transcript_content(),
-            },
-            TranscriptEntry {
-                conversation_id: "compact-epoch".to_string(),
-                sequence: 4,
-                created_at_unix_seconds: 1,
-                role: TranscriptRole::Assistant,
-                turn_id: "turn-2".to_string(),
-                agent_id: "agent-%1".to_string(),
-                pane_id: "%1".to_string(),
-                content: "assistant response after compaction".to_string(),
-            },
-        ];
-
-        let summarized = runtime_compact_transcript_entries_for_summary(4, &entries, 0);
-
-        assert_eq!(summarized, entries);
-    }
-
-    /// Builds deterministic transcript entries for compaction helper tests.
-    ///
-    /// # Parameters
-    /// - `count`: The number of entries to build.
-    /// - `content_words`: The content words stored in each entry.
-    fn runtime_compact_test_entries(count: u64, content_words: usize) -> Vec<TranscriptEntry> {
-        (1..=count)
-            .map(|sequence| TranscriptEntry {
-                conversation_id: "compact-test".to_string(),
-                sequence,
-                created_at_unix_seconds: sequence,
-                role: TranscriptRole::Assistant,
-                turn_id: format!("turn-{sequence}"),
-                agent_id: "agent-%1".to_string(),
-                pane_id: "%1".to_string(),
-                content: "context-word ".repeat(content_words),
-            })
-            .collect()
     }
 
     /// Verifies `/loop` work prompts remain identical across iterations so the

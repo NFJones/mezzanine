@@ -17,6 +17,7 @@
 use super::*;
 use std::fmt;
 
+mod evidence;
 mod messages;
 mod original;
 mod replay;

@@ -17,37 +17,8 @@
 //! making it transferable to a bounded worker. It alone does not claim that
 //! manual command preparation has become asynchronous or visibly admitted.
 
-use super::{Result, TranscriptEntry};
+use super::Result;
 use crate::storage::transcript::AgentTranscriptStore;
-
-impl super::RuntimeAgentCompactionTask {
-    /// Uses only the logical operation's original captured publication store.
-    /// Missing storage is retained absence, never permission to sample a later
-    /// installation during response correction or persistence retry.
-    pub(in crate::runtime) fn source_store(&self) -> Option<AgentTranscriptStore> {
-        self.source_owner
-            .as_ref()
-            .and_then(|owner| owner.store.clone())
-    }
-}
-
-impl super::RuntimeSessionService {
-    /// Resolves pending rows through existing exact-target receipt ownership.
-    /// Later accepted original-path rows remain visible after installation
-    /// changes; equal-CID rows owned by a replacement path cannot enter it.
-    pub(in crate::runtime) fn compaction_pending_entries(
-        &self,
-        task: &super::RuntimeAgentCompactionTask,
-    ) -> Result<crate::runtime::persistence::RuntimePendingTranscriptContext> {
-        let Some(store) = task.source_store() else {
-            return Ok(Default::default());
-        };
-        self.persistence.pending_transcript_context_at_path(
-            &store.transcript_path(&task.conversation_id)?,
-            &task.conversation_id,
-        )
-    }
-}
 
 /// Actor-captured store and conversation, never a live service reference.
 #[derive(Debug, Clone)]
@@ -75,25 +46,34 @@ impl ManualCompactionSourceWork {
     ) -> Result<crate::runtime::RuntimeAgentTranscriptSnapshot> {
         history.execute_source_snapshot(self.store.as_ref(), &self.conversation_id, high_water)
     }
-
-    /// Decodes the captured durable archive without accessing actor state.
-    /// Missing archive/store returns no source, while malformed or inaccessible
-    /// source propagates its existing typed error and is never silently skipped.
-    pub(super) fn execute(self) -> Result<Vec<TranscriptEntry>> {
-        let Some(store) = self.store else {
-            return Ok(Vec::new());
-        };
-        match store.inspect(&self.conversation_id) {
-            Ok(entries) => Ok(entries),
-            Err(error) if error.kind() == crate::error::MezErrorKind::NotFound => Ok(Vec::new()),
-            Err(error) => Err(error),
-        }
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mez_agent::TranscriptEntry;
+
+    /// Captures the same paired source/history used by manual preparation. It
+    /// performs no source I/O until the caller executes the actual snapshot.
+    fn history(
+        store: Option<AgentTranscriptStore>,
+        conversation: &str,
+        frontier: u64,
+    ) -> crate::runtime::control::RuntimeAgentPromptHistoryWork {
+        let mut service = crate::test_support::runtime::RuntimeServiceFixture::new().build();
+        if let Some(store) = store {
+            service.set_agent_transcript_store(store);
+        }
+        service
+            .agent_shell_store_mut()
+            .enter_or_resume("%1")
+            .unwrap();
+        service
+            .agent_shell_store_mut()
+            .bind_conversation("%1", conversation, frontier)
+            .unwrap();
+        service.prepare_runtime_agent_prompt_history_work("%1")
+    }
 
     /// Capturing source ownership performs no archive decode. A malformed file
     /// encountered later must remain an error, not become a successful empty
@@ -109,8 +89,9 @@ mod tests {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, b"not-a-transcript-record\n").unwrap();
         let direct = store.inspect("source-corrupt").unwrap_err();
+        let history = history(Some(store.clone()), "source-corrupt", 1);
         let captured = ManualCompactionSourceWork::capture(Some(store), "source-corrupt".into());
-        let error = captured.execute().unwrap_err();
+        let error = captured.execute_with_history(history, 1).unwrap_err();
         assert_eq!(error.kind(), direct.kind());
         assert_eq!(error.message(), direct.message());
         assert_eq!(std::fs::read(&path).unwrap(), b"not-a-transcript-record\n");
@@ -138,20 +119,41 @@ mod tests {
             content: "exact source".into(),
         };
         store.append(&entry).unwrap();
+        let original_history = history(Some(store.clone()), &entry.conversation_id, 1);
         let captured =
             ManualCompactionSourceWork::capture(Some(store), entry.conversation_id.clone());
         let replacement = AgentTranscriptStore::new(root.join("replacement"));
+        // A different source cannot borrow the original history capture, even
+        // if its conversation ID matches. A genuinely empty capture is separate.
+        assert!(
+            ManualCompactionSourceWork::capture(
+                Some(replacement.clone()),
+                entry.conversation_id.clone()
+            )
+            .execute_with_history(original_history.clone(), 1)
+            .is_err()
+        );
+        let empty = history(Some(replacement.clone()), &entry.conversation_id, 0);
         assert!(
             ManualCompactionSourceWork::capture(Some(replacement), entry.conversation_id.clone())
-                .execute()
+                .execute_with_history(empty, 0)
                 .unwrap()
+                .rows
                 .is_empty()
         );
-        assert_eq!(captured.execute().unwrap(), vec![entry]);
+        assert_eq!(
+            captured
+                .execute_with_history(original_history, 1)
+                .unwrap()
+                .rows,
+            vec![entry]
+        );
+        let absent = history(None, "source-original", 0);
         assert!(
             ManualCompactionSourceWork::capture(None, "source-original".into())
-                .execute()
+                .execute_with_history(absent, 0)
                 .unwrap()
+                .rows
                 .is_empty()
         );
         std::fs::remove_dir_all(root).unwrap();

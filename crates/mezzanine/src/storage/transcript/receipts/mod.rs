@@ -18,6 +18,9 @@
 //! planned root with its backing. Their original owner repairs interrupted
 //! publication before normal cold replay; missing required authority refuses
 //! the affected conversation rather than selecting partial raw-only history.
+//! Selective initial admission is retired, while original journals keep their
+//! codec and ownership. Recovery may settle an already complete historical
+//! promise; incomplete incompatible projection stays retained without replay.
 
 use std::fs::{self, OpenOptions};
 use std::io::Write;
@@ -746,6 +749,7 @@ impl AgentTranscriptStore {
         batch: &TranscriptAppendBatch,
         generation: u64,
     ) -> Result<()> {
+        initial_projection::require_supported_initial_projection(batch.initial_compaction_epoch())?;
         let receipt = AppendReceipt::from_batch(batch, generation)?;
         let _lock = self.acquire_conversation_lock(&receipt.conversation_id)?;
         self.accept_prepared_transcript_receipt_locked(batch, &receipt, &_lock)
@@ -758,6 +762,19 @@ impl AgentTranscriptStore {
         batch: &TranscriptAppendBatch,
         receipt: &AppendReceipt,
         lease: &fs::File,
+    ) -> Result<()> {
+        initial_projection::require_supported_initial_projection(batch.initial_compaction_epoch())?;
+        self.retain_prepared_transcript_receipt_locked(batch, receipt, lease)?;
+        self.reconcile_initial_projection_locked(batch, lease)
+    }
+
+    /// Retains only the original immutable intent under its caller's lease.
+    /// Journal durability alone grants no initial-projection readiness or ACK.
+    fn retain_prepared_transcript_receipt_locked(
+        &self,
+        batch: &TranscriptAppendBatch,
+        receipt: &AppendReceipt,
+        _lease: &fs::File,
     ) -> Result<()> {
         let entries = batch.entries();
         self.ensure_custody_receipts_settled_locked(&receipt.conversation_id)?;
@@ -826,7 +843,6 @@ impl AgentTranscriptStore {
                     set_private_file_permissions(&directory.join(existing.filename()))?;
                     fs::File::open(&directory)?.sync_all()?;
                     fs::File::open(&self.root)?.sync_all()?;
-                    self.reconcile_initial_projection_locked(batch, lease)?;
                     return Ok(());
                 }
                 return Err(MezError::conflict("transcript receipt identity changed"));
@@ -878,8 +894,30 @@ impl AgentTranscriptStore {
         fs::rename(&temporary, &path)?;
         fs::File::open(&directory)?.sync_all()?;
         fs::File::open(&self.root)?.sync_all()?;
-        self.reconcile_initial_projection_locked(batch, lease)?;
         Ok(())
+    }
+
+    /// Seeds a genuine historical selective intent through the original journal
+    /// encoder/owner for migration tests. It never publishes, settles or grants
+    /// actor readiness, and is unavailable to product callers.
+    #[cfg(test)]
+    pub(crate) fn retain_legacy_initial_receipt_fixture(
+        &self,
+        batch: &TranscriptAppendBatch,
+        generation: u64,
+    ) -> Result<()> {
+        if initial_projection::require_supported_initial_projection(
+            batch.initial_compaction_epoch(),
+        )
+        .is_ok()
+        {
+            return Err(MezError::invalid_args(
+                "historical receipt fixture requires selective state",
+            ));
+        }
+        let receipt = AppendReceipt::from_batch(batch, generation)?;
+        let lease = self.acquire_conversation_lock(&receipt.conversation_id)?;
+        self.retain_prepared_transcript_receipt_locked(batch, &receipt, &lease)
     }
 
     /// Returns exact pending rows in chronological order for recovery tests.
@@ -971,6 +1009,16 @@ impl AgentTranscriptStore {
         });
         for (receipt, _) in receipts {
             let batch = receipt.batch()?;
+            if initial_projection::require_supported_initial_projection(
+                batch.initial_compaction_epoch(),
+            )
+            .is_err()
+            {
+                // Full-snapshot preflight and settlement both require the exact
+                // original complete old publication; never republish its format.
+                self.settle_transcript_append_receipt(&batch, receipt.generation)?;
+                continue;
+            }
             if batch.row_accounting().is_some() {
                 self.commit_accounted_transcript_batch(&batch, receipt.generation)?;
                 continue;

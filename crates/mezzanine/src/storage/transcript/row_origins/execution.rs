@@ -50,6 +50,40 @@ impl IndexedExecutionSource {
 }
 
 impl AgentTranscriptStore {
+    /// Content edits may revise an existing descriptor's full-row fingerprint,
+    /// never its producer/group/ordinal or the existence of execution evidence.
+    pub(super) fn revise_execution_image_in_transaction(
+        &self,
+        transaction: &Transaction<'_>,
+        edit: &super::ContentRowRevision,
+    ) -> Result<()> {
+        let Some(source) = revised_execution_image(transaction, edit)? else {
+            return Ok(());
+        };
+        let encoded = serde_json::to_string(&source)
+            .map_err(|_| invalid("content edit execution encoding failed"))?;
+        transaction.execute(
+            "UPDATE execution_sources SET payload=?1, sha256=?2 WHERE origin=?3",
+            params![
+                encoded,
+                descriptor_digest(&encoded),
+                String::from(edit.origin)
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Preparation checks descriptive source before staging any replacement;
+    /// recovery calls the same validation before its transactional update.
+    pub(super) fn validate_execution_content_revision(
+        &self,
+        connection: &rusqlite::Connection,
+        edit: &super::ContentRowRevision,
+    ) -> Result<()> {
+        revised_execution_image(connection, edit)?;
+        Ok(())
+    }
+
     /// Adds original execution descriptors in the same transaction that has
     /// just published these exact rows' placement, costs and full fingerprints.
     /// Legacy images acquire no guessed descriptor during ordinary lookup.
@@ -209,6 +243,44 @@ impl AgentTranscriptStore {
 
 fn invalid(reason: &str) -> MezError {
     MezError::invalid_state(format!("transcript execution source: {reason}"))
+}
+
+fn revised_execution_image(
+    connection: &rusqlite::Connection,
+    edit: &super::ContentRowRevision,
+) -> Result<Option<IndexedExecutionSource>> {
+    let version: u32 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+    if version < 5 {
+        return Ok(None);
+    }
+    let previous: Option<(String, String, String)> = connection
+        .query_row(
+            "SELECT sequence, payload, sha256 FROM execution_sources WHERE origin=?1",
+            [String::from(edit.origin)],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .optional()?;
+    let Some((sequence, encoded, digest)) = previous else {
+        return Ok(None);
+    };
+    if descriptor_digest(&encoded) != digest || sequence != edit.sequence.to_string() {
+        return Err(invalid(
+            "content edit original execution descriptor changed",
+        ));
+    }
+    let mut source: IndexedExecutionSource = serde_json::from_str(&encoded)
+        .map_err(|_| invalid("invalid content edit execution descriptor"))?;
+    source.validate()?;
+    let after = edit
+        .after()
+        .ok_or_else(|| invalid("execution edit lost original row image"))?;
+    if Some(&source.image) != edit.before.as_ref() && source.image != after {
+        return Err(invalid(
+            "content edit execution image conflicts with original",
+        ));
+    }
+    source.image = after;
+    Ok(Some(source))
 }
 
 fn descriptor_digest(encoded: &str) -> String {

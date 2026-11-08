@@ -1,4 +1,4 @@
-//! Fixed-allowance convergence through real actor leases and canonical OpenAI
+//! Compaction convergence through real actor leases and canonical OpenAI
 //! Responses HTTP construction. All traffic and synthetic auth are local to
 //! this fixture; no user configuration, credentials or live provider is used.
 
@@ -19,8 +19,8 @@ enum RetryPath {
 }
 
 /// An ordinary context rejection must freeze auxiliary work, reject oversized
-/// completed output, accept a summary above halved guidance but within ORIGINAL
-/// authority, pass full fit and dispatch exactly one ordinary continuation.
+/// byte-bound output, accept a summary above halved guidance, pass the complete
+/// request fit and dispatch exactly one ordinary continuation after publication.
 /// Every captured canonical OpenAI body omits max_output_tokens, with and
 /// without an internal allocation and in streaming and nonstreaming modes.
 #[tokio::test(flavor = "current_thread")]
@@ -130,69 +130,72 @@ async fn qualify(manual: bool, streaming: bool, allocation: bool, retry: RetryPa
         .unwrap()
         .session_id
         .clone();
-    for sequence in 1..=3 {
-        // One immutable execution group disables whole-group walkback for the
-        // split fixture, so a real rejection must traverse chunks/synthesis.
-        let group = mez_agent::ContextExecutionGroupId::new(if retry == RetryPath::ContextSplit {
-            "canonical-source-single-group".to_string()
-        } else {
-            format!("canonical-source-{sequence}")
-        })
-        .unwrap();
-        store
-            .append(&mez_agent::transcript::TranscriptEntry {
-                conversation_id: conversation.clone(),
-                sequence,
-                created_at_unix_seconds: sequence,
-                role: if manual {
-                    mez_agent::transcript::TranscriptRole::Assistant
-                } else {
-                    mez_agent::transcript::TranscriptRole::System
-                },
-                turn_id: format!("old-{sequence}"),
-                agent_id: "agent-%1".into(),
-                pane_id: "%1".into(),
-                content: if manual {
-                    format!(
-                        "CANONICAL_FROZEN_SOURCE_{sequence} {}",
-                        "evidence ".repeat(1000)
-                    )
-                } else {
-                    mez_agent::TranscriptContextEvent::execution_block_with_metadata(
-                        mez_agent::ContextSourceKind::TranscriptAssistant,
-                        "closed evidence",
-                        format!(
-                            "CANONICAL_FROZEN_SOURCE_{sequence} {}",
-                            "evidence ".repeat(8000)
-                        ),
-                        group,
-                        sequence,
-                        None,
-                    )
-                    .unwrap()
-                    .to_transcript_content()
-                },
+    let mut exact_manual_root = None;
+    let turn = if manual {
+        let original = (1..=3)
+            .map(|sequence| {
+                format!(
+                    "CANONICAL_FROZEN_SOURCE_{sequence} {}",
+                    "evidence ".repeat(1000),
+                )
             })
-            .unwrap();
-    }
-    let archived = store.inspect(&conversation).unwrap();
-    service
-        .agent_shell_store_mut()
-        .bind_conversation("%1", &conversation, 3)
-        .unwrap();
-    if !manual {
-        service
-            .execute_agent_shell_command(&primary, "continue with frozen evidence")
-            .unwrap();
-    }
-    let initial_effect = if manual {
+            .collect::<Vec<_>>()
+            .join("\n");
+        let current = crate::test_support::compaction_source::complete_task_and_admit_successor(
+            &mut service,
+            &primary,
+            &original,
+            "original manual source task completed",
+            "preserve this exact manual task",
+            mez_agent::ProviderApiCompatibility::OpenAiResponses,
+        );
+        exact_manual_root = Some(
+            service.agent_turn_contexts()[&current]
+                .chronology()
+                .iter()
+                .rev()
+                .find(|event| event.block().source == mez_agent::ContextSourceKind::UserInstruction)
+                .unwrap()
+                .clone(),
+        );
+        crate::test_support::compaction_source::complete_task(
+            &mut service,
+            &current,
+            "current manual task completed",
+            mez_agent::ProviderApiCompatibility::OpenAiResponses,
+        );
         None
     } else {
-        Some(RuntimeSideEffect::DispatchAgentProvider {
-            agent_id: AgentId::opaque("agent-%1").unwrap(),
-            turn_id: "turn-1".into(),
-        })
+        // One original instruction is an indivisible canonical source unit.
+        // A provider context rejection must use private chunks and synthesis,
+        // without inventing execution closure for old unaccounted wire rows.
+        let original = (1..=3)
+            .map(|sequence| {
+                format!(
+                    "CANONICAL_FROZEN_SOURCE_{sequence} {}",
+                    "evidence ".repeat(8000),
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        Some(
+            crate::test_support::compaction_source::complete_task_and_admit_successor(
+                &mut service,
+                &primary,
+                &original,
+                "original source task completed",
+                "continue with frozen evidence",
+                mez_agent::ProviderApiCompatibility::OpenAiResponses,
+            ),
+        )
     };
+    let archived = store.inspect(&conversation).unwrap();
+    let initial_effect = turn
+        .as_ref()
+        .map(|turn| RuntimeSideEffect::DispatchAgentProvider {
+            agent_id: AgentId::opaque("agent-%1").unwrap(),
+            turn_id: turn.clone(),
+        });
     let started = StdArc::new(tokio::sync::Notify::new());
     let release = StdArc::new(tokio::sync::Notify::new());
     let published = StdArc::new(tokio::sync::Notify::new());
@@ -245,11 +248,9 @@ async fn qualify(manual: bool, streaming: bool, allocation: bool, retry: RetryPa
             .take(200)
             .collect::<String>()
             .contains("estimated input tokens (approximately");
-        let invalid = if token_mode {
-            "abcd".repeat(budget + 1)
-        } else {
-            "INVALID ".repeat(budget + 1)
-        };
+        // Advisory word/token targets alone cannot reject canonical output.
+        // This definite block-byte violation exercises actual private repair.
+        let invalid = "界".repeat(128 * 1024 / 3 + 1);
         requests.push(body);
         respond(&mut socket, &invalid, streaming).await;
         let corrected = if !token_mode {
@@ -272,7 +273,7 @@ async fn qualify(manual: bool, streaming: bool, allocation: bool, retry: RetryPa
         let (mut socket, _) = listener.accept().await.unwrap();
         let body = read_body(&mut socket, streaming).await;
         assert!(body.to_string().contains("[private summary correction]"));
-        assert!(!body.to_string().contains("INVALID INVALID"));
+        assert!(!body.to_string().contains(&invalid));
         phase.store(3, Ordering::SeqCst);
         requests.push(body);
         started.notify_one();
@@ -295,7 +296,7 @@ async fn qualify(manual: bool, streaming: bool, allocation: bool, retry: RetryPa
                 if retry == RetryPath::ContextSplit && next.contains("conversation compactor") {
                     extra_summaries += 1;
                     assert!(extra_summaries <= 8, "finite frozen chunk/synthesis work");
-                    assert!(!next.contains("INVALID INVALID"));
+                    assert!(!next.contains(&invalid));
                     requests.push(body);
                     final_summary = "CANONICAL_ACCEPTED_SYNTHESIS".into();
                     respond(&mut socket, &final_summary, streaming).await;
@@ -385,6 +386,12 @@ async fn qualify(manual: bool, streaming: bool, allocation: bool, retry: RetryPa
         }
         assert!(store.compaction_epoch(&conversation).unwrap().is_none());
         assert!(
+            store
+                .load_replay_epoch(&conversation, mez_agent::AgentContext::empty())
+                .unwrap()
+                .is_none()
+        );
+        assert!(
             handle
                 .pending_agent_provider_tasks()
                 .await
@@ -393,6 +400,17 @@ async fn qualify(manual: bool, streaming: bool, allocation: bool, retry: RetryPa
         );
         release.notify_one();
         loop {
+            run_async_persistence_side_effect_service(
+                &handle,
+                AsyncRuntimeSideEffectServiceConfig {
+                    max_polls: 4,
+                    drain_limit: 64,
+                    idle_interval: Duration::from_millis(1),
+                },
+                |_, _| false,
+            )
+            .await
+            .unwrap();
             let view = handle
                 .render_client_view(
                     ClientViewRole::Primary,
@@ -404,7 +422,7 @@ async fn qualify(manual: bool, streaming: bool, allocation: bool, retry: RetryPa
                 .unwrap();
             if view.lines.iter().any(|line| {
                 line.contains(if manual {
-                    "compacted conversation summary"
+                    "canonical compaction head accepted"
                 } else {
                     "ordinary canonical continuation completed"
                 })
@@ -457,12 +475,19 @@ async fn qualify(manual: bool, streaming: bool, allocation: bool, retry: RetryPa
     let cutoff = u64::from(retry == RetryPath::OutputLimit);
     assert_eq!(input, report.executions * 100 + cutoff * 10);
     assert_eq!(output, report.executions * 10 + cutoff);
-    let epoch = store.compaction_epoch(&conversation).unwrap().unwrap();
-    if manual {
-        assert!(epoch.summary.contains(&corrected));
-    } else {
-        assert_eq!(epoch.ranges.len(), 1);
-        assert_eq!(epoch.ranges[0].summary, corrected);
+    let (_, cold) = AgentTranscriptStore::new(store.root())
+        .load_replay_epoch(&conversation, mez_agent::AgentContext::empty())
+        .unwrap()
+        .unwrap();
+    assert_eq!(cold.context().chronology()[0].block().content, corrected);
+    if let Some(exact) = exact_manual_root {
+        assert_eq!(
+            cold.context()
+                .chronology()
+                .iter()
+                .find(|event| event.record().occurrence_id() == exact.record().occurrence_id()),
+            Some(&exact)
+        );
     }
     assert_eq!(
         &store.inspect(&conversation).unwrap()[..archived.len()],
@@ -472,7 +497,7 @@ async fn qualify(manual: bool, streaming: bool, allocation: bool, retry: RetryPa
         assert_eq!(
             exit.service
                 .agent_turn_ledger()
-                .turn("turn-1")
+                .turn(turn.as_deref().unwrap())
                 .unwrap()
                 .state,
             mez_agent::AgentTurnState::Completed

@@ -63,21 +63,18 @@ fn selective_epoch_rejects_content_only_edit_before_any_persisted_change() {
         .collect::<Vec<_>>();
     store.append_many(&rows).unwrap();
     store
-        .save_compaction_ranges_with_proof(
-            super::super::AgentCompactionEpoch {
-                summary_records: None,
-                version: 2,
-                conversation_id: "selective-edit".to_string(),
-                through_sequence: 0,
-                summary: String::new(),
-                ranges: vec![super::super::AgentCompactionRange {
-                    first_sequence: 2,
-                    through_sequence: 4,
-                    summary: "original group summary".to_string(),
-                }],
-            },
-            &rows,
-        )
+        .install_legacy_compaction_fixture(super::super::AgentCompactionEpoch {
+            summary_records: None,
+            version: 2,
+            conversation_id: "selective-edit".to_string(),
+            through_sequence: 0,
+            summary: String::new(),
+            ranges: vec![super::super::AgentCompactionRange {
+                first_sequence: 2,
+                through_sequence: 4,
+                summary: "original group summary".to_string(),
+            }],
+        })
         .unwrap();
     let before = persisted_bytes(&root);
     let result = store.compare_and_swap_entry_content(
@@ -112,38 +109,30 @@ fn publish_disjoint_epoch(store: &AgentTranscriptStore, prefix: u64) -> Vec<Tran
         })
         .collect::<Vec<_>>();
     store.append_many(&rows).unwrap();
-    let selected = rows
-        .iter()
-        .filter(|row| matches!(row.sequence, 2..=4 | 6..=8))
-        .cloned()
-        .collect::<Vec<_>>();
     store
-        .save_compaction_ranges_with_proof(
-            super::super::AgentCompactionEpoch {
-                summary_records: None,
-                version: 2,
-                conversation_id: "selective-edit".to_string(),
-                through_sequence: prefix,
-                summary: if prefix == 0 {
-                    String::new()
-                } else {
-                    "prefix summary".to_string()
-                },
-                ranges: vec![
-                    super::super::AgentCompactionRange {
-                        first_sequence: 2,
-                        through_sequence: 4,
-                        summary: "first summary".to_string(),
-                    },
-                    super::super::AgentCompactionRange {
-                        first_sequence: 6,
-                        through_sequence: 8,
-                        summary: "second summary".to_string(),
-                    },
-                ],
+        .install_legacy_compaction_fixture(super::super::AgentCompactionEpoch {
+            summary_records: None,
+            version: 2,
+            conversation_id: "selective-edit".to_string(),
+            through_sequence: prefix,
+            summary: if prefix == 0 {
+                String::new()
+            } else {
+                "prefix summary".to_string()
             },
-            &selected,
-        )
+            ranges: vec![
+                super::super::AgentCompactionRange {
+                    first_sequence: 2,
+                    through_sequence: 4,
+                    summary: "first summary".to_string(),
+                },
+                super::super::AgentCompactionRange {
+                    first_sequence: 6,
+                    through_sequence: 8,
+                    summary: "second summary".to_string(),
+                },
+            ],
+        })
         .unwrap();
     rows
 }

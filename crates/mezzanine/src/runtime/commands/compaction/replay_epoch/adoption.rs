@@ -14,7 +14,22 @@ impl RuntimeSessionService {
             .replay_source
             .as_ref()
             .ok_or_else(|| MezError::invalid_state("canonical compaction source missing"))?;
-        source.validate_live(self, &task.pane_id, task.task_generation)
+        source.validate_live(self, &task.pane_id, task.task_generation)?;
+        let accepted = self
+            .retained_agent_compaction_task(&task.pane_id, task.task_generation)
+            .ok_or_else(|| MezError::conflict("canonical compaction task is no longer retained"))?;
+        if !task
+            .source_owner
+            .as_ref()
+            .is_some_and(|owner| Arc::ptr_eq(owner, &source.original))
+            || task.model_profile != accepted.model_profile
+            || task.model_profile_name != accepted.model_profile_name
+        {
+            return Err(MezError::conflict(
+                "canonical compaction source/model changed from accepted task",
+            ));
+        }
+        Ok(())
     }
 
     /// Retains the provider claim until the physical write and actual adoption.
@@ -182,6 +197,47 @@ impl RuntimeSessionService {
                 .transpose()?;
             let before_rewrite = work.source().ephemeral.then(|| body.clone());
             completion.adopt(&mut body)?;
+            if let Some(position) = completion.position() {
+                let conversation = work.source().owner.conversation_id().as_str();
+                let store = work.source().original.store.as_ref().ok_or_else(|| {
+                    MezError::invalid_state("publication position lost its original store")
+                })?;
+                // Position counts original rows, including zero-model or legacy
+                // pending owners. It grants none of their semantic authority.
+                let pending = self.persistence.pending_transcript_entries_at_path(
+                    &store.transcript_path(conversation)?,
+                    conversation,
+                )?;
+                let logical_high_water = position
+                    .logical_high_water
+                    .max(pending.last().map_or(0, |row| row.sequence))
+                    .max(
+                        self.agent_shell_store()
+                            .get(&pane)
+                            .map_or(0, |session| session.transcript_high_water),
+                    );
+                let cut = completion
+                    .history()
+                    .ok_or_else(|| {
+                        MezError::invalid_state(
+                            "durable publication position has no original snapshot",
+                        )
+                    })?
+                    .covered_archive_frontier();
+                self.agent_shell_store_mut().restore_transcript_position(
+                    &pane,
+                    mez_agent::AgentTranscriptPosition {
+                        logical_high_water,
+                        active_raw_entries: logical_high_water.checked_sub(cut).ok_or_else(
+                            || {
+                                MezError::invalid_state(
+                                    "publication cut exceeds logical transcript position",
+                                )
+                            },
+                        )?,
+                    },
+                )?;
+            }
             // Session/native identities survive; provider cache routing starts
             // a distinct epoch only after actual receipt acceptance.
             let mut metadata = body.metadata().clone();

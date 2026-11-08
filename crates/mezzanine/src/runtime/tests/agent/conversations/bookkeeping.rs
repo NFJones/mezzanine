@@ -299,11 +299,14 @@ fn seed_compaction_prefix(
                 conversation_id: conversation.into(),
                 sequence,
                 created_at_unix_seconds: sequence,
-                role: TranscriptRole::Assistant,
+                role: TranscriptRole::User,
                 turn_id: format!("prefix-{sequence}"),
                 agent_id: "agent-%1".into(),
                 pane_id: "%1".into(),
-                content: format!("completed prefix {sequence}"),
+                content: format!(
+                    "literal historical prefix {sequence} {}",
+                    "source ".repeat(5_000)
+                ),
             })
             .unwrap();
     }

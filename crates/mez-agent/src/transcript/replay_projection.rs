@@ -32,16 +32,25 @@ pub fn transcript_display_copy_indices(
         else {
             continue;
         };
-        if execution_group_id
+        let qualified = execution_group_id
             .as_ref()
-            .is_some_and(|group| groups.contains(group) && seen.insert(group))
+            .is_some_and(|group| groups.contains(group));
+        if qualified
+            && execution_group_id
+                .as_ref()
+                .is_some_and(|group| seen.insert(group))
         {
             let start = previous.get(&origin(row)).map_or(0, |last| last + 1);
             copies.extend(
                 (start..index).filter(|candidate| origin(&rows[*candidate]) == origin(row)),
             );
+            previous.insert(origin(row), index);
+        } else if !qualified {
+            // Unqualified source remains a boundary. A late member of an
+            // already qualified group does not: its result may follow the next
+            // response's display rows, whose own first typed row is still ahead.
+            previous.insert(origin(row), index);
         }
-        previous.insert(origin(row), index);
     }
     copies
 }
@@ -104,6 +113,70 @@ fn origin(row: &TranscriptEntry) -> (&str, &str, &str, &str) {
 mod tests {
     use super::*;
     use crate::ContextSourceKind;
+
+    /// Incremental persistence can place an old group's late result between a
+    /// newer response's display rows and its first canonical row. Those display
+    /// copies must not allocate extra occurrences ahead of the original source.
+    #[test]
+    fn late_group_member_keeps_the_next_response_display_boundary() {
+        let first = ContextExecutionGroupId::new("first").unwrap();
+        let next = ContextExecutionGroupId::new("next").unwrap();
+        let event = |source, group: &ContextExecutionGroupId, ordinal| {
+            Some(
+                TranscriptContextEvent::execution_block_with_metadata(
+                    source,
+                    "canonical",
+                    "equal source",
+                    group.clone(),
+                    ordinal,
+                    None,
+                )
+                .unwrap(),
+            )
+        };
+        let rows = [
+            TranscriptRole::Assistant,
+            TranscriptRole::System,
+            TranscriptRole::Assistant,
+            TranscriptRole::Tool,
+            TranscriptRole::System,
+            TranscriptRole::System,
+            TranscriptRole::Tool,
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(index, role)| TranscriptEntry {
+            conversation_id: "conversation".into(),
+            sequence: index as u64 + 1,
+            created_at_unix_seconds: 1,
+            role,
+            turn_id: "turn".into(),
+            agent_id: "agent".into(),
+            pane_id: "pane".into(),
+            content: "equal source".into(),
+        })
+        .collect::<Vec<_>>();
+        let events = vec![
+            None,
+            event(ContextSourceKind::TranscriptAssistant, &first, 1),
+            None,
+            None,
+            event(ContextSourceKind::ActionResult, &first, 2),
+            event(ContextSourceKind::TranscriptAssistant, &next, 1),
+            None,
+        ];
+        let groups = BTreeSet::from([first, next]);
+        assert_eq!(
+            transcript_zero_projection_indices(&rows, &events, &groups),
+            BTreeSet::from([0, 2, 3])
+        );
+        let mut foreign = rows;
+        foreign[2].pane_id = "other-pane".into();
+        assert_eq!(
+            transcript_zero_projection_indices(&foreign, &events, &groups),
+            BTreeSet::from([0, 3])
+        );
+    }
 
     /// Identical turn text cannot suppress a foreign producer's row, and input
     /// misalignment or an unqualified group yields no suppression proof.

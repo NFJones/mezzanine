@@ -2407,6 +2407,54 @@ impl RuntimeSessionService {
         };
 
         let mut resumed = continuation.context.clone();
+        if resumed.has_replay_owner() {
+            // A correcting user prompt explicitly supersedes the task. Keep
+            // the original prompt's bytes/record/framing instead of rewriting
+            // sealed history through the legacy archival adapter.
+            let suffix = fresh
+                .chronology()
+                .iter()
+                .filter(|event| event.sequence().get() > imported_history_sequence_high_water)
+                .collect::<Vec<_>>();
+            let prompt = suffix
+                .iter()
+                .position(|event| event.sequence() == prompt_sequence)
+                .ok_or_else(|| {
+                    MezError::invalid_state("continued prompt event identity unavailable")
+                })?;
+            if suffix.iter().any(|event| {
+                !matches!(
+                    event.semantic_kind(),
+                    mez_agent::ContextSemanticKind::TaskPrelude
+                        | mez_agent::ContextSemanticKind::ReferenceEvent
+                        | mez_agent::ContextSemanticKind::UserEvent
+                )
+            }) {
+                return Err(MezError::invalid_state(
+                    "fresh interrupted continuation contains unsupported task source",
+                ));
+            }
+            let start = resumed.chronology().len();
+            let records = suffix
+                .iter()
+                .enumerate()
+                .map(|(index, event)| (index, event.record()))
+                .collect::<Vec<_>>();
+            let blocks = suffix.iter().map(|event| event.block().clone()).collect();
+            resumed.update_replay_owner(|owner| {
+                owner.replace_stable_slots(fresh.stable_slots().to_vec())?;
+                owner.admit_instruction_task(blocks, &records, &[], prompt)
+            })?;
+            resumed.set_metadata(fresh.metadata().clone());
+            let remapped_prompt = resumed.chronology()[start + prompt].sequence();
+            resumed.validate_durable()?;
+            return Ok((
+                resumed,
+                true,
+                continuation.imported_history_sequence_high_water,
+                remapped_prompt,
+            ));
+        }
         resumed.archive_active_user_prompt()?;
         resumed.replace_stable_slots(fresh.stable_slots().to_vec())?;
         resumed.set_metadata(fresh.metadata().clone());
@@ -3614,6 +3662,21 @@ impl RuntimeSessionService {
         self.agent
             .claimed_agent_compaction_tasks
             .contains_key(&(pane_id.to_string(), task_generation))
+    }
+
+    /// Borrows the exact retained task during pending/backoff or claimed work.
+    /// Canonical source checks need this actual allocation, not only matching
+    /// generation/conversation counters. This creates no new task or authority.
+    pub(crate) fn retained_agent_compaction_task(
+        &self,
+        pane: &str,
+        generation: u64,
+    ) -> Option<&RuntimeAgentCompactionTask> {
+        self.agent
+            .pending_agent_compaction_tasks
+            .get(pane)
+            .filter(|task| task.task_generation == generation)
+            .or_else(|| self.claimed_agent_compaction_task(pane, generation))
     }
 
     pub(crate) fn claimed_agent_compaction_task(
@@ -5510,6 +5573,13 @@ impl RuntimeSessionService {
         self.agent
             .agent_conversation_provider_request_chains
             .contains_key(conversation_id)
+    }
+
+    /// Observes the consumed sample fence without changing admission state.
+    pub(crate) fn agent_turn_has_consumed_observed_input_for_tests(&self, turn_id: &str) -> bool {
+        self.agent
+            .agent_turn_observed_input_compaction_turns
+            .contains(turn_id)
     }
 
     /// Returns loop-owned turn metadata for integration-test observation.

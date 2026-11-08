@@ -296,14 +296,13 @@ fn runtime_fork_inheritance_zero_raw_tail_keeps_summary_and_empty_archive() {
     service.terminate_all_pane_processes().unwrap();
 }
 
-/// Child selective ranges shift over its own contiguous raw archive and retain
-/// source ordering without resending covered text. Repeated context reads leave
-/// parent authority and child projection unchanged.
+/// The actual subagent entry point cannot rebase incompatible historical ranges
+/// into a new child. Refusal leaves parent records, raw bytes and pane count intact.
 #[test]
 fn runtime_fork_inheritance_rebases_selective_ranges_without_parent_mutation() {
     let (mut service, store, primary) = resumed_source(5, 1);
     store
-        .save_compaction_ranges(
+        .install_legacy_compaction_ranges_fixture(
             CONVERSATION,
             1,
             "FROZEN_PREFIX",
@@ -322,53 +321,24 @@ fn runtime_fork_inheritance_rebases_selective_ranges_without_parent_mutation() {
         )
         .unwrap();
     let parent = store.compaction_epoch(CONVERSATION).unwrap();
-    let (pane, cid, _) = spawn_child(&mut service, &primary, true);
-    let child = store.compaction_epoch(&cid).unwrap().unwrap();
-    assert_eq!(child.through_sequence, 0);
-    assert_eq!(
-        child
-            .ranges
-            .iter()
-            .map(|r| (r.first_sequence, r.through_sequence))
-            .collect::<Vec<_>>(),
-        [(1, 2), (3, 4)]
+    let raw = store.inspect(CONVERSATION).unwrap();
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    let before = service.session().windows()[0].panes().len();
+    let result = service.spawn_runtime_subagent(
+        &primary,
+        fork_request(true),
+        RuntimeSubagentPlacement::NewPane {
+            direction: SplitDirection::Vertical,
+            select: true,
+        },
     );
-    assert_eq!(
-        store
-            .inspect(&cid)
-            .unwrap()
-            .iter()
-            .map(|r| r.sequence)
-            .collect::<Vec<_>>(),
-        [1, 2, 3, 4]
-    );
-    for _ in 0..2 {
-        let context = service
-            .agent_context_for_pane_prompt(&pane, "continue", 0)
-            .unwrap();
-        let projected = context
-            .blocks()
-            .iter()
-            .filter(|block| {
-                ["FROZEN_PREFIX", "FIRST_SELECTIVE", "SECOND_SELECTIVE"]
-                    .contains(&block.content.as_str())
-            })
-            .map(|block| block.content.as_str())
-            .collect::<Vec<_>>();
-        assert_eq!(
-            projected,
-            ["FROZEN_PREFIX", "FIRST_SELECTIVE", "SECOND_SELECTIVE"]
-        );
-        assert!(
-            !context
-                .blocks()
-                .iter()
-                .any(|block| block.content.contains("raw source"))
-        );
-    }
-    assert_eq!(store.compaction_epoch(CONVERSATION).unwrap(), parent);
-    assert_eq!(store.compaction_epoch(&cid).unwrap(), Some(child));
+    let after = service.session().windows()[0].panes().len();
     service.terminate_all_pane_processes().unwrap();
+    let error = result.unwrap_err();
+    assert!(error.to_string().contains("normalization"), "{error}");
+    assert_eq!(after, before);
+    assert_eq!(store.compaction_epoch(CONVERSATION).unwrap(), parent);
+    assert_eq!(store.inspect(CONVERSATION).unwrap(), raw);
 }
 
 /// The first non-skipped child turn receives captured summary authority before
@@ -476,9 +446,9 @@ fn runtime_fork_inheritance_first_context_waits_for_exact_initial_publication() 
     service.terminate_all_pane_processes().unwrap();
 }
 
-/// A committed but unpublished terminal witness is projected without changing
-/// parent bytes. The child owns its accepted range summary and an inert audit
-/// copy, so reopening never replays a source witness against renumbered rows.
+/// An unpublished historical terminal witness cannot create a selective child
+/// projection after the single-head cutover. Refusal preserves its audit bytes,
+/// original authority and live parent, without allocating a partial child.
 #[test]
 fn runtime_fork_inheritance_projects_terminal_witness_without_replaying_it() {
     let (mut service, store, primary) = resumed_source(5, 1);
@@ -502,40 +472,30 @@ fn runtime_fork_inheritance_projects_terminal_witness_without_replaying_it() {
         .record_transcript_append("%1", std::slice::from_ref(&audit))
         .unwrap();
     let before = fs::read(store.transcript_path(CONVERSATION).unwrap()).unwrap();
-    let (pane, cid, _) = spawn_child(&mut service, &primary, true);
+    service.start_initial_pane_process(Some("cat")).unwrap();
+    let panes = service.session().windows()[0].panes().len();
+    let sessions = service.agent_shell_store().sessions().count();
+    let result = service.spawn_runtime_subagent(
+        &primary,
+        fork_request(true),
+        RuntimeSubagentPlacement::NewPane {
+            direction: SplitDirection::Vertical,
+            select: true,
+        },
+    );
+    let error = result.unwrap_err();
+    assert!(
+        error.message().contains("single-head normalization"),
+        "{error}"
+    );
+    assert_eq!(service.session().windows()[0].panes().len(), panes);
+    assert_eq!(service.agent_shell_store().sessions().count(), sessions);
+    assert!(store.pending_append_receipts().unwrap().is_empty());
     assert_eq!(store.compaction_epoch(CONVERSATION).unwrap(), baseline);
     assert_eq!(
         fs::read(store.transcript_path(CONVERSATION).unwrap()).unwrap(),
         before
     );
-    let child_rows = store.inspect(&cid).unwrap();
-    assert!(
-        child_rows
-            .last()
-            .unwrap()
-            .content
-            .starts_with(crate::storage::transcript::compaction_handoff::INHERITED_MARKER)
-    );
-    for _ in 0..2 {
-        let context = service
-            .agent_context_for_pane_prompt(&pane, "continue", 0)
-            .unwrap();
-        assert_eq!(
-            context
-                .blocks()
-                .iter()
-                .filter(|block| block.content == "TERMINAL_ACCEPTED_SUMMARY")
-                .count(),
-            1
-        );
-        assert!(
-            !context
-                .blocks()
-                .iter()
-                .any(|block| block.content.contains("raw source 2")
-                    || block.content.contains("raw source 3"))
-        );
-    }
     service.terminate_all_pane_processes().unwrap();
 }
 
@@ -662,16 +622,15 @@ fn runtime_fork_inheritance_ephemeral_zero_source_keeps_captured_summary() {
     let (mut service, store, primary) = resumed_source(5, 5);
     let (pane, cid, _) = spawn_child(&mut service, &primary, true);
     let ephemeral = "ephemeral-zero-child";
+    // An idle legacy copy has not yet normalized its prefix. The actual cold
+    // history path performs that deterministic transition without a model call.
     service
-        .agent_shell_store_mut()
-        .bind_ephemeral_conversation_with_lineage_and_transcript_source(
-            &pane,
-            ephemeral,
-            0,
-            None,
-            Some(cid.clone()),
-            0,
-        )
+        .agent_context_for_pane_prompt(&pane, "inspect saved head", 0)
+        .unwrap();
+    let frozen = service.freeze_agent_replay_history(&pane).unwrap().unwrap();
+    let original = frozen.history().replay_owner().unwrap().unwrap();
+    service
+        .bind_ephemeral_replay_history(&pane, ephemeral, &frozen, None)
         .unwrap();
     let mut late = row(1);
     late.conversation_id = cid.clone();
@@ -683,7 +642,9 @@ fn runtime_fork_inheritance_ephemeral_zero_source_keeps_captured_summary() {
         store.append(source).unwrap();
     }
     let witness = crate::storage::transcript::compaction_handoff::TerminalCompactionHandoff {
-        baseline: store.compaction_epoch(&cid).unwrap(),
+        // A historical certificate appended after capture must neither select
+        // another head nor force a read of this later incompatible authority.
+        baseline: None,
         replacements: vec![
             crate::storage::transcript::compaction_handoff::TerminalCompactionReplacement {
                 summary_record: None,
@@ -707,12 +668,20 @@ fn runtime_fork_inheritance_ephemeral_zero_source_keeps_captured_summary() {
     let captured = work.execute().unwrap();
     assert_eq!(captured.source_high_water, 0);
     assert!(captured.entries.is_empty());
-    let captured_epoch = captured.compaction_epoch.unwrap();
-    assert_eq!(captured_epoch.summary, "FROZEN_PREFIX");
-    assert!(captured_epoch.ranges.is_empty());
+    assert!(captured.compaction_epoch.is_none());
     let context = service
         .agent_context_for_pane_prompt(&pane, "continue", 0)
         .unwrap();
+    let owner = mez_agent::ReplayEpochContext::from_owned_context(
+        mez_agent::ReplayConversationId::new(ephemeral).unwrap(),
+        context.clone(),
+    )
+    .unwrap();
+    assert_eq!(owner.revision(), original.revision());
+    assert_eq!(
+        owner.head().unwrap().occurrence_id(),
+        original.head().unwrap().occurrence_id()
+    );
     assert_eq!(
         context
             .blocks()

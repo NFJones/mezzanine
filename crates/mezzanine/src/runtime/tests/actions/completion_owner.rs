@@ -1177,7 +1177,7 @@ impl CompletionFixture {
         .await
     }
 
-    /// Selects actual live replay ownership before provider/action admission.
+    /// Verifies actual live replay ownership before provider/action admission.
     /// This fixture keeps the same real claim, hook, publication and cleanup
     /// predecessors; it does not install completion flags or execute network I/O.
     async fn admit_prepared_with_replay(
@@ -1186,7 +1186,7 @@ impl CompletionFixture {
         root: CompletionRoot,
         final_turn: bool,
         replace_before_group: bool,
-        replay: bool,
+        native_replay: bool,
     ) -> Self {
         service
             .agent_shell_store_mut()
@@ -1205,19 +1205,17 @@ impl CompletionFixture {
             .turn(&started.turn_id)
             .unwrap()
             .clone();
-        if replay {
-            let context = service
-                .agent_turn_contexts_mut()
-                .remove(&turn.turn_id)
-                .unwrap();
-            let source = mez_agent::ReplayEpochContext::new(
+        if native_replay {
+            // Prompt admission already owns the original canonical source.
+            // Reconstructing an initial owner here would discard its task and
+            // incarnation witnesses before the completion fence is exercised.
+            let context = service.agent_turn_contexts().get(&turn.turn_id).unwrap();
+            assert!(context.has_replay_owner());
+            mez_agent::ReplayEpochContext::from_owned_context(
                 mez_agent::ReplayConversationId::new(&turn.conversation_id).unwrap(),
-                context,
+                context.clone(),
             )
             .unwrap();
-            service
-                .agent_turn_contexts_mut()
-                .insert(turn.turn_id.clone(), source.into_owned_context());
         }
         if replace_before_group {
             service.set_agent_transcript_store(AgentTranscriptStore::new(
@@ -1265,7 +1263,7 @@ impl CompletionFixture {
             final_turn,
             terminal_state: AgentTurnState::Running,
         };
-        if replay {
+        if native_replay {
             let owner = mez_agent::ProviderContinuityOwner::new(
                 mez_agent::ProviderApiCompatibility::OpenAiChatCompletions,
                 "runtime-batch",

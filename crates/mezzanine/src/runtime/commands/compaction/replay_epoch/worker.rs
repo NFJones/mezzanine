@@ -217,7 +217,9 @@ impl RuntimeReplayEpochAttempt {
                                 .original
                                 .history
                                 .as_ref()
-                                .filter(|original| original.replay.is_none())
+                                .filter(|original| {
+                                    original.replay.is_none() && original.raw.is_none()
+                                })
                                 .map(|original| {
                                     original.raw_replay_rows(&work.0.publication_source)
                                 })
@@ -225,6 +227,13 @@ impl RuntimeReplayEpochAttempt {
                                 .unwrap_or_default();
                             let capture = if history.is_some() {
                                 source.origin.clone().capture(history)
+                            } else if let Some(raw) = source
+                                .original
+                                .history
+                                .as_ref()
+                                .and_then(|history| history.raw.as_deref())
+                            {
+                                source.origin.clone().capture_legacy_raw(raw)
                             } else {
                                 source.origin.clone().capture_raw(&raw_rows)
                             };
@@ -303,6 +312,14 @@ impl RuntimeReplayEpochCompletion {
     ) -> Option<&Arc<crate::storage::transcript::replay_epoch::ReplayEpochSnapshot>> {
         match self.result.as_ref() {
             Ok(Published::Durable { history, .. }) => Some(history),
+            _ => None,
+        }
+    }
+    /// Physical audit position from the original leased writer, not a model
+    /// member count or an acknowledgment of ordinary queued transcript rows.
+    pub(super) fn position(&self) -> Option<mez_agent::AgentTranscriptPosition> {
+        match self.result.as_ref() {
+            Ok(Published::Durable { ack, .. }) => Some(ack.position()),
             _ => None,
         }
     }

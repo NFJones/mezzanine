@@ -169,7 +169,10 @@ async fn actor_native_receive_persists_before_ack_and_releases_original_provider
         .position(|row| {
             matches!(
                 TranscriptContextEvent::from_transcript_content(&row.content),
-                Some(TranscriptContextEvent::UserEvent { .. })
+                Some(
+                    TranscriptContextEvent::TaskAdmission { .. }
+                        | TranscriptContextEvent::UserEvent { .. }
+                )
             )
         })
         .expect("the actual user request must already be canonical before ACK");

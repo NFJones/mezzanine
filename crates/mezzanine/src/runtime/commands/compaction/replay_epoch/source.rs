@@ -39,19 +39,18 @@ struct ManualSource {
     transcript_entries: u64,
     transcript_high_water: u64,
     profile_name: String,
-    store: Option<crate::storage::transcript::AgentTranscriptStore>,
     frozen: Option<crate::runtime::control::RuntimeFrozenReplayHistory>,
 }
 
 pub(in crate::runtime::commands::compaction) enum Preparation {
-    Unowned,
-    NoWork,
+    NoWork(super::super::NoWorkReason),
     Ready(Arc<RuntimeCompactionReplaySource>),
 }
 
 impl RuntimeSessionService {
-    /// Freezes the actual prefix before rendering provider input. Unowned legacy
-    /// contexts remain with their existing producer until explicit migration.
+    /// Freezes the actual prefix before rendering provider input. A descriptive
+    /// legacy body cannot authorize another model producer: the original history
+    /// importer or task admission must establish its canonical owner first.
     pub(in crate::runtime::commands::compaction) fn prepare_active_replay_compaction(
         &self,
         turn: &mez_agent::AgentTurnRecord,
@@ -64,7 +63,9 @@ impl RuntimeSessionService {
             ));
         };
         if !context.has_replay_owner() {
-            return Ok(Preparation::Unowned);
+            return Err(MezError::invalid_state(
+                "active compaction history lacks its canonical source owner",
+            ));
         }
         if self
             .agent_shell_store()
@@ -90,7 +91,11 @@ impl RuntimeSessionService {
             .map_err(|_| MezError::invalid_state("invalid canonical raw retention percentage"))?;
         let plan = match owner.prepare_compaction(ReplayTailPolicy::new(budget, retained)?)? {
             ReplayCompactionPreparation::Ready(plan) => plan,
-            ReplayCompactionPreparation::NoWork(_) => return Ok(Preparation::NoWork),
+            ReplayCompactionPreparation::NoWork(_) => {
+                return Ok(Preparation::NoWork(
+                    super::super::NoWorkReason::NoEligibleClosedPrefix,
+                ));
+            }
         };
         let history = self.agent_turn_history_source(&turn.turn_id).cloned();
         let original = Arc::new(crate::runtime::agent_state::RuntimeCompactionSourceOwner {
@@ -146,9 +151,23 @@ impl RuntimeSessionService {
             })?;
         let retained = u8::try_from(self.agent_compaction_raw_retention_percent())
             .map_err(|_| MezError::invalid_state("invalid canonical raw retention percentage"))?;
-        let plan = match owner.prepare_compaction(ReplayTailPolicy::new(budget, retained)?)? {
+        let policy = ReplayTailPolicy::new(budget, retained)?;
+        let plan = match owner.prepare_compaction(policy)? {
             ReplayCompactionPreparation::Ready(plan) => plan,
-            ReplayCompactionPreparation::NoWork(_) => return Ok(Preparation::NoWork),
+            ReplayCompactionPreparation::NoWork(_) => {
+                // With no selectable prefix all raw source must remain. Use
+                // the same cached cost view and reservation as the planner;
+                // this diagnostic cannot relax protection or create model work.
+                let estimates = owner
+                    .provider_input_estimates()
+                    .unwrap_or(owner.input_estimates());
+                let reason = if estimates.raw_input_tokens() > policy.retained_raw_tokens() {
+                    super::super::NoWorkReason::IrreducibleExactTail
+                } else {
+                    super::super::NoWorkReason::NoEligibleClosedPrefix
+                };
+                return Ok(Preparation::NoWork(reason));
+            }
         };
         let store = history.as_ref().map_or_else(
             || self.persistence.transcript_store().cloned(),
@@ -171,7 +190,6 @@ impl RuntimeSessionService {
                     transcript_entries: session.transcript_entries,
                     transcript_high_water: session.transcript_high_water,
                     profile_name: profile_name.to_owned(),
-                    store: self.persistence.transcript_store().cloned(),
                     frozen: session
                         .ephemeral
                         .then(|| self.frozen_replay_binding(pane, &session.session_id))
@@ -270,6 +288,22 @@ impl RuntimeCompactionReplaySource {
                 "canonical compaction actor owner became stale",
             ));
         }
+        let accepted = service
+            .retained_agent_compaction_task(pane, generation)
+            .ok_or_else(|| MezError::conflict("canonical compaction task is no longer retained"))?;
+        if !accepted
+            .replay_source
+            .as_deref()
+            .is_some_and(|source| std::ptr::eq(source, self))
+            || !accepted
+                .source_owner
+                .as_ref()
+                .is_some_and(|owner| Arc::ptr_eq(owner, &self.original))
+        {
+            return Err(MezError::conflict(
+                "canonical compaction source is not the accepted task source",
+            ));
+        }
         match &self.target {
             SourceTarget::Turn { turn, .. } => {
                 if service.agent_turn_model_profile(turn) != self.model_profile.as_ref()
@@ -301,9 +335,12 @@ impl RuntimeCompactionReplaySource {
                     .ok_or_else(|| MezError::conflict("manual replay binding disappeared"))?;
                 let (name, profile) =
                     service.active_model_profile_for_pane(pane, &format!("agent-{pane}"), None)?;
+                // Request admission already checked the installed source. An
+                // accepted logical operation keeps its original store through
+                // correction and publication; a later installation cannot
+                // retarget or invalidate that original physical ownership.
                 if session.transcript_entries != original.transcript_entries
                     || session.transcript_high_water != original.transcript_high_water
-                    || service.persistence.transcript_store() != original.store.as_ref()
                     || session
                         .ephemeral
                         .then(|| service.frozen_replay_binding(pane, &session.session_id))

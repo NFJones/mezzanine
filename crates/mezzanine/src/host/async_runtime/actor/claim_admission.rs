@@ -676,24 +676,25 @@ mod tests {
             .service
             .provider_refusal_test_facts(&turn.turn_id, &group);
         let loop_fault = source == HandoffSource::FreshLoop && fault.is_some();
-        let duplicate_after_claim = if fault == Some("task_consumer") || loop_fault {
-            let duplicate = actor.service.fail_configured_agent_provider_task(
-                &turn.turn_id,
-                &MezError::invalid_state("duplicate refusal must not replace primary"),
-            );
-            let after_duplicate = actor
-                .service
-                .original_completion_source_for_tests(&turn.turn_id, &group);
-            let phases = actor
-                .service
-                .provider_refusal_test_facts(&turn.turn_id, &group);
-            let loop_facts = actor
-                .service
-                .provider_loop_restore_facts_for_tests(&turn.turn_id, &group);
-            Some((duplicate, after_duplicate, phases, loop_facts))
-        } else {
-            None
-        };
+        let duplicate_after_claim =
+            if fault == Some("task_consumer") || source == HandoffSource::FreshLoop {
+                let duplicate = actor.service.fail_configured_agent_provider_task(
+                    &turn.turn_id,
+                    &MezError::invalid_state("duplicate refusal must not replace primary"),
+                );
+                let after_duplicate = actor
+                    .service
+                    .original_completion_source_for_tests(&turn.turn_id, &group);
+                let phases = actor
+                    .service
+                    .provider_refusal_test_facts(&turn.turn_id, &group);
+                let loop_facts = actor
+                    .service
+                    .provider_loop_restore_facts_for_tests(&turn.turn_id, &group);
+                Some((duplicate, after_duplicate, phases, loop_facts))
+            } else {
+                None
+            };
 
         // The acceptance control attempts another REAL preparation request,
         // after freezing first-claim facts. It does not fabricate a second claim.
@@ -908,6 +909,14 @@ mod tests {
                     shell.running_turn_id.is_none(),
                     "normal finish must clear the old turn, never a manual clear"
                 );
+                let (_, _, after_phases, after_loop) = duplicate_after_claim.as_ref().unwrap();
+                assert_eq!(after_loop.as_ref().unwrap().bind_attempts, 1);
+                let before = phases_after_claim.as_ref().unwrap();
+                let after = after_phases.as_ref().unwrap();
+                assert_eq!(after.consumer_entries, before.consumer_entries);
+                assert!(
+                    after.task_accepted && after.scheduler_accepted && after.settlement_terminal
+                );
                 let (allowed, name) = parent_metadata_before_claim.as_ref().unwrap();
                 assert!(
                     shell.allowed_actions.as_ref() == Some(allowed),
@@ -1013,64 +1022,52 @@ mod tests {
     /// not leave a compacting marker or a waiting ordinary turn behind.
     #[tokio::test]
     async fn compaction_transport_retry_admission_settles_on_queue_pressure() {
-        let mut actor = claimed_provider_actor();
-        let profile = actor
-            .service
-            .agent_turn_model_profile("turn-1")
-            .unwrap()
-            .clone();
-        let request = mez_agent::session_title::session_title_request(
-            &profile,
-            "agent-%1",
-            &mez_agent::session_title::SessionTitleGenerationInputs {
-                objective: Some("frozen source"),
-                ..Default::default()
-            },
-            mez_agent::AllowedActionSet::say_only(),
+        let root = HandoffFixtureRoot(std::env::temp_dir().join(format!(
+            "mez-compaction-retry-admission-{}",
+            crate::storage::token_usage::new_token_usage_event_id()
+        )));
+        let (mut service, _, turn) = crate::test_support::compaction_source::recovery_source(
+            RuntimeServiceFixture::new().build(),
+            root.0.clone(),
+            &"original source ".repeat(5_000),
+            "original completed answer",
+            10,
         );
-        actor
-            .service
-            .queue_agent_compaction_task(crate::runtime::RuntimeAgentCompactionTask {
-                source_owner: None,
-                replay_source: None,
-                summary_proposal: None,
-                frozen_compaction_epoch: None,
-                task_generation: 0,
-                compaction_epoch: 0,
-                transport_retry_attempts: 0,
-                transport_retry_delay_ms: None,
-                summary_correction: Default::default(),
-                pane_id: "%1".into(),
-                conversation_id: actor
-                    .service
-                    .agent_shell_store()
-                    .get("%1")
-                    .unwrap()
-                    .session_id
-                    .clone(),
-                accounting_origin: crate::storage::token_usage::AccountingOrigin::Unattributed,
-                source: "provider-context-limit".into(),
-                transcript_entries: 0,
-                compacted_through_sequence: None,
-                frozen_compaction_rows: Vec::new(),
-                retained_transcript_entries: 0,
-                summarized_entries: 1,
-                model_profile_name: "default".into(),
-                model_profile: profile,
-                request,
-                preserve_summary_output_budget: true,
-                manual_retry_source: None,
-                manual_final_retry: None,
-                candidate_context: None,
-                resume_turn_id: Some("turn-1".into()),
-                target: crate::runtime::RuntimeAgentCompactionTarget::Conversation,
-                conversation_chunks: None,
-                compaction_request_shape: None,
-            });
+        let context = &service.agent_turn_contexts()[&turn];
+        let plan = mez_agent::plan_model_context_compaction_for_provider_tokens(
+            context,
+            40_000,
+            1,
+            context.event_sequence_high_water_mark(),
+            mez_agent::ProviderBudgetProjection::new(
+                mez_agent::ProviderApiCompatibility::OpenAiResponses,
+                "runtime-batch",
+            ),
+        )
+        .unwrap();
+        let profile = service.agent_turn_model_profile(&turn).unwrap().clone();
+        assert!(
+            service
+                .queue_agent_active_turn_compaction(
+                    &turn,
+                    "provider-context-limit-test".into(),
+                    profile,
+                    crate::runtime::RuntimeActiveTurnCompactionTrigger::ObservedInputLimit {
+                        observed_input_tokens: 40_000,
+                        max_input_tokens: 40_000,
+                    },
+                    plan,
+                )
+                .unwrap()
+        );
+        let mut actor = AsyncRuntimeSessionActor::new(service, AsyncRuntimeActorConfig::default())
+            .unwrap()
+            .1;
         let task = actor
             .service
             .take_pending_agent_compaction_task("%1")
             .unwrap();
+        assert!(task.replay_source.is_some());
         let generation = task.task_generation;
         actor.service.claim_agent_compaction_task_state("%1", task);
         let transition = actor
@@ -1119,12 +1116,7 @@ mod tests {
                 .is_none()
         );
         assert_eq!(
-            actor
-                .service
-                .agent_turn_ledger()
-                .turn("turn-1")
-                .unwrap()
-                .state,
+            actor.service.agent_turn_ledger().turn(&turn).unwrap().state,
             mez_agent::AgentTurnState::Failed
         );
         assert!(actor.timers.compaction_retry.is_empty());

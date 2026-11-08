@@ -31,6 +31,7 @@ pub struct CompactionSummaryRecords {
 }
 
 /// A producer's exact rendered summary and original occurrence/cost record.
+#[cfg(test)]
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct CompactionSummary<'a> {
     /// Exact prefix framing or selective body being proposed.

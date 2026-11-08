@@ -1,183 +1,105 @@
-//! Immutable manual compactor request rendering after actor-owned context capture.
+//! Immutable manual request rendering from the canonical source owner.
 //!
-//! This worker uses the existing redaction, request and output-budget helpers.
-//! It neither resolves current policy nor calls a provider; the actor supplies
-//! the exact eligible source, model/context/action snapshot and accounting origin.
-//! The original source-preparation owner retains capacity and logical identity
-//! until actual construction and actor adoption finish. No execution queue or
-//! durability boundary competes with the established compactor lifecycle.
+//! Actor admission selects one frozen prefix and captures policy, model and
+//! expense origin. This worker only renders that selection; it cannot fall back
+//! to row counts, infer execution closure or produce an old-format task.
 
 use super::*;
+use std::sync::Arc;
 
-/// Owned request inputs for the existing manual compaction task, not authority.
+/// Original canonical source and request inputs for one manual operation.
 #[derive(Debug, Clone)]
 pub(crate) struct RuntimeManualCompactionRequestWork {
-    /// Original generation, epoch and finite source-preparation permit.
+    /// Original generation and finite source-preparation permit.
     pub(crate) owner: RuntimeManualCompactionPreparation,
     profile_name: String,
     profile: ModelProfile,
-    context: AgentContext,
-    mcp_summary: mez_agent::McpPromptSummary,
+    source: Arc<RuntimeCompactionReplaySource>,
     allowed_actions: AllowedActionSet,
-    entries: Vec<TranscriptEntry>,
-    /// Whole summary replacements selected with these physical source rows.
-    ranges: Vec<crate::storage::transcript::AgentCompactionRange>,
-    /// Even an empty selected range list excludes later cached summaries.
-    selective_history: bool,
-    /// Full source authority, including later ranges used by planning budgets.
-    source_epoch: Option<crate::storage::transcript::AgentCompactionEpoch>,
-    retained_entries: u64,
     origin: crate::storage::token_usage::AccountingOrigin,
-    /// Canonical source selected before rendering; legacy rows cannot replace it.
-    replay_source: Option<std::sync::Arc<RuntimeCompactionReplaySource>>,
     /// Independent request-rendering barrier, absent from production work.
     #[cfg(test)]
     pub(crate) probe: Option<(
-        std::sync::Arc<tokio::sync::Notify>,
-        std::sync::Arc<tokio::sync::Notify>,
-        std::sync::Arc<tokio::sync::Notify>,
+        Arc<tokio::sync::Notify>,
+        Arc<tokio::sync::Notify>,
+        Arc<tokio::sync::Notify>,
     )>,
 }
 
 impl RuntimeManualCompactionRequestWork {
-    /// Captures immutable eligible source and live policy projection. This does
-    /// not render provider input or acquire any new execution authority.
-    #[allow(
-        clippy::too_many_arguments,
-        reason = "exact owner, model, context, source and accounting inputs are independent"
-    )]
+    /// Captures already selected source and current model/action policy. The
+    /// required source retains its own history/store; no alternate producer or
+    /// physical-row selection can replace it during request construction.
     pub(in crate::runtime::commands::compaction) fn capture(
         owner: RuntimeManualCompactionPreparation,
         profile_name: String,
         profile: ModelProfile,
-        context: AgentContext,
-        mcp_summary: mez_agent::McpPromptSummary,
+        source: Arc<RuntimeCompactionReplaySource>,
         allowed_actions: AllowedActionSet,
-        entries: Vec<TranscriptEntry>,
-        ranges: Vec<crate::storage::transcript::AgentCompactionRange>,
-        selective_history: bool,
-        source_epoch: Option<crate::storage::transcript::AgentCompactionEpoch>,
-        retained_entries: u64,
         origin: crate::storage::token_usage::AccountingOrigin,
     ) -> Self {
         Self {
             owner,
             profile_name,
             profile,
-            context,
-            mcp_summary,
+            source,
             allowed_actions,
-            entries,
-            ranges,
-            selective_history,
-            source_epoch,
-            retained_entries,
             origin,
-            replay_source: None,
             #[cfg(test)]
             probe: None,
         }
     }
 
-    /// Selects original canonical input before the existing rendering phase.
-    /// Neither legacy rows nor the temporary request prompt enter that source.
-    pub(in crate::runtime::commands::compaction) fn with_replay_source(
-        mut self,
-        source: std::sync::Arc<RuntimeCompactionReplaySource>,
-    ) -> Self {
-        self.replay_source = Some(source);
-        self
-    }
-
-    /// Adds an explicit fixture gate while leaving immutable product inputs
-    /// and generation/capacity ownership untouched.
+    /// Adds a fixture gate without changing immutable inputs or ownership.
     #[cfg(test)]
     pub(crate) fn with_probe(
         mut self,
         probe: Option<(
-            std::sync::Arc<tokio::sync::Notify>,
-            std::sync::Arc<tokio::sync::Notify>,
-            std::sync::Arc<tokio::sync::Notify>,
+            Arc<tokio::sync::Notify>,
+            Arc<tokio::sync::Notify>,
+            Arc<tokio::sync::Notify>,
         )>,
     ) -> Self {
         self.probe = probe;
         self
     }
 
-    /// Builds exactly the existing manual task using frozen inputs. No actor
-    /// lookup, I/O, provider call or publication occurs. Existing request errors
-    /// propagate and the caller must validate original ownership before queuing.
-    pub(crate) fn execute_request(&self) -> Result<RuntimeAgentCompactionTask> {
-        if let Some(source) = &self.replay_source {
-            return replay_epoch::manual_replay_task(
-                &self.owner.pane_id,
-                &self.profile_name,
-                &self.profile,
-                source.clone(),
-                self.owner.compaction_epoch,
-                self.owner.transcript_entries,
-                self.origin.clone(),
-                self.allowed_actions.clone(),
-            );
+    /// Accepts only this worker's original source/model. Matching scalar owner
+    /// fields cannot let another operation's rendered result enter this slot.
+    pub(super) fn validate_task(&self, task: &RuntimeAgentCompactionTask) -> Result<()> {
+        if !task
+            .replay_source
+            .as_ref()
+            .is_some_and(|source| Arc::ptr_eq(source, &self.source))
+            || !task
+                .source_owner
+                .as_ref()
+                .is_some_and(|owner| Arc::ptr_eq(owner, &self.source.original))
+            || task.model_profile != self.profile
+            || task.model_profile_name != self.profile_name
+            || task.source != "manual"
+            || task.resume_turn_id.is_some()
+            || !matches!(&task.target, RuntimeAgentCompactionTarget::Conversation)
+        {
+            return Err(MezError::conflict(
+                "manual rendered request source/model changed",
+            ));
         }
-        let source = if self.selective_history {
-            CompactionTranscriptSource::projected(&self.entries, &self.ranges)?
-        } else {
-            CompactionTranscriptSource::raw(&self.entries)
-        };
-        let context =
-            source.prepare_context(append_mcp_context(self.context.clone(), &self.mcp_summary)?)?;
-        let mut request = runtime_model_compaction_request(
-            &self.profile,
+        Ok(())
+    }
+
+    /// Renders the same canonical manual task as inline admission. No actor
+    /// lookup, I/O, provider call, publication or ordinary append ACK occurs.
+    pub(crate) fn execute_request(&self) -> Result<RuntimeAgentCompactionTask> {
+        replay_epoch::manual_replay_task(
             &self.owner.pane_id,
-            &self.owner.conversation_id,
+            &self.profile_name,
+            &self.profile,
+            self.source.clone(),
+            self.owner.compaction_epoch,
             self.owner.transcript_entries,
-            source,
-            &context,
+            self.origin.clone(),
             self.allowed_actions.clone(),
-        )?;
-        let words = request
-            .messages
-            .last()
-            .map(|message| model_context_text_word_count(&message.content))
-            .unwrap_or_default()
-            .max(1);
-        runtime_limit_compaction_summary_output(&mut request, words);
-        let retry_source = request
-            .messages
-            .last()
-            .map(|message| message.content.clone());
-        Ok(RuntimeAgentCompactionTask {
-            source_owner: None,
-            replay_source: None,
-            summary_proposal: None,
-            frozen_compaction_epoch: Some(self.source_epoch.clone()),
-            task_generation: 0,
-            compaction_epoch: self.owner.compaction_epoch,
-            transport_retry_attempts: 0,
-            transport_retry_delay_ms: None,
-            summary_correction:
-                crate::runtime::agent_state::RuntimeSummaryCorrection::for_manual_words(words),
-            pane_id: self.owner.pane_id.clone(),
-            accounting_origin: self.origin.clone(),
-            conversation_id: self.owner.conversation_id.clone(),
-            source: "manual".into(),
-            transcript_entries: self.owner.transcript_entries,
-            compacted_through_sequence: self.entries.last().map(|entry| entry.sequence),
-            frozen_compaction_rows: self.entries.clone(),
-            retained_transcript_entries: self.retained_entries,
-            summarized_entries: self.entries.len(),
-            model_profile_name: self.profile_name.clone(),
-            model_profile: self.profile.clone(),
-            request,
-            preserve_summary_output_budget: true,
-            manual_retry_source: retry_source,
-            manual_final_retry: None,
-            candidate_context: Some(context),
-            resume_turn_id: None,
-            target: RuntimeAgentCompactionTarget::Conversation,
-            conversation_chunks: None,
-            compaction_request_shape: None,
-        })
+        )
     }
 }

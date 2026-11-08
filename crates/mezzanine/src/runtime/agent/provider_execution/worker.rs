@@ -120,6 +120,18 @@ impl RuntimeSessionService {
             match provider.send_request(&request) {
                 Ok(response) => {
                     self.apply_agent_compaction_completed_event(&pane_id, response)?;
+                    // This synchronous test adapter substitutes for the actor's
+                    // persistence lane, not for its receipt. Execute the same
+                    // retained attempt and adoption reducer before retrying;
+                    // the publication owner already bounds physical retries.
+                    while let Some(attempt) = self.take_replay_epoch_attempt_for_tests() {
+                        if attempt.work().pane() != pane_id {
+                            return Err(MezError::invalid_state(
+                                "synchronous compaction encountered another pane's publication",
+                            ));
+                        }
+                        self.apply_replay_epoch_completion(attempt.execute())?;
+                    }
                 }
                 Err(error) => {
                     self.apply_agent_compaction_failed_event(

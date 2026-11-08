@@ -26,6 +26,7 @@ use mez_agent::{
 
 mod bootstrap;
 mod execution_controls;
+mod prefix_import;
 mod raw_history;
 mod replay_arrivals;
 
@@ -54,6 +55,8 @@ pub(in crate::runtime) struct RuntimeContextRecords {
     controls_qualified: bool,
     /// Frozen typed history; never rebuilt from its read-only flat projection.
     replay: Option<ReplayHistory>,
+    /// Original raw projection needs legacy row-image backing at first publish.
+    pub(super) legacy_raw: bool,
     #[cfg(test)]
     estimate_recomputations: usize,
 }
@@ -66,6 +69,9 @@ struct ReplayHistory {
     /// An actual durable source when present. Pure NoStore checkpoints must not
     /// fabricate a committed identity merely to reuse canonical composition.
     snapshot: Option<std::sync::Arc<crate::storage::transcript::replay_epoch::ReplayEpochSnapshot>>,
+    /// Original read's memory-only custody for a frozen legacy prefix. A later
+    /// copy cannot reconstruct this from mutable parent storage or row counts.
+    memory: Option<std::sync::Arc<crate::storage::transcript::replay_epoch::ReplayMemorySource>>,
     /// Original head/tail plus checked new arrivals and actual in-memory
     /// lifecycle witnesses. The committed parent remains independent for CAS.
     body: AgentContext,
@@ -81,6 +87,20 @@ pub(super) struct DecodedContextRow {
 }
 
 impl RuntimeContextRecords {
+    /// Retains the latest checked descriptive snapshot for an independent copy.
+    /// Empty snapshots retire older records; none of these records supply policy
+    /// bytes or permit an unowned history to become executable source.
+    pub(in crate::runtime::control) fn stable_records_for_copy(
+        &self,
+    ) -> Result<Vec<StableContextBlockRecord>> {
+        self.ensure_valid()?;
+        Ok(self.stable.clone().unwrap_or_else(|| {
+            self.replay
+                .as_ref()
+                .map_or_else(Vec::new, |replay| replay.stable_records.clone())
+        }))
+    }
+
     /// Validates a frozen one-head epoch and exposes its exact read-only flat
     /// projection to existing prompt composition. An owned canonical body keeps
     /// source sequences and any later qualified lifecycle transitions intact.
@@ -142,6 +162,7 @@ impl RuntimeContextRecords {
                     body: owner.into_owned_context(),
                     stable_records,
                     snapshot,
+                    memory: None,
                     blocks: blocks.len(),
                 }),
                 ..Self::default()
@@ -205,6 +226,14 @@ impl RuntimeContextRecords {
 
     pub(super) fn replay_conversation(&self) -> Option<&mez_agent::ReplayConversationId> {
         self.replay.as_ref().map(|history| &history.conversation)
+    }
+
+    pub(super) fn replay_memory_source(
+        &self,
+    ) -> Option<std::sync::Arc<crate::storage::transcript::replay_epoch::ReplayMemorySource>> {
+        self.replay
+            .as_ref()
+            .and_then(|history| history.memory.clone())
     }
 
     /// Rebinds only an explicitly copied immutable source. Original checkpoint

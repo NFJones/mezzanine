@@ -975,6 +975,7 @@ impl RuntimeSessionService {
         turn_id: &str,
     ) -> Result<()> {
         let evidence = self.completion_settlement_evidence(turn_id)?;
+        let canonical_record = self.retain_completion_settlement_evidence(turn_id, &evidence)?;
         let group = self
             .agent
             .completion_settlements
@@ -1064,19 +1065,20 @@ impl RuntimeSessionService {
         let retained_record = existing
             .filter(|handoff| handoff.evidence == evidence)
             .map(|handoff| handoff.evidence_record);
-        let evidence_record =
-            if fresh_source || existing.is_none_or(|handoff| handoff.evidence != evidence) {
-                Self::append_completion_settlement_evidence(
-                    &mut candidate,
-                    &group.group,
-                    evidence.clone(),
-                    retained_record,
-                )?
-            } else {
-                retained_record.ok_or_else(|| {
-                    MezError::invalid_state("original completion evidence record is unavailable")
-                })?
-            };
+        let evidence_record = if let Some(record) = canonical_record {
+            record
+        } else if fresh_source || existing.is_none_or(|handoff| handoff.evidence != evidence) {
+            Self::append_completion_settlement_evidence(
+                &mut candidate,
+                &group.group,
+                evidence.clone(),
+                retained_record,
+            )?
+        } else {
+            retained_record.ok_or_else(|| {
+                MezError::invalid_state("original completion evidence record is unavailable")
+            })?
+        };
         if let Some(handoff) = existing
             && handoff.evidence == evidence
             && handoff.candidate.entries.len() == candidate.entries.len()

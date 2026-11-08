@@ -155,6 +155,21 @@ fn imported_execution_restoration_preserves_exact_owner_and_fails_closed() {
         .unwrap();
     assert_eq!(context.chronology()[1].provider_owner(), Some(&owner));
     assert_eq!(context.chronology()[1].execution_group_id(), Some(&group));
+    let mut canonical = crate::ReplayEpochContext::new(
+        crate::ReplayConversationId::new("restored-source").unwrap(),
+        context.clone(),
+    )
+    .unwrap()
+    .into_owned_context();
+    assert!(canonical.execution_group_is_pending(&group));
+    let frozen = canonical.clone();
+    assert!(
+        canonical
+            .restore_imported_execution_events(&[assistant_record.clone(), native_record.clone()])
+            .is_err(),
+        "flat metadata cannot rewrite owned source or mint completion"
+    );
+    assert_eq!(canonical, frozen);
     let original = context.clone();
     let reordered = [native_record, assistant_record];
     let error = context

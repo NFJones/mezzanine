@@ -1,7 +1,7 @@
-//! Manual compaction consumes selective summaries without covered raw replay.
+//! Manual compaction refuses historical selective state before model rendering.
 //!
-//! Real archives and command preparation qualify source ordering, future-summary
-//! exclusion, physical counts and protected leading groups without model calls.
+//! Real archives preserve the prior ordering, boundary, budget and open-barrier
+//! layouts. None permits implicit normalization or covered-source resubmission.
 
 use super::*;
 
@@ -51,7 +51,7 @@ fn selective_fixture(shared_turn: bool) -> (RuntimeSessionService, ClientId, Age
             .unwrap();
     }
     store
-        .save_compaction_ranges(
+        .install_legacy_compaction_ranges_fixture(
             "selective-manual",
             0,
             "",
@@ -70,150 +70,58 @@ fn selective_fixture(shared_turn: bool) -> (RuntimeSessionService, ClientId, Age
     (service, primary, store)
 }
 
-/// Applies a controlled test summary through the actual task completion path,
-/// reopens storage, and resumes the conversation before reading provider context.
-/// This qualifies publication/replay, not external model quality or billing.
-fn complete_and_resume(
+/// Drives actual command/source completion and proves refusal precedes request
+/// rendering, provider dispatch or durable source mutation.
+fn assert_selective_manual_refused(
     service: &mut RuntimeSessionService,
     primary: &ClientId,
     store: &AgentTranscriptStore,
-    work: &crate::runtime::RuntimeManualCompactionRequestWork,
-    task: crate::runtime::RuntimeAgentCompactionTask,
-    summary: &str,
-) -> mez_agent::AgentContext {
-    assert!(
-        service
-            .complete_manual_compaction_request(work, Ok(task))
-            .unwrap()
-    );
-    complete_runtime_test_compaction(service, "%1", summary);
-    assert!(!service.agent_is_compacting("%1"));
-    service.set_agent_transcript_store(AgentTranscriptStore::new(store.root().to_path_buf()));
-    let response = service
-        .execute_agent_shell_command(primary, "/resume selective-manual")
+) {
+    let paths = [
+        store.transcript_path("selective-manual").unwrap(),
+        store.root().join("selective-manual/compaction-epoch.json"),
+    ];
+    let before = paths.each_ref().map(|path| std::fs::read(path).unwrap());
+    let queued = service
+        .execute_agent_shell_command(primary, "/compact")
         .unwrap();
-    let settled = service
-        .run_pending_deferred_agent_command_for_tests()
-        .unwrap()
-        .unwrap_or(response);
-    assert!(settled.contains("resumed=true"), "{settled}");
-    service
-        .agent_context_for_pane_prompt("%1", "continue", 0)
-        .unwrap()
+    assert!(queued.contains("state=preparing"), "{queued}");
+    let source = service.take_manual_compaction_preparations().pop().unwrap();
+    let result = source.execute_source();
+    assert!(
+        result
+            .as_ref()
+            .unwrap_err()
+            .to_string()
+            .contains("normalization")
+    );
+    let error = service
+        .complete_manual_compaction_preparation(&source, result)
+        .unwrap_err();
+    assert!(error.to_string().contains("normalization"), "{error}");
+    assert!(!service.agent_is_compacting("%1"));
+    assert!(service.take_manual_compaction_requests().is_empty());
+    assert!(service.pending_agent_compaction_task_ids().is_empty());
+    assert_eq!(
+        paths.each_ref().map(|path| std::fs::read(path).unwrap()),
+        before
+    );
 }
 
-/// A range inside the selected complete turn enters the compactor exactly once
-/// as its authoritative summary. Its covered raw bytes must not return. Frozen
-/// publication proof and retained counts still refer to all three physical
-/// source rows, independently of the reduced model representation.
+/// A range inside a complete turn still needs explicit normalization. It must
+/// not be reopened as raw source or silently folded into another summary.
 #[test]
 fn runtime_manual_compaction_selective_range_replaces_covered_raw_input() {
     let (mut service, primary, store) = selective_fixture(true);
-    let original = store.inspect("selective-manual").unwrap();
-    let work = request_work(&mut service, &primary);
-    let task = work.execute_request().unwrap();
-    assert_eq!(task.compacted_through_sequence, Some(3));
-    assert_eq!(task.retained_transcript_entries, 1);
-    assert_eq!(
-        task.frozen_compaction_rows
-            .iter()
-            .map(|row| row.sequence)
-            .collect::<Vec<_>>(),
-        [1, 2, 3]
-    );
-    let source = &task.request.messages.last().unwrap().content;
-    assert!(!source.contains("COVERED_RAW_MUST_NOT_RETURN"), "{source}");
-    assert_eq!(
-        source.matches("SELECTIVE_SUMMARY_ONCE").count(),
-        1,
-        "{source}"
-    );
-    assert!(
-        source.find("RAW_FIRST_GROUP").unwrap() < source.find("SELECTIVE_SUMMARY_ONCE").unwrap()
-    );
-    assert!(!source.contains("RAW_RETAINED_TAIL"));
-    let context = complete_and_resume(
-        &mut service,
-        &primary,
-        &store,
-        &work,
-        task,
-        "COMPACTED_PREFIX_RESULT",
-    );
-    let epoch = store.compaction_epoch("selective-manual").unwrap().unwrap();
-    assert_eq!(epoch.through_sequence, 3);
-    assert!(epoch.ranges.is_empty());
-    assert_eq!(
-        &store.inspect("selective-manual").unwrap()[..4],
-        original.as_slice()
-    );
-    assert_eq!(
-        context
-            .blocks()
-            .iter()
-            .filter(|block| block.content.contains("COMPACTED_PREFIX_RESULT"))
-            .count(),
-        1
-    );
-    assert!(
-        context
-            .blocks()
-            .iter()
-            .any(|block| block.content.contains("RAW_RETAINED_TAIL"))
-    );
-    assert!(!context.blocks().iter().any(|block| {
-        block.content.contains("COVERED_RAW_MUST_NOT_RETURN")
-            || block.content.contains("SELECTIVE_SUMMARY_ONCE")
-            || block.content.contains("RAW_FIRST_GROUP")
-    }));
+    assert_selective_manual_refused(&mut service, &primary, &store);
 }
 
-/// A fitting forced prefix selects only the earlier independent closed turn.
-/// A later range's summary must stay in the retained projection rather than
-/// enter the new prefix summary and then appear a second time after publication.
+/// A later selective summary must not become eligible through an earlier raw
+/// turn. The format gate runs before choosing a new prefix or rendering input.
 #[test]
 fn runtime_manual_compaction_selective_summary_after_boundary_stays_out_of_input() {
     let (mut service, primary, store) = selective_fixture(false);
-    let work = request_work(&mut service, &primary);
-    let task = work.execute_request().unwrap();
-    assert_eq!(task.compacted_through_sequence, Some(1));
-    assert_eq!(task.retained_transcript_entries, 3);
-    let source = &task.request.messages.last().unwrap().content;
-    assert!(source.contains("RAW_FIRST_GROUP"));
-    assert!(!source.contains("SELECTIVE_SUMMARY_ONCE"), "{source}");
-    assert!(!source.contains("COVERED_RAW_MUST_NOT_RETURN"));
-    assert!(!source.contains("RAW_RETAINED_TAIL"));
-    let context = complete_and_resume(
-        &mut service,
-        &primary,
-        &store,
-        &work,
-        task,
-        "EARLY_PREFIX_RESULT",
-    );
-    let epoch = store.compaction_epoch("selective-manual").unwrap().unwrap();
-    assert_eq!(epoch.through_sequence, 1);
-    assert_eq!(epoch.ranges.len(), 1);
-    assert_eq!(
-        context
-            .blocks()
-            .iter()
-            .filter(|block| block.content == "SELECTIVE_SUMMARY_ONCE")
-            .count(),
-        1
-    );
-    assert_eq!(
-        context
-            .blocks()
-            .iter()
-            .filter(|block| block.content.contains("EARLY_PREFIX_RESULT"))
-            .count(),
-        1
-    );
-    assert!(!context.blocks().iter().any(|block| {
-        block.content.contains("COVERED_RAW_MUST_NOT_RETURN")
-            || block.content.contains("RAW_FIRST_GROUP")
-    }));
+    assert_selective_manual_refused(&mut service, &primary, &store);
 }
 
 /// Builds two early closed turns, a selective range, and a later exact tail.
@@ -267,7 +175,7 @@ fn extended_fixture(
             .unwrap();
     }
     store
-        .save_compaction_ranges(
+        .install_legacy_compaction_ranges_fixture(
             "selective-manual",
             0,
             "",
@@ -286,35 +194,19 @@ fn extended_fixture(
     (service, primary, store)
 }
 
-/// A large archived range has the cost of its small authoritative summary.
-/// Charging its covered raw bytes would unnecessarily summarize the second
-/// turn; correct budgeting retains that turn and selects only the first one.
+/// Large covered raw data cannot bypass admission merely because its stored
+/// summary is small. Refusal must not expand that raw source into model input.
 #[test]
 fn runtime_manual_compaction_selective_budget_uses_summary_cost() {
-    let (mut service, primary, _) = extended_fixture(false, 20000);
-    let task = request_work(&mut service, &primary)
-        .execute_request()
-        .unwrap();
-    assert_eq!(task.compacted_through_sequence, Some(1));
-    assert_eq!(task.retained_transcript_entries, 4);
-    assert!(
-        !task
-            .request
-            .messages
-            .last()
-            .unwrap()
-            .content
-            .contains("COVERED_BUDGET_RAW")
-    );
-    service.cancel_current_agent_compaction_task("%1");
+    let (mut service, primary, store) = extended_fixture(false, 20000);
+    assert_selective_manual_refused(&mut service, &primary, &store);
 }
 
-/// A range may cover complete execution groups in multiple turns. A tight
-/// budget cannot cut between those turns and publish a prefix through the
-/// middle of their shared range. The full physical prefix remains the proof.
+/// A tight budget cannot split a historical range across turns into a purported
+/// new prefix. The complete old projection remains intact on format refusal.
 #[test]
 fn runtime_manual_compaction_selective_range_is_atomic_across_turns() {
-    let (mut service, primary, _) = extended_fixture(true, 2);
+    let (mut service, primary, store) = extended_fixture(true, 2);
     let mut layers = service.integration.config_layers().to_vec();
     for layer in &mut layers {
         layer.text = layer
@@ -322,23 +214,7 @@ fn runtime_manual_compaction_selective_range_is_atomic_across_turns() {
             .replace("context_window_tokens=128000", "context_window_tokens=100");
     }
     service.replace_config_layers(layers).unwrap();
-    let task = request_work(&mut service, &primary)
-        .execute_request()
-        .unwrap();
-    assert_eq!(task.compacted_through_sequence, Some(5));
-    assert_eq!(task.retained_transcript_entries, 0);
-    assert_eq!(task.frozen_compaction_rows.len(), 5);
-    assert_eq!(
-        task.request
-            .messages
-            .last()
-            .unwrap()
-            .content
-            .matches("small authoritative summary")
-            .count(),
-        1
-    );
-    service.cancel_current_agent_compaction_task("%1");
+    assert_selective_manual_refused(&mut service, &primary, &store);
 }
 
 /// Covered closed work after an uncovered open user turn cannot authorize
@@ -359,23 +235,10 @@ fn runtime_manual_compaction_selective_summary_does_not_bypass_open_barrier() {
         .unwrap()
         .unwrap();
     store
-        .save_compaction_ranges("selective-manual", 0, "", epoch.ranges)
+        .install_legacy_compaction_ranges_fixture("selective-manual", 0, "", epoch.ranges)
         .unwrap();
     service.set_agent_transcript_store(store.clone());
-    let before = store.inspect("selective-manual").unwrap();
-    service
-        .execute_agent_shell_command(&primary, "/compact")
-        .unwrap();
-    let work = service.take_manual_compaction_preparations().pop().unwrap();
-    assert!(
-        service
-            .complete_manual_compaction_preparation(&work, work.execute_source())
-            .unwrap()
-    );
-    assert!(service.take_manual_compaction_requests().is_empty());
-    assert!(service.pending_agent_compaction_task_ids().is_empty());
-    assert!(!service.agent_is_compacting("%1"));
-    assert_eq!(store.inspect("selective-manual").unwrap(), before);
+    assert_selective_manual_refused(&mut service, &primary, &store);
     assert!(
         store
             .compaction_epoch("selective-manual")
@@ -386,14 +249,32 @@ fn runtime_manual_compaction_selective_summary_does_not_bypass_open_barrier() {
     );
 }
 
-/// A cooperating publisher may replace a summary without changing any physical
-/// row. Completion from an earlier immutable source must not absorb and discard
-/// that newer authority merely because its frozen raw rows still match. This
-/// exercises actual task adoption, epoch publication and controlled completion;
-/// it makes no claim about external provider execution or summary quality.
+/// An independent compactor changes the head without rewriting audit rows.
+/// Completion from the earlier capture must fail the actual publisher's parent
+/// CAS, retaining the newer authority and protected raw groups exactly.
 #[test]
 fn runtime_manual_compaction_selective_epoch_edit_survives_old_completion() {
-    let (mut service, primary, store) = selective_fixture(true);
+    let (mut service, primary, old) = selective_fixture(true);
+    let store = AgentTranscriptStore::new(temp_root("manual-supported-prefix-source"));
+    for mut row in old.inspect("selective-manual").unwrap() {
+        // The race needs eligible historical input, not inferred closure for
+        // an assistant role. The explicit grouped source remains protected.
+        if row.role == TranscriptRole::Assistant {
+            row.role = TranscriptRole::User;
+        }
+        store.append(&row).unwrap();
+    }
+    service.set_agent_transcript_store(store.clone());
+    // Capture a real request after the supported prefix is normalized. The
+    // historical selective layout remains a separate refusal control above.
+    store
+        .install_legacy_compaction_ranges_fixture(
+            "selective-manual",
+            0,
+            "SUPPORTED_PREFIX",
+            Vec::new(),
+        )
+        .unwrap();
     let work = request_work(&mut service, &primary);
     let task = work.execute_request().unwrap();
     assert!(
@@ -401,26 +282,59 @@ fn runtime_manual_compaction_selective_epoch_edit_survives_old_completion() {
             .complete_manual_compaction_request(&work, Ok(task))
             .unwrap()
     );
-    let mut replacement = store.compaction_epoch("selective-manual").unwrap().unwrap();
-    replacement.ranges[0].summary = "NEW_AUTHORITATIVE_RANGE_SUMMARY".into();
-    let records = replacement.summary_records.as_mut().unwrap();
-    records.ranges[0] = records.ranges[0]
-        .revised(&crate::storage::transcript::selective_summary_block(
-            &replacement.ranges[0].summary,
-        ))
+    let before = store.inspect("selective-manual").unwrap();
+    let (parent, current) = store
+        .load_replay_epoch("selective-manual", mez_agent::AgentContext::empty())
+        .unwrap()
         .unwrap();
-    store
-        .save_compaction_projection(replacement.clone(), None, None)
+    let plan = match current
+        .prepare_compaction(mez_agent::ReplayTailPolicy::new(128_000, 1).unwrap())
+        .unwrap()
+    {
+        mez_agent::ReplayCompactionPreparation::Ready(plan) => plan,
+        other => panic!("independent original source expected: {other:?}"),
+    };
+    let proposal = store
+        .prepare_replay_epoch(
+            crate::storage::transcript::replay_epoch::ReplaySourceOrigin::new(
+                "independent-compactor",
+                "agent-%1",
+                "%1",
+            )
+            .unwrap()
+            .capture(None),
+            "selective-manual",
+            Some(parent),
+            &current,
+            plan,
+            mez_agent::ReplayHeadPublication::Summary("NEW_AUTHORITATIVE_RANGE_SUMMARY".into()),
+        )
         .unwrap();
+    let replacement = store.publish_replay_epoch(&proposal).unwrap();
     let task = service.take_pending_agent_compaction_task("%1").unwrap();
     service.claim_agent_compaction_task_state("%1", task);
-    let _completion = service.apply_agent_compaction_completed_event(
-        "%1",
-        runtime_test_compaction_response("OLD_CAPTURED_RESULT"),
-    );
+    service
+        .apply_agent_compaction_completed_event(
+            "%1",
+            runtime_test_compaction_response("OLD_CAPTURED_RESULT"),
+        )
+        .unwrap();
+    let completion = service
+        .take_replay_epoch_attempt_for_tests()
+        .unwrap()
+        .execute();
+    assert!(completion.error().is_some());
+    service.apply_replay_epoch_completion(completion).unwrap();
+    assert!(!service.agent_is_compacting("%1"));
+    assert!(service.pending_agent_provider_tasks().is_empty());
+    let (identity, cold) = store
+        .load_replay_epoch("selective-manual", mez_agent::AgentContext::empty())
+        .unwrap()
+        .unwrap();
+    assert_eq!(&identity, replacement.identity());
     assert_eq!(
-        store.compaction_epoch("selective-manual").unwrap(),
-        Some(replacement),
-        "an old compactor cannot replace a later authoritative range summary"
+        cold.context().chronology()[0].block().content,
+        "NEW_AUTHORITATIVE_RANGE_SUMMARY"
     );
+    assert_eq!(store.inspect("selective-manual").unwrap(), before);
 }

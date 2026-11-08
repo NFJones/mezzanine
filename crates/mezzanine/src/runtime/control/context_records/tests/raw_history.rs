@@ -186,6 +186,241 @@ fn raw_history_closed_control_preserves_exact_source_in_pending_settled_and_cold
     }
 }
 
+/// A mixed legacy projection keeps genuine task boundaries and an original
+/// closed control when copied before its first summary. Copying may not reopen
+/// that group or borrow the late legacy row's producer for its original source.
+#[test]
+fn raw_history_mixed_legacy_copy_preserves_original_task_and_control() {
+    let directory = Directory::new();
+    let store = AgentTranscriptStore::new(&directory.0);
+    let (mut owner, original) = raw_tasks();
+    let group = mez_agent::ContextExecutionGroupId::new("original-pending-group").unwrap();
+    let receipt = owner
+        .capture_execution_owner(&group, owner.context().chronology()[1].sequence())
+        .unwrap();
+    owner.finish_execution_group(&receipt).unwrap();
+    let mut rows = original.entries().to_vec();
+    rows.push(execution_control(&owner));
+    let batch = crate::storage::transcript::TranscriptAppendBatch::owned_rows(rows).unwrap();
+    store.commit_accounted_transcript_batch(&batch, 96).unwrap();
+    let legacy = TranscriptEntry {
+        conversation_id: CID.into(),
+        sequence: 6,
+        created_at_unix_seconds: 2,
+        // Matching a real task's producer cannot turn a literal role row into
+        // a task member during its independent copied projection.
+        role: TranscriptRole::User,
+        turn_id: "later-turn".into(),
+        agent_id: "original-agent".into(),
+        pane_id: "original-pane".into(),
+        content: "literal legacy follow-up".into(),
+    };
+    store.append(&legacy).unwrap();
+    let history = execute_runtime_agent_history_epoch_work(work(store.clone())).unwrap();
+    let expected = history.replay_owner().unwrap().unwrap();
+    assert!(!expected.context().execution_group_is_pending(&group));
+    assert_eq!(
+        &expected.context().chronology()[..4],
+        owner.context().chronology()
+    );
+    let source = history
+        .records
+        .replay_memory_source()
+        .unwrap()
+        .fork_source(&expected)
+        .unwrap();
+    let copied = source.initial_batch("mixed-raw-child", 100).unwrap();
+    store.accept_transcript_append_receipt(&copied, 1).unwrap();
+    store.settle_transcript_append_receipt(&copied, 1).unwrap();
+    let mut read = work(AgentTranscriptStore::new(&directory.0));
+    read.inputs.conversation_id = "mixed-raw-child".into();
+    let child = execute_runtime_agent_history_epoch_work(read)
+        .unwrap()
+        .replay_owner()
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        child.context().chronology(),
+        expected.context().chronology()
+    );
+    assert!(!child.context().execution_group_is_pending(&group));
+    assert!(child.head().is_none());
+    let audit = store.inspect(CID).unwrap();
+    assert_eq!(&audit[..5], batch.entries());
+    assert_eq!(audit[5], legacy);
+}
+
+/// A legacy routed handoff remains typed inert context through an independent
+/// initial receipt and cold child replay. Its original occurrence/cost/producer
+/// survive; later parent rows and protocol-looking user text cannot replace it.
+#[test]
+fn raw_history_routed_copy_preserves_original_projection_on_cold_reopen() {
+    let directory = Directory::new();
+    let store = AgentTranscriptStore::new(&directory.0);
+    let payload = r#"{"version":1,"result_summary":"original routed evidence"}"#;
+    for (index, (role, content)) in [
+        (TranscriptRole::User, "original parent prompt".to_owned()),
+        (
+            TranscriptRole::System,
+            TranscriptContextEvent::RoutedHandoff {
+                content: payload.into(),
+            }
+            .to_transcript_content(),
+        ),
+        (
+            TranscriptRole::Assistant,
+            "original visible answer".to_owned(),
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        store
+            .append(&TranscriptEntry {
+                conversation_id: CID.into(),
+                sequence: index as u64 + 1,
+                created_at_unix_seconds: 1,
+                role,
+                turn_id: "original-routed-turn".into(),
+                agent_id: "original-agent".into(),
+                pane_id: "original-pane".into(),
+                content,
+            })
+            .unwrap();
+    }
+    let original_rows = store.inspect(CID).unwrap();
+    let history = execute_runtime_agent_history_epoch_work(work(store.clone())).unwrap();
+    let expected = history.replay_owner().unwrap().unwrap();
+    let source = history
+        .records
+        .replay_memory_source()
+        .unwrap()
+        .fork_source(&expected)
+        .unwrap();
+    // The frozen source, not a later parent count/read, owns this copy.
+    store
+        .append(&TranscriptEntry {
+            sequence: 4,
+            role: TranscriptRole::User,
+            content: "late parent must not enter frozen copy".into(),
+            ..original_rows[0].clone()
+        })
+        .unwrap();
+    let copied = source.initial_batch("routed-raw-child", 100).unwrap();
+    let handoff = copied
+        .entries()
+        .iter()
+        .find(|row| {
+            TranscriptContextRecord::from_transcript_content(&row.content)
+                .unwrap()
+                .is_some_and(|record| {
+                    matches!(record.event(),
+                TranscriptContextEvent::RoutedHandoff {content} if content == payload)
+                })
+        })
+        .unwrap();
+    assert_eq!(handoff.turn_id, "original-routed-turn");
+    assert_eq!(handoff.agent_id, "original-agent");
+    assert_eq!(handoff.pane_id, "original-pane");
+    store.accept_transcript_append_receipt(&copied, 1).unwrap();
+    store.settle_transcript_append_receipt(&copied, 1).unwrap();
+    let mut read = work(AgentTranscriptStore::new(&directory.0));
+    read.inputs.conversation_id = "routed-raw-child".into();
+    let child = execute_runtime_agent_history_epoch_work(read)
+        .unwrap()
+        .replay_owner()
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        child.context().chronology(),
+        expected.context().chronology()
+    );
+    assert!(child.head().is_none());
+    assert_eq!(child.revision().get(), 0);
+    assert_eq!(&store.inspect(CID).unwrap()[..3], original_rows.as_slice());
+}
+
+/// Pending legacy rows keep their actual append owner. The same captured read
+/// can normalize only after that original receipt physically settles its rows.
+#[test]
+fn raw_history_legacy_pending_source_waits_for_original_settlement() {
+    let directory = Directory::new();
+    let store = AgentTranscriptStore::new(&directory.0);
+    let original = TranscriptEntry {
+        conversation_id: CID.into(),
+        sequence: 1,
+        created_at_unix_seconds: 1,
+        role: TranscriptRole::User,
+        turn_id: "legacy-original".into(),
+        agent_id: "original-agent".into(),
+        pane_id: "original-pane".into(),
+        content: "original committed legacy text".into(),
+    };
+    store.append(&original).unwrap();
+    let pending = TranscriptEntry {
+        sequence: 2,
+        content: "actual pending legacy text".into(),
+        ..original.clone()
+    };
+    let batch =
+        crate::storage::transcript::TranscriptAppendBatch::owned_rows(vec![pending.clone()])
+            .unwrap();
+    let mut captured = work(store.clone());
+    captured.inputs.pending_entries =
+        crate::runtime::persistence::RuntimePendingTranscriptContext::from_batch(&batch).unwrap();
+    let first = execute_runtime_agent_history_epoch_work(captured.clone()).unwrap();
+    let source = first.source.as_ref().unwrap().raw.as_ref().unwrap();
+    let owner = first.replay_owner().unwrap().unwrap();
+    let prepare = || {
+        let mez_agent::ReplayCompactionPreparation::Ready(plan) = owner
+            .prepare_compaction(mez_agent::ReplayTailPolicy::new(1000, 0).unwrap())
+            .unwrap()
+        else {
+            panic!("expected original raw source");
+        };
+        store.prepare_replay_epoch(
+            crate::storage::transcript::replay_epoch::ReplaySourceOrigin::new(
+                "publisher",
+                "publisher-agent",
+                "publisher-pane",
+            )
+            .unwrap()
+            .capture_legacy_raw(source),
+            CID,
+            None,
+            &owner,
+            plan,
+            mez_agent::ReplayHeadPublication::Summary("original source summary".into()),
+        )
+    };
+    assert!(
+        prepare().is_err(),
+        "a read must not acknowledge a pending append"
+    );
+    assert_eq!(
+        store.inspect(CID).unwrap().as_slice(),
+        std::slice::from_ref(&original)
+    );
+    store.accept_transcript_append_receipt(&batch, 1).unwrap();
+    // Execute the original physical/accounting owner; journal admission alone
+    // is not an archive write and cannot authorize receipt settlement.
+    assert!(
+        prepare().is_err(),
+        "journal admission is not physical settlement"
+    );
+    store.commit_accounted_transcript_batch(&batch, 1).unwrap();
+    let history = execute_runtime_agent_history_epoch_work(captured).unwrap();
+    let settled = history.replay_owner().unwrap().unwrap();
+    assert!(settled.head().is_none());
+    assert_eq!(settled.context().chronology().len(), 2);
+    assert_eq!(settled.context().chronology(), owner.context().chronology());
+    // The SAME frozen source can now prepare; no regenerated read or summary
+    // is needed to acquire the original rows' real physical proof.
+    prepare().unwrap();
+    assert_eq!(store.inspect(CID).unwrap(), [original, pending]);
+    assert!(store.compaction_epoch(CID).unwrap().is_none());
+}
+
 /// Uses actual first-head adoption and the original live retirement handle.
 /// The control's ordinary append is delayed unchanged across further heads;
 /// neither archived model rows nor newer publisher identity may replace it.

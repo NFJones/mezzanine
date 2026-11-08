@@ -66,7 +66,7 @@ impl ReplayEpochContext {
             .iter()
             .filter(|event| {
                 event.retention() == ContextRetention::Exact
-                    && instruction_source_can_complete(event.block())
+                    && instruction_event_can_complete(event)
             })
             .map(|event| event.sequence())
             .collect::<Vec<_>>();

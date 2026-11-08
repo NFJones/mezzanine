@@ -88,26 +88,17 @@ async fn qualify_transport_retry(sse: bool) {
         .unwrap()
         .session_id
         .clone();
-    service
-        .execute_agent_shell_command(&primary, "continue after oversized observations")
-        .unwrap();
-    let context = service.agent_turn_contexts_mut().get_mut("turn-1").unwrap();
-    for label in ["older", "newer"] {
-        let group = mez_agent::ContextExecutionGroupId::new(format!("transport-{label}")).unwrap();
-        context
-            .append_assistant_event("settled inspection", "already executed", group.clone())
-            .unwrap();
-        context
-            .append_evidence_event(
-                mez_agent::ContextSourceKind::ActionResult,
-                label,
-                "settled observation ".repeat(3000),
-                group,
-                None,
-                true,
-            )
-            .unwrap();
-    }
+    let turn = crate::test_support::compaction_source::complete_task_and_admit_successor(
+        &mut service,
+        &primary,
+        &format!(
+            "FROZEN_TRANSPORT_SOURCE {}",
+            "settled observation ".repeat(3_000)
+        ),
+        "original observation task completed",
+        "continue after oversized observations",
+        mez_agent::ProviderApiCompatibility::OpenAiChatCompletions,
+    );
     let original = store.inspect(&conversation).unwrap_or_default();
     let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
         .build()
@@ -134,7 +125,7 @@ async fn qualify_transport_retry(sse: bool) {
         handle
             .queue_runtime_side_effects(vec![RuntimeSideEffect::DispatchAgentProvider {
                 agent_id: AgentId::opaque("agent-%1").unwrap(),
-                turn_id: "turn-1".into(),
+                turn_id: turn.clone(),
             }])
             .await
             .unwrap();
@@ -160,7 +151,12 @@ async fn qualify_transport_retry(sse: bool) {
                 .unwrap()
                 .is_empty()
         );
-        assert!(store.compaction_epoch(&conversation).unwrap().is_none());
+        assert!(
+            store
+                .load_replay_epoch(&conversation, mez_agent::AgentContext::empty())
+                .unwrap()
+                .is_none()
+        );
         let mut timer = RuntimeEventBatch::new();
         timer.push(RuntimeEvent::Timer(TimerEvent {
             key: retry_key.clone(),
@@ -184,7 +180,12 @@ async fn qualify_transport_retry(sse: bool) {
             0
         );
         summary_started.notified().await;
-        assert!(store.compaction_epoch(&conversation).unwrap().is_none());
+        assert!(
+            store
+                .load_replay_epoch(&conversation, mez_agent::AgentContext::empty())
+                .unwrap()
+                .is_none()
+        );
         let archive = store.inspect(&conversation).unwrap_or_default();
         assert_eq!(&archive[..original.len()], original.as_slice());
         assert!(
@@ -202,6 +203,19 @@ async fn qualify_transport_retry(sse: bool) {
         summary_release.notify_one();
         tokio::time::timeout(Duration::from_secs(5), async {
             loop {
+                // Accepted inference queues publication; only the real storage
+                // worker and actor adoption may resume the ordinary provider.
+                run_async_persistence_side_effect_service(
+                    &handle,
+                    AsyncRuntimeSideEffectServiceConfig {
+                        max_polls: 4,
+                        drain_limit: 64,
+                        idle_interval: Duration::from_millis(1),
+                    },
+                    |_, _| false,
+                )
+                .await
+                .unwrap();
                 let view = handle
                     .render_client_view(
                         ClientViewRole::Primary,
@@ -216,17 +230,6 @@ async fn qualify_transport_retry(sse: bool) {
                     .iter()
                     .any(|line| line.contains("ordinary resumed exactly once"))
                 {
-                    run_async_persistence_side_effect_service(
-                        &handle,
-                        AsyncRuntimeSideEffectServiceConfig {
-                            max_polls: 4,
-                            drain_limit: 64,
-                            idle_interval: Duration::from_millis(1),
-                        },
-                        |_, _| false,
-                    )
-                    .await
-                    .unwrap();
                     break;
                 }
                 tokio::time::sleep(Duration::from_millis(5)).await;
@@ -255,15 +258,19 @@ async fn qualify_transport_retry(sse: bool) {
     );
     assert!(!exit.service.agent_is_compacting("%1"));
     assert_eq!(
-        exit.service
-            .agent_turn_ledger()
-            .turn("turn-1")
-            .unwrap()
-            .state,
+        exit.service.agent_turn_ledger().turn(&turn).unwrap().state,
         mez_agent::AgentTurnState::Completed
     );
     assert!(exit.service.pending_agent_provider_tasks().is_empty());
     assert!(exit.service.pending_agent_compaction_tasks().is_empty());
+    let (_, cold) = AgentTranscriptStore::new(store.root())
+        .load_replay_epoch(&conversation, mez_agent::AgentContext::empty())
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        cold.context().chronology()[0].block().content,
+        "COMPLETE_TRANSPORT_RETRY_SUMMARY"
+    );
     exit.service.terminate_all_pane_processes().unwrap();
     std::fs::remove_dir_all(root).unwrap();
 }

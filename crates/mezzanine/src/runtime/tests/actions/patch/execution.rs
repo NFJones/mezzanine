@@ -707,6 +707,13 @@ fn runtime_agent_loop_continues_after_apply_patch_iteration() {
             content: "create a note".to_string(),
         })
         .unwrap();
+    // This original parent row was appended outside runtime bookkeeping. Keep
+    // its actual binding frontier coherent before the first loop admission;
+    // otherwise the live task would reserve sequences as if no source existed.
+    service
+        .agent_shell_store_mut()
+        .record_transcript_entries("%1", 1)
+        .unwrap();
     let unique = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
@@ -785,7 +792,22 @@ fn runtime_agent_loop_continues_after_apply_patch_iteration() {
         .unwrap();
     assert_eq!(completions.len(), 1);
     assert_eq!(completions[0].terminal_state, AgentTurnState::Completed);
-    assert_eq!(service.agent_loop_state("%1").unwrap().iteration, 2);
+    assert_eq!(
+        service
+            .agent_loop_state("%1")
+            .unwrap_or_else(|| {
+                panic!(
+                    "loop continuation missing: {}",
+                    service
+                        .pane_screen("%1")
+                        .unwrap()
+                        .normal_content_lines()
+                        .join("\n")
+                )
+            })
+            .iteration,
+        2
+    );
     assert_eq!(service.agent_loop_turn("turn-2").unwrap().iteration, 2);
     assert_eq!(
         service

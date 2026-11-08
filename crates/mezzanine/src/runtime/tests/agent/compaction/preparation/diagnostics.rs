@@ -21,6 +21,93 @@ fn row(sequence: u64, role: TranscriptRole, turn: &str, content: String) -> Tran
     }
 }
 
+/// Produces original instruction/task records and, when requested, an actual
+/// fenced assistant completion. Role text alone supplies neither protection
+/// nor closure. The runtime still reads and qualifies these original records.
+fn authored_rows(prompt: Option<&str>, completed: bool) -> Vec<TranscriptEntry> {
+    let mut owner = mez_agent::ReplayEpochContext::new(
+        mez_agent::ReplayConversationId::new("diagnostic-compact").unwrap(),
+        mez_agent::AgentContext::empty(),
+    )
+    .unwrap();
+    if let Some(prompt) = prompt {
+        owner
+            .admit_instruction_task(
+                vec![ContextBlock::user_event("user prompt", prompt)],
+                &[],
+                &[],
+                0,
+            )
+            .unwrap();
+    }
+    let group = mez_agent::ContextExecutionGroupId::new("original-diagnostic-group").unwrap();
+    if completed {
+        let frontier = owner
+            .append_execution_events([mez_agent::ContextConversationAppend::assistant(
+                "original assistant",
+                "completed later work",
+                group.clone(),
+            )])
+            .unwrap()
+            .pop()
+            .unwrap();
+        let receipt = owner.capture_execution_owner(&group, frontier).unwrap();
+        owner.finish_execution_group(&receipt).unwrap();
+    }
+    let mut rows = owner
+        .context()
+        .chronology()
+        .iter()
+        .enumerate()
+        .map(|(index, event)| {
+            let block = event.block();
+            let semantic =
+                if let Some(start) = owner.task_admission_start(event.record().occurrence_id()) {
+                    mez_agent::TranscriptContextEvent::task_admission(
+                        event.sequence().get(),
+                        start,
+                        &block.label,
+                        &block.content,
+                    )
+                    .unwrap()
+                } else {
+                    mez_agent::TranscriptContextEvent::execution_block_with_metadata(
+                        block.source,
+                        &block.label,
+                        &block.content,
+                        group.clone(),
+                        1,
+                        None,
+                    )
+                    .unwrap()
+                };
+            row(
+                index as u64 + 1,
+                TranscriptRole::System,
+                "original-diagnostic",
+                mez_agent::transcript::TranscriptContextRecord::new(semantic, event.record(), None)
+                    .unwrap()
+                    .to_transcript_content()
+                    .unwrap(),
+            )
+        })
+        .collect::<Vec<_>>();
+    if completed {
+        rows.push(row(
+            rows.len() as u64 + 1,
+            TranscriptRole::System,
+            "original-diagnostic",
+            mez_agent::transcript::TranscriptExecutionStateRecord::new(
+                owner.execution_states().unwrap().pop().unwrap(),
+            )
+            .unwrap()
+            .to_transcript_content()
+            .unwrap(),
+        ));
+    }
+    rows
+}
+
 /// Shares model policy but uses only the specifically supplied source archive.
 fn setup(
     label: &str,
@@ -47,20 +134,7 @@ fn setup(
 #[test]
 fn runtime_manual_compaction_no_work_reports_prefix_eligibility() {
     for later_complete in [false, true] {
-        let mut rows = vec![row(
-            1,
-            TranscriptRole::User,
-            "open",
-            "retain exact unfinished instruction".into(),
-        )];
-        if later_complete {
-            rows.push(row(
-                2,
-                TranscriptRole::Assistant,
-                "later-complete",
-                "completed later work".into(),
-            ));
-        }
+        let rows = authored_rows(Some("retain exact unfinished instruction"), later_complete);
         let (mut service, primary, store) = setup(
             &format!("no-prefix-{later_complete}"),
             &rows,
@@ -121,20 +195,20 @@ async fn runtime_manual_compaction_no_work_awaited_ingress_keeps_narrow_groups()
             "unknown-system",
             "unqualified metadata remains exact".into(),
         )],
-        vec![
-            row(
+        {
+            let mut rows = vec![row(
                 1,
                 TranscriptRole::System,
                 "mixed",
                 mez_agent::TranscriptContextEvent::McpCompactionEpoch.to_transcript_content(),
-            ),
-            row(
-                2,
-                TranscriptRole::User,
-                "mixed",
-                "exact unfinished user goal".into(),
-            ),
-        ],
+            )];
+            let mut task = authored_rows(Some("exact unfinished user goal"), false);
+            for entry in &mut task {
+                entry.sequence += 1;
+            }
+            rows.extend(task);
+            rows
+        },
     ] {
         let (mut service, primary, store) = setup("awaited-no-prefix", &rows, rows.len() as u64);
         let response = service
@@ -173,12 +247,7 @@ fn runtime_manual_compaction_no_work_source_and_exact_tail_matrix() {
         ),
         (
             "irreducible",
-            vec![row(
-                1,
-                TranscriptRole::User,
-                "open",
-                "protected exact ".repeat(14000),
-            )],
+            authored_rows(Some(&"protected exact ".repeat(14_000)), false),
             1,
             "irreducible-exact-retained-tail",
         ),
@@ -231,13 +300,8 @@ fn runtime_manual_compaction_no_work_source_and_exact_tail_matrix() {
     assert!(response.contains("compacted=false"));
     assert!(!no_store.agent_is_compacting("%1"));
     assert!(no_store.pending_agent_compaction_task_ids().is_empty());
-    let rows = vec![row(
-        1,
-        TranscriptRole::Assistant,
-        "one-closed",
-        "eligible completed answer".into(),
-    )];
-    let (mut service, primary, store) = setup("single-closed", &rows, 1);
+    let rows = authored_rows(None, true);
+    let (mut service, primary, store) = setup("single-closed", &rows, rows.len() as u64);
     let response = service
         .execute_agent_shell_command(&primary, "/compact")
         .unwrap();
@@ -263,12 +327,7 @@ fn runtime_manual_compaction_no_work_source_and_exact_tail_matrix() {
 /// the persisted replay epoch. Logical admission fencing is not summary commit.
 #[test]
 fn runtime_manual_compaction_no_work_worker_retires_without_provider() {
-    let rows = vec![row(
-        1,
-        TranscriptRole::User,
-        "open",
-        "exact retained source".into(),
-    )];
+    let rows = authored_rows(Some("exact retained source"), false);
     let (mut service, primary, store) = setup("worker-no-prefix", &rows, 1);
     service.use_agent_source_preparation_adapter();
     let response = service
@@ -335,30 +394,52 @@ fn runtime_manual_compaction_no_work_does_not_mask_corrupt_source() {
     );
 }
 
-/// The final selector already permits one intact dedicated MCP epoch group.
-/// Forced under-budget selection must use that same narrow predicate; otherwise
-/// explicit compaction overlooks valid metadata merely for lacking an assistant.
+/// Retains the historical regression name while checking the canonical policy:
+/// an MCP boundary has no model source, and a catalog remains exact. Neither
+/// may fabricate an eligible model group or a summary merely to force progress.
 #[test]
 fn runtime_manual_compaction_forces_eligible_mcp_only_epoch_group() {
-    let rows = vec![row(
-        1,
-        TranscriptRole::System,
-        "mcp-epoch",
-        mez_agent::TranscriptContextEvent::McpCompactionEpoch.to_transcript_content(),
-    )];
-    let (mut service, primary, store) = setup("mcp-only-prefix", &rows, 1);
-    let response = service
-        .execute_agent_shell_command(&primary, "/compact")
-        .unwrap();
-    assert!(response.contains("state=queued"), "{response}");
-    let task = service.take_pending_agent_compaction_task("%1").unwrap();
-    assert_eq!(task.summarized_entries, 1);
-    assert_eq!(task.compacted_through_sequence, Some(1));
-    assert_eq!(store.inspect("diagnostic-compact").unwrap(), rows);
-    assert!(
-        store
-            .compaction_epoch("diagnostic-compact")
-            .unwrap()
-            .is_none()
-    );
+    for mode in ["boundary", "catalog"] {
+        let mut rows = Vec::new();
+        if mode == "catalog" {
+            rows.push(row(
+                1,
+                TranscriptRole::System,
+                "mcp-epoch",
+                mez_agent::TranscriptContextEvent::mcp_catalog_snapshot(
+                    "original catalog content",
+                    1024,
+                )
+                .unwrap()
+                .to_transcript_content(),
+            ));
+        }
+        if mode == "boundary" {
+            // An old reset marker is a zero-model boundary, not a replacement
+            // for the current catalog or the original task's retired prelude.
+            rows.push(row(
+                1,
+                TranscriptRole::System,
+                "mcp-epoch",
+                mez_agent::TranscriptContextEvent::McpCompactionEpoch.to_transcript_content(),
+            ));
+        }
+        let (mut service, primary, store) = setup("mcp-only-prefix", &rows, rows.len() as u64);
+        let response = service
+            .execute_agent_shell_command(&primary, "/compact")
+            .unwrap();
+        assert!(
+            response.contains("reason=no-eligible-closed-prefix"),
+            "{response}"
+        );
+        assert!(service.pending_agent_compaction_task_ids().is_empty());
+        assert!(
+            store
+                .compaction_epoch("diagnostic-compact")
+                .unwrap()
+                .is_none()
+        );
+        assert!(!service.agent_is_compacting("%1"));
+        assert_eq!(store.inspect("diagnostic-compact").unwrap(), rows);
+    }
 }

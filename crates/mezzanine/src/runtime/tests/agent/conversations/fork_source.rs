@@ -5,7 +5,7 @@
 //! Child publication is a separate owner and is not qualified by these tests.
 
 use super::*;
-use crate::storage::transcript::{AgentCompactionEpoch, AgentCompactionRange};
+use crate::storage::transcript::AgentCompactionRange;
 
 use super::fork_fixtures::{CONVERSATION, resumed_source, row};
 
@@ -68,9 +68,9 @@ fn runtime_fork_source_preserves_resumed_prefix_with_and_without_raw_tail() {
     }
 }
 
-/// A worker freezes the existing prefix and only ranges wholly before its
-/// captured logical cutoff. Later raw rows and their summaries cannot enter
-/// that source, and a subsequent epoch edit cannot mutate the owned snapshot.
+/// A historical selective epoch appearing after capture cannot replace the
+/// originally admitted format, even with a range inside its numeric cutoff.
+/// Repeated failures preserve both the original raw rows and latest sidecar.
 #[test]
 fn runtime_fork_source_freezes_selective_authority_at_captured_cutoff() {
     let (service, store, _) = resumed_source(3, 1);
@@ -94,39 +94,21 @@ fn runtime_fork_source_freezes_selective_authority_at_captured_cutoff() {
         },
     ];
     store
-        .save_compaction_ranges(CONVERSATION, 1, "FROZEN_PREFIX", ranges.clone())
+        .install_legacy_compaction_ranges_fixture(CONVERSATION, 1, "FROZEN_PREFIX", ranges.clone())
         .unwrap();
-    let original_records = store
-        .compaction_epoch(CONVERSATION)
-        .unwrap()
-        .unwrap()
-        .summary_records
-        .unwrap();
-    let snapshot = work.execute().unwrap();
-    let expected = AgentCompactionEpoch {
-        summary_records: Some(crate::storage::transcript::CompactionSummaryRecords::new(
-            original_records.prefix,
-            vec![original_records.ranges[0]],
-        )),
-        version: 3,
-        conversation_id: CONVERSATION.into(),
-        through_sequence: 1,
-        summary: "FROZEN_PREFIX".into(),
-        ranges: vec![ranges[0].clone()],
-    };
-    assert_eq!(snapshot.compaction_epoch, Some(expected.clone()));
-    assert_eq!(
-        snapshot
-            .entries
-            .iter()
-            .map(|r| r.sequence)
-            .collect::<Vec<_>>(),
-        [2, 3]
-    );
+    let original = store.compaction_epoch(CONVERSATION).unwrap();
+    let raw = store.inspect(CONVERSATION).unwrap();
+    let error = work.execute().unwrap_err();
+    assert!(error.to_string().contains("normalization"), "{error}");
+    assert_eq!(store.compaction_epoch(CONVERSATION).unwrap(), original);
     store
-        .save_compaction_ranges(CONVERSATION, 1, "REPLACEMENT_PREFIX", ranges)
+        .install_legacy_compaction_ranges_fixture(CONVERSATION, 1, "REPLACEMENT_PREFIX", ranges)
         .unwrap();
-    assert_eq!(snapshot.compaction_epoch, Some(expected));
+    let replacement = store.compaction_epoch(CONVERSATION).unwrap();
+    let error = work.execute().unwrap_err();
+    assert!(error.to_string().contains("normalization"), "{error}");
+    assert_eq!(store.compaction_epoch(CONVERSATION).unwrap(), replacement);
+    assert_eq!(store.inspect(CONVERSATION).unwrap(), raw);
     work.check_owner(&service).unwrap();
 }
 
@@ -141,7 +123,7 @@ fn runtime_fork_source_rejects_selective_range_bisecting_captured_cutoff() {
         .unwrap();
     store.append(&row(3)).unwrap();
     store
-        .save_compaction_ranges(
+        .install_legacy_compaction_ranges_fixture(
             CONVERSATION,
             1,
             "FROZEN_PREFIX",

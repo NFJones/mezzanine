@@ -1021,8 +1021,23 @@ reasoning_profile = "high"
             .iter()
             .filter(|block| block.content == "implement this")
             .count(),
-        1
+        2
     );
+    // The sealed original task remains intact. The new controller instruction
+    // is descriptive and cannot replace that original occurrence or task root.
+    for source in [
+        ContextSourceKind::UserInstruction,
+        ContextSourceKind::LocalMessage,
+    ] {
+        assert_eq!(
+            child_context
+                .blocks()
+                .iter()
+                .filter(|block| { block.content == "implement this" && block.source == source })
+                .count(),
+            1
+        );
+    }
     assert!(child_context.blocks().iter().any(|block| {
         block.source == ContextSourceKind::TranscriptAssistant
             && block

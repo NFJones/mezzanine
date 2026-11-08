@@ -602,14 +602,24 @@ fn runtime_resumed_compacted_archive_fork_keeps_actual_high_water() {
     let snapshot = work
         .execute()
         .expect("resumed fork must not invent a missing high-water row");
+    assert_eq!(snapshot.source_high_water, 3);
+    // Typed copies have independent child row positions. Their source cutoff
+    // remains three while the sole retained member is rebased to child row one.
     assert_eq!(
         snapshot
             .entries
             .iter()
             .map(|entry| entry.sequence)
             .collect::<Vec<_>>(),
-        [3]
+        [1]
     );
+    assert_eq!(snapshot.entries.len(), 1);
+    let copied = mez_agent::transcript::TranscriptContextRecord::from_transcript_content(
+        &snapshot.entries[0].content,
+    )
+    .unwrap()
+    .unwrap();
+    assert!(format!("{:?}", copied.event()).contains("retained row three"));
     std::fs::remove_dir_all(root).unwrap();
 }
 
@@ -629,8 +639,10 @@ fn runtime_resumed_compacted_archive_manual_selection_stays_after_prefix() {
                 conversation_id: conversation.into(),
                 sequence,
                 created_at_unix_seconds: sequence,
-                role: mez_agent::transcript::TranscriptRole::Assistant,
-                turn_id: format!("closed-{sequence}"),
+                // Literal historical users are references, not active tasks or
+                // native groups with guessed completion from display text.
+                role: mez_agent::transcript::TranscriptRole::User,
+                turn_id: format!("reference-{sequence}"),
                 agent_id: "agent-%9".into(),
                 pane_id: "%9".into(),
                 content: format!("row-{sequence} {}", "small closed group ".repeat(20)),
@@ -672,17 +684,12 @@ fn runtime_resumed_compacted_archive_manual_selection_stays_after_prefix() {
     let task = service
         .pending_agent_compaction_task_for_tests("%1")
         .unwrap_or_else(|| panic!("manual compaction must queue uncovered work: {settled}"));
-    assert_eq!(
-        task.compacted_through_sequence,
-        Some(3),
-        "covered prefix must never be selected again"
-    );
-    assert_eq!(
-        task.frozen_compaction_rows
-            .iter()
-            .map(|row| row.sequence)
-            .collect::<Vec<_>>(),
-        [3]
+    assert!(task.replay_source.is_some());
+    let source = &task.request.messages.last().unwrap().content;
+    assert!(source.contains("PRIOR_PREFIX") && source.contains("row-3"));
+    assert!(
+        !source.contains("row-1") && !source.contains("row-2"),
+        "covered raw prefix must never be selected again"
     );
     std::fs::remove_dir_all(root).unwrap();
 }

@@ -72,6 +72,15 @@ impl RuntimeSessionService {
         self.persistence.queue_transcript(effect);
     }
 
+    /// Takes only a real queued publication; ordinary append ownership remains
+    /// at its original queue until the corresponding fixture actually runs it.
+    #[cfg(test)]
+    pub(crate) fn take_replay_epoch_attempt_for_tests(
+        &mut self,
+    ) -> Option<crate::runtime::RuntimeReplayEpochAttempt> {
+        self.persistence.take_replay_epoch_attempt_for_tests()
+    }
+
     /// Seeds an accepted divider intent without synthetic terminal input.
     #[cfg(test)]
     pub(crate) fn queue_divider_debounce_for_tests(&mut self, client_id: mez_core::ids::ClientId) {

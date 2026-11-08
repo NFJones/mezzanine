@@ -201,11 +201,14 @@ context_window_tokens = 128000
                 conversation_id: "async-attached-compact".to_string(),
                 sequence,
                 created_at_unix_seconds: sequence,
-                role: mez_agent::transcript::TranscriptRole::Assistant,
+                role: mez_agent::transcript::TranscriptRole::User,
                 turn_id: format!("turn-{sequence}"),
                 agent_id: "agent-%1".to_string(),
                 pane_id: "%1".to_string(),
-                content: format!("compact source entry {sequence}"),
+                content: format!(
+                    "literal compaction reference {sequence} {}",
+                    "source ".repeat(5_000)
+                ),
             })
             .unwrap();
     }

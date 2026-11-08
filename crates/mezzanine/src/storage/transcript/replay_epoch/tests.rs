@@ -8,8 +8,14 @@ use std::{
     sync::{Arc, Barrier},
 };
 
+mod arrivals;
+mod edit_lifetime;
 mod initial;
+mod interrupted;
 mod memory;
+mod native_edits;
+mod raw_edits;
+mod raw_revision;
 
 /// Owns an isolated physical temporary directory on Linux and macOS, removed
 /// after every scenario. Source and archive bytes are synthetic and task-owned.
@@ -1189,7 +1195,7 @@ fn version_five_source_upgrades_through_qualified_publication() {
     assert!(mez_agent::invoked_mcp_tools_for_context(current.context(), &summary).is_empty());
     current.append_fact("new", "new exact source").unwrap();
     let next = proposal(&fixture, &current, Some(parent), "current version head");
-    assert_eq!(next.envelope.manifest.version, 9);
+    assert_eq!(next.envelope.manifest.version, 10);
     assert!(next.envelope.manifest.archive_cut.is_some());
     fixture.store.publish_replay_epoch(&next).unwrap();
     assert_eq!(fixture.load().0, next.identity());
@@ -1214,7 +1220,7 @@ fn version_six_source_upgrades_without_reinterpreting_task_lifecycle() {
         .append_fact("arrival", "original arrival bytes")
         .unwrap();
     let next = proposal(&fixture, &current, Some(parent), "new head");
-    assert_eq!(next.envelope.manifest.version, 9);
+    assert_eq!(next.envelope.manifest.version, 10);
     fixture.store.publish_replay_epoch(&next).unwrap();
     assert_eq!(fixture.load().0, next.identity());
 }

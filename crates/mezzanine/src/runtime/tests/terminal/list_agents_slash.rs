@@ -879,7 +879,7 @@ fn list_agents_slash_opens_during_real_compaction_without_state_change() {
                 conversation_id: conversation.clone(),
                 sequence,
                 created_at_unix_seconds: sequence,
-                role: TranscriptRole::Assistant,
+                role: TranscriptRole::User,
                 turn_id: format!("old-{sequence}"),
                 agent_id: "agent-%1".into(),
                 pane_id: "%1".into(),

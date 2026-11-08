@@ -405,252 +405,130 @@ fn runtime_agent_remember_usage_does_not_replace_execution_context_usage() {
     );
 }
 
-/// Verifies that `/compact` converts the active conversation transcript into a
-/// bounded pane-scoped memory record, retains a raw recent transcript tail, and
-/// feeds both into the next prompt context. This keeps context pressure
-/// handling from silently dropping recent exact referents.
+/// Manual compaction publishes a typed head with exact recent referents. The
+/// original public regression name remains stable; optional Memory records and
+/// physical display counts cannot supply replay authority or replace its receipt.
 #[test]
 fn runtime_agent_shell_compact_summarizes_transcript_into_memory_context() {
-    let mut service = test_runtime_service();
-    service
-        .replace_config_layers(vec![ConfigLayer {
-            name: "compact-context-window".to_string(),
-            path: None,
-            format: ConfigFormat::Toml,
-            scope: ConfigScope::Primary,
-            trusted: true,
-            text: r#"[agents]
-default_provider = "openai"
-default_model_profile = "compact-test"
-compaction_raw_retention_percent = 2
-[providers.openai]
-kind = "openai"
-models = ["gpt-compact-test"]
-default_model = "gpt-compact-test"
-[model_profiles.compact-test]
-provider = "openai"
-model = "gpt-compact-test"
-context_window_tokens = 20000
-"#
-            .to_string(),
-        }])
-        .unwrap();
-    let transcript_store = AgentTranscriptStore::new(temp_root("runtime-agent-compact"));
-    for sequence in 1_u64..=12 {
-        let (role, content) = match sequence {
-            1 => (
-                mez_agent::transcript::TranscriptRole::User,
-                format!("summarize release plan {}", "summary-word ".repeat(28)),
-            ),
-            2 => (
-                mez_agent::transcript::TranscriptRole::Tool,
-                format!(
-                    "api_key sk-secret should be hidden {}",
-                    "secret-word ".repeat(28)
-                ),
-            ),
-            3 => (
-                mez_agent::transcript::TranscriptRole::Assistant,
-                format!(
-                    "release plan summary is ready {}",
-                    "release-word ".repeat(28)
-                ),
-            ),
-            12 => (
-                mez_agent::transcript::TranscriptRole::Assistant,
-                format!(
-                    "final filler assistant turn {sequence} {}",
-                    "assistant-word ".repeat(28)
-                ),
-            ),
-            _ if sequence % 2 == 0 => (
-                mez_agent::transcript::TranscriptRole::User,
-                format!("filler user turn {sequence} {}", "user-word ".repeat(28)),
-            ),
-            _ => (
-                mez_agent::transcript::TranscriptRole::Assistant,
-                format!(
-                    "filler assistant turn {sequence} {}",
-                    "assistant-word ".repeat(28)
-                ),
-            ),
-        };
-        let turn_id = match sequence {
-            1..=3 => "turn-1".to_string(),
-            _ => format!("turn-{}", (sequence.saturating_sub(2)) / 2 + 1),
-        };
-        transcript_store
-            .append(&mez_agent::transcript::TranscriptEntry {
-                conversation_id: "as1".to_string(),
-                sequence,
-                created_at_unix_seconds: sequence,
-                role,
-                turn_id,
-                agent_id: "agent-%1".to_string(),
-                pane_id: "%1".to_string(),
-                content,
-            })
-            .unwrap();
-    }
-    service.set_agent_transcript_store(transcript_store.clone());
-    let primary = service
-        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
-        .unwrap();
-    let mut screen = TerminalScreen::new(Size::new(80, 8).unwrap(), 80).unwrap();
-    screen.feed(b"ready\n");
-    service.set_pane_screen("%1".to_string(), screen);
-    service
-        .agent_shell_store_mut()
-        .enter_or_resume("%1")
-        .unwrap();
-    service
-        .agent_shell_store_mut()
-        .bind_conversation("%1", "as1", 12)
-        .unwrap();
-    let (_, profile) = service
-        .active_model_profile_for_pane("%1", "agent-%1", None)
-        .unwrap();
-    let execution_usage = mez_agent::ModelTokenUsage {
+    let (mut service, store, turn) = crate::test_support::compaction_source::recovery_source(
+        test_runtime_service(),
+        temp_root("runtime-agent-compact"),
+        &format!(
+            "summarize release plan api_key sk-secret {}",
+            "summary-word ".repeat(10_000)
+        ),
+        "ORIGINAL_RECENT_RELEASE_REFERENT",
+        2,
+    );
+    let profile = service.agent_turn_model_profile(&turn).unwrap().clone();
+    crate::test_support::compaction_source::complete_task(
+        &mut service,
+        &turn,
+        "LATEST_COMPLETED_RELEASE_TASK",
+        mez_agent::ProviderApiCompatibility::OpenAiResponses,
+    );
+    let conversation = service
+        .agent_turn_ledger()
+        .turn(&turn)
+        .unwrap()
+        .conversation_id
+        .clone();
+    let usage = mez_agent::ModelTokenUsage {
         input_tokens: 1_200,
         output_tokens: 20,
         reasoning_tokens: 5,
         cached_input_tokens: Some(100),
         cache_write_input_tokens: None,
     };
-    service.record_agent_provider_token_usage_with_profile(
-        "%1",
-        execution_usage,
-        execution_usage,
-        Some(&profile),
-    );
-
+    service.record_agent_provider_token_usage_with_profile("%1", usage, usage, Some(&profile));
+    let audit = store.inspect(&conversation).unwrap();
+    let primary = service
+        .session
+        .clients()
+        .iter()
+        .find(|client| service.session.is_attached_primary(&client.id))
+        .unwrap()
+        .id
+        .clone();
     let compact = service.dispatch_runtime_control_body(
         r#"{"jsonrpc":"2.0","id":"compact","method":"agent/shell/command","params":{"idempotency_key":"compact","input":"/compact"}}"#,
         &primary,
     );
-
     assert!(compact.contains(r#""kind":"mutated""#), "{compact}");
-    assert!(compact.contains(r#""command":"compact""#), "{compact}");
     assert!(compact.contains("state=queued"), "{compact}");
-    assert!(
-        compact.contains("previous_transcript_entries=12"),
-        "{compact}"
-    );
-    assert!(compact.contains("summarized_entries=9"), "{compact}");
-    assert!(compact.contains("source=model-compact"), "{compact}");
-    assert!(!compact.contains("requires_runtime"), "{compact}");
     assert!(service.agent_is_compacting("%1"));
+    complete_runtime_test_compaction(&mut service, "%1", "summarize release plan\n[redacted]");
+    // Inference alone cannot install a head or reset the execution sample.
+    assert!(service.agent_latest_request_usage(&conversation).is_some());
+    let completion =
+        crate::test_support::compaction_publication::execute_pending_publication(&mut service);
     assert!(
         service
-            .pending_agent_compaction_task_for_tests("%1")
-            .is_some()
+            .apply_replay_epoch_completion(completion)
+            .unwrap()
+            .applied
+    );
+    assert!(service.agent_latest_request_usage(&conversation).is_none());
+    assert!(
+        service
+            .agent_context_usage_snapshot(&conversation)
+            .is_none()
+    );
+    assert_eq!(store.inspect(&conversation).unwrap(), audit);
+
+    let history = crate::runtime::execute_runtime_agent_prompt_history_work(
+        service.prepare_runtime_agent_prompt_history_work("%1"),
+    )
+    .unwrap();
+    let owner = history.replay_owner().unwrap().unwrap();
+    assert_eq!(owner.revision().get(), 1);
+    let head = owner.context().chronology().first().unwrap();
+    assert_eq!(head.block().source, ContextSourceKind::CompactionPrefix);
+    assert_eq!(head.block().content, "summarize release plan\n[redacted]");
+    assert!(
+        owner
+            .context()
+            .blocks()
+            .iter()
+            .any(|block| { block.content.contains("ORIGINAL_RECENT_RELEASE_REFERENT") })
+    );
+    assert!(
+        !owner
+            .context()
+            .blocks()
+            .iter()
+            .any(|block| block.content.contains("sk-secret"))
     );
 
-    complete_runtime_test_compaction(&mut service, "%1", "summarize release plan\n[redacted]");
-    assert!(
-        service.agent_latest_request_usage("as1").is_none(),
-        "manual context replacement must leave execution usage unknown: {}",
-        service
-            .pane_screen("%1")
-            .unwrap()
-            .normal_content_lines()
-            .join("\n")
-    );
-    assert!(
-        service.agent_context_usage_snapshot("as1").is_none(),
-        "manual compactor usage must not become the context snapshot"
-    );
-    let metadata = transcript_store
+    let metadata = store
         .load_agent_session_metadata(service.session().id.as_str())
         .unwrap();
     let metadata = metadata
         .iter()
-        .find(|metadata| metadata.conversation_id == "as1")
-        .expect("compaction completion must checkpoint conversation metadata");
-    assert!(metadata.latest_request_usage.is_none(), "{metadata:#?}");
-    assert!(metadata.context_usage_snapshot.is_none(), "{metadata:#?}");
-    let pane_text = service
-        .pane_screen("%1")
-        .unwrap()
-        .normal_content_lines()
-        .join("\n");
-    assert!(
-        pane_text.contains("agent: compacting conversation summary"),
-        "{pane_text}"
-    );
-    assert!(
-        pane_text.contains("agent: compacted conversation summary"),
-        "{pane_text}"
-    );
+        .find(|row| row.conversation_id == conversation)
+        .unwrap();
+    assert!(metadata.latest_request_usage.is_none());
+    assert!(metadata.context_usage_snapshot.is_none());
+    let next = service
+        .start_agent_prompt_turn("%1", "continue after compaction")
+        .unwrap();
+    let context = &service.agent_turn_contexts()[&next.turn_id];
+    for original in owner.context().chronology() {
+        assert!(context.chronology().iter().any(|event| {
+            event.record() == original.record() && event.block() == original.block()
+        }));
+    }
     assert_eq!(
-        service
-            .agent_shell_store()
-            .get("%1")
-            .unwrap()
-            .transcript_entries,
-        5
+        context
+            .blocks()
+            .iter()
+            .filter(|block| {
+                block.source == ContextSourceKind::CompactionPrefix
+                    && block.content == "summarize release plan\n[redacted]"
+            })
+            .count(),
+        1
     );
-    let compacted = service
-        .memory_records()
-        .into_iter()
-        .find(|record| record.id == mez_agent::memory::canonical_memory_uuid("compact-as1"))
-        .expect("compacted memory record");
-    assert!(
-        compacted.content.contains("summarize release plan"),
-        "{}",
-        compacted.content
-    );
-    assert!(
-        compacted.content.contains("[redacted]"),
-        "{}",
-        compacted.content
-    );
-    assert!(
-        !compacted.content.contains("sk-secret"),
-        "{}",
-        compacted.content
-    );
-
-    let prompt = service.dispatch_runtime_control_body(
-        r#"{"jsonrpc":"2.0","id":"compact-prompt","method":"agent/shell/command","params":{"idempotency_key":"compact-prompt","input":"continue after compaction"}}"#,
-        &primary,
-    );
-    assert!(prompt.contains(r#""state":"running""#), "{prompt}");
-    let context = service.agent_turn_contexts().get("turn-1").unwrap();
-    assert!(context.blocks().iter().any(|block| {
-        block.source == ContextSourceKind::CompactionPrefix
-            && block
-                .label
-                .contains(&mez_agent::memory::canonical_memory_uuid("compact-as1"))
-            && block.content.contains("summarize release plan")
-    }));
-    assert!(context.blocks().iter().all(|block| {
-        !matches!(
-            block.source,
-            ContextSourceKind::Transcript
-                | ContextSourceKind::TranscriptUser
-                | ContextSourceKind::TranscriptAssistant
-                | ContextSourceKind::TranscriptTool
-        ) || !block.content.contains("release plan summary is ready")
-    }));
-    assert!(context.blocks().iter().all(|block| {
-        !matches!(
-            block.source,
-            ContextSourceKind::Transcript
-                | ContextSourceKind::TranscriptUser
-                | ContextSourceKind::TranscriptAssistant
-                | ContextSourceKind::TranscriptTool
-        ) || !block.content.contains("sk-secret")
-    }));
-    assert!(context.blocks().iter().all(|block| {
-        !matches!(
-            block.source,
-            ContextSourceKind::Transcript
-                | ContextSourceKind::TranscriptUser
-                | ContextSourceKind::TranscriptAssistant
-                | ContextSourceKind::TranscriptTool
-        ) || !block.content.contains("summarize release plan")
-    }));
 }
 
 /// Verifies provider context receives only the active conversation compaction

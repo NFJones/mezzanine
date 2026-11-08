@@ -151,9 +151,45 @@ fn runtime_replayed_uuid_summary_continuity_preserves_transition_meaning() {
         .break_reason,
         ContextContinuityBreakReason::UnexpectedRewrite
     );
-    store
-        .save_compaction_epoch(conversation, 1, "new model-authored durable summary")
+    // Once replay normalizes the prefix, a later rewrite must use the typed
+    // publisher and its exact parent. The retired prefix writer is no longer
+    // an alternate way to replace that authority.
+    let snapshot = store
+        .conversation_replay_snapshot(conversation, &[], |_| None)
         .unwrap();
+    let snapshot = snapshot.replay.as_ref().unwrap();
+    let mut source = mez_agent::ReplayEpochContext::from_checkpoint(
+        mez_agent::ReplayConversationId::new(conversation).unwrap(),
+        snapshot.checkpoint().clone(),
+        AgentContext::empty(),
+    )
+    .unwrap();
+    source
+        .append_fact("later state", "new closed source to summarize")
+        .unwrap();
+    let mez_agent::ReplayCompactionPreparation::Ready(plan) = source
+        .prepare_compaction(mez_agent::ReplayTailPolicy::new(1_000, 0).unwrap())
+        .unwrap()
+    else {
+        panic!("later source must permit a new epoch")
+    };
+    let proposal = store
+        .prepare_replay_epoch(
+            crate::storage::transcript::replay_epoch::ReplaySourceOrigin::new(
+                "new-summary-turn",
+                "agent-%1",
+                "%1",
+            )
+            .unwrap()
+            .capture(Some(snapshot)),
+            conversation,
+            Some(snapshot.identity().clone()),
+            &source,
+            plan,
+            mez_agent::ReplayHeadPublication::Summary("new model-authored durable summary".into()),
+        )
+        .unwrap();
+    store.publish_replay_epoch(&proposal).unwrap();
     let changed = AgentContext::new_durable(
         service
             .runtime_agent_history_epoch_context("%1")

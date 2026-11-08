@@ -829,243 +829,365 @@ fn runtime_saved_fork_epoch_setup_failure_removes_only_published_target() {
     assert_eq!(after, before);
 }
 
-/// Selective epochs without reconstructible terminal witnesses must survive a
-/// real fork and the first encoded request after reopen. Inclusive ranges keep
-/// their original anchors, user barriers and assistant roles remain ordered,
-/// and an uncovered provider-owned native item retains its exact wire shape.
-/// Later parent work cannot leak in; later target work appears exactly once.
+/// Historical selective state refuses without changing its anchors or native
+/// bytes. A separate canonical one-head fork retains the original positive
+/// provider-owner, wire-shape and cold-resume checks. Later parent work cannot
+/// leak into that child; a genuine child task arrival appears exactly once.
 #[test]
 fn runtime_saved_fork_selective_epoch_encoded_anchors_and_native_ownership() {
     use crate::storage::transcript::{AgentCompactionEpoch, AgentCompactionRange};
+    use mez_agent::{
+        AgentContext, ContextConversationAppend, ReplayCompactionPreparation, ReplayConversationId,
+        ReplayEpochContext, ReplayHeadPublication, ReplayTailPolicy,
+    };
     for prefix in [0, 1] {
         let root = temp_root("runtime-fork-selective-epoch");
         let store = AgentTranscriptStore::new(root.clone());
         let mut service = test_runtime_service();
         service.set_agent_transcript_store(store.clone());
-        let primary = service
-            .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let primary = service
+                .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+                .unwrap();
+            service
+                .start_initial_pane_process(Some("cat >/dev/null"))
+                .unwrap();
+            service
+                .agent_shell_store_mut()
+                .enter_or_resume("%1")
+                .unwrap();
+            let (_, profile) = service
+                .active_model_profile_for_pane("%1", "agent-%1", None)
+                .unwrap();
+            let owner = mez_agent::ProviderContinuityOwner::new(
+                mez_agent::ProviderApiCompatibility::OpenAiResponses,
+                &profile.provider,
+            )
             .unwrap();
-        service
-            .start_initial_pane_process(Some("cat >/dev/null"))
-            .unwrap();
-        service
-            .agent_shell_store_mut()
-            .enter_or_resume("%1")
-            .unwrap();
-        let (_, profile) = service
-            .active_model_profile_for_pane("%1", "agent-%1", None)
-            .unwrap();
-        let owner = mez_agent::ProviderContinuityOwner::new(
-            mez_agent::ProviderApiCompatibility::OpenAiResponses,
-            &profile.provider,
-        )
-        .unwrap();
-        let native_item = serde_json::json!({
-            "type":"message", "id":"fork-native-msg", "role":"assistant",
-            "content":[{"type":"output_text", "text":"FORK_ROW_010"}]
-        });
-        let native = mez_agent::ProviderTranscriptEvent::validated_openai_response_output(vec![
-            native_item.clone(),
-        ])
-        .unwrap();
-        let rows = (1..=11)
-            .map(|sequence| {
-                let mut row = TranscriptEntry {
-                    conversation_id: "fork-source".into(),
-                    sequence,
-                    created_at_unix_seconds: sequence,
-                    role: if matches!(sequence, 5 | 9) {
-                        TranscriptRole::Assistant
-                    } else {
-                        TranscriptRole::User
-                    },
-                    turn_id: format!("turn-{sequence}"),
-                    agent_id: "agent-%1".into(),
-                    pane_id: "%1".into(),
-                    content: format!("FORK_ROW_{sequence:03}"),
-                };
-                if matches!(sequence, 2..=3 | 6..=7 | 10..=11) {
-                    row.role = TranscriptRole::System;
-                    if sequence >= 10 {
-                        // Native continuity requires its neutral assistant twin
-                        // before provider output in the same complete group.
-                        row.turn_id = "native-turn".into();
-                    }
-                    let (group, ordinal) = match sequence {
-                        2..=3 => ("first", sequence - 1),
-                        6..=7 => ("second", sequence - 5),
-                        _ => ("native", sequence - 9),
+            let native_item = serde_json::json!({
+                "type":"message", "id":"fork-native-msg", "role":"assistant",
+                "content":[{"type":"output_text", "text":"FORK_ROW_010"}]
+            });
+            let native =
+                mez_agent::ProviderTranscriptEvent::validated_openai_response_output(vec![
+                    native_item.clone(),
+                ])
+                .unwrap();
+            let rows = (1..=11)
+                .map(|sequence| {
+                    let mut row = TranscriptEntry {
+                        conversation_id: "fork-source".into(),
+                        sequence,
+                        created_at_unix_seconds: sequence,
+                        role: if matches!(sequence, 5 | 9) {
+                            TranscriptRole::Assistant
+                        } else {
+                            TranscriptRole::User
+                        },
+                        turn_id: format!("turn-{sequence}"),
+                        agent_id: "agent-%1".into(),
+                        pane_id: "%1".into(),
+                        content: format!("FORK_ROW_{sequence:03}"),
                     };
-                    row.content = mez_agent::TranscriptContextEvent::execution_block_with_metadata(
-                        if sequence == 11 {
-                            ContextSourceKind::TranscriptTool
-                        } else {
-                            ContextSourceKind::TranscriptAssistant
-                        },
-                        "answer",
-                        if sequence == 11 {
-                            native.to_transcript_content()
-                        } else {
-                            row.content
-                        },
-                        mez_agent::ContextExecutionGroupId::new(group).unwrap(),
-                        ordinal,
-                        (sequence == 11).then(|| owner.clone()),
-                    )
-                    .unwrap()
-                    .to_transcript_content();
-                }
-                row
-            })
-            .collect::<Vec<_>>();
-        store.append_many(&rows).unwrap();
-        let epoch = AgentCompactionEpoch {
-            summary_records: None,
-            version: 2,
-            conversation_id: "fork-source".into(),
-            through_sequence: prefix,
-            summary: if prefix == 0 {
-                String::new()
-            } else {
-                "FORK_SUMMARY_PREFIX".into()
-            },
-            ranges: vec![
-                AgentCompactionRange {
-                    first_sequence: 2,
-                    through_sequence: 3,
-                    summary: "FORK_SUMMARY_FIRST".into(),
+                    if matches!(sequence, 2..=3 | 6..=7 | 10..=11) {
+                        row.role = TranscriptRole::System;
+                        if sequence >= 10 {
+                            // Native continuity requires its neutral assistant twin
+                            // before provider output in the same complete group.
+                            row.turn_id = "native-turn".into();
+                        }
+                        let (group, ordinal) = match sequence {
+                            2..=3 => ("first", sequence - 1),
+                            6..=7 => ("second", sequence - 5),
+                            _ => ("native", sequence - 9),
+                        };
+                        row.content =
+                            mez_agent::TranscriptContextEvent::execution_block_with_metadata(
+                                if sequence == 11 {
+                                    ContextSourceKind::TranscriptTool
+                                } else {
+                                    ContextSourceKind::TranscriptAssistant
+                                },
+                                "answer",
+                                if sequence == 11 {
+                                    native.to_transcript_content()
+                                } else {
+                                    row.content
+                                },
+                                mez_agent::ContextExecutionGroupId::new(group).unwrap(),
+                                ordinal,
+                                (sequence == 11).then(|| owner.clone()),
+                            )
+                            .unwrap()
+                            .to_transcript_content();
+                    }
+                    row
+                })
+                .collect::<Vec<_>>();
+            store.append_many(&rows).unwrap();
+            let epoch = AgentCompactionEpoch {
+                summary_records: None,
+                version: 2,
+                conversation_id: "fork-source".into(),
+                through_sequence: prefix,
+                summary: if prefix == 0 {
+                    String::new()
+                } else {
+                    "FORK_SUMMARY_PREFIX".into()
                 },
-                AgentCompactionRange {
-                    first_sequence: 6,
-                    through_sequence: 7,
-                    summary: "FORK_SUMMARY_SECOND".into(),
-                },
-            ],
-        };
-        let selected = rows
-            .iter()
-            .filter(|row| matches!(row.sequence, 2..=3 | 6..=7))
-            .cloned()
-            .collect::<Vec<_>>();
-        store
-            .save_compaction_ranges_with_proof(epoch, &selected)
-            .unwrap();
-        let source_path = store.transcript_path("fork-source").unwrap();
-        let epoch_path = source_path.parent().unwrap().join("compaction-epoch.json");
-        let source_bytes = fs::read(&source_path).unwrap();
-        let epoch_bytes = fs::read(&epoch_path).unwrap();
-        service
-            .agent_shell_store_mut()
-            .bind_conversation("%1", "fork-source", 11)
-            .unwrap();
-        let response = service
-            .execute_agent_shell_command(&primary, "/fork fork-target")
-            .unwrap();
-        assert_eq!(
-            serde_json::from_str::<serde_json::Value>(&response).unwrap()["body"],
-            serde_json::Value::Null
-        );
-        assert!(service.agent_command_is_active("%1"));
-        let response = service
-            .run_pending_deferred_agent_command_for_tests()
-            .unwrap()
-            .unwrap();
-        assert!(response.contains("forked=true"), "{response}");
-        let pane = service
-            .agent_shell_store()
-            .sessions()
-            .find(|session| session.session_id == "fork-target")
-            .unwrap()
-            .pane_id
-            .clone();
-        let actual = encoded_history(&mut service, &pane);
-        let body = encoded_body(&mut service, &pane);
-        let context = service
-            .agent_context_for_pane_prompt(&pane, "continue", 0)
-            .unwrap();
-        service.terminate_all_pane_processes().unwrap();
-        let expected = [
-            if prefix == 0 {
-                ("user", "FORK_ROW_001")
-            } else {
-                ("developer", "FORK_SUMMARY_PREFIX")
-            },
-            ("developer", "FORK_SUMMARY_FIRST"),
-            ("user", "FORK_ROW_004"),
-            ("assistant", "FORK_ROW_005"),
-            ("developer", "FORK_SUMMARY_SECOND"),
-            ("user", "FORK_ROW_008"),
-            ("assistant", "FORK_ROW_009"),
-            ("assistant", "FORK_ROW_010"),
-        ]
-        .into_iter()
-        .map(|(role, text)| (role.to_string(), text.to_string()))
-        .collect::<Vec<_>>();
-        assert_eq!(actual, expected);
-        assert!(
-            body["input"].as_array().unwrap().contains(&native_item),
-            "{body}"
-        );
-        let switched =
-            encoded_body_with_provider(&mut service, &pane, Some("different-native-owner"));
-        assert!(
-            !switched["input"].as_array().unwrap().contains(&native_item),
-            "{switched}"
-        );
-        assert!(
-            switched.to_string().contains("FORK_ROW_010"),
-            "neutral assistant twin survives model/provider switch"
-        );
-        assert!(
-            context
-                .chronology()
-                .iter()
-                .any(|event| event.provider_owner() == Some(&owner))
-        );
-        assert_eq!(fs::read(&source_path).unwrap(), source_bytes);
-        assert_eq!(fs::read(&epoch_path).unwrap(), epoch_bytes);
-        let mut reopened = test_runtime_service();
-        reopened.set_agent_transcript_store(AgentTranscriptStore::new(root));
-        let primary = reopened
-            .attach_primary("reopened", true, Size::new(80, 24).unwrap(), 120)
-            .unwrap();
-        reopened
-            .agent_shell_store_mut()
-            .enter_or_resume("%1")
-            .unwrap();
-        reopened
-            .execute_agent_shell_command(&primary, "/resume fork-target")
-            .unwrap();
-        let settled = reopened
-            .run_pending_deferred_agent_command_for_tests()
-            .unwrap()
-            .unwrap();
-        assert!(settled.contains("resumed=true"), "{settled}");
-        assert_eq!(encoded_history(&mut reopened, "%1"), expected);
-        assert!(
-            encoded_body(&mut reopened, "%1")["input"]
-                .as_array()
+                ranges: vec![
+                    AgentCompactionRange {
+                        first_sequence: 2,
+                        through_sequence: 3,
+                        summary: "FORK_SUMMARY_FIRST".into(),
+                    },
+                    AgentCompactionRange {
+                        first_sequence: 6,
+                        through_sequence: 7,
+                        summary: "FORK_SUMMARY_SECOND".into(),
+                    },
+                ],
+            };
+            store.install_legacy_compaction_fixture(epoch).unwrap();
+            let source_path = store.transcript_path("fork-source").unwrap();
+            let epoch_path = source_path.parent().unwrap().join("compaction-epoch.json");
+            let source_bytes = fs::read(&source_path).unwrap();
+            let epoch_bytes = fs::read(&epoch_path).unwrap();
+            service
+                .agent_shell_store_mut()
+                .bind_conversation("%1", "fork-source", 11)
+                .unwrap();
+            let response = service
+                .execute_agent_shell_command(&primary, "/fork fork-target")
+                .unwrap();
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&response).unwrap()["body"],
+                serde_json::Value::Null
+            );
+            assert!(service.agent_command_is_active("%1"));
+            let response = service
+                .run_pending_deferred_agent_command_for_tests()
                 .unwrap()
-                .contains(&native_item)
-        );
-        assert!(
+                .unwrap();
+            assert!(response.contains("normalization"), "{response}");
+            assert_eq!(
+                service.agent_shell_store().get("%1").unwrap().session_id,
+                "fork-source"
+            );
+            assert!(
+                !service
+                    .agent_shell_store()
+                    .sessions()
+                    .any(|session| session.session_id == "fork-target")
+            );
+            assert!(!root.join("fork-target").exists());
+            assert_eq!(fs::read(&source_path).unwrap(), source_bytes);
+            assert_eq!(fs::read(&epoch_path).unwrap(), epoch_bytes);
+
+            // Keep the original positive provider/native and cold-fork assertions
+            // on supported one-head source. This is an independent canonical
+            // admission/publication, never a concatenation of the old summaries.
+            let control_cid = "typed-fork-control";
+            let mut control = ReplayEpochContext::new(
+                ReplayConversationId::new(control_cid).unwrap(),
+                AgentContext::empty(),
+            )
+            .unwrap();
+            control
+                .append_fact("original closed fact", "COVERED_CONTROL_FACT")
+                .unwrap();
+            control
+                .admit_instruction_task(
+                    vec![ContextBlock::user_event("user prompt", "FORK_ROW_008")],
+                    &[],
+                    &[],
+                    0,
+                )
+                .unwrap();
+            let group = mez_agent::ContextExecutionGroupId::new("native-control").unwrap();
+            control
+                .append_execution_events([
+                    ContextConversationAppend::assistant("answer", "FORK_ROW_010", group.clone()),
+                    ContextConversationAppend::evidence(
+                        ContextSourceKind::TranscriptTool,
+                        "native output",
+                        native.to_transcript_content(),
+                        group,
+                        Some(owner.clone()),
+                        true,
+                    ),
+                ])
+                .unwrap();
+            let ReplayCompactionPreparation::Ready(plan) = control
+                .prepare_compaction(ReplayTailPolicy::new(1000, 0).unwrap())
+                .unwrap()
+            else {
+                panic!("original fact must be eligible before the protected task")
+            };
+            let origin = crate::storage::transcript::replay_epoch::ReplaySourceOrigin::new(
+                "typed-control-turn",
+                "agent-%1",
+                "%1",
+            )
+            .unwrap();
+            let proposal = store
+                .prepare_replay_epoch(
+                    origin.capture(None),
+                    control_cid,
+                    None,
+                    &control,
+                    plan,
+                    ReplayHeadPublication::Summary("FORK_SUMMARY_PREFIX".into()),
+                )
+                .unwrap();
+            store.publish_replay_epoch(&proposal).unwrap();
+            service
+                .agent_shell_store_mut()
+                .bind_conversation("%1", control_cid, 0)
+                .unwrap();
+            service
+                .execute_agent_shell_command(&primary, "/fork fork-target")
+                .unwrap();
+            let response = service
+                .run_pending_deferred_agent_command_for_tests()
+                .unwrap()
+                .unwrap();
+            assert!(response.contains("forked=true"), "{response}");
+            let pane = service
+                .agent_shell_store()
+                .sessions()
+                .find(|session| session.session_id == "fork-target")
+                .unwrap()
+                .pane_id
+                .clone();
+            let actual = encoded_history(&mut service, &pane);
+            let body = encoded_body(&mut service, &pane);
+            let context = service
+                .agent_context_for_pane_prompt(&pane, "continue", 0)
+                .unwrap();
+            service.terminate_all_pane_processes().unwrap();
+            let expected = [
+                ("developer", "FORK_SUMMARY_PREFIX"),
+                ("user", "FORK_ROW_008"),
+                ("assistant", "FORK_ROW_010"),
+            ]
+            .into_iter()
+            .map(|(role, text)| (role.to_string(), text.to_string()))
+            .collect::<Vec<_>>();
+            assert_eq!(actual, expected);
+            assert!(
+                body["input"].as_array().unwrap().contains(&native_item),
+                "{body}"
+            );
+            let switched =
+                encoded_body_with_provider(&mut service, &pane, Some("different-native-owner"));
+            assert!(
+                !switched["input"].as_array().unwrap().contains(&native_item),
+                "{switched}"
+            );
+            assert!(
+                switched.to_string().contains("FORK_ROW_010"),
+                "neutral assistant twin survives model/provider switch"
+            );
+            assert!(
+                context
+                    .chronology()
+                    .iter()
+                    .any(|event| event.provider_owner() == Some(&owner))
+            );
+            assert_eq!(fs::read(&source_path).unwrap(), source_bytes);
+            assert_eq!(fs::read(&epoch_path).unwrap(), epoch_bytes);
+            let mut reopened = test_runtime_service();
+            reopened.set_agent_transcript_store(AgentTranscriptStore::new(root.clone()));
+            let primary = reopened
+                .attach_primary("reopened", true, Size::new(80, 24).unwrap(), 120)
+                .unwrap();
             reopened
-                .agent_context_for_pane_prompt("%1", "continue", 0)
+                .agent_shell_store_mut()
+                .enter_or_resume("%1")
+                .unwrap();
+            reopened
+                .execute_agent_shell_command(&primary, "/resume fork-target")
+                .unwrap();
+            let settled = reopened
+                .run_pending_deferred_agent_command_for_tests()
                 .unwrap()
-                .chronology()
-                .iter()
-                .any(|event| event.provider_owner() == Some(&owner))
-        );
-        let mut later = rows[0].clone();
-        later.sequence = 12;
-        later.content = "FORK_ROW_PARENT_ONLY".into();
-        store.append(&later).unwrap();
-        later.conversation_id = "fork-target".into();
-        later.content = "FORK_ROW_012".into();
-        store.append(&later).unwrap();
-        let mut expected = expected;
-        expected.push(("user".into(), "FORK_ROW_012".into()));
-        assert_eq!(encoded_history(&mut reopened, "%1"), expected);
+                .unwrap();
+            assert!(settled.contains("resumed=true"), "{settled}");
+            assert_eq!(encoded_history(&mut reopened, "%1"), expected);
+            assert!(
+                encoded_body(&mut reopened, "%1")["input"]
+                    .as_array()
+                    .unwrap()
+                    .contains(&native_item)
+            );
+            assert!(
+                reopened
+                    .agent_context_for_pane_prompt("%1", "continue", 0)
+                    .unwrap()
+                    .chronology()
+                    .iter()
+                    .any(|event| event.provider_owner() == Some(&owner))
+            );
+            // Persist actual canonical task admissions with their own records and
+            // boundary metadata. Parent and child acquire distinct new occurrences.
+            let append_task = |conversation: &str, content: &str| {
+                let (_, mut source) = store
+                    .load_replay_epoch(conversation, AgentContext::empty())
+                    .unwrap()
+                    .unwrap();
+                source
+                    .admit_instruction_task(
+                        vec![ContextBlock::user_event("user prompt", content)],
+                        &[],
+                        &[],
+                        0,
+                    )
+                    .unwrap();
+                let event = source.context().chronology().last().unwrap();
+                let record = mez_agent::transcript::TranscriptContextRecord::new(
+                    mez_agent::TranscriptContextEvent::task_admission(
+                        event.sequence().get(),
+                        event.record().occurrence_id(),
+                        event.block().label.clone(),
+                        event.block().content.clone(),
+                    )
+                    .unwrap(),
+                    event.record(),
+                    None,
+                )
+                .unwrap();
+                store
+                    .append(&TranscriptEntry {
+                        conversation_id: conversation.into(),
+                        sequence: store.next_sequence(conversation).unwrap(),
+                        created_at_unix_seconds: 123,
+                        role: TranscriptRole::System,
+                        turn_id: format!("new-{conversation}-task"),
+                        agent_id: "agent-%1".into(),
+                        pane_id: "%1".into(),
+                        content: record.to_transcript_content().unwrap(),
+                    })
+                    .unwrap();
+            };
+            append_task(control_cid, "FORK_ROW_PARENT_ONLY");
+            append_task("fork-target", "FORK_ROW_012");
+            let mut expected = expected;
+            expected.push(("user".into(), "FORK_ROW_012".into()));
+            assert_eq!(encoded_history(&mut reopened, "%1"), expected);
+            reopened.terminate_all_pane_processes().unwrap();
+        }));
+        let cleanup = fixture_teardown::settle(&mut service);
+        match outcome {
+            Ok(()) => cleanup.unwrap(),
+            Err(panic) => {
+                if let Err(errors) = cleanup {
+                    eprintln!("owned fork fixture cleanup also failed: {errors:?}");
+                }
+                std::panic::resume_unwind(panic);
+            }
+        }
+        fs::remove_dir_all(root).unwrap();
     }
 }
 
@@ -1292,6 +1414,15 @@ fn runtime_saved_fork_epoch_first_encoded_request_survives_reopen() {
         .unwrap();
     assert!(settled.contains("resumed=true"), "{settled}");
     let parent_projection = encoded_history(&mut service, "%1");
+    // Resume performs the explicit source-preserving prefix normalization.
+    // Fork must preserve that accepted parent, not the superseded sidecar.
+    let normalized_epoch_bytes = fs::read(&epoch_path).unwrap();
+    assert_ne!(normalized_epoch_bytes, epoch_bytes);
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&normalized_epoch_bytes).unwrap()["manifest"]["version"],
+        10
+    );
+    assert_eq!(fs::read(&source_path).unwrap(), source_bytes);
     let forked = service
         .execute_agent_shell_command(&primary, "/fork fork-target")
         .unwrap();
@@ -1330,7 +1461,7 @@ fn runtime_saved_fork_epoch_first_encoded_request_survives_reopen() {
         .collect::<Vec<_>>();
     assert_eq!(encoded, expected);
     assert_eq!(fs::read(&source_path).unwrap(), source_bytes);
-    assert_eq!(fs::read(&epoch_path).unwrap(), epoch_bytes);
+    assert_eq!(fs::read(&epoch_path).unwrap(), normalized_epoch_bytes);
     assert_eq!(store.inspect("fork-target").unwrap().len(), 100);
     let mut reopened = test_runtime_service();
     reopened.set_agent_transcript_store(AgentTranscriptStore::new(root));

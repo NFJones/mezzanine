@@ -54,22 +54,20 @@ impl RuntimeSessionService {
                 estimated_tokens: tokens,
             })
         } else {
-            if task.replay_source.is_some() {
-                validate_model_compaction_summary(&summary, usize::MAX, false).map_err(
-                    |mut rejected| {
-                        rejected.budget = budget;
-                        rejected.estimated_tokens = tokens;
-                        rejected.cost = if tokens {
-                            mez_agent::provider_text_input_token_estimate(&summary)
-                        } else {
-                            model_context_text_word_count(&summary)
-                        };
-                        rejected
-                    },
-                )
-            } else {
-                validate_model_compaction_summary(&summary, budget, tokens)
-            }
+            // Canonical source ownership was checked before output handling.
+            // Local guidance is never a second semantic acceptance policy.
+            validate_model_compaction_summary(&summary, usize::MAX, false).map_err(
+                |mut rejected| {
+                    rejected.budget = budget;
+                    rejected.estimated_tokens = tokens;
+                    rejected.cost = if tokens {
+                        mez_agent::provider_text_input_token_estimate(&summary)
+                    } else {
+                        model_context_text_word_count(&summary)
+                    };
+                    rejected
+                },
+            )
         };
         // A frozen-valid summary MUST reach the existing complete-candidate
         // owner, even above its advisory replan target. Only that owner measures
@@ -179,54 +177,13 @@ impl RuntimeSessionService {
         Ok(())
     }
 
-    /// Proves the frozen source remains authoritative before treating output as
-    /// correctable. A one-character private witness exercises existing strict
-    /// application/mapping validators but is never stored, published or sent.
+    /// Correctable output retains exactly the same source contract as ordinary
+    /// completion. Missing canonical ownership never enables a legacy producer.
     fn validate_compaction_correction_source(
-        &self,
+        &mut self,
         task: &RuntimeAgentCompactionTask,
     ) -> Result<()> {
-        if task.replay_source.is_some() {
-            return self.validate_replay_compaction_task(task);
-        }
-        match &task.target {
-            RuntimeAgentCompactionTarget::ActiveTurn {
-                turn_id,
-                plan,
-                staged,
-                ..
-            } => {
-                let turn = self.agent_turn_ledger().turn(turn_id).ok_or_else(|| {
-                    MezError::invalid_state("summary correction turn disappeared")
-                })?;
-                if turn.state != AgentTurnState::Running {
-                    return Err(MezError::invalid_state(
-                        "summary correction turn is terminal",
-                    ));
-                }
-                let live = self.agent_turn_contexts().get(turn_id).ok_or_else(|| {
-                    MezError::invalid_state("summary correction context disappeared")
-                })?;
-                let context = if let Some(staged) = staged {
-                    let mut context = staged.context.clone();
-                    context
-                        .rebase_chronology_suffix(&staged.source_chronology, live)
-                        .map_err(|error| MezError::invalid_state(error.message()))?;
-                    context
-                } else {
-                    live.clone()
-                };
-                apply_model_context_compaction_plan(context.clone(), plan, "x")
-                    .map_err(|error| MezError::invalid_state(error.message()))?;
-                // This also validates archive/epoch/frozen-row evidence; a
-                // legitimate turn-local mapping remains eligible, not corruption.
-                self.prospective_observed_compaction_epoch(task, &context, plan, "x")?;
-            }
-            RuntimeAgentCompactionTarget::Conversation => {
-                self.manual_compaction_candidate_context(task, "x")?;
-            }
-        }
-        Ok(())
+        self.validate_replay_compaction_task(task)
     }
 }
 
@@ -272,11 +229,12 @@ fn prepare_summary_correction(
             && message.source == ContextSourceKind::Configuration
             && message.content.starts_with("[private summary correction]"))
     });
+    let acceptance = "Final acceptance uses the complete proposed request and its configured input limit, not the advisory summary target.";
     messages.insert(2.min(messages.len()), ModelMessage {
         role: ModelMessageRole::Developer, source: ContextSourceKind::Configuration,
         placement: mez_agent::ContextPlacement::StablePrefix,
-        content: format!("[private summary correction]\nThe previous completed output was rejected ({:?}). Generate a fresh nonempty concise summary of the same frozen source, not a repair of quoted rejected text. Return exactly one final say. Aim for at most {next} {}; this is advisory guidance, not a provider-enforced output cap. UTF-8 summary bytes must not exceed {SUMMARY_BYTES}. The authoritative semantic allowance remains {} in that unit. No logs, repeated history or unsupported claims.", rejected.defect,
-            if rejected.estimated_tokens { "estimated input tokens (conservative UTF-8 byte estimate, about four bytes per token)" } else { "whitespace-delimited words" }, rejected.budget),
+        content: format!("[private summary correction]\nThe previous completed output was rejected ({:?}). Generate a fresh nonempty concise summary of the same frozen source, not a repair of quoted rejected text. Return exactly one final say. Aim for at most {next} {}; this is advisory guidance, not a provider-enforced output cap. UTF-8 summary bytes must not exceed {SUMMARY_BYTES}. {acceptance} No logs, repeated history or unsupported claims.", rejected.defect,
+            if rejected.estimated_tokens { "estimated input tokens (conservative UTF-8 byte estimate, about four bytes per token)" } else { "whitespace-delimited words" }),
     });
     task.request.messages = messages.into();
     Ok(())

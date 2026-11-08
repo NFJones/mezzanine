@@ -15,7 +15,40 @@ use std::{collections::BTreeMap, fs::File, path::PathBuf};
 /// Checked receipt identity, path and decoded rows from the existing reader.
 type StoredReceipt = (PathBuf, AppendReceipt, Vec<TranscriptEntry>);
 
+/// New admission cannot create a retired selective authority. This is semantic
+/// admission policy, not a codec restriction on existing durable receipts.
+pub(super) fn require_supported_initial_projection(
+    epoch: Option<&crate::storage::transcript::AgentCompactionEpoch>,
+) -> Result<()> {
+    if epoch.is_some_and(|epoch| !epoch.ranges.is_empty()) {
+        return Err(MezError::invalid_state(
+            "legacy selective initial projection requires explicit single-head normalization",
+        ));
+    }
+    Ok(())
+}
+
 impl AgentTranscriptStore {
+    /// Reads original selective authority without persisting an accounting
+    /// import. Receipt verification cannot normalize the historical source it
+    /// is checking; supported prefix receipts retain their usual import owner.
+    fn initial_receipt_authority_locked(
+        &self,
+        conversation_id: &str,
+        expected: Option<&crate::storage::transcript::AgentCompactionEpoch>,
+    ) -> Result<Option<crate::storage::transcript::AgentCompactionEpoch>> {
+        if require_supported_initial_projection(expected).is_ok() {
+            return self.compaction_epoch_locked(conversation_id);
+        }
+        let mut current = self.read_compaction_epoch_unmigrated(conversation_id)?;
+        if let Some(epoch) = current.as_mut()
+            && epoch.version == 3
+        {
+            epoch.restore_summary_records()?;
+        }
+        Ok(current)
+    }
+
     /// Rejects unrelated archive adoption or different replay authority before
     /// writing a new journal. A matching retained receipt owns partial writes;
     /// an already identical durable epoch supports idempotent late admission.
@@ -38,7 +71,7 @@ impl AgentTranscriptStore {
         let current = if initial.is_some() {
             None
         } else {
-            self.compaction_epoch_locked(batch.conversation_id())?
+            self.initial_receipt_authority_locked(batch.conversation_id(), epoch)?
         };
         if current
             .as_ref()
@@ -107,6 +140,7 @@ impl AgentTranscriptStore {
         batch: &TranscriptAppendBatch,
         lease: &File,
     ) -> Result<()> {
+        require_supported_initial_projection(batch.initial_compaction_epoch())?;
         if !batch.has_initial_authority() {
             return Ok(());
         }
@@ -176,7 +210,7 @@ impl AgentTranscriptStore {
         }
         if let Some(epoch) = batch.initial_compaction_epoch()
             && (self
-                .compaction_epoch_locked(batch.conversation_id())?
+                .initial_receipt_authority_locked(batch.conversation_id(), Some(epoch))?
                 .as_ref()
                 .is_none_or(|current| !current.matches_expected(epoch))
                 || !self.compaction_epoch_marker_is_committed(batch.conversation_id())?)
@@ -212,12 +246,26 @@ impl AgentTranscriptStore {
                 ));
             }
         }
+        // An original old receipt may retire if its whole promised projection
+        // already exists. Incomplete old authority stays retained and cannot
+        // cause any recovery writer, including another conversation, to run.
+        for (_, receipt, _) in receipts {
+            if require_supported_initial_projection(receipt.compaction_epoch.as_ref()).is_err() {
+                let _lease = self.acquire_conversation_lock(&receipt.conversation_id)?;
+                if self
+                    .verify_missing_append_receipt(&receipt.batch()?)
+                    .is_err()
+                {
+                    require_supported_initial_projection(receipt.compaction_epoch.as_ref())?;
+                }
+            }
+        }
         for (conversation_id, (epoch, initial, accounting, _)) in projections {
             let _lease = self.acquire_conversation_lock(conversation_id)?;
             if let Some(initial) = initial {
                 self.initial_replay_matches_locked(initial)?;
             } else if self
-                .compaction_epoch_locked(conversation_id)?
+                .initial_receipt_authority_locked(conversation_id, epoch)?
                 .as_ref()
                 .is_some_and(|current| epoch.is_none_or(|epoch| !current.matches_expected(epoch)))
             {

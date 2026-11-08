@@ -4,344 +4,49 @@ use super::*;
 use crate::runtime::{current_unix_seconds, execute_runtime_agent_prompt_history_work};
 use mez_agent::messaging::{Envelope, MessageScope};
 
-/// Leaves room for the current system prompt and both summaries while still
-/// requiring the two large historical groups to be compacted separately.
-const STAGED_COMPACTION_INPUT_LIMIT: &str = "20000";
-
+mod first_turn;
+mod legacy_raw;
+mod manual_model;
+mod observed_continuation;
+mod observed_fit;
+mod observed_history;
+mod observed_staging;
 mod preparation;
+mod provider_backoff;
+mod provider_continuity;
 mod provider_limit_replay;
+mod provider_recovery;
+mod replay_compatibility;
 mod replay_copies;
+mod replay_observed;
 mod replay_publication;
+mod routed_copies;
 mod single_head;
 mod summary_correction;
 mod terminal_handoff;
 mod transport_retries;
 mod usage_invalidation;
 
-/// Valid legacy history after a durable range must continue as private
-/// turn-local recovery, preserving raw history and both model summaries.
+/// Legacy reference history joins the same private reduction and single-head
+/// publication, with or without an already imported prefix summary.
 #[test]
 fn runtime_staged_compaction_legacy_range_recovers_turn_locally() {
-    staged_compaction_legacy_fallback_case(false);
-    staged_compaction_legacy_fallback_case(true);
+    observed_staging::legacy_source_survives_publication(false);
+    observed_staging::legacy_source_survives_publication(true);
 }
 
-/// Exercises the same transition with or without an existing authoritative
-/// epoch and checks that exact late arrivals survive the private recovery.
-fn staged_compaction_legacy_fallback_case(prior_epoch: bool) {
-    let second = mez_agent::TranscriptContextEvent::execution_block(
-        ContextSourceKind::TranscriptAssistant,
-        "second answer",
-        "SECOND_RANGE_SOURCE ".repeat(1_200),
-    )
-    .unwrap()
-    .to_transcript_content();
-    let (mut service, store, turn_id) =
-        queue_observed_input_compaction_with_groups_and_epoch(None, Some(second), prior_epoch);
-    let conversation_id = service
-        .agent_shell_store()
-        .get("%1")
-        .unwrap()
-        .session_id
-        .clone();
-    let mut profile = service.agent_turn_model_profile(&turn_id).unwrap().clone();
-    profile.provider_options.insert(
-        "max_input_tokens".to_string(),
-        STAGED_COMPACTION_INPUT_LIMIT.to_string(),
-    );
-    service.set_agent_turn_model_profile(turn_id.clone(), profile);
-    let task = service.take_pending_agent_compaction_task("%1").unwrap();
-    let original_epoch = store.compaction_epoch(&conversation_id).unwrap();
-    let original_rows = store.inspect(&conversation_id).unwrap();
-    service.claim_agent_compaction_task_state("%1", task);
-    assert!(
-        service
-            .apply_agent_compaction_completed_event(
-                "%1",
-                runtime_test_compaction_response("first summary"),
-            )
-            .unwrap()
-    );
-    assert!(
-        service
-            .pending_agent_compaction_task_for_tests("%1")
-            .is_some()
-    );
-    assert_eq!(
-        store.compaction_epoch(&conversation_id).unwrap(),
-        original_epoch
-    );
-    assert!(!service.agent_provider_task_is_pending(&turn_id));
-    service
-        .agent_turn_contexts_mut()
-        .get_mut(&turn_id)
-        .unwrap()
-        .append_user_event("late steering", "EXACT_MIXED_LATE_STEERING")
-        .unwrap();
-    let sequence = store.next_sequence(&conversation_id).unwrap();
-    store
-        .append(&mez_agent::transcript::TranscriptEntry {
-            conversation_id: conversation_id.clone(),
-            sequence,
-            created_at_unix_seconds: 2,
-            role: mez_agent::transcript::TranscriptRole::User,
-            turn_id: "external-late-turn".into(),
-            agent_id: "agent-%1".into(),
-            pane_id: "%1".into(),
-            content: "EXACT_EXTERNAL_LATE_USER".into(),
-        })
-        .unwrap();
-    complete_runtime_test_compaction(&mut service, "%1", "second summary");
-    assert!(service.agent_provider_task_is_pending(&turn_id));
-    assert_eq!(service.pending_agent_provider_tasks().len(), 1);
-    assert_eq!(
-        store.compaction_epoch(&conversation_id).unwrap(),
-        original_epoch
-    );
-    assert!(
-        store
-            .inspect(&conversation_id)
-            .unwrap()
-            .starts_with(&original_rows)
-    );
-    let context = service.agent_turn_contexts().get(&turn_id).unwrap();
-    for summary in [
-        "first summary",
-        "second summary",
-        "EXACT_MIXED_LATE_STEERING",
-        "EXACT_EXTERNAL_LATE_USER",
-    ] {
-        assert_eq!(
-            context
-                .blocks()
-                .iter()
-                .filter(|block| block.content == summary)
-                .count(),
-            1
-        );
-    }
-    let sources = context
-        .chronology()
-        .iter()
-        .map(|event| event.block().content.as_str())
-        .collect::<Vec<_>>();
-    let position = |source| {
-        sources
-            .iter()
-            .position(|candidate| *candidate == source)
-            .unwrap()
-    };
-    assert!(position("first summary") < position("second summary"));
-    assert!(position("EXACT_MIXED_LATE_STEERING") < position("EXACT_EXTERNAL_LATE_USER"));
-}
-
-/// Losing selective publication authority must not lose the epoch witness.
-/// An external epoch change after private staging rejects the completion and
+/// An external epoch change after private inference rejects publication and
 /// cannot install stale summaries or queue a provider continuation.
 #[test]
 fn runtime_staged_turn_local_compaction_rejects_changed_epoch() {
-    let second = mez_agent::TranscriptContextEvent::execution_block(
-        ContextSourceKind::TranscriptAssistant,
-        "second answer",
-        "SECOND_RANGE_SOURCE ".repeat(1_200),
-    )
-    .unwrap()
-    .to_transcript_content();
-    let (mut service, store, turn_id) =
-        queue_observed_input_compaction_with_second_group(Some(second));
-    let conversation = service
-        .agent_shell_store()
-        .get("%1")
-        .unwrap()
-        .session_id
-        .clone();
-    let original = service.agent_turn_contexts().get(&turn_id).unwrap().clone();
-    let mut profile = service.agent_turn_model_profile(&turn_id).unwrap().clone();
-    profile
-        .provider_options
-        .insert("max_input_tokens".into(), "17000".into());
-    service.set_agent_turn_model_profile(turn_id.clone(), profile);
-    complete_runtime_test_compaction(&mut service, "%1", "first summary");
-    let retry = service
-        .pending_agent_compaction_task_for_tests("%1")
-        .unwrap();
-    let crate::runtime::agent_state::RuntimeAgentCompactionTarget::ActiveTurn {
-        staged: Some(staged),
-        ..
-    } = &retry.target
-    else {
-        panic!("private recovery expected");
-    };
-    assert!(staged.projection.is_none());
-    assert_eq!(service.agent_turn_contexts().get(&turn_id), Some(&original));
-    store
-        .save_compaction_ranges(&conversation, 0, "externally changed epoch", Vec::new())
-        .unwrap();
-    let changed = store.compaction_epoch(&conversation).unwrap();
-    complete_runtime_test_compaction(&mut service, "%1", "second summary");
-    assert!(!service.agent_provider_task_is_pending(&turn_id));
-    assert!(
-        service
-            .agent_turn_ledger()
-            .turn(&turn_id)
-            .is_some_and(|turn| turn.state == AgentTurnState::Failed)
-    );
-    assert_eq!(store.compaction_epoch(&conversation).unwrap(), changed);
+    observed_staging::changed_epoch_rejects_publication();
 }
 
-/// Typed closed live work has no durable row yet. Recovery retains exact
-/// steering and earlier summaries without treating that absence as corruption.
+/// Later live work has no durable row yet. It remains raw behind its current
+/// user root while private reduction publishes only the frozen closed prefix.
 #[test]
 fn runtime_staged_compaction_live_range_recovers_turn_locally() {
-    let (mut service, store, turn_id) = queue_observed_input_compaction_with_exact_history();
-    let conversation_id = service
-        .agent_shell_store()
-        .get("%1")
-        .unwrap()
-        .session_id
-        .clone();
-    let queued = service
-        .pending_agent_compaction_task_for_tests("%1")
-        .unwrap()
-        .clone();
-    service.fail_current_agent_compaction_task("%1");
-    let context = service.agent_turn_contexts_mut().get_mut(&turn_id).unwrap();
-    context
-        .append_user_event("steering", "Keep this instruction exact")
-        .unwrap();
-    let group = mez_agent::ContextExecutionGroupId::new("live-closed-group").unwrap();
-    context
-        .append_assistant_event(
-            "live decision",
-            "LIVE_RANGE_SOURCE ".repeat(1_200),
-            group.clone(),
-        )
-        .unwrap();
-    context
-        .append_evidence_event(
-            ContextSourceKind::ActionResult,
-            "live result",
-            "settled",
-            group,
-            None,
-            true,
-        )
-        .unwrap();
-    // The synthetic provider has consumed the closed live group. Freeze that
-    // full frontier, while keeping the first selected source in older history.
-    let plan = mez_agent::plan_model_context_compaction_for_provider_tokens(
-        context,
-        20_000,
-        1,
-        context.event_sequence_high_water_mark(),
-        mez_agent::ProviderBudgetProjection::new(
-            mez_agent::ProviderApiCompatibility::OpenAiResponses,
-            "runtime-batch",
-        ),
-    )
-    .unwrap();
-    let crate::runtime::agent_state::RuntimeAgentCompactionTarget::ActiveTurn { trigger, .. } =
-        queued.target
-    else {
-        panic!("expected observed-input compaction");
-    };
-    assert!(
-        plan.replacement_blocks()
-            .iter()
-            .all(|block| { !block.content.contains("LIVE_RANGE_SOURCE") })
-    );
-    assert!(
-        service
-            .queue_agent_active_turn_compaction(
-                &turn_id,
-                queued.model_profile_name,
-                queued.model_profile,
-                trigger,
-                plan
-            )
-            .unwrap()
-    );
-    let mut profile = service.agent_turn_model_profile(&turn_id).unwrap().clone();
-    profile
-        .provider_options
-        .insert("max_input_tokens".to_string(), "19000".to_string());
-    service.set_agent_turn_model_profile(turn_id.clone(), profile);
-    complete_runtime_test_compaction(&mut service, "%1", "first summary");
-    assert!(
-        service
-            .pending_agent_compaction_task_for_tests("%1")
-            .is_some()
-    );
-    assert!(store.compaction_epoch(&conversation_id).unwrap().is_none());
-    assert!(!service.agent_provider_task_is_pending(&turn_id));
-    let mut last_selection = None;
-    let mut summarized_live = false;
-    let mut accepted_summaries = vec!["first summary".to_string()];
-    for index in 0..8 {
-        let Some(retry) = service.pending_agent_compaction_task_for_tests("%1") else {
-            break;
-        };
-        let crate::runtime::agent_state::RuntimeAgentCompactionTarget::ActiveTurn {
-            staged: Some(staged),
-            plan,
-            ..
-        } = &retry.target
-        else {
-            panic!("expected private recovery stage");
-        };
-        if summarized_live {
-            assert!(staged.projection.is_none());
-        }
-        let first = *plan.replacement_event_sequences().first().unwrap();
-        assert!(last_selection.is_none_or(|previous| first > previous));
-        last_selection = Some(*plan.replacement_event_sequences().last().unwrap());
-        let is_live = plan
-            .replacement_blocks()
-            .iter()
-            .any(|block| block.content.contains("LIVE_RANGE_SOURCE"));
-        assert!(!service.agent_provider_task_is_pending(&turn_id));
-        let summary = if is_live {
-            "live summary".to_string()
-        } else {
-            format!("older summary {index}")
-        };
-        complete_runtime_test_compaction(&mut service, "%1", &summary);
-        assert!(
-            service.agent_turn_is_running(&turn_id),
-            "{}",
-            service
-                .pane_screen("%1")
-                .unwrap()
-                .normal_content_lines()
-                .join("\n")
-        );
-        summarized_live |= is_live;
-        accepted_summaries.push(summary);
-        assert!(store.compaction_epoch(&conversation_id).unwrap().is_none());
-    }
-    assert!(
-        summarized_live,
-        "live source was never selected; accepted={accepted_summaries:?} retained_live={}",
-        service
-            .agent_turn_contexts()
-            .get(&turn_id)
-            .is_some_and(|context| {
-                context
-                    .blocks()
-                    .iter()
-                    .any(|block| block.content.contains("LIVE_RANGE_SOURCE"))
-            })
-    );
-    assert!(service.agent_provider_task_is_pending(&turn_id));
-    assert!(store.compaction_epoch(&conversation_id).unwrap().is_none());
-    let context = service.agent_turn_contexts().get(&turn_id).unwrap();
-    for source in accepted_summaries
-        .iter()
-        .map(String::as_str)
-        .chain(std::iter::once("Keep this instruction exact"))
-    {
-        assert!(context.blocks().iter().any(|block| block.content == source));
-    }
+    observed_staging::pending_live_source_survives_publication();
 }
 
 /// Verifies the runtime applies raw-retention config for compaction recovery.
@@ -369,258 +74,13 @@ fn runtime_config_reload_applies_compaction_raw_retention() {
     assert_eq!(service.agent_compaction_raw_retention_percent(), 25);
 }
 
-/// A previously summarized segment must not mask later closed work behind an
-/// exact steering barrier during a subsequent provider context rejection.
-#[test]
-fn runtime_context_limit_recovery_skips_earlier_summary_only_segment() {
-    let mut service = test_runtime_service();
-    service.replace_config_layers(vec![ConfigLayer {
-        name: "summary-segment-recovery".to_string(),
-        path: None,
-        format: ConfigFormat::Toml,
-        scope: ConfigScope::Primary,
-        trusted: true,
-        text: "[agents]\ndefault_provider = \"runtime-batch\"\ndefault_model_profile = \"segment-recovery\"\n[providers.runtime-batch]\nkind = \"openai\"\nmodels = [\"test\"]\ndefault_model = \"test\"\n[model_profiles.segment-recovery]\nprovider = \"runtime-batch\"\nmodel = \"test\"\ncontext_window_tokens = 40000\n".to_string(),
-    }]).unwrap();
-    let primary = service
-        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
-        .unwrap();
-    service
-        .agent_shell_store_mut()
-        .enter_or_resume("%1")
-        .unwrap();
-    let start = service.dispatch_runtime_control_body(
-        r#"{"jsonrpc":"2.0","id":"segment","method":"agent/shell/command","params":{"idempotency_key":"summary-segment-recovery","input":"continue"}}"#,
-        &primary,
-    );
-    assert!(start.contains(r#""state":"running""#), "{start}");
-    service
-        .agent_turn_contexts_mut()
-        .get_mut("turn-1")
-        .unwrap()
-        .replace_after_compaction(vec![
-            ContextBlock::reference_event(
-                ContextSourceKind::Memory,
-                "context compaction summary",
-                "[context compacted]\nEarlier decision summarized.",
-            ),
-            ContextBlock::user_event("steering", "preserve this instruction exactly"),
-            ContextBlock::assistant_event("later decision", "later decision ".repeat(15_000)),
-            ContextBlock::evidence_event(
-                ContextSourceKind::ActionResult,
-                "later result",
-                "later result ".repeat(15_000),
-            ),
-        ])
-        .unwrap();
-    let high_water = service
-        .agent_turn_contexts()
-        .get("turn-1")
-        .unwrap()
-        .event_sequence_high_water_mark();
-    service
-        .record_claimed_agent_provider_context_for_tests("turn-1", high_water)
-        .unwrap();
-    let error = MezError::invalid_state("provider context length exceeded")
-        .with_provider_failure_json(
-            r#"{"status_code":400,"error":{"code":"context_length_exceeded"}}"#,
-        );
-    assert!(
-        service
-            .recover_agent_provider_context_limit_failure(
-                &AgentId::opaque("agent-%1").unwrap(),
-                "turn-1",
-                &error,
-                1,
-            )
-            .unwrap()
-    );
-    let task = service
-        .pending_agent_compaction_task_for_tests("%1")
-        .unwrap();
-    let crate::runtime::agent_state::RuntimeAgentCompactionTarget::ActiveTurn { plan, .. } =
-        &task.target
-    else {
-        panic!("expected active-turn compaction target");
-    };
-    assert_eq!(plan.replacement_blocks().len(), 2);
-    assert!(
-        plan.replacement_blocks()
-            .iter()
-            .all(|block| block.content.contains("later"))
-    );
-    complete_runtime_test_compaction(&mut service, "%1", "Later events summarized.");
-    let context = service.agent_turn_contexts().get("turn-1").unwrap();
-    assert_eq!(
-        context.chronology()[0].block().content,
-        "[context compacted]\nEarlier decision summarized."
-    );
-    assert_eq!(
-        context.chronology()[1].block().content,
-        "preserve this instruction exactly"
-    );
-    assert_eq!(
-        context.chronology()[2].block().content,
-        "Later events summarized."
-    );
-    assert!(service.agent_provider_task_is_pending("turn-1"));
-}
-
-/// Provider-limit recovery must continue beyond a word-budgeted first range
-/// when retained byte-heavy evidence still exceeds the complete request limit.
-/// Earlier summaries stay provisional, exact barriers survive, and only the
-/// final fitting candidate can resume the original turn without action replay.
-#[test]
-fn runtime_provider_compaction_continues_after_word_budget_underestimates_retained_history() {
-    let mut service = test_runtime_service();
-    service.replace_config_layers(vec![ConfigLayer {
-        name: "diagnostic-word-wire".to_string(),
-        path: None,
-        format: ConfigFormat::Toml,
-        scope: ConfigScope::Primary,
-        trusted: true,
-        text: "[agents]\ndefault_provider = \"runtime-batch\"\ndefault_model_profile = \"word-wire\"\n[providers.runtime-batch]\nkind = \"openai\"\nmodels = [\"test\"]\ndefault_model = \"test\"\n[model_profiles.word-wire]\nprovider = \"runtime-batch\"\nmodel = \"test\"\ncontext_window_tokens = 40000\nmax_input_tokens = 30000\n".to_string(),
-    }]).unwrap();
-    let primary = service
-        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
-        .unwrap();
-    service
-        .agent_shell_store_mut()
-        .enter_or_resume("%1")
-        .unwrap();
-    let start = service.dispatch_runtime_control_body(
-        r#"{"jsonrpc":"2.0","id":"diagnostic","method":"agent/shell/command","params":{"idempotency_key":"diagnostic-word-wire","input":"continue"}}"#,
-        &primary,
-    );
-    assert!(start.contains(r#""state":"running""#));
-    service
-        .agent_turn_contexts_mut()
-        .get_mut("turn-1")
-        .unwrap()
-        .replace_after_compaction(vec![
-            ContextBlock::assistant_event("first decision", "first decision"),
-            ContextBlock::evidence_event(
-                ContextSourceKind::ActionResult,
-                "first result",
-                "first ".repeat(4_000),
-            ),
-            ContextBlock::user_event("barrier", "preserve exact instruction"),
-            ContextBlock::assistant_event("second decision", "second decision"),
-            ContextBlock::evidence_event(
-                ContextSourceKind::ActionResult,
-                "byte-heavy result",
-                "x".repeat(200_000),
-            ),
-        ])
-        .unwrap();
-    let original = service.agent_turn_contexts().get("turn-1").unwrap().clone();
-    let high_water = original.event_sequence_high_water_mark();
-    service
-        .record_claimed_agent_provider_context_for_tests("turn-1", high_water)
-        .unwrap();
-    let error = MezError::invalid_state("provider context length exceeded")
-        .with_provider_failure_json(
-            r#"{"status_code":400,"error":{"code":"context_length_exceeded"}}"#,
-        );
-    assert!(
-        service
-            .recover_agent_provider_context_limit_failure(
-                &AgentId::opaque("agent-%1").unwrap(),
-                "turn-1",
-                &error,
-                1,
-            )
-            .unwrap()
-    );
-    let task = service
-        .pending_agent_compaction_task_for_tests("%1")
-        .unwrap();
-    let crate::runtime::agent_state::RuntimeAgentCompactionTarget::ActiveTurn { plan, .. } =
-        &task.target
-    else {
-        panic!("expected recovery plan");
-    };
-    assert_eq!(plan.planning_budget(), (22_500, false));
-    assert!(!plan.requires_additional_segments());
-    assert!(
-        plan.replacement_blocks()
-            .iter()
-            .all(|block| !block.label.contains("byte-heavy"))
-    );
-    let (candidate, _) =
-        mez_agent::apply_model_context_compaction_plan(original.clone(), plan, "short summary")
-            .unwrap();
-    let next = mez_agent::plan_model_context_compaction_for_provider_tokens(
-        &candidate,
-        28_500,
-        0,
-        high_water,
-        mez_agent::ProviderBudgetProjection::new(
-            mez_agent::ProviderApiCompatibility::OpenAiResponses,
-            "runtime-batch",
-        ),
-    )
-    .unwrap();
-    assert!(next.changes_context());
-    assert!(
-        next.replacement_blocks()
-            .iter()
-            .any(|block| block.label == "byte-heavy result")
-    );
-    complete_runtime_test_compaction(&mut service, "%1", "short summary");
-    assert_eq!(
-        service.agent_turn_ledger().turn("turn-1").unwrap().state,
-        AgentTurnState::Running
-    );
-    assert!(!service.agent_provider_task_is_pending("turn-1"));
-    assert_eq!(service.agent_turn_contexts().get("turn-1"), Some(&original));
-    let retry = service
-        .pending_agent_compaction_task_for_tests("%1")
-        .expect("retained byte-heavy history must queue a later summary");
-    let crate::runtime::agent_state::RuntimeAgentCompactionTarget::ActiveTurn {
-        plan,
-        staged: Some(staged),
-        ..
-    } = &retry.target
-    else {
-        panic!("first summary must remain staged");
-    };
-    assert_eq!(staged.attempts, 1);
-    assert!(
-        plan.replacement_blocks()
-            .iter()
-            .any(|block| block.label == "byte-heavy result")
-    );
-    complete_runtime_test_compaction(&mut service, "%1", "second range summarized");
-    assert_eq!(
-        service.agent_turn_ledger().turn("turn-1").unwrap().state,
-        AgentTurnState::Running
-    );
-    assert!(service.agent_provider_task_is_pending("turn-1"));
-    assert!(
-        service
-            .pending_agent_compaction_task_for_tests("%1")
-            .is_none()
-    );
-    let chronology = service
-        .agent_turn_contexts()
-        .get("turn-1")
-        .unwrap()
-        .chronology();
-    assert_eq!(chronology[0].block().content, "short summary");
-    assert_eq!(chronology[1].block().content, "preserve exact instruction");
-    assert_eq!(chronology[2].block().content, "second range summarized");
-    assert_eq!(chronology.len(), 3);
-}
-
 /// A byte-heavy direct-user instruction cannot become summary input merely
 /// because the earlier word-budgeted range leaves the full request oversized.
 /// Exhaustion must settle boundedly without a continuation or partial epoch,
 /// preserving the original durable transcript rather than truncating the prompt.
 #[test]
 fn runtime_provider_compaction_does_not_summarize_byte_heavy_exact_history() {
-    let (mut service, store, turn_id) = queue_observed_input_compaction_with_exact_history();
-    service.fail_current_agent_compaction_task("%1");
+    let (mut service, store, turn_id) = observed_history::queued();
     let conversation_id = service
         .agent_shell_store()
         .get("%1")
@@ -628,57 +88,29 @@ fn runtime_provider_compaction_does_not_summarize_byte_heavy_exact_history() {
         .session_id
         .clone();
     let original_rows = store.inspect(&conversation_id).unwrap();
-    let mut profile = service.agent_turn_model_profile(&turn_id).unwrap().clone();
-    profile
-        .provider_options
-        .insert("max_input_tokens".to_string(), "30000".to_string());
-    service.set_agent_turn_model_profile(turn_id.clone(), profile.clone());
+    let exact = "x".repeat(200_000);
     service
         .agent_turn_contexts_mut()
         .get_mut(&turn_id)
         .unwrap()
-        .replace_after_compaction(vec![
-            ContextBlock::assistant_event("first decision", "first decision"),
-            ContextBlock::evidence_event(
-                ContextSourceKind::ActionResult,
-                "first result",
-                "first ".repeat(4_000),
-            ),
-            ContextBlock::user_event("exact retained instruction", "x".repeat(200_000)),
-        ])
+        .append_user_event("exact retained instruction", exact.clone())
         .unwrap();
-    // Whole-context fixture replacement creates new live occurrences. The old
-    // archive import boundary cannot describe this new synthetic chronology.
-    service.set_agent_turn_imported_history_sequence_high_water(turn_id.clone(), 0);
-    let context = service.agent_turn_contexts().get(&turn_id).unwrap();
-    let plan = mez_agent::plan_model_context_compaction_for_provider(
-        context,
-        22_500,
-        10,
-        context.event_sequence_high_water_mark(),
-        mez_agent::ProviderBudgetProjection::new(
-            mez_agent::ProviderApiCompatibility::OpenAiResponses,
-            "runtime-batch",
-        ),
-    )
-    .unwrap();
-    assert!(plan.changes_context());
-    assert!(!plan.requires_additional_segments());
+    let task = service
+        .pending_agent_compaction_task_for_tests("%1")
+        .unwrap();
     assert!(
-        plan.replacement_blocks()
+        !task
+            .request
+            .messages
             .iter()
-            .all(|block| block.source != ContextSourceKind::TranscriptUser)
+            .any(|message| message.content.contains(&exact)),
+        "new exact instructions cannot enter the frozen compactor source"
     );
     assert!(
         service
-            .queue_agent_context_limit_recovery_compaction(
-                &turn_id,
-                "observed-input-exact-history".to_string(),
-                profile,
-                1,
-                plan,
-            )
+            .observed_compaction_candidate_input_tokens_for_tests("%1", "short summary",)
             .unwrap()
+            > 20_000
     );
     complete_runtime_test_compaction(&mut service, "%1", "short summary");
     assert_eq!(
@@ -704,8 +136,19 @@ fn runtime_provider_compaction_does_not_summarize_byte_heavy_exact_history() {
         .normal_content_lines()
         .join("\n");
     let failure = normalized_pane_log_text(&text);
-    assert!(failure.contains("protected exact context"), "{text}");
-    assert!(failure.contains("protected_block_estimate="), "{text}");
+    assert!(
+        failure.contains("canonical compaction candidate cannot reduce"),
+        "{text}"
+    );
+    assert!(
+        store
+            .inspect(&conversation_id)
+            .unwrap()
+            .iter()
+            .any(|row| row.content.contains(&exact)),
+        "terminal history retains the exact instruction"
+    );
+    assert!(service.take_replay_epoch_attempt_for_tests().is_none());
 }
 
 /// Saved-history replay must allow another compaction range after an earlier
@@ -1248,1358 +691,149 @@ max_input_tokens = 1
     );
 }
 
-/// Creates an observed-input compaction task from durable mixed-role history.
-///
-/// The seeded user instructions are exact history barriers and the current
-/// prompt is appended after them. The synthetic response reaches the ordinary
-/// continuation boundary so completion exercises the same active-turn refresh
-/// and replay-retention path as proactive compaction.
-fn queue_observed_input_compaction_with_exact_history() -> (
-    crate::runtime::RuntimeSessionService,
-    AgentTranscriptStore,
-    String,
-) {
-    queue_observed_input_compaction_with_second_group(None)
-}
-
-/// Builds the same exact-barrier fixture with an optional second typed range.
-fn queue_observed_input_compaction_with_second_group(
-    second_group: Option<String>,
-) -> (
-    crate::runtime::RuntimeSessionService,
-    AgentTranscriptStore,
-    String,
-) {
-    queue_observed_input_compaction_with_groups(None, second_group)
-}
-
-/// Builds distinct historical groups with optional identical typed content.
-fn queue_observed_input_compaction_with_groups(
-    first_group: Option<String>,
-    second_group: Option<String>,
-) -> (
-    crate::runtime::RuntimeSessionService,
-    AgentTranscriptStore,
-    String,
-) {
-    queue_observed_input_compaction_with_groups_and_epoch(first_group, second_group, false)
-}
-
-/// Captures a prior epoch before the real prompt/history import, so the frozen
-/// operation starts with that authority rather than observing a mid-flight edit.
-fn queue_observed_input_compaction_with_groups_and_epoch(
-    first_group: Option<String>,
-    second_group: Option<String>,
-    prior_epoch: bool,
-) -> (
-    crate::runtime::RuntimeSessionService,
-    AgentTranscriptStore,
-    String,
-) {
-    let mut service = test_runtime_service();
-    service
-        .replace_config_layers(vec![ConfigLayer {
-            name: "observed-input-exact-history".to_string(),
-            path: None,
-            format: ConfigFormat::Toml,
-            scope: ConfigScope::Primary,
-            trusted: true,
-            text: r#"[agents]
-default_provider = "runtime-batch"
-default_model_profile = "observed-input-exact-history"
-[providers.runtime-batch]
-kind = "openai"
-models = ["test"]
-default_model = "test"
-[model_profiles.observed-input-exact-history]
-provider = "runtime-batch"
-model = "test"
-context_window_tokens = 40000
-max_input_tokens = 20000
-"#
-            .to_string(),
-        }])
-        .unwrap();
-    let transcript_store = AgentTranscriptStore::new(temp_root("observed-input-exact-history"));
-    service.set_agent_transcript_store(transcript_store.clone());
-    let primary = service
-        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
-        .unwrap();
-    let session = service
-        .agent_shell_store_mut()
-        .enter_or_resume("%1")
-        .unwrap()
-        .clone();
-    let historical = [
-        (
-            mez_agent::transcript::TranscriptRole::User,
-            "EXACT_OLDER_USER_INSTRUCTION Keep the deployment rollback plan available.".to_string(),
-            "historical-turn-1",
-        ),
-        (
-            mez_agent::transcript::TranscriptRole::System,
-            first_group.unwrap_or_else(|| {
-                mez_agent::TranscriptContextEvent::execution_block_with_metadata(
-                    ContextSourceKind::TranscriptAssistant,
-                    "historical answer",
-                    "TYPED_OLD_WORK ".repeat(80),
-                    mez_agent::ContextExecutionGroupId::new("historical-group-1").unwrap(),
-                    1,
-                    None,
-                )
-                .unwrap()
-                .to_transcript_content()
-            }),
-            "historical-turn-1",
-        ),
-        (
-            mez_agent::transcript::TranscriptRole::User,
-            "EXACT_SECOND_USER_INSTRUCTION Preserve the migration ordering.".to_string(),
-            "historical-turn-2",
-        ),
-        (
-            if second_group.is_some() {
-                mez_agent::transcript::TranscriptRole::System
-            } else {
-                mez_agent::transcript::TranscriptRole::Assistant
-            },
-            second_group.unwrap_or_else(|| "Historical answer two. ".repeat(80)),
-            "historical-turn-2",
-        ),
-        (
-            mez_agent::transcript::TranscriptRole::User,
-            "EXACT_THIRD_USER_INSTRUCTION Do not remove the compatibility check.".to_string(),
-            "historical-turn-3",
-        ),
-        (
-            mez_agent::transcript::TranscriptRole::Assistant,
-            "Historical answer three. ".repeat(80),
-            "historical-turn-3",
-        ),
-    ];
-    let historical_count = historical.len();
-    for (index, (role, content, turn_id)) in historical.into_iter().enumerate() {
-        transcript_store
-            .append(&mez_agent::transcript::TranscriptEntry {
-                conversation_id: session.session_id.clone(),
-                sequence: u64::try_from(index + 1).unwrap(),
-                created_at_unix_seconds: 1,
-                role,
-                turn_id: turn_id.to_string(),
-                agent_id: "agent-%1".to_string(),
-                pane_id: "%1".to_string(),
-                content: content.to_string(),
-            })
-            .unwrap();
-    }
-    service
-        .agent_shell_store_mut()
-        .record_transcript_entries("%1", historical_count)
-        .unwrap();
-
-    if prior_epoch {
-        transcript_store
-            .save_compaction_epoch(&session.session_id, 0, "prior authoritative summary")
-            .unwrap();
-    }
-
-    let start = service.dispatch_runtime_control_body(
-        r#"{"jsonrpc":"2.0","id":"observed-input-exact-history","method":"agent/shell/command","params":{"idempotency_key":"observed-input-exact-history","input":"CURRENT_USER_PROMPT Continue with the collected evidence."}}"#,
-        &primary,
-    );
-    assert!(start.contains(r#""state":"running""#), "{start}");
-    let task = service.pending_agent_provider_tasks().remove(0);
-    let turn = service
-        .agent_turn_ledger()
-        .turns()
-        .iter()
-        .find(|turn| turn.turn_id == task.turn_id)
-        .cloned()
-        .expect("pending provider task owns a running turn");
-    insert_test_context_block(
-        service
-            .agent_turn_contexts_mut()
-            .get_mut(&task.turn_id)
-            .unwrap(),
-        ContextBlock {
-            source: ContextSourceKind::ActionResult,
-            placement: mez_agent::ContextPlacement::ConversationAppend,
-            label: "observed input evidence".to_string(),
-            content: "observed-input-exact-history-evidence ".repeat(40),
-        },
-    );
-    let response = runtime_say_response(&task.turn_id, "continue", false);
-    let action = response
-        .action_batch
-        .as_ref()
-        .and_then(|batch| batch.actions.first())
-        .cloned()
-        .expect("continuation response contains a say action");
-    service
-        .apply_agent_provider_execution(
-            &turn,
-            &task.model_profile,
-            "runtime-batch",
-            mez_agent::AgentTurnExecution {
-                request: runtime_model_request_fixture_for_agent(&task.turn_id, &task.agent_id),
-                response,
-                latest_response_usage: mez_agent::ModelTokenUsage {
-                    input_tokens: 20000,
-                    output_tokens: 1,
-                    reasoning_tokens: 0,
-                    cached_input_tokens: Some(20),
-                    cache_write_input_tokens: None,
-                },
-                routing_token_usage_by_model: std::collections::BTreeMap::new(),
-                action_results: vec![mez_agent::ActionResult::succeeded(
-                    &turn,
-                    &action,
-                    vec!["continue".to_string()],
-                    None,
-                )],
-                final_turn: false,
-                terminal_state: AgentTurnState::Running,
-            },
-        )
-        .unwrap();
-    assert!(
-        service
-            .pending_agent_compaction_task_for_tests("%1")
-            .is_some(),
-        "observed input should queue proactive compaction"
-    );
-    (service, transcript_store, turn.turn_id)
-}
-
-/// Verifies active-turn compaction refresh preserves the exact current prompt
-/// when compaction shrinks the imported durable-history prefix.
-///
-/// The imported event count is captured before compaction. Reusing that count
-/// after selected historical groups collapse to one summary can make the
-/// refresh predicate claim the current prompt as imported history and replace
-/// it with the shortened durable transcript.
-#[test]
-fn runtime_observed_compaction_refresh_preserves_current_user_prompt() {
-    let (mut service, transcript_store, turn_id) =
-        queue_observed_input_compaction_with_exact_history();
-    let queued = service
-        .pending_agent_compaction_task_for_tests("%1")
-        .unwrap();
-    let crate::runtime::agent_state::RuntimeAgentCompactionTarget::ActiveTurn { plan, .. } =
-        &queued.target
-    else {
-        panic!("expected active-turn compaction");
-    };
-    assert!(
-        plan.replacement_blocks()
-            .iter()
-            .any(|block| block.content.contains("TYPED_OLD_WORK")),
-        "selected={:?}",
-        plan.replacement_blocks()
-    );
-    assert_eq!(
-        plan.replacement_blocks().len(),
-        1,
-        "selected={:?}",
-        plan.replacement_blocks()
-    );
-    let session = service
-        .agent_shell_store()
-        .get("%1")
-        .expect("active agent shell session");
-    let conversation_id = session.session_id.clone();
-    let next_sequence = transcript_store
-        .inspect(&conversation_id)
-        .unwrap()
-        .last()
-        .expect("seeded and prompt transcript entries")
-        .sequence
-        .saturating_add(1);
-    transcript_store
-        .append(&mez_agent::transcript::TranscriptEntry {
-            conversation_id: conversation_id.clone(),
-            sequence: next_sequence,
-            created_at_unix_seconds: 2,
-            role: mez_agent::transcript::TranscriptRole::Assistant,
-            turn_id: "late-active-turn-transcript".to_string(),
-            agent_id: "agent-%1".to_string(),
-            pane_id: "%1".to_string(),
-            content: "LATE_ACTIVE_TURN_TRANSCRIPT_ENTRY".to_string(),
-        })
-        .unwrap();
-    service
-        .agent_shell_store_mut()
-        .record_transcript_entries("%1", 1)
-        .unwrap();
-    complete_runtime_test_compaction(
-        &mut service,
-        "%1",
-        "observed input summary without exact user instructions",
-    );
-    let epoch = transcript_store
-        .compaction_epoch(&conversation_id)
-        .unwrap()
-        .unwrap();
-    assert_eq!(
-        epoch.version,
-        3,
-        "epoch={epoch:?}; pane={}",
-        service
-            .pane_screen("%1")
-            .unwrap()
-            .normal_content_lines()
-            .join("\n")
-    );
-    assert_eq!(epoch.ranges.len(), 1);
-    let context = service
-        .agent_turn_contexts()
-        .get(&turn_id)
-        .unwrap_or_else(|| {
-            panic!(
-                "the running turn retains its refreshed context; pane status: {}",
-                service
-                    .pane_screen("%1")
-                    .unwrap()
-                    .normal_content_lines()
-                    .join("\\n")
-            )
-        });
-    assert!(
-        context
-            .blocks()
-            .iter()
-            .any(|block| block.content == "observed input summary without exact user instructions")
-    );
-    assert!(
-        !context
-            .blocks()
-            .iter()
-            .any(|block| block.content.contains("TYPED_OLD_WORK"))
-    );
-    assert!(
-        context.blocks().iter().any(|block| {
-            block.label == "user prompt"
-                && block.content == "CURRENT_USER_PROMPT Continue with the collected evidence."
-        }),
-        "the active prompt must remain exact after compaction refresh: {:#?}",
-        context.blocks()
-    );
-    assert!(
-        context
-            .blocks()
-            .iter()
-            .any(|block| block.content.contains("LATE_ACTIVE_TURN_TRANSCRIPT_ENTRY")),
-        "post-plan transcript entries must remain in the refreshed live context: {:#?}",
-        context.blocks()
-    );
-}
-
-/// Verifies proactive compaction keeps exact user instructions that were not
-/// included in the model-authored summary available to the next turn.
-///
-/// Durable replay must represent the same selected ranges as the live
-/// compacted context. Retaining only the newest transcript count is not valid
-/// when exact barriers inside the selected history were intentionally omitted
-/// from summary input.
-#[test]
-fn runtime_observed_compaction_retains_unsummarized_exact_history_for_replay() {
-    let (mut service, _transcript_store, _turn_id) =
-        queue_observed_input_compaction_with_exact_history();
-    complete_runtime_test_compaction(
-        &mut service,
-        "%1",
-        "observed input summary without exact user instructions",
-    );
-    let next_context = service
-        .agent_context_for_pane_prompt("%1", "NEXT_USER_PROMPT Continue.", 0)
-        .unwrap();
-    assert!(
-        next_context
-            .blocks()
-            .iter()
-            .any(|block| block.content == "observed input summary without exact user instructions")
-    );
-    assert!(
-        !next_context
-            .blocks()
-            .iter()
-            .any(|block| block.content.contains("TYPED_OLD_WORK"))
-    );
-    assert!(
-        [
-            "EXACT_OLDER_USER_INSTRUCTION",
-            "EXACT_SECOND_USER_INSTRUCTION",
-            "EXACT_THIRD_USER_INSTRUCTION",
-        ]
-        .iter()
-        .all(|marker| {
-            next_context
-                .blocks()
-                .iter()
-                .any(|block| block.content.contains(marker))
-        }),
-        "every exact historical instruction omitted from summary input must remain replayable: {:#?}",
-        next_context.blocks()
-    );
-}
-
-/// Places the fixture's configured cap between two fully assembled refreshed
-/// requests, including current system policy, schemas, exact history and late
-/// transcript rows. The production five-percent headroom remains in force;
-/// assertions prove the large summary is over budget and the short one fits.
-/// This calibrates test input only and changes no runtime/model default.
-fn set_observed_compaction_summary_fit_boundary(
-    service: &mut crate::runtime::RuntimeSessionService,
-    turn_id: &str,
-    large_summary: &str,
-) {
-    let short = service
-        .observed_compaction_candidate_input_tokens_for_tests("%1", "shorter final summary")
-        .unwrap();
-    let large = service
-        .observed_compaction_candidate_input_tokens_for_tests("%1", large_summary)
-        .unwrap();
-    assert!(large > short + 2, "short={short} large={large}");
-    let desired_safe_limit = short + (large - short) / 2;
-    // Invert floor(19 * configured / 20), the existing five-percent reserve.
-    let configured = (desired_safe_limit * 20).div_ceil(19);
-    let safe_limit = configured - configured.div_ceil(20);
-    assert!(
-        short < safe_limit && safe_limit < large,
-        "short={short} safe={safe_limit} large={large}"
-    );
-    let mut profile = service.agent_turn_model_profile(turn_id).unwrap().clone();
-    profile
-        .provider_options
-        .insert("max_input_tokens".into(), configured.to_string());
-    service.set_agent_turn_model_profile(turn_id.to_string(), profile);
-}
-
-/// A still-oversized refreshed request retries a smaller model-authored
-/// summary without publishing the first candidate or repeating settled work.
-#[test]
-fn runtime_observed_compaction_retries_oversized_final_request() {
-    let (mut service, store, turn_id) = queue_observed_input_compaction_with_exact_history();
-    let conversation_id = service
-        .agent_shell_store()
-        .get("%1")
-        .unwrap()
-        .session_id
-        .clone();
-    let initial_budget = service
-        .pending_agent_compaction_task_for_tests("%1")
-        .unwrap()
-        .request
-        .max_output_tokens;
-    set_observed_compaction_summary_fit_boundary(
-        &mut service,
-        &turn_id,
-        &"large-summary ".repeat(900),
-    );
-    complete_runtime_test_compaction(&mut service, "%1", &"large-summary ".repeat(900));
-    assert!(store.compaction_epoch(&conversation_id).unwrap().is_none());
-    assert!(
-        service
-            .agent_turn_ledger()
-            .turns()
-            .iter()
-            .any(|turn| { turn.turn_id == turn_id && turn.state == AgentTurnState::Running }),
-        "budget={initial_budget:?} pane={}",
-        service
-            .pane_screen("%1")
-            .unwrap()
-            .normal_content_lines()
-            .join("\n")
-    );
-    let retry = service
-        .pending_agent_compaction_task_for_tests("%1")
-        .expect("oversized final request must queue another model summary");
-    let crate::runtime::agent_state::RuntimeAgentCompactionTarget::ActiveTurn {
-        final_request_retry,
-        ..
-    } = &retry.target
-    else {
-        panic!("expected active turn retry")
-    };
-    assert_eq!(final_request_retry.attempts, 1);
-    assert_eq!(retry.request.max_output_tokens, initial_budget);
-    assert!(retry.summary_correction.effective_input_tokens.is_some());
-    complete_runtime_test_compaction(&mut service, "%1", "shorter final summary");
-    let epoch = store.compaction_epoch(&conversation_id).unwrap().unwrap();
-    assert_eq!(epoch.ranges.len(), 1);
-    assert_eq!(epoch.ranges[0].summary, "shorter final summary");
-    assert!(service.agent_provider_task_is_pending(&turn_id));
-    let next = service
-        .agent_context_for_pane_prompt("%1", "next prompt", 0)
-        .unwrap();
-    assert!(
-        !next
-            .blocks()
-            .iter()
-            .any(|block| block.content.contains("TYPED_OLD_WORK"))
-    );
-}
-
-/// A fourth improving final candidate must continue instead of failing at an
-/// arbitrary retry count; the complete request and output ceiling still shrink.
-#[test]
-fn runtime_observed_compaction_allows_fourth_improving_final_retry() {
-    let (mut service, store, turn_id) = queue_observed_input_compaction_with_exact_history();
-    let conversation_id = service
-        .agent_shell_store()
-        .get("%1")
-        .unwrap()
-        .session_id
-        .clone();
-    set_observed_compaction_summary_fit_boundary(
-        &mut service,
-        &turn_id,
-        &"large-summary ".repeat(900),
-    );
-    let mut task = service.take_pending_agent_compaction_task("%1").unwrap();
-    let crate::runtime::agent_state::RuntimeAgentCompactionTarget::ActiveTurn {
-        final_request_retry,
-        ..
-    } = &mut task.target
-    else {
-        panic!("expected active-turn retry state");
-    };
-    final_request_retry.attempts = 3;
-    final_request_retry.last_input_tokens = Some(usize::MAX);
-    final_request_retry.summary_ceiling = Some(usize::MAX);
-    service.queue_agent_compaction_task(task);
-    complete_runtime_test_compaction(&mut service, "%1", &"large-summary ".repeat(900));
-    assert!(store.compaction_epoch(&conversation_id).unwrap().is_none());
-    let retry = service
-        .pending_agent_compaction_task_for_tests("%1")
-        .expect("fourth improving candidate must retain the frozen source");
-    let crate::runtime::agent_state::RuntimeAgentCompactionTarget::ActiveTurn {
-        final_request_retry,
-        ..
-    } = &retry.target
-    else {
-        panic!("expected active-turn retry state");
-    };
-    assert_eq!(final_request_retry.attempts, 4);
-    assert!(final_request_retry.last_input_tokens.unwrap() < usize::MAX);
-    assert!(final_request_retry.summary_ceiling.unwrap() < usize::MAX);
-    assert!(!service.agent_provider_task_is_pending(&turn_id));
-}
-
-/// A completed temporary chunk advances to a distinct pending source even
-/// after 32 earlier responses; the count alone cannot terminate recovery.
-#[test]
-fn runtime_compaction_continues_pending_chunk_after_32_responses() {
-    let (mut service, _store, turn_id) = queue_observed_input_compaction_with_exact_history();
-    let mut task = service.take_pending_agent_compaction_task("%1").unwrap();
-    let crate::runtime::agent_state::RuntimeAgentCompactionTarget::ActiveTurn {
-        current_blocks,
-        pending_blocks,
-        completed_responses,
-        ..
-    } = &mut task.target
-    else {
-        panic!("expected active-turn compaction");
-    };
-    *completed_responses = 32;
-    pending_blocks.push(vec![ContextBlock::assistant_event(
-        "pending source",
-        "DISTINCT_PENDING_CHUNK",
-    )]);
-    assert!(!current_blocks.is_empty());
-    service.queue_agent_compaction_task(task);
-    complete_runtime_test_compaction(&mut service, "%1", "first temporary summary");
-    let next = service
-        .pending_agent_compaction_task_for_tests("%1")
-        .expect("finite pending source must continue beyond 32 responses");
-    let crate::runtime::agent_state::RuntimeAgentCompactionTarget::ActiveTurn {
-        completed_responses,
-        current_blocks,
-        ..
-    } = &next.target
-    else {
-        panic!("expected active-turn compaction");
-    };
-    assert_eq!(*completed_responses, 33);
-    assert_eq!(current_blocks[0].content, "DISTINCT_PENDING_CHUNK");
-    assert!(!service.agent_provider_task_is_pending(&turn_id));
-}
-
-/// Two halves of the same repetitive source can have identical text while
-/// representing distinct finite positions; both must reach synthesis.
-#[test]
-fn runtime_compaction_accepts_equal_content_sibling_chunks() {
-    let (mut service, _store, turn_id) = queue_observed_input_compaction_with_exact_history();
-    let mut task = service.take_pending_agent_compaction_task("%1").unwrap();
-    let identical = vec![ContextBlock::assistant_event("half", "REPEATED_SOURCE")];
-    let crate::runtime::agent_state::RuntimeAgentCompactionTarget::ActiveTurn {
-        current_blocks,
-        pending_blocks,
-        ..
-    } = &mut task.target
-    else {
-        panic!("expected active-turn compaction");
-    };
-    *current_blocks = identical.clone();
-    pending_blocks.push(identical);
-    service.queue_agent_compaction_task(task);
-    complete_runtime_test_compaction(&mut service, "%1", "first half summarized");
-    let second = service
-        .pending_agent_compaction_task_for_tests("%1")
-        .expect("equal-content sibling still owns a distinct source position");
-    let crate::runtime::agent_state::RuntimeAgentCompactionTarget::ActiveTurn {
-        current_blocks,
-        pending_blocks,
-        ..
-    } = &second.target
-    else {
-        panic!("expected active-turn compaction");
-    };
-    assert_eq!(current_blocks[0].content, "REPEATED_SOURCE");
-    assert!(pending_blocks.is_empty());
-    complete_runtime_test_compaction(&mut service, "%1", "second half summarized");
-    let synthesis = service
-        .pending_agent_compaction_task_for_tests("%1")
-        .expect("both equal-content halves must reach synthesis");
-    assert!(synthesis.request.messages.iter().any(|message| {
-        message.content.contains("first half summarized")
-            && message.content.contains("second half summarized")
-    }));
-    assert!(!service.agent_provider_task_is_pending(&turn_id));
-}
-
-/// A later active-turn synthesis round cannot repeat or enlarge its previous
-/// source; terminal failure leaves durable replay unchanged.
-#[test]
-fn runtime_compaction_rejects_nonreducing_active_synthesis() {
-    let (mut service, store, turn_id) = queue_observed_input_compaction_with_exact_history();
-    let conversation_id = service
-        .agent_shell_store()
-        .get("%1")
-        .unwrap()
-        .session_id
-        .clone();
-    let original_rows = store.inspect(&conversation_id).unwrap();
-    let mut task = service.take_pending_agent_compaction_task("%1").unwrap();
-    let crate::runtime::agent_state::RuntimeAgentCompactionTarget::ActiveTurn {
-        completed_summaries,
-        synthesis_source_bytes,
-        ..
-    } = &mut task.target
-    else {
-        panic!("expected active-turn compaction");
-    };
-    completed_summaries.push("earlier summary".to_string());
-    *synthesis_source_bytes = Some(1);
-    service.queue_agent_compaction_task(task);
-    complete_runtime_test_compaction(&mut service, "%1", "later summary");
-    assert!(
-        service
-            .pending_agent_compaction_task_for_tests("%1")
-            .is_none()
-    );
-    assert!(store.compaction_epoch(&conversation_id).unwrap().is_none());
-    assert!(
-        store
-            .inspect(&conversation_id)
-            .unwrap()
-            .starts_with(&original_rows)
-    );
-    assert!(service.agent_turn_contexts().get(&turn_id).is_none());
-    assert!(!service.agent_provider_task_is_pending(&turn_id));
-}
-
-/// A second closed segment remains provisional until both anchored summaries
-/// fit the complete refreshed request and can publish as one epoch.
-#[test]
-fn runtime_observed_compaction_stages_second_range_before_publication() {
-    let second = mez_agent::TranscriptContextEvent::execution_block_with_metadata(
-        ContextSourceKind::TranscriptAssistant,
-        "second answer",
-        "SECOND_RANGE_SOURCE ".repeat(1_200),
-        mez_agent::ContextExecutionGroupId::new("historical-group-2").unwrap(),
-        1,
-        None,
-    )
-    .unwrap()
-    .to_transcript_content();
-    let (mut service, store, turn_id) =
-        queue_observed_input_compaction_with_second_group(Some(second));
-    let conversation_id = service
-        .agent_shell_store()
-        .get("%1")
-        .unwrap()
-        .session_id
-        .clone();
-    let mut profile = service.agent_turn_model_profile(&turn_id).unwrap().clone();
-    profile.provider_options.insert(
-        "max_input_tokens".to_string(),
-        STAGED_COMPACTION_INPUT_LIMIT.to_string(),
-    );
-    service.set_agent_turn_model_profile(turn_id.clone(), profile);
-    complete_runtime_test_compaction(&mut service, "%1", "first summary");
-    assert!(store.compaction_epoch(&conversation_id).unwrap().is_none());
-    let retry = service
-        .pending_agent_compaction_task_for_tests("%1")
-        .expect("a second closed range should be queued");
-    let crate::runtime::agent_state::RuntimeAgentCompactionTarget::ActiveTurn {
-        staged, plan, ..
-    } = &retry.target
-    else {
-        panic!("expected staged active-turn compaction")
-    };
-    assert_eq!(staged.as_ref().unwrap().attempts, 1);
-    assert!(
-        plan.replacement_blocks()
-            .iter()
-            .any(|block| block.content.contains("SECOND_RANGE_SOURCE"))
-    );
-    service
-        .agent_turn_contexts_mut()
-        .get_mut(&turn_id)
-        .unwrap()
-        .append_user_event("user steering 1", "EXACT_STAGED_STEERING")
-        .unwrap();
-    complete_runtime_test_compaction(&mut service, "%1", "second summary");
-    let epoch = store.compaction_epoch(&conversation_id).unwrap().unwrap();
-    assert_eq!(epoch.ranges.len(), 2);
-    assert_eq!(epoch.ranges[0].summary, "first summary");
-    assert_eq!(epoch.ranges[1].summary, "second summary");
-    assert!(service.agent_provider_task_is_pending(&turn_id));
-    assert!(
-        service
-            .agent_turn_contexts()
-            .get(&turn_id)
-            .unwrap()
-            .blocks()
-            .iter()
-            .any(|block| { block.content == "EXACT_STAGED_STEERING" })
-    );
-    let next = service
-        .agent_context_for_pane_prompt("%1", "next", 0)
-        .unwrap();
-    assert!(
-        !next
-            .blocks()
-            .iter()
-            .any(|block| block.content.contains("SECOND_RANGE_SOURCE"))
-    );
-}
-
-/// Late peer mail must remain lower-trust, ordered, and occurrence-exact while
-/// staged summaries publish atomically. Repeated content is not deduplicated.
-/// The full action catalog and late receipts must fit after two summaries;
-/// the large second source must still require a separate unpublished stage.
-#[test]
-fn runtime_staged_compaction_preserves_late_peer_occurrences() {
-    let second = mez_agent::TranscriptContextEvent::execution_block_with_metadata(
-        ContextSourceKind::TranscriptAssistant,
-        "second answer",
-        "SECOND_RANGE_SOURCE ".repeat(1_200),
-        mez_agent::ContextExecutionGroupId::new("historical-group-2").unwrap(),
-        1,
-        None,
-    )
-    .unwrap()
-    .to_transcript_content();
-    let (mut service, store, turn_id) =
-        queue_observed_input_compaction_with_second_group(Some(second));
-    let conversation_id = service
-        .agent_shell_store()
-        .get("%1")
-        .unwrap()
-        .session_id
-        .clone();
-    let mut profile = service.agent_turn_model_profile(&turn_id).unwrap().clone();
-    profile.provider_options.insert(
-        "max_input_tokens".to_string(),
-        STAGED_COMPACTION_INPUT_LIMIT.to_string(),
-    );
-    service.set_agent_turn_model_profile(turn_id.clone(), profile);
-    complete_runtime_test_compaction(&mut service, "%1", "first summary");
-    assert!(store.compaction_epoch(&conversation_id).unwrap().is_none());
-    assert!(
-        service
-            .pending_agent_compaction_task_for_tests("%1")
-            .is_some()
-    );
-    let now_ms = current_unix_seconds().saturating_mul(1000);
-    let sender = service
-        .ensure_runtime_message_identity("agent-sender", None, "agent", &[], now_ms)
-        .unwrap();
-    let recipient = AgentId::opaque("agent-%1").unwrap();
-    let mut last_sequence = 0;
-    for (index, message_type) in ["send", "task_result", "send"].into_iter().enumerate() {
-        let bridge = message_type == "task_result";
-        let envelope = Envelope {
-            protocol: "mmp/1",
-            id: format!("late-mail-{index}"),
-            message_type: message_type.to_string(),
-            time: format!("runtime:{now_ms}"),
-            sender: sender.clone(),
-            recipient: mez_agent::messaging::Recipient::Agent(recipient.clone()),
-            correlation_id: Some(turn_id.clone()),
-            ttl_ms: None,
-            content_type: if bridge {
-                "application/json"
-            } else {
-                "text/plain; charset=utf-8"
-            }
-            .to_string(),
-            payload: if bridge {
-                r#"{"task_id":"synthetic-child","success":true,"summary":"bridge result","output":"SYNTHETIC_LATE_MAIL"}"#.to_string()
-            } else {
-                "SYNTHETIC_LATE_MAIL".to_string()
-            },
-            extension_fields: if bridge {
-                crate::runtime::control::runtime_bridge_extension_fields()
-            } else {
-                Vec::new()
-            },
-        };
-        last_sequence = service
-            .control
-            .message_service_mut()
-            .accept_at_with_scope(&sender.agent_id, envelope, MessageScope::Session, now_ms)
-            .unwrap()
-            .sequence;
-        assert_eq!(
-            service
-                .deliver_pending_runtime_agent_messages(now_ms)
-                .unwrap(),
-            1
-        );
-        assert_eq!(
-            service
-                .deliver_pending_runtime_agent_messages(now_ms)
-                .unwrap(),
-            0
-        );
-        if index == 0 {
-            service
-                .agent_turn_contexts_mut()
-                .get_mut(&turn_id)
-                .unwrap()
-                .append_user_event("steering", "EXACT_LATE_STEERING")
-                .unwrap();
-        }
-    }
-    let context = service.agent_turn_contexts().get(&turn_id).unwrap();
-    let suffix_start = context.chronology().len() - 4;
-    let suffix = context.chronology()[suffix_start..].to_vec();
-    complete_runtime_test_compaction(&mut service, "%1", "");
-    assert!(service.agent_is_compacting("%1"));
-    assert!(store.compaction_epoch(&conversation_id).unwrap().is_none());
-    assert_eq!(
-        &service
-            .agent_turn_contexts()
-            .get(&turn_id)
-            .unwrap()
-            .chronology()[suffix_start..],
-        suffix.as_slice()
-    );
-    complete_runtime_test_compaction(&mut service, "%1", "second summary");
-    assert!(service.agent_provider_task_is_pending(&turn_id));
-    let context = service.agent_turn_contexts().get(&turn_id).unwrap();
-    assert_eq!(
-        &context.chronology()[context.chronology().len() - 4..],
-        suffix.as_slice()
-    );
-    assert_eq!(
-        suffix[0].semantic_kind(),
-        mez_agent::ContextSemanticKind::ReferenceEvent
-    );
-    assert_eq!(
-        suffix[0].retention(),
-        mez_agent::ContextRetention::Summarizable
-    );
-    let remaining_stage = service
-        .pending_agent_compaction_task_for_tests("%1")
-        .map(|task| match &task.target {
-            crate::runtime::agent_state::RuntimeAgentCompactionTarget::ActiveTurn {
-                final_request_retry,
-                plan,
-                staged,
-                ..
-            } => format!(
-                "last_input_tokens={:?} next_range={:?} staged_attempts={:?}",
-                final_request_retry.last_input_tokens,
-                plan.replacement_event_sequences(),
-                staged.as_ref().map(|state| state.attempts)
-            ),
-            _ => "non-active compaction target".to_string(),
-        });
-    assert!(
-        !service.agent_is_compacting("%1"),
-        "two summaries must complete this scenario; remaining_stage={remaining_stage:?}"
-    );
-    let epoch = store.compaction_epoch(&conversation_id).unwrap().unwrap_or_else(|| {
-        panic!("staged summaries did not publish; remaining_stage={remaining_stage:?}; trace={} screen={}",
-            service.agent_pane_trace_log_text("%1").unwrap_or_default(),
-            service.pane_screen("%1").unwrap().normal_content_lines().join("\n"));
-    });
-    assert_eq!(epoch.ranges.len(), 2);
-    assert_eq!(
-        service
-            .control
-            .message_service()
-            .subscription(&recipient)
-            .unwrap()
-            .last_sequence,
-        last_sequence
-    );
-    assert_eq!(
-        service
-            .deliver_pending_runtime_agent_messages(now_ms)
-            .unwrap(),
-        0
-    );
-}
-
-/// Identical source/label/content in different groups must map to each group's
-/// own durable row, including a second provisional range after the first summary.
-#[test]
-fn runtime_observed_compaction_stages_repeated_content_by_group_identity() {
-    let repeated = |group| {
-        mez_agent::TranscriptContextEvent::execution_block_with_metadata(
-            ContextSourceKind::TranscriptAssistant,
-            "repeated answer",
-            "REPEATED_RANGE_SOURCE ".repeat(1_200),
-            mez_agent::ContextExecutionGroupId::new(group).unwrap(),
-            1,
-            None,
-        )
-        .unwrap()
-        .to_transcript_content()
-    };
-    let (mut service, store, turn_id) = queue_observed_input_compaction_with_groups(
-        Some(repeated("historical-group-1")),
-        Some(repeated("historical-group-2")),
-    );
-    let conversation_id = service
-        .agent_shell_store()
-        .get("%1")
-        .unwrap()
-        .session_id
-        .clone();
-    let mut profile = service.agent_turn_model_profile(&turn_id).unwrap().clone();
-    profile.provider_options.insert(
-        "max_input_tokens".to_string(),
-        STAGED_COMPACTION_INPUT_LIMIT.to_string(),
-    );
-    service.set_agent_turn_model_profile(turn_id.clone(), profile);
-    complete_runtime_test_compaction(&mut service, "%1", "first summary");
-    assert!(store.compaction_epoch(&conversation_id).unwrap().is_none());
-    assert!(
-        service
-            .pending_agent_compaction_task_for_tests("%1")
-            .is_some(),
-        "the repeated later group must remain eligible after staging the first"
-    );
-    complete_runtime_test_compaction(&mut service, "%1", "second summary");
-    let epoch = store.compaction_epoch(&conversation_id).unwrap().unwrap();
-    assert_eq!(epoch.ranges.len(), 2);
-    assert_eq!(
-        (
-            epoch.ranges[0].first_sequence,
-            epoch.ranges[0].through_sequence
-        ),
-        (2, 2)
-    );
-    assert_eq!(
-        (
-            epoch.ranges[1].first_sequence,
-            epoch.ranges[1].through_sequence
-        ),
-        (4, 4)
-    );
-    assert!(service.agent_provider_task_is_pending(&turn_id));
-}
-
-/// A complete refreshed request that already fits must publish its selected
-/// first range even if the planner still sees another eligible closed range.
-#[test]
-fn runtime_observed_compaction_fits_before_staging_another_range() {
-    let second = mez_agent::TranscriptContextEvent::execution_block_with_metadata(
-        ContextSourceKind::TranscriptAssistant,
-        "second answer",
-        "SECOND_RANGE_SOURCE ".repeat(80),
-        mez_agent::ContextExecutionGroupId::new("historical-group-2").unwrap(),
-        1,
-        None,
-    )
-    .unwrap()
-    .to_transcript_content();
-    let (mut service, store, turn_id) =
-        queue_observed_input_compaction_with_second_group(Some(second));
-    let conversation_id = service
-        .agent_shell_store()
-        .get("%1")
-        .unwrap()
-        .session_id
-        .clone();
-    let queued = service
-        .pending_agent_compaction_task_for_tests("%1")
-        .unwrap()
-        .clone();
-    let crate::runtime::agent_state::RuntimeAgentCompactionTarget::ActiveTurn { trigger, .. } =
-        queued.target
-    else {
-        panic!("expected observed-input active turn");
-    };
-    let context = service.agent_turn_contexts().get(&turn_id).unwrap();
-    let projection = mez_agent::ProviderBudgetProjection::new(
-        mez_agent::ProviderApiCompatibility::OpenAiResponses,
-        "runtime-batch",
-    );
-    let plan = (1..20_000)
-        .rev()
-        .find_map(|budget| {
-            mez_agent::plan_model_context_compaction_for_provider_tokens(
-                context,
-                budget,
-                1,
-                context.event_sequence_high_water_mark(),
-                projection,
-            )
-            .ok()
-            .filter(|plan| plan.requires_additional_segments())
-        })
-        .expect("two eligible durable segments must leave a later range");
-    assert!(plan.requires_additional_segments());
-    service.fail_current_agent_compaction_task("%1");
-    assert!(
-        service
-            .queue_agent_active_turn_compaction(
-                &turn_id,
-                queued.model_profile_name,
-                queued.model_profile,
-                trigger,
-                plan,
-            )
-            .unwrap()
-    );
-    let mut profile = service.agent_turn_model_profile(&turn_id).unwrap().clone();
-    profile
-        .provider_options
-        .insert("max_input_tokens".to_string(), "30000".to_string());
-    service.set_agent_turn_model_profile(turn_id.clone(), profile);
-    complete_runtime_test_compaction(&mut service, "%1", "short first summary");
-    let epoch = store.compaction_epoch(&conversation_id).unwrap().unwrap();
-    assert_eq!(epoch.ranges.len(), 1);
-    assert_eq!(epoch.ranges[0].summary, "short first summary");
-    assert!(service.agent_provider_task_is_pending(&turn_id));
-}
-
-/// A second independently queued observed-input compaction extends a prior
-/// selective epoch without requiring the previous task's frozen source rows.
-/// Each completion publishes only its newly selected durable range.
+/// Two observed-input rewrites span actual completed tasks. The next rewrite
+/// consumes the previous typed head and newly closed source exactly once, while
+/// inference and physical publication remain separate from accepted adoption.
 #[test]
 fn runtime_observed_compaction_extends_previous_selective_epoch() {
-    let second = mez_agent::TranscriptContextEvent::execution_block_with_metadata(
-        ContextSourceKind::TranscriptAssistant,
-        "second answer",
-        "SECOND_RANGE_SOURCE ".repeat(80),
-        mez_agent::ContextExecutionGroupId::new("historical-group-2").unwrap(),
+    let (mut service, store, mut turn_id) = provider_limit_replay::recovery_source(
+        &format!("FIRST_OBSERVED_SOURCE {}", "original ".repeat(5_000)),
+        "first task completed",
         1,
-        None,
-    )
-    .unwrap()
-    .to_transcript_content();
-    let (mut service, store, turn_id) =
-        queue_observed_input_compaction_with_second_group(Some(second));
-    let conversation_id = service
-        .agent_shell_store()
-        .get("%1")
-        .unwrap()
-        .session_id
-        .clone();
-    complete_runtime_test_compaction(&mut service, "%1", "first summary");
-    let first = store.compaction_epoch(&conversation_id).unwrap().unwrap();
-    assert_eq!(first.ranges.len(), 1);
-    let context = service.agent_turn_contexts().get(&turn_id).unwrap();
-    let plan = mez_agent::plan_model_context_compaction_for_provider_tokens(
-        context,
-        10_000,
-        1,
-        context.event_sequence_high_water_mark(),
-        mez_agent::ProviderBudgetProjection::new(
-            mez_agent::ProviderApiCompatibility::OpenAiResponses,
-            "runtime-batch",
-        ),
-    )
-    .unwrap();
-    assert!(
-        plan.replacement_blocks()
-            .iter()
-            .any(|block| block.content.contains("SECOND_RANGE_SOURCE"))
     );
-    let profile = service.agent_turn_model_profile(&turn_id).unwrap().clone();
-    assert!(service.queue_agent_active_turn_compaction(
-        &turn_id,
-        "observed-input-exact-history".to_string(),
-        profile,
-        crate::runtime::agent_state::RuntimeActiveTurnCompactionTrigger::ObservedInputLimit {
-            observed_input_tokens: 20_000,
-            max_input_tokens: 20_000,
-        },
-        plan,
-    ).unwrap());
-    complete_runtime_test_compaction(&mut service, "%1", "second summary");
-    let final_epoch = store.compaction_epoch(&conversation_id).unwrap().unwrap();
-    assert_eq!(final_epoch.ranges.len(), 2);
-    assert_eq!(final_epoch.ranges[0], first.ranges[0]);
-    assert_eq!(final_epoch.ranges[1].summary, "second summary");
-    assert!(service.agent_provider_task_is_pending(&turn_id));
-}
-
-/// A zero first-segment allowance must stage both durable ranges before the
-/// observed-input continuation, retaining exact steering in replay order.
-#[test]
-fn runtime_observed_zero_budget_stages_durable_ranges() {
-    let second = mez_agent::TranscriptContextEvent::execution_block_with_metadata(
-        ContextSourceKind::TranscriptAssistant,
-        "second answer",
-        "SECOND_RANGE_SOURCE ".repeat(1_200),
-        mez_agent::ContextExecutionGroupId::new("historical-group-2").unwrap(),
-        1,
-        None,
-    )
-    .unwrap()
-    .to_transcript_content();
-    let (mut service, store, turn_id) =
-        queue_observed_input_compaction_with_second_group(Some(second));
-    let conversation_id = service
-        .agent_shell_store()
-        .get("%1")
+    let conversation = service
+        .agent_turn_ledger()
+        .turn(&turn_id)
         .unwrap()
-        .session_id
+        .conversation_id
         .clone();
-    let queued = service
-        .pending_agent_compaction_task_for_tests("%1")
-        .unwrap()
-        .clone();
-    let crate::runtime::agent_state::RuntimeAgentCompactionTarget::ActiveTurn { trigger, .. } =
-        queued.target
-    else {
-        panic!("expected observed-input active turn")
-    };
-    let context = service.agent_turn_contexts().get(&turn_id).unwrap();
-    let projection = mez_agent::ProviderBudgetProjection::new(
-        mez_agent::ProviderApiCompatibility::OpenAiResponses,
-        "runtime-batch",
-    );
-    let plan = (1..20_000)
-        .rev()
-        .find_map(|budget| {
-            mez_agent::plan_model_context_compaction_for_provider_tokens(
-                context,
-                budget,
-                1,
-                context.event_sequence_high_water_mark(),
-                projection,
-            )
-            .ok()
-            .filter(|plan| plan.requires_additional_segments())
-        })
-        .expect("two eligible durable segments must recover a zero first allowance");
-    let original = context.clone();
-    service.fail_current_agent_compaction_task("%1");
-    assert!(
-        service
-            .queue_agent_active_turn_compaction(
-                &turn_id,
-                queued.model_profile_name,
-                queued.model_profile,
-                trigger,
-                plan,
-            )
+    let mut prior_head = None;
+    for (revision, summary) in [
+        (1, "first observed summary"),
+        (2, "second observed summary"),
+    ] {
+        let before = service.agent_turn_contexts()[&turn_id].clone();
+        let owner = mez_agent::ReplayEpochContext::from_owned_context(
+            mez_agent::ReplayConversationId::new(&conversation).unwrap(),
+            before.clone(),
+        )
+        .unwrap();
+        let selected = match owner
+            .prepare_compaction(mez_agent::ReplayTailPolicy::new(40_000, 1).unwrap())
             .unwrap()
-    );
-    let mut first_range = service.take_pending_agent_compaction_task("%1").unwrap();
-    if let crate::runtime::agent_state::RuntimeAgentCompactionTarget::ActiveTurn {
-        synthesis_source_bytes,
-        ..
-    } = &mut first_range.target
-    {
-        *synthesis_source_bytes = Some(1);
+        {
+            mez_agent::ReplayCompactionPreparation::Ready(plan) => plan,
+            other => panic!("expected closed observed source: {other:?}"),
+        };
+        let expected_tail = before.chronology()[selected.summary_input().len()..].to_vec();
+        if let Some(head) = prior_head {
+            assert_eq!(selected.summary_input()[0].record().occurrence_id(), head);
+            assert!(
+                selected
+                    .summary_input()
+                    .iter()
+                    .any(|event| event.block().content.contains("SECOND_OBSERVED_SOURCE"))
+            );
+            assert!(
+                !selected
+                    .summary_input()
+                    .iter()
+                    .any(|event| event.block().content.contains("FIRST_OBSERVED_SOURCE"))
+            );
+        }
+        let profile = service.agent_turn_model_profile(&turn_id).unwrap().clone();
+        let plan = mez_agent::plan_model_context_compaction_for_provider_tokens(
+            &before,
+            40_000,
+            1,
+            before.event_sequence_high_water_mark(),
+            mez_agent::ProviderBudgetProjection::new(
+                mez_agent::ProviderApiCompatibility::OpenAiResponses,
+                "runtime-batch",
+            ),
+        )
+        .unwrap();
+        assert!(service.queue_agent_active_turn_compaction(
+            &turn_id, "provider-context-limit-test".into(), profile,
+            crate::runtime::agent_state::RuntimeActiveTurnCompactionTrigger::ObservedInputLimit {
+                observed_input_tokens: 40_000, max_input_tokens: 40_000,
+            }, plan,
+        ).unwrap());
+        let input = &service
+            .pending_agent_compaction_task_for_tests("%1")
+            .unwrap()
+            .request
+            .messages
+            .last()
+            .unwrap()
+            .content;
+        assert_eq!(input.contains("FIRST_OBSERVED_SOURCE"), revision == 1);
+        if revision == 2 {
+            assert_eq!(input.matches("first observed summary").count(), 1);
+            assert!(input.contains("SECOND_OBSERVED_SOURCE"));
+        }
+        complete_runtime_test_compaction(&mut service, "%1", summary);
+        assert_eq!(service.agent_turn_contexts()[&turn_id], before);
+        assert!(!service.agent_provider_task_is_pending(&turn_id));
+        let completion = replay_publication::execute_pending_publication(&mut service);
+        let duplicate = completion.clone();
+        assert_eq!(service.agent_turn_contexts()[&turn_id], before);
+        assert!(!service.agent_provider_task_is_pending(&turn_id));
+        assert!(
+            service
+                .apply_replay_epoch_completion(completion)
+                .unwrap()
+                .applied
+        );
+        let after = &service.agent_turn_contexts()[&turn_id];
+        assert_eq!(after.chronology()[0].block().content, summary);
+        assert_eq!(&after.chronology()[1..], expected_tail);
+        let (_, cold) = AgentTranscriptStore::new(store.root())
+            .load_replay_epoch(&conversation, mez_agent::AgentContext::empty())
+            .unwrap()
+            .unwrap();
+        assert_eq!(cold.revision().get(), revision);
+        assert_eq!(cold.context().chronology(), after.chronology());
+        let head = cold.head().unwrap().occurrence_id();
+        assert_ne!(prior_head, Some(head));
+        prior_head = Some(head);
+        assert!(service.agent_provider_task_is_pending(&turn_id));
+        assert!(service.pending_agent_compaction_tasks().is_empty());
+        assert!(
+            !service
+                .apply_replay_epoch_completion(duplicate)
+                .unwrap()
+                .applied
+        );
+        if revision == 1 {
+            let profile = service.agent_turn_model_profile(&turn_id).unwrap().clone();
+            let provider = RuntimeBatchProvider {
+                response: runtime_say_response(
+                    &turn_id,
+                    &format!("SECOND_OBSERVED_SOURCE {}", "later ".repeat(1_000)),
+                    true,
+                ),
+            };
+            assert_eq!(
+                service
+                    .execute_agent_turn_with_provider(&turn_id, &provider, profile)
+                    .unwrap()
+                    .terminal_state,
+                AgentTurnState::Completed
+            );
+            turn_id = service
+                .start_agent_prompt_turn("%1", "keep the new task exact")
+                .unwrap()
+                .turn_id;
+        }
     }
-    service.queue_agent_compaction_task(first_range);
-    complete_runtime_test_compaction(&mut service, "%1", "x");
-    assert!(store.compaction_epoch(&conversation_id).unwrap().is_none());
-    assert_eq!(service.agent_turn_contexts().get(&turn_id), Some(&original));
-    assert!(!service.agent_provider_task_is_pending(&turn_id));
-    let retry = service
-        .pending_agent_compaction_task_for_tests("%1")
-        .expect("later durable segment queued");
-    let crate::runtime::agent_state::RuntimeAgentCompactionTarget::ActiveTurn {
-        staged: Some(staged),
-        synthesis_source_bytes,
-        ..
-    } = &retry.target
-    else {
-        panic!("first summary must remain provisional")
-    };
-    assert_eq!(staged.attempts, 1);
-    assert_eq!(*synthesis_source_bytes, None);
-    service
-        .agent_turn_contexts_mut()
-        .get_mut(&turn_id)
-        .unwrap()
-        .append_user_event("late steering", "EXACT_LATE_STEERING")
-        .unwrap();
-    complete_runtime_test_compaction(&mut service, "%1", "x");
-    let epoch = store.compaction_epoch(&conversation_id).unwrap().unwrap();
-    assert_eq!(epoch.ranges.len(), 2);
-    assert_eq!(epoch.ranges[0].summary, "x");
-    assert_eq!(epoch.ranges[1].summary, "x");
-    assert!(service.agent_provider_task_is_pending(&turn_id));
-    assert!(
-        service
-            .agent_turn_contexts()
-            .get(&turn_id)
-            .unwrap()
-            .blocks()
-            .iter()
-            .any(|block| block.content == "EXACT_LATE_STEERING")
-    );
-    let next = service
-        .agent_context_for_pane_prompt("%1", "next", 0)
-        .unwrap();
-    assert!(
-        next.blocks()
-            .iter()
-            .any(|block| block.content.contains("EXACT_SECOND_USER_INSTRUCTION"))
-    );
-    assert!(
-        !next
-            .blocks()
-            .iter()
-            .any(|block| block.content.contains("SECOND_RANGE_SOURCE"))
-    );
 }
 
 /// An oversized second range cannot publish the earlier staged summary or
 /// leave a shortened raw replay suffix after recovery fails.
 #[test]
 fn runtime_observed_compaction_second_range_failure_keeps_original_epoch() {
-    let second = mez_agent::TranscriptContextEvent::execution_block_with_metadata(
-        ContextSourceKind::TranscriptAssistant,
-        "second answer",
-        "SECOND_RANGE_SOURCE ".repeat(1_200),
-        mez_agent::ContextExecutionGroupId::new("historical-group-2").unwrap(),
-        1,
-        None,
-    )
-    .unwrap()
-    .to_transcript_content();
-    let (mut service, store, turn_id) =
-        queue_observed_input_compaction_with_second_group(Some(second));
-    let conversation_id = service
-        .agent_shell_store()
-        .get("%1")
-        .unwrap()
-        .session_id
-        .clone();
-    let mut profile = service.agent_turn_model_profile(&turn_id).unwrap().clone();
-    profile
-        .provider_options
-        .insert("max_input_tokens".to_string(), "17000".to_string());
-    service.set_agent_turn_model_profile(turn_id.clone(), profile);
-    complete_runtime_test_compaction(&mut service, "%1", "first summary");
-    assert!(store.compaction_epoch(&conversation_id).unwrap().is_none());
-    let source = "second oversized summary ".repeat(850);
-    let steering = "EXACT_OVERSIZED_STAGED_STEERING ".repeat(2_000);
-    service
-        .agent_turn_contexts_mut()
-        .get_mut(&turn_id)
-        .unwrap()
-        .append_user_event("user steering 1", steering.clone())
-        .unwrap();
-    assert!(
-        service
-            .agent_turn_contexts()
-            .get(&turn_id)
-            .unwrap()
-            .blocks()
-            .iter()
-            .any(|block| block.content == steering)
-    );
-    complete_runtime_test_compaction(&mut service, "%1", &source);
-    assert!(store.compaction_epoch(&conversation_id).unwrap().is_none());
-    if service
-        .pending_agent_compaction_task_for_tests("%1")
-        .is_some()
-    {
-        complete_runtime_test_compaction(&mut service, "%1", &source);
-    }
-    assert!(store.compaction_epoch(&conversation_id).unwrap().is_none());
-    assert!(
-        service
-            .agent_turn_ledger()
-            .turns()
-            .iter()
-            .any(|turn| { turn.turn_id == turn_id && turn.state == AgentTurnState::Failed })
-    );
-    assert!(
-        store
-            .inspect(&conversation_id)
-            .unwrap()
-            .iter()
-            .any(|row| { row.content.contains("SECOND_RANGE_SOURCE") })
-    );
-    assert!(service.agent_turn_contexts().get(&turn_id).is_none());
-}
-
-/// A second summary that makes no progress cannot cause an unbounded loop or
-/// publish either oversized candidate to durable replay.
-#[test]
-fn runtime_observed_compaction_rejects_non_reducing_final_retry() {
-    let (mut service, store, turn_id) = queue_observed_input_compaction_with_exact_history();
-    let conversation_id = service
-        .agent_shell_store()
-        .get("%1")
-        .unwrap()
-        .session_id
-        .clone();
-    set_observed_compaction_summary_fit_boundary(
-        &mut service,
-        &turn_id,
-        &"large-summary ".repeat(900),
-    );
-    complete_runtime_test_compaction(&mut service, "%1", "");
-    assert!(
-        service
-            .pending_agent_compaction_task_for_tests("%1")
-            .is_some()
-    );
-    let oversized = "large-summary ".repeat(900);
-    complete_runtime_test_compaction(&mut service, "%1", &oversized);
-    assert!(
-        service
-            .pending_agent_compaction_task_for_tests("%1")
-            .is_some()
-    );
-    complete_runtime_test_compaction(&mut service, "%1", &oversized);
-    assert!(
-        service
-            .pending_agent_compaction_task_for_tests("%1")
-            .is_none()
-    );
-    assert!(store.compaction_epoch(&conversation_id).unwrap().is_none());
-    assert!(
-        service
-            .agent_turn_ledger()
-            .turns()
-            .iter()
-            .any(|turn| { turn.turn_id == turn_id && turn.state == AgentTurnState::Failed })
-    );
-    let failure = persisted_compaction_failure(&service, &store, &conversation_id, &turn_id);
-    assert!(failure.contains("phase=CompleteCandidate"));
-    assert!(failure.contains("corrections_admitted=1"));
-    assert!(failure.contains("source_generation=Some("));
-    assert!(failure.contains("bytes=Some("));
-    assert!(!failure.contains(&oversized));
+    observed_staging::second_range_failure_keeps_original_epoch();
 }
 
 /// Reads the terminal durable projection after ordinary execution state has
@@ -2633,41 +867,49 @@ fn persisted_compaction_failure(
 /// replay without displacing exact history that the plan deliberately retained.
 #[test]
 fn runtime_observed_compaction_preserves_history_when_transcript_arrives_after_queue() {
-    let (mut service, transcript_store, _) = queue_observed_input_compaction_with_exact_history();
+    let (mut service, transcript_store, turn) = observed_history::queued();
     let session = service
         .agent_shell_store()
         .get("%1")
         .expect("active agent shell session");
     let conversation_id = session.session_id.clone();
-    let next_sequence = transcript_store
-        .inspect(&conversation_id)
-        .unwrap()
-        .last()
-        .expect("seeded and prompt transcript entries")
-        .sequence
-        .saturating_add(1);
-    transcript_store
-        .append(&mez_agent::transcript::TranscriptEntry {
-            conversation_id,
-            sequence: next_sequence,
-            created_at_unix_seconds: 2,
-            role: mez_agent::transcript::TranscriptRole::Assistant,
-            turn_id: "late-transcript-turn".to_string(),
-            agent_id: "agent-%1".to_string(),
-            pane_id: "%1".to_string(),
-            content: "LATE_POST_PLAN_TRANSCRIPT_ENTRY".to_string(),
-        })
-        .unwrap();
-    service
-        .agent_shell_store_mut()
-        .record_transcript_entries("%1", 1)
-        .unwrap();
+    let arrival = observed_history::append_external_task(
+        &service,
+        &transcript_store,
+        &turn,
+        "LATE_POST_PLAN_TRANSCRIPT_ENTRY",
+    );
 
     complete_runtime_test_compaction(
         &mut service,
         "%1",
         "observed input summary without exact user instructions",
     );
+    // Inference has no authority to publish or discard the external archive
+    // arrival. The real writer joins it after the frozen prefix once.
+    replay_observed::adopt(&mut service, &turn);
+    let mut fresh = test_runtime_service();
+    fresh.set_agent_transcript_store(AgentTranscriptStore::new(transcript_store.root()));
+    fresh.agent_shell_store_mut().enter_or_resume("%1").unwrap();
+    fresh
+        .agent_shell_store_mut()
+        .bind_conversation("%1", &conversation_id, 0)
+        .unwrap();
+    let cold = fresh
+        .runtime_agent_history_epoch_context("%1")
+        .unwrap()
+        .replay_owner()
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        cold.context()
+            .chronology()
+            .iter()
+            .filter(|event| event.record() == arrival.record())
+            .count(),
+        1
+    );
+    assert_eq!(cold.context().chronology().last().unwrap(), &arrival);
     let next_context = service
         .agent_context_for_pane_prompt("%1", "NEXT_USER_PROMPT Continue.", 0)
         .unwrap();
@@ -2686,111 +928,46 @@ fn runtime_observed_compaction_preserves_history_when_transcript_arrives_after_q
     assert!(replay.contains("EXACT_THIRD_USER_INSTRUCTION"), "{replay}");
 }
 
-/// A late raw transcript row can overfill only the refreshed projection; the
-/// first summary must not commit while a shorter summary can still recover.
-#[test]
-fn runtime_observed_compaction_retries_refreshed_only_overflow() {
-    let (mut service, store, turn_id) = queue_observed_input_compaction_with_exact_history();
-    let conversation_id = service
-        .agent_shell_store()
-        .get("%1")
-        .unwrap()
-        .session_id
-        .clone();
-    let sequence = store
-        .inspect(&conversation_id)
-        .unwrap()
-        .last()
-        .unwrap()
-        .sequence
-        + 1;
-    store
-        .append(&mez_agent::transcript::TranscriptEntry {
-            conversation_id: conversation_id.clone(),
-            sequence,
-            created_at_unix_seconds: sequence,
-            role: mez_agent::transcript::TranscriptRole::Assistant,
-            turn_id: "late-raw".to_string(),
-            agent_id: "agent-%1".to_string(),
-            pane_id: "%1".to_string(),
-            content: "late raw evidence ".repeat(200),
-        })
-        .unwrap();
-    service
-        .agent_shell_store_mut()
-        .record_transcript_entries("%1", 1)
-        .unwrap();
-    set_observed_compaction_summary_fit_boundary(
-        &mut service,
-        &turn_id,
-        &"large-summary ".repeat(600),
-    );
-    complete_runtime_test_compaction(&mut service, "%1", &"large-summary ".repeat(600));
-    assert!(store.compaction_epoch(&conversation_id).unwrap().is_none());
-    assert!(
-        service
-            .pending_agent_compaction_task_for_tests("%1")
-            .is_some(),
-        "pane={}",
-        service
-            .pane_screen("%1")
-            .unwrap()
-            .normal_content_lines()
-            .join("\n")
-    );
-    complete_runtime_test_compaction(&mut service, "%1", "shorter summary");
-    assert!(service.agent_provider_task_is_pending(&turn_id));
-    let next = service
-        .agent_context_for_pane_prompt("%1", "next", 0)
-        .unwrap();
-    assert!(
-        next.blocks()
-            .iter()
-            .any(|block| block.content.contains("late raw evidence"))
-    );
-    assert!(
-        !next
-            .blocks()
-            .iter()
-            .any(|block| block.content.contains("TYPED_OLD_WORK"))
-    );
-}
-
 /// Verifies oversized transcript history arriving after observed-input
 /// compaction was queued is included in the final request check before commit.
 #[test]
 fn runtime_observed_input_limit_rejects_late_oversized_transcript_without_commit() {
-    let (mut service, transcript_store, turn_id) =
-        queue_observed_input_compaction_with_exact_history();
+    let (mut service, transcript_store, turn_id) = observed_history::queued();
     let conversation_id = service
         .agent_shell_store()
         .get("%1")
         .expect("active agent shell session")
         .session_id
         .clone();
-    let sequence = transcript_store
-        .inspect(&conversation_id)
+    // This original live occurrence is a pending transcript member, not a
+    // fabricated closed historical task or a count-derived archive import.
+    let original_rows = transcript_store.inspect(&conversation_id).unwrap();
+    service
+        .agent_turn_contexts_mut()
+        .get_mut(&turn_id)
         .unwrap()
-        .last()
-        .expect("seeded transcript history")
-        .sequence
-        .saturating_add(1);
-    transcript_store
-        .append(&mez_agent::transcript::TranscriptEntry {
-            conversation_id: conversation_id.clone(),
-            sequence,
-            created_at_unix_seconds: 2,
-            role: mez_agent::transcript::TranscriptRole::Assistant,
-            turn_id: "late-oversized-transcript-turn".to_string(),
-            agent_id: "agent-%1".to_string(),
-            pane_id: "%1".to_string(),
-            content: "late-oversized-transcript-token ".repeat(21_000),
+        .update_replay_owner(|owner| {
+            owner.append_execution_events([mez_agent::ContextConversationAppend::assistant(
+                "late oversized transcript",
+                "late-oversized-transcript-token ".repeat(21_000),
+                mez_agent::ContextExecutionGroupId::new("late-oversized-transcript")?,
+            )])?;
+            Ok(())
         })
         .unwrap();
-    service
-        .agent_shell_store_mut()
-        .record_transcript_entries("%1", 1)
-        .unwrap();
+    assert!(
+        service
+            .observed_compaction_candidate_input_tokens_for_tests(
+                "%1",
+                "small observed input summary",
+            )
+            .unwrap()
+            > 20_000
+    );
+    assert_eq!(
+        transcript_store.inspect(&conversation_id).unwrap(),
+        original_rows
+    );
 
     complete_runtime_test_compaction(&mut service, "%1", "small observed input summary");
     // Earlier consumed ranges may still be summarized privately. The late
@@ -2833,35 +1010,36 @@ fn runtime_observed_input_limit_rejects_late_oversized_transcript_without_commit
     );
 }
 
-/// Verifies observed-input compaction rejects a candidate that fits the cap
-/// but does not strictly shrink the triggering request estimate.
+/// Repeated oversized output cannot make progress by mutating an observation
+/// counter. Both candidates are measured through the actual complete request;
+/// neither may publish a head or resume ordinary work.
 #[test]
 fn runtime_observed_input_limit_rejects_non_reducing_candidate_without_commit() {
-    let (mut service, transcript_store, turn_id) =
-        queue_observed_input_compaction_with_exact_history();
+    let (mut service, transcript_store, turn_id) = observed_history::queued();
     let conversation_id = service
         .agent_shell_store()
         .get("%1")
         .expect("active agent shell session")
         .session_id
         .clone();
-    let queued = service
-        .pending_agent_compaction_task_mut_for_tests("%1")
-        .expect("observed-input compaction task");
-    let crate::runtime::agent_state::RuntimeAgentCompactionTarget::ActiveTurn {
-        trigger:
-            crate::runtime::agent_state::RuntimeActiveTurnCompactionTrigger::ObservedInputLimit {
-                observed_input_tokens,
-                ..
-            },
-        ..
-    } = &mut queued.target
-    else {
-        panic!("expected observed-input-limit active-turn compaction");
-    };
-    *observed_input_tokens = 1;
-
-    complete_runtime_test_compaction(&mut service, "%1", "small observed input summary");
+    let summary = "non-reducing candidate ".repeat(3_000);
+    assert!(
+        service
+            .observed_compaction_candidate_input_tokens_for_tests("%1", &summary,)
+            .unwrap()
+            > 20_000
+    );
+    let original = service.agent_turn_contexts()[&turn_id].clone();
+    complete_runtime_test_compaction(&mut service, "%1", &summary);
+    assert_eq!(service.agent_turn_contexts()[&turn_id], original);
+    assert!(
+        service
+            .pending_agent_compaction_task_for_tests("%1")
+            .is_some()
+    );
+    assert!(service.take_replay_epoch_attempt_for_tests().is_none());
+    assert!(!service.agent_provider_task_is_pending(&turn_id));
+    complete_runtime_test_compaction(&mut service, "%1", &summary);
 
     assert_eq!(
         transcript_store.compaction_epoch(&conversation_id).unwrap(),
@@ -2875,761 +1053,6 @@ fn runtime_observed_input_limit_rejects_non_reducing_candidate_without_commit() 
             .any(|turn| turn.turn_id == turn_id && turn.state == AgentTurnState::Failed)
     );
     assert!(service.agent_turn_contexts().get(&turn_id).is_none());
-}
-
-/// Verifies observed-input compaction refuses an oversized exact next request.
-///
-/// A provider-reported threshold queues compaction, but the summary and retained
-/// context must still fit the configured cap before either the live turn context
-/// or durable transcript epoch is committed.
-#[test]
-fn runtime_observed_input_limit_rejects_over_cap_candidate_without_commit() {
-    let mut service = test_runtime_service();
-    let store = AgentTranscriptStore::new(temp_root("observed-input-deferred-first-turn"));
-    service.set_agent_transcript_store(store.clone());
-    service.use_transcript_effect_adapter();
-    service
-        .replace_config_layers(vec![ConfigLayer {
-            name: "observed-input-limit".to_string(),
-            path: None,
-            format: ConfigFormat::Toml,
-            scope: ConfigScope::Primary,
-            trusted: true,
-            text: r#"[agents]
-default_provider = "runtime-batch"
-default_model_profile = "observed-input-limit"
-[providers.runtime-batch]
-kind = "openai"
-models = ["test"]
-default_model = "test"
-[model_profiles.observed-input-limit]
-provider = "runtime-batch"
-model = "test"
-context_window_tokens = 40000
-max_input_tokens = 100
-"#
-            .to_string(),
-        }])
-        .unwrap();
-    let primary = service
-        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
-        .unwrap();
-    service
-        .agent_shell_store_mut()
-        .enter_or_resume("%1")
-        .unwrap();
-    let start = service.dispatch_runtime_control_body(
-        r#"{"jsonrpc":"2.0","id":"observed-input-limit","method":"agent/shell/command","params":{"idempotency_key":"observed-input-limit","input":"continue with the collected evidence"}}"#,
-        &primary,
-    );
-    assert!(start.contains(r#""state":"running""#), "{start}");
-    let task = service.pending_agent_provider_tasks().remove(0);
-    let turn = service
-        .agent_turn_ledger()
-        .turns()
-        .iter()
-        .find(|turn| turn.turn_id == task.turn_id)
-        .cloned()
-        .expect("pending provider task owns a running turn");
-    insert_test_context_block(
-        service
-            .agent_turn_contexts_mut()
-            .get_mut(&task.turn_id)
-            .unwrap(),
-        ContextBlock {
-            source: ContextSourceKind::ActionResult,
-            placement: mez_agent::ContextPlacement::ConversationAppend,
-            label: "observed input evidence".to_string(),
-            content: "observed-input-marker ".repeat(500),
-        },
-    );
-    let response = runtime_say_response(&task.turn_id, "continue", false);
-    let action = response
-        .action_batch
-        .as_ref()
-        .and_then(|batch| batch.actions.first())
-        .cloned()
-        .expect("continuation response contains a say action");
-    service
-        .apply_agent_provider_execution(
-            &turn,
-            &task.model_profile,
-            "runtime-batch",
-            mez_agent::AgentTurnExecution {
-                request: runtime_model_request_fixture_for_agent(&task.turn_id, &task.agent_id),
-                response,
-                latest_response_usage: mez_agent::ModelTokenUsage {
-                    input_tokens: 100,
-                    output_tokens: 1,
-                    reasoning_tokens: 0,
-                    cached_input_tokens: Some(20),
-                    cache_write_input_tokens: None,
-                },
-                routing_token_usage_by_model: std::collections::BTreeMap::new(),
-                action_results: vec![mez_agent::ActionResult::succeeded(
-                    &turn,
-                    &action,
-                    vec!["continue".to_string()],
-                    None,
-                )],
-                final_turn: false,
-                terminal_state: AgentTurnState::Running,
-            },
-        )
-        .unwrap();
-    assert!(!service.agent_provider_task_is_pending(&task.turn_id));
-    let queued = service
-        .pending_agent_compaction_task_for_tests("%1")
-        .expect("observed threshold queues compaction at continuation boundary");
-    assert_eq!(queued.source, "observed-input-limit");
-    let crate::runtime::agent_state::RuntimeAgentCompactionTarget::ActiveTurn {
-        trigger:
-            crate::runtime::agent_state::RuntimeActiveTurnCompactionTrigger::ObservedInputLimit {
-                observed_input_tokens,
-                max_input_tokens,
-            },
-        ..
-    } = &queued.target
-    else {
-        panic!("expected observed-input-limit active-turn compaction");
-    };
-    assert_eq!(*observed_input_tokens, 100);
-    assert_eq!(*max_input_tokens, 100);
-
-    complete_runtime_test_compaction(&mut service, "%1", "observed input summary");
-    assert!(!service.agent_provider_task_is_pending(&task.turn_id));
-    assert!(
-        service
-            .agent_turn_ledger()
-            .turns()
-            .iter()
-            .any(|turn| { turn.turn_id == task.turn_id && turn.state == AgentTurnState::Failed })
-    );
-    let conversation_id = &turn.conversation_id;
-    assert_eq!(store.compaction_epoch(conversation_id).unwrap(), None);
-    let pending_transcript = service
-        .persistence
-        .pending_transcript_entries(conversation_id);
-    assert!(
-        !pending_transcript
-            .iter()
-            .any(|entry| entry.content.contains("observed input summary"))
-    );
-    assert!(
-        !pending_transcript
-            .iter()
-            .any(|entry| entry.content.contains("mcp_compaction_epoch"))
-    );
-}
-
-/// An observed first-turn input overflow can summarize closed live work even
-/// before the transcript worker commits its first archive. Recovery queues one
-/// continuation but leaves the original append-only history authoritative.
-#[test]
-fn runtime_observed_first_turn_without_archive_recovers_turn_locally() {
-    let mut service = test_runtime_service();
-    let store = AgentTranscriptStore::new(temp_root("observed-first-turn-local"));
-    service.set_agent_transcript_store(store.clone());
-    service.use_transcript_effect_adapter();
-    service.replace_config_layers(vec![ConfigLayer {
-        name: "observed-first-turn-local".to_string(), path: None,
-        format: ConfigFormat::Toml, scope: ConfigScope::Primary, trusted: true,
-        text: "[agents]\ndefault_provider = \"runtime-batch\"\ndefault_model_profile = \"first-turn-local\"\n[providers.runtime-batch]\nkind = \"openai\"\nmodels = [\"test\"]\ndefault_model = \"test\"\n[model_profiles.first-turn-local]\nprovider = \"runtime-batch\"\nmodel = \"test\"\ncontext_window_tokens = 40000\nmax_input_tokens = 20000\n".to_string(),
-    }]).unwrap();
-    let primary = service
-        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
-        .unwrap();
-    service
-        .agent_shell_store_mut()
-        .enter_or_resume("%1")
-        .unwrap();
-    let start = service.dispatch_runtime_control_body(
-        r#"{"jsonrpc":"2.0","id":"first-local","method":"agent/shell/command","params":{"idempotency_key":"first-local","input":"continue with the collected evidence"}}"#,
-        &primary,
-    );
-    assert!(start.contains(r#""state":"running""#), "{start}");
-    let task = service.pending_agent_provider_tasks().remove(0);
-    let turn = service
-        .agent_turn_ledger()
-        .turns()
-        .iter()
-        .find(|turn| turn.turn_id == task.turn_id)
-        .unwrap()
-        .clone();
-    insert_test_context_block(
-        service
-            .agent_turn_contexts_mut()
-            .get_mut(&task.turn_id)
-            .unwrap(),
-        ContextBlock {
-            source: ContextSourceKind::ActionResult,
-            placement: mez_agent::ContextPlacement::ConversationAppend,
-            label: "first-turn evidence".to_string(),
-            content: "first-turn-evidence ".repeat(500),
-        },
-    );
-    let response = runtime_say_response(&task.turn_id, "continue", false);
-    let action = response
-        .action_batch
-        .as_ref()
-        .unwrap()
-        .actions
-        .first()
-        .unwrap()
-        .clone();
-    service
-        .apply_agent_provider_execution(
-            &turn,
-            &task.model_profile,
-            "runtime-batch",
-            mez_agent::AgentTurnExecution {
-                request: runtime_model_request_fixture_for_agent(&task.turn_id, &task.agent_id),
-                response,
-                latest_response_usage: mez_agent::ModelTokenUsage {
-                    input_tokens: 20_000,
-                    output_tokens: 1,
-                    reasoning_tokens: 0,
-                    cached_input_tokens: Some(20),
-                    cache_write_input_tokens: None,
-                },
-                routing_token_usage_by_model: std::collections::BTreeMap::new(),
-                action_results: vec![mez_agent::ActionResult::succeeded(
-                    &turn,
-                    &action,
-                    vec!["continue".to_string()],
-                    None,
-                )],
-                final_turn: false,
-                terminal_state: AgentTurnState::Running,
-            },
-        )
-        .unwrap();
-    assert!(
-        service
-            .pending_agent_compaction_task_for_tests("%1")
-            .is_some()
-    );
-    assert!(
-        !store
-            .transcript_path(&turn.conversation_id)
-            .unwrap()
-            .exists()
-    );
-    complete_runtime_test_compaction(&mut service, "%1", "closed evidence summarized");
-    assert_eq!(store.compaction_epoch(&turn.conversation_id).unwrap(), None);
-    assert!(
-        !store
-            .transcript_path(&turn.conversation_id)
-            .unwrap()
-            .exists()
-    );
-    assert!(service.agent_provider_task_is_pending(&turn.turn_id));
-    assert_eq!(service.pending_agent_provider_tasks().len(), 1);
-    assert!(
-        service
-            .agent_turn_contexts()
-            .get(&turn.turn_id)
-            .unwrap()
-            .blocks()
-            .iter()
-            .any(|block| block.content == "closed evidence summarized")
-    );
-    assert!(
-        service
-            .persistence
-            .pending_transcript_entries(&turn.conversation_id)
-            .iter()
-            .all(|entry| !entry.content.contains("closed evidence summarized"))
-    );
-}
-
-/// A first-turn zero-budget plan may resume after one summary when the complete
-/// request fits, while leaving uncommitted source and exact steering intact.
-#[test]
-fn runtime_observed_first_turn_resumes_fitting_local_summary() {
-    let mut service = test_runtime_service();
-    let store = AgentTranscriptStore::new(temp_root("first-turn-staged-local"));
-    service.set_agent_transcript_store(store.clone());
-    service.use_transcript_effect_adapter();
-    service.replace_config_layers(vec![ConfigLayer {
-        name: "first-turn-staged-local".to_string(), path: None,
-        format: ConfigFormat::Toml, scope: ConfigScope::Primary, trusted: true,
-        text: "[agents]\ndefault_provider = \"runtime-batch\"\ndefault_model_profile = \"first-turn-staged\"\n[providers.runtime-batch]\nkind = \"openai\"\nmodels = [\"test\"]\ndefault_model = \"test\"\n[model_profiles.first-turn-staged]\nprovider = \"runtime-batch\"\nmodel = \"test\"\ncontext_window_tokens = 40000\nmax_input_tokens = 20000\n".to_string(),
-    }]).unwrap();
-    let primary = service
-        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
-        .unwrap();
-    service
-        .agent_shell_store_mut()
-        .enter_or_resume("%1")
-        .unwrap();
-    let start = service.dispatch_runtime_control_body(
-        r#"{"jsonrpc":"2.0","id":"first-staged","method":"agent/shell/command","params":{"idempotency_key":"first-staged","input":"continue"}}"#,
-        &primary,
-    );
-    assert!(start.contains(r#""state":"running""#), "{start}");
-    let context = service.agent_turn_contexts_mut().get_mut("turn-1").unwrap();
-    context
-        .replace_after_compaction(vec![
-            ContextBlock::assistant_event("first decision", "first ".repeat(200)),
-            ContextBlock::evidence_event(
-                ContextSourceKind::ActionResult,
-                "first outcome",
-                "outcome ".repeat(200),
-            ),
-            ContextBlock::user_event("steering", "preserve this exact instruction"),
-            ContextBlock::assistant_event("second decision", "second ".repeat(200)),
-            ContextBlock::evidence_event(
-                ContextSourceKind::ActionResult,
-                "second outcome",
-                "result ".repeat(200),
-            ),
-        ])
-        .unwrap();
-    let context = service.agent_turn_contexts().get("turn-1").unwrap();
-    let plan = mez_agent::plan_model_context_compaction_for_provider_tokens(
-        context,
-        100,
-        1,
-        context.event_sequence_high_water_mark(),
-        mez_agent::ProviderBudgetProjection::new(
-            mez_agent::ProviderApiCompatibility::OpenAiResponses,
-            "runtime-batch",
-        ),
-    )
-    .unwrap();
-    assert!(plan.requires_additional_segments());
-    let profile = service.agent_turn_model_profile("turn-1").unwrap().clone();
-    assert!(service.queue_agent_active_turn_compaction(
-        "turn-1", "first-turn-staged".to_string(), profile,
-        crate::runtime::agent_state::RuntimeActiveTurnCompactionTrigger::ObservedInputLimit {
-            observed_input_tokens: 20_000, max_input_tokens: 20_000,
-        }, plan,
-    ).unwrap());
-    complete_runtime_test_compaction(&mut service, "%1", "x");
-    assert!(
-        store
-            .compaction_epoch(
-                service
-                    .agent_shell_store()
-                    .get("%1")
-                    .unwrap()
-                    .session_id
-                    .as_str()
-            )
-            .unwrap()
-            .is_none()
-    );
-    assert!(service.agent_provider_task_is_pending("turn-1"));
-    assert!(
-        service
-            .pending_agent_compaction_task_for_tests("%1")
-            .is_none()
-    );
-    assert_eq!(service.pending_agent_provider_tasks().len(), 1);
-    let chronology = service
-        .agent_turn_contexts()
-        .get("turn-1")
-        .unwrap()
-        .chronology();
-    assert_eq!(chronology[0].block().content, "x");
-    assert_eq!(
-        chronology[1].block().content,
-        "preserve this exact instruction"
-    );
-    assert!(chronology[2].block().content.starts_with("second second"));
-    assert!(chronology[3].block().content.starts_with("result result"));
-    assert!(
-        store
-            .compaction_epoch(
-                service
-                    .agent_shell_store()
-                    .get("%1")
-                    .unwrap()
-                    .session_id
-                    .as_str()
-            )
-            .unwrap()
-            .is_none()
-    );
-}
-
-/// Five barrier-separated closed ranges must remain private until the complete
-/// provider request fits; a fixed three-stage ceiling cannot stop progress.
-#[test]
-fn runtime_context_recovery_stages_five_distinct_closed_ranges() {
-    let mut service = test_runtime_service();
-    service.replace_config_layers(vec![ConfigLayer {
-        name: "five-closed-ranges".to_string(),
-        path: None,
-        format: ConfigFormat::Toml,
-        scope: ConfigScope::Primary,
-        trusted: true,
-        text: "[agents]\ndefault_provider = \"runtime-batch\"\ndefault_model_profile = \"five-ranges\"\n[providers.runtime-batch]\nkind = \"openai\"\nmodels = [\"test\"]\ndefault_model = \"test\"\n[model_profiles.five-ranges]\nprovider = \"runtime-batch\"\nmodel = \"test\"\ncontext_window_tokens = 40000\nmax_input_tokens = 1800\n".to_string(),
-    }]).unwrap();
-    let primary = service
-        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
-        .unwrap();
-    service
-        .agent_shell_store_mut()
-        .enter_or_resume("%1")
-        .unwrap();
-    let start = service.dispatch_runtime_control_body(
-        r#"{"jsonrpc":"2.0","id":"five-ranges","method":"agent/shell/command","params":{"idempotency_key":"five-ranges","input":"continue"}}"#,
-        &primary,
-    );
-    assert!(start.contains(r#""state":"running""#), "{start}");
-    let mut blocks = Vec::new();
-    for index in 0..5 {
-        if index > 0 {
-            blocks.push(ContextBlock::user_event(
-                format!("steering {index}"),
-                format!("EXACT_STEERING_{index}"),
-            ));
-        }
-        blocks.push(ContextBlock::assistant_event(
-            format!("decision {index}"),
-            format!("decision-{index} ").repeat(900),
-        ));
-        blocks.push(ContextBlock::evidence_event(
-            ContextSourceKind::ActionResult,
-            format!("outcome {index}"),
-            format!("outcome-{index} ").repeat(900),
-        ));
-    }
-    service
-        .agent_turn_contexts_mut()
-        .get_mut("turn-1")
-        .unwrap()
-        .replace_after_compaction(blocks)
-        .unwrap();
-    let context = service.agent_turn_contexts().get("turn-1").unwrap();
-    let plan = mez_agent::plan_model_context_compaction_at_consumed_sequence(
-        context,
-        100,
-        1,
-        context.event_sequence_high_water_mark(),
-    )
-    .unwrap();
-    assert!(plan.requires_additional_segments());
-    let profile = service.agent_turn_model_profile("turn-1").unwrap().clone();
-    assert!(
-        service
-            .queue_agent_context_limit_recovery_compaction(
-                "turn-1",
-                "five-ranges".to_string(),
-                profile,
-                1,
-                plan,
-            )
-            .unwrap()
-    );
-    for index in 0..5 {
-        if index == 4 {
-            let mut profile = service.agent_turn_model_profile("turn-1").unwrap().clone();
-            profile
-                .provider_options
-                .insert("max_input_tokens".to_string(), "30000".to_string());
-            service.set_agent_turn_model_profile("turn-1".to_string(), profile);
-        }
-        complete_runtime_test_compaction(&mut service, "%1", &format!("summary-{index}"));
-        if index < 4 {
-            let task = service
-                .pending_agent_compaction_task_for_tests("%1")
-                .expect("next closed range should remain eligible");
-            let crate::runtime::agent_state::RuntimeAgentCompactionTarget::ActiveTurn {
-                staged: Some(staged),
-                ..
-            } = &task.target
-            else {
-                panic!("expected unpublished stage");
-            };
-            assert_eq!(staged.attempts, index + 1);
-            assert!(!service.agent_provider_task_is_pending("turn-1"));
-        }
-    }
-    assert!(service.agent_provider_task_is_pending("turn-1"));
-    let chronology = service
-        .agent_turn_contexts()
-        .get("turn-1")
-        .unwrap()
-        .chronology();
-    assert_eq!(chronology.len(), 9);
-    for index in 1..5 {
-        assert_eq!(
-            chronology[index * 2 - 1].block().content,
-            format!("EXACT_STEERING_{index}")
-        );
-    }
-}
-
-/// Verifies an observed-input recovery failure identifies its actual trigger.
-///
-/// A provider failure while producing the compaction summary must fail the
-/// waiting turn without misreporting an output-limit compaction. The observed
-/// input count remains the last successful usage sample for the display, while
-/// the terminal provider diagnostic names only the content-free trigger.
-#[test]
-fn runtime_observed_input_limit_compaction_failure_keeps_its_trigger() {
-    let mut service = test_runtime_service();
-    service
-        .replace_config_layers(vec![ConfigLayer {
-            name: "observed-input-limit-failure".to_string(),
-            path: None,
-            format: ConfigFormat::Toml,
-            scope: ConfigScope::Primary,
-            trusted: true,
-            text: r#"[agents]
-default_provider = "runtime-batch"
-default_model_profile = "observed-input-limit-failure"
-[providers.runtime-batch]
-kind = "openai"
-models = ["test"]
-default_model = "test"
-[model_profiles.observed-input-limit-failure]
-provider = "runtime-batch"
-model = "test"
-context_window_tokens = 40000
-max_input_tokens = 100
-"#
-            .to_string(),
-        }])
-        .unwrap();
-    let primary = service
-        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
-        .unwrap();
-    service
-        .agent_shell_store_mut()
-        .enter_or_resume("%1")
-        .unwrap();
-    let start = service.dispatch_runtime_control_body(
-        r#"{"jsonrpc":"2.0","id":"observed-input-limit-failure","method":"agent/shell/command","params":{"idempotency_key":"observed-input-limit-failure","input":"continue with the collected evidence"}}"#,
-        &primary,
-    );
-    assert!(start.contains(r#""state":"running""#), "{start}");
-    let task = service.pending_agent_provider_tasks().remove(0);
-    let turn = service
-        .agent_turn_ledger()
-        .turns()
-        .iter()
-        .find(|turn| turn.turn_id == task.turn_id)
-        .cloned()
-        .expect("pending provider task owns a running turn");
-    insert_test_context_block(
-        service
-            .agent_turn_contexts_mut()
-            .get_mut(&task.turn_id)
-            .unwrap(),
-        ContextBlock {
-            source: ContextSourceKind::ActionResult,
-            placement: mez_agent::ContextPlacement::ConversationAppend,
-            label: "observed input evidence".to_string(),
-            content: "observed-input-failure-marker ".repeat(500),
-        },
-    );
-    let response = runtime_say_response(&task.turn_id, "continue", false);
-    let action = response
-        .action_batch
-        .as_ref()
-        .and_then(|batch| batch.actions.first())
-        .cloned()
-        .expect("continuation response contains a say action");
-    service
-        .apply_agent_provider_execution(
-            &turn,
-            &task.model_profile,
-            "runtime-batch",
-            mez_agent::AgentTurnExecution {
-                request: runtime_model_request_fixture_for_agent(&task.turn_id, &task.agent_id),
-                response,
-                latest_response_usage: mez_agent::ModelTokenUsage {
-                    input_tokens: 100,
-                    output_tokens: 1,
-                    reasoning_tokens: 0,
-                    cached_input_tokens: Some(20),
-                    cache_write_input_tokens: None,
-                },
-                routing_token_usage_by_model: std::collections::BTreeMap::new(),
-                action_results: vec![mez_agent::ActionResult::succeeded(
-                    &turn,
-                    &action,
-                    vec!["continue".to_string()],
-                    None,
-                )],
-                final_turn: false,
-                terminal_state: AgentTurnState::Running,
-            },
-        )
-        .unwrap();
-    let task = service
-        .take_pending_agent_compaction_task("%1")
-        .expect("observed input queues active-turn compaction");
-    assert_eq!(task.source, "observed-input-limit");
-    service.claim_agent_compaction_task_state("%1", task);
-    assert!(
-        service
-            .apply_agent_compaction_failed_event(
-                "%1",
-                "forbidden",
-                "provider authentication rejected the compaction request",
-                Some(r#"{"status_code":401,"error":{"code":"invalid_api_key"}}"#),
-            )
-            .unwrap()
-    );
-    let pane_text = service
-        .pane_screen("%1")
-        .unwrap()
-        .normal_content_lines()
-        .join("\n");
-    let failure = normalized_pane_log_text(&pane_text);
-    assert!(
-        failure.contains("automatic observed-input-limit compaction failed before provider retry"),
-        "{}",
-        pane_text
-    );
-    assert!(
-        !failure.contains("automatic output-limit compaction"),
-        "{}",
-        pane_text
-    );
-}
-
-/// Verifies a high execution sample still defers continuation when an action
-/// settles after the initial provider response.
-///
-/// Deferred shell, approval, network, and MCP actions enqueue continuation
-/// later than response application. The provider-task claim boundary must
-/// therefore re-check the stored execution sample before provider I/O.
-#[test]
-fn runtime_observed_input_limit_compacts_before_deferred_action_continuation_claim() {
-    let mut service = test_runtime_service();
-    service
-        .replace_config_layers(vec![ConfigLayer {
-            name: "observed-input-deferred-continuation".to_string(),
-            path: None,
-            format: ConfigFormat::Toml,
-            scope: ConfigScope::Primary,
-            trusted: true,
-            text: r#"[agents]
-default_provider = "runtime-batch"
-default_model_profile = "observed-input-limit"
-[providers.runtime-batch]
-kind = "openai"
-models = ["test"]
-default_model = "test"
-[model_profiles.observed-input-limit]
-provider = "runtime-batch"
-model = "test"
-context_window_tokens = 40000
-max_input_tokens = 100
-"#
-            .to_string(),
-        }])
-        .unwrap();
-    let auth_root = temp_root("observed-input-deferred-continuation-auth");
-    service.set_auth_store(AuthStore::new(
-        crate::security::auth::AuthPaths::under_config_root(&auth_root),
-    ));
-    let primary = service
-        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
-        .unwrap();
-    service
-        .agent_shell_store_mut()
-        .enter_or_resume("%1")
-        .unwrap();
-    let start = service.dispatch_runtime_control_body(
-        r#"{"jsonrpc":"2.0","id":"observed-input-deferred","method":"agent/shell/command","params":{"idempotency_key":"observed-input-deferred","input":"run the deferred evidence command"}}"#,
-        &primary,
-    );
-    assert!(start.contains(r#""state":"running""#), "{start}");
-    let task = service.pending_agent_provider_tasks().remove(0);
-    let turn = service
-        .agent_turn_ledger()
-        .turns()
-        .iter()
-        .find(|turn| turn.turn_id == task.turn_id)
-        .cloned()
-        .expect("pending provider task owns a running turn");
-    insert_test_context_block(
-        service
-            .agent_turn_contexts_mut()
-            .get_mut(&task.turn_id)
-            .unwrap(),
-        ContextBlock {
-            source: ContextSourceKind::ActionResult,
-            placement: mez_agent::ContextPlacement::ConversationAppend,
-            label: "deferred input evidence".to_string(),
-            content: "deferred-observed-input-marker ".repeat(500),
-        },
-    );
-    let action = mez_agent::AgentAction {
-        id: "shell-1".to_string(),
-        payload: mez_agent::AgentActionPayload::ShellCommand {
-            summary: "Collect deferred evidence".to_string(),
-            command: "printf deferred".to_string(),
-            interactive: false,
-            stateful: false,
-            timeout_ms: None,
-        },
-    };
-    let response = mez_agent::ModelResponse {
-        provider: "runtime-batch".to_string(),
-        model: "test".to_string(),
-        raw_text: "collect deferred evidence".to_string(),
-        usage: Default::default(),
-        latest_request_usage: None,
-        quota_usage: Default::default(),
-        action_batch: Some(mez_agent::MaapBatch {
-            rationale: "test action batch rationale".to_string(),
-            actions: vec![action.clone()],
-        }),
-        provider_transcript_events: Vec::new(),
-    };
-    let mut execution = mez_agent::AgentTurnExecution {
-        request: runtime_model_request_fixture_for_agent(&task.turn_id, &task.agent_id),
-        response,
-        latest_response_usage: mez_agent::ModelTokenUsage {
-            input_tokens: 100,
-            output_tokens: 1,
-            reasoning_tokens: 0,
-            cached_input_tokens: Some(20),
-            cache_write_input_tokens: None,
-        },
-        routing_token_usage_by_model: std::collections::BTreeMap::new(),
-        action_results: vec![mez_agent::ActionResult::running(
-            &turn,
-            &action,
-            vec!["shell action accepted for deferred execution".to_string()],
-            None,
-        )],
-        final_turn: false,
-        terminal_state: AgentTurnState::Running,
-    };
-    execution.action_results[0] = mez_agent::ActionResult::succeeded(
-        &turn,
-        &action,
-        vec!["deferred evidence collected".to_string()],
-        None,
-    );
-    service.set_agent_turn_model_profile(task.turn_id.clone(), task.model_profile.clone());
-    service
-        .agent_turn_executions_mut()
-        .insert(task.turn_id.clone(), execution);
-    service.queue_agent_provider_task(task.turn_id.clone());
-    let agent_id = AgentId::opaque(task.agent_id).unwrap();
-    assert!(
-        service
-            .claim_configured_agent_provider_task(&agent_id, &task.turn_id)
-            .unwrap()
-            .is_none(),
-        "the continuation claim must defer into observed-input compaction"
-    );
-    assert!(
-        service
-            .pending_agent_compaction_task_for_tests("%1")
-            .is_some(),
-        "the settled deferred action must trigger active-turn compaction"
-    );
 }
 
 /// Verifies an explicit input cap defers an oversized ordinary provider claim
@@ -4121,904 +1544,6 @@ max_input_tokens = 1
     );
 }
 
-/// Verifies synchronous provider recovery completes model-backed compaction
-/// before rebuilding and retrying a request rejected for context length.
-///
-/// The compatibility worker must send the oversized context once, send the
-/// selected source to the compactor, and only then retry with durable context
-/// containing the model-authored summary instead of the rejected source.
-#[test]
-fn runtime_synchronous_context_limit_recovery_waits_for_compaction() {
-    let mut service = test_runtime_service();
-    service
-        .replace_config_layers(vec![ConfigLayer {
-            name: "synchronous-context-limit-recovery".to_string(),
-            path: None,
-            format: ConfigFormat::Toml,
-            scope: ConfigScope::Primary,
-            trusted: true,
-            text: r#"[agents]
-default_provider = "runtime-batch"
-default_model_profile = "synchronous-context-limit-test"
-[providers.runtime-batch]
-kind = "openai"
-models = ["test"]
-default_model = "test"
-[model_profiles.synchronous-context-limit-test]
-provider = "runtime-batch"
-model = "test"
-context_window_tokens = 40000
-"#
-            .to_string(),
-        }])
-        .unwrap();
-    let primary = service
-        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
-        .unwrap();
-    service
-        .agent_shell_store_mut()
-        .enter_or_resume("%1")
-        .unwrap();
-    let start = service.dispatch_runtime_control_body(
-        r#"{"jsonrpc":"2.0","id":"agent-prompt","method":"agent/shell/command","params":{"idempotency_key":"synchronous-context-limit-recovery","input":"continue with the oversized evidence"}}"#,
-        &primary,
-    );
-    assert!(start.contains(r#""state":"running""#), "{start}");
-    insert_test_context_block(
-        service.agent_turn_contexts_mut().get_mut("turn-1").unwrap(),
-        ContextBlock {
-            source: ContextSourceKind::ActionResult,
-            placement: mez_agent::ContextPlacement::ConversationAppend,
-            label: "synchronous rejected context".to_string(),
-            content: format!(
-                "synchronous-oversized-marker {}",
-                "oversized ".repeat(10_000)
-            ),
-        },
-    );
-    service.remove_pending_agent_provider_task("turn-1");
-    let provider = RuntimeContextLimitThenCompactionProvider {
-        requests: RefCell::new(Vec::new()),
-    };
-
-    let execution = service
-        .execute_agent_turn_with_provider(
-            "turn-1",
-            &provider,
-            service
-                .provider_registry()
-                .resolve_profile("synchronous-context-limit-test")
-                .unwrap(),
-        )
-        .unwrap();
-
-    assert_eq!(execution.terminal_state, AgentTurnState::Completed);
-    let requests = provider.requests.borrow();
-    assert_eq!(requests.len(), 3, "{requests:#?}");
-    let request_text = |index: usize| {
-        requests[index]
-            .messages
-            .iter()
-            .map(|message| message.content.as_str())
-            .collect::<Vec<_>>()
-            .join("\n")
-    };
-    let rejected = request_text(0);
-    let compaction = request_text(1);
-    let retry = request_text(2);
-    assert!(rejected.contains("synchronous-oversized-marker"));
-    assert!(compaction.contains("synchronous-oversized-marker"));
-    assert!(retry.contains("synchronous model-authored context summary"));
-    assert!(!retry.contains("synchronous-oversized-marker"));
-    assert!(service.pending_agent_compaction_tasks().is_empty());
-    assert!(!service.agent_is_compacting("%1"));
-}
-
-/// Verifies compactor backoff recursively summarizes smaller temporary chunks.
-///
-/// The rejected compaction request must not mutate active-turn context or
-/// dispatch the original provider turn. Every retry must be smaller than the
-/// rejected compactor request, while the original source plan remains atomic
-/// until the recursively synthesized final summary is ready.
-#[test]
-fn runtime_model_compaction_recursively_shrinks_without_exact_tail_fallback() {
-    let mut service = test_runtime_service();
-    service
-        .replace_config_layers(vec![ConfigLayer {
-            name: "model-compaction-context-limit-backoff".to_string(),
-            path: None,
-            format: ConfigFormat::Toml,
-            scope: ConfigScope::Primary,
-            trusted: true,
-            text: r#"[agents]
-default_provider = "runtime-batch"
-default_model_profile = "model-compaction-backoff-test"
-[providers.runtime-batch]
-kind = "openai"
-models = ["test"]
-default_model = "test"
-[model_profiles.model-compaction-backoff-test]
-provider = "runtime-batch"
-model = "test"
-context_window_tokens = 40000
-max_input_tokens = 20000
-"#
-            .to_string(),
-        }])
-        .unwrap();
-    let primary = service
-        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
-        .unwrap();
-    service
-        .agent_shell_store_mut()
-        .enter_or_resume("%1")
-        .unwrap();
-    let start = service.dispatch_runtime_control_body(
-        r#"{"jsonrpc":"2.0","id":"agent-prompt","method":"agent/shell/command","params":{"idempotency_key":"model-compaction-context-limit-backoff","input":"continue after compacting the observations"}}"#,
-        &primary,
-    );
-    assert!(start.contains(r#""state":"running""#), "{start}");
-    let context = service.agent_turn_contexts_mut().get_mut("turn-1").unwrap();
-    insert_test_context_block(
-        context,
-        ContextBlock {
-            source: ContextSourceKind::ActionResult,
-            placement: mez_agent::ContextPlacement::ConversationAppend,
-            label: "older compaction input".to_string(),
-            content: format!("older-backoff-marker {}", "older ".repeat(6_000)),
-        },
-    );
-    insert_test_context_block(
-        context,
-        ContextBlock {
-            source: ContextSourceKind::ActionResult,
-            placement: mez_agent::ContextPlacement::ConversationAppend,
-            label: "newer exact compaction tail".to_string(),
-            content: format!("newer-exact-marker {}", "newer ".repeat(6_000)),
-        },
-    );
-    let original = context.blocks().to_vec();
-    let error = MezError::invalid_state("provider context length exceeded")
-        .with_provider_failure_json(
-            r#"{"status_code":400,"error":{"code":"context_length_exceeded"}}"#,
-        );
-    let transition = service
-        .schedule_agent_provider_retry_transition(
-            &AgentId::opaque("agent-%1").unwrap(),
-            "turn-1",
-            mez_agent::ProviderErrorRetryClass::ContextLimit,
-            &error,
-        )
-        .unwrap()
-        .expect("context-limit recovery transition");
-    assert!(transition.side_effects.iter().any(|effect| matches!(
-        effect,
-        RuntimeSideEffect::DispatchAgentCompaction { pane_id, .. } if pane_id == "%1"
-    )));
-    let initial_task = service
-        .take_pending_agent_compaction_task("%1")
-        .expect("initial compaction task");
-    let initial_source = initial_task
-        .request
-        .messages
-        .iter()
-        .map(|message| message.content.as_str())
-        .collect::<Vec<_>>()
-        .join("\n");
-    let initial_request_bytes =
-        mez_agent::openai_responses_request_body_with_stream(&initial_task.request, false)
-            .unwrap()
-            .len();
-    assert!(initial_source.contains("older-backoff-marker"));
-    assert!(initial_source.contains("newer-exact-marker"));
-    let mut initial_task = initial_task;
-    if let crate::runtime::agent_state::RuntimeAgentCompactionTarget::ActiveTurn {
-        compaction_backoff_attempt,
-        rejected_request_stream,
-        ..
-    } = &mut initial_task.target
-    {
-        *compaction_backoff_attempt = mez_agent::DEFAULT_PROVIDER_RETRY_POLICY.max_attempts;
-        assert!(rejected_request_stream.is_none());
-    }
-    initial_task.compaction_request_shape = Some((
-        mez_agent::ProviderApiCompatibility::OpenAiResponses,
-        Default::default(),
-        false,
-    ));
-    service.claim_agent_compaction_task_state("%1", initial_task);
-
-    assert!(
-        service
-            .apply_agent_compaction_failed_event(
-                "%1",
-                "invalid_state",
-                "provider context length exceeded",
-                Some(r#"{"status_code":400,"error":{"code":"context_length_exceeded"}}"#),
-            )
-            .unwrap()
-    );
-    assert_eq!(
-        service
-            .agent_turn_contexts()
-            .get("turn-1")
-            .unwrap()
-            .blocks(),
-        original.as_slice()
-    );
-    assert!(!service.agent_provider_task_is_pending("turn-1"));
-    let retry_task = service
-        .pending_agent_compaction_task_for_tests("%1")
-        .expect("backed-off compaction task");
-    let retry_source = retry_task
-        .request
-        .messages
-        .iter()
-        .map(|message| message.content.as_str())
-        .collect::<Vec<_>>()
-        .join("\n");
-    let retry_request_bytes =
-        mez_agent::openai_responses_request_body_with_stream(&retry_task.request, false)
-            .unwrap()
-            .len();
-    assert!(retry_request_bytes < initial_request_bytes);
-    assert!(retry_source.contains("older-backoff-marker"));
-    assert!(!retry_source.contains("newer-exact-marker"));
-    let crate::runtime::agent_state::RuntimeAgentCompactionTarget::ActiveTurn {
-        compaction_backoff_attempt,
-        pending_blocks,
-        plan,
-        ..
-    } = &retry_task.target
-    else {
-        panic!("expected active-turn compaction target");
-    };
-    assert_eq!(
-        *compaction_backoff_attempt,
-        mez_agent::DEFAULT_PROVIDER_RETRY_POLICY.max_attempts + 1
-    );
-    assert!(plan.retained_tail().is_empty());
-    assert!(
-        plan.replacement_blocks()
-            .iter()
-            .any(|block| block.content.contains("older-backoff-marker"))
-    );
-    assert!(
-        plan.replacement_blocks()
-            .iter()
-            .any(|block| block.content.contains("newer-exact-marker"))
-    );
-    assert_eq!(pending_blocks.len(), 1);
-    assert!(
-        pending_blocks[0]
-            .iter()
-            .any(|block| block.content.contains("newer-exact-marker"))
-    );
-
-    complete_runtime_test_compaction(&mut service, "%1", "model-authored older-group summary");
-    assert_eq!(
-        service
-            .agent_turn_contexts()
-            .get("turn-1")
-            .unwrap()
-            .blocks(),
-        original.as_slice()
-    );
-    assert!(!service.agent_provider_task_is_pending("turn-1"));
-    let second_chunk_task = service
-        .pending_agent_compaction_task_for_tests("%1")
-        .expect("second recursive compaction chunk");
-    let second_chunk_source = second_chunk_task
-        .request
-        .messages
-        .iter()
-        .map(|message| message.content.as_str())
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert!(!second_chunk_source.contains("older-backoff-marker"));
-    assert!(second_chunk_source.contains("newer-exact-marker"));
-
-    complete_runtime_test_compaction(&mut service, "%1", "model-authored newer-group summary");
-    assert_eq!(
-        service
-            .agent_turn_contexts()
-            .get("turn-1")
-            .unwrap()
-            .blocks(),
-        original.as_slice()
-    );
-    assert!(!service.agent_provider_task_is_pending("turn-1"));
-    let synthesis_task = service
-        .pending_agent_compaction_task_for_tests("%1")
-        .expect("recursive summary synthesis task");
-    let synthesis_source = synthesis_task
-        .request
-        .messages
-        .iter()
-        .map(|message| message.content.as_str())
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert!(synthesis_source.contains("model-authored older-group summary"));
-    assert!(synthesis_source.contains("model-authored newer-group summary"));
-
-    complete_runtime_test_compaction(&mut service, "%1", "recursive final-fit summary");
-    let final_context = service.agent_turn_contexts().get("turn-1").unwrap();
-    assert_eq!(
-        final_context
-            .blocks()
-            .iter()
-            .filter(|block| block.label == "context compaction summary")
-            .count(),
-        1
-    );
-    let final_text = final_context
-        .blocks()
-        .iter()
-        .map(|block| block.content.as_str())
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert!(final_text.contains("recursive final-fit summary"));
-    assert!(!final_text.contains("older-backoff-marker"));
-    assert!(!final_text.contains("newer-exact-marker"));
-    assert!(service.agent_provider_task_is_pending("turn-1"));
-}
-
-/// A viable whole-group walk-back leaves the newest selected group raw and
-/// summarizes only the older source after a compactor context-limit rejection.
-#[test]
-fn runtime_compactor_walkback_preserves_newest_group() {
-    let mut service = test_runtime_service();
-    service.replace_config_layers(vec![ConfigLayer {
-        name: "walkback".to_string(), path: None, format: ConfigFormat::Toml,
-        scope: ConfigScope::Primary, trusted: true,
-        text: "[agents]\ndefault_provider = \"runtime-batch\"\ndefault_model_profile = \"walkback\"\n[providers.runtime-batch]\nkind = \"openai\"\nmodels = [\"test\"]\ndefault_model = \"test\"\n[model_profiles.walkback]\nprovider = \"runtime-batch\"\nmodel = \"test\"\ncontext_window_tokens = 40000\n".to_string(),
-    }]).unwrap();
-    let primary = service
-        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
-        .unwrap();
-    service
-        .agent_shell_store_mut()
-        .enter_or_resume("%1")
-        .unwrap();
-    let start = service.dispatch_runtime_control_body(
-        r#"{"jsonrpc":"2.0","id":"walkback","method":"agent/shell/command","params":{"idempotency_key":"walkback","input":"continue"}}"#,
-        &primary,
-    );
-    assert!(start.contains(r#""state":"running""#), "{start}");
-    let context = service.agent_turn_contexts_mut().get_mut("turn-1").unwrap();
-    for (label, marker) in [("older", "OLDER_WALKBACK"), ("newer", "NEWER_WALKBACK")] {
-        insert_test_context_block(
-            context,
-            ContextBlock {
-                source: ContextSourceKind::ActionResult,
-                placement: mez_agent::ContextPlacement::ConversationAppend,
-                label: label.to_string(),
-                content: format!("{marker} {}", "evidence ".repeat(3_000)),
-            },
-        );
-    }
-    let error = MezError::invalid_state("provider context length exceeded")
-        .with_provider_failure_json(
-            r#"{"status_code":400,"error":{"code":"context_length_exceeded"}}"#,
-        );
-    service
-        .schedule_agent_provider_retry_transition(
-            &AgentId::opaque("agent-%1").unwrap(),
-            "turn-1",
-            mez_agent::ProviderErrorRetryClass::ContextLimit,
-            &error,
-        )
-        .unwrap()
-        .expect("context-limit transition");
-    let initial = service.take_pending_agent_compaction_task("%1").unwrap();
-    service.claim_agent_compaction_task_state("%1", initial);
-    service
-        .apply_agent_compaction_failed_event(
-            "%1",
-            "invalid_state",
-            "provider context length exceeded",
-            Some(r#"{"status_code":400,"error":{"code":"context_length_exceeded"}}"#),
-        )
-        .unwrap();
-    let retry = service
-        .pending_agent_compaction_task_for_tests("%1")
-        .unwrap();
-    let crate::runtime::agent_state::RuntimeAgentCompactionTarget::ActiveTurn {
-        plan,
-        pending_blocks,
-        ..
-    } = &retry.target
-    else {
-        panic!("expected active-turn retry");
-    };
-    assert!(
-        plan.replacement_blocks()
-            .iter()
-            .any(|block| block.content.contains("OLDER_WALKBACK"))
-    );
-    assert!(
-        !plan
-            .replacement_blocks()
-            .iter()
-            .any(|block| block.content.contains("NEWER_WALKBACK"))
-    );
-    assert!(pending_blocks.is_empty());
-    complete_runtime_test_compaction(&mut service, "%1", "older work summarized");
-    let blocks = service
-        .agent_turn_contexts()
-        .get("turn-1")
-        .unwrap()
-        .blocks();
-    assert!(
-        blocks
-            .iter()
-            .any(|block| block.content.contains("NEWER_WALKBACK"))
-    );
-    assert!(
-        !blocks
-            .iter()
-            .any(|block| block.content.contains("OLDER_WALKBACK"))
-    );
-}
-
-/// An unmapped first-turn source uses the complete turn-local request when
-/// walking back after a compactor context-limit response. It must not require
-/// a nonexistent durable archive or publish a selective epoch on completion.
-#[test]
-fn runtime_observed_first_turn_compactor_walkback_is_turn_local() {
-    let mut service = test_runtime_service();
-    let store = AgentTranscriptStore::new(temp_root("first-turn-walkback"));
-    service.set_agent_transcript_store(store.clone());
-    service.use_transcript_effect_adapter();
-    service.replace_config_layers(vec![ConfigLayer {
-        name: "first-turn-walkback".to_string(), path: None,
-        format: ConfigFormat::Toml, scope: ConfigScope::Primary, trusted: true,
-        text: "[agents]\ndefault_provider = \"runtime-batch\"\ndefault_model_profile = \"first-turn-walkback\"\n[providers.runtime-batch]\nkind = \"openai\"\nmodels = [\"test\"]\ndefault_model = \"test\"\n[model_profiles.first-turn-walkback]\nprovider = \"runtime-batch\"\nmodel = \"test\"\ncontext_window_tokens = 40000\nmax_input_tokens = 20000\n".to_string(),
-    }]).unwrap();
-    let primary = service
-        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
-        .unwrap();
-    service
-        .agent_shell_store_mut()
-        .enter_or_resume("%1")
-        .unwrap();
-    let start = service.dispatch_runtime_control_body(
-        r#"{"jsonrpc":"2.0","id":"first-walkback","method":"agent/shell/command","params":{"idempotency_key":"first-walkback","input":"continue"}}"#,
-        &primary,
-    );
-    assert!(start.contains(r#""state":"running""#), "{start}");
-    let context = service.agent_turn_contexts_mut().get_mut("turn-1").unwrap();
-    for (label, marker) in [
-        ("older", "OLDER_FIRST_WALKBACK"),
-        ("newer", "NEWER_FIRST_WALKBACK"),
-    ] {
-        insert_test_context_block(
-            context,
-            ContextBlock {
-                source: ContextSourceKind::ActionResult,
-                placement: mez_agent::ContextPlacement::ConversationAppend,
-                label: label.to_string(),
-                content: format!("{marker} {}", "evidence ".repeat(1_000)),
-            },
-        );
-    }
-    let context = service.agent_turn_contexts().get("turn-1").unwrap();
-    let plan = mez_agent::plan_model_context_compaction_for_provider_tokens(
-        context,
-        18_000,
-        1,
-        context.event_sequence_high_water_mark(),
-        mez_agent::ProviderBudgetProjection::new(
-            mez_agent::ProviderApiCompatibility::OpenAiResponses,
-            "runtime-batch",
-        ),
-    )
-    .unwrap();
-    assert!(plan.replacement_blocks().len() >= 2);
-    let profile = service.agent_turn_model_profile("turn-1").unwrap().clone();
-    assert!(service.queue_agent_active_turn_compaction(
-        "turn-1", "first-turn-walkback".to_string(), profile,
-        crate::runtime::agent_state::RuntimeActiveTurnCompactionTrigger::ObservedInputLimit {
-            observed_input_tokens: 20_000, max_input_tokens: 20_000,
-        }, plan,
-    ).unwrap());
-    assert!(
-        !store
-            .transcript_path(
-                service
-                    .agent_shell_store()
-                    .get("%1")
-                    .unwrap()
-                    .session_id
-                    .as_str()
-            )
-            .unwrap()
-            .exists()
-    );
-    let initial = service.take_pending_agent_compaction_task("%1").unwrap();
-    service.claim_agent_compaction_task_state("%1", initial);
-    service
-        .apply_agent_compaction_failed_event(
-            "%1",
-            "invalid_state",
-            "provider context length exceeded",
-            Some(r#"{"status_code":400,"error":{"code":"context_length_exceeded"}}"#),
-        )
-        .unwrap();
-    let retry = service
-        .pending_agent_compaction_task_for_tests("%1")
-        .expect("walk-back queued");
-    let crate::runtime::agent_state::RuntimeAgentCompactionTarget::ActiveTurn { plan, .. } =
-        &retry.target
-    else {
-        panic!("expected active-turn walk-back");
-    };
-    assert!(
-        plan.replacement_blocks()
-            .iter()
-            .any(|block| block.content.contains("OLDER_FIRST_WALKBACK"))
-    );
-    assert!(
-        !plan
-            .replacement_blocks()
-            .iter()
-            .any(|block| block.content.contains("NEWER_FIRST_WALKBACK"))
-    );
-    complete_runtime_test_compaction(&mut service, "%1", "older work summarized");
-    assert!(service.agent_provider_task_is_pending("turn-1"));
-    assert_eq!(service.pending_agent_provider_tasks().len(), 1);
-    let blocks = service
-        .agent_turn_contexts()
-        .get("turn-1")
-        .unwrap()
-        .blocks();
-    assert!(
-        blocks
-            .iter()
-            .any(|block| block.content.contains("NEWER_FIRST_WALKBACK"))
-    );
-    assert!(
-        !blocks
-            .iter()
-            .any(|block| block.content.contains("OLDER_FIRST_WALKBACK"))
-    );
-    assert!(
-        store
-            .compaction_epoch(
-                service
-                    .agent_shell_store()
-                    .get("%1")
-                    .unwrap()
-                    .session_id
-                    .as_str()
-            )
-            .unwrap()
-            .is_none()
-    );
-}
-
-/// A walk-back validation error after the compaction claim is retired must
-/// fail the waiting turn rather than leave it running without an owner.
-#[test]
-fn runtime_compactor_walkback_validation_failure_settles_turn() {
-    let mut service = test_runtime_service();
-    service.replace_config_layers(vec![ConfigLayer {
-        name: "walkback-error".to_string(), path: None, format: ConfigFormat::Toml,
-        scope: ConfigScope::Primary, trusted: true,
-        text: "[agents]\ndefault_provider = \"runtime-batch\"\ndefault_model_profile = \"walkback\"\n[providers.runtime-batch]\nkind = \"openai\"\nmodels = [\"test\"]\ndefault_model = \"test\"\n[model_profiles.walkback]\nprovider = \"runtime-batch\"\nmodel = \"test\"\ncontext_window_tokens = 40000\n".to_string(),
-    }]).unwrap();
-    let primary = service
-        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
-        .unwrap();
-    service
-        .agent_shell_store_mut()
-        .enter_or_resume("%1")
-        .unwrap();
-    let start = service.dispatch_runtime_control_body(
-        r#"{"jsonrpc":"2.0","id":"walkback-error","method":"agent/shell/command","params":{"idempotency_key":"walkback-error","input":"continue"}}"#,
-        &primary,
-    );
-    assert!(start.contains(r#""state":"running""#), "{start}");
-    let context = service.agent_turn_contexts_mut().get_mut("turn-1").unwrap();
-    for label in ["older", "newer"] {
-        insert_test_context_block(
-            context,
-            ContextBlock {
-                source: ContextSourceKind::ActionResult,
-                placement: mez_agent::ContextPlacement::ConversationAppend,
-                label: label.to_string(),
-                content: format!("{label} {}", "evidence ".repeat(3_000)),
-            },
-        );
-    }
-    let error = MezError::invalid_state("provider context length exceeded")
-        .with_provider_failure_json(
-            r#"{"status_code":400,"error":{"code":"context_length_exceeded"}}"#,
-        );
-    service
-        .schedule_agent_provider_retry_transition(
-            &AgentId::opaque("agent-%1").unwrap(),
-            "turn-1",
-            mez_agent::ProviderErrorRetryClass::ContextLimit,
-            &error,
-        )
-        .unwrap()
-        .expect("context-limit transition");
-    let initial = service.take_pending_agent_compaction_task("%1").unwrap();
-    service.claim_agent_compaction_task_state("%1", initial);
-    let mut profile = service.agent_turn_model_profile("turn-1").unwrap().clone();
-    profile.provider = "missing-walkback-provider".to_string();
-    service.set_agent_turn_model_profile("turn-1", profile);
-    let outcome = service.apply_agent_compaction_failed_event(
-        "%1",
-        "invalid_state",
-        "provider context length exceeded",
-        Some(r#"{"status_code":400,"error":{"code":"context_length_exceeded"}}"#),
-    );
-    assert!(outcome.is_ok(), "{outcome:?}");
-    assert!(!service.agent_is_compacting("%1"));
-    assert!(!service.agent_provider_task_is_pending("turn-1"));
-    assert_eq!(
-        service.agent_turn_ledger().turn("turn-1").unwrap().state,
-        AgentTurnState::Failed
-    );
-}
-
-/// Verifies a rebuilt provider request that is not smaller fails closed.
-///
-/// The compactor summary must not mutate durable context or automatically
-/// replay the rejected provider command when the complete serialized Responses
-/// body cannot satisfy the strict monotonic reduction invariant.
-#[test]
-fn runtime_context_limit_recovery_does_not_resend_non_shrinking_request() {
-    let mut service = test_runtime_service();
-    service
-        .replace_config_layers(vec![ConfigLayer {
-            name: "context-limit-monotonic-gate".to_string(),
-            path: None,
-            format: ConfigFormat::Toml,
-            scope: ConfigScope::Primary,
-            trusted: true,
-            text: r#"[agents]
-default_provider = "runtime-batch"
-default_model_profile = "context-limit-monotonic-test"
-[providers.runtime-batch]
-kind = "openai"
-models = ["test"]
-default_model = "test"
-[model_profiles.context-limit-monotonic-test]
-provider = "runtime-batch"
-model = "test"
-context_window_tokens = 40000
-"#
-            .to_string(),
-        }])
-        .unwrap();
-    let primary = service
-        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
-        .unwrap();
-    service
-        .agent_shell_store_mut()
-        .enter_or_resume("%1")
-        .unwrap();
-    let start = service.dispatch_runtime_control_body(
-        r#"{"jsonrpc":"2.0","id":"agent-prompt","method":"agent/shell/command","params":{"idempotency_key":"context-limit-monotonic-gate","input":"continue after compacting this oversized evidence"}}"#,
-        &primary,
-    );
-    assert!(start.contains(r#""state":"running""#), "{start}");
-    let context = service.agent_turn_contexts_mut().get_mut("turn-1").unwrap();
-    insert_test_context_block(
-        context,
-        ContextBlock {
-            source: ContextSourceKind::ActionResult,
-            placement: mez_agent::ContextPlacement::ConversationAppend,
-            label: "oversized rejected evidence".to_string(),
-            content: format!("monotonic-gate-marker {}", "evidence ".repeat(8_000)),
-        },
-    );
-    let original = context.blocks().to_vec();
-    let error = MezError::invalid_state("provider context length exceeded")
-        .with_provider_failure_json(
-            r#"{"status_code":400,"error":{"code":"context_length_exceeded"}}"#,
-        );
-    service
-        .schedule_agent_provider_retry_transition(
-            &AgentId::opaque("agent-%1").unwrap(),
-            "turn-1",
-            mez_agent::ProviderErrorRetryClass::ContextLimit,
-            &error,
-        )
-        .unwrap()
-        .expect("context-limit recovery transition");
-    let task = service
-        .pending_agent_compaction_task_mut_for_tests("%1")
-        .expect("queued active-turn compaction task");
-    let crate::runtime::agent_state::RuntimeAgentCompactionTarget::ActiveTurn {
-        rejected_request_bytes,
-        rejected_request_stream,
-        ..
-    } = &mut task.target
-    else {
-        panic!("expected active-turn compaction target");
-    };
-    *rejected_request_bytes = Some(1);
-    *rejected_request_stream = Some(false);
-
-    complete_runtime_test_compaction(&mut service, "%1", "bounded model summary");
-
-    assert!(service.pending_agent_compaction_tasks().is_empty());
-    assert!(!service.agent_provider_task_is_pending("turn-1"));
-    assert!(
-        service
-            .agent_turn_ledger()
-            .turns()
-            .iter()
-            .any(|turn| { turn.turn_id == "turn-1" && turn.state == AgentTurnState::Failed })
-    );
-    assert!(
-        original
-            .iter()
-            .any(|block| block.content.contains("monotonic-gate-marker"))
-    );
-}
-
-/// Verifies repeated provider context-limit recovery can still shrink a stored
-/// action-result-only prefix after an earlier retry already narrowed context.
-///
-/// Later retries may encounter a compacted active-turn context where the next
-/// compactable prefix contains only older action results. Recovery must still
-/// summarize older exact action-result blocks instead of bailing out with a
-/// false "no compactable active turn context remains" message.
-#[test]
-fn runtime_provider_context_limit_error_recompacts_action_result_prefix() {
-    let mut service = test_runtime_service();
-    service
-        .replace_config_layers(vec![ConfigLayer {
-            name: "provider-context-limit-action-result-recovery".to_string(),
-            path: None,
-            format: ConfigFormat::Toml,
-            scope: ConfigScope::Primary,
-            trusted: true,
-            text: r#"[agents]
-default_provider = "runtime-batch"
-default_model_profile = "provider-context-limit-action-result-test"
-[providers.runtime-batch]
-kind = "openai"
-models = ["test"]
-default_model = "test"
-[model_profiles.provider-context-limit-action-result-test]
-provider = "runtime-batch"
-model = "test"
-context_window_tokens = 40000
-"#
-            .to_string(),
-        }])
-        .unwrap();
-    let primary = service
-        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
-        .unwrap();
-    service
-        .agent_shell_store_mut()
-        .enter_or_resume("%1")
-        .unwrap();
-
-    let start = service.dispatch_runtime_control_body(
-        r#"{"jsonrpc":"2.0","id":"agent-prompt","method":"agent/shell/command","params":{"idempotency_key":"agent-context-limit-action-result-recovery","input":"continue with the very large observation"}}"#,
-        &primary,
-    );
-    assert!(start.contains(r#""state":"running""#), "{start}");
-    service
-        .agent_turn_contexts_mut()
-        .get_mut("turn-1")
-        .unwrap()
-        .replace_after_compaction(vec![
-            ContextBlock::assistant_event(
-                "synthetic retained action request",
-                "synthetic action request owning the retained results",
-            ),
-            ContextBlock {
-                source: ContextSourceKind::ActionResult,
-                placement: mez_agent::ContextPlacement::ConversationAppend,
-                label: "synthetic retained action result one".to_string(),
-                content: format!("provider-context-limit-tail-one- {}", "tail ".repeat(5_000)),
-            },
-            ContextBlock {
-                source: ContextSourceKind::ActionResult,
-                placement: mez_agent::ContextPlacement::ConversationAppend,
-                label: "synthetic retained action result two".to_string(),
-                content: format!("provider-context-limit-tail-two- {}", "tail ".repeat(5_000)),
-            },
-            ContextBlock {
-                source: ContextSourceKind::ActionResult,
-                placement: mez_agent::ContextPlacement::ConversationAppend,
-                label: "synthetic retained action result three".to_string(),
-                content: format!(
-                    "provider-context-limit-tail-three- {}",
-                    "tail ".repeat(5_000)
-                ),
-            },
-        ])
-        .unwrap();
-    let before_context = service
-        .agent_turn_contexts()
-        .get("turn-1")
-        .unwrap()
-        .blocks()
-        .iter()
-        .map(|block| block.content.as_str())
-        .collect::<Vec<_>>()
-        .join("\n");
-    let error = MezError::invalid_state(
-        "OpenAI Responses API returned status 400: This model's maximum context length is 128000 tokens. However, your messages resulted in 130000 tokens. Please reduce the length of the messages.",
-    )
-    .with_provider_failure_json(
-        r#"{"status_code":400,"error":{"message":"This model's maximum context length is 128000 tokens. However, your messages resulted in 130000 tokens. Please reduce the length of the messages.","type":"invalid_request_error","code":"context_length_exceeded"}}"#,
-    );
-
-    let recovered = service
-        .recover_agent_provider_context_limit_failure(
-            &AgentId::opaque("agent-%1").unwrap(),
-            "turn-1",
-            &error,
-            2,
-        )
-        .unwrap();
-
-    assert!(recovered);
-    let queued_context = service
-        .agent_turn_contexts()
-        .get("turn-1")
-        .unwrap()
-        .blocks()
-        .iter()
-        .map(|block| block.content.as_str())
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert_eq!(queued_context, before_context);
-    assert!(
-        service
-            .pending_agent_compaction_task_for_tests("%1")
-            .is_some()
-    );
-    assert!(!service.agent_provider_task_is_pending("turn-1"));
-
-    complete_runtime_test_compaction(
-        &mut service,
-        "%1",
-        "model-authored action-result prefix summary",
-    );
-    let after_context = service
-        .agent_turn_contexts()
-        .get("turn-1")
-        .unwrap()
-        .blocks()
-        .iter()
-        .map(|block| block.content.as_str())
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert!(
-        after_context.contains("model-authored action-result prefix summary"),
-        "{after_context}"
-    );
-    assert!(service.agent_provider_task_is_pending("turn-1"));
-    let pane_text = service
-        .pane_screen("%1")
-        .unwrap()
-        .normal_content_lines()
-        .join("\n");
-    let pane_text_unwrapped = normalized_pane_log_text(&pane_text);
-    assert!(
-        pane_text_unwrapped.contains(
-            "provider rejected context as too large; requesting model-backed context compaction"
-        ),
-        "{pane_text}"
-    );
-    assert!(
-        !pane_text.contains("no compactable active turn context remains"),
-        "{pane_text}"
-    );
-}
-
 /// Verifies provider output-limit incomplete responses first trigger a compact
 /// request-local mode, then max-output escalation, without mutating durable
 /// active-turn context.
@@ -5165,170 +1690,17 @@ max_output_tokens = 4096
     );
 }
 
-/// Verifies routing context-limit recovery budgets against the smallest
-/// possible main-provider target before a router decision has been stored.
-///
-/// A turn may start with a large default profile while the router is still able
-/// to choose a smaller target profile for the first normal request. Provider
-/// context-limit recovery must therefore compact against the minimum target
-/// window until the synthesized per-turn profile exists.
-#[test]
-fn runtime_routing_context_limit_recovery_uses_minimum_target_window() {
-    let mut service = test_runtime_service();
-    service
-        .replace_config_layers(vec![ConfigLayer {
-            name: "routing-context-limit-recovery".to_string(),
-            path: None,
-            format: ConfigFormat::Toml,
-            scope: ConfigScope::Primary,
-            trusted: true,
-            text: r#"
-[agents]
-default_provider = "runtime-batch"
-default_model_profile = "default"
-routing = true
-
-[agents.auto_sizing]
-router_model_profile = "router"
-small_model_profile = "small"
-medium_model_profile = "medium"
-large_model_profile = "large"
-allowed_reasoning_efforts = ["low", "medium", "high", "xhigh"]
-fallback_policy = "use-default-profile"
-
-[providers.runtime-batch]
-kind = "openai"
-models = ["gpt-router", "gpt-default", "gpt-small", "gpt-medium", "gpt-large"]
-default_model = "gpt-default"
-
-[model_profiles.default]
-provider = "runtime-batch"
-model = "gpt-default"
-reasoning_profile = "medium"
-context_window_tokens = 100000
-
-[model_profiles.router]
-provider = "runtime-batch"
-model = "gpt-router"
-reasoning_profile = "low"
-context_window_tokens = 2000
-
-[model_profiles.small]
-provider = "runtime-batch"
-model = "gpt-small"
-reasoning_profile = "medium"
-context_window_tokens = 40000
-
-[model_profiles.medium]
-provider = "runtime-batch"
-model = "gpt-medium"
-reasoning_profile = "medium"
-context_window_tokens = 100000
-
-[model_profiles.large]
-provider = "runtime-batch"
-model = "gpt-large"
-reasoning_profile = "high"
-context_window_tokens = 100000
-"#
-            .to_string(),
-        }])
-        .unwrap();
-    let primary = service
-        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
-        .unwrap();
-    service
-        .agent_shell_store_mut()
-        .enter_or_resume("%1")
-        .unwrap();
-
-    let start = service.dispatch_runtime_control_body(
-        r#"{"jsonrpc":"2.0","id":"agent-auto-context-limit","method":"agent/shell/command","params":{"idempotency_key":"agent-auto-context-limit","input":"continue with the current findings"}}"#,
-        &primary,
-    );
-    assert!(start.contains(r#""state":"running""#), "{start}");
-    let default_profile = service
-        .provider_registry()
-        .resolve_profile("default")
-        .unwrap();
-    service.set_agent_turn_model_profile("turn-1", default_profile);
-    let context = service.agent_turn_contexts_mut().get_mut("turn-1").unwrap();
-    insert_test_context_block(
-        context,
-        ContextBlock {
-            source: ContextSourceKind::ActionResult,
-            placement: mez_agent::ContextPlacement::ConversationAppend,
-            label: "synthetic routing action result".to_string(),
-            content: format!(
-                "routing-context-pressure- {}",
-                "context-pressure ".repeat(50_000)
-            ),
-        },
-    );
-    let error = MezError::invalid_state(
-        "OpenAI Responses API returned status 400: context length exceeded",
-    )
-    .with_provider_failure_json(
-        r#"{"status_code":400,"error":{"message":"maximum context length exceeded","type":"invalid_request_error","code":"context_length_exceeded"}}"#,
-    );
-
-    let recovered = service
-        .recover_agent_provider_context_limit_failure(
-            &AgentId::opaque("agent-%1").unwrap(),
-            "turn-1",
-            &error,
-            1,
-        )
-        .unwrap();
-
-    assert!(recovered);
-    let queued_context = service
-        .agent_turn_contexts()
-        .get("turn-1")
-        .unwrap()
-        .blocks()
-        .iter()
-        .map(|block| block.content.as_str())
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert!(queued_context.contains("routing-context-pressure-"));
-    assert!(
-        service
-            .pending_agent_compaction_task_for_tests("%1")
-            .is_some()
-    );
-    assert!(!service.agent_provider_task_is_pending("turn-1"));
-
-    complete_runtime_test_compaction(&mut service, "%1", "model-authored routing context summary");
-    let stored_context = service
-        .agent_turn_contexts()
-        .get("turn-1")
-        .unwrap()
-        .blocks()
-        .iter()
-        .map(|block| block.content.as_str())
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert!(stored_context.contains("model-authored routing context summary"));
-    assert!(service.agent_provider_task_is_pending("turn-1"));
-    let pane_text = service
-        .pane_screen("%1")
-        .unwrap()
-        .normal_content_lines()
-        .join("\n");
-    let pane_text_unwrapped = normalized_pane_log_text(&pane_text);
-    assert!(
-        pane_text_unwrapped.contains(
-            "provider rejected context as too large; requesting model-backed context compaction"
-        ),
-        "{pane_text}"
-    );
-}
-
 /// Creates an old claimed compaction and a newer queued compaction owned by a
-/// replacement conversation in the same pane.
+/// replacement conversation in the same pane. Both sources come from real
+/// completed tasks and successor admissions; no task is relabelled to a foreign
+/// CID. The fixture retains each actual idle binding before crossing the stale
+/// worker boundary, without executing auxiliary inference.
 fn runtime_service_with_replacement_compaction() -> (RuntimeSessionService, String, u64, String, u64)
 {
+    use crate::test_support::compaction_source::{
+        complete_task, complete_task_and_admit_successor,
+    };
+    let api = mez_agent::ProviderApiCompatibility::OpenAiResponses;
     let mut service = test_runtime_service();
     service
         .replace_config_layers(vec![ConfigLayer {
@@ -5340,6 +1712,7 @@ fn runtime_service_with_replacement_compaction() -> (RuntimeSessionService, Stri
             text: r#"[agents]
 default_provider = "openai"
 default_model_profile = "compact-stale-test"
+compaction_raw_retention_percent = 1
 [providers.openai]
 kind = "openai"
 models = ["gpt-compact-test"]
@@ -5347,26 +1720,12 @@ default_model = "gpt-compact-test"
 [model_profiles.compact-stale-test]
 provider = "openai"
 model = "gpt-compact-test"
-context_window_tokens = 5000
+context_window_tokens = 40000
 "#
             .to_string(),
         }])
         .unwrap();
     let transcript_store = AgentTranscriptStore::new(temp_root("stale-compaction-regression"));
-    for sequence in 1..=12 {
-        transcript_store
-            .append(&mez_agent::transcript::TranscriptEntry {
-                conversation_id: "stale-compaction-original".to_string(),
-                sequence,
-                created_at_unix_seconds: sequence,
-                role: mez_agent::transcript::TranscriptRole::Assistant,
-                turn_id: format!("turn-{sequence}"),
-                agent_id: "agent-%1".to_string(),
-                pane_id: "%1".to_string(),
-                content: format!("original-{sequence} {}", "history ".repeat(1_500)),
-            })
-            .unwrap();
-    }
     service.set_agent_transcript_store(transcript_store);
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
@@ -5377,34 +1736,90 @@ context_window_tokens = 5000
         .unwrap();
     service
         .agent_shell_store_mut()
-        .bind_conversation("%1", "stale-compaction-original", 12)
+        .bind_conversation("%1", "stale-compaction-original", 0)
         .unwrap();
-
-    let queued = service.dispatch_runtime_control_body(
-        r#"{"jsonrpc":"2.0","id":"stale-compaction-original","method":"agent/shell/command","params":{"idempotency_key":"stale-compaction-original","input":"/compact"}}"#,
+    let successor = complete_task_and_admit_successor(
+        &mut service,
         &primary,
+        &format!("ORIGINAL_SOURCE {}", "history ".repeat(2_000)),
+        "original completed answer",
+        "original current instruction",
+        api,
     );
+    complete_task(&mut service, &successor, "original current answer", api);
+    let original = service.agent_shell_store().get("%1").unwrap().clone();
+
+    service
+        .agent_shell_store_mut()
+        .start_new_conversation("%1")
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .bind_conversation("%1", "stale-compaction-replacement", 0)
+        .unwrap();
+    let successor = complete_task_and_admit_successor(
+        &mut service,
+        &primary,
+        &format!("REPLACEMENT_SOURCE {}", "different ".repeat(2_000)),
+        "replacement completed answer",
+        "replacement current instruction",
+        api,
+    );
+    complete_task(&mut service, &successor, "replacement current answer", api);
+    let replacement = service.agent_shell_store().get("%1").unwrap().clone();
+    let queued = service
+        .execute_agent_shell_command(&primary, "/compact")
+        .unwrap();
+    assert!(queued.contains("state=queued"), "{queued}");
+    let mut replacement_task = service.take_pending_agent_compaction_task("%1").unwrap();
+    assert!(replacement_task.replay_source.is_some());
+    // Return only this undispatched fixture operation to idle; retain its exact
+    // source for the later generation. No source fields or CID are reassigned.
+    service.cancel_current_agent_compaction_task("%1");
+    assert!(!service.agent_is_compacting("%1"));
+    service
+        .agent_shell_store_mut()
+        .restore_session("%1", original)
+        .unwrap();
+    let queued = service
+        .execute_agent_shell_command(&primary, "/compact")
+        .unwrap();
     assert!(queued.contains("state=queued"), "{queued}");
     let old_task = service
         .take_pending_agent_compaction_task("%1")
         .expect("original conversation compaction task");
     let original_conversation_id = old_task.conversation_id.clone();
     let old_generation = old_task.task_generation;
-    service.claim_agent_compaction_task_state("%1", old_task.clone());
-
+    assert!(old_task.replay_source.is_some());
+    assert!(
+        old_task
+            .request
+            .messages
+            .iter()
+            .any(|message| message.content.contains("ORIGINAL_SOURCE"))
+    );
+    assert!(
+        replacement_task
+            .request
+            .messages
+            .iter()
+            .any(|message| message.content.contains("REPLACEMENT_SOURCE"))
+    );
+    assert!(
+        !replacement_task
+            .request
+            .messages
+            .iter()
+            .any(|message| message.content.contains("ORIGINAL_SOURCE"))
+    );
+    service.claim_agent_compaction_task_state("%1", old_task);
+    let replacement_conversation_id = replacement.session_id.clone();
     service
         .agent_shell_store_mut()
-        .start_new_conversation("%1")
+        .restore_session("%1", replacement)
         .unwrap();
-    let replacement_conversation_id = "stale-compaction-replacement".to_string();
-    service
-        .agent_shell_store_mut()
-        .bind_conversation("%1", &replacement_conversation_id, 12)
-        .unwrap();
-    let mut replacement_task = old_task;
     replacement_task.task_generation = 0;
     replacement_task.compaction_epoch = 0;
-    replacement_task.conversation_id = replacement_conversation_id.clone();
     service.queue_agent_compaction_task(replacement_task);
     let replacement_generation = service
         .pending_agent_compaction_task_generation("%1")
@@ -5472,6 +1887,7 @@ fn runtime_agent_compaction_stale_completion_preserves_replacement_task() {
     let replacement_task = service
         .take_pending_agent_compaction_task("%1")
         .expect("replacement compaction is queued");
+    let replacement_entries = replacement_task.transcript_entries;
     service.claim_agent_compaction_task_state("%1", replacement_task);
     assert_eq!(
         service.claimed_agent_compaction_task_generation("%1"),
@@ -5516,7 +1932,7 @@ fn runtime_agent_compaction_stale_completion_preserves_replacement_task() {
     assert!(service.agent_is_compacting("%1"));
     let session = service.agent_shell_store().get("%1").unwrap();
     assert_eq!(session.session_id, replacement_conversation_id);
-    assert_eq!(session.transcript_entries, 12);
+    assert_eq!(session.transcript_entries, replacement_entries);
     let original_usage = service.agent_token_usage_for_conversation(&original_conversation_id);
     assert_eq!(original_usage.values().next().unwrap().input_tokens, 17);
     assert!(
@@ -5668,10 +2084,11 @@ fn runtime_agent_compaction_stale_failure_preserves_replacement_task() {
         .expect("stale failure must preserve the replacement task");
     assert_eq!(replacement.task_generation, replacement_generation);
     assert_eq!(replacement.conversation_id, replacement_conversation_id);
+    let replacement_entries = replacement.transcript_entries;
     assert!(service.agent_is_compacting("%1"));
     let session = service.agent_shell_store().get("%1").unwrap();
     assert_eq!(session.session_id, replacement_conversation_id);
-    assert_eq!(session.transcript_entries, 12);
+    assert_eq!(session.transcript_entries, replacement_entries);
 }
 
 /// Verifies overlapping compaction attempts are rejected before they can start
@@ -5796,62 +2213,11 @@ fn runtime_manual_compaction_queues_steering_and_blocks_conversation_mutation() 
 /// the unchanged replay epoch and ignores a late result from that generation.
 #[test]
 fn runtime_manual_compaction_cancellation_ignores_late_provider_result() {
-    let mut service = test_runtime_service();
-    service
-        .replace_config_layers(vec![ConfigLayer {
-            name: "manual-compaction-cancel".to_string(),
-            path: None,
-            format: ConfigFormat::Toml,
-            scope: ConfigScope::Primary,
-            trusted: true,
-            text: r#"[agents]
-default_provider = "openai"
-default_model_profile = "manual-cancel-test"
-[providers.openai]
-kind = "openai"
-models = ["gpt-manual-cancel-test"]
-default_model = "gpt-manual-cancel-test"
-[model_profiles.manual-cancel-test]
-provider = "openai"
-model = "gpt-manual-cancel-test"
-context_window_tokens = 5000
-"#
-            .to_string(),
-        }])
-        .unwrap();
-    let transcript_store = AgentTranscriptStore::new(temp_root("manual-compaction-cancel"));
-    for sequence in 1..=3 {
-        transcript_store
-            .append(&mez_agent::transcript::TranscriptEntry {
-                conversation_id: "manual-cancel".to_string(),
-                sequence,
-                created_at_unix_seconds: sequence,
-                role: mez_agent::transcript::TranscriptRole::Assistant,
-                turn_id: format!("turn-{sequence}"),
-                agent_id: "agent-%1".to_string(),
-                pane_id: "%1".to_string(),
-                content: format!("cancel source {sequence}"),
-            })
-            .unwrap();
-    }
-    service.set_agent_transcript_store(transcript_store);
-    let primary = service
-        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
-        .unwrap();
-    service
-        .agent_shell_store_mut()
-        .enter_or_resume("%1")
-        .unwrap();
-    service
-        .agent_shell_store_mut()
-        .bind_conversation("%1", "manual-cancel", 3)
-        .unwrap();
-
-    let compact = service.dispatch_runtime_control_body(
-        r#"{"jsonrpc":"2.0","id":"manual-cancel","method":"agent/shell/command","params":{"idempotency_key":"manual-cancel","input":"/compact"}}"#,
-        &primary,
-    );
-    assert!(compact.contains("state=queued"), "{compact}");
+    // Literal historical reference needs no invented execution completion.
+    // The shared fixture admits the actual manual canonical operation.
+    let (mut service, store) = manual_model::queued("manual-cancel", "cancel source".into());
+    let archive = store.inspect("manual-cancel").unwrap();
+    let primary = service.session().layout_owner_client_id().unwrap().clone();
     let generation = service
         .pending_agent_compaction_task_generation("%1")
         .expect("queued compaction generation");
@@ -5886,6 +2252,8 @@ context_window_tokens = 5000
         0
     );
     assert_eq!(service.agent_turn_ledger().turns().len(), 0);
+    assert_eq!(store.inspect("manual-cancel").unwrap(), archive);
+    assert!(store.compaction_epoch("manual-cancel").unwrap().is_none());
 }
 
 /// Verifies prompts retained for one conversation are discarded when the pane
@@ -6017,25 +2385,25 @@ max_output_tokens = 256
     for sequence in 1..=12 {
         let (role, content) = match sequence {
             1 => (
-                mez_agent::transcript::TranscriptRole::Assistant,
+                mez_agent::transcript::TranscriptRole::User,
                 format!(
                     "old raw marker should be summary only {}",
                     "old-word ".repeat(28)
                 ),
             ),
             11 => (
-                mez_agent::transcript::TranscriptRole::Assistant,
+                mez_agent::transcript::TranscriptRole::User,
                 format!(
                     "Recent targets:\n1. Preserve raw tail after compaction.\n2. Keep memory summary. {}",
                     "recent-word ".repeat(28)
                 ),
             ),
             _ if sequence % 2 == 0 => (
-                mez_agent::transcript::TranscriptRole::Assistant,
+                mez_agent::transcript::TranscriptRole::User,
                 format!("filler user turn {sequence} {}", "tail-user ".repeat(28)),
             ),
             _ => (
-                mez_agent::transcript::TranscriptRole::Assistant,
+                mez_agent::transcript::TranscriptRole::User,
                 format!(
                     "filler assistant turn {sequence} {}",
                     "tail-assistant ".repeat(28)
@@ -6072,59 +2440,145 @@ max_output_tokens = 256
         .bind_conversation("%1", "as-tail", 12)
         .unwrap();
 
+    let mut external = service
+        .runtime_agent_history_epoch_context("%1")
+        .unwrap()
+        .replay_owner()
+        .unwrap()
+        .unwrap();
     let compact = service.dispatch_runtime_control_body(
         r#"{"jsonrpc":"2.0","id":"compact-tail","method":"agent/shell/command","params":{"idempotency_key":"compact-tail","input":"/compact"}}"#,
         &primary,
     );
 
     assert!(compact.contains("state=queued"), "{compact}");
-    assert!(compact.contains("summarized_entries=9"), "{compact}");
-    transcript_store
-        .append(&mez_agent::transcript::TranscriptEntry {
-            conversation_id: "as-tail".to_string(),
-            sequence: 13,
-            created_at_unix_seconds: 13,
-            role: mez_agent::transcript::TranscriptRole::Assistant,
-            turn_id: "turn-13".to_string(),
-            agent_id: "agent-%1".to_string(),
-            pane_id: "%1".to_string(),
-            content: "LATE_POST_PLAN_MANUAL_TRANSCRIPT_ENTRY".to_string(),
-        })
+    let task = service
+        .pending_agent_compaction_task_for_tests("%1")
         .unwrap();
-    service
-        .agent_shell_store_mut()
-        .record_transcript_entries("%1", 1)
+    assert!(task.replay_source.is_some());
+    let summarized = task.summarized_entries;
+    assert!(summarized > 0 && summarized <= 10);
+    // Archive counts fence freshness; the canonical candidate owns membership.
+    assert_eq!(task.transcript_entries, 12);
+    let original = transcript_store.inspect("as-tail").unwrap();
+    let expected_tail = original[summarized..]
+        .iter()
+        .map(|row| row.content.clone())
+        .collect::<Vec<_>>();
+    // Another original writer appends after capture. Its typed occurrence and
+    // actual append receipt, not a synthetic local counter, qualify the arrival.
+    external
+        .admit_instruction_task(
+            vec![ContextBlock::user_event(
+                "user prompt",
+                "LATE_POST_PLAN_MANUAL_TRANSCRIPT_ENTRY",
+            )],
+            &[],
+            &[],
+            0,
+        )
+        .unwrap();
+    let arrival = external.context().chronology().last().unwrap();
+    let block = arrival.block();
+    let late = mez_agent::transcript::TranscriptContextRecord::new(
+        mez_agent::TranscriptContextEvent::task_admission(
+            arrival.sequence().get(),
+            external
+                .task_admission_start(arrival.record().occurrence_id())
+                .unwrap(),
+            &block.label,
+            &block.content,
+        )
+        .unwrap(),
+        arrival.record(),
+        None,
+    )
+    .unwrap();
+    transcript_store
+        .commit_accounted_transcript_batch(
+            &crate::storage::transcript::TranscriptAppendBatch::owned_rows(vec![
+                mez_agent::transcript::TranscriptEntry {
+                    conversation_id: "as-tail".to_string(),
+                    sequence: 13,
+                    created_at_unix_seconds: 13,
+                    role: mez_agent::transcript::TranscriptRole::System,
+                    turn_id: "turn-13".to_string(),
+                    agent_id: "agent-%1".to_string(),
+                    pane_id: "%1".to_string(),
+                    content: late.to_transcript_content().unwrap(),
+                },
+            ])
+            .unwrap(),
+            1,
+        )
         .unwrap();
     complete_runtime_test_compaction(&mut service, "%1", "old raw marker should be summary only");
-    let persisted = transcript_store.inspect("as-tail").unwrap();
     assert!(
-        persisted.iter().any(|entry| matches!(
-            mez_agent::TranscriptContextEvent::from_transcript_content(&entry.content),
-            Some(mez_agent::TranscriptContextEvent::McpCompactionEpoch)
-        )),
-        "{persisted:#?}\n{}",
-        service
-            .pane_screen("%1")
+        transcript_store
+            .load_replay_epoch("as-tail", mez_agent::AgentContext::empty())
             .unwrap()
-            .normal_content_lines()
-            .join("\n")
+            .is_none()
     );
+    let archive = transcript_store.inspect("as-tail").unwrap();
+    assert!(archive.starts_with(&original));
+    let receipt = replay_publication::execute_pending_publication(&mut service);
+    assert!(service.agent_is_compacting("%1"));
     assert!(
-        persisted.iter().any(|entry| matches!(
-            mez_agent::TranscriptContextEvent::from_transcript_content(&entry.content),
-            Some(mez_agent::TranscriptContextEvent::PromptBoundary { label, .. })
-                if label == "MCP compaction re-retrieval guidance"
-        )),
-        "{persisted:#?}"
+        service
+            .apply_replay_epoch_completion(receipt)
+            .unwrap()
+            .applied
+    );
+    let (_, cold) = AgentTranscriptStore::new(transcript_store.root())
+        .load_replay_epoch("as-tail", mez_agent::AgentContext::empty())
+        .unwrap()
+        .unwrap();
+    assert_eq!(cold.revision().get(), 1);
+    assert_eq!(
+        cold.context().chronology()[0].block().source,
+        ContextSourceKind::CompactionPrefix
     );
     assert_eq!(
-        service
-            .agent_shell_store()
-            .get("%1")
-            .unwrap()
-            .transcript_entries,
-        6
+        cold.context().chronology()[0].block().content,
+        "old raw marker should be summary only"
     );
+    let raw = cold.context().chronology()[1..]
+        .iter()
+        .map(|event| event.block().content.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(raw, expected_tail);
+    // The manifest loader returns its frozen members. A fresh ordinary history
+    // read joins later accounted archive arrivals exactly once in source order.
+    let mut fresh = test_runtime_service();
+    fresh.set_agent_transcript_store(AgentTranscriptStore::new(transcript_store.root()));
+    fresh.agent_shell_store_mut().enter_or_resume("%1").unwrap();
+    fresh
+        .agent_shell_store_mut()
+        .bind_conversation("%1", "as-tail", 13)
+        .unwrap();
+    let replay = fresh
+        .runtime_agent_history_epoch_context("%1")
+        .unwrap()
+        .replay_owner()
+        .unwrap()
+        .unwrap();
+    assert!(
+        replay
+            .context()
+            .chronology()
+            .starts_with(cold.context().chronology())
+    );
+    assert_eq!(
+        replay
+            .context()
+            .chronology()
+            .iter()
+            .filter(|event| event.record() == arrival.record())
+            .count(),
+        1
+    );
+    assert_eq!(replay.context().chronology().last().unwrap(), arrival);
+    assert_eq!(transcript_store.inspect("as-tail").unwrap(), archive);
 
     let prompt = service.dispatch_runtime_control_body(
         r#"{"jsonrpc":"2.0","id":"compact-tail-prompt","method":"agent/shell/command","params":{"idempotency_key":"compact-tail-prompt","input":"Implement the first item"}}"#,
@@ -6135,31 +2589,17 @@ max_output_tokens = 256
     let compact_memory = context
         .blocks()
         .iter()
-        .find(|block| {
-            block
-                .label
-                .contains(&mez_agent::memory::canonical_memory_uuid("compact-as-tail"))
-        })
-        .expect("compact memory should be model-visible after /compact");
-    assert!(
-        compact_memory
-            .content
-            .contains("Older durable transcript entries were summarized"),
-        "{compact_memory:?}"
+        .find(|block| block.source == ContextSourceKind::CompactionPrefix)
+        .expect("typed summary head should be model-visible after /compact");
+    assert_eq!(
+        compact_memory.content,
+        "old raw marker should be summary only"
     );
     let transcript_context = context
-        .blocks()
+        .chronology()
         .iter()
-        .filter(|block| {
-            matches!(
-                block.source,
-                ContextSourceKind::Transcript
-                    | ContextSourceKind::TranscriptUser
-                    | ContextSourceKind::TranscriptAssistant
-                    | ContextSourceKind::TranscriptTool
-            )
-        })
-        .map(|block| block.content.as_str())
+        .filter(|event| event.block().source != ContextSourceKind::CompactionPrefix)
+        .map(|event| event.block().content.as_str())
         .collect::<Vec<_>>()
         .join("\n");
 
@@ -6175,14 +2615,17 @@ max_output_tokens = 256
         !transcript_context.contains("old raw marker should be summary only"),
         "{transcript_context}"
     );
-    assert!(
-        context.blocks().iter().any(|block| {
-            block.label == "MCP compaction re-retrieval guidance"
-                && block.content.contains("mcp_server_get")
-        }),
-        "{:#?}",
-        context.blocks()
+    assert_eq!(
+        context
+            .chronology()
+            .iter()
+            .filter(|event| event.block().source == ContextSourceKind::CompactionPrefix)
+            .count(),
+        1
     );
+    assert!(service.memory_records().iter().all(|record| {
+        record.id != mez_agent::memory::canonical_memory_uuid("compact-as-tail")
+    }));
 }
 
 /// Verifies manual compaction reports an oversized unfinished exact tail instead
@@ -6201,19 +2644,50 @@ fn runtime_manual_compaction_reports_irreducible_oversized_unfinished_tail() {
         }])
         .unwrap();
     let store = AgentTranscriptStore::new(temp_root("manual-unfinished-tail"));
+    let mut original = mez_agent::ReplayEpochContext::new(
+        mez_agent::ReplayConversationId::new("manual-unfinished-tail").unwrap(),
+        mez_agent::AgentContext::empty(),
+    )
+    .unwrap();
+    original
+        .admit_instruction_task(
+            vec![ContextBlock::user_event(
+                "user prompt",
+                format!(
+                    "EXACT_UNFINISHED_USER_REQUEST {}",
+                    "protected ".repeat(2_000)
+                ),
+            )],
+            &[],
+            &[],
+            0,
+        )
+        .unwrap();
+    let event = &original.context().chronology()[0];
+    let record = mez_agent::transcript::TranscriptContextRecord::new(
+        mez_agent::TranscriptContextEvent::task_admission(
+            event.sequence().get(),
+            original
+                .task_admission_start(event.record().occurrence_id())
+                .unwrap(),
+            &event.block().label,
+            &event.block().content,
+        )
+        .unwrap(),
+        event.record(),
+        None,
+    )
+    .unwrap();
     store
         .append(&mez_agent::transcript::TranscriptEntry {
             conversation_id: "manual-unfinished-tail".to_string(),
             sequence: 1,
             created_at_unix_seconds: 1,
-            role: mez_agent::transcript::TranscriptRole::User,
+            role: mez_agent::transcript::TranscriptRole::System,
             turn_id: "unfinished-turn".to_string(),
             agent_id: "agent-%1".to_string(),
             pane_id: "%1".to_string(),
-            content: format!(
-                "EXACT_UNFINISHED_USER_REQUEST {}",
-                "protected ".repeat(2_000)
-            ),
+            content: record.to_transcript_content().unwrap(),
         })
         .unwrap();
     service.set_agent_transcript_store(store.clone());
@@ -6270,7 +2744,8 @@ fn runtime_manual_compaction_rejects_oversized_post_summary_request() {
             conversation_id: "manual-final-fit".to_string(),
             sequence: 1,
             created_at_unix_seconds: 1,
-            role: mez_agent::transcript::TranscriptRole::Assistant,
+            // An inert historical reference, not an inferred closed execution.
+            role: mez_agent::transcript::TranscriptRole::User,
             turn_id: "turn-1".to_string(),
             agent_id: "agent-%1".to_string(),
             pane_id: "%1".to_string(),
@@ -6361,7 +2836,8 @@ fn qualify_manual_final_fit_retry(repeat: bool) {
             conversation_id: "manual-final-retry".to_string(),
             sequence: 1,
             created_at_unix_seconds: 1,
-            role: mez_agent::transcript::TranscriptRole::Assistant,
+            // Historical reference text needs no invented execution closure.
+            role: mez_agent::transcript::TranscriptRole::User,
             turn_id: "old-turn".to_string(),
             agent_id: "agent-%1".to_string(),
             pane_id: "%1".to_string(),
@@ -6385,13 +2861,12 @@ fn qualify_manual_final_fit_retry(repeat: bool) {
         &primary,
     );
     assert!(queued.contains("state=queued"), "{queued}");
-    let mut task = service
+    let task = service
         .pending_agent_compaction_task_for_tests("%1")
         .expect("initial manual source")
         .clone();
-    let frozen_words = task.summary_correction.manual_words;
-    assert!(frozen_words.is_some());
-    let estimate = |summary| {
+    assert!(task.replay_source.is_some());
+    let mut estimate = |summary| {
         let context = service
             .manual_compaction_candidate_context(&task, summary)
             .unwrap();
@@ -6405,9 +2880,27 @@ fn qualify_manual_final_fit_retry(repeat: bool) {
     assert!(long_estimate > short_estimate);
     let desired_safe_limit = short_estimate + (long_estimate - short_estimate) / 2;
     let input_cap = (desired_safe_limit * 20).div_ceil(19);
-    task.model_profile
-        .provider_options
-        .insert("max_input_tokens".to_string(), input_cap.to_string());
+    // Calibration does not authorize changing a frozen task's model. Admit a
+    // new operation under the actual configured cap, retaining the unchanged
+    // original archive. Both fit checks below use that newly captured profile.
+    service.cancel_current_agent_compaction_task("%1");
+    let mut layers = service.config_layers().to_vec();
+    layers[0].text = layers[0].text.replace(
+        "max_input_tokens = 16000",
+        &format!("max_input_tokens = {input_cap}"),
+    );
+    service.replace_config_layers(layers).unwrap();
+    let queued = service
+        .execute_agent_shell_command(&primary, "/compact")
+        .unwrap();
+    assert!(queued.contains("state=queued"), "{queued}");
+    let task = service
+        .pending_agent_compaction_task_for_tests("%1")
+        .unwrap()
+        .clone();
+    assert_eq!(task.model_profile.max_input_tokens(), Some(input_cap));
+    let frozen_words = task.summary_correction.manual_words;
+    assert!(frozen_words.is_some());
     let context = service
         .manual_compaction_candidate_context(&task, "short manual summary")
         .unwrap();
@@ -6415,9 +2908,6 @@ fn qualify_manual_final_fit_retry(repeat: bool) {
         .manual_compaction_candidate_size_for_tests(&task, context)
         .unwrap();
     assert!(short_estimate <= safe_limit && safe_limit < long_estimate);
-    *service
-        .pending_agent_compaction_task_mut_for_tests("%1")
-        .unwrap() = task;
     complete_runtime_test_compaction(&mut service, "%1", &"long summary ".repeat(700));
     assert!(
         store
@@ -6459,12 +2949,12 @@ fn qualify_manual_final_fit_retry(repeat: bool) {
     complete_runtime_test_compaction(&mut service, "%1", &next_summary);
     assert!(
         store
-            .compaction_epoch("manual-final-retry")
+            .load_replay_epoch("manual-final-retry", mez_agent::AgentContext::empty())
             .unwrap()
-            .is_some()
-            != repeat
+            .is_none()
     );
     if repeat {
+        assert!(service.take_replay_epoch_attempt_for_tests().is_none());
         let raw = store.inspect("manual-final-retry").unwrap();
         assert_eq!(raw.len(), 1);
         assert_eq!(raw[0].content, "old decision ".repeat(800));
@@ -6472,12 +2962,29 @@ fn qualify_manual_final_fit_retry(repeat: bool) {
             .pane_screen("%1")
             .unwrap()
             .normal_content_lines()
-            .join("\n");
+            .iter()
+            .map(|line| line.trim().trim_start_matches('│').trim())
+            .collect::<Vec<_>>()
+            .join(" ");
         assert!(
             screen.contains("manual compaction candidate")
-                && screen.contains("safe input allowance"),
+                && screen.contains("cannot fit its complete input allowance"),
             "{screen}"
         );
+    } else {
+        assert!(service.agent_is_compacting("%1"));
+        let receipt = replay_publication::execute_pending_publication(&mut service);
+        assert!(service.agent_is_compacting("%1"));
+        service.apply_replay_epoch_completion(receipt).unwrap();
+        let (_, cold) = AgentTranscriptStore::new(store.root())
+            .load_replay_epoch("manual-final-retry", mez_agent::AgentContext::empty())
+            .unwrap()
+            .unwrap();
+        assert_eq!(cold.context().chronology()[0].block().content, next_summary);
+        assert_eq!(cold.revision().get(), 1);
+        let raw = store.inspect("manual-final-retry").unwrap();
+        assert_eq!(raw.len(), 1);
+        assert_eq!(raw[0].content, "old decision ".repeat(800));
     }
     assert!(!service.agent_is_compacting("%1"));
     assert!(service.pending_agent_provider_tasks().is_empty());
@@ -6500,7 +3007,8 @@ fn runtime_manual_compaction_splits_configured_input_cap() {
                 conversation_id: "manual-cap-split".to_string(),
                 sequence,
                 created_at_unix_seconds: sequence,
-                role: mez_agent::transcript::TranscriptRole::Assistant,
+                // Packing arbitrary reference text needs no execution witness.
+                role: mez_agent::transcript::TranscriptRole::User,
                 turn_id: format!("turn-{sequence}"),
                 agent_id: "agent-%1".to_string(),
                 pane_id: "%1".to_string(),
@@ -6648,11 +3156,35 @@ fn runtime_manual_compaction_splits_configured_input_cap() {
     assert_eq!(fragments.concat(), original_source);
     assert!(
         store
-            .compaction_epoch("manual-cap-split")
+            .load_replay_epoch("manual-cap-split", mez_agent::AgentContext::empty())
             .unwrap()
+            .is_none()
+    );
+    assert!(
+        service
+            .take_pending_agent_prompt_history_for_tests()
+            .is_empty()
+    );
+    let receipt = replay_publication::execute_pending_publication(&mut service);
+    assert!(
+        service
+            .take_pending_agent_prompt_history_for_tests()
+            .is_empty()
+    );
+    assert!(
+        service
+            .apply_replay_epoch_completion(receipt)
             .unwrap()
-            .summary
-            .contains("FINAL_CAP_SUMMARY")
+            .applied
+    );
+    let (_, cold) = AgentTranscriptStore::new(store.root())
+        .load_replay_epoch("manual-cap-split", mez_agent::AgentContext::empty())
+        .unwrap()
+        .unwrap();
+    assert_eq!(cold.revision().get(), 1);
+    assert_eq!(
+        cold.context().chronology()[0].block().content,
+        "FINAL_CAP_SUMMARY"
     );
     let resumed = service.take_pending_agent_prompt_history_for_tests();
     assert_eq!(resumed.len(), 1);
@@ -6679,7 +3211,8 @@ fn runtime_manual_compaction_recovers_provider_context_limit() {
                 conversation_id: "manual-context-limit".to_string(),
                 sequence,
                 created_at_unix_seconds: sequence,
-                role: mez_agent::transcript::TranscriptRole::Assistant,
+                // Provider rejection operates on literal historical references.
+                role: mez_agent::transcript::TranscriptRole::User,
                 turn_id: format!("turn-{sequence}"),
                 agent_id: "agent-%1".to_string(),
                 pane_id: "%1".to_string(),
@@ -6827,11 +3360,35 @@ fn runtime_manual_compaction_recovers_provider_context_limit() {
     );
     assert!(
         store
-            .compaction_epoch("manual-context-limit")
+            .load_replay_epoch("manual-context-limit", mez_agent::AgentContext::empty())
             .unwrap()
+            .is_none()
+    );
+    assert!(
+        service
+            .take_pending_agent_prompt_history_for_tests()
+            .is_empty()
+    );
+    let receipt = replay_publication::execute_pending_publication(&mut service);
+    assert!(
+        service
+            .take_pending_agent_prompt_history_for_tests()
+            .is_empty()
+    );
+    assert!(
+        service
+            .apply_replay_epoch_completion(receipt)
             .unwrap()
-            .summary
-            .contains("FINAL_MANUAL_SUMMARY")
+            .applied
+    );
+    let (_, cold) = AgentTranscriptStore::new(store.root())
+        .load_replay_epoch("manual-context-limit", mez_agent::AgentContext::empty())
+        .unwrap()
+        .unwrap();
+    assert_eq!(cold.revision().get(), 1);
+    assert_eq!(
+        cold.context().chronology()[0].block().content,
+        "FINAL_MANUAL_SUMMARY"
     );
     let resumed = service.take_pending_agent_prompt_history_for_tests();
     assert_eq!(resumed.len(), 1);
@@ -6861,7 +3418,8 @@ fn runtime_manual_compaction_partial_chunk_failure_preserves_history() {
                 conversation_id: "manual-partial-failure".to_string(),
                 sequence,
                 created_at_unix_seconds: sequence,
-                role: mez_agent::transcript::TranscriptRole::Assistant,
+                // No fake completion authority is needed for reference history.
+                role: mez_agent::transcript::TranscriptRole::User,
                 turn_id: format!("turn-{sequence}"),
                 agent_id: "agent-%1".to_string(),
                 pane_id: "%1".to_string(),
@@ -6943,7 +3501,8 @@ fn runtime_manual_compaction_tail_uses_configured_token_allowance() {
                 conversation_id: "manual-token-tail".to_string(),
                 sequence,
                 created_at_unix_seconds: sequence,
-                role: mez_agent::transcript::TranscriptRole::Assistant,
+                // Whole reference occurrences exercise the token reservation.
+                role: mez_agent::transcript::TranscriptRole::User,
                 turn_id: format!("turn-{sequence}"),
                 agent_id: "agent-%1".to_string(),
                 pane_id: "%1".to_string(),
@@ -6967,11 +3526,30 @@ fn runtime_manual_compaction_tail_uses_configured_token_allowance() {
         r#"{"jsonrpc":"2.0","id":"manual-token-tail","method":"agent/shell/command","params":{"idempotency_key":"manual-token-tail","input":"/compact"}}"#,
         &primary,
     );
-    assert!(queued.contains("summarized_entries=1"), "{queued}");
+    assert!(queued.contains("state=queued"), "{queued}");
     let task = service
         .pending_agent_compaction_task_for_tests("%1")
         .unwrap();
-    assert_eq!(task.retained_transcript_entries, 1);
+    assert!(task.replay_source.is_some());
+    assert_eq!(task.summarized_entries, 1);
+    let task = task.clone();
+    let candidate = service
+        .manual_compaction_candidate_context(&task, "old work summarized")
+        .unwrap();
+    assert_eq!(
+        candidate
+            .chronology()
+            .iter()
+            .filter(|event| event.block().content == "x".repeat(6_000))
+            .count(),
+        1
+    );
+    assert!(
+        !candidate
+            .chronology()
+            .iter()
+            .any(|event| event.block().content == "old work")
+    );
 }
 
 /// Manual compaction may absorb a prior selective range only after summarizing
@@ -7029,7 +3607,7 @@ fn runtime_manual_compaction_after_selective_epoch() {
             .unwrap();
     }
     store
-        .save_compaction_ranges(
+        .install_legacy_compaction_ranges_fixture(
             "manual-selective",
             0,
             "",
@@ -7052,34 +3630,20 @@ fn runtime_manual_compaction_after_selective_epoch() {
         .agent_shell_store_mut()
         .bind_conversation("%1", "manual-selective", 3)
         .unwrap();
+    let original = store.compaction_epoch("manual-selective").unwrap();
+    let original_rows = store.inspect("manual-selective").unwrap();
     let queued = service.dispatch_runtime_control_body(
         r#"{"jsonrpc":"2.0","id":"manual-selective","method":"agent/shell/command","params":{"idempotency_key":"manual-selective","input":"/compact"}}"#,
         &primary,
     );
-    assert!(queued.contains("state=queued"), "{queued}");
-    complete_runtime_test_compaction(
-        &mut service,
-        "%1",
-        "new manual summary including prior typed summary",
+    assert!(queued.contains("normalization"), "{queued}");
+    assert!(service.pending_agent_compaction_task_ids().is_empty());
+    assert!(!service.agent_is_compacting("%1"));
+    assert_eq!(
+        store.compaction_epoch("manual-selective").unwrap(),
+        original
     );
-    let epoch = store.compaction_epoch("manual-selective").unwrap().unwrap();
-    assert!(epoch.through_sequence >= 2, "{epoch:?}");
-    assert!(epoch.ranges.is_empty(), "{epoch:?}");
-    let replay = service
-        .agent_context_for_pane_prompt("%1", "continue", 0)
-        .unwrap();
-    assert!(
-        replay
-            .blocks()
-            .iter()
-            .any(|block| block.content.contains("new manual summary"))
-    );
-    assert!(
-        replay
-            .blocks()
-            .iter()
-            .any(|block| block.content.contains("recent exact answer"))
-    );
+    assert_eq!(store.inspect("manual-selective").unwrap(), original_rows);
 }
 
 /// Verifies model-generated compacted context survives runtime restoration.
@@ -7109,20 +3673,6 @@ context_window_tokens = 128000
         }])
         .unwrap();
     let transcript_store = AgentTranscriptStore::new(temp_root("runtime-agent-compact-restore"));
-    for sequence in 1..=3 {
-        transcript_store
-            .append(&mez_agent::transcript::TranscriptEntry {
-                conversation_id: "as-restore".to_string(),
-                sequence,
-                created_at_unix_seconds: sequence,
-                role: mez_agent::transcript::TranscriptRole::Assistant,
-                turn_id: format!("turn-{sequence}"),
-                agent_id: "agent-%1".to_string(),
-                pane_id: "%1".to_string(),
-                content: format!("restore compact source {sequence}"),
-            })
-            .unwrap();
-    }
     service.set_agent_transcript_store(transcript_store.clone());
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
@@ -7133,8 +3683,23 @@ context_window_tokens = 128000
         .unwrap();
     service
         .agent_shell_store_mut()
-        .bind_conversation("%1", "as-restore", 3)
+        .bind_conversation("%1", "as-restore", 0)
         .unwrap();
+    let successor = crate::test_support::compaction_source::complete_task_and_admit_successor(
+        &mut service,
+        &primary,
+        "restore compact source from the original task",
+        "original task completed",
+        "retain the current task exactly",
+        mez_agent::ProviderApiCompatibility::OpenAiResponses,
+    );
+    crate::test_support::compaction_source::complete_task(
+        &mut service,
+        &successor,
+        "current task completed",
+        mez_agent::ProviderApiCompatibility::OpenAiResponses,
+    );
+    let original_archive = transcript_store.inspect("as-restore").unwrap();
     service.checkpoint_agent_session_metadata().unwrap();
 
     let compact = service.dispatch_runtime_control_body(
@@ -7167,10 +3732,49 @@ context_window_tokens = 128000
             .unwrap()
             .applied
     );
+    assert!(
+        service
+            .take_pending_agent_prompt_history_for_tests()
+            .is_empty()
+    );
+    assert!(
+        transcript_store
+            .compaction_epoch("as-restore")
+            .unwrap()
+            .is_none()
+    );
+    let receipt = replay_publication::execute_pending_publication(&mut service);
+    assert!(
+        service
+            .take_pending_agent_prompt_history_for_tests()
+            .is_empty()
+    );
+    assert!(
+        service
+            .apply_replay_epoch_completion(receipt)
+            .unwrap()
+            .applied
+    );
+    let (_, expected) = AgentTranscriptStore::new(transcript_store.root())
+        .load_replay_epoch("as-restore", mez_agent::AgentContext::empty())
+        .unwrap()
+        .unwrap();
+    assert_eq!(expected.revision().get(), 1);
+    assert_eq!(
+        transcript_store.inspect("as-restore").unwrap(),
+        original_archive
+    );
     let resumed = service.take_pending_agent_prompt_history_for_tests();
     assert_eq!(resumed.len(), 1);
     assert_eq!(resumed[0].prompt, "continue after compaction");
-    assert_eq!(resumed[0].transcript_entries, 4);
+    assert_eq!(
+        resumed[0].transcript_entries,
+        service
+            .agent_shell_store()
+            .get("%1")
+            .unwrap()
+            .transcript_entries
+    );
     let session_snapshot = service.session().clone();
 
     let mut restored = RuntimeServiceFixture::new().build_with_session(session_snapshot);
@@ -7187,6 +3791,38 @@ context_window_tokens = 128000
             .contains("COMPACTION_SUMMARY_RESTORED_AFTER_RESTART")),
         "restored history should include the durable compaction summary: {:#?}",
         context.blocks()
+    );
+    assert!(context.chronology().len() > expected.context().chronology().len());
+    for (actual, original) in context
+        .chronology()
+        .iter()
+        .zip(expected.context().chronology())
+    {
+        assert_eq!(actual.block(), original.block());
+        assert_eq!(actual.record(), original.record());
+        assert_eq!(actual.sequence(), original.sequence());
+        assert_eq!(actual.execution_group_id(), original.execution_group_id());
+        assert_eq!(actual.provider_owner(), original.provider_owner());
+        // The newly admitted prompt supersedes the previous task's protected
+        // instruction scope, not its original bytes, identity or accounting.
+        if original.retention() == mez_agent::ContextRetention::Exact
+            && original.block().source == ContextSourceKind::UserInstruction
+        {
+            assert_eq!(
+                actual.retention(),
+                mez_agent::ContextRetention::Summarizable
+            );
+        } else {
+            assert_eq!(actual.retention(), original.retention());
+        }
+    }
+    assert_eq!(
+        context
+            .chronology()
+            .iter()
+            .filter(|event| event.block().source == ContextSourceKind::CompactionPrefix)
+            .count(),
+        1
     );
 }
 
@@ -7296,10 +3932,40 @@ fn runtime_compaction_epoch_replays_empty_tail_and_later_append() {
             .iter()
             .any(|block| block.content.contains("OLDER_ARCHIVED_ROW"))
     );
+    // Produce a genuine later canonical fact and commit its original ordinary
+    // append proposal. Bare legacy rows cannot claim arrival custody after a
+    // typed head has become authoritative.
+    let (_, mut arrival_source) = store
+        .load_replay_epoch("epoch-empty", mez_agent::AgentContext::empty())
+        .unwrap()
+        .unwrap();
+    arrival_source
+        .append_fact("later", "LATER_EXACT_ROW")
+        .unwrap();
+    let original = arrival_source.context().chronology().last().unwrap();
     let mut later = store.inspect("epoch-empty").unwrap().pop().unwrap();
     later.sequence = 2;
-    later.content = "LATER_EXACT_ROW".to_string();
-    store.append(&later).unwrap();
+    later.role = TranscriptRole::System;
+    later.content = mez_agent::transcript::TranscriptContextRecord::new(
+        mez_agent::TranscriptContextEvent::prompt_boundary_with_event_sequence(
+            original.block().source,
+            original.sequence().get(),
+            original.block().label.clone(),
+            original.block().content.clone(),
+        )
+        .unwrap(),
+        original.record(),
+        None,
+    )
+    .unwrap()
+    .to_transcript_content()
+    .unwrap();
+    store
+        .commit_accounted_transcript_batch(
+            &crate::storage::transcript::TranscriptAppendBatch::owned_rows(vec![later]).unwrap(),
+            1,
+        )
+        .unwrap();
     let after = service
         .agent_context_for_pane_prompt("%1", "continue", 0)
         .unwrap();
@@ -7323,6 +3989,20 @@ fn runtime_compaction_epoch_replays_empty_tail_and_later_append() {
             .iter()
             .any(|block| block.content.contains("OLDER_ARCHIVED_ROW"))
     );
+    let restored = service
+        .agent_context_for_pane_prompt("%1", "continue", 0)
+        .unwrap();
+    for context in [&after, &restored] {
+        let retained = context
+            .chronology()
+            .iter()
+            .filter(|event| event.record().occurrence_id() == original.record().occurrence_id())
+            .collect::<Vec<_>>();
+        assert_eq!(retained.len(), 1);
+        assert_eq!(retained[0].record(), original.record());
+        assert_eq!(retained[0].sequence(), original.sequence());
+        assert_eq!(retained[0].block(), original.block());
+    }
 }
 
 /// An empty pane replay count cannot conceal loss of the transcript that owns
@@ -7373,80 +4053,52 @@ fn runtime_compaction_epoch_missing_transcript_fails_empty_tail() {
 /// least one active durable entry instead of returning a budget-based no-op.
 #[test]
 fn runtime_agent_shell_compact_forces_summary_when_under_context_budget() {
-    let mut service = test_runtime_service();
-    service
-        .replace_config_layers(vec![ConfigLayer {
-            name: "compact-forced-context-window".to_string(),
-            path: None,
-            format: ConfigFormat::Toml,
-            scope: ConfigScope::Primary,
-            trusted: true,
-            text: r#"[agents]
-default_provider = "openai"
-default_model_profile = "compact-forced-test"
-[providers.openai]
-kind = "openai"
-models = ["gpt-compact-forced-test"]
-default_model = "gpt-compact-forced-test"
-[model_profiles.compact-forced-test]
-provider = "openai"
-model = "gpt-compact-forced-test"
-context_window_tokens = 128000
-"#
-            .to_string(),
-        }])
+    // Literal historical reference has no task or execution closure to infer.
+    // Its tiny cost is well inside the configured 10% raw allowance, but the
+    // explicit command still selects one eligible original occurrence.
+    let (mut service, transcript_store) =
+        manual_model::queued("as-forced", "forced compact marker 1".into());
+    let archive = transcript_store.inspect("as-forced").unwrap();
+    let task = service
+        .pending_agent_compaction_task_for_tests("%1")
         .unwrap();
-    let transcript_store = AgentTranscriptStore::new(temp_root("runtime-agent-compact-forced"));
-    for sequence in 1..=3 {
-        transcript_store
-            .append(&mez_agent::transcript::TranscriptEntry {
-                conversation_id: "as-forced".to_string(),
-                sequence,
-                created_at_unix_seconds: sequence,
-                role: mez_agent::transcript::TranscriptRole::Assistant,
-                turn_id: format!("turn-{sequence}"),
-                agent_id: "agent-%1".to_string(),
-                pane_id: "%1".to_string(),
-                content: format!("forced compact marker {sequence}"),
-            })
-            .unwrap();
-    }
-    service.set_agent_transcript_store(transcript_store);
-    let primary = service
-        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
-        .unwrap();
-    service
-        .agent_shell_store_mut()
-        .enter_or_resume("%1")
-        .unwrap();
-    service
-        .agent_shell_store_mut()
-        .bind_conversation("%1", "as-forced", 3)
-        .unwrap();
-
-    let compact = service.dispatch_runtime_control_body(
-        r#"{"jsonrpc":"2.0","id":"compact-forced","method":"agent/shell/command","params":{"idempotency_key":"compact-forced","input":"/compact"}}"#,
-        &primary,
-    );
-
-    assert!(compact.contains(r#""kind":"mutated""#), "{compact}");
-    assert!(compact.contains("state=queued"), "{compact}");
-    assert!(compact.contains("summarized_entries=1"), "{compact}");
-    assert!(
-        !compact.contains("within-retained-context-tail"),
-        "{compact}"
-    );
+    assert_eq!(task.summarized_entries, 1);
+    assert!(mez_agent::provider_text_input_token_estimate(&archive[0].content) < 2000);
+    let memory_before = service.memory_records().len();
     complete_runtime_test_compaction(&mut service, "%1", "forced compact marker 1");
-    let compacted = service
-        .memory_records()
-        .into_iter()
-        .find(|record| record.id == mez_agent::memory::canonical_memory_uuid("compact-as-forced"))
-        .expect("compacted memory record");
     assert!(
-        compacted.content.contains("forced compact marker 1"),
-        "{}",
-        compacted.content
+        transcript_store
+            .compaction_epoch("as-forced")
+            .unwrap()
+            .is_none()
     );
+    assert!(service.agent_is_compacting("%1"));
+    let receipt = replay_publication::execute_pending_publication(&mut service);
+    assert!(service.agent_is_compacting("%1"));
+    assert!(
+        service
+            .apply_replay_epoch_completion(receipt)
+            .unwrap()
+            .applied
+    );
+    let (_, compacted) = AgentTranscriptStore::new(transcript_store.root())
+        .load_replay_epoch("as-forced", mez_agent::AgentContext::empty())
+        .unwrap()
+        .unwrap();
+    assert_eq!(compacted.revision().get(), 1);
+    assert_eq!(compacted.context().chronology().len(), 1);
+    assert_eq!(
+        compacted.context().chronology()[0].block().source,
+        ContextSourceKind::CompactionPrefix
+    );
+    assert_eq!(
+        compacted.context().chronology()[0].block().content,
+        "forced compact marker 1"
+    );
+    assert_eq!(transcript_store.inspect("as-forced").unwrap(), archive);
+    assert_eq!(service.memory_records().len(), memory_before);
+    assert!(!service.agent_is_compacting("%1"));
+    assert!(service.pending_agent_provider_tasks().is_empty());
 }
 
 /// Verifies a non-reducing configured-cap pass retries instead of failing.

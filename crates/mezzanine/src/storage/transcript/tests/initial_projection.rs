@@ -88,52 +88,193 @@ fn selective_batch() -> TranscriptAppendBatch {
     TranscriptAppendBatch::initial_projection(expected, rows).unwrap()
 }
 
-/// Publication preserves selective source identities and exact summary bytes.
-/// An identical lost-ack retry stays idempotent, and complete settlement removes
-/// only its receipt while leaving both projection and physical rows unchanged.
+/// Uses the same complete raw source for supported prefix receipt ownership
+/// tests. These tests exercise publication/retry contracts independently of
+/// retired selective admission; they still use the real journal owner.
+fn prefix_batch() -> TranscriptAppendBatch {
+    let source = selective_batch();
+    let rows = source
+        .entries()
+        .iter()
+        .cloned()
+        .map(|mut row| {
+            row.conversation_id = "prefix-child".into();
+            row
+        })
+        .collect();
+    TranscriptAppendBatch::initial_projection(epoch("prefix-child"), rows).unwrap()
+}
+
+/// New selective initial requests refuse before journal/archive creation. An
+/// original historical journal stays readable and retained on failed recovery;
+/// neither a retry nor row-only settlement may turn it into a new model head.
 #[test]
 fn initial_projection_selective_retry_and_settlement_are_exact() {
     let root = temp_root("initial-projection-selective");
     let store = AgentTranscriptStore::new(root.clone());
     let batch = selective_batch();
     for _ in 0..2 {
-        store.accept_transcript_append_receipt(&batch, 7).unwrap();
+        let error = store
+            .accept_transcript_append_receipt(&batch, 7)
+            .unwrap_err();
+        assert!(error.to_string().contains("normalization"), "{error}");
     }
+    assert!(store.pending_append_receipts().unwrap().is_empty());
+    assert!(
+        !store
+            .transcript_path(batch.conversation_id())
+            .unwrap()
+            .exists()
+    );
+    store
+        .retain_legacy_initial_receipt_fixture(&batch, 7)
+        .unwrap();
+    let receipt = fs::read_dir(root.join(".append-receipts"))
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    let original = fs::read(&receipt).unwrap();
+    let reopened = AgentTranscriptStore::new(root.clone());
+    for _ in 0..2 {
+        let error = reopened.recover_append_receipts().unwrap_err();
+        assert!(error.to_string().contains("normalization"), "{error}");
+        assert_eq!(fs::read(&receipt).unwrap(), original);
+        assert_eq!(
+            reopened.pending_append_receipts().unwrap(),
+            vec![batch.entries().to_vec()]
+        );
+        assert!(
+            !reopened
+                .transcript_path(batch.conversation_id())
+                .unwrap()
+                .exists()
+        );
+    }
+    assert!(reopened.settle_append_receipt(batch.entries(), 7).is_err());
+    assert!(
+        reopened
+            .settle_transcript_append_receipt(&batch, 7)
+            .is_err()
+    );
+    let control = prefix_batch();
+    reopened
+        .accept_transcript_append_receipt(&control, 8)
+        .unwrap();
+    reopened
+        .settle_transcript_append_receipt(&control, 8)
+        .unwrap();
+    assert_eq!(
+        reopened.pending_append_receipts().unwrap(),
+        vec![batch.entries().to_vec()]
+    );
+    assert_eq!(
+        reopened.inspect(control.conversation_id()).unwrap(),
+        control.entries()
+    );
+    assert_eq!(fs::read(receipt).unwrap(), original);
+    fs::remove_dir_all(root).unwrap();
+}
+
+/// A complete historical publication may settle only its original exact intent.
+/// Settlement is a durability fact, not permission to replay the retired format.
+#[test]
+fn initial_projection_complete_legacy_receipt_settles_without_republication() {
+    let root = temp_root("initial-projection-complete-legacy");
+    let store = AgentTranscriptStore::new(root.clone());
+    let batch = selective_batch();
+    store.append_many(batch.entries()).unwrap();
+    store
+        .install_legacy_compaction_fixture(batch.initial_compaction_epoch().unwrap().clone())
+        .unwrap();
+    store
+        .retain_legacy_initial_receipt_fixture(&batch, 7)
+        .unwrap();
+    let path = root
+        .join(batch.conversation_id())
+        .join("compaction-epoch.json");
+    let original = fs::read(&path).unwrap();
+    let mut changed = batch.initial_compaction_epoch().unwrap().clone();
+    changed.summary = "foreign summary intent".into();
+    let changed =
+        TranscriptAppendBatch::initial_projection(changed, batch.entries().to_vec()).unwrap();
+    assert!(store.settle_transcript_append_receipt(&changed, 7).is_err());
     assert_eq!(
         store.pending_append_receipts().unwrap(),
         vec![batch.entries().to_vec()]
     );
+    store.recover_append_receipts().unwrap();
+    assert!(store.pending_append_receipts().unwrap().is_empty());
+    assert_eq!(fs::read(path).unwrap(), original);
     assert_eq!(
         store.inspect(batch.conversation_id()).unwrap(),
         batch.entries()
     );
-    assert_eq!(
-        store
-            .compaction_epoch(batch.conversation_id())
-            .unwrap()
-            .as_ref(),
-        batch.initial_compaction_epoch()
-    );
-    // A row-only worker cannot retire an owner whose digest also commits an
-    // initial projection, even though every row is already durable.
-    assert!(store.settle_append_receipt(batch.entries(), 7).is_err());
-    for _ in 0..2 {
-        store.settle_transcript_append_receipt(&batch, 7).unwrap();
-    }
-    assert!(store.pending_append_receipts().unwrap().is_empty());
-    let reopened = AgentTranscriptStore::new(root.clone());
-    assert_eq!(
-        reopened.inspect(batch.conversation_id()).unwrap(),
-        batch.entries()
-    );
-    assert_eq!(
-        reopened
-            .compaction_epoch(batch.conversation_id())
-            .unwrap()
-            .as_ref(),
-        batch.initial_compaction_epoch()
-    );
+    let error = store
+        .lock_resume_replay_snapshot(batch.conversation_id(), true)
+        .err()
+        .unwrap();
+    assert!(error.to_string().contains("normalization"), "{error}");
     fs::remove_dir_all(root).unwrap();
+}
+
+/// Original v2 journals and sidecars must not be imported merely to discover a
+/// missing raw suffix or required-state marker. Global preflight protects even
+/// an unrelated earlier-sorting receipt from mutation until the promise is whole.
+#[test]
+fn initial_projection_legacy_preflight_preserves_unimported_authority() {
+    for (complete_rows, marker) in [(false, true), (true, false), (true, true)] {
+        let root = temp_root("initial-legacy-unimported");
+        let store = AgentTranscriptStore::new(root.clone());
+        let original = selective_batch();
+        let mut old = original.initial_compaction_epoch().unwrap().clone();
+        old.version = 2;
+        old.summary_records = None;
+        let mut rows = original.entries().to_vec();
+        rows.push(entry(old.conversation_id.as_str(), 3, TranscriptRole::User));
+        let batch = TranscriptAppendBatch::initial_projection(old.clone(), rows.clone()).unwrap();
+        store
+            .retain_legacy_initial_receipt_fixture(&batch, 11)
+            .unwrap();
+        store
+            .append_many(&rows[..if complete_rows { 3 } else { 2 }])
+            .unwrap();
+        if marker {
+            store
+                .install_legacy_compaction_fixture(old.clone())
+                .unwrap();
+        }
+        // Authentic old persistence data predates summary-record import. The
+        // fixture installer above supplies only its actual required marker.
+        let path = root
+            .join(&old.conversation_id)
+            .join("compaction-epoch.json");
+        let encoded = serde_json::to_vec(&old).unwrap();
+        fs::write(&path, &encoded).unwrap();
+        let control = vec![entry("a-unrelated", 1, TranscriptRole::User)];
+        store.accept_append_receipt(&control, 12).unwrap();
+        let before = store.pending_append_receipts().unwrap();
+        let reopened = AgentTranscriptStore::new(root.clone());
+        if complete_rows && marker {
+            reopened.recover_append_receipts().unwrap();
+            assert!(reopened.pending_append_receipts().unwrap().is_empty());
+            assert_eq!(reopened.inspect("a-unrelated").unwrap(), control);
+        } else {
+            for _ in 0..2 {
+                let error = reopened.recover_append_receipts().unwrap_err();
+                assert!(error.message().contains("normalization"), "{error}");
+                assert_eq!(reopened.pending_append_receipts().unwrap(), before);
+                assert!(!reopened.transcript_path("a-unrelated").unwrap().exists());
+            }
+        }
+        assert_eq!(fs::read(path).unwrap(), encoded);
+        assert_eq!(
+            reopened.inspect(&old.conversation_id).unwrap(),
+            rows[..if complete_rows { 3 } else { 2 }]
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
 }
 
 /// A failure after raw rows or sidecar rename is not an admission ACK. The
@@ -144,7 +285,7 @@ fn initial_projection_restart_recovers_each_partial_publication_boundary() {
     for boundary in ["row-summary", "sidecar-rename", "required-marker"] {
         let root = temp_root(boundary);
         let store = AgentTranscriptStore::new(root.clone());
-        let batch = selective_batch();
+        let batch = prefix_batch();
         match boundary {
             "row-summary" => store.fail_transcript_append_before_summary(),
             "sidecar-rename" => store.fail_next_compaction_epoch_before_rename(),
@@ -224,7 +365,7 @@ fn initial_projection_empty_receipt_survives_restart_and_reserves_identity() {
 fn initial_projection_rejects_changed_payload_and_durable_authority() {
     let root = temp_root("initial-projection-authority-conflict");
     let store = AgentTranscriptStore::new(root.clone());
-    let batch = selective_batch();
+    let batch = prefix_batch();
     store.accept_transcript_append_receipt(&batch, 10).unwrap();
     let mut changed = batch.initial_compaction_epoch().unwrap().clone();
     changed.summary = "DIFFERENT_AUTHORITY".into();
@@ -248,7 +389,7 @@ fn initial_projection_rejects_changed_payload_and_durable_authority() {
         batch.initial_compaction_epoch()
     );
     store
-        .save_compaction_ranges(
+        .install_legacy_compaction_ranges_fixture(
             batch.conversation_id(),
             0,
             "INDEPENDENT_NEWER_SUMMARY",
@@ -296,7 +437,7 @@ fn initial_projection_cannot_adopt_unowned_existing_raw_archive() {
 fn initial_projection_digest_tampering_blocks_global_recovery_before_mutation() {
     let root = temp_root("initial-projection-digest");
     let store = AgentTranscriptStore::new(root.clone());
-    let batch = selective_batch();
+    let batch = prefix_batch();
     store.fail_next_compaction_epoch_before_rename();
     assert!(store.accept_transcript_append_receipt(&batch, 13).is_err());
     let directory = root.join(".append-receipts");
@@ -420,7 +561,7 @@ fn initial_projection_retry_cannot_extend_its_immutable_initial_payload() {
     for retained in [true, false] {
         let root = temp_root("initial-projection-extended-claim");
         let store = AgentTranscriptStore::new(root.clone());
-        let batch = selective_batch();
+        let batch = prefix_batch();
         store.accept_transcript_append_receipt(&batch, 17).unwrap();
         if !retained {
             store.settle_transcript_append_receipt(&batch, 17).unwrap();
@@ -458,7 +599,7 @@ fn initial_projection_global_preflight_rejects_conflicting_valid_receipts() {
     let other_root = temp_root("initial-projection-other-owner");
     let store = AgentTranscriptStore::new(root.clone());
     let other_store = AgentTranscriptStore::new(other_root.clone());
-    let batch = selective_batch();
+    let batch = prefix_batch();
     store.accept_transcript_append_receipt(&batch, 19).unwrap();
     let mut different = batch.initial_compaction_epoch().unwrap().clone();
     different.summary = "CONFLICTING_COMPLETE_JOURNAL".into();

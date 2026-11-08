@@ -427,6 +427,68 @@ impl ReplayEpochContext {
 }
 
 impl ReplayEpochCheckpoint {
+    /// Revises one retained raw payload without creating a compaction epoch.
+    /// The head, occurrence, source framing, order, birth revision, reservations,
+    /// stable records and descriptive lifecycle state stay unchanged. Only the
+    /// selected record's cached estimates are recomputed from the new bytes.
+    ///
+    /// Missing/covered/head occurrences and pending native or peer source refuse.
+    /// Both original and revised checkpoints must pass complete validation,
+    /// including closed native call/result pairing. This pure descriptive edit
+    /// grants no old controller handle, live adoption, append or storage rights;
+    /// the storage owner must separately provide CAS, source and recovery proof.
+    pub fn revise_raw_member(
+        mut self,
+        occurrence: ContextBlockOccurrenceId,
+        content: String,
+    ) -> AgentContextResult<Self> {
+        let conversation = ReplayConversationId::new(self.conversation.clone())?;
+        let original = ReplayEpochContext::from_checkpoint(
+            conversation.clone(),
+            self.clone(),
+            AgentContext::empty(),
+        )?;
+        if !original
+            .members()
+            .iter()
+            .any(|member| member.occurrence_id() == occurrence)
+        {
+            return Err(invalid("raw edit does not select a retained member"));
+        }
+        let selected = original
+            .context()
+            .chronology()
+            .iter()
+            .find(|event| event.record().occurrence_id() == occurrence)
+            .ok_or_else(|| invalid("raw edit occurrence has no original event"))?;
+        if selected
+            .execution_group_id()
+            .is_some_and(|group| original.context().execution_group_is_pending(group))
+            || original
+                .context()
+                .peer_message_is_pending(selected.sequence())
+        {
+            return Err(invalid(
+                "raw edit cannot replace pending execution or peer source",
+            ));
+        }
+        let event = self
+            .events
+            .iter_mut()
+            .find(|event| event.record.occurrence_id() == occurrence)
+            .ok_or_else(|| invalid("raw edit occurrence has no checkpoint event"))?;
+        let block = ContextBlock {
+            source: event.block.source,
+            placement: event.block.placement,
+            label: event.block.label.clone(),
+            content,
+        };
+        event.record = event.record.revised(&block)?;
+        event.block.content = block.content;
+        ReplayEpochContext::from_checkpoint(conversation, self.clone(), AgentContext::empty())?;
+        Ok(self)
+    }
+
     /// Copies checked replay into a distinct conversation scope without changing
     /// source bytes, occurrence records, costs, membership or birth revisions.
     /// The copy grants no task, process, execution, peer or publication rights.

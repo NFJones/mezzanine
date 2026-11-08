@@ -200,11 +200,12 @@ fn native_filesystem_archive_ignores_replacement_maps_and_keeps_import_boundary(
     assert_eq!(repeated, bytes);
 }
 
-/// Seeds settled canonical source and runs the actual compaction completion
-/// producer before the pending filesystem assistant is installed. Offline test
-/// provider output is deterministic; no model or filesystem effect is replayed.
+/// Completes a real earlier task with ordinary append settlement still pending.
+/// Its successor makes that source eligible, then actual epoch publication makes
+/// the head durable without claiming the pending raw archive has been appended.
+/// The native assistant is installed only after the actual receipt is adopted.
 fn compacted_fixture() -> Fixture {
-    Fixture::with_context_and_store(
+    Fixture::with_history_and_context(
         Some("archive"),
         false,
         |root| {
@@ -219,40 +220,81 @@ fn compacted_fixture() -> Fixture {
                 },
             }]
         },
-        |service, turn| {
-            let context = service
-                .agent_turn_contexts_mut()
-                .get_mut(&turn.turn_id)
+        |service| {
+            service
+                .replace_config_layers(vec![ConfigLayer {
+                    name: "native-archive-compaction".into(),
+                    path: None,
+                    format: ConfigFormat::Toml,
+                    scope: ConfigScope::Primary,
+                    trusted: true,
+                    text: r#"[agents]
+default_provider = "runtime-batch"
+default_model_profile = "native-archive"
+shell_mode = "native"
+compaction_raw_retention_percent = 10
+[providers.runtime-batch]
+kind = "openai"
+models = ["test"]
+default_model = "test"
+[model_profiles.native-archive]
+provider = "runtime-batch"
+model = "test"
+context_window_tokens = 40000
+max_input_tokens = 20000
+"#
+                    .into(),
+                }])
                 .unwrap();
-            for index in 0..2 {
-                let group =
-                    mez_agent::ContextExecutionGroupId::new(format!("original-compacted-{index}"))
-                        .unwrap();
-                context
-                    .append_assistant_event(
-                        "original raw source",
-                        "ORIGINAL_COMPACTION_RAW ".repeat(3000),
-                        group.clone(),
-                    )
-                    .unwrap();
-                context
-                    .append_evidence_event(
-                        mez_agent::ContextSourceKind::ActionResult,
-                        "original settled result",
-                        "ORIGINAL_COMPACTION_RESULT",
-                        group,
-                        None,
-                        true,
-                    )
-                    .unwrap();
-                context
-                    .append_user_event("steering", format!("ORIGINAL_COMPACTION_BARRIER_{index}"))
-                    .unwrap();
-            }
+            service.persistence.enable_transcript_adapter();
+            let start = service
+                .start_agent_prompt_turn(
+                    "%1",
+                    &format!("ORIGINAL_COMPACTION_RAW {}", "source ".repeat(5_000)),
+                )
+                .unwrap();
+            crate::test_support::compaction_source::complete_task(
+                service,
+                &start.turn_id,
+                "ORIGINAL_COMPACTION_RESULT",
+                mez_agent::ProviderApiCompatibility::OpenAiResponses,
+            );
+            // Admit the real checked bookkeeping proposal, leaving its ordinary
+            // append with the external writer. Unchecked bookkeeping correctly
+            // fences the next task; logical acceptance is still no disk ACK.
+            let work = service.claim_bookkeeping_candidates().pop().unwrap();
+            let history = work.execute();
+            assert!(
+                service
+                    .complete_bookkeeping_candidate(work, history)
+                    .unwrap()
+            );
+        },
+        |service, turn| {
+            let store = service.persistence.transcript_store().unwrap().clone();
+            assert!(
+                !store
+                    .transcript_path(&turn.conversation_id)
+                    .unwrap()
+                    .exists()
+            );
+            let pending = service
+                .persistence
+                .pending_transcript_entries_at_path(
+                    &store.transcript_path(&turn.conversation_id).unwrap(),
+                    &turn.conversation_id,
+                )
+                .unwrap();
+            assert!(
+                pending
+                    .iter()
+                    .any(|row| row.content.contains("ORIGINAL_COMPACTION_RAW"))
+            );
+            let context = &service.agent_turn_contexts()[&turn.turn_id];
             let plan = mez_agent::plan_model_context_compaction_for_provider_tokens(
                 context,
-                2000,
-                0,
+                40_000,
+                1,
                 context.event_sequence_high_water_mark(),
                 mez_agent::ProviderBudgetProjection::new(
                     mez_agent::ProviderApiCompatibility::OpenAiResponses,
@@ -260,50 +302,94 @@ fn compacted_fixture() -> Fixture {
                 ),
             )
             .unwrap();
-            assert!(plan.changes_context());
             let profile = service
                 .agent_turn_model_profile(&turn.turn_id)
                 .unwrap()
                 .clone();
-            assert!(service.queue_agent_active_turn_compaction(&turn.turn_id, "archive-source".into(), profile,
-            crate::runtime::agent_state::RuntimeActiveTurnCompactionTrigger::ProviderContextLimit {attempt:1}, plan).unwrap());
-            for index in 0..8 {
-                if service
+            assert!(service.queue_agent_active_turn_compaction(
+                &turn.turn_id, "native-archive".into(), profile,
+                crate::runtime::agent_state::RuntimeActiveTurnCompactionTrigger::ObservedInputLimit {
+                    observed_input_tokens: 40_000, max_input_tokens: 40_000,
+                }, plan,
+            ).unwrap());
+            assert!(
+                service
                     .pending_agent_compaction_task_for_tests("%1")
-                    .is_none()
-                {
-                    break;
-                }
-                complete_runtime_test_compaction(
-                    service,
-                    "%1",
-                    &format!("ORIGINAL_ARCHIVE_SUMMARY_{index}"),
-                );
-            }
+                    .unwrap()
+                    .replay_source
+                    .is_some()
+            );
+            complete_runtime_test_compaction(service, "%1", "ORIGINAL_ARCHIVE_SUMMARY");
+            let receipt =
+                crate::test_support::compaction_publication::execute_pending_publication(service);
+            assert!(
+                service
+                    .apply_replay_epoch_completion(receipt)
+                    .unwrap()
+                    .applied
+            );
             assert!(
                 service
                     .pending_agent_compaction_task_for_tests("%1")
                     .is_none()
             );
             assert!(
-                !service.agent.agent_turn_compaction_handoffs[&turn.turn_id]
-                    .witnesses
-                    .is_empty()
+                !service
+                    .agent
+                    .agent_turn_compaction_handoffs
+                    .contains_key(&turn.turn_id)
+            );
+            // Publication primes the archive/index with an empty file, while
+            // these raw rows remain owned by their original pending append.
+            assert!(store.inspect(&turn.conversation_id).unwrap().is_empty());
+            assert_eq!(
+                service
+                    .persistence
+                    .pending_transcript_entries_at_path(
+                        &store.transcript_path(&turn.conversation_id).unwrap(),
+                        &turn.conversation_id,
+                    )
+                    .unwrap(),
+                pending
+            );
+            let (_, cold) = store
+                .load_replay_epoch(&turn.conversation_id, mez_agent::AgentContext::empty())
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                cold.context().chronology()[0].block().content,
+                "ORIGINAL_ARCHIVE_SUMMARY"
             );
         },
     )
 }
 
-/// Actual accepted compaction witnesses move with original context and survive
-/// removal/replacement of the live metadata maps. Restaging restores their raw
-/// occurrences and terminal certificate alongside later native result facts.
+/// The accepted head and source survive actual context detachment while ordinary
+/// source append is unsettled. Late native facts use the original moved owner;
+/// no second terminal rewrite/certificate is manufactured during restaging.
 #[test]
 fn native_filesystem_archive_keeps_actual_compaction_witnesses_after_detach() {
     let mut fixture = compacted_fixture();
-    fixture.service.persistence.enable_transcript_adapter();
+    let store = fixture
+        .service
+        .persistence
+        .transcript_store()
+        .unwrap()
+        .clone();
+    let (_, accepted) = store
+        .load_replay_epoch(
+            &fixture.turn.conversation_id,
+            mez_agent::AgentContext::empty(),
+        )
+        .unwrap()
+        .unwrap();
+    let original = fixture.service.agent_turn_contexts()[&fixture.turn.turn_id].clone();
+    let source = fixture
+        .service
+        .agent_turn_history_source(&fixture.turn.turn_id)
+        .unwrap()
+        .clone();
     let (attempt, _) = execute_and_retain(&mut fixture, false);
-    let handoff =
-        fixture.service.agent.agent_turn_compaction_handoffs[&fixture.turn.turn_id].clone();
     assert!(
         fixture
             .service
@@ -313,10 +399,27 @@ fn native_filesystem_archive_keeps_actual_compaction_witnesses_after_detach() {
     assert!(
         !fixture
             .service
-            .agent
-            .agent_turn_compaction_handoffs
+            .agent_turn_contexts()
             .contains_key(&fixture.turn.turn_id)
     );
+    assert!(
+        fixture
+            .service
+            .agent_turn_history_source(&fixture.turn.turn_id)
+            .is_none()
+    );
+    // A later same-key live body/source must not replace the captured originals.
+    let mut replacement = original;
+    replacement
+        .append_user_event("replacement", "REPLACEMENT_CONTEXT_MUST_NOT_ARCHIVE")
+        .unwrap();
+    fixture
+        .service
+        .agent_turn_contexts_mut()
+        .insert(fixture.turn.turn_id.clone(), replacement);
+    fixture
+        .service
+        .set_agent_turn_history_source(fixture.turn.turn_id.clone(), Some(source));
     fixture
         .service
         .project_native_filesystem_completion(&attempt)
@@ -327,33 +430,42 @@ fn native_filesystem_archive_keeps_actual_compaction_witnesses_after_detach() {
         .unwrap();
     let candidate: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     let rows = candidate["entries"].as_array().unwrap();
-    let certificates = rows
-        .iter()
-        .filter_map(|entry| entry["content"].as_str())
-        .filter(|content| content.starts_with("[mez-terminal-compaction-handoff/"))
-        .collect::<Vec<_>>();
-    assert_eq!(certificates.len(), 1);
-    for witness in &handoff.witnesses {
-        assert!(certificates[0].contains(&witness.summary));
-    }
-    assert!(rows.iter().any(|entry| {
+    assert!(!rows.iter().any(|entry| {
         entry["content"]
             .as_str()
             .unwrap()
-            .contains("ORIGINAL_COMPACTION_RAW")
+            .starts_with("[mez-terminal-compaction-handoff/")
     }));
+    assert!(
+        !String::from_utf8(bytes.clone())
+            .unwrap()
+            .contains("REPLACEMENT_CONTEXT_MUST_NOT_ARCHIVE")
+    );
     assert!(rows.iter().any(|entry| {
         entry["content"]
             .as_str()
             .unwrap()
             .contains("Native patch completed; 1 confirmed file endpoint(s).")
     }));
+    let (_, cold) = AgentTranscriptStore::new(store.root())
+        .load_replay_epoch(
+            &fixture.turn.conversation_id,
+            mez_agent::AgentContext::empty(),
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(cold.head(), accepted.head());
+    assert_eq!(cold.context().chronology(), accepted.context().chronology());
     assert_eq!(
         fixture
             .service
             .publish_and_stage_completion_sources_for_tests(&fixture.turn.turn_id)
             .unwrap(),
         bytes
+    );
+    assert_eq!(
+        fs::read(fixture.root.join("file")).unwrap(),
+        b"native data\n"
     );
 }
 
@@ -429,29 +541,41 @@ fn native_filesystem_archive_missing_captured_context_never_uses_replacement() {
     );
 }
 
-/// A genuine compaction witness with a changed accepted anchor is invalidated
-/// before capture. Moved metadata must keep that failure even if a clean-looking
-/// handoff is later inserted in the live map; stale candidate bytes stay owned
-/// without being relabelled as freshly projected accepted source.
+/// An unpublished replacement head cannot claim the accepted source's archive
+/// authority. Capture keeps that mismatch after clean live context/source maps
+/// are restored, while the real late filesystem effect remains retained.
 #[test]
 fn native_filesystem_archive_rejects_changed_original_compaction_witness() {
     let mut fixture = compacted_fixture();
-    fixture.service.persistence.enable_transcript_adapter();
     let (attempt, _) = execute_and_retain(&mut fixture, false);
     fixture
         .service
         .publish_and_stage_completion_sources_for_tests(&fixture.turn.turn_id)
         .unwrap();
-    let clean = fixture.service.agent.agent_turn_compaction_handoffs[&fixture.turn.turn_id].clone();
+    let clean = fixture.service.agent_turn_contexts()[&fixture.turn.turn_id].clone();
+    let source = fixture
+        .service
+        .agent_turn_history_source(&fixture.turn.turn_id)
+        .unwrap()
+        .clone();
     fixture
         .service
-        .agent
-        .agent_turn_compaction_handoffs
+        .agent_turn_contexts_mut()
         .get_mut(&fixture.turn.turn_id)
         .unwrap()
-        .witnesses[0]
-        .summary
-        .push_str("CHANGED_ANCHOR");
+        .update_replay_owner(|owner| {
+            let mez_agent::ReplayCompactionPreparation::Ready(plan) =
+                owner.prepare_compaction(mez_agent::ReplayTailPolicy::new(20_000, 10)?)?
+            else {
+                panic!("accepted head must remain eligible for a replacement rewrite");
+            };
+            owner.publish_compaction(
+                plan,
+                mez_agent::ReplayHeadPublication::Summary("CHANGED_ANCHOR".into()),
+            )?;
+            Ok(())
+        })
+        .unwrap();
     assert!(
         fixture
             .service
@@ -465,18 +589,22 @@ fn native_filesystem_archive_rejects_changed_original_compaction_witness() {
         .unwrap();
     fixture
         .service
-        .agent
-        .agent_turn_compaction_handoffs
+        .agent_turn_contexts_mut()
         .insert(fixture.turn.turn_id.clone(), clean);
+    fixture
+        .service
+        .set_agent_turn_history_source(fixture.turn.turn_id.clone(), Some(source));
     fixture
         .service
         .project_native_filesystem_completion(&attempt)
         .unwrap();
+    let error = fixture
+        .service
+        .publish_and_stage_completion_sources_for_tests(&fixture.turn.turn_id)
+        .unwrap_err();
     assert!(
-        fixture
-            .service
-            .publish_and_stage_completion_sources_for_tests(&fixture.turn.turn_id)
-            .is_err()
+        error.message().contains("original accepted replay head"),
+        "{error}"
     );
     assert_eq!(
         fixture

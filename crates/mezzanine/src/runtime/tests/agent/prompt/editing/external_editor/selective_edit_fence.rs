@@ -27,6 +27,180 @@ fn draft_path(root: &Path, session_id: &str) -> PathBuf {
         .join("draft.md")
 }
 
+/// The real editor/recovery SAVE reaches the single-head content transaction,
+/// normalizes cached costs and reopens the exact saved row. A user-facing edit
+/// preserves the original summary/epoch and does not dispatch provider work.
+#[test]
+fn runtime_transcript_editor_saves_retained_single_head_raw_member() {
+    use mez_agent::transcript::{
+        TranscriptContextEvent as Event, TranscriptContextRecord as Record,
+    };
+    use mez_agent::{
+        AgentContext, ReplayCompactionPreparation, ReplayConversationId, ReplayEpochContext,
+        ReplayHeadPublication, ReplayTailPolicy,
+    };
+    let (mut service, primary, root) = prompt_editor_fixture("single-head-raw-editor-save");
+    let store = AgentTranscriptStore::new(root.join("agent-sessions"));
+    let parent = "typed-editor-parent";
+    let cid = "typed-editor-child";
+    let mut owner = ReplayEpochContext::new(
+        ReplayConversationId::new(parent).unwrap(),
+        AgentContext::empty(),
+    )
+    .unwrap();
+    owner
+        .append_fact("covered", "original source represented by the head")
+        .unwrap();
+    let ReplayCompactionPreparation::Ready(plan) = owner
+        .prepare_compaction(ReplayTailPolicy::new(1000, 0).unwrap())
+        .unwrap()
+    else {
+        panic!("expected source");
+    };
+    owner
+        .append_fact("tail", "original editable source")
+        .unwrap();
+    let origin = crate::storage::transcript::replay_epoch::ReplaySourceOrigin::new(
+        "editor-turn",
+        "agent-%1",
+        "%1",
+    )
+    .unwrap();
+    let proposal = store
+        .prepare_replay_epoch(
+            origin.capture(None),
+            parent,
+            None,
+            &owner,
+            plan,
+            ReplayHeadPublication::Summary("original model summary".into()),
+        )
+        .unwrap();
+    let receipt = store.publish_replay_epoch(&proposal).unwrap();
+    let snapshot = receipt.snapshot(&store, &proposal).unwrap();
+    let (_, owner) = store
+        .load_replay_epoch(parent, AgentContext::empty())
+        .unwrap()
+        .unwrap();
+    let source = snapshot.fork_source(&owner, &[]).unwrap();
+    let batch = source.initial_batch(cid, 100).unwrap();
+    store.accept_transcript_append_receipt(&batch, 1).unwrap();
+    store.settle_transcript_append_receipt(&batch, 1).unwrap();
+    let (identity, before) = store
+        .load_replay_epoch(cid, AgentContext::empty())
+        .unwrap()
+        .unwrap();
+    let original = store.inspect(cid).unwrap().remove(0);
+    let record = Record::from_transcript_content(&original.content)
+        .unwrap()
+        .unwrap();
+    let Event::PromptBoundary {
+        source,
+        event_sequence: Some(sequence),
+        label,
+        ..
+    } = record.event()
+    else {
+        panic!("expected retained fact");
+    };
+    let event = Event::prompt_boundary_with_event_sequence(
+        *source,
+        *sequence,
+        label.clone(),
+        "edited through the actual recovery SAVE 界",
+    )
+    .unwrap();
+    let edited = Record::new(
+        event,
+        record.record(),
+        record.stable_records().map(<[_]>::to_vec),
+    )
+    .unwrap()
+    .to_transcript_content()
+    .unwrap();
+    service.set_agent_transcript_store(store.clone());
+    service
+        .apply_attached_agent_prompt_input_for_pane(&primary, "%1", b"current prompt remains")
+        .unwrap();
+    service
+        .start_transcript_entry_external_edit(&primary, "%1", cid, original.sequence)
+        .unwrap();
+    let transaction = editor_transaction(&service);
+    complete_prompt_editor(&mut service, &root, &transaction, edited.as_bytes(), 9);
+    let path = store.transcript_path(cid).unwrap();
+    let admission = service
+        .persistence
+        .capture_transcript_admission_stamp(&path, cid);
+    service
+        .apply_external_editor_recovery(&primary, "%1", &transaction.2)
+        .unwrap();
+    assert!(!service.persistence.transcript_admission_matches(&admission));
+    assert!(
+        !service
+            .list_external_editor_recoveries(&primary)
+            .unwrap()
+            .contains(&transaction.2)
+    );
+    let cold = AgentTranscriptStore::new(root.join("agent-sessions"));
+    let (saved_identity, saved) = cold
+        .load_replay_epoch(cid, AgentContext::empty())
+        .unwrap()
+        .unwrap();
+    assert_ne!(saved_identity, identity);
+    assert_eq!(saved.revision(), before.revision());
+    assert_eq!(saved.head(), before.head());
+    assert_eq!(saved.members(), before.members());
+    assert_eq!(
+        saved.context().chronology()[0],
+        before.context().chronology()[0]
+    );
+    assert_eq!(
+        saved.context().chronology()[1].block().content,
+        "edited through the actual recovery SAVE 界"
+    );
+    let rows = cold.inspect(cid).unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(
+        Record::from_transcript_content(&rows[0].content)
+            .unwrap()
+            .unwrap()
+            .record(),
+        saved.context().chronology()[1].record()
+    );
+    assert_eq!(
+        service.agent_prompt_inputs_for_tests()["%1"]
+            .prompt
+            .buffer
+            .line(),
+        "current prompt remains"
+    );
+    assert!(service.pending_agent_provider_tasks().is_empty());
+    service
+        .start_transcript_entry_external_edit(&primary, "%1", cid, original.sequence)
+        .unwrap();
+    let reopened = editor_transaction(&service);
+    assert_eq!(
+        fs::read_to_string(draft_path(&root, &reopened.2)).unwrap(),
+        rows[0].content
+    );
+    complete_prompt_editor(
+        &mut service,
+        &root,
+        &reopened,
+        rows[0].content.as_bytes(),
+        0,
+    );
+    assert_eq!(
+        cold.load_replay_epoch(cid, AgentContext::empty())
+            .unwrap()
+            .unwrap()
+            .0,
+        saved_identity
+    );
+    service.terminate_all_pane_processes().unwrap();
+    fs::remove_dir_all(root).unwrap();
+}
+
 /// Compaction can publish after the editor captures a revision without changing
 /// that revision. Explicit SAVE must nevertheless reject the now-covered row,
 /// preserve the draft and current prompt, and expose the existing diagnostic.
@@ -68,21 +242,18 @@ fn runtime_transcript_editor_save_rechecks_selective_epoch_published_after_open(
     );
 
     store
-        .save_compaction_ranges_with_proof(
-            crate::storage::transcript::AgentCompactionEpoch {
-                summary_records: None,
-                version: 2,
-                conversation_id: conversation_id.to_string(),
-                through_sequence: 0,
-                summary: String::new(),
-                ranges: vec![crate::storage::transcript::AgentCompactionRange {
-                    first_sequence: 1,
-                    through_sequence: 1,
-                    summary: "authoritative group summary".to_string(),
-                }],
-            },
-            std::slice::from_ref(&original),
-        )
+        .install_legacy_compaction_fixture(crate::storage::transcript::AgentCompactionEpoch {
+            summary_records: None,
+            version: 2,
+            conversation_id: conversation_id.to_string(),
+            through_sequence: 0,
+            summary: String::new(),
+            ranges: vec![crate::storage::transcript::AgentCompactionRange {
+                first_sequence: 1,
+                through_sequence: 1,
+                summary: "authoritative group summary".to_string(),
+            }],
+        })
         .unwrap();
     let epoch = store.compaction_epoch(conversation_id).unwrap();
     let history_path = store_root.join(conversation_id).join("history.tsv");

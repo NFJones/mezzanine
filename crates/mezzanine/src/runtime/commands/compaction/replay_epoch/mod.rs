@@ -12,6 +12,7 @@ use std::sync::Arc;
 
 mod adoption;
 mod manual;
+mod recovery;
 pub(in crate::runtime::commands::compaction) use manual::manual_replay_task;
 mod source;
 mod worker;

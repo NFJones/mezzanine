@@ -182,7 +182,7 @@ fn indexed_epoch_fixture() -> (PathBuf, AgentTranscriptStore, AgentCompactionEpo
     ];
     epoch.allocate_summary_records().unwrap();
     store
-        .save_compaction_projection(epoch.clone(), None, None)
+        .install_legacy_compaction_fixture(epoch.clone())
         .unwrap();
     (root, store, epoch)
 }

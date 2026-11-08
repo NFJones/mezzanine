@@ -7,7 +7,9 @@
 //! (an initial receipt or saved-fork generation) grants durability.
 
 use super::*;
-use mez_agent::{TranscriptEntry, TranscriptRole, transcript::TranscriptContextRecord};
+use mez_agent::{
+    ContextBlockRecord, TranscriptEntry, TranscriptRole, transcript::TranscriptContextRecord,
+};
 
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) struct ReplayMemorySource {
@@ -26,6 +28,176 @@ impl std::fmt::Debug for ReplayMemorySource {
 }
 
 impl ReplayMemorySource {
+    /// Freezes an already rendered historical prefix without publishing or
+    /// rereading its parent. Placement and costs come from that exact read;
+    /// covered task dependencies use its audit projection only when required.
+    /// No archived custody, execution interval, or append receipt is inferred.
+    pub(crate) fn capture_legacy_prefix(
+        owner: &ReplayEpochContext,
+        epoch: &super::super::AgentCompactionEpoch,
+        rows: &[TranscriptEntry],
+        origins: &super::super::TranscriptRowOrigins,
+        records: &super::super::TranscriptRowRecords,
+        resolve_dependencies: impl FnOnce() -> Result<(AgentContext, Vec<(u64, ContextBlockRecord)>)>,
+    ) -> Result<Self> {
+        owner.checkpoint().map_err(context_error)?;
+        let head = owner
+            .context()
+            .chronology()
+            .first()
+            .ok_or_else(|| invalid("frozen legacy prefix has no original head"))?;
+        if epoch.version != 3
+            || !epoch.ranges.is_empty()
+            || epoch.conversation_id != owner.conversation_id().as_str()
+            || epoch.summary != head.block().content
+            || epoch
+                .summary_records
+                .as_ref()
+                .and_then(|records| records.prefix)
+                != Some(head.record())
+            || owner.head().is_none()
+            || owner.revision().get() != 1
+            || !owner.execution_states().map_err(context_error)?.is_empty()
+            || owner
+                .context()
+                .chronology()
+                .iter()
+                .filter_map(|event| event.execution_group_id())
+                .any(|group| !owner.context().execution_group_is_pending(group))
+        {
+            return Err(invalid(
+                "frozen legacy prefix differs from its original authority",
+            ));
+        }
+        Self::capture_legacy_source(
+            owner,
+            epoch.through_sequence,
+            rows,
+            origins,
+            records,
+            resolve_dependencies,
+        )
+    }
+
+    /// Freezes the actual checked raw projection before its first head. Original
+    /// cached records and producer images qualify every member. Unknown native
+    /// groups remain protected; this supplies no completion or append receipt.
+    pub(crate) fn capture_legacy_raw(
+        owner: &ReplayEpochContext,
+        rows: &[TranscriptEntry],
+        origins: &super::super::TranscriptRowOrigins,
+        records: &super::super::TranscriptRowRecords,
+    ) -> Result<Self> {
+        if owner.head().is_some() || owner.revision().get() != 0 {
+            return Err(invalid("raw source capture already has summary authority"));
+        }
+        let covered = rows.first().map_or(0, |row| row.sequence.saturating_sub(1));
+        let mut capture =
+            Self::capture_legacy_source(owner, covered, rows, origins, records, || {
+                Err(invalid(
+                    "raw source dependency is outside its original projection",
+                ))
+            })?;
+        // A headless initial copy has no manifest checkpoint to carry original
+        // lifecycle. Keep its checked zero-model controls beside the model rows;
+        // only the child's existing initial receipt can make that copy durable.
+        // A zero-model legacy window (for example an MCP boundary alone) is
+        // valid no-work history, not an empty required publication escrow.
+        if !owner.members().is_empty() {
+            capture.capture_raw_controls(owner, None, None, rows)?;
+        }
+        Ok(capture)
+    }
+
+    fn capture_legacy_source(
+        owner: &ReplayEpochContext,
+        covered: u64,
+        rows: &[TranscriptEntry],
+        origins: &super::super::TranscriptRowOrigins,
+        records: &super::super::TranscriptRowRecords,
+        resolve_dependencies: impl FnOnce() -> Result<(AgentContext, Vec<(u64, ContextBlockRecord)>)>,
+    ) -> Result<Self> {
+        let mut by_id = BTreeMap::new();
+        let mut previous = 0;
+        for row in rows {
+            if row.conversation_id != owner.conversation_id().as_str() || row.sequence <= previous {
+                return Err(invalid("frozen legacy row window changed original order"));
+            }
+            previous = row.sequence;
+            let authored = if row.role == TranscriptRole::System {
+                TranscriptContextRecord::from_transcript_content(&row.content)?
+            } else {
+                None
+            };
+            let id = authored
+                .as_ref()
+                .map(|record| record.record().occurrence_id())
+                .or_else(|| origins.get(&row.sequence).copied());
+            if let Some(id) = id
+                && by_id.insert(id, row).is_some()
+            {
+                return Err(invalid("frozen legacy occurrence placement is duplicated"));
+            }
+        }
+        let current = owner
+            .members()
+            .iter()
+            .map(|member| member.occurrence_id())
+            .collect::<BTreeSet<_>>();
+        let dependency_records = std::cell::RefCell::new(BTreeMap::new());
+        let qualified = escrow::qualify_legacy_prefix(
+            owner,
+            escrow::LegacyPrefixRows {
+                covered,
+                through: rows.last().map_or(covered, |row| row.sequence),
+                rows,
+                archived: false,
+            },
+            |id| {
+                by_id
+                    .get(&id)
+                    .copied()
+                    .ok_or_else(|| invalid("frozen legacy member has no original row placement"))
+            },
+            |placements| {
+                let dependencies = dependency_records.borrow();
+                Ok(placements
+                    .iter()
+                    .filter_map(|(sequence, id)| {
+                        (if current.contains(id) {
+                            records.get(sequence)
+                        } else {
+                            dependencies.get(sequence).or_else(|| records.get(sequence))
+                        })
+                        .filter(|record| record.occurrence_id() == *id)
+                        .map(|record| (*sequence, *record))
+                    })
+                    .collect())
+            },
+            || {
+                let (context, updates) = resolve_dependencies()?;
+                dependency_records.borrow_mut().extend(updates);
+                Ok(context)
+            },
+        )?;
+        let captured = qualified
+            .items
+            .iter()
+            .map(|item| {
+                by_id
+                    .get(&item.occurrence_id())
+                    .map(|row| (*row).clone())
+                    .ok_or_else(|| invalid("frozen legacy dependency lost its original row"))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(Self {
+            escrow: qualified.items,
+            rows: captured,
+            payloads: qualified.payloads,
+            controls: Vec::new(),
+        })
+    }
+
     /// Retains only current raw originals. The producer boundary comes from
     /// actual turn admission: older unknown occurrences cannot borrow the new
     /// turn's provenance. Qualified original wire images retain their own

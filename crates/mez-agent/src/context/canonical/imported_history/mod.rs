@@ -13,6 +13,8 @@ use super::{
 };
 use std::collections::{BTreeMap, BTreeSet};
 
+mod reservations;
+
 #[cfg(test)]
 mod tests;
 
@@ -123,9 +125,11 @@ impl AgentContext {
             }
             if let Some(sequence) = hints.get(&index) {
                 if sequence.get() < candidate.next_event_sequence {
-                    return Err(AgentContextError::new(
-                        "imported arrival reservation rewinds source",
-                    ));
+                    return Err(AgentContextError::new(format!(
+                        "imported arrival reservation rewinds source (arrival_index={index}, reserved={}, next={})",
+                        sequence.get(),
+                        candidate.next_event_sequence
+                    )));
                 }
                 candidate.next_event_sequence = sequence.get();
             }

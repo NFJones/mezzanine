@@ -3652,7 +3652,7 @@ fn runtime_interrupted_subagent_redirects_without_premature_parent_handoff() {
     assert_eq!(
         retained,
         vec![
-            (ContextSourceKind::TranscriptUser, "initial child task"),
+            (ContextSourceKind::UserInstruction, "initial child task"),
             (
                 ContextSourceKind::TranscriptAssistant,
                 "child retained the inspected implementation details"

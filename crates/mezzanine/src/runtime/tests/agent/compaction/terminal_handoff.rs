@@ -11,132 +11,160 @@ mod completion_owner;
 mod occurrences;
 mod receive_admission;
 mod source_owner;
+mod typed_source;
 
-/// Mixed staging must abandon its original selective projection even when the
-/// archive already owns the first group. After all summaries fit and terminal
-/// bookkeeping commits the remaining live group, a separate terminal witness
-/// may prove both ranges without opportunistically publishing the old stage.
+/// Mixed durable and pending completed tasks share one frozen source. Private
+/// summaries acquire no authority; one final publication precedes terminal
+/// append settlement, which must not create another head or selective writer.
 #[test]
 fn mixed_staged_recovery_publishes_only_at_distinct_terminal_handoff() {
-    let (mut service, store, turn_id) = live_fixture_with_source(1_200, true);
+    let (mut service, store, predecessor) = observed_history::prepared_with_cap(20_000, false);
     let conversation = service
-        .agent_shell_store()
-        .get("%1")
+        .agent_turn_ledger()
+        .turn(&predecessor)
         .unwrap()
-        .session_id
+        .conversation_id
         .clone();
     let first = store.inspect(&conversation).unwrap();
-    let context = service.agent_turn_contexts().get(&turn_id).unwrap();
-    let plan = mez_agent::plan_model_context_compaction_for_provider_tokens(
-        context,
-        20_000,
-        0,
-        context.event_sequence_high_water_mark(),
-        mez_agent::ProviderBudgetProjection::new(
-            mez_agent::ProviderApiCompatibility::OpenAiResponses,
-            "runtime-batch",
-        ),
-    )
-    .unwrap();
-    let mut profile = service.agent_turn_model_profile(&turn_id).unwrap().clone();
-    profile.provider_options.insert(
-        "max_input_tokens".into(),
-        STAGED_COMPACTION_INPUT_LIMIT.into(),
+    service.use_transcript_effect_adapter();
+    crate::test_support::compaction_source::complete_task(
+        &mut service,
+        &predecessor,
+        &"MIXED_PENDING_SOURCE ".repeat(300),
+        mez_agent::ProviderApiCompatibility::OpenAiResponses,
     );
-    assert_eq!(profile.max_input_tokens(), Some(20_000));
-    service.set_agent_turn_model_profile(turn_id.clone(), profile.clone());
-    assert!(service.queue_agent_active_turn_compaction(&turn_id, "live".into(), profile,
-        crate::runtime::agent_state::RuntimeActiveTurnCompactionTrigger::ObservedInputLimit { observed_input_tokens: 20_000, max_input_tokens: 20_000 }, plan).unwrap());
-    let mut responses = 0;
-    let mut saw_abandoned_projection = false;
+    typed_source::admit_bookkeeping(&mut service);
+    let turn_id = service
+        .start_agent_prompt_turn("%1", "EXACT_MIXED_SUCCESSOR")
+        .unwrap()
+        .turn_id;
+    let pending = service
+        .persistence
+        .pending_transcript_entries(&conversation);
+    assert!(!pending.is_empty());
+    assert_eq!(store.inspect(&conversation).unwrap(), first);
+    typed_source::queue(&mut service, &turn_id, false);
+    let original = service.agent_turn_contexts()[&turn_id].clone();
+    let baseline = store
+        .load_replay_epoch(&conversation, mez_agent::AgentContext::empty())
+        .unwrap();
+    assert!(baseline.is_none());
+    let mut task = service.take_pending_agent_compaction_task("%1").unwrap();
+    let input = &task.request.messages.last().unwrap().content;
+    assert!(input.contains("TYPED_OLD_WORK") && input.contains("MIXED_PENDING_SOURCE"));
+    let provider = service
+        .provider_registry()
+        .provider(&task.model_profile.provider)
+        .unwrap();
+    let api = mez_agent::resolve_provider_api(&provider.kind, provider.api.as_deref()).unwrap();
+    let options =
+        crate::runtime::config::runtime_effective_provider_options(provider, &task.model_profile);
+    task.compaction_request_shape = Some((api, options, false));
+    service.claim_agent_compaction_task_state("%1", task);
+    assert!(
+        service
+            .apply_agent_compaction_failed_event(
+                "%1",
+                "invalid_state",
+                "provider context length exceeded",
+                Some(r#"{"status_code":400,"error":{"code":"context_length_exceeded"}}"#),
+            )
+            .unwrap()
+    );
+    let mut responses = 0usize;
     while let Some(task) = service.pending_agent_compaction_task_for_tests("%1") {
-        if let crate::runtime::agent_state::RuntimeAgentCompactionTarget::ActiveTurn {
-            staged: Some(staged),
-            ..
-        } = &task.target
-        {
-            saw_abandoned_projection |= staged.projection.is_none();
-        }
-        assert!(store.compaction_epoch(&conversation).unwrap().is_none());
-        complete_runtime_test_compaction(&mut service, "%1", &format!("MIXED_SUMMARY_{responses}"));
+        let crate::runtime::RuntimeAgentCompactionTarget::ActiveTurn { current_blocks, .. } =
+            &task.target
+        else {
+            panic!("active target");
+        };
+        let synthesis = current_blocks
+            .iter()
+            .all(|block| block.source == ContextSourceKind::Memory);
+        let summary = if synthesis {
+            "MIXED_FINAL_HEAD".into()
+        } else {
+            format!("private mixed summary {responses}")
+        };
+        complete_runtime_test_compaction(&mut service, "%1", &summary);
+        assert_eq!(service.agent_turn_contexts()[&turn_id], original);
+        assert!(!service.agent_provider_task_is_pending(&turn_id));
         assert!(
-            service.agent_turn_is_running(&turn_id),
-            "{}",
-            service
-                .pane_screen("%1")
+            store
+                .load_replay_epoch(&conversation, mez_agent::AgentContext::empty())
                 .unwrap()
-                .normal_content_lines()
-                .join("\n")
+                .is_none()
         );
         responses += 1;
         assert!(
             responses < 16,
-            "synthetic compactor did not finish its bounded source"
+            "finite original chunks must reach one synthesis"
         );
+        if synthesis {
+            break;
+        }
+        assert!(service.take_replay_epoch_attempt_for_tests().is_none());
     }
+    assert!(responses >= 3);
+    let completion = replay_publication::execute_pending_publication(&mut service);
+    assert!(!service.agent_provider_task_is_pending(&turn_id));
     assert!(
-        responses >= 2 && saw_abandoned_projection,
-        "responses={responses} abandoned={saw_abandoned_projection}"
+        service
+            .apply_replay_epoch_completion(completion)
+            .unwrap()
+            .applied
     );
-    assert!(store.compaction_epoch(&conversation).unwrap().is_none());
-    let summaries = service
-        .agent_turn_contexts()
-        .get(&turn_id)
+    let (_, accepted) = store
+        .load_replay_epoch(&conversation, mez_agent::AgentContext::empty())
         .unwrap()
-        .chronology()
-        .iter()
-        .filter(|event| event.block().label == "context compaction summary")
-        .map(|event| event.block().content.clone())
-        .collect::<Vec<_>>();
-    complete_turn(&mut service, &turn_id);
-    let epoch = store.compaction_epoch(&conversation).unwrap().unwrap();
+        .unwrap();
+    assert_eq!(accepted.revision().get(), 1);
     assert_eq!(
-        epoch
-            .ranges
-            .iter()
-            .map(|range| range.summary.clone())
-            .collect::<Vec<_>>(),
-        summaries
+        accepted.context().chronology()[0].block().content,
+        "MIXED_FINAL_HEAD"
     );
-    assert!(store.inspect(&conversation).unwrap().starts_with(&first));
+    assert!(
+        service
+            .terminal_compaction_handoff_content(&turn_id)
+            .unwrap()
+            .is_none()
+    );
+    service.stop_agent_turn_for_pane("%1").unwrap();
+    typed_source::settle(&mut service);
+    let archive = store.inspect(&conversation).unwrap();
+    assert!(archive.starts_with(&first));
+    assert!(
+        archive
+            .iter()
+            .any(|row| row.content.contains("MIXED_PENDING_SOURCE"))
+    );
+    assert!(service.take_replay_epoch_attempt_for_tests().is_none());
     service.set_agent_transcript_store(AgentTranscriptStore::new(store.root()));
-    let replay = service.runtime_agent_history_epoch_context("%1").unwrap();
-    for summary in summaries {
-        assert_eq!(
-            replay
-                .blocks
-                .iter()
-                .filter(|block| block.content == summary)
-                .count(),
-            1
-        );
-    }
+    let replay = service
+        .runtime_agent_history_epoch_context("%1")
+        .unwrap()
+        .replay_owner()
+        .unwrap()
+        .unwrap();
+    assert_eq!(replay.head(), accepted.head());
+    assert_eq!(replay.revision(), accepted.revision());
+    assert_eq!(
+        replay
+            .context()
+            .chronology()
+            .iter()
+            .filter(|event| event.block().content == "MIXED_FINAL_HEAD")
+            .count(),
+        1
+    );
     assert!(
         !replay
-            .blocks
+            .context()
+            .blocks()
             .iter()
-            .any(|block| block.content.contains("LIVE_ORIGINAL_SOURCE"))
+            .any(|block| block.content.contains("TYPED_OLD_WORK")
+                || block.content.contains("MIXED_PENDING_SOURCE"))
     );
-}
-
-/// Creates a real prompt with two closed live groups and exact steering. These
-/// groups have never reached an archive when the first summary is accepted.
-fn live_fixture() -> (RuntimeSessionService, AgentTranscriptStore, String) {
-    live_fixture_with_words(200)
-}
-
-/// Allows the mixed staging regression to create genuine multi-range pressure.
-fn live_fixture_with_words(words: usize) -> (RuntimeSessionService, AgentTranscriptStore, String) {
-    live_fixture_with_source(words, false)
-}
-
-/// Seeds optional committed history before prompt assembly, keeping imported
-/// event ownership distinct from the later live group and current prompt.
-fn live_fixture_with_source(
-    words: usize,
-    durable_first: bool,
-) -> (RuntimeSessionService, AgentTranscriptStore, String) {
-    live_fixture_with_source_codec(words, durable_first, false)
 }
 
 /// Chooses the actual persisted import format before the real prompt replay.
@@ -267,17 +295,6 @@ fn live_fixture_with_source_store(
     (service, store, turn_id)
 }
 
-/// Runs one model-backed compaction through its actual runtime completion path.
-fn compact_live(service: &mut RuntimeSessionService, turn_id: &str, summary: &str, observed: bool) {
-    queue_live_compaction(service, turn_id, observed);
-    complete_runtime_test_compaction(service, "%1", summary);
-    assert!(
-        service
-            .pending_agent_compaction_task_for_tests("%1")
-            .is_none()
-    );
-}
-
 /// Retains the real dispatch boundary so fixtures may replace storage while
 /// provider work is in flight without changing the accepted request source.
 fn queue_live_compaction(service: &mut RuntimeSessionService, turn_id: &str, observed: bool) {
@@ -312,137 +329,46 @@ fn queue_live_compaction(service: &mut RuntimeSessionService, turn_id: &str, obs
     );
 }
 
-/// Persists a terminal execution and then uses ordinary lifecycle cleanup. No
-/// source action is re-executed while capturing its canonical transcript.
-fn complete_turn(service: &mut RuntimeSessionService, turn_id: &str) {
-    let turn = service
-        .agent_turn_ledger()
-        .turns()
-        .iter()
-        .find(|turn| turn.turn_id == turn_id)
-        .unwrap()
-        .clone();
-    let response = runtime_say_response(turn_id, "done", true);
-    let action = response.action_batch.as_ref().unwrap().actions[0].clone();
-    let execution = mez_agent::AgentTurnExecution {
-        request: runtime_model_request_fixture_for_agent(turn_id, &turn.agent_id),
-        response,
-        latest_response_usage: mez_agent::ModelTokenUsage::default(),
-        routing_token_usage_by_model: Default::default(),
-        action_results: vec![mez_agent::ActionResult::succeeded(
-            &turn,
-            &action,
-            vec!["done".into()],
-            None,
-        )],
-        final_turn: true,
-        terminal_state: AgentTurnState::Completed,
-    };
-    service
-        .persist_runtime_agent_turn_execution_transcript(&turn, &execution)
-        .unwrap();
-    service
-        .complete_running_agent_turn_and_start_ready(
-            &turn,
-            AgentTurnState::Completed,
-            "terminal_handoff_regression",
-        )
-        .unwrap();
-}
-
-/// Imported legacy and accounted groups must retain their exact physical row
-/// images in a later terminal certificate. Live successors use the original
-/// accounted records; publication and reopened replay must accept both without
-/// rewriting imported history or replacing exact proofs with text matching.
+/// Imported row images stay immutable across actual rewrites and ordinary
+/// completion. The latest head keeps its original record/cost through cold
+/// replay, while accounting and occurrence metadata never enter provider wire.
 #[test]
 fn terminal_handoff_preserves_exact_imported_and_live_accounted_sources() {
     for accounted in [false, true] {
-        let (mut service, store, turn_id) = live_fixture_with_source_codec(200, true, accounted);
-        let conversation = service
-            .agent_turn_ledger()
-            .turn(&turn_id)
-            .unwrap()
-            .conversation_id
-            .clone();
-        let original = store.inspect(&conversation).unwrap();
-        let imported = original[..2]
-            .iter()
-            .map(|row| row.content.clone())
-            .collect::<Vec<_>>();
-        compact_live(&mut service, &turn_id, "IMPORTED_SUMMARY", false);
-        compact_live(&mut service, &turn_id, "LIVE_SUMMARY", false);
-        let certificate = service
-            .terminal_compaction_handoff_content(&turn_id)
-            .unwrap()
-            .unwrap();
-        let proof: crate::storage::transcript::compaction_handoff::TerminalCompactionHandoff =
-            serde_json::from_str(
-                certificate
-                    .strip_prefix(crate::storage::transcript::compaction_handoff::MARKER)
-                    .unwrap(),
-            )
-            .unwrap();
-        assert_eq!(proof.replacements[0].sources, imported);
-        let summary_records = service
-            .agent_turn_contexts()
-            .get(&turn_id)
-            .unwrap()
-            .chronology()
-            .iter()
-            .filter(|event| event.block().source == ContextSourceKind::CompactionSelective)
-            .map(|event| event.record())
-            .collect::<Vec<_>>();
-        assert_eq!(
-            proof
-                .replacements
-                .iter()
-                .map(|replacement| replacement.summary_record.unwrap())
-                .collect::<Vec<_>>(),
-            summary_records,
-            "certificate must retain actual accepted canonical summary records"
-        );
+        let (mut service, store, turn_id) = typed_source::saved(accounted);
         let turn = service.agent_turn_ledger().turn(&turn_id).unwrap().clone();
+        let original = store.inspect(&turn.conversation_id).unwrap();
         let profile = service.agent_turn_model_profile(&turn_id).unwrap().clone();
-        assert!(proof.replacements[1].sources.iter().all(|content| {
-            mez_agent::transcript::TranscriptContextRecord::from_transcript_content(content)
-                .unwrap()
-                .is_some()
+        let mut records = Vec::new();
+        for summary in ["IMPORTED_SUMMARY", "LIVE_SUMMARY"] {
+            typed_source::queue(&mut service, &turn_id, true);
+            typed_source::complete(&mut service, &turn_id, summary);
+            records.push(service.agent_turn_contexts()[&turn_id].chronology()[0].record());
+        }
+        crate::test_support::compaction_source::complete_task(
+            &mut service,
+            &turn_id,
+            "done",
+            mez_agent::ProviderApiCompatibility::OpenAiResponses,
+        );
+        let archive = store.inspect(&turn.conversation_id).unwrap();
+        assert!(archive.starts_with(&original));
+        assert!(!archive.iter().any(|row| {
+            row.content
+                .starts_with(crate::storage::transcript::compaction_handoff::MARKER)
         }));
-        complete_turn(&mut service, &turn_id);
-        assert!(store.inspect(&conversation).unwrap().starts_with(&original));
-        assert_eq!(
-            store
-                .compaction_epoch(&conversation)
-                .unwrap()
-                .unwrap()
-                .summary_records
-                .as_ref()
-                .unwrap()
-                .ranges,
-            summary_records
-        );
-        assert_eq!(
-            store
-                .compaction_epoch(&conversation)
-                .unwrap()
-                .unwrap()
-                .ranges
-                .len(),
-            2
-        );
         service.set_agent_transcript_store(AgentTranscriptStore::new(store.root()));
         let context = service
             .agent_context_for_pane_prompt("%1", "reopen summary records", 100)
             .unwrap();
-        assert_eq!(
-            context
-                .chronology()
-                .iter()
-                .filter(|event| event.block().source == ContextSourceKind::CompactionSelective)
-                .map(|event| event.record())
-                .collect::<Vec<_>>(),
-            summary_records
-        );
+        let summaries = context
+            .chronology()
+            .iter()
+            .filter(|event| event.block().source == ContextSourceKind::CompactionPrefix)
+            .collect::<Vec<_>>();
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(summaries[0].record(), records[1]);
+        assert_eq!(summaries[0].block().content, "LIVE_SUMMARY");
         let request = crate::integrations::agent::context::assemble_model_request(
             &profile,
             mez_agent::ProviderApiCompatibility::OpenAiResponses,
@@ -451,49 +377,55 @@ fn terminal_handoff_preserves_exact_imported_and_live_accounted_sources() {
         )
         .unwrap();
         let wire = mez_agent::openai_responses_request_body(&request).unwrap();
-        for record in &summary_records {
+        for record in records {
             let origin: String = record.occurrence_id().into();
             assert!(!wire.contains(&origin));
         }
         assert!(!wire.contains("rendered_sha256"));
         assert!(!wire.contains("framed_input_tokens"));
         let replay = service.runtime_agent_history_epoch_context("%1").unwrap();
-        for summary in ["IMPORTED_SUMMARY", "LIVE_SUMMARY"] {
-            assert_eq!(
-                replay
-                    .blocks
-                    .iter()
-                    .filter(|block| block.content == summary)
-                    .count(),
-                1
-            );
-        }
+        assert_eq!(
+            replay
+                .blocks
+                .iter()
+                .filter(|block| block.content == "LIVE_SUMMARY")
+                .count(),
+            1
+        );
         assert!(
             !replay
                 .blocks
                 .iter()
-                .any(|block| block.content.contains("LIVE_ORIGINAL_SOURCE"))
+                .any(|block| block.content == "IMPORTED_SUMMARY"
+                    || block.content.contains("LIVE_ORIGINAL_SOURCE"))
         );
+        assert_eq!(store.inspect(&turn.conversation_id).unwrap(), archive);
     }
 }
 
-/// A valid source edit after summary acceptance must not be adopted by a later
-/// terminal certificate. Both legacy and accounted imported rows retain their
-/// frozen images; exact admission rejects the edited archive and publishes no
-/// epoch, even when an accounted edit preserves the original occurrence ID.
+/// A covered original row cannot be edited after actual summary publication.
+/// Even valid revised accounted bodies preserving occurrence IDs must refuse
+/// before changing source or authority, rather than fail only at later handoff.
 #[test]
 fn terminal_handoff_rejects_imported_source_edit_after_summary_acceptance() {
     for accounted in [false, true] {
-        let (mut service, store, turn_id) = live_fixture_with_source_codec(200, true, accounted);
+        let (mut service, store, turn_id) = typed_source::saved(accounted);
         let conversation = service
             .agent_turn_ledger()
             .turn(&turn_id)
             .unwrap()
             .conversation_id
             .clone();
-        let original = store.inspect(&conversation).unwrap()[0].clone();
-        compact_live(&mut service, &turn_id, "IMPORTED_SUMMARY", false);
-        compact_live(&mut service, &turn_id, "LIVE_SUMMARY", false);
+        let original = store.inspect(&conversation).unwrap();
+        for summary in ["IMPORTED_SUMMARY", "LIVE_SUMMARY"] {
+            typed_source::queue(&mut service, &turn_id, true);
+            typed_source::complete(&mut service, &turn_id, summary);
+        }
+        let manifest = store
+            .root()
+            .join(&conversation)
+            .join("compaction-epoch.json");
+        let accepted = fs::read(&manifest).unwrap();
         let block = ContextBlock::assistant_event("same decision", "EDITED_IMPORTED_SOURCE");
         let event = mez_agent::TranscriptContextEvent::execution_block_with_metadata(
             block.source,
@@ -505,7 +437,7 @@ fn terminal_handoff_rejects_imported_source_edit_after_summary_acceptance() {
         )
         .unwrap();
         let changed = match mez_agent::transcript::TranscriptContextRecord::from_transcript_content(
-            &original.content,
+            &original[0].content,
         )
         .unwrap()
         {
@@ -519,80 +451,85 @@ fn terminal_handoff_rejects_imported_source_edit_after_summary_acceptance() {
             .unwrap(),
             None => event.to_transcript_content(),
         };
-        let revision = store.transcript_entry_revision(&original).unwrap();
-        assert!(matches!(
-            store
-                .compare_and_swap_entry_content(
-                    &conversation,
-                    original.sequence,
-                    &original.pane_id,
-                    &revision,
-                    changed,
-                )
-                .unwrap(),
-            crate::storage::transcript::CompareAndSwapTranscriptEntryResult::Updated(_)
-        ));
-        let certificate = service
-            .terminal_compaction_handoff_content(&turn_id)
-            .unwrap()
-            .unwrap();
-        let proof: crate::storage::transcript::compaction_handoff::TerminalCompactionHandoff =
-            serde_json::from_str(
-                certificate
-                    .strip_prefix(crate::storage::transcript::compaction_handoff::MARKER)
-                    .unwrap(),
-            )
-            .unwrap();
-        assert_eq!(proof.replacements[0].sources[0], original.content);
-        let error =
-            crate::storage::transcript::compaction_handoff::terminal_handoff_source_is_contiguous(
-                &certificate,
-                &store.inspect(&conversation).unwrap(),
+        let error = store
+            .compare_and_swap_entry_content(
+                &conversation,
+                original[0].sequence,
+                &original[0].pane_id,
+                &store.transcript_entry_revision(&original[0]).unwrap(),
+                changed,
             )
             .unwrap_err();
         assert!(
             error
                 .message()
-                .contains("source occurrence is missing or ambiguous")
+                .contains("already represented by a compaction epoch"),
+            "{error}"
         );
-        assert!(store.compaction_epoch(&conversation).unwrap().is_none());
+        assert_eq!(store.inspect(&conversation).unwrap(), original);
+        assert_eq!(fs::read(&manifest).unwrap(), accepted);
+        assert!(service.runtime_agent_history_epoch_context("%1").is_ok());
     }
 }
 
-/// Two accepted live summaries survive completed turn A, fresh turns B/C and
-/// reopening. Original groups are durably archived exactly once, exact steering
-/// remains ordered, and neither unknown nor below-threshold fresh usage can
-/// queue proactive compaction merely because A compacted.
+/// Two real rewrites publish while the original ordinary archive is still
+/// empty. Latest head and exact active input/steering survive turns B/C and a
+/// reopened store. Unknown/below-threshold usage cannot itself queue compaction.
 #[test]
 fn completed_live_summaries_survive_turns_b_c_and_reopen() {
     for observed in [false, true] {
-        let (mut service, store, turn_id) = live_fixture();
-        compact_live(&mut service, &turn_id, "LIVE_SUMMARY_0", observed);
-        compact_live(&mut service, &turn_id, "LIVE_SUMMARY_1", observed);
+        let (mut service, store, turn_id) = typed_source::pending();
         let conversation = service
-            .agent_shell_store()
-            .get("%1")
+            .agent_turn_ledger()
+            .turn(&turn_id)
             .unwrap()
-            .session_id
+            .conversation_id
             .clone();
-        assert!(store.compaction_epoch(&conversation).unwrap().is_none());
-        complete_turn(&mut service, &turn_id);
-        let epoch = store.compaction_epoch(&conversation).unwrap().unwrap();
-        assert_eq!(epoch.ranges.len(), 2);
-        let archive = store.inspect(&conversation).unwrap();
-        assert_eq!(
-            archive
-                .iter()
-                .filter(|row| matches!(
-                    mez_agent::TranscriptContextEvent::from_transcript_content(&row.content),
-                    Some(mez_agent::TranscriptContextEvent::ExecutionBlock {
-                        execution_group_id: Some(_),
-                        ..
-                    })
-                ))
-                .count(),
-            4
+        let original = service
+            .persistence
+            .pending_transcript_entries(&conversation);
+        service
+            .agent_turn_contexts_mut()
+            .get_mut(&turn_id)
+            .unwrap()
+            .append_user_event("steering", "EXACT_LIVE_STEERING")
+            .unwrap();
+        let steering = service.agent_turn_contexts()[&turn_id]
+            .chronology()
+            .last()
+            .unwrap()
+            .clone();
+        for (index, summary) in ["LIVE_SUMMARY_0", "LIVE_SUMMARY_1"].into_iter().enumerate() {
+            typed_source::queue_at_attempt(&mut service, &turn_id, observed, index as u32 + 1);
+            typed_source::complete(&mut service, &turn_id, summary);
+            assert!(store.inspect(&conversation).unwrap().is_empty());
+            assert_eq!(
+                service
+                    .persistence
+                    .pending_transcript_entries(&conversation),
+                original
+            );
+        }
+        let (_, accepted) = store
+            .load_replay_epoch(&conversation, mez_agent::AgentContext::empty())
+            .unwrap()
+            .unwrap();
+        assert_eq!(accepted.revision().get(), 2);
+        crate::test_support::compaction_source::complete_task(
+            &mut service,
+            &turn_id,
+            "done",
+            mez_agent::ProviderApiCompatibility::OpenAiResponses,
         );
+        typed_source::settle(&mut service);
+        let archive = store.inspect(&conversation).unwrap();
+        assert!(archive.starts_with(&original));
+        for row in &original {
+            assert_eq!(
+                archive.iter().filter(|candidate| *candidate == row).count(),
+                1
+            );
+        }
         service.set_agent_transcript_store(AgentTranscriptStore::new(store.root()));
         let primary = service.session.layout_owner_client_id().unwrap().clone();
         for next in 2..=3 {
@@ -601,55 +538,51 @@ fn completed_live_summaries_survive_turns_b_c_and_reopen() {
             );
             let result = service.dispatch_runtime_control_body(&command, &primary);
             assert!(result.contains("turn_started"), "{result}");
-            let id = format!("turn-{next}");
-            let context = service.agent_turn_contexts().get(&id).unwrap();
-            let contents = context
-                .chronology()
-                .iter()
-                .map(|event| event.block().content.as_str())
-                .collect::<Vec<_>>();
-            for summary in [
-                "LIVE_SUMMARY_0",
+            let id = service
+                .agent_shell_store()
+                .get("%1")
+                .unwrap()
+                .running_turn_id
+                .clone()
+                .unwrap();
+            let context = &service.agent_turn_contexts()[&id];
+            for value in [
                 "LIVE_SUMMARY_1",
                 "EXACT_LIVE_STEERING",
                 "LIVE_INITIAL_PROMPT",
             ] {
                 assert_eq!(
-                    contents
+                    context
+                        .chronology()
                         .iter()
-                        .filter(|content| **content == summary)
+                        .filter(|event| event.block().content == value)
                         .count(),
-                    1,
-                    "{contents:?}"
+                    1
                 );
             }
             assert!(
-                contents
+                !context
+                    .blocks()
                     .iter()
-                    .position(|content| *content == "LIVE_SUMMARY_0")
-                    .unwrap()
-                    < contents
-                        .iter()
-                        .position(|content| *content == "EXACT_LIVE_STEERING")
-                        .unwrap()
+                    .any(|block| block.content == "LIVE_SUMMARY_0"
+                        || block.content.contains("LIVE_ORIGINAL_SOURCE"))
             );
-            assert!(
-                !contents
-                    .iter()
-                    .any(|content| content.contains("LIVE_ORIGINAL_SOURCE"))
-            );
+            let head = context.chronology().first().unwrap();
+            assert_eq!(head.record(), accepted.context().chronology()[0].record());
+            let retained = context
+                .chronology()
+                .iter()
+                .find(|event| event.record() == steering.record())
+                .unwrap();
+            assert_eq!(retained.block(), steering.block());
+            assert_eq!(retained.sequence(), steering.sequence());
+            assert!(head.sequence() < retained.sequence());
             assert!(
                 service
                     .pending_agent_compaction_task_for_tests("%1")
                     .is_none()
             );
-            let turn = service
-                .agent_turn_ledger()
-                .turns()
-                .iter()
-                .find(|turn| turn.turn_id == id)
-                .unwrap()
-                .clone();
+            let turn = service.agent_turn_ledger().turn(&id).unwrap().clone();
             let profile = service.agent_turn_model_profile(&id).unwrap().clone();
             for input_tokens in [0, 19_999] {
                 assert!(
@@ -661,165 +594,176 @@ fn completed_live_summaries_survive_turns_b_c_and_reopen() {
                                 input_tokens,
                                 ..Default::default()
                             },
-                            &runtime_model_request_fixture_for_agent(&id, &turn.agent_id)
+                            &runtime_model_request_fixture_for_agent(&id, &turn.agent_id),
                         )
                         .unwrap()
                 );
             }
-            complete_turn(&mut service, &id);
+            crate::test_support::compaction_source::complete_task(
+                &mut service,
+                &id,
+                "done",
+                mez_agent::ProviderApiCompatibility::OpenAiResponses,
+            );
+            typed_source::settle(&mut service);
         }
         assert!(store.inspect(&conversation).unwrap().starts_with(&archive));
     }
 }
 
-/// Intermediate approval persistence can separate adjacent live groups with
-/// display rows in the archive. Such a valid but unmappable layout must be
-/// reported before certificate admission, never poison future/reopened replay.
+/// Intermediate execution persistence interleaves display and canonical rows.
+/// Actual completed tasks, not reconstructed closed groups, must remain usable
+/// through one summary publication, terminal settlement and reopened replay.
 #[test]
 fn interleaved_approval_history_remains_usable_after_terminalization() {
-    let (mut service, store, turn_id) = live_fixture();
-    // Remove the exact steering barrier so one accepted summary covers both groups.
-    let context = service.agent_turn_contexts_mut().get_mut(&turn_id).unwrap();
-    let blocks = context
-        .blocks()
-        .iter()
-        .filter(|block| block.label != "steering")
-        .cloned()
-        .collect();
-    context.replace_after_compaction(blocks).unwrap();
-    // Re-import canonical ownership with the original immutable group identities.
-    let context = service.agent_turn_contexts().get(&turn_id).unwrap();
-    let conversation = service
-        .agent_shell_store()
-        .get("%1")
-        .unwrap()
-        .session_id
-        .clone();
-    let chronology = context
-        .chronology()
-        .iter()
-        .filter(|event| event.execution_group_id().is_some())
-        .cloned()
-        .collect::<Vec<_>>();
-    assert_eq!(chronology.len(), 4);
-    let mut rows = Vec::new();
-    for (index, event) in chronology.iter().enumerate() {
-        if index == 2 {
-            rows.push(TranscriptEntry {
-                conversation_id: conversation.clone(),
-                sequence: rows.len() as u64 + 1,
-                created_at_unix_seconds: 1,
-                role: TranscriptRole::Assistant,
-                turn_id: turn_id.clone(),
-                agent_id: "agent-%1".into(),
-                pane_id: "%1".into(),
-                content: "intermediate display".into(),
-            });
-        }
-        let block = event.block();
-        rows.push(TranscriptEntry {
-            conversation_id: conversation.clone(),
-            sequence: rows.len() as u64 + 1,
-            created_at_unix_seconds: 1,
-            role: TranscriptRole::System,
-            turn_id: turn_id.clone(),
-            agent_id: "agent-%1".into(),
-            pane_id: "%1".into(),
-            content: mez_agent::transcript::TranscriptContextRecord::new(
-                mez_agent::TranscriptContextEvent::execution_block_with_metadata(
-                    block.source,
-                    block.label.clone(),
-                    block.content.clone(),
-                    event.execution_group_id().unwrap().clone(),
-                    (index % 2) as u64 + 1,
-                    event.provider_owner().cloned(),
-                )
-                .unwrap(),
-                event.record(),
-                None,
-            )
-            .unwrap()
-            .to_transcript_content()
-            .unwrap(),
-        });
-    }
-    store.append_many(&rows).unwrap();
-    service
-        .agent_shell_store_mut()
-        .record_transcript_entries("%1", rows.len())
-        .unwrap();
-    compact_live(&mut service, &turn_id, "JOINED_LIVE_SUMMARY", false);
-    complete_turn(&mut service, &turn_id);
-    assert!(store.compaction_epoch(&conversation).unwrap().is_none());
-    assert!(
-        store
-            .inspect(&conversation)
-            .unwrap()
-            .iter()
-            .any(|row| row.content.contains("noncontiguous_archive_source"))
-    );
-    service.set_agent_transcript_store(AgentTranscriptStore::new(store.root()));
-    assert!(service.runtime_agent_history_epoch_context("%1").is_ok());
-}
-
-/// Provider rejection deliberately recovers turn-locally. Once the owning
-/// turn terminates, its exact typed source must support an independent durable
-/// handoff: subsequent turns must see the summary once, not resurrect the raw
-/// group. The archive itself must remain byte-for-byte append-only.
-#[test]
-fn provider_rejection_summary_survives_terminal_and_reopened_replay() {
-    let (mut service, store, turn_id) = queue_observed_input_compaction_with_exact_history();
-    let mut task = service.take_pending_agent_compaction_task("%1").unwrap();
-    let crate::runtime::agent_state::RuntimeAgentCompactionTarget::ActiveTurn { trigger, .. } =
-        &mut task.target
-    else {
-        panic!("expected active compaction")
-    };
-    *trigger =
-        crate::runtime::agent_state::RuntimeActiveTurnCompactionTrigger::ProviderContextLimit {
-            attempt: 1,
-        };
-    service.claim_agent_compaction_task_state("%1", task);
-    service
-        .apply_agent_compaction_completed_event(
-            "%1",
-            runtime_test_compaction_response("TERMINAL_ACCEPTED_SUMMARY"),
-        )
-        .unwrap();
+    let (mut service, store, original_turn) = observed_history::prepared_with_cap(20_000, false);
     let turn = service
         .agent_turn_ledger()
-        .turns()
-        .iter()
-        .find(|turn| turn.turn_id == turn_id)
+        .turn(&original_turn)
         .unwrap()
         .clone();
-    let original = store.inspect(&turn.conversation_id).unwrap();
+    let conversation = turn.conversation_id.clone();
+    for index in 0..2 {
+        let mut response = runtime_say_response(
+            &original_turn,
+            &format!("INTERLEAVED_PROGRESS_{index}"),
+            false,
+        );
+        response.action_batch.as_mut().unwrap().actions[0].id = format!("progress-{index}");
+        let profile = service
+            .agent_turn_model_profile(&original_turn)
+            .unwrap()
+            .clone();
+        let execution = service
+            .execute_agent_turn_with_provider(
+                &original_turn,
+                &RuntimeBatchProvider { response },
+                profile,
+            )
+            .unwrap();
+        assert_eq!(execution.terminal_state, AgentTurnState::Running);
+        service
+            .persist_runtime_agent_turn_execution_transcript(&turn, &execution)
+            .unwrap();
+    }
+    crate::test_support::compaction_source::complete_task(
+        &mut service,
+        &original_turn,
+        "interleaved task completed",
+        mez_agent::ProviderApiCompatibility::OpenAiResponses,
+    );
+    let archive = store.inspect(&conversation).unwrap();
+    let display = archive
+        .iter()
+        .enumerate()
+        .filter(|(_, row)| row.role == TranscriptRole::Assistant)
+        .map(|(index, _)| index)
+        .collect::<Vec<_>>();
+    assert!(display.len() >= 3);
     assert!(
-        store
-            .compaction_epoch(&turn.conversation_id)
+        display.windows(2).any(
+            |pair| archive[pair[0] + 1..pair[1]].iter().any(|row| matches!(
+                mez_agent::TranscriptContextEvent::from_transcript_content(&row.content),
+                Some(mez_agent::TranscriptContextEvent::ExecutionBlock { .. })
+            ))
+        )
+    );
+    let turn_id = service
+        .start_agent_prompt_turn("%1", "keep the successor exact")
+        .unwrap()
+        .turn_id;
+    typed_source::queue(&mut service, &turn_id, false);
+    typed_source::complete(&mut service, &turn_id, "JOINED_LIVE_SUMMARY");
+    let (_, accepted) = store
+        .load_replay_epoch(&conversation, mez_agent::AgentContext::empty())
+        .unwrap()
+        .unwrap();
+    assert!(
+        service
+            .terminal_compaction_handoff_content(&turn_id)
             .unwrap()
             .is_none()
     );
-    service
-        .finish_agent_turn("%1", &turn_id, AgentTurnState::Interrupted)
-        .unwrap();
-    assert!(!service.agent_turn_contexts().contains_key(&turn_id));
-    let after = store.inspect(&turn.conversation_id).unwrap();
-    assert!(after.starts_with(&original));
-    let epoch = store.compaction_epoch(&turn.conversation_id).unwrap();
-    assert!(
-        epoch.is_some(),
-        "accepted local summary was lost at terminalization"
+    crate::test_support::compaction_source::complete_task(
+        &mut service,
+        &turn_id,
+        "successor completed",
+        mez_agent::ProviderApiCompatibility::OpenAiResponses,
     );
-    // Reopen the filesystem-backed store, discarding the original handle.
+    assert!(store.inspect(&conversation).unwrap().starts_with(&archive));
+    service.set_agent_transcript_store(AgentTranscriptStore::new(store.root()));
+    let replay = service
+        .runtime_agent_history_epoch_context("%1")
+        .unwrap()
+        .replay_owner()
+        .unwrap()
+        .unwrap();
+    assert_eq!(replay.head(), accepted.head());
+    assert_eq!(replay.revision(), accepted.revision());
+    assert_eq!(
+        replay
+            .context()
+            .chronology()
+            .iter()
+            .filter(|event| event.block().content == "JOINED_LIVE_SUMMARY")
+            .count(),
+        1
+    );
+    assert!(
+        !replay
+            .context()
+            .blocks()
+            .iter()
+            .any(|block| block.content.contains("INTERLEAVED_PROGRESS_")
+                || block.content.contains("TYPED_OLD_WORK"))
+    );
+}
+
+/// A genuine provider rejection publishes before interruption. Terminal append
+/// settlement and a new prompt must retain the same head once, without another
+/// rewrite or resurrection of covered source; ordinary audit remains append-only.
+#[test]
+fn provider_rejection_summary_survives_terminal_and_reopened_replay() {
+    let (mut service, store, turn_id) = typed_source::pending();
+    let conversation = service
+        .agent_turn_ledger()
+        .turn(&turn_id)
+        .unwrap()
+        .conversation_id
+        .clone();
+    let original = service
+        .persistence
+        .pending_transcript_entries(&conversation);
+    typed_source::queue(&mut service, &turn_id, false);
+    typed_source::complete(&mut service, &turn_id, "TERMINAL_ACCEPTED_SUMMARY");
+    let (_, accepted) = store
+        .load_replay_epoch(&conversation, mez_agent::AgentContext::empty())
+        .unwrap()
+        .unwrap();
+    assert!(store.inspect(&conversation).unwrap().is_empty());
+    service.stop_agent_turn_for_pane("%1").unwrap();
+    assert_eq!(
+        service.agent_turn_ledger().turn(&turn_id).unwrap().state,
+        AgentTurnState::Interrupted
+    );
+    assert!(!service.agent_turn_contexts().contains_key(&turn_id));
+    typed_source::settle(&mut service);
+    let archive = store.inspect(&conversation).unwrap();
+    assert!(archive.starts_with(&original));
     service.set_agent_transcript_store(AgentTranscriptStore::new(store.root()));
     let primary = service.session.layout_owner_client_id().unwrap().clone();
     let next = service.dispatch_runtime_control_body(
-        r#"{"jsonrpc":"2.0","id":"next","method":"agent/shell/command","params":{"idempotency_key":"next","input":"NEXT_PROMPT"}}"#,
-        &primary,
+        r#"{"jsonrpc":"2.0","id":"next","method":"agent/shell/command","params":{"idempotency_key":"next","input":"NEXT_PROMPT"}}"#, &primary,
     );
     assert!(next.contains(r#""kind":"turn_started""#), "{next}");
-    let context = service.agent_turn_contexts().get("turn-2").unwrap();
+    let next_id = service
+        .agent_shell_store()
+        .get("%1")
+        .unwrap()
+        .running_turn_id
+        .clone()
+        .unwrap_or_else(|| panic!("next prompt did not run: {next}"));
+    let context = &service.agent_turn_contexts()[&next_id];
     assert_eq!(
         context
             .blocks()
@@ -828,15 +772,20 @@ fn provider_rejection_summary_survives_terminal_and_reopened_replay() {
             .count(),
         1
     );
+    assert_eq!(
+        context.chronology()[0].record(),
+        accepted.context().chronology()[0].record()
+    );
     assert!(
         !context
             .blocks()
             .iter()
-            .any(|block| block.content.contains("TYPED_OLD_WORK"))
+            .any(|block| block.content.contains("LIVE_ORIGINAL_SOURCE"))
     );
     assert!(
         service
             .pending_agent_compaction_task_for_tests("%1")
             .is_none()
     );
+    assert_eq!(store.inspect(&conversation).unwrap(), archive);
 }

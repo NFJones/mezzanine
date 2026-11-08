@@ -265,10 +265,9 @@ fn prefix_proof_retries_original_proposal_after_uncertain_publication() {
     }
 }
 
-/// Retained selective slots remain part of the exact retry authority. A forged
-/// baseline with equal summary bytes and a fresh retained occurrence cannot
-/// settle a prefix that already reached disk. The original typed baseline can
-/// settle it without changing either the new prefix or inherited range record.
+/// Neither an original nor a forged retained selective baseline can authorize
+/// an implicit prefix conversion. Refusal preserves all original range records
+/// and source bytes; historical accounting is never a new publication permit.
 #[test]
 fn prefix_retry_requires_original_retained_selective_records() {
     let root = temp_root("prefix-proof-retained-record-retry");
@@ -292,7 +291,7 @@ fn prefix_retry_requires_original_retained_selective_records() {
     }
     store.append_many(&rows).unwrap();
     store
-        .save_compaction_ranges(
+        .install_legacy_compaction_ranges_fixture(
             "source",
             1,
             "earlier prefix",
@@ -305,7 +304,6 @@ fn prefix_retry_requires_original_retained_selective_records() {
         .unwrap();
     let baseline = store.compaction_epoch("source").unwrap();
     let proposal = prefix_summary("new prefix");
-    store.fail_next_compaction_epoch_before_marker();
     assert!(
         store
             .save_compaction_prefix_with_proof("source", 2, proposal, &rows[1..2], &baseline, &[],)
@@ -330,9 +328,11 @@ fn prefix_retry_requires_original_retained_selective_records() {
             )
             .is_err()
     );
-    store
-        .save_compaction_prefix_with_proof("source", 2, proposal, &rows[1..2], &baseline, &[])
-        .unwrap();
+    assert!(
+        store
+            .save_compaction_prefix_with_proof("source", 2, proposal, &rows[1..2], &baseline, &[])
+            .is_err()
+    );
     assert_eq!(store.compaction_epoch("source").unwrap(), published);
     assert_eq!(
         published.unwrap().summary_records.unwrap().ranges,

@@ -1607,7 +1607,7 @@ fn runtime_interrupted_turn_prompt_is_persisted_for_continuation_context() {
         retained,
         vec![
             (
-                ContextSourceKind::TranscriptUser,
+                ContextSourceKind::UserInstruction,
                 "repair the interrupted defect"
             ),
             (
@@ -1696,7 +1696,7 @@ fn runtime_interrupted_turn_pending_transcript_is_visible_to_immediate_continuat
         retained,
         vec![
             (
-                ContextSourceKind::TranscriptUser,
+                ContextSourceKind::UserInstruction,
                 "repair the interrupted deferred defect"
             ),
             (ContextSourceKind::UserInstruction, "Continue"),

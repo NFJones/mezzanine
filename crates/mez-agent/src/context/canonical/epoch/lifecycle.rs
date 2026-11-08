@@ -34,7 +34,7 @@ impl ReplayEpochContext {
             || requested.iter().any(|sequence| {
                 !self.context.chronology().iter().any(|event| {
                     event.sequence() == *sequence
-                        && instruction_source_can_complete(event.block())
+                        && instruction_event_can_complete(event)
                         && event.retention() == ContextRetention::Exact
                 }) || self.instruction_owners.iter().any(|(generation, events)| {
                     *generation != owner.generation && events.contains(sequence)
@@ -70,7 +70,13 @@ impl ReplayEpochContext {
             .context
             .append_conversation_events([ContextConversationAppend {
                 record: None,
-                semantic_kind: block.semantic_kind(),
+                // This explicit instruction port owns task semantics even for
+                // local-message blocks whose ordinary projection is neutral.
+                semantic_kind: if block.source == ContextSourceKind::UserInstruction {
+                    super::super::ContextSemanticKind::UserEvent
+                } else {
+                    super::super::ContextSemanticKind::TaskPrelude
+                },
                 block,
                 retention: ContextRetention::Exact,
                 execution_group_id: None,
@@ -104,8 +110,7 @@ impl ReplayEpochContext {
                 .iter_mut()
                 .find(|event| event.sequence == *sequence)
                 .ok_or_else(|| AgentContextError::new("active instruction source disappeared"))?;
-            if !instruction_source_can_complete(&event.block)
-                || event.retention != ContextRetention::Exact
+            if !instruction_event_can_complete(event) || event.retention != ContextRetention::Exact
             {
                 return Err(AgentContextError::new(
                     "active instruction source changed before completion",

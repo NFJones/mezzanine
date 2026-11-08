@@ -3,14 +3,14 @@
 use super::*;
 
 /// Existing selective history may cover a later group while an earlier raw
-/// group remains eligible. The distinct baseline-fenced handoff must insert its
-/// new range in order without changing the previously durable model summary.
+/// group remains raw. Historical inspection preserves its ordered description,
+/// but receipt validation cannot publish the missing selective replacement.
 #[test]
 fn terminal_handoff_inserts_before_prior_selective_range() {
     let (store, rows) = fixture();
     store.append_many(&rows[..2]).unwrap();
     store
-        .save_compaction_ranges(
+        .install_legacy_compaction_ranges_fixture(
             "handoff-conversation",
             0,
             "",
@@ -32,9 +32,10 @@ fn terminal_handoff_inserts_before_prior_selective_range() {
     }
     .to_content()
     .unwrap();
-    store.append_many(&[row(3, content)]).unwrap();
-    let epoch = store
-        .compaction_epoch("handoff-conversation")
+    store.append(&row(3, content)).unwrap();
+    let before = store.inspect("handoff-conversation").unwrap();
+    let original = store.compaction_epoch("handoff-conversation").unwrap();
+    let epoch = fork_terminal_projection("handoff-conversation", &before, original.clone())
         .unwrap()
         .unwrap();
     assert_eq!(
@@ -45,6 +46,15 @@ fn terminal_handoff_inserts_before_prior_selective_range() {
             .collect::<Vec<_>>(),
         vec!["new earlier summary", "already durable"]
     );
+    let error = store
+        .validate_terminal_compaction_handoffs("handoff-conversation")
+        .unwrap_err();
+    assert!(error.message().contains("normalization"), "{error}");
+    assert_eq!(
+        store.compaction_epoch("handoff-conversation").unwrap(),
+        original
+    );
+    assert_eq!(store.inspect("handoff-conversation").unwrap(), before);
 }
 
 /// Creates independent occurrence-bearing source and a terminal certificate.
@@ -103,12 +113,20 @@ fn row(sequence: u64, content: String) -> TranscriptEntry {
 }
 
 /// Repeated text is not occurrence identity. Two groups remain independently
-/// anchored, and repeating append/publication after reopening never duplicates
-/// their summaries or mutates the archive.
+/// anchored. Repeating a fully committed historical append after reopening
+/// settles its original promise without republishing or admitting model replay.
 #[test]
 fn repeated_text_reopens_with_exactly_one_summary_per_group() {
     let (store, rows) = fixture();
-    store.append_many(&rows).unwrap();
+    for entry in &rows {
+        store.append(entry).unwrap();
+    }
+    let historical = fork_terminal_projection("handoff-conversation", &rows, None)
+        .unwrap()
+        .unwrap();
+    store
+        .install_legacy_compaction_fixture(historical.clone())
+        .unwrap();
     let before = store.inspect("handoff-conversation").unwrap();
     let reopened = AgentTranscriptStore::new(store.root());
     reopened.append_many(&rows).unwrap();
@@ -119,18 +137,30 @@ fn repeated_text_reopens_with_exactly_one_summary_per_group() {
     assert_eq!(epoch.ranges.len(), 2);
     assert_eq!(epoch.ranges[0].summary, "summary-0");
     assert_eq!(epoch.ranges[1].summary, "summary-1");
+    assert_eq!(epoch, historical);
+    reopened
+        .validate_terminal_compaction_handoffs("handoff-conversation")
+        .unwrap();
+    assert!(
+        reopened
+            .lock_resume_replay_snapshot("handoff-conversation", true)
+            .err()
+            .unwrap()
+            .message()
+            .contains("normalization")
+    );
     assert_eq!(reopened.inspect("handoff-conversation").unwrap(), before);
 }
 
 /// A crash after raw append but before epoch publication retains the exact
-/// receipt. Restart retries only persistence, publishes both replacements in
-/// one epoch, then settles that receipt without executing any actions.
+/// receipt. Restart retains unsupported selective intent without publishing.
+/// A genuine historical successor can later discharge that original append.
 #[test]
 fn failed_publication_recovers_through_exact_append_receipt() {
     let (store, rows) = fixture();
     store.accept_append_receipt(&rows, 1).unwrap();
-    store.fail_next_compaction_epoch_write();
-    assert!(store.append_many(&rows).is_err());
+    let error = store.append_many(&rows).unwrap_err();
+    assert!(error.message().contains("normalization"), "{error}");
     assert_eq!(store.inspect("handoff-conversation").unwrap(), rows);
     assert!(
         store
@@ -138,24 +168,44 @@ fn failed_publication_recovers_through_exact_append_receipt() {
             .unwrap()
             .is_none()
     );
-    assert_eq!(store.pending_append_receipts().unwrap(), vec![rows]);
+    assert_eq!(store.pending_append_receipts().unwrap(), vec![rows.clone()]);
     let reopened = AgentTranscriptStore::new(store.root());
+    for _ in 0..2 {
+        let error = reopened.recover_append_receipts().unwrap_err();
+        assert!(error.message().contains("normalization"), "{error}");
+        assert_eq!(
+            reopened.pending_append_receipts().unwrap(),
+            vec![rows.clone()]
+        );
+        assert_eq!(reopened.inspect("handoff-conversation").unwrap(), rows);
+        assert!(
+            reopened
+                .compaction_epoch("handoff-conversation")
+                .unwrap()
+                .is_none()
+        );
+    }
+    reopened
+        .install_legacy_compaction_ranges_fixture(
+            "handoff-conversation",
+            3,
+            "historical prefix successor",
+            Vec::new(),
+        )
+        .unwrap();
+    let successor = reopened.compaction_epoch("handoff-conversation").unwrap();
     reopened.recover_append_receipts().unwrap();
     assert!(reopened.pending_append_receipts().unwrap().is_empty());
     assert_eq!(
-        reopened
-            .compaction_epoch("handoff-conversation")
-            .unwrap()
-            .unwrap()
-            .ranges
-            .len(),
-        2
+        reopened.compaction_epoch("handoff-conversation").unwrap(),
+        successor
     );
+    assert_eq!(reopened.inspect("handoff-conversation").unwrap(), rows);
 }
 
 /// Partial append cannot publish a selective epoch referencing its missing
-/// suffix. Exact receipt recovery appends the remaining source and certificate
-/// before it installs the complete replay projection.
+/// suffix. Exact receipt recovery may finish its own audit rows but retains the
+/// receipt until a supported historical successor already covers the witness.
 #[test]
 fn partial_append_preserves_old_authority_until_receipt_recovery() {
     let (store, rows) = fixture();
@@ -169,18 +219,100 @@ fn partial_append_preserves_old_authority_until_receipt_recovery() {
             .unwrap()
             .is_none()
     );
-    AgentTranscriptStore::new(store.root())
-        .recover_append_receipts()
-        .unwrap();
+    let reopened = AgentTranscriptStore::new(store.root());
+    let error = reopened.recover_append_receipts().unwrap_err();
+    assert!(error.message().contains("normalization"), "{error}");
+    assert_eq!(reopened.inspect("handoff-conversation").unwrap(), rows);
     assert_eq!(
-        store
+        reopened.pending_append_receipts().unwrap(),
+        vec![rows.clone()]
+    );
+    assert!(
+        reopened
             .compaction_epoch("handoff-conversation")
             .unwrap()
-            .unwrap()
-            .ranges
-            .len(),
-        2
+            .is_none()
     );
+    reopened
+        .install_legacy_compaction_ranges_fixture(
+            "handoff-conversation",
+            3,
+            "historical prefix successor",
+            Vec::new(),
+        )
+        .unwrap();
+    let successor = reopened.compaction_epoch("handoff-conversation").unwrap();
+    reopened.recover_append_receipts().unwrap();
+    assert!(reopened.pending_append_receipts().unwrap().is_empty());
+    assert_eq!(
+        reopened.compaction_epoch("handoff-conversation").unwrap(),
+        successor
+    );
+    assert_eq!(reopened.inspect("handoff-conversation").unwrap(), rows);
+}
+
+/// A real sidecar-before-marker failure cannot discharge terminal append
+/// ownership merely because its source is covered. Recovery retains the exact
+/// journal until the original immutable prefix proposal repairs its marker.
+#[test]
+fn terminal_handoff_settlement_requires_durable_epoch_marker() {
+    let (store, rows) = fixture();
+    store.accept_append_receipt(&rows, 1).unwrap();
+    for entry in &rows {
+        store.append(entry).unwrap();
+    }
+    let mut successor = AgentCompactionEpoch {
+        summary_records: None,
+        version: 1,
+        conversation_id: "handoff-conversation".into(),
+        through_sequence: 3,
+        summary: "historical complete successor".into(),
+        ranges: Vec::new(),
+    };
+    successor.allocate_summary_records().unwrap();
+    store.fail_next_compaction_epoch_before_marker();
+    assert!(
+        store
+            .save_compaction_projection(successor.clone(), None, None)
+            .is_err()
+    );
+    assert!(
+        !store
+            .compaction_epoch_marker_is_committed("handoff-conversation")
+            .unwrap()
+    );
+    let path = store
+        .root()
+        .join("handoff-conversation")
+        .join("compaction-epoch.json");
+    let original = std::fs::read(&path).unwrap();
+    let reopened = AgentTranscriptStore::new(store.root());
+    for _ in 0..2 {
+        let error = reopened.recover_append_receipts().unwrap_err();
+        assert!(error.message().contains("marker"), "{error}");
+        assert_eq!(
+            reopened.pending_append_receipts().unwrap(),
+            vec![rows.clone()]
+        );
+        assert_eq!(reopened.inspect("handoff-conversation").unwrap(), rows);
+        assert_eq!(std::fs::read(&path).unwrap(), original);
+        assert!(
+            !reopened
+                .compaction_epoch_marker_is_committed("handoff-conversation")
+                .unwrap()
+        );
+    }
+    reopened
+        .save_compaction_projection(successor.clone(), None, Some(&Some(successor.clone())))
+        .unwrap();
+    reopened.recover_append_receipts().unwrap();
+    assert!(reopened.pending_append_receipts().unwrap().is_empty());
+    assert_eq!(
+        reopened.compaction_epoch("handoff-conversation").unwrap(),
+        Some(successor)
+    );
+    assert_eq!(reopened.inspect("handoff-conversation").unwrap(), rows);
+    std::fs::remove_dir_all(store.root()).unwrap();
 }
 
 /// A changed authoritative epoch invalidates the terminal witness. A matching
@@ -191,7 +323,12 @@ fn stale_epoch_is_not_overwritten_by_terminal_handoff() {
     let (store, rows) = fixture();
     store.append_many(&rows[..2]).unwrap();
     store
-        .save_compaction_ranges("handoff-conversation", 0, "new authority", Vec::new())
+        .install_legacy_compaction_ranges_fixture(
+            "handoff-conversation",
+            0,
+            "new authority",
+            Vec::new(),
+        )
         .unwrap();
     let previous = store.compaction_epoch("handoff-conversation").unwrap();
     assert!(store.append_many(&rows[2..]).is_err());
@@ -267,12 +404,14 @@ fn incomplete_group_keeps_epoch_unpublished() {
 #[test]
 fn later_prefix_epoch_supersedes_terminal_certificates() {
     let (store, rows) = fixture();
-    store.append_many(&rows).unwrap();
+    for entry in &rows {
+        store.append(entry).unwrap();
+    }
     store
         .save_compaction_epoch("handoff-conversation", 3, "later prefix")
         .unwrap();
     store
-        .publish_terminal_compaction_handoffs("handoff-conversation")
+        .validate_terminal_compaction_handoffs("handoff-conversation")
         .unwrap();
     assert_eq!(
         store
@@ -300,9 +439,15 @@ fn occurrence_conflicts_report_phase_and_counts_without_source_payloads() {
     ] {
         let admission =
             terminal_handoff_source_is_contiguous(&rows[2].content, &source).unwrap_err();
-        let publication =
-            project_terminal_handoff("handoff-conversation", 10, &source, handoff.clone(), None)
-                .unwrap_err();
+        let publication = project_terminal_handoff(
+            "handoff-conversation",
+            10,
+            &source,
+            handoff.clone(),
+            None,
+            ProjectionPurpose::SettlementValidation,
+        )
+        .unwrap_err();
         for (phase, error) in [
             ("preappend", admission),
             ("committed-publication", publication),

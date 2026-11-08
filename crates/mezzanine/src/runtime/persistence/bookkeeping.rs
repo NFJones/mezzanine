@@ -174,6 +174,9 @@ impl RuntimePersistenceComponent {
         self.bookkeeping_candidates
             .iter()
             .filter_map(|candidate| {
+                if candidate.awaiting_terminal_append {
+                    return None;
+                }
                 if canonical_writers.contains(&candidate.turn.conversation_id)
                     || !seen.insert(candidate.turn.conversation_id.clone())
                     || candidate.blocked
@@ -210,11 +213,15 @@ impl RuntimePersistenceComponent {
             .find(|candidate| candidate.generation == generation)?;
         let conversation_id = &candidate.turn.conversation_id;
         if candidate.blocked
+            || candidate.awaiting_terminal_append
             || self.bookkeeping_claims.contains_key(&generation)
             || self
                 .bookkeeping_candidates
                 .iter()
-                .find(|candidate| &candidate.turn.conversation_id == conversation_id)
+                .find(|candidate| {
+                    &candidate.turn.conversation_id == conversation_id
+                        && !candidate.awaiting_terminal_append
+                })
                 .is_none_or(|candidate| candidate.generation != generation)
             || self.bookkeeping_candidates.iter().any(|candidate| {
                 &candidate.turn.conversation_id == conversation_id
@@ -229,9 +236,10 @@ impl RuntimePersistenceComponent {
         Some(candidate)
     }
 
-    /// Reports whether unchecked history or an unsettled terminal handoff
+    /// Reports whether unchecked history or an unsettled terminal append
     /// fences this conversation. Ordinary pending raw rows remain available
-    /// for checked logical replay; terminal summary proof must commit first.
+    /// for checked logical replay; a checked typed terminal candidate stays
+    /// owned here until its actual ordinary source append completes.
     pub(crate) fn bookkeeping_pending(&self, conversation_id: &str) -> bool {
         self.initial_transcript_pending(conversation_id)
             || self
@@ -300,7 +308,65 @@ impl RuntimePersistenceComponent {
         &mut self,
         mut candidate: RuntimeBookkeepingCandidate,
     ) {
+        self.bookkeeping_candidates.retain(|existing| {
+            !(existing.awaiting_terminal_append
+                && existing.generation == candidate.generation
+                && existing.persistence_key == candidate.persistence_key
+                && existing.terminal_append_proposal() == candidate.terminal_append_proposal())
+        });
         candidate.blocked = true;
+        candidate.awaiting_terminal_append = false;
         self.bookkeeping_candidates.insert(0, candidate);
+    }
+
+    /// Retains the original checked candidate in its existing owner while its
+    /// already queued append runs. It cannot be claimed for another read.
+    pub(crate) fn retain_terminal_bookkeeping_candidate(
+        &mut self,
+        candidate: RuntimeBookkeepingCandidate,
+    ) {
+        self.bookkeeping_candidates.push(candidate);
+    }
+
+    /// Called only after the existing full-batch/path completion gate accepts
+    /// a real write. A stale or unrelated callback cannot reach this retirement.
+    pub(super) fn settle_terminal_bookkeeping_append(
+        &mut self,
+        path: &std::path::Path,
+        batch: &crate::storage::transcript::TranscriptAppendBatch,
+    ) {
+        self.bookkeeping_candidates.retain(|candidate| {
+            !candidate
+                .terminal_append_proposal()
+                .is_some_and(|(store, proposal)| {
+                    proposal == batch
+                        && store
+                            .transcript_path(batch.conversation_id())
+                            .is_ok_and(|owned| owned == path)
+                })
+        });
+    }
+
+    /// Explicit queued rollback may abandon its receipt fence, but an actual
+    /// in-flight proposal keeps the original candidate until settlement.
+    pub(super) fn cancel_unissued_terminal_bookkeeping(&mut self, cid: &str) {
+        let removable = self
+            .bookkeeping_candidates
+            .iter()
+            .enumerate()
+            .filter_map(|(index, candidate)| {
+                let (store, batch) = candidate.terminal_append_proposal()?;
+                (batch.conversation_id() == cid
+                    && store
+                        .transcript_path(cid)
+                        .is_ok_and(|path| !self.pending_transcript_proposal_matches(&path, batch)))
+                .then_some(index)
+            })
+            .collect::<Vec<_>>();
+        // These positions belong to this unchanged actor-owned vector; a
+        // saturated generation label cannot select an unrelated candidate.
+        for index in removable.into_iter().rev() {
+            self.bookkeeping_candidates.remove(index);
+        }
     }
 }

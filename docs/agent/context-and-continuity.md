@@ -36,12 +36,13 @@ Hiding the agent shell or detaching the client does not start a new
 conversation. Saved history can also be resumed after restart. A fork receives
 a snapshot of its source conversation and does not absorb later parent work.
 That snapshot includes the saved compaction projection: the first request and
-later resumes retain the same model-written summary and exact uncovered history,
-including selective summaries at their original positions. The full source
+later resumes retain the same model-written head and exact uncovered history.
+Older selective formats require explicit normalization before replay. The full source
 archive remains inspectable; covered raw rows do not reappear as active context.
 Missing or corrupt required compaction state fails visibly rather than creating
-a raw-history fork. Fork publication and eligible saved terminal-handoff
-reconciliation change only the new target's replay authority. Source capture
+a raw-history fork. Fork publication establishes the new target's replay
+authority. Historical terminal receipts only validate existing coverage and
+cannot publish another selective head. Source capture
 may atomically import or repair descriptive summary accounting and legacy row
 placement under the
 parent's lock, preserving its summary text, coverage, raw archive and pane
@@ -74,9 +75,8 @@ not completion. Reusing its idempotency key returns the original acknowledgment
 without creating another fork. Native `/cd` also acknowledges deferred acceptance;
 observe the visible shell
 for its final navigation result. Acceptance alone does not prove cwd changed.
-When manual compaction folds a selective summary into its prefix, it uses that
-summary once instead of resending the covered raw text. Later summaries stay in
-the retained history. Selection preserves whole turns and whole ranges, and its
+Manual compaction uses the current head once, without resending its covered raw
+source. Selection preserves complete execution groups, and its
 retained row count continues to describe physical history rather than model blocks. If
 another publisher changes a summary while compaction is running, the old result
 cannot overwrite that newer projection merely because the raw rows are unchanged.
@@ -126,6 +126,11 @@ lane too. Each result belongs to its exact settled predecessor and iteration;
 cancellation or a duplicate result cannot repeat completed work or start an
 extra iteration. Source failures stop that controller while other panes remain
 usable.
+If provider-continuation admission fails after a standalone loop restores its
+parent, required terminal cleanup releases the old running-turn slot only with
+the original private restoration receipt. A matching conversation name is not
+enough. Failed restoration keeps its cleanup obligation; it cannot clear a
+replacement turn or resume the old work.
 
 Agent log entries retain presentation-only local occurrence evidence separately
 from saved-session creation and activity timestamps. Streamed components keep the
@@ -242,8 +247,8 @@ and owned action/native-tool/MCP evidence together as complete execution groups;
 unrelated exact references keep their original identities and order. The summary
 candidate restores the retained groups with their original execution ownership.
 
-Prefix and selective summaries retain explicit summary identity through saved
-epoch replay and provider projection, including a prefix labelled with its
+Prefix summaries and typed heads retain explicit summary identity through saved
+epoch replay and provider projection, including a legacy prefix labelled with its
 canonical memory UUID. An ordinary UUID memory remains ordinary; only its
 owning compaction producer supplies summary identity. Existing labels and
 model-visible summary bytes are unchanged, and known legacy summary labels
@@ -252,15 +257,24 @@ A summary-only segment before exact steering stays anchored while the next
 compaction selects later eligible raw work.
 
 Each accepted summary also owns a separate occurrence UUID and cached local
-input estimate. Version-3 epoch files store those records atomically with the
-prefix and selective summaries. Publication, receipt retries and reopened
-replay reuse them; equal text from a new compaction receives a new occurrence.
-Older epoch files import once under the conversation lock before exposing
-their assigned records. Stale estimates are repaired against actual rendering
+input estimate. Historical version-3 epoch files store those records with the
+prefix and selective summaries. Their codec preserves original identities;
+selective replay is refused before accounting import. Prefix-only accounting
+imports once under the conversation lock before exposing its assigned records.
+Current typed publication, receipt retries and reopened replay reuse their
+original records; equal text from a new compaction receives a new occurrence.
+Stale estimates are repaired against actual rendering
 without replacing identities or rewriting raw history. Invalid typed record
 slots fail visibly. Existing summary text limits stay at one MiB; the v3 file
 allows sixteen MiB to accommodate accounting metadata during migration.
 Accounting remains outside model messages and billed usage.
+
+A loop captured from a historical prefix keeps its original summary and exact
+selected raw window as typed memory-only history, including original occurrence
+placement and producer fields. Covered task dependencies stay in copy backing,
+outside model context. Capture does not migrate or save the parent, and later
+parent edits or summaries cannot change a saved child. The child's actual save
+receipt establishes its durability.
 
 The source imported for a turn keeps its original store, replay epoch, physical
 row images and accepted pending ownership. Compaction uses that capture through
@@ -271,6 +285,10 @@ and guidance rows, and accepted replay refresh use that same store; a turn that
 originally had no storage does not acquire it retroactively. Conflicting pending
 ownership fails preparation visibly instead of being treated as empty history.
 
+An interruption reference appended after an accepted head keeps its original
+occurrence, producer, cost and exact rendered bytes through replay and saved
+copies. It remains a runtime reference and restores no execution or tool rights.
+
 Ordinary terminal bookkeeping and completion receipts retain the same original
 store and the turn's admitted save policy, including when a store is installed
 or replaced before completion-group admission. A child's save policy is separate
@@ -278,6 +296,15 @@ from the history window it inherits. Retiring context moves its original source
 with the retained projection metadata. Rebuilding the same completion evidence
 for a failed handoff reuses its occurrence and local estimate; a changed proposal
 or a new group receives its own record.
+Saved completion projection checks the original accepted head and revision.
+An unpublished local rewrite cannot substitute for that head, and replacement
+live metadata cannot repair a mismatched source after detachment. Late native
+effects remain retained while the affected archive projection is refused.
+After terminal admission for a typed head, the original bookkeeping candidate
+waits for its ordinary append receipt. A durable head alone does not settle
+those rows: peer receive and new prompt history remain fenced through failed or
+partial writes. Only the exact original path and batch completion clears the
+fence; the waiting candidate cannot be dispatched for another read.
 
 Routed workers retain the surviving seed records and chronology anchors instead
 of importing bare block text again. Their original history source and imported
@@ -285,26 +312,24 @@ boundary travel with the context through retirement, handoff and repair. A later
 store installation cannot supply that history, and each child retains its own
 save policy independently of its inherited source.
 
-A manual prefix retry retains the original proposal occurrence. If its epoch
+Recovery of an existing legacy prefix receipt retains the original proposal occurrence. If its epoch
 reached disk before a later write failed, retry checks the same frozen source
 rows and exact proposal before settling the required-state marker. An equal-text
 proposal with a different occurrence cannot take over that publication.
 
-Manual candidate sizing and publication share the same prefix/range projection.
-Absorbed ranges disappear; surviving ranges retain their anchors exactly once.
-Retained history carries its saved occurrence identities and local estimates
-through candidate reconstruction before native execution ownership is restored.
-Those accounting records do not become provider message content.
-Auxiliary compactor requests also unwrap accounted system rows before redaction;
-their frozen physical publication proofs retain the original records. Invalid
-accounting envelopes stop request construction instead of entering the summary
-source. Literal marker text in user or assistant rows remains authored content.
-The candidate rebuilds owned history rather than retaining a cached summary
-beside the same replayed range, and preserves unrelated optional memory, exact
-references and native group metadata. A split range or backwards boundary is
-rejected without changing the epoch. Fit checks still measure the complete
-provider request with tools, controls and output/headroom allowance; fixing a
-projection does not relax the request limit or replay an action.
+Manual candidate sizing and publication share the canonical frozen head/tail
+plan. The command and prepared request worker require that original owner;
+there is no separate row/count/word selection or flat-transcript request factory.
+The history importer qualifies legacy source before selection and retains its
+original occurrence identities, costs and native protection. Optional memory
+and display counts cannot substitute for missing source ownership.
+Accounting and audit remain outside provider input. Invalid accounting envelopes
+stop admission, while literal marker text in user or assistant rows remains
+authored content. Candidate preview preserves unrelated optional memory, exact
+references and native group metadata without rebuilding a legacy range projection.
+Fit checks still measure the complete provider request with tools, controls and
+output/headroom allowance; projection changes do not relax the request limit or
+replay an action.
 
 If an earlier accepted prompt or command is still preparing its history, a new
 `/compact` is refused before changing the conversation epoch. The earlier input
@@ -355,10 +380,9 @@ and jittered backoff. The ordinary turn waits; settled actions are not replayed.
 Manual and observed-input compaction use the same policy. Stop and human pause
 remain effective during backoff. Exhausted or nonretryable failures are terminal,
 and incomplete summaries never replace authoritative history.
-The currently wired product adapters also check completed summaries before
-private chunk/synthesis staging. The canonical epoch foundation described below
-has a separate usable-output publication contract; its trigger integration is
-not enabled by this API work.
+The product adapters check completed summaries before private chunk/synthesis
+staging. Only the complete accepted result can reach the canonical epoch
+publisher described below.
 Empty or malformed output, oversized UTF-8 text, and text above the frozen word
 or estimated-input-token allowance retry only auxiliary summarization of the
 same validated source. The rejected text is not published or quoted back. The
@@ -391,45 +415,41 @@ private until the complete replay fits. Known auxiliary expense counts once,
 but does not become an ordinary execution sample. Changed source, stale epochs
 and corrupt required history are integrity failures, not retryable output.
 Missing or corrupt required history is reported rather than silently omitted.
-Provider-rejection recovery and observed-input recovery with uncommitted source
-can initially be **turn-local**. An accepted summary is not automatically a
-saved Memory record. At terminal settlement, Mez retains its original source
-occurrences and can publish a separate durable handoff after complete typed
-execution groups have committed through transcript receipts. Following prompts
-wait for that handoff's bookkeeping and receipt settlement. Its summaries then
-survive subsequent turns and reopen once, without restoring covered raw groups
-or re-executing their actions. The archive itself is never truncated.
+For a canonical first task, its active user instruction protects the prefix even
+when later execution groups have completed. Input pressure does not permit
+selective summaries after that instruction. Eligibility is checked before local
+summary-sizing estimates; an exhausted estimate does not fail an already
+accepted execution with no eligible prefix. An ordinary continuation keeps the
+exact source; a provider rejection with no eligible prefix settles as
+a failure without another model request or action replay. Having no ordinary
+archive yet grants no permission to drop the instruction or acknowledge pending
+transcript writes. Unclaimed auxiliary results cannot install a summary.
+Provider-rejection recovery, observed-input recovery and manual compaction use
+the same canonical source and one-head publisher. Valid uncommitted source is
+backed before publication is acknowledged; its ordinary transcript writes keep
+their own receipt and settlement requirements. A summary does not become a saved
+Memory record or wait for a second terminal-summary writer. Subsequent turns and
+reopen select the accepted head and exact retained raw members without restoring
+covered groups or re-executing their actions. The audit archive is not truncated.
+
 Imported source keeps its exact frozen archive encoding, whether legacy or
 accounted, bound to the original occurrence. Live source uses the same accounted
-encoding as terminal bookkeeping. Recompacting a summary preserves those source
-images; an edit after acceptance fails the original proof rather than updating
-the certificate to match changed history.
-Terminal certificates and inherited audit remain inspectable proof and are
-excluded from later compactor requests, including their nested accounting data.
+encoding as terminal bookkeeping. Recompacting a summary preserves required
+original backing; changed source fails qualification rather than replacing its
+proof. Historical terminal certificates and inherited audit remain inspectable
+recovery evidence, excluded from compactor input along with nested accounting
+data. Their receipt settlement does not select another replay history.
 
-Legacy/unowned source and archive layouts that cannot be represented safely by
-the selective epoch contract remain turn-local. Certificates and terminal rows
-share occurrence numbering over the complete restored chronology, so separate
-witnesses cannot restart a group's ordinals. Duplicate or contradictory witness
-sequences fail before certificate capture; the map cannot replace one witness's
-original payload with another witness's source. Compaction closes a group at its
-consumed frontier; it does not seal the canonical group forever. A later valid
-same-group occurrence can leave that group split across exact barriers or
-summary ranges. Such a layout cannot satisfy the complete-group selective
-contract and keeps raw replay authoritative before certificate append. Existing
-runtime ownership checks still reject late results lacking an owning assistant;
-this does not authorize replaying a provider response or an action.
-
-Interleaved display rows can likewise make adjacent model-visible groups unmappable. Mez reports
-that limitation before recording a publication certificate and keeps raw replay
-authoritative. A changed source/epoch or failed publication instead fails closed
-with an explicit persistence/history error; receipt recovery retries persistence,
-not provider actions. Missing or ambiguous source errors report capture, admission or
-committed-publication phase, witness/source indexes, source count and match count
-without including private source text or opaque provider/group labels. The typed
-occurrence encoding and handoff representation remain at their existing version.
-These guarantees do not assert that every old session is
-compactable, or that a larger follow-up prompt cannot legitimately need recovery.
+Unowned or ambiguous source fails before model work is queued. Interleaved
+display rows do not grant ownership or require a separate selective compactor;
+publication uses the original canonical members and qualified source backing.
+Reopening a selected execution group prevents publication, and runtime ownership
+checks still reject late results lacking an owning assistant. A changed source,
+epoch or failed publication reports an explicit persistence/history error;
+receipt recovery retries persistence, never provider actions. Diagnostics omit
+private source text and opaque provider/group labels. These guarantees do not
+assert that every old session is compactable, or that a larger follow-up prompt
+cannot legitimately need recovery.
 
 The typed epoch publisher returns a private acknowledgment for its exact
 prepared summary and original archive. Its live adoption boundary installs that
@@ -437,10 +457,47 @@ same summary occurrence while retaining current instructions, request metadata,
 pending native ownership and source received during the write. A duplicate reply
 preserves subsequent work; a wrong archive, replacement owner, changed protected
 selection or newer head refuses the stale adoption. Arrivals keep their original
-birth revisions, with live-only witnesses for subsequent publication. A cold
-checkpoint cannot recreate those witnesses. This is an implementation boundary;
-legacy raw/manual cutover, complete arrival custody settlement, subagent forks
-and legacy migration remain incomplete for this format.
+birth revisions and required original backing. Subsequent publication qualifies
+that source again under the conversation lease. A cold checkpoint describes the
+selected history; it cannot grant execution authority or acknowledge an ordinary
+append whose actual persistence owner has not settled it.
+
+An independently authored later task stays beyond the captured archive cut,
+including when it arrives after proposal preparation. Reopening a selected
+execution group instead prevents publication. Earlier qualified pending/frontier
+controls remain inert under canonical causal ordering, including on cold replay;
+a delayed older control cannot erase a newer renewal. The writer's receipt carries its
+checked physical row position; live adoption combines it with original pending
+rows from the same archive without settling them. The logical row frontier and
+physical post-cut count remain separate from retained model membership.
+For a first head over authored raw history, captured rows must match the full
+original image at any committed slot or occurrence. Matching semantic content
+cannot hide a moved row, changed timestamp or changed accounting envelope.
+The existing leased preparation and publication check their captured windows.
+Genuine uncommitted authored rows can still use immutable source escrow; their
+ordinary append remains owned and unacknowledged until its actual commit.
+
+Before a first head exists, a checked legacy raw window can retain canonical
+ownership from its original committed row images, occurrence IDs and cached
+costs. Literal user rows keep their historical role without admitting a task.
+Independent raw copies encode that historical source explicitly, so sharing an
+archive or producer with real task admissions cannot promote it to instructions.
+Imported native groups stay protected even when their call and result are both
+present. Reads and independent copies can retain descriptive pending legacy
+source without acknowledging it. Durable normalization requires those exact
+rows to settle through their original append owner; receipt admission alone
+does not establish physical commitment.
+The first model summary uses the same publisher as later epochs, which checks
+the captured source again under its conversation lease. Editing that source or
+replacing its authority prevents publication. Storage retries retain the original
+proposal and recover its exact head after an uncertain acknowledgment.
+Legacy root TSVs use the existing metadata migration before head publication,
+including archives whose IDs, costs, names and action catalog already exist.
+The publisher keeps the conversation lock and the original raw bytes while
+that owner moves the payload. Native custody must settle before the move;
+promotion failures retain the existing rollback and restart-recovery behavior.
+Later head-write failures leave complete migrated raw history, and storage
+retries keep the original accepted summary and proposal.
 
 Saved forks copy a typed head and raw membership through the existing locked
 fork transaction. The child has independent payload backing and its own storage
@@ -450,6 +507,11 @@ later authored rows stay available as arrivals. Later parent activity and parent
 deletion cannot change the child's captured source. Copies retire retrieved MCP
 grants and carry no execution authority or current permissions; they do not run
 a compactor or acknowledge pending ordinary appends.
+
+NoStore copies also preserve the accounting identity of unchanged trusted
+guidance when its original archive carrier is covered. Freezing and publishing
+the copy keep that descriptive baseline; the child's current trusted settings
+still supply all instruction bytes.
 
 Subagent forks carry the captured typed head through their existing initial
 append owner. Retained original raw occurrences receive independent contiguous
@@ -468,11 +530,63 @@ do not release the waiting provider. Recovery keeps its original diagnostic
 reason and completes the existing retry state; duplicate completion does not
 start another attempt. Observed-input compaction keeps its separate reason,
 and idle manual compaction creates no provider continuation.
+Active-turn admission requires the same canonical source as manual compaction.
+A legacy planner proposal supplies optional output guidance, never replacement
+source or permission to use a separate turn-local compactor. Missing source
+ownership fails before model queue admission, and a completed response cannot
+publish through a historical writer after losing its accepted owner.
+The same check precedes transport retry, smaller-input recovery and malformed
+output correction. Losing either the canonical source or its original storage
+owner settles that compaction rather than reconstructing ownership from the
+current store or issuing another auxiliary request.
 Canonical recovery keeps the configured raw-tail reservation. A small completed
 history can still make progress by summarizing its oldest eligible complete
 unit, even when the optional reservation could hold all closed source. Active
 instructions and unfinished groups remain protected. The recovery request does
 not ask for an empty summary because an older projection found no work.
+
+If an auxiliary provider rejects its input, Mez keeps the original selected
+prefix, configured raw tail, parent and arrival frontier. A newest closed group
+that exceeds the reservation stays selected; retries cannot move it into the
+raw tail. Smaller temporary chunks and final synthesis still cover the complete
+original selection. New arrivals and unfinished ownership cannot enter it. Changed
+source or profile fails against the original claim before retry admission.
+Temporary compactor requests render selected history as source data. They keep
+source labels and ordering with the existing secret redaction, without loading
+fragments as another conversation. Completed user tasks remain historical and
+current instructions stay protected.
+Safe completion settlement observations enter the original canonical context
+before archive projection. Repeated staging reuses their occurrence and cost;
+publication and cold replay preserve that same evidence. These observations
+cannot complete an action group or acknowledge an ordinary archive append.
+When an older planning estimate supplies no advisory allowance, temporary
+requests and synthesis omit a zero-output directive. The actual frozen source,
+bounded output and complete continuation fit still decide whether work can publish.
+Before writing a canonical head, Mez sizes the complete ordinary continuation
+with current policy, tools, controls and native projection. A known rejected
+wire request must get strictly smaller. Shorter-summary retries must reduce the
+complete estimate and their issued ceiling; an advisory target cannot itself
+authorize publication or provider continuation.
+When fixed retained context yields the same calculated fitting target, Mez still
+reduces the next guidance while requiring the actual candidate to shrink. Output
+correction counts remain attached to the operation across complete-fit retries;
+accepting an intermediate summary cannot erase that failure provenance.
+
+Manual preview uses that same typed owner and normal next-prompt composition.
+It keeps native call/result ownership, ordering, costs and exact references;
+previewing does not start a task or acknowledge a write. Request-worker results
+and previews stay bound to the original admitted source and model; equal
+conversation labels, generation and display counts cannot substitute another
+operation's source. An installed replacement store still cannot retarget or
+cancel that already accepted operation. A delayed ordinary copy
+of source already backed by the epoch is deduplicated both while pending and
+after its real append receipt. Manual summary guidance is advisory too: complete
+fit and bounded output decide acceptance. Oversized candidates must make actual
+size progress to retry, and only the final publication receipt changes replay.
+
+Neutral references stay exact when a new task starts, including documents whose
+source family also supports task instructions. Explicit task-owned local messages
+retain their separate completion lifecycle.
 
 At this typed acceptance boundary, retained MCP retrieval evidence keeps its
 original bytes, identity and local cost, but stops granting callable tools.
@@ -585,10 +699,31 @@ boundary backing is corruption, even when those bytes are outside model history.
 Saved copies validate the original indexed cut and bind those row fingerprints
 to the child's actual copied bytes before publishing its independent root.
 
-The current writer uses sidecar version nine. It retains version-seven
+Model-head publications and source-preserving roots use sidecar version ten.
+It retains version-seven
 original-source escrow and version-eight independently backed saved-copy roots,
 and adds a distinct memory-origin root for frozen NoStore copies. A memory
 origin records a capture identity rather than claiming a saved parent publication.
+Version-eleven raw revisions verify edits against one immutable
+original head receipt. It keeps the same summary, canonical epoch, occurrence
+membership, source framing and lifecycle metadata; only edited raw bytes and
+their estimates change. Repeated edits reference that same original receipt,
+and a saved fork independently backs the edited source. This validation is
+separate from the edit transaction's raw archive and row-accounting recovery.
+Saving an editable raw row checks its pane and full-row revision under the same
+conversation lock as compaction. A bounded operation intent binds the old and
+new archive images, exact parent/replacement receipts and selected accounting.
+After that intent is synced, a later lock owner finishes the same replacement
+before other mutations. Changed or missing recovery source fails visibly and
+retains the intent. Covered rows remain protected; the physical archive cut
+alone does not make a retained raw member immutable. Native lifecycle and
+custody controls cannot be created or changed through ordinary content editing.
+An edited head still needs its immutable original-head proof and the raw source
+that proof describes. An interrupted save additionally needs its exact operation
+receipts until recovery finishes. Missing required source blocks recovery and
+cleanup while preserving the intent. Conversation cleanup removes its own
+namespace; saved forks keep independent backing. Archiving and restoring an
+edited conversation preserves its head, edited bytes and required proof.
 If ordinary rows arrive after several summaries, replay
 checks their original turn, occurrence, bytes and native metadata before
 deduplicating them. Earlier covered source and display copies do not reenter
@@ -645,8 +780,10 @@ separate integration. Valid version-five escrow can upgrade through this
 publication path without a model call.
 The earlier version-four prototype still supports frozen empty-archive reads,
 but writing a new epoch requires an explicit original-source escrow transition.
-Resume never asks a model to invent that missing backing. Older prefix/selective
-migration, actual actor publication and fork/cleanup integration remain unfinished.
+Resume never asks a model to invent that missing backing. Legacy prefixes use
+the explicit normalization path described above; selective formats use the
+visible refusal described below. Actor publication and copies use the same
+qualified source and existing persistence owners.
 
 Native suffix composition can now join a saved pending call to its later result
 using the original execution group and provider. It preserves the saved source
@@ -663,8 +800,8 @@ next request is under its input cap. Proactive compaction needs a fresh ordinary
 response at or above that cap; prior-turn compaction and auxiliary usage are not
 triggers. Installing a summary clears the displayed usage but keeps the old
 pressure sample consumed until a new ordinary execution response arrives.
-This applies even when the summary is turn-local and no durable epoch is
-publishable. Latest-request cache reuse also becomes unknown; cumulative expense
+This also applies to accepted in-memory rewrites of NoStore conversations.
+Latest-request cache reuse becomes unknown; cumulative expense
 is conserved. Cleared display metadata is checkpointed before recovery queues
 the ordinary continuation. An immediate checkpoint error fails the waiting turn
 without admitting a continuation, rather than restoring the pre-summary sample.
@@ -676,7 +813,45 @@ Retrieved MCP tool contracts are cleared by compaction. Explicit server
 references survive, but the agent must retrieve a server's current metadata
 again before calling its tools; see [MCP integration](mcp-integration.md).
 
+### Older selective compaction formats
+
+Saved version-2 selective state and version-3 state containing selective ranges
+require explicit single-head normalization. Resume, prompt-history loading and
+fork refuse that source visibly and keep its files intact. Other conversations
+remain usable. Retrying does not merge distinct summaries, reintroduce covered
+raw text or call a provider to create a replacement. New selective publications
+are refused, including publications proposed by historical terminal certificates.
+Historical certificate and selective-record descriptions above define retained
+audit data and integrity checks; they do not enable another replay mode.
+New initial copies cannot journal a selective projection. Recovery keeps an
+incomplete historical receipt intact and reports the incompatible state. If its
+original projection is already fully durable, recovery can retire that exact
+receipt without republishing it; the conversation still requires normalization
+before model replay.
+Terminal append recovery likewise distinguishes an already covered certificate
+from a pending selective rewrite. It can settle the former without publishing
+another head; the latter keeps its receipt and reports normalization required.
+
 ## Resume and preserve saved work
+
+Loading a complete saved prefix history converts its existing single summary
+and active raw tail to the typed format without asking a model for another
+summary. The original archive and summary identity remain intact. Version ten
+keeps the original prefix sidecar as integrity-checked migration provenance;
+missing or damaged required provenance fails visibly. Pending writes remain
+owned by their existing persistence receipts. Historical execution groups with
+missing completion evidence stay protected, without claiming a new producer
+interval. Retrying an interrupted migration verifies the same frozen source and
+reuses the committed summary; a changed source proposal is refused.
+Recorded task boundaries keep their original event ordering. If an earlier
+prelude is already summarized, its source remains available to validate the
+boundary without adding that prelude back to the model's raw history.
+This includes catalog snapshots retired by an earlier compaction.
+An earlier MCP invalidation marker also keeps its retrieved execution group out
+of model replay. This deliberate exclusion is not native-history corruption:
+migration preserves the original group as audit backing without reviving its
+tool grant. Malformed group ordering still requires repair, even when that
+group's retrieval has been invalidated.
 
 Give an important conversation a recognizable name while it is idle:
 

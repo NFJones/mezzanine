@@ -118,6 +118,26 @@ impl<'a> RuntimeTranscriptProjection<'a> {
         Ok(())
     }
 
+    /// A terminal rewrite's source must retain its existing append owner until
+    /// settlement. The typed live owner proves the head; labels cannot do so.
+    pub(super) fn requires_terminal_append(
+        &self,
+        conversation: &str,
+        terminal: bool,
+    ) -> Result<bool> {
+        if !terminal && !self.terminal_archive {
+            return Ok(false);
+        }
+        let Some(context) = self.context.filter(|context| context.has_replay_owner()) else {
+            return Ok(false);
+        };
+        let owner = mez_agent::ReplayEpochContext::from_owned_context(
+            mez_agent::ReplayConversationId::new(conversation)?,
+            context.clone(),
+        )?;
+        Ok(owner.head().is_some())
+    }
+
     /// Projects ordinary rows and exact canonical occurrences from this source.
     pub(super) fn entries_for_execution(
         &self,
@@ -127,6 +147,9 @@ impl<'a> RuntimeTranscriptProjection<'a> {
         turn: &AgentTurnRecord,
         execution: &AgentTurnExecution,
     ) -> Result<Vec<TranscriptEntry>> {
+        if let (Some(source), Some(context)) = (self.history_source, self.context) {
+            source.validate_published_replay_head(conversation_id, context)?;
+        }
         let sequence = first_sequence;
         let mut execution_entries = transcript_entries_for_execution(
             conversation_id,

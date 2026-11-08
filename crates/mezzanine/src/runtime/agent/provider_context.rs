@@ -475,6 +475,34 @@ impl RuntimeSessionService {
             .get(&turn.turn_id)
             .cloned()
             .ok_or_else(|| MezError::invalid_state("runtime agent turn context is unavailable"))?;
+        if context.has_replay_owner() {
+            // Eligibility precedes the legacy summary-sizing estimate. A
+            // provider has already accepted this execution; an exhausted local
+            // allowance cannot fail it when the canonical prefix is protected.
+            // Queue admission independently freezes any actual eligible work.
+            let owner = mez_agent::ReplayEpochContext::from_owned_context(
+                mez_agent::ReplayConversationId::new(&turn.conversation_id)?,
+                context.clone(),
+            )?;
+            let budget = max_input_tokens.min(
+                model_profile
+                    .context_window_tokens()
+                    .unwrap_or(max_input_tokens),
+            );
+            let retained =
+                u8::try_from(self.agent_compaction_raw_retention_percent()).map_err(|_| {
+                    MezError::invalid_state("invalid canonical raw retention percentage")
+                })?;
+            if matches!(
+                owner.prepare_compaction(mez_agent::ReplayTailPolicy::new(budget, retained)?)?,
+                mez_agent::ReplayCompactionPreparation::NoWork(_)
+            ) {
+                self.agent
+                    .agent_turn_observed_input_compaction_turns
+                    .remove(&turn.turn_id);
+                return Ok(false);
+            }
+        }
         let provider_projection = self.agent_provider_budget_projection(model_profile);
         let block_estimates =
             mez_agent::projected_context_block_input_tokens(&context, provider_projection);

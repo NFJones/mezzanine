@@ -103,7 +103,7 @@ impl ReplayEpochContext {
             let mut completed = old.clone();
             if old.retention == ContextRetention::Exact
                 && current.retention == ContextRetention::Summarizable
-                && instruction_source_can_complete(old.block())
+                && instruction_event_can_complete(old)
                 && self
                     .source_lifecycle
                     .completed_instructions

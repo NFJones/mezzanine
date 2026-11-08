@@ -16,7 +16,6 @@ mod approval;
 mod component;
 mod configuration;
 mod context;
-pub(in crate::runtime) use context::runtime_interrupted_turn_context_block;
 mod context_records;
 mod external_agents;
 mod external_enrollment;
@@ -39,7 +38,7 @@ mod state;
 pub(crate) mod status;
 mod subagents;
 use super::{
-    AgentContext, AgentId, AgentShellStore, AgentTurnLedger, AgentTurnState, ApprovalDecision,
+    AgentContext, AgentId, AgentShellStore, AgentTurnLedger, ApprovalDecision,
     ApprovalDecisionScopePersistence, AttachedTerminalClientStepPlan, AuditActor, AuditRecord,
     BlockedApprovalRequest, ClientRole, ClientState, ClientViewRole, CommandRule, CommandRuleScope,
     ConfigFormat, ConfigLayer, ConfigMutation, ConfigMutationOperation, ConfigScope, ContextBlock,
@@ -105,7 +104,7 @@ mod history_source;
 pub(crate) use context::{
     RuntimeAgentHistoryEpochInputs, RuntimeAgentHistoryEpochWork, RuntimeAgentPromptHistoryWork,
     RuntimeAgentTranscriptContext, RuntimeAgentTranscriptSnapshot,
-    execute_runtime_agent_prompt_history_work, runtime_agent_compaction_replay_context,
+    execute_runtime_agent_prompt_history_work,
 };
 pub(crate) use external_enrollment::ExternalEnrollmentWork;
 pub(crate) use external_enrollment::ExternalSourceEndWork;
@@ -818,34 +817,6 @@ impl RuntimeSessionService {
         Ok(())
     }
 
-    /// Refreshes one actual turn using its original archive and exact-target
-    /// receipt owners, including rows accepted after compactor dispatch.
-    fn prepare_runtime_agent_turn_history_work(
-        &self,
-        pane_id: &str,
-        turn_id: &str,
-    ) -> Result<RuntimeAgentPromptHistoryWork> {
-        let mut work = self.prepare_runtime_agent_prompt_history_work(pane_id);
-        if work.frozen_replay.is_some() {
-            return Ok(work);
-        }
-        if let Some(source) = self.agent_turn_history_source(turn_id) {
-            let Some(mut transcript) = source.work.clone() else {
-                work.transcript_work = None;
-                return Ok(work);
-            };
-            transcript.inputs.pending_entries =
-                self.persistence.pending_transcript_context_at_path(
-                    &transcript
-                        .store
-                        .transcript_path(&transcript.inputs.conversation_id)?,
-                    &transcript.inputs.conversation_id,
-                )?;
-            work.transcript_work = Some(transcript);
-        }
-        Ok(work)
-    }
-
     /// Captures immutable prompt history inputs before transcript I/O begins.
     pub(crate) fn prepare_runtime_agent_prompt_history_work(
         &self,
@@ -954,276 +925,6 @@ impl RuntimeSessionService {
                 },
             }),
         }
-    }
-
-    /// Refreshes transcript and compact-memory context for a running turn.
-    ///
-    /// Automatic provider recovery can compact a pane conversation while the
-    /// active turn remains running. The provider retry must then see the newly
-    /// written summary and shorter transcript tail without discarding same-turn
-    /// action results, steering, or other durable chronology.
-    pub(crate) fn refresh_running_turn_context_after_conversation_compaction(
-        &mut self,
-        turn_id: &str,
-    ) -> Result<bool> {
-        let Some(turn) = self
-            .agent_turn_ledger()
-            .turns()
-            .iter()
-            .find(|turn| turn.turn_id == turn_id)
-            .cloned()
-        else {
-            return Ok(false);
-        };
-        if turn.state != AgentTurnState::Running {
-            return Ok(false);
-        }
-        let Some(session) = self.agent_shell_store().get(&turn.pane_id).cloned() else {
-            return Ok(false);
-        };
-        if session.running_turn_id.as_deref() != Some(turn_id) {
-            return Ok(false);
-        }
-
-        let refreshed_history = execute_runtime_agent_prompt_history_work(
-            self.prepare_runtime_agent_turn_history_work(&turn.pane_id, turn_id)?,
-        )?;
-        let refreshed_source = refreshed_history.source;
-        let refreshed_records = refreshed_history.records;
-        let mut refreshed_blocks = refreshed_history.blocks;
-        let refreshed_execution_events = refreshed_history.execution_events;
-        let imported_history_sequence_high_water =
-            self.agent_turn_imported_history_sequence_high_water(turn_id);
-
-        if !self.agent_turn_has_new_environment_snapshot(turn_id)
-            && let Some(current_environment_snapshot) = self
-                .agent_turn_current_environment_snapshot(turn_id)
-                .map(str::to_string)
-            && refreshed_blocks
-                .iter()
-                .rev()
-                .find(|block| {
-                    block.source == ContextSourceKind::Configuration
-                        && block.label == "task environment snapshot"
-                })
-                .is_none_or(|block| block.content != current_environment_snapshot)
-        {
-            refreshed_blocks.push(ContextBlock {
-                source: ContextSourceKind::Configuration,
-                placement: mez_agent::ContextPlacement::ConversationAppend,
-                label: "task environment snapshot".to_string(),
-                content: current_environment_snapshot,
-            });
-        }
-
-        let Some(mut refreshed_context) = self.agent_turn_contexts().get(turn_id).cloned() else {
-            return Ok(false);
-        };
-        if imported_history_sequence_high_water == 0 {
-            return Ok(false);
-        }
-        let replacement_count = refreshed_context
-            .replace_imported_history_prefix_through_sequence_with_records(
-                imported_history_sequence_high_water,
-                refreshed_blocks,
-                &refreshed_records.indices_with_offset(0)?,
-            )?;
-        refreshed_context
-            .restore_imported_execution_events(&refreshed_execution_events)
-            .map_err(|error| MezError::invalid_state(error.to_string()))?;
-        let refreshed_block_count = refreshed_context.blocks().len();
-        let refreshed_imported_history_sequence_high_water = replacement_count
-            .checked_sub(1)
-            .and_then(|index| refreshed_context.chronology().get(index))
-            .map_or(0, |event| event.sequence().get());
-        self.agent_turn_contexts_mut()
-            .insert(turn_id.to_string(), refreshed_context);
-        self.set_agent_turn_imported_history_sequence_high_water(
-            turn_id.to_string(),
-            refreshed_imported_history_sequence_high_water,
-        );
-        self.set_agent_turn_history_source(turn_id.to_string(), refreshed_source);
-        self.append_agent_trace_turn_event(
-            &turn.pane_id,
-            turn_id,
-            &format!(
-                "context refreshed reason=conversation_compaction_completed blocks={refreshed_block_count}"
-            ),
-        )?;
-        Ok(true)
-    }
-
-    /// Adds only externally owned transcript arrivals after a compaction's
-    /// captured logical boundary. Same-turn records already belong to canonical
-    /// live chronology. This temporary request candidate never restores the
-    /// summarized prefix or makes late source eligible for the frozen plan.
-    pub(crate) fn preview_turn_local_compaction_history(
-        &self,
-        task: &crate::runtime::RuntimeAgentCompactionTask,
-        turn_id: &str,
-        mut candidate: AgentContext,
-    ) -> Result<AgentContext> {
-        let Some(store) = task.source_store() else {
-            return Ok(candidate);
-        };
-        let pending = self.compaction_pending_entries(task)?;
-        let (_, history) = store.conversation_replay_projection(
-            &task.conversation_id,
-            pending.entries(),
-            |_| {
-                Some((
-                    crate::storage::transcript::ConversationTranscriptRead::All,
-                    task.transcript_entries > pending.len() as u64,
-                ))
-            },
-            |snapshot| {
-                let arrivals = snapshot
-                    .view
-                    .logical
-                    .iter()
-                    .filter(|row| row.sequence > task.transcript_entries && row.turn_id != turn_id)
-                    .cloned()
-                    .collect::<Vec<_>>();
-                let history = context::runtime_agent_transcript_context_from_snapshot(
-                    &task.pane_id,
-                    &arrivals,
-                    snapshot,
-                    Some(&pending),
-                );
-                let records = history.records.committed_row_records(snapshot)?;
-                Ok((history, records))
-            },
-        )?;
-        history.records.ensure_valid()?;
-        if history.blocks.is_empty() {
-            return Ok(candidate);
-        }
-        let mut imported = history.records.import_context(history.blocks)?;
-        imported
-            .restore_imported_execution_events(&history.execution_events)
-            .map_err(|error| MezError::invalid_state(error.message()))?;
-        candidate
-            .append_imported_history(&imported)
-            .map_err(|error| MezError::invalid_state(error.message()))?;
-        Ok(candidate)
-    }
-
-    /// Builds, without committing, the running-turn context that a conversation
-    /// compaction refresh will expose after its summary and MCP epoch are stored.
-    pub(crate) fn preview_running_turn_context_after_conversation_compaction(
-        &self,
-        turn_id: &str,
-        mut candidate_context: AgentContext,
-        compact_summary: ContextBlock,
-        mcp_epoch_blocks: Vec<ContextBlock>,
-        projection: Option<crate::storage::transcript::AgentCompactionEpoch>,
-    ) -> Result<Option<AgentContext>> {
-        let Some(turn) = self
-            .agent_turn_ledger()
-            .turns()
-            .iter()
-            .find(|turn| turn.turn_id == turn_id)
-        else {
-            return Ok(None);
-        };
-        if turn.state != AgentTurnState::Running {
-            return Ok(None);
-        }
-        let Some(session) = self.agent_shell_store().get(&turn.pane_id) else {
-            return Ok(None);
-        };
-        if session.running_turn_id.as_deref() != Some(turn_id) {
-            return Ok(None);
-        }
-
-        let projected_history = projection.is_some();
-        let history = if let Some(epoch) = projection {
-            let mut work = self.prepare_runtime_agent_turn_history_work(&turn.pane_id, turn_id)?;
-            let transcript_work = work.transcript_work.take().ok_or_else(|| {
-                MezError::invalid_state("selective compaction preview requires transcript history")
-            })?;
-            let transcript = context::execute_runtime_agent_history_epoch_with_projection(
-                transcript_work,
-                Some(epoch),
-            )?;
-            let mut blocks = work.memory_blocks;
-            if transcript
-                .blocks
-                .iter()
-                .any(mez_agent::context_block_is_compaction_summary)
-            {
-                blocks.clear();
-            }
-            let mut records = transcript.records;
-            records.prepend_blocks(blocks.len());
-            blocks.extend(transcript.blocks);
-            RuntimeAgentTranscriptContext {
-                source: transcript.source,
-                blocks,
-                execution_events: transcript.execution_events,
-                records,
-                provider_history_repair_identity: transcript.provider_history_repair_identity,
-            }
-        } else {
-            execute_runtime_agent_prompt_history_work(
-                self.prepare_runtime_agent_turn_history_work(&turn.pane_id, turn_id)?,
-            )?
-        };
-        let imported_history_sequence_high_water =
-            self.agent_turn_imported_history_sequence_high_water(turn_id);
-        if imported_history_sequence_high_water == 0 {
-            return Ok(None);
-        }
-        let compact_memory_id =
-            mez_agent::memory::canonical_memory_uuid(&format!("compact-{}", session.session_id));
-        let mut refreshed_records = history.records;
-        let mut refreshed_blocks = history.blocks;
-        refreshed_blocks.retain(|block| {
-            !(!projected_history
-                && (block.source == ContextSourceKind::CompactionPrefix
-                    || (block.source == ContextSourceKind::Memory
-                        && block
-                            .label
-                            .starts_with(&format!("memory {compact_memory_id} ")))))
-                && block.source != ContextSourceKind::McpRetrievedManifest
-                && block.source != ContextSourceKind::McpCatalogSnapshot
-        });
-        if !projected_history {
-            refreshed_records.prepend_blocks(1);
-            refreshed_blocks.insert(0, compact_summary);
-        }
-        refreshed_blocks.extend(mcp_epoch_blocks);
-
-        if !self.agent_turn_has_new_environment_snapshot(turn_id)
-            && let Some(current_environment_snapshot) = self
-                .agent_turn_current_environment_snapshot(turn_id)
-                .map(str::to_string)
-            && refreshed_blocks
-                .iter()
-                .rev()
-                .find(|block| {
-                    block.source == ContextSourceKind::Configuration
-                        && block.label == "task environment snapshot"
-                })
-                .is_none_or(|block| block.content != current_environment_snapshot)
-        {
-            refreshed_blocks.push(ContextBlock {
-                source: ContextSourceKind::Configuration,
-                placement: mez_agent::ContextPlacement::ConversationAppend,
-                label: "task environment snapshot".to_string(),
-                content: current_environment_snapshot,
-            });
-        }
-
-        candidate_context.replace_imported_history_prefix_through_sequence_with_records(
-            imported_history_sequence_high_water,
-            refreshed_blocks,
-            &refreshed_records.indices_with_offset(0)?,
-        )?;
-        candidate_context
-            .restore_imported_execution_events(&history.execution_events)
-            .map_err(|error| MezError::invalid_state(error.to_string()))?;
-        Ok(Some(candidate_context))
     }
 
     /// Runs the registry update plan operation for this subsystem.

@@ -8,8 +8,8 @@
 //! current source and whole still-required groups retain their backing. This
 //! does not acknowledge pending receipts or remove archive/payload files.
 
-use super::{Payload, SOURCE_LIMIT, context_error, invalid};
-use crate::Result;
+use super::{AgentTranscriptStore, Payload, SOURCE_LIMIT, context_error, invalid};
+use crate::{MezError, Result};
 use mez_agent::{
     ContextBlockOccurrenceId, ContextBlockRecord, ContextSourceKind, ReplayEpochContext,
     TranscriptEntry, TranscriptRole,
@@ -209,6 +209,364 @@ fn extend_with_limit(
     Ok(result)
 }
 
+/// Complete immutable backing for an explicit prefix migration, including
+/// source-only task dependencies without adding them to model membership.
+pub(super) struct LegacyPrefixSource {
+    pub(super) items: Vec<EscrowOccurrence>,
+    pub(super) payloads: BTreeMap<String, String>,
+}
+
+/// Captures only checked current legacy members, using original indexed row
+/// placement and producer fields. Old rows gain no authored-record or effect
+/// receipt. The migration's immutable complete cut backs their physical images.
+pub(super) fn legacy_prefix_source(
+    store: &AgentTranscriptStore,
+    conversation: &str,
+    covered: u64,
+    through: u64,
+    source: &ReplayEpochContext,
+    rows: &[TranscriptEntry],
+    resolve_dependencies: impl FnOnce() -> Result<mez_agent::AgentContext>,
+) -> Result<LegacyPrefixSource> {
+    let by_sequence = rows
+        .iter()
+        .map(|row| (row.sequence, row))
+        .collect::<BTreeMap<_, _>>();
+    qualify_legacy_prefix(
+        source,
+        LegacyPrefixRows {
+            covered,
+            through,
+            rows,
+            archived: true,
+        },
+        |id| {
+            let indexed = store
+                .indexed_occurrence_reference_locked(conversation, id, through)?
+                .ok_or_else(|| invalid("legacy member has no original row image"))?;
+            let row = by_sequence
+                .get(&indexed.sequence)
+                .copied()
+                .ok_or_else(|| invalid("legacy member is outside its frozen source"))?;
+            if indexed.digest != store.transcript_entry_revision(row)? {
+                return Err(invalid("legacy prefix original row image changed"));
+            }
+            Ok(row)
+        },
+        |placements| store.transcript_row_records_locked(conversation, placements),
+        resolve_dependencies,
+    )
+}
+
+/// One immutable selected read. `archived` describes actual source custody,
+/// never an ordinary append acknowledgement for memory-only captures.
+pub(super) struct LegacyPrefixRows<'a> {
+    pub(super) covered: u64,
+    pub(super) through: u64,
+    pub(super) rows: &'a [TranscriptEntry],
+    pub(super) archived: bool,
+}
+
+/// Shared semantic qualification for durable migration and frozen memory copies.
+/// The caller supplies original occurrence placement and independently captured
+/// costs. A durable caller additionally checks its indexed full-row digest;
+/// memory callers borrow only immutable facts from their original leased read.
+pub(super) fn qualify_legacy_prefix<'a>(
+    source: &ReplayEpochContext,
+    selected: LegacyPrefixRows<'a>,
+    row_for: impl Fn(ContextBlockOccurrenceId) -> Result<&'a TranscriptEntry>,
+    records_for: impl FnOnce(
+        &super::super::TranscriptRowOrigins,
+    ) -> Result<super::super::TranscriptRowRecords>,
+    resolve_dependencies: impl FnOnce() -> Result<mez_agent::AgentContext>,
+) -> Result<LegacyPrefixSource> {
+    if source.members().is_empty() {
+        return Ok(LegacyPrefixSource {
+            items: Vec::new(),
+            payloads: BTreeMap::new(),
+        });
+    }
+    let fallback = selected
+        .rows
+        .first()
+        .ok_or_else(|| invalid("legacy raw source is missing"))?;
+    let origin = ReplaySourceOrigin::new(&fallback.turn_id, &fallback.agent_id, &fallback.pane_id)?;
+    let mut items = extend(&[], source, &origin, &[])?;
+    let current = source
+        .members()
+        .iter()
+        .map(|member| member.occurrence_id())
+        .collect::<BTreeSet<_>>();
+    let mut payloads = source
+        .context()
+        .chronology()
+        .iter()
+        .skip(usize::from(source.head().is_some()))
+        .map(|event| {
+            (
+                Payload::new(event.block().content.as_bytes()).sha256,
+                event.block().content.clone(),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    let original =
+        legacy_prefix_dependencies(&row_for, &mut items, &mut payloads, resolve_dependencies)?;
+    let mut explicit = BTreeSet::new();
+    let mut inferred = BTreeSet::new();
+    let mut placements = BTreeMap::new();
+    let mut authored_records = BTreeMap::new();
+    let mut previous = 0;
+    for item in &mut items {
+        let row = row_for(item.occurrence_id())?;
+        if row.sequence <= previous
+            || current.contains(&item.occurrence_id()) && row.sequence <= selected.covered
+            || row.sequence > selected.through
+        {
+            return Err(invalid(
+                "legacy prefix migration would reopen covered or changed source",
+            ));
+        }
+        previous = row.sequence;
+        // Protocol-shaped prose in another role remains literal source, as in
+        // the original renderer; it cannot supply execution or cost metadata.
+        let event = if row.role != TranscriptRole::System {
+            None
+        } else {
+            match TranscriptContextRecord::from_transcript_content(&row.content)? {
+                Some(authored) => {
+                    authored_records.insert(authored.record().occurrence_id(), authored.record());
+                    Some(authored.into_event())
+                }
+                None => TranscriptContextEvent::from_transcript_content(&row.content),
+            }
+        };
+        let framing = match event {
+            Some(TranscriptContextEvent::ExecutionBlock {
+                execution_group_id,
+                ordinal,
+                provider_owner,
+                ..
+            }) if execution_group_id.is_some() || ordinal.is_some() || provider_owner.is_some() => {
+                explicit.insert(item.occurrence_id());
+                execution_group_id.as_ref().map(|group| group.as_str()) == item.group.as_deref()
+                    && ordinal == item.ordinal
+                    && provider_owner
+                        .as_ref()
+                        .map(|owner| (owner.api().as_str(), owner.provider_id()))
+                        == item
+                            .provider
+                            .as_ref()
+                            .map(|(api, id)| (api.as_str(), id.as_str()))
+            }
+            Some(TranscriptContextEvent::TaskAdmission {
+                event_sequence,
+                task_start,
+                ..
+            }) => {
+                event_sequence == item.sequence
+                    && item.task_start == Some(task_start)
+                    && item.source == ContextSourceKind::UserInstruction
+                    && item.group.is_none()
+                    && item.provider.is_none()
+            }
+            Some(TranscriptContextEvent::UserEvent { event_sequence, .. }) => {
+                event_sequence == item.sequence && item.group.is_none() && item.provider.is_none()
+            }
+            Some(TranscriptContextEvent::PromptBoundary { event_sequence, .. }) => {
+                event_sequence.is_none_or(|sequence| sequence == item.sequence)
+                    && item.group.is_none()
+                    && item.provider.is_none()
+            }
+            _ => {
+                inferred.insert(item.occurrence_id());
+                true
+            }
+        };
+        if !framing {
+            return Err(invalid(
+                "legacy prefix source requires its original execution or task framing",
+            ));
+        }
+        placements.insert(row.sequence, item.occurrence_id());
+        item.origin = ReplaySourceOrigin::new(&row.turn_id, &row.agent_id, &row.pane_id)?;
+        item.archived = selected.archived;
+    }
+    // Only original grouped wire rows reserve producer group names. Legacy
+    // grouping is checked over the complete canonical source and cannot alias
+    // those names or turn an imported pending group into a producer claim.
+    let explicit_current = explicit.intersection(&current).copied().collect();
+    let compatibility = source
+        .context()
+        .legacy_import_framing(&explicit_current)
+        .map_err(context_error)?;
+    let mut compatibility = compatibility
+        .iter()
+        .map(|event| (event.record().occurrence_id(), event))
+        .collect::<BTreeMap<_, _>>();
+    if let Some(original) = &original {
+        for event in original.block_metadata() {
+            compatibility
+                .entry(event.record().occurrence_id())
+                .or_insert(event);
+        }
+    }
+    let qualified_groups = source.execution_states().map_err(context_error)?;
+    for item in items
+        .iter()
+        .filter(|item| inferred.contains(&item.occurrence_id()))
+    {
+        if !compatibility
+            .get(&item.occurrence_id())
+            .is_some_and(|event| {
+                event.execution_group_id().map(|group| group.as_str()) == item.group.as_deref()
+                    && event
+                        .provider_owner()
+                        .map(|owner| (owner.api().as_str(), owner.provider_id()))
+                        == item
+                            .provider
+                            .as_ref()
+                            .map(|(api, id)| (api.as_str(), id.as_str()))
+                    && !qualified_groups
+                        .iter()
+                        .any(|state| Some(state.group()) == item.group.as_deref())
+            })
+        {
+            return Err(invalid(
+                "legacy prefix source requires its original execution or task framing",
+            ));
+        }
+    }
+    let records = records_for(&placements)?
+        .into_values()
+        .map(|record| (record.occurrence_id(), record))
+        .collect::<BTreeMap<_, _>>();
+    for item in &items {
+        // Valid authored records need no duplicate SQL cost cache. A stale
+        // authored estimate has already been repaired by the leased renderer
+        // and takes its updated record from that cache instead.
+        if records
+            .get(&item.occurrence_id())
+            .or_else(|| authored_records.get(&item.occurrence_id()))
+            != Some(&item.record)
+        {
+            return Err(invalid(
+                "legacy prefix projection differs from its original row record",
+            ));
+        }
+    }
+    validate(&items)?;
+    validate_current(&items, source, &[])?;
+    Ok(LegacyPrefixSource { items, payloads })
+}
+
+/// Resolves only original task-start and group dependencies from a migration's
+/// frozen audit projection. It neither extends model membership nor reconstructs
+/// lifecycle rights. The projection callback runs once only if backing is needed.
+fn legacy_prefix_dependencies<'a>(
+    row_for: &impl Fn(ContextBlockOccurrenceId) -> Result<&'a TranscriptEntry>,
+    items: &mut Vec<EscrowOccurrence>,
+    payloads: &mut BTreeMap<String, String>,
+    resolve: impl FnOnce() -> Result<mez_agent::AgentContext>,
+) -> Result<Option<mez_agent::AgentContext>> {
+    let task_start = |row: &TranscriptEntry| -> Result<Option<ContextBlockOccurrenceId>> {
+        if row.role != TranscriptRole::System {
+            return Ok(None);
+        }
+        let event = match TranscriptContextRecord::from_transcript_content(&row.content)? {
+            Some(record) => Some(record.into_event()),
+            None => TranscriptContextEvent::from_transcript_content(&row.content),
+        };
+        Ok(match event {
+            Some(TranscriptContextEvent::TaskAdmission { task_start, .. }) => Some(task_start),
+            _ => None,
+        })
+    };
+    let mut present = items
+        .iter()
+        .map(EscrowOccurrence::occurrence_id)
+        .collect::<BTreeSet<_>>();
+    let mut required = BTreeSet::new();
+    for item in items.iter_mut() {
+        item.task_start = task_start(row_for(item.occurrence_id())?)?;
+        if let Some(first) = item.task_start
+            && !present.contains(&first)
+        {
+            required.insert(first);
+        }
+    }
+    if required.is_empty() {
+        return Ok(None);
+    }
+    let original = resolve()?;
+    let events = original
+        .chronology()
+        .iter()
+        .map(|event| (event.record().occurrence_id(), event))
+        .collect::<BTreeMap<_, _>>();
+    while let Some(id) = required.pop_first() {
+        if present.contains(&id) {
+            continue;
+        }
+        let event = events
+            .get(&id)
+            .ok_or_else(|| invalid("legacy task boundary source is missing"))?;
+        // Native/group dependencies keep their whole original ordinal base,
+        // independently of which occurrences remain active model members.
+        let group = event.execution_group_id();
+        for event in original.chronology().iter().filter(|candidate| {
+            if let Some(group) = group {
+                candidate.execution_group_id() == Some(group)
+            } else {
+                candidate.record().occurrence_id() == id
+            }
+        }) {
+            if !present.insert(event.record().occurrence_id()) {
+                continue;
+            }
+            let row = row_for(event.record().occurrence_id())?;
+            let first = task_start(row)?;
+            if let Some(first) = first
+                && !present.contains(&first)
+            {
+                required.insert(first);
+            }
+            payloads.insert(
+                Payload::new(event.block().content.as_bytes()).sha256,
+                event.block().content.clone(),
+            );
+            items.push(EscrowOccurrence {
+                record: event.record(),
+                source: event.block().source,
+                label: event.block().label.clone(),
+                content: Payload::new(event.block().content.as_bytes()),
+                sequence: event.sequence().get(),
+                group: event
+                    .execution_group_id()
+                    .map(|group| group.as_str().into()),
+                ordinal: None,
+                provider: event
+                    .provider_owner()
+                    .map(|owner| (owner.api().as_str().into(), owner.provider_id().into())),
+                origin: ReplaySourceOrigin::new(&row.turn_id, &row.agent_id, &row.pane_id)?,
+                task_start: first,
+                archived: true,
+            });
+        }
+    }
+    items.sort_by_key(|item| item.sequence);
+    let mut ordinals = BTreeMap::<String, u64>::new();
+    for item in items {
+        if let Some(group) = &item.group {
+            let ordinal = ordinals.entry(group.clone()).or_default();
+            *ordinal = ordinal
+                .checked_add(1)
+                .ok_or_else(|| invalid("legacy task group ordinal exhausted"))?;
+            item.ordinal = Some(*ordinal);
+        }
+    }
+    Ok(Some(original))
+}
+
 /// Validates bounded metadata before payload lookup or canonical row matching.
 pub(super) fn validate(items: &[EscrowOccurrence]) -> Result<()> {
     validate_with_limit(items, SOURCE_LIMIT)
@@ -391,13 +749,30 @@ pub(super) fn validate_current(
 }
 
 impl EscrowOccurrence {
+    /// Revises only the payload/accounting of an already retained occurrence.
+    /// The edit proof separately checks complete checkpoint equality against
+    /// the pure canonical edit. Original producer, group, ordinal, task source
+    /// and archive settlement cannot change through this operation.
+    pub(super) fn with_revised_payload(mut self, owner: &ReplayEpochContext) -> Self {
+        if let Some(event) = owner
+            .context()
+            .chronology()
+            .iter()
+            .find(|event| event.record().occurrence_id() == self.occurrence_id())
+        {
+            self.record = event.record();
+            self.content = Payload::new(event.block().content.as_bytes());
+        }
+        self
+    }
+
     /// Projects an original, still-unarchived occurrence into a copied child's
     /// physical raw history. This is descriptive source, never parent append
     /// settlement. Peer references carry no transport authority; actual native
     /// evidence is preserved only by copying its captured authored wire image.
     pub(super) fn copy_row(&self, content: String, conversation: &str) -> Result<TranscriptEntry> {
         let event = match self.source {
-            ContextSourceKind::UserInstruction | ContextSourceKind::TranscriptUser => {
+            ContextSourceKind::UserInstruction => {
                 if let Some(start) = self.task_start {
                     TranscriptContextEvent::task_admission(
                         self.sequence,
@@ -411,6 +786,13 @@ impl EscrowOccurrence {
             }
             ContextSourceKind::McpCatalogSnapshot => {
                 TranscriptContextEvent::mcp_catalog_snapshot(content, self.sequence)
+            }
+            // A routed handoff is inert continuation text with exact original
+            // escrow provenance, not native completion or delegation authority.
+            ContextSourceKind::RoutedHandoff
+                if self.group.is_none() && self.provider.is_none() && self.task_start.is_none() =>
+            {
+                Some(TranscriptContextEvent::RoutedHandoff { content })
             }
             ContextSourceKind::LocalMessage
             | ContextSourceKind::PeerMessage
@@ -426,6 +808,8 @@ impl EscrowOccurrence {
                     content,
                 )
             }
+            // Literal historical users use an explicit ungrouped source tag.
+            // UserEvent would become instruction data beside real admissions.
             _ => match (&self.group, self.ordinal) {
                 (Some(group), Some(ordinal)) => {
                     let provider = self
@@ -474,7 +858,8 @@ impl EscrowOccurrence {
             | TranscriptContextEvent::UserEvent { content, .. }
             | TranscriptContextEvent::TaskAdmission { content, .. }
             | TranscriptContextEvent::PromptBoundary { content, .. }
-            | TranscriptContextEvent::McpCatalogSnapshot { content, .. } => content,
+            | TranscriptContextEvent::McpCatalogSnapshot { content, .. }
+            | TranscriptContextEvent::RoutedHandoff { content } => content,
             _ => return Err(invalid("fork source projection changed semantic framing")),
         };
         if !self.matches(&row, &authored, actual) {
@@ -594,6 +979,20 @@ impl EscrowOccurrence {
                     && self.label == "task environment snapshot"
                     && actual == content
             }
+            TranscriptContextEvent::InterruptedTurn {
+                prompt,
+                reason,
+                evidence,
+            } => {
+                let block =
+                    mez_agent::transcript::interrupted_turn_context_block(prompt, reason, evidence);
+                self.source == block.source
+                    && self.label == block.label
+                    && content == block.content
+                    && self.group.is_none()
+                    && self.provider.is_none()
+                    && self.task_start.is_none()
+            }
             TranscriptContextEvent::McpCatalogSnapshot {
                 event_sequence,
                 content: actual,
@@ -703,8 +1102,13 @@ fn is_false(value: &bool) -> bool {
 
 /// Whether classification is preparing new authored source or checking a
 /// publication whose complete semantic source must already be escrow-backed.
-pub(super) enum RowAdmission {
-    KnownCopies,
+pub(super) enum RowAdmission<'a> {
+    /// A publication may leave genuinely new authored rows beyond its cut.
+    /// They cannot extend or reopen any execution group selected for coverage.
+    Publication {
+        source: &'a ReplayEpochContext,
+        covered: &'a [ContextBlockOccurrenceId],
+    },
     AuthoredArrivals,
 }
 
@@ -862,7 +1266,7 @@ pub(super) fn qualify_rows(
     conversation: &str,
     rows: &[TranscriptEntry],
     indexed: &BTreeMap<ContextBlockOccurrenceId, super::super::row_origins::IndexedExecutionSource>,
-    admission: RowAdmission,
+    admission: RowAdmission<'_>,
     mut resolve: impl FnMut(&Payload) -> Result<String>,
 ) -> Result<QualifiedRows> {
     let index = items
@@ -875,14 +1279,16 @@ pub(super) fn qualify_rows(
     let mut groups = BTreeSet::new();
     let mut arrivals = Vec::new();
     let mut arrival_sequences = BTreeSet::new();
-    if rows.iter().any(|row| {
+    let controls = if rows.iter().any(|row| {
         row.role == TranscriptRole::System
             && row
                 .content
                 .starts_with(mez_agent::transcript::EXECUTION_STATE_RECORD_MARKER)
     }) {
-        drop(qualify_controls(items, conversation, rows, indexed)?);
-    }
+        qualify_controls(items, conversation, rows, indexed)?
+    } else {
+        Vec::new()
+    };
     let mut control_sequences = BTreeSet::new();
     for row in rows {
         if row.conversation_id != conversation {
@@ -923,27 +1329,26 @@ pub(super) fn qualify_rows(
                 ));
             }
             qualified.insert(row.sequence);
-        } else if matches!(admission, RowAdmission::AuthoredArrivals)
-            && matches!(
-                authored.event(),
-                TranscriptContextEvent::UserEvent { .. }
-                    | TranscriptContextEvent::TaskAdmission { .. }
-                    | TranscriptContextEvent::PromptBoundary {
-                        event_sequence: Some(_),
-                        ..
-                    }
-                    | TranscriptContextEvent::ExecutionBlock {
-                        execution_group_id: Some(_),
-                        ordinal: Some(_),
-                        ..
-                    }
-                    | TranscriptContextEvent::EnvironmentSnapshot { .. }
-                    | TranscriptContextEvent::McpCatalogSnapshot { .. }
-                    | TranscriptContextEvent::NativePeerMessage { .. }
-                    | TranscriptContextEvent::TerminalHandoff { .. }
-                    | TranscriptContextEvent::RoutedHandoff { .. }
-            )
-        {
+        } else if matches!(
+            authored.event(),
+            TranscriptContextEvent::UserEvent { .. }
+                | TranscriptContextEvent::TaskAdmission { .. }
+                | TranscriptContextEvent::PromptBoundary {
+                    event_sequence: Some(_),
+                    ..
+                }
+                | TranscriptContextEvent::ExecutionBlock {
+                    execution_group_id: Some(_),
+                    ordinal: Some(_),
+                    ..
+                }
+                | TranscriptContextEvent::EnvironmentSnapshot { .. }
+                | TranscriptContextEvent::McpCatalogSnapshot { .. }
+                | TranscriptContextEvent::NativePeerMessage { .. }
+                | TranscriptContextEvent::TerminalHandoff { .. }
+                | TranscriptContextEvent::RoutedHandoff { .. }
+                | TranscriptContextEvent::InterruptedTurn { .. }
+        ) {
             ReplaySourceOrigin::new(&row.turn_id, &row.agent_id, &row.pane_id)?;
             arrival_sequences.insert(row.sequence);
             arrivals.push(row.clone());
@@ -969,6 +1374,69 @@ pub(super) fn qualify_rows(
             && !zero.contains(&index)
     }) {
         return Err(invalid("replay archive has unqualified model source"));
+    }
+    if let RowAdmission::Publication { source, covered } = admission {
+        let covered = covered.iter().copied().collect::<BTreeSet<_>>();
+        let selected_groups = source
+            .context()
+            .chronology()
+            .iter()
+            .filter(|event| covered.contains(&event.record().occurrence_id()))
+            .filter_map(|event| event.execution_group_id().map(|group| group.as_str()))
+            .collect::<BTreeSet<_>>();
+        let original_ids = source
+            .context()
+            .chronology()
+            .iter()
+            .map(|event| event.record().occurrence_id())
+            .collect::<BTreeSet<_>>();
+        for row in &arrivals {
+            let record = TranscriptContextRecord::from_transcript_content(&row.content)?
+                .ok_or_else(|| invalid("publication arrival lost its original record"))?;
+            if original_ids.contains(&record.record().occurrence_id()) {
+                return Err(invalid(
+                    "publication arrival repeats a frozen source occurrence",
+                ));
+            }
+            if let TranscriptContextEvent::ExecutionBlock {
+                execution_group_id: Some(group),
+                ..
+            } = record.event()
+                && selected_groups.contains(group.as_str())
+            {
+                return Err(MezError::conflict(
+                    "late publication source extends a selected execution group",
+                ));
+            }
+        }
+        // The archive may still contain earlier pending/frontier controls for
+        // a now-closed selected group. Reuse the core's causal restoration on a
+        // private clone: stale states are inert, while renewal/conflicting
+        // intervals must not change the frozen source. Comparing checkpoints
+        // also covers cold closed intervals that cannot export a new producer
+        // closure witness through execution_states(). No restored authority
+        // escapes this validation-only clone.
+        let mut selected_controls = controls
+            .into_iter()
+            .filter(|state| selected_groups.contains(state.group()))
+            .peekable();
+        if selected_controls.peek().is_some() {
+            let mut observed = source.clone();
+            for state in selected_controls {
+                observed.restore_execution_state(&state).map_err(|_| {
+                    MezError::conflict(
+                        "late publication control changed a selected execution group",
+                    )
+                })?;
+            }
+            if observed.checkpoint().map_err(context_error)?
+                != source.checkpoint().map_err(context_error)?
+            {
+                return Err(MezError::conflict(
+                    "late publication control changed a selected execution group",
+                ));
+            }
+        }
     }
     Ok(QualifiedRows {
         copies: qualified,

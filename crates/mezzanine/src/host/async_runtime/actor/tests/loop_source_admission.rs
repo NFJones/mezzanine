@@ -312,7 +312,24 @@ async fn loop_source_admission_adopts_prepared_history_without_source_read() {
                 assert!(owner.head().is_none());
             } else if legacy {
                 assert!(contents.contains("original legacy loop source"));
-                assert!(!context.has_replay_owner());
+                // The raw migration now gives the original leased projection
+                // canonical ownership without creating a summary or reopening
+                // later parent rows. It must not retain an unowned legacy mode.
+                let owner = mez_agent::ReplayEpochContext::from_owned_context(
+                    mez_agent::ReplayConversationId::new(&session.session_id).unwrap(),
+                    context.clone(),
+                )
+                .unwrap();
+                assert_eq!(owner.revision().get(), 0);
+                assert!(owner.head().is_none());
+                assert_eq!(
+                    context
+                        .blocks()
+                        .iter()
+                        .filter(|block| block.content == "original legacy loop source")
+                        .count(),
+                    1
+                );
             } else {
                 assert!(context.has_replay_owner());
                 assert!(contents.contains("original long task"));
@@ -327,7 +344,11 @@ async fn loop_source_admission_adopts_prepared_history_without_source_read() {
 #[tokio::test(flavor = "current_thread")]
 async fn loop_source_admission_preserves_legacy_summary_and_refuses_crossing_range() {
     use crate::test_support::replay_epoch::CONVERSATION;
-    for crossing in [false, true] {
+    // Preserve the supported prefix case, explicit selective refusal, and the
+    // independent original-frontier guard for an otherwise supported prefix.
+    for case in 0..3 {
+        let selective = case == 1;
+        let crossing = case != 0;
         let (fixture, mut service, primary) = setup();
         let store =
             crate::storage::transcript::AgentTranscriptStore::new(fixture.root.join("legacy"));
@@ -368,11 +389,11 @@ async fn loop_source_admission_preserves_legacy_summary_and_refuses_crossing_ran
                 .unwrap();
         }
         store
-            .save_compaction_ranges(
+            .install_legacy_compaction_ranges_fixture(
                 CONVERSATION,
-                1,
+                if case == 2 { 3 } else { 1 },
                 "original prefix summary",
-                if crossing {
+                if selective {
                     vec![crate::storage::transcript::AgentCompactionRange {
                         first_sequence: 2,
                         through_sequence: 3,
@@ -383,7 +404,13 @@ async fn loop_source_admission_preserves_legacy_summary_and_refuses_crossing_ran
                 },
             )
             .unwrap();
-        service.set_agent_transcript_store(store);
+        let authority_path = store
+            .root()
+            .join(CONVERSATION)
+            .join("compaction-epoch.json");
+        let authority = std::fs::read(&authority_path).unwrap();
+        let archive = store.inspect(CONVERSATION).unwrap();
+        service.set_agent_transcript_store(store.clone());
         service
             .agent_shell_store_mut()
             .bind_conversation("%1", CONVERSATION, 2)
@@ -398,7 +425,14 @@ async fn loop_source_admission_preserves_legacy_summary_and_refuses_crossing_ran
         let result = crate::runtime::RuntimeSessionService::execute_deferred_agent_command(&work);
         if crossing {
             assert!(
-                matches!(&result, RuntimeAgentCommandAsyncOutcome::Failed {message, ..} if message.contains("crossed its captured frontier")),
+                matches!(&result, RuntimeAgentCommandAsyncOutcome::Failed {message, ..}
+                    if message.contains(if selective { "explicit single-head normalization" }
+                    else { "crossed its captured frontier" })),
+                "{result:?}"
+            );
+        } else {
+            assert!(
+                matches!(&result, RuntimeAgentCommandAsyncOutcome::LoopSource(_)),
                 "{result:?}"
             );
         }
@@ -409,6 +443,8 @@ async fn loop_source_admission_preserves_legacy_summary_and_refuses_crossing_ran
                 .unwrap()
         );
         if crossing {
+            assert_eq!(std::fs::read(&authority_path).unwrap(), authority);
+            assert_eq!(store.inspect(CONVERSATION).unwrap(), archive);
             assert!(actor.service.agent_loop_state("%1").is_none());
             assert_eq!(
                 actor
@@ -426,9 +462,14 @@ async fn loop_source_admission_preserves_legacy_summary_and_refuses_crossing_ran
                 .get("%1")
                 .unwrap()
                 .running_turn_id
-                .as_ref()
-                .unwrap();
-            let context = &actor.service.agent_turn_contexts()[turn];
+                .clone()
+                .unwrap_or_else(|| {
+                    panic!(
+                        "loop source adoption failed: {:?}",
+                        actor.service.drain_deferred_effects_transition()
+                    )
+                });
+            let context = &actor.service.agent_turn_contexts()[&turn];
             let contents = context
                 .blocks()
                 .iter()
@@ -443,7 +484,7 @@ async fn loop_source_admission_preserves_legacy_summary_and_refuses_crossing_ran
                 !contents.contains("original raw row 1")
                     && !contents.contains("original raw row 3")
             );
-            assert!(!context.has_replay_owner());
+            assert!(context.has_replay_owner());
         }
     }
 }

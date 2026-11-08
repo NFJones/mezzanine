@@ -33,17 +33,22 @@ async fn async_manual_compaction_request_preparation_is_responsive_and_cancellab
 async fn qualify(cancel: bool, request_phase: bool) {
     let root = std::env::temp_dir().join(format!("mez-cprepare-{:032x}", rand::random::<u128>()));
     let store = AgentTranscriptStore::new(root.clone());
+    // Explicit literal imports exercise source preparation without inventing
+    // assistant execution closure from an unstructured historical row.
     for sequence in 1..=3 {
         store
             .append(&mez_agent::transcript::TranscriptEntry {
                 conversation_id: "prepare-compact".into(),
                 sequence,
                 created_at_unix_seconds: sequence,
-                role: mez_agent::transcript::TranscriptRole::Assistant,
+                role: mez_agent::transcript::TranscriptRole::User,
                 turn_id: format!("turn-{sequence}"),
                 agent_id: "agent-%1".into(),
                 pane_id: "%1".into(),
-                content: format!("completed source {sequence}"),
+                content: format!(
+                    "literal historical reference {sequence} {}",
+                    "source ".repeat(5_000)
+                ),
             })
             .unwrap();
     }

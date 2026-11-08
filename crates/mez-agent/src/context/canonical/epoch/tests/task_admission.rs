@@ -2,6 +2,73 @@
 
 use super::*;
 
+/// A reference document may share a source family with a task prelude, but its
+/// explicit neutral semantics do not give a new task authority to retire it.
+#[test]
+fn task_admission_preserves_exact_reference_events() {
+    let mut body = owner().into_owned_context();
+    for source in [
+        ContextSourceKind::PersistedContextDocument,
+        ContextSourceKind::LocalMessage,
+    ] {
+        body.append_reference_event(source, "exact reference", "original reference bytes")
+            .unwrap();
+    }
+    let mut source = ReplayEpochContext::from_owned_context(
+        ReplayConversationId::new("conversation-a").unwrap(),
+        body,
+    )
+    .unwrap();
+    let references = source.context().chronology().to_vec();
+    source
+        .admit_instruction_task(
+            vec![ContextBlock::user_event("user prompt", "new task")],
+            &[],
+            &[],
+            0,
+        )
+        .unwrap();
+    assert_eq!(
+        &source.context().chronology()[..references.len()],
+        references
+    );
+    assert!(matches!(
+        source
+            .prepare_compaction(ReplayTailPolicy::new(1000, 0).unwrap())
+            .unwrap(),
+        ReplayCompactionPreparation::NoWork(ReplayCompactionNoWork::ProtectedPrefix)
+    ));
+}
+
+/// Explicit task ownership permits local instructions to retire without
+/// granting that lifecycle to ordinary neutral references of the same source.
+#[test]
+fn explicit_task_instruction_owner_can_retire_its_local_message() {
+    let mut source = owner();
+    let task = source.begin_instruction_task().unwrap();
+    let sequence = source
+        .append_instruction(
+            &task,
+            ContextBlock::reference_event(
+                ContextSourceKind::LocalMessage,
+                "explicit task instruction",
+                "perform this task",
+            ),
+        )
+        .unwrap();
+    let original = source.context().chronology()[0].clone();
+    assert_eq!(
+        original.semantic_kind(),
+        crate::ContextSemanticKind::TaskPrelude
+    );
+    source.complete_instruction_task(&task).unwrap();
+    let completed = &source.context().chronology()[0];
+    assert_eq!(completed.sequence(), sequence);
+    assert_eq!(completed.block(), original.block());
+    assert_eq!(completed.record(), original.record());
+    assert_eq!(completed.retention(), ContextRetention::Summarizable);
+}
+
 /// Original live task input must be usable by immutable publication backing
 /// after explicit supersession. It remains exact while active, and an unfinished
 /// execution still stops the prefix at its own source boundary.

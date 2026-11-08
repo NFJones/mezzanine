@@ -32,8 +32,9 @@ impl CopyOrigin {
             bytes: 0,
         }
         .validate_format()?;
-        if !matches!(manifest.version, 8 | 9)
+        if !matches!(manifest.version, 8..=10)
             || manifest.memory_copy_origin.is_some()
+            || manifest.prefix_origin.is_some()
             || self.conversation == manifest.conversation_id
             || self.identity.epoch_revision == 0
             || self.identity.revision == 0
@@ -65,8 +66,9 @@ pub(super) struct MemoryCopyOrigin {
 impl MemoryCopyOrigin {
     pub(super) fn validate(&self, manifest: &Manifest) -> Result<()> {
         mez_agent::transcript::validate_conversation_id(&self.conversation)?;
-        if manifest.version != 9
+        if !matches!(manifest.version, 9 | 10)
             || manifest.copy_origin.is_some()
+            || manifest.prefix_origin.is_some()
             || self.conversation == manifest.conversation_id
             || self.epoch_revision == 0
             || self.epoch_revision != manifest.epoch_revision
@@ -105,7 +107,7 @@ impl ReplayEpochCopy {
         cut: cursor::ArchiveCut,
     ) -> Result<(Envelope, BTreeMap<String, String>)> {
         let manifest = Manifest {
-            version: 9,
+            version: 10,
             conversation_id: self.target,
             epoch_revision: self.origin.epoch_revision(),
             revision: 1,
@@ -119,6 +121,8 @@ impl ReplayEpochCopy {
             checkpoint: self.checkpoint,
             copy_origin: Some(self.origin),
             memory_copy_origin: None,
+            prefix_origin: None,
+            raw_revision_origin: None,
             source_escrow: Some(self.escrow),
             archive_cut: Some(cut),
         };

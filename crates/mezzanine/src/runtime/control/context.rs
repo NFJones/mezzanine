@@ -14,38 +14,8 @@ use super::super::{ContextBlock, ContextSourceKind, Envelope, TranscriptEntry, T
 use super::context_records::RuntimeContextRecords;
 use crate::error::Result;
 use crate::storage::transcript::ConversationTranscriptRead;
-use mez_agent::{
-    AGENT_LIST_MAX_CAPABILITIES, ProviderTranscriptEvent, TranscriptContextEvent,
-    agent_list_bounded_text,
-};
+use mez_agent::{AGENT_LIST_MAX_CAPABILITIES, TranscriptContextEvent, agent_list_bounded_text};
 use std::collections::{BTreeMap, BTreeSet};
-
-const AGENT_TRANSCRIPT_TOOL_CONTEXT_LIMIT_BYTES: usize = 256 * 1024;
-const LEGACY_MAAP_ASSISTANT_CONTEXT: &str =
-    "[legacy MAAP assistant execution omitted from transcript replay]";
-
-/// Renders one stopped-turn reference for both its original accounting producer
-/// and replay. It preserves the existing text and priority; the new hint owns
-/// its own occurrence rather than borrowing the original user's identity.
-pub(in crate::runtime) fn runtime_interrupted_turn_context_block(
-    prompt: &str,
-    reason: &str,
-    evidence: &[String],
-) -> ContextBlock {
-    let evidence = if evidence.is_empty() {
-        "no action result was available when the turn stopped".to_owned()
-    } else {
-        evidence.join("\n")
-    };
-    ContextBlock {
-        source: ContextSourceKind::RuntimeHint,
-        placement: mez_agent::ContextPlacement::ConversationAppend,
-        label: "interrupted turn context".to_owned(),
-        content: format!(
-            "The prior turn was interrupted before completion. Continue or redirect that work using its original user intent:\n{prompt}\n\nreason={reason}\nobserved action state:\n{evidence}"
-        ),
-    }
-}
 
 /// Exact transcript projection plus non-model-visible execution ownership.
 #[derive(Debug, Clone)]
@@ -63,6 +33,23 @@ pub(crate) struct RuntimeAgentTranscriptContext {
 }
 
 impl RuntimeAgentTranscriptContext {
+    /// Composes a hypothetical canonical head through normal prompt assembly.
+    /// This carries the actual cloned owner, never a forged durable snapshot or
+    /// source receipt. It must remain a preview and cannot authorize bookkeeping.
+    pub(in crate::runtime) fn for_replay_preview(
+        owner: mez_agent::ReplayEpochContext,
+    ) -> Result<Self> {
+        let (records, blocks) =
+            RuntimeContextRecords::from_replay_owner(owner.conversation_id().clone(), owner, None)?;
+        Ok(Self {
+            source: None,
+            blocks,
+            records,
+            execution_events: Vec::new(),
+            provider_history_repair_identity: None,
+        })
+    }
+
     /// Returns only the canonical owner carried by this checked projection.
     /// Flat legacy blocks or summary labels cannot manufacture its source seal.
     pub(in crate::runtime) fn replay_owner(&self) -> Result<Option<mez_agent::ReplayEpochContext>> {
@@ -125,6 +112,97 @@ impl RuntimeAgentHistoryEpochWork {
         }
         Ok(())
     }
+
+    /// Gives both ordinary reads and manual preparation the same explicit
+    /// old-prefix transition. Only the original committed projection is backed;
+    /// pending appends keep their owners and join on the subsequent typed read.
+    /// The caller has released its read lease before the writer requalifies the
+    /// captured source under its mutation lease. No provider call occurs.
+    fn normalize_captured_prefix(
+        &self,
+        snapshot: &crate::storage::transcript::ConversationReplaySnapshot,
+    ) -> Result<bool> {
+        let Some(epoch) = snapshot
+            .epoch
+            .as_ref()
+            .filter(|epoch| epoch.ranges.is_empty())
+        else {
+            return Ok(false);
+        };
+        if self.inputs.ephemeral_source_entries.is_some() {
+            return Ok(false);
+        }
+        let mut inputs = self.inputs.clone();
+        inputs.pending_entries = Default::default();
+        // Ordinary reads already select After(prefix), but manual preparation
+        // captures the complete archive through its frontier. The migration
+        // proposal always owns only the uncovered suffix, never covered rows.
+        let suffix = snapshot
+            .view
+            .committed
+            .iter()
+            .filter(|row| row.sequence > epoch.through_sequence)
+            .cloned()
+            .collect::<Vec<_>>();
+        let durable = runtime_agent_history_epoch_from_snapshot(
+            inputs,
+            Some(epoch.clone()),
+            suffix.clone(),
+            Some(snapshot),
+        );
+        if durable.provider_history_repair_identity.is_some() {
+            return Err(crate::MezError::conflict(
+                "legacy prefix source requires native history repair",
+            ));
+        }
+        let head = epoch
+            .summary_records
+            .as_ref()
+            .and_then(|records| records.prefix)
+            .ok_or_else(|| {
+                crate::MezError::invalid_state("legacy prefix has no original summary record")
+            })?;
+        let owner = durable.records.import_legacy_prefix(
+            &self.inputs.conversation_id,
+            durable.blocks,
+            &durable.execution_events,
+            head,
+        )?;
+        self.store.normalize_legacy_prefix(
+            &self.inputs.conversation_id,
+            epoch,
+            &owner,
+            &suffix,
+            RuntimeContextRecords::import_legacy_prefix_backing,
+        )?;
+        Ok(true)
+    }
+
+    /// A pinned/NoStore prefix gains only its original memory source, without
+    /// migrating the parent's durable authority or granting native completion.
+    fn freeze_pinned_prefix(
+        &self,
+        snapshot: &crate::storage::transcript::ConversationReplaySnapshot,
+        history: &mut RuntimeAgentTranscriptContext,
+    ) -> Result<()> {
+        if self.inputs.ephemeral_source_entries.is_some()
+            && let Some(epoch) = &snapshot.epoch
+        {
+            if history.provider_history_repair_identity.is_some() {
+                return Err(crate::MezError::conflict(
+                    "legacy pinned prefix requires native history repair",
+                ));
+            }
+            history.blocks = history.records.freeze_legacy_prefix(
+                epoch,
+                std::mem::take(&mut history.blocks),
+                &history.execution_events,
+                snapshot,
+            )?;
+            history.execution_events.clear();
+        }
+        Ok(())
+    }
 }
 
 /// Reads and projects one actor-captured transcript epoch without live service state.
@@ -132,24 +210,27 @@ pub(crate) fn execute_runtime_agent_history_epoch_work(
     work: RuntimeAgentHistoryEpochWork,
 ) -> Result<RuntimeAgentTranscriptContext> {
     work.validate_pending_capture()?;
-    work.store
-        .publish_terminal_compaction_handoffs(&work.inputs.conversation_id)?;
     let (snapshot, mut history) = work.store.conversation_replay_projection_with_frontier(
         &work.inputs.conversation_id,
         work.inputs.pending_entries.entries(),
         work.inputs.ephemeral_source_entries,
         |epoch| runtime_agent_history_read(&work.inputs, epoch),
         |snapshot| {
-            let history = runtime_agent_history_epoch_from_snapshot(
+            let mut history = runtime_agent_history_epoch_from_snapshot(
                 work.inputs.clone(),
                 snapshot.epoch.clone(),
                 snapshot.view.logical.clone(),
                 Some(snapshot),
             );
             let records = history.records.committed_row_records(snapshot)?;
+            work.freeze_pinned_prefix(snapshot, &mut history)?;
             Ok((history, records))
         },
     )?;
+    if work.normalize_captured_prefix(&snapshot)? {
+        // Reenter the same typed reader after its real deterministic import.
+        return execute_runtime_agent_history_epoch_work(work);
+    }
     super::RuntimeAgentHistorySource::attach(
         &mut history,
         work,
@@ -160,6 +241,7 @@ pub(crate) fn execute_runtime_agent_history_epoch_work(
 }
 
 /// Projects a proposed epoch through the same replay path without publishing it.
+#[cfg(test)]
 pub(crate) fn execute_runtime_agent_history_epoch_with_projection(
     work: RuntimeAgentHistoryEpochWork,
     epoch: Option<crate::storage::transcript::AgentCompactionEpoch>,
@@ -209,7 +291,10 @@ fn runtime_agent_history_read(
             .is_none_or(|limit| epoch.through_sequence <= limit)
     {
         return Some((
-            ConversationTranscriptRead::After(epoch.through_sequence),
+            inputs.ephemeral_source_entries.map_or(
+                ConversationTranscriptRead::After(epoch.through_sequence),
+                ConversationTranscriptRead::Through,
+            ),
             true,
         ));
     }
@@ -240,7 +325,7 @@ pub(in crate::runtime) fn runtime_agent_history_epoch_from_snapshot(
                 &entries,
                 &[],
                 None,
-                false,
+                TranscriptMcpProjection::Replay,
                 accounting,
                 Some(&inputs.pending_entries),
             );
@@ -327,7 +412,7 @@ pub(in crate::runtime) fn runtime_agent_history_epoch_from_snapshot(
             &entries,
             &applicable_ranges,
             applicable_records.as_deref(),
-            false,
+            TranscriptMcpProjection::Replay,
             accounting,
             Some(&inputs.pending_entries),
         );
@@ -382,13 +467,11 @@ pub(crate) struct RuntimeAgentPromptHistoryWork {
 
 /// Frozen manual source and its canonical history from one checked storage read.
 /// Rows include the physical archive through the admitted logical frontier;
-/// prefix/selective coverage is retained separately from raw row counts.
+/// canonical source custody is retained by the rendered history itself.
 #[derive(Debug, Clone)]
 pub(crate) struct RuntimeAgentTranscriptSnapshot {
     /// Checked logical rows including deduplicated captured pending appends.
     pub(crate) rows: Vec<TranscriptEntry>,
-    /// Authoritative projection captured in the same mutation lane as the rows.
-    pub(crate) epoch: Option<crate::storage::transcript::AgentCompactionEpoch>,
     /// Canonical model history rendered without any second storage read.
     pub(crate) history: RuntimeAgentTranscriptContext,
 }
@@ -449,13 +532,27 @@ impl RuntimeAgentPromptHistoryWork {
                     epoch
                         .retain_summary_ranges(|range| range.through_sequence <= legacy_frontier)?;
                 }
-                let history = runtime_agent_history_epoch_from_snapshot(
+                let mut history = runtime_agent_history_epoch_from_snapshot(
                     work.inputs.clone(),
                     epoch.clone(),
                     snapshot.view.logical.clone(),
                     Some(snapshot),
                 );
                 let records = history.records.committed_row_records(snapshot)?;
+                if let Some(epoch) = &epoch {
+                    if history.provider_history_repair_identity.is_some() {
+                        return Err(crate::MezError::conflict(
+                            "legacy frozen prefix requires native history repair",
+                        ));
+                    }
+                    history.blocks = history.records.freeze_legacy_prefix(
+                        epoch,
+                        history.blocks,
+                        &history.execution_events,
+                        snapshot,
+                    )?;
+                    history.execution_events.clear();
+                }
                 Ok(((history, epoch), records))
             },
         )?;
@@ -558,7 +655,6 @@ impl RuntimeAgentPromptHistoryWork {
             })?;
             return Ok(RuntimeAgentTranscriptSnapshot {
                 rows: Vec::new(),
-                epoch: None,
                 history,
             });
         }
@@ -572,7 +668,6 @@ impl RuntimeAgentPromptHistoryWork {
         let Some(store) = store else {
             return Ok(RuntimeAgentTranscriptSnapshot {
                 rows: Vec::new(),
-                epoch: None,
                 history: empty(self.memory_blocks),
             });
         };
@@ -585,7 +680,7 @@ impl RuntimeAgentPromptHistoryWork {
                 "manual source history owner changed",
             ));
         }
-        store.publish_terminal_compaction_handoffs(conversation_id)?;
+        store.validate_terminal_compaction_handoffs(conversation_id)?;
         let pending_count = work
             .inputs
             .pending_entries
@@ -594,7 +689,7 @@ impl RuntimeAgentPromptHistoryWork {
             .map(|row| row.sequence)
             .collect::<BTreeSet<_>>()
             .len() as u64;
-        let (_, (rows, epoch, mut transcript)) = store.conversation_replay_projection(
+        let (snapshot, (rows, epoch, mut transcript)) = store.conversation_replay_projection(
             conversation_id,
             work.inputs.pending_entries.entries(),
             |_| {
@@ -625,16 +720,25 @@ impl RuntimeAgentPromptHistoryWork {
                     }
                     epoch.retain_summary_ranges(|range| range.through_sequence <= high_water)?;
                 }
-                let transcript = runtime_agent_history_epoch_from_snapshot(
+                let mut transcript = runtime_agent_history_epoch_from_snapshot(
                     work.inputs.clone(),
                     epoch.clone(),
                     rows.clone(),
                     Some(snapshot),
                 );
                 let records = transcript.records.committed_row_records(snapshot)?;
+                work.freeze_pinned_prefix(snapshot, &mut transcript)?;
                 Ok(((rows, epoch, transcript), records))
             },
         )?;
+        if work.normalize_captured_prefix(&snapshot)? {
+            return Self {
+                frozen_replay: None,
+                memory_blocks: self.memory_blocks,
+                transcript_work: Some(work),
+            }
+            .execute_source_snapshot(Some(store), conversation_id, high_water);
+        }
         super::RuntimeAgentHistorySource::attach(
             &mut transcript,
             work,
@@ -642,11 +746,7 @@ impl RuntimeAgentPromptHistoryWork {
             rows.clone(),
         );
         let history = runtime_agent_prompt_history_from_transcript(self.memory_blocks, transcript);
-        Ok(RuntimeAgentTranscriptSnapshot {
-            rows,
-            epoch,
-            history,
-        })
+        Ok(RuntimeAgentTranscriptSnapshot { rows, history })
     }
 }
 
@@ -738,7 +838,7 @@ fn runtime_agent_history_epoch_from_selected_entries(
         &entries,
         &[],
         None,
-        false,
+        TranscriptMcpProjection::Replay,
         accounting,
         Some(&inputs.pending_entries),
     );
@@ -779,48 +879,39 @@ pub(super) fn runtime_agent_transcript_context_with_ranges(
     ranges: &[crate::storage::transcript::AgentCompactionRange],
 ) -> RuntimeAgentTranscriptContext {
     runtime_agent_transcript_context_with_ranges_and_mcp_epoch(
-        pane_id, entries, ranges, None, false, None, None,
-    )
-}
-
-/// Projects an explicitly selected raw window using the original leased
-/// snapshot's identities and costs, without imposing a prospective MCP reset.
-pub(super) fn runtime_agent_transcript_context_from_snapshot(
-    pane_id: &str,
-    entries: &[TranscriptEntry],
-    snapshot: &crate::storage::transcript::ConversationReplaySnapshot,
-    pending: Option<&crate::runtime::persistence::RuntimePendingTranscriptContext>,
-) -> RuntimeAgentTranscriptContext {
-    runtime_agent_transcript_context_with_ranges_and_mcp_epoch(
-        pane_id,
-        entries,
-        &[],
-        None,
-        false,
-        Some(snapshot),
-        pending,
-    )
-}
-
-/// Projects a prospective compaction with the same MCP invalidation as a stored epoch.
-/// The virtual boundary affects filtering only; it does not create a durable row.
-pub(crate) fn runtime_agent_compaction_replay_context(
-    pane_id: &str,
-    entries: &[TranscriptEntry],
-    ranges: &[crate::storage::transcript::AgentCompactionRange],
-    summary_records: Option<&[mez_agent::ContextBlockRecord]>,
-    accounting: Option<&crate::storage::transcript::ConversationReplaySnapshot>,
-    pending: Option<&crate::runtime::persistence::RuntimePendingTranscriptContext>,
-) -> RuntimeAgentTranscriptContext {
-    runtime_agent_transcript_context_with_ranges_and_mcp_epoch(
         pane_id,
         entries,
         ranges,
-        summary_records,
-        true,
-        accounting,
-        pending,
+        None,
+        TranscriptMcpProjection::Replay,
+        None,
+        None,
     )
+}
+
+/// Reads original audit dependencies, retaining source that an MCP epoch has
+/// retired from model replay. This projection must never be sent to a provider
+/// or used to restore tool grants; migration selects source-only backing from it.
+pub(super) fn runtime_agent_transcript_audit_context_from_snapshot(
+    pane_id: &str,
+    snapshot: &crate::storage::transcript::ConversationReplaySnapshot,
+) -> RuntimeAgentTranscriptContext {
+    runtime_agent_transcript_context_with_ranges_and_mcp_epoch(
+        pane_id,
+        &snapshot.view.committed,
+        &[],
+        None,
+        TranscriptMcpProjection::Audit,
+        Some(snapshot),
+        None,
+    )
+}
+
+/// Model retirement and immutable audit custody are separate projections.
+#[derive(Clone, Copy)]
+enum TranscriptMcpProjection {
+    Replay,
+    Audit,
 }
 
 /// Owns canonical block and execution projection for real and prospective epochs.
@@ -829,7 +920,7 @@ fn runtime_agent_transcript_context_with_ranges_and_mcp_epoch(
     entries: &[TranscriptEntry],
     ranges: &[crate::storage::transcript::AgentCompactionRange],
     summary_records: Option<&[mez_agent::ContextBlockRecord]>,
-    prospective_mcp_epoch: bool,
+    mcp_projection: TranscriptMcpProjection,
     accounting: Option<&crate::storage::transcript::ConversationReplaySnapshot>,
     pending: Option<&crate::runtime::persistence::RuntimePendingTranscriptContext>,
 ) -> RuntimeAgentTranscriptContext {
@@ -860,12 +951,11 @@ fn runtime_agent_transcript_context_with_ranges_and_mcp_epoch(
         row_records.push(decoded.record);
         row_stable_records.push(decoded.stable);
     }
-    let latest_mcp_compaction_epoch = if prospective_mcp_epoch {
-        Some(entries.len())
-    } else {
-        transcript_events
+    let latest_mcp_compaction_epoch = match mcp_projection {
+        TranscriptMcpProjection::Replay => transcript_events
             .iter()
-            .rposition(|event| matches!(event, Some(TranscriptContextEvent::McpCompactionEpoch)))
+            .rposition(|event| matches!(event, Some(TranscriptContextEvent::McpCompactionEpoch))),
+        TranscriptMcpProjection::Audit => None,
     };
     let mut latest_execution_group_ordinals = BTreeMap::new();
     let mut execution_groups_with_assistant = BTreeSet::new();
@@ -919,8 +1009,6 @@ fn runtime_agent_transcript_context_with_ranges_and_mcp_epoch(
             .insert(execution_group_id.clone(), *ordinal)
             .unwrap_or(0_u64);
         if *ordinal != previous_ordinal.saturating_add(1)
-            || *source == ContextSourceKind::McpRetrievedManifest
-                && latest_mcp_compaction_epoch.is_some_and(|epoch| index <= epoch)
             || matches!(
                 source,
                 ContextSourceKind::ActionResult | ContextSourceKind::TranscriptTool
@@ -928,6 +1016,15 @@ fn runtime_agent_transcript_context_with_ranges_and_mcp_epoch(
         {
             excluded_execution_groups.insert(execution_group_id.clone());
             repaired_execution_groups.insert(execution_group_id.clone());
+        }
+        // Revoking a retrieval deliberately excludes its entire group, but
+        // does not make otherwise valid native framing corrupt. Migration
+        // keeps the original bytes as audit backing without reviving a grant.
+        // Structural errors above remain repair-required even in revoked groups.
+        if *source == ContextSourceKind::McpRetrievedManifest
+            && latest_mcp_compaction_epoch.is_some_and(|epoch| index <= epoch)
+        {
+            excluded_execution_groups.insert(execution_group_id.clone());
         }
         if *source == ContextSourceKind::TranscriptAssistant {
             execution_groups_with_assistant.insert(execution_group_id.clone());
@@ -948,10 +1045,33 @@ fn runtime_agent_transcript_context_with_ranges_and_mcp_epoch(
         &transcript_events,
         &exact_execution_groups,
     );
+    // A native group without an assistant cannot lend ownership to its ordinary
+    // provider display row. Keep neutral assistant/result fallbacks, but never
+    // replay an orphaned tool call merely because it has a legacy wire image.
+    let rejected_native_producers = entries
+        .iter()
+        .zip(&transcript_events)
+        .filter_map(|(row, event)| match event {
+            Some(TranscriptContextEvent::ExecutionBlock {
+                execution_group_id: Some(group),
+                ..
+            }) if repaired_execution_groups.contains(group)
+                && !execution_groups_with_assistant.contains(group) =>
+            {
+                Some((
+                    row.conversation_id.as_str(),
+                    row.turn_id.as_str(),
+                    row.agent_id.as_str(),
+                    row.pane_id.as_str(),
+                ))
+            }
+            _ => None,
+        })
+        .collect::<BTreeSet<_>>();
     // Original accounted task events retain their authored user framing before
     // a first head, too. Explicit admissions reconstruct retirement separately;
     // legacy text cannot supply a task boundary or borrow this source identity.
-    let raw_tasks = accounting.is_some_and(|snapshot| snapshot.epoch.is_none())
+    let raw_tasks = accounting.is_some()
         && transcript_events
             .iter()
             .any(|event| matches!(event, Some(TranscriptContextEvent::TaskAdmission { .. })));
@@ -1096,7 +1216,7 @@ fn runtime_agent_transcript_context_with_ranges_and_mcp_epoch(
                 prompt,
                 reason,
                 evidence,
-            }) => Some(runtime_interrupted_turn_context_block(
+            }) => Some(mez_agent::transcript::interrupted_turn_context_block(
                 prompt, reason, evidence,
             )),
             None => None,
@@ -1108,24 +1228,27 @@ fn runtime_agent_transcript_context_with_ranges_and_mcp_epoch(
         if suppressed_display_entries.contains(&index) {
             continue;
         }
-        let Some(content) = runtime_transcript_entry_context_content(entry) else {
+        if entry.role == TranscriptRole::System
+            && rejected_native_producers.contains(&(
+                entry.conversation_id.as_str(),
+                entry.turn_id.as_str(),
+                entry.agent_id.as_str(),
+                entry.pane_id.as_str(),
+            ))
+            && mez_agent::ProviderTranscriptEvent::from_transcript_content(&entry.content).is_some()
+        {
+            continue;
+        }
+        let Some(block) = mez_agent::transcript::transcript_literal_context_block(
+            entry,
+            format!(
+                "previous {} message for pane {pane_id}",
+                runtime_context_transcript_role_name(entry.role)
+            ),
+        ) else {
             continue;
         };
-        records.push_block(
-            &mut blocks,
-            ContextBlock {
-                source: runtime_transcript_context_source_kind(entry),
-                placement: mez_agent::ContextPlacement::ConversationAppend,
-                label: format!(
-                    "previous {} message for pane {pane_id}",
-                    runtime_context_transcript_role_name(entry.role)
-                ),
-                content,
-            },
-            entry,
-            source_record,
-            stable,
-        );
+        records.push_block(&mut blocks, block, entry, source_record, stable);
     }
     RuntimeAgentTranscriptContext {
         source: None,
@@ -1141,102 +1264,6 @@ fn runtime_agent_transcript_context_with_ranges_and_mcp_epoch(
     }
 }
 
-/// Maps a stored transcript role to a model-context source that preserves the
-/// role across request assembly.
-fn runtime_transcript_context_source_kind(entry: &TranscriptEntry) -> ContextSourceKind {
-    match entry.role {
-        TranscriptRole::User => ContextSourceKind::TranscriptUser,
-        TranscriptRole::Assistant => ContextSourceKind::TranscriptAssistant,
-        TranscriptRole::Tool if entry.content.trim_start().starts_with("[action_result ") => {
-            ContextSourceKind::ActionResult
-        }
-        TranscriptRole::Tool => ContextSourceKind::TranscriptTool,
-        TranscriptRole::System
-            if ProviderTranscriptEvent::from_transcript_content(&entry.content).is_some() =>
-        {
-            ContextSourceKind::TranscriptTool
-        }
-        TranscriptRole::System => ContextSourceKind::Transcript,
-    }
-}
-
-/// Returns model-facing transcript content after removing protocol scaffolding
-/// that is useful for durable audit but harmful as future prompt context.
-fn runtime_transcript_entry_context_content(entry: &TranscriptEntry) -> Option<String> {
-    if entry.content.trim().is_empty() {
-        return None;
-    }
-    match entry.role {
-        TranscriptRole::System => ProviderTranscriptEvent::from_transcript_content(&entry.content)
-            .and_then(|event| event.sanitized_for_historical_replay())
-            .map(|event| event.to_transcript_content()),
-        TranscriptRole::Tool => runtime_transcript_tool_context_content(&entry.content),
-        TranscriptRole::User if transcript_content_looks_like_skill_context(&entry.content) => None,
-        TranscriptRole::Assistant
-            if transcript_content_looks_like_maap_action_json(&entry.content) =>
-        {
-            Some(LEGACY_MAAP_ASSISTANT_CONTEXT.to_string())
-        }
-        _ => Some(entry.content.clone()),
-    }
-}
-
-/// Returns secret-safe transcript tool output for model-facing replay.
-///
-/// Current-turn action context carries exact execution evidence. Historical
-/// transcript replay independently reduces legacy tool bodies to safe status
-/// metadata so old session files cannot become a provider disclosure channel.
-fn runtime_transcript_tool_context_content(content: &str) -> Option<String> {
-    let trimmed = content.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-    if transcript_tool_content_is_omitted_for_replay(trimmed) {
-        return None;
-    }
-    let sanitized = mez_agent::historical_tool_result_context_content(trimmed)?;
-    Some(truncate_runtime_context_text(
-        &sanitized,
-        AGENT_TRANSCRIPT_TOOL_CONTEXT_LIMIT_BYTES,
-        "transcript tool context",
-    ))
-}
-
-/// Returns whether one durable tool transcript payload should stay out of
-/// later model context because it is metadata or workflow body rather than
-/// execution evidence.
-fn transcript_tool_content_is_omitted_for_replay(content: &str) -> bool {
-    content.starts_with("[action_result ")
-        && [" fetch_url ", " web_search "]
-            .iter()
-            .any(|needle| content.contains(needle))
-        || content.contains("action_type=request_skills")
-        || content.contains("action_type=call_skill")
-}
-
-/// Reports whether transcript text is an expanded skill body rather than the
-/// user's original prompt.
-fn transcript_content_looks_like_skill_context(content: &str) -> bool {
-    let trimmed = content.trim_start();
-    trimmed.starts_with("# Skill: ")
-        && trimmed.contains("\nSource: ")
-        && trimmed.contains("\nPath: ")
-        && trimmed.contains("\nInvocation state: this skill is already loaded")
-}
-
-/// Reports whether transcript text is a raw MAAP action object rather than
-/// conversational assistant content.
-fn transcript_content_looks_like_maap_action_json(content: &str) -> bool {
-    let trimmed = content.trim();
-    let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) else {
-        return false;
-    };
-    let Some(object) = value.as_object() else {
-        return false;
-    };
-    object.contains_key("actions") || object.contains_key("action_batch")
-}
-
 /// Returns the display name used for a transcript role in replay labels.
 fn runtime_context_transcript_role_name(role: TranscriptRole) -> &'static str {
     match role {
@@ -1245,22 +1272,6 @@ fn runtime_context_transcript_role_name(role: TranscriptRole) -> &'static str {
         TranscriptRole::Tool => "tool",
         TranscriptRole::System => "system",
     }
-}
-
-/// Returns bounded context text without splitting UTF-8 characters.
-fn truncate_runtime_context_text(content: &str, max_bytes: usize, label: &str) -> String {
-    if content.len() <= max_bytes {
-        return content.to_string();
-    }
-    let mut end = max_bytes;
-    while !content.is_char_boundary(end) {
-        end = end.saturating_sub(1);
-    }
-    format!(
-        "{}...[mez: {label} truncated; original_bytes={}]",
-        &content[..end],
-        content.len()
-    )
 }
 
 /// Static trust guidance attached to every injected peer-message block.
@@ -1552,7 +1563,6 @@ mod tests {
     use super::{
         RuntimeAgentHistoryEpochInputs, RuntimeAgentHistoryEpochWork,
         execute_runtime_agent_history_epoch_work, runtime_peer_message_logged_payload,
-        runtime_transcript_tool_context_content,
     };
     use crate::runtime::{TranscriptEntry, TranscriptRole};
     use crate::storage::transcript::AgentTranscriptStore;
@@ -1623,6 +1633,72 @@ mod tests {
         }
     }
 
+    /// Deliberate MCP invalidation excludes the complete original group without
+    /// demanding native repair. It cannot conceal malformed ordinals, and an
+    /// unrelated valid group remains available in either case.
+    #[test]
+    fn mcp_invalidation_is_not_native_history_corruption() {
+        use mez_agent::{ContextExecutionGroupId, ContextSourceKind, TranscriptContextEvent};
+        for malformed in [false, true] {
+            let group = ContextExecutionGroupId::new("revoked").unwrap();
+            let contents = [
+                TranscriptContextEvent::execution_block_with_metadata(
+                    ContextSourceKind::TranscriptAssistant,
+                    "assistant",
+                    "REVOKED_GROUP_ASSISTANT",
+                    group.clone(),
+                    1,
+                    None,
+                )
+                .unwrap()
+                .to_transcript_content(),
+                TranscriptContextEvent::execution_block_with_metadata(
+                    ContextSourceKind::McpRetrievedManifest,
+                    "manifest",
+                    "REVOKED_MANIFEST",
+                    group,
+                    if malformed { 3 } else { 2 },
+                    None,
+                )
+                .unwrap()
+                .to_transcript_content(),
+                TranscriptContextEvent::McpCompactionEpoch.to_transcript_content(),
+                TranscriptContextEvent::execution_block_with_metadata(
+                    ContextSourceKind::TranscriptAssistant,
+                    "unrelated assistant",
+                    "HEALTHY_GROUP",
+                    ContextExecutionGroupId::new("healthy").unwrap(),
+                    1,
+                    None,
+                )
+                .unwrap()
+                .to_transcript_content(),
+            ];
+            let rows = contents
+                .into_iter()
+                .enumerate()
+                .map(|(index, content)| TranscriptEntry {
+                    conversation_id: "conversation".into(),
+                    sequence: index as u64 + 1,
+                    created_at_unix_seconds: 1,
+                    role: TranscriptRole::System,
+                    turn_id: "original-turn".into(),
+                    agent_id: "original-agent".into(),
+                    pane_id: "pane".into(),
+                    content,
+                })
+                .collect::<Vec<_>>();
+            let context = super::runtime_agent_transcript_context("pane", &rows);
+            assert_eq!(context.blocks.len(), 1);
+            assert_eq!(context.blocks[0].content, "HEALTHY_GROUP");
+            assert_eq!(context.execution_events.len(), 1);
+            assert_eq!(
+                context.provider_history_repair_identity.is_some(),
+                malformed
+            );
+        }
+    }
+
     /// Summarized typed events still own and suppress their duplicate display
     /// rows, while exact raw rows in later turns retain their original role.
     #[test]
@@ -1689,8 +1765,8 @@ mod tests {
         assert!(history.execution_events.is_empty());
     }
 
-    /// A selective epoch replaces only its validated closed execution group;
-    /// exact user rows and a later raw group retain their original order.
+    /// Distinct historical summaries cannot be installed as a new single head.
+    /// Refusal keeps their original anchors and raw source intact.
     #[test]
     fn history_epoch_replays_selective_summary_between_exact_rows() {
         let root = std::env::temp_dir().join(format!(
@@ -1761,7 +1837,7 @@ mod tests {
                 .unwrap();
         }
         store
-            .save_compaction_ranges(
+            .install_legacy_compaction_ranges_fixture(
                 "selective-epoch",
                 0,
                 "previous epoch",
@@ -1772,39 +1848,25 @@ mod tests {
                 }],
             )
             .unwrap();
-        let history = execute_runtime_agent_history_epoch_work(RuntimeAgentHistoryEpochWork {
-            pending_capture_error: None,
-            store,
-            inputs: RuntimeAgentHistoryEpochInputs {
-                pane_id: "%1".to_string(),
-                conversation_id: "selective-epoch".to_string(),
-                ephemeral_source_entries: None,
-                active_entries: Some(5),
-                pending_entries: Default::default(),
+        assert_selective_history_requires_normalization(
+            RuntimeAgentHistoryEpochWork {
+                pending_capture_error: None,
+                store,
+                inputs: RuntimeAgentHistoryEpochInputs {
+                    pane_id: "%1".to_string(),
+                    conversation_id: "selective-epoch".to_string(),
+                    ephemeral_source_entries: None,
+                    active_entries: Some(5),
+                    pending_entries: Default::default(),
+                },
             },
-        })
-        .unwrap();
-        let contents = history
-            .blocks
-            .iter()
-            .map(|block| block.content.as_str())
-            .collect::<Vec<_>>();
-        assert_eq!(
-            contents,
-            [
-                "previous epoch",
-                "exact earlier",
-                "old work summarized",
-                "exact later",
-                "newer answer"
-            ]
+            &root,
         );
-        assert!(history.execution_events.is_empty());
         let _ = std::fs::remove_dir_all(root);
     }
 
-    /// Fork replay stops at its captured high-water even when the parent later
-    /// appends rows and commits a selective range beyond that boundary.
+    /// A numeric fork cutoff cannot authorize the retired selective replay mode,
+    /// even when its summaries were entirely inside the captured frontier.
     #[test]
     fn history_epoch_selective_ranges_respect_fork_high_water() {
         let root = std::env::temp_dir().join(format!(
@@ -1854,7 +1916,7 @@ mod tests {
             }
         }
         store
-            .save_compaction_ranges(
+            .install_legacy_compaction_ranges_fixture(
                 "selective-fork",
                 0,
                 "",
@@ -1865,31 +1927,25 @@ mod tests {
                 }],
             )
             .unwrap();
-        let history = execute_runtime_agent_history_epoch_work(RuntimeAgentHistoryEpochWork {
-            pending_capture_error: None,
-            store,
-            inputs: RuntimeAgentHistoryEpochInputs {
-                pane_id: "%1".to_string(),
-                conversation_id: "selective-fork".to_string(),
-                ephemeral_source_entries: Some(2),
-                active_entries: None,
-                pending_entries: Default::default(),
+        assert_selective_history_requires_normalization(
+            RuntimeAgentHistoryEpochWork {
+                pending_capture_error: None,
+                store,
+                inputs: RuntimeAgentHistoryEpochInputs {
+                    pane_id: "%1".to_string(),
+                    conversation_id: "selective-fork".to_string(),
+                    ephemeral_source_entries: Some(2),
+                    active_entries: None,
+                    pending_entries: Default::default(),
+                },
             },
-        })
-        .unwrap();
-        assert_eq!(
-            history
-                .blocks
-                .iter()
-                .map(|block| block.content.as_str())
-                .collect::<Vec<_>>(),
-            ["captured instruction", "summarized work"]
+            &root,
         );
         let _ = std::fs::remove_dir_all(root);
     }
 
-    /// A parent range straddling a fork boundary cannot summarize source the
-    /// fork never captured, even if its first row is inside the snapshot.
+    /// A range crossing the captured frontier must not fall back to reopening
+    /// covered raw source. Preserve the historical state and require normalization.
     #[test]
     fn history_epoch_crossing_fork_range_keeps_captured_raw_group() {
         let root = std::env::temp_dir().join(format!(
@@ -1947,7 +2003,7 @@ mod tests {
                 .unwrap();
         }
         store
-            .save_compaction_ranges(
+            .install_legacy_compaction_ranges_fixture(
                 "crossing-fork",
                 0,
                 "",
@@ -1958,29 +2014,43 @@ mod tests {
                 }],
             )
             .unwrap();
-        let history = execute_runtime_agent_history_epoch_work(RuntimeAgentHistoryEpochWork {
-            pending_capture_error: None,
-            store,
-            inputs: RuntimeAgentHistoryEpochInputs {
-                pane_id: "%1".to_string(),
-                conversation_id: "crossing-fork".to_string(),
-                ephemeral_source_entries: Some(2),
-                active_entries: None,
-                pending_entries: Default::default(),
+        assert_selective_history_requires_normalization(
+            RuntimeAgentHistoryEpochWork {
+                pending_capture_error: None,
+                store,
+                inputs: RuntimeAgentHistoryEpochInputs {
+                    pane_id: "%1".to_string(),
+                    conversation_id: "crossing-fork".to_string(),
+                    ephemeral_source_entries: Some(2),
+                    active_entries: None,
+                    pending_entries: Default::default(),
+                },
             },
-        })
-        .unwrap();
-        let contents = history
-            .blocks
-            .iter()
-            .map(|block| block.content.as_str())
-            .collect::<Vec<_>>();
-        assert_eq!(contents, ["captured instruction", "captured work"]);
+            &root,
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 
-    /// Verifies worker-owned history preparation reads durable rows and merges
-    /// the actor-captured persistence tail through the canonical projection.
+    /// All three historical range layouts use the same actual replay worker;
+    /// neither summary accounting nor ordinary audit bytes may change on refusal.
+    fn assert_selective_history_requires_normalization(
+        work: RuntimeAgentHistoryEpochWork,
+        root: &std::path::Path,
+    ) {
+        let paths = ["history.tsv", "compaction-epoch.json"]
+            .map(|name| root.join(&work.inputs.conversation_id).join(name));
+        let before = paths.each_ref().map(|path| std::fs::read(path).unwrap());
+        let error = execute_runtime_agent_history_epoch_work(work).unwrap_err();
+        assert!(error.to_string().contains("normalization"), "{error}");
+        assert_eq!(
+            paths.each_ref().map(|path| std::fs::read(path).unwrap()),
+            before
+        );
+    }
+
+    /// Pending bytes remain readable with descriptive source custody, not an
+    /// append acknowledgment. Settlement preserves the same projected source
+    /// without changing either payload or admitting model/provider work.
     #[test]
     fn history_epoch_work_merges_durable_and_pending_entries() {
         let root = std::env::temp_dir().join(format!(
@@ -2007,9 +2077,9 @@ mod tests {
         pending.sequence = 2;
         pending.content = "pending history".to_string();
 
-        let history = execute_runtime_agent_history_epoch_work(RuntimeAgentHistoryEpochWork {
+        let work = RuntimeAgentHistoryEpochWork {
             pending_capture_error: None,
-            store,
+            store: store.clone(),
             inputs: RuntimeAgentHistoryEpochInputs {
                 pane_id: "%1".to_string(),
                 conversation_id: "history-work".to_string(),
@@ -2017,11 +2087,23 @@ mod tests {
                 active_entries: Some(2),
                 pending_entries:
                     crate::runtime::persistence::RuntimePendingTranscriptContext::unaccounted(vec![
-                        pending,
+                        pending.clone(),
                     ]),
             },
-        })
-        .unwrap();
+        };
+        let path = store.transcript_path("history-work").unwrap();
+        let before = std::fs::read(&path).unwrap();
+        let pending_history = execute_runtime_agent_history_epoch_work(work.clone()).unwrap();
+        assert!(pending_history.source.as_ref().unwrap().raw.is_some());
+        let pending_records = pending_history.records.indices_with_offset(0).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+        store.append(&pending).unwrap();
+        let history = execute_runtime_agent_history_epoch_work(work).unwrap();
+        assert_eq!(
+            history.records.indices_with_offset(0).unwrap(),
+            pending_records
+        );
+        assert_eq!(store.inspect("history-work").unwrap(), [durable, pending]);
 
         let content = history
             .blocks
@@ -2096,11 +2178,24 @@ mod tests {
     /// Verifies legacy shell and MCP transcript bodies are unavailable to
     /// provider replay even when persistence predates durable summarization.
     fn transcript_tool_replay_omits_legacy_raw_bodies() {
-        let shell = runtime_transcript_tool_context_content(
-            "[action_result shell-1 shell_command succeeded]\noutput:\nshell-secret",
-        )
-        .unwrap();
-        let mcp = runtime_transcript_tool_context_content("mcp-secret");
+        let project = |content: &str| {
+            let entry = TranscriptEntry {
+                conversation_id: "conversation".into(),
+                sequence: 1,
+                created_at_unix_seconds: 1,
+                role: TranscriptRole::Tool,
+                turn_id: "turn".into(),
+                agent_id: "agent".into(),
+                pane_id: "pane".into(),
+                content: content.into(),
+            };
+            mez_agent::transcript::transcript_literal_context_block(&entry, "tool".into())
+                .map(|block| block.content)
+        };
+        let shell =
+            project("[action_result shell-1 shell_command succeeded]\noutput:\nshell-secret")
+                .unwrap();
+        let mcp = project("mcp-secret");
 
         assert!(shell.contains("[action_result shell-1 shell_command succeeded]"));
         assert!(shell.contains("historical_output: omitted"));

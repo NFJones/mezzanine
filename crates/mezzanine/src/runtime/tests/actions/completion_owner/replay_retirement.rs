@@ -217,7 +217,17 @@ async fn runtime_completion_replay_terminal_retirement_keeps_original_fence() {
                     )
             );
         } else {
-            assert_eq!(state, AgentTurnState::Completed);
+            assert_eq!(
+                state,
+                AgentTurnState::Completed,
+                "queue={:?}, required_failures={:?}",
+                fixture
+                    .service
+                    .completion_provider_queue_flags_for_tests(&fixture.turn.turn_id),
+                fixture
+                    .service
+                    .completion_required_failures_for_tests(&fixture.turn.turn_id),
+            );
         }
     }
 }

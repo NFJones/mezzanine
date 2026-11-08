@@ -4,6 +4,8 @@
 //! rebind. It cannot authorize parent work, arbitrary replacement adoption, or a
 //! restoration of its own. The existing bind/cleanup return installs the ack
 //! before later fallible paint/objective operations; there is no lookup gap.
+//! Terminal detached cleanup may release only the original running-turn slot
+//! retained by that acknowledged restore, never a replacement turn or binding.
 
 use super::*;
 #[cfg(test)]
@@ -438,6 +440,50 @@ impl RuntimeSessionService {
                     .set((foreign_snapshot, foreign_scope));
             }
         }
+    }
+
+    /// Qualifies release of the old slot after required terminal cleanup. The
+    /// restored parent is not the failed turn's conversation, so ordinary
+    /// detached cleanup must not publish into it or adopt it as old context.
+    /// Only this exact installed receipt permits the lower store to finish the
+    /// retained old running turn; public CID/turn labels alone grant nothing.
+    pub(in crate::runtime::agent) fn completion_provider_loop_slot_owned(
+        &self,
+        turn: &AgentTurnRecord,
+    ) -> bool {
+        let Some(group) = self.agent.completion_settlements.groups.get(&turn.turn_id) else {
+            return false;
+        };
+        let Some(owner) = group.provider_handoff.as_ref() else {
+            return false;
+        };
+        let Some(session) = self.agent_shell_store().get(&turn.pane_id) else {
+            return false;
+        };
+        group.turn == *turn
+            && group.task_result == CompletionMilestone::Accepted
+            && group.scheduler == CompletionMilestone::Entered
+            && owner.rejection.is_some()
+            && owner.settlement == CompletionMilestone::Entered
+            && session.session_id != turn.conversation_id
+            && session.running_turn_id.as_deref() == Some(turn.turn_id.as_str())
+            && self
+                .agent_turn_ledger()
+                .turn(&turn.turn_id)
+                .is_some_and(|current| {
+                    current.agent_id == turn.agent_id
+                        && current.pane_id == turn.pane_id
+                        && current.conversation_id == turn.conversation_id
+                        && current.state == AgentTurnState::Failed
+                })
+            && owner.own_loop_restore.as_ref().is_some_and(|restore| {
+                restore.installed_parent_matches(
+                    session,
+                    &group.identity,
+                    &owner.identity,
+                    &turn.conversation_id,
+                )
+            })
     }
 
     /// Original binding or exact private installed own-restore receipt only.

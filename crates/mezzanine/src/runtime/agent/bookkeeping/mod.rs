@@ -128,6 +128,12 @@ pub(crate) struct RuntimeBookkeepingCandidate {
     pub(crate) entries: Vec<TranscriptEntry>,
     /// Once-allocated physical append proposal retained through checked retries.
     append_proposal: Option<crate::storage::transcript::TranscriptAppendBatch>,
+    /// Original typed terminal source needs physical append settlement before
+    /// another prompt/peer can acquire this conversation's history.
+    terminal_append_required: bool,
+    /// Checked admission retains this same candidate as a receipt fence, not
+    /// another read job. Only its exact original append completion retires it.
+    pub(crate) awaiting_terminal_append: bool,
     pub(crate) directory: Option<TranscriptEntry>,
     pub(crate) blocked: bool,
     /// Runtime failure metadata is not immutable evidence identity.
@@ -158,6 +164,20 @@ impl std::fmt::Debug for RuntimeBookkeepingCandidate {
 }
 
 impl RuntimeBookkeepingCandidate {
+    /// Borrows the existing actual proposal while this checked candidate waits
+    /// for settlement. Its store/path/full batch remain the receipt identity.
+    pub(crate) fn terminal_append_proposal(
+        &self,
+    ) -> Option<(
+        &crate::storage::transcript::AgentTranscriptStore,
+        &crate::storage::transcript::TranscriptAppendBatch,
+    )> {
+        if !self.awaiting_terminal_append {
+            return None;
+        }
+        Some((&self.read.store, self.append_proposal.as_ref()?))
+    }
+
     /// Freezes descriptive append identity only after final physical placement
     /// is checked. Retry cannot reconstruct a new owner from equal raw rows.
     fn append_proposal_for(
@@ -630,6 +650,11 @@ impl RuntimeSessionService {
                     batch,
                 });
         }
+        if candidate.terminal_append_required && self.persistence.transcript_uses_adapter() {
+            candidate.awaiting_terminal_append = true;
+            self.persistence
+                .retain_terminal_bookkeeping_candidate(candidate.clone());
+        }
         self.agent
             .agent_persisted_execution_transcripts
             .insert(candidate.persistence_key.clone());
@@ -936,6 +961,17 @@ impl RuntimeSessionService {
             persistence_key: (turn.conversation_id.clone(), turn.turn_id.clone()),
             entries,
             append_proposal: None,
+            terminal_append_required: source.requires_terminal_append(
+                &turn.conversation_id,
+                execution.final_turn
+                    || matches!(
+                        execution.terminal_state,
+                        mez_agent::AgentTurnState::Completed
+                            | mez_agent::AgentTurnState::Failed
+                            | mez_agent::AgentTurnState::Interrupted
+                    ),
+            )?,
+            awaiting_terminal_append: false,
             directory,
             blocked: false,
             failure: None,
@@ -1081,6 +1117,21 @@ impl RuntimeSessionService {
                     persistence_key,
                     entries,
                     append_proposal: None,
+                    terminal_append_required: RuntimeTranscriptProjection::live(
+                        self,
+                        &turn.turn_id,
+                    )
+                    .requires_terminal_append(
+                        &conversation_id,
+                        execution.final_turn
+                            || matches!(
+                                execution.terminal_state,
+                                mez_agent::AgentTurnState::Completed
+                                    | mez_agent::AgentTurnState::Failed
+                                    | mez_agent::AgentTurnState::Interrupted
+                            ),
+                    )?,
+                    awaiting_terminal_append: false,
                     directory,
                     blocked: false,
                     failure: None,
@@ -1122,13 +1173,43 @@ impl RuntimeSessionService {
             if entries.is_empty() {
                 return Ok(0);
             }
+            let batch =
+                crate::storage::transcript::TranscriptAppendBatch::owned_rows(entries.clone())?;
+            if RuntimeTranscriptProjection::live(self, &turn.turn_id).requires_terminal_append(
+                &conversation_id,
+                execution.final_turn
+                    || matches!(
+                        execution.terminal_state,
+                        mez_agent::AgentTurnState::Completed
+                            | mez_agent::AgentTurnState::Failed
+                            | mez_agent::AgentTurnState::Interrupted
+                    ),
+            )? {
+                // The prepared read has already passed its original source
+                // gate. Retain only its actual append proposal; no second
+                // worker read or durability acknowledgment is manufactured.
+                self.persistence
+                    .queue_bookkeeping_candidate(RuntimeBookkeepingCandidate {
+                        generation: 0,
+                        checked_source: None,
+                        turn: turn.clone(),
+                        read: read.clone(),
+                        persistence_key: persistence_key.clone(),
+                        entries: entries.clone(),
+                        append_proposal: Some(batch.clone()),
+                        terminal_append_required: true,
+                        awaiting_terminal_append: true,
+                        directory: None,
+                        blocked: false,
+                        failure: None,
+                        publication_failure: None,
+                    });
+            }
             self.persistence
                 .queue_transcript(RuntimeSideEffect::PersistTranscriptEntries {
                     path: store.transcript_path(&conversation_id)?,
                     store,
-                    batch: crate::storage::transcript::TranscriptAppendBatch::owned_rows(
-                        entries.clone(),
-                    )?,
+                    batch,
                 });
             if first_persistence {
                 self.queue_saved_session_retention_operation(created_at_unix_seconds, false)?;
@@ -1170,128 +1251,6 @@ impl RuntimeSessionService {
         self.record_pane_transcript_ref(
             &turn.pane_id,
             format!("transcript:{}:{conversation_id}", turn.pane_id),
-        )?;
-        Ok(entries.len())
-    }
-
-    /// Persists an MCP authorization-reset boundary and fresh safe catalog after compaction.
-    /// Manual publication supplies its checked next logical sequence so this
-    /// step needs no additional archive read or mutation lock. Other producers
-    /// check the original logical frontier and exact-target pending owners.
-    /// Sequence exhaustion fails before
-    /// any control row is queued or written.
-    /// The compactor supplies its original store. Later installation and
-    /// equal-CID pending rows at another path cannot retarget this publication.
-    pub(crate) fn persist_mcp_compaction_epoch_transcript(
-        &mut self,
-        pane_id: &str,
-        conversation_id: &str,
-        store: Option<crate::storage::transcript::AgentTranscriptStore>,
-        catalog_snapshot: Option<String>,
-        checked_next_sequence: Option<u64>,
-    ) -> Result<usize> {
-        let Some(session) = self.agent_shell_store().get(pane_id) else {
-            return Ok(0);
-        };
-        if session.session_id != conversation_id || session.ephemeral {
-            return Ok(0);
-        }
-        let Some(store) = store else {
-            return Ok(0);
-        };
-        let sequence = if let Some(sequence) = checked_next_sequence {
-            sequence
-        } else {
-            let pending = self.persistence.pending_transcript_entries_at_path(
-                &store.transcript_path(conversation_id)?,
-                conversation_id,
-            )?;
-            let view = store.conversation_transcript_view(
-                conversation_id,
-                crate::storage::transcript::ConversationTranscriptRead::All,
-                false,
-                &pending,
-            )?;
-            view.logical.last().map_or(Ok(1), |row| {
-                row.sequence.checked_add(1).ok_or_else(|| {
-                    MezError::invalid_state("MCP compaction transcript sequence is exhausted")
-                })
-            })?
-        };
-        let additional = if catalog_snapshot.is_some() { 2 } else { 1 };
-        sequence
-            .checked_add(additional)
-            .ok_or_else(|| MezError::invalid_state("MCP compaction sequence span is exhausted"))?;
-        let entry = TranscriptEntry {
-            conversation_id: conversation_id.to_string(),
-            sequence,
-            created_at_unix_seconds: current_unix_seconds().max(1),
-            role: TranscriptRole::System,
-            turn_id: format!("compact-{conversation_id}-{sequence}"),
-            agent_id: format!("agent-{pane_id}"),
-            pane_id: pane_id.to_string(),
-            content: TranscriptContextEvent::McpCompactionEpoch.to_transcript_content(),
-        };
-        entry.validate()?;
-        let mut entries = vec![entry];
-        if let Some(catalog_snapshot) = catalog_snapshot {
-            let catalog_event = TranscriptContextEvent::mcp_catalog_snapshot(
-                catalog_snapshot,
-                sequence.saturating_add(1),
-            )
-            .ok_or_else(|| {
-                MezError::invalid_state("compaction MCP catalog snapshot is empty or oversized")
-            })?;
-            let catalog_entry = TranscriptEntry {
-                conversation_id: conversation_id.to_string(),
-                sequence: sequence.saturating_add(1),
-                created_at_unix_seconds: current_unix_seconds().max(1),
-                role: TranscriptRole::System,
-                turn_id: format!("compact-{conversation_id}-{sequence}"),
-                agent_id: format!("agent-{pane_id}"),
-                pane_id: pane_id.to_string(),
-                content: catalog_event.to_transcript_content(),
-            };
-            catalog_entry.validate()?;
-            entries.push(catalog_entry);
-        }
-        let guidance_event = TranscriptContextEvent::prompt_boundary(
-            ContextSourceKind::Configuration,
-            "MCP compaction re-retrieval guidance",
-            "Conversation compaction cleared previously retrieved MCP tool contracts. Before using mcp_call, retrieve the needed server again with mcp_server_get; existing directory, reference, and search evidence may still make a server referencable.",
-        )
-        .ok_or_else(|| {
-            MezError::invalid_state("compaction MCP re-retrieval guidance is invalid")
-        })?;
-        let guidance_entry = TranscriptEntry {
-            conversation_id: conversation_id.to_string(),
-            sequence: sequence.saturating_add(entries.len() as u64),
-            created_at_unix_seconds: current_unix_seconds().max(1),
-            role: TranscriptRole::System,
-            turn_id: format!("compact-{conversation_id}-{sequence}"),
-            agent_id: format!("agent-{pane_id}"),
-            pane_id: pane_id.to_string(),
-            content: guidance_event.to_transcript_content(),
-        };
-        guidance_entry.validate()?;
-        entries.push(guidance_entry);
-        if self.persistence.transcript_uses_adapter() {
-            self.persistence
-                .queue_transcript(RuntimeSideEffect::PersistTranscriptEntries {
-                    path: store.transcript_path(conversation_id)?,
-                    store,
-                    batch: crate::storage::transcript::TranscriptAppendBatch::owned_rows(
-                        entries.clone(),
-                    )?,
-                });
-        } else {
-            self.append_transcript_with_admission_observation(&store, &entries, false)?;
-        }
-        self.agent_shell_store_mut()
-            .record_transcript_append(pane_id, &entries)?;
-        self.record_pane_transcript_ref(
-            pane_id,
-            format!("transcript:{pane_id}:{conversation_id}"),
         )?;
         Ok(entries.len())
     }
@@ -1415,9 +1374,8 @@ impl RuntimeSessionService {
             created_at_unix_seconds,
             turn,
         )?;
-        let interrupted_block = crate::runtime::control::runtime_interrupted_turn_context_block(
-            &prompt, reason, &evidence,
-        );
+        let interrupted_block =
+            mez_agent::transcript::interrupted_turn_context_block(&prompt, reason, &evidence);
         let interrupted_record = mez_agent::ContextBlockRecord::allocate(&interrupted_block)?;
         let interrupted_event = TranscriptContextEvent::InterruptedTurn {
             prompt,
@@ -1460,6 +1418,9 @@ impl RuntimeSessionService {
                     persistence_key,
                     entries,
                     append_proposal: None,
+                    terminal_append_required: projection
+                        .requires_terminal_append(&turn.conversation_id, true)?,
+                    awaiting_terminal_append: false,
                     directory: None,
                     blocked: false,
                     failure: None,

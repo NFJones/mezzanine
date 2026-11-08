@@ -6,12 +6,16 @@
 
 mod checkpoint;
 mod context_event;
+mod interrupted_turn;
+pub use interrupted_turn::interrupted_turn_context_block;
 mod context_record;
 mod error;
 mod execution_state;
 pub use execution_state::{EXECUTION_STATE_RECORD_MARKER, TranscriptExecutionStateRecord};
+mod literal_replay;
 mod records;
 mod replay_projection;
+pub use literal_replay::transcript_literal_context_block;
 pub use replay_projection::{transcript_display_copy_indices, transcript_zero_projection_indices};
 mod steering;
 mod summary;

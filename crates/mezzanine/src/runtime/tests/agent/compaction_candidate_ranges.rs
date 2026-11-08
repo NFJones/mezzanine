@@ -1,20 +1,13 @@
-//! Prospective manual history versus actual prefix publication and replay.
+//! Canonical manual candidate/request parity and explicit legacy admission.
 //!
-//! Real saved selective ranges and complete native groups feed the production
-//! manual planner. The same frozen task is sized, completed and replayed. Exact
-//! optional references are supplied at the same pre-history boundary on both
-//! requests; they are not summary epochs or source-publication authority.
+//! Original selective layouts remain refusal controls. Successful cases use
+//! actual typed source and receipts, preserving native custody, exact references
+//! and complete wire cost through inline and worker preparation.
 
+use super::compaction_candidate::CanonicalManualFixture;
 use super::*;
 use crate::integrations::agent::context::assemble_model_request;
-use mez_agent::{AgentContext, ContextPlacement, ContextRetention};
 
-/// The actual planner must preserve candidate/published parity with no ranges,
-/// an absorbed range, a surviving range, both, multiple surviving ranges and an
-/// existing prefix. Native call/result ownership, protected reference metadata,
-/// provider switching, model changes and complete serialized request estimates
-/// must remain identical. One accepted summary must not enqueue a shrink retry.
-/// Incomplete frozen prefixes and backwards cuts must reject without mutation.
 #[test]
 fn runtime_manual_candidate_ranges_match_complete_published_requests() {
     for (name, prefix, absorbed, surviving) in [
@@ -26,67 +19,218 @@ fn runtime_manual_candidate_ranges_match_complete_published_requests() {
         ("prefix-mixed", true, true, 1),
     ] {
         for worker in [false, true] {
-            qualify_candidate_ranges(name, prefix, absorbed, surviving, None, false, worker);
+            qualify_legacy_admission(name, prefix, absorbed, surviving, None, false, worker);
+        }
+    }
+    for worker in [false, true] {
+        for headless in [false, true] {
+            qualify_canonical_candidate(headless, worker, None, false);
         }
     }
 }
 
-/// Two independently admitted fixtures establish and then use a narrow real
-/// request allowance. The exact runtime estimator includes tools and controls.
-/// Correct replay fits with small headroom; one duplicate retained range would
-/// exceed it, yet actual completion publishes without a new provider/shrink job.
+/// Calibrate with the real complete estimator, then admit an independent
+/// fixture with very small headroom. Duplicating one exact retained reference
+/// must exceed that same bound; the actual correct publication needs no repair.
 #[test]
 fn runtime_manual_candidate_retained_ranges_fit_without_shrink_retry() {
     for worker in [false, true] {
-        let input = qualify_candidate_ranges("near-fit", false, false, 2, None, true, worker);
-        let configured_limit = ((input + 32) * 20).div_ceil(19);
-        qualify_candidate_ranges(
-            "near-fit",
-            false,
-            false,
-            2,
-            Some(configured_limit),
-            true,
-            worker,
-        );
+        qualify_legacy_admission("near-fit", false, false, 2, None, true, worker);
+        let input = qualify_canonical_candidate(false, worker, None, false);
+        let cap = ((input + 8) * 20).div_ceil(19);
+        qualify_canonical_candidate(false, worker, Some(cap), true);
     }
 }
 
-/// Adds the same neutral optional memory and exact reference before history,
-/// retaining all existing stable-slot and chronological metadata. A generic
-/// UUID memory remains ordinary even though a controller summary also has UUIDs.
-fn with_exact_references(mut context: AgentContext, memory_label: &str) -> AgentContext {
-    let mut history = context.clone();
-    history
-        .retain_blocks_with_metadata(|block, _| {
-            block.placement == ContextPlacement::ConversationAppend
+/// Exact references and pending native source are real captured members, not
+/// flat blocks inserted around a sealed history. NoStore starts without a head;
+/// saved source carries one prior head that the new prefix must absorb once.
+fn qualify_canonical_candidate(
+    headless: bool,
+    worker: bool,
+    cap: Option<usize>,
+    tight: bool,
+) -> usize {
+    let mut fixture = if headless {
+        CanonicalManualFixture::headless(true)
+    } else {
+        CanonicalManualFixture::new(cap, 90, true)
+    };
+    let task = fixture.queue(worker);
+    assert!(task.replay_source.is_some());
+    assert!(fixture.service.agent_turn_ledger().turns().is_empty());
+    let source = task.request.messages.last().unwrap().content.clone();
+    assert!(source.contains("ELIGIBLE_OLD_PREFIX"));
+    assert_eq!(source.contains("previous canonical head"), !headless);
+    let before = fixture
+        .store
+        .load_replay_epoch(&fixture.conversation, mez_agent::AgentContext::empty())
+        .unwrap()
+        .map(|(id, _)| id);
+    assert_eq!(before.is_none(), headless);
+    let candidate = fixture
+        .service
+        .manual_compaction_candidate_context(&task, "new prefix summary")
+        .unwrap();
+    assert_eq!(
+        candidate
+            .blocks()
+            .iter()
+            .filter(|block| block.source == ContextSourceKind::CompactionPrefix)
+            .count(),
+        1
+    );
+    assert!(!candidate.blocks().iter().any(|block| block.source
+        == ContextSourceKind::CompactionSelective
+        || block.content.contains("ELIGIBLE_OLD_PREFIX")
+        || block.content.contains("COVERED_RAW_MUST_NOT_REENTER")));
+    let references = candidate
+        .chronology()
+        .iter()
+        .filter(|event| {
+            matches!(
+                event.block().source,
+                ContextSourceKind::Memory | ContextSourceKind::PersistedContextDocument
+            )
         })
+        .cloned()
+        .collect::<Vec<_>>();
+    assert_eq!(references.len(), 2);
+    for reference in &references {
+        assert_eq!(reference.retention(), mez_agent::ContextRetention::Exact);
+        assert!(reference.execution_group_id().is_none());
+        assert!(!mez_agent::context_block_is_compaction_summary(
+            reference.block()
+        ));
+        assert!(fixture.original.context().chronology().contains(reference));
+    }
+    assert!(candidate.execution_group_is_pending(&fixture.group));
+    assert_eq!(
+        candidate
+            .chronology()
+            .iter()
+            .filter(|event| event.provider_owner() == Some(&fixture.owner))
+            .count(),
+        2
+    );
+    let (input, limit, _) = fixture
+        .service
+        .manual_compaction_candidate_size_for_tests(&task, candidate.clone())
         .unwrap();
-    context
-        .retain_blocks_with_metadata(|block, _| block.placement == ContextPlacement::StablePrefix)
-        .unwrap();
-    context
-        .append_reference_event(
-            ContextSourceKind::Memory,
-            memory_label,
-            "ordinary optional memory",
-        )
-        .unwrap();
-    context
-        .append_reference_event(
-            ContextSourceKind::PersistedContextDocument,
-            "candidate exact reference",
-            "preserve exact reference bytes",
-        )
-        .unwrap();
-    context.append_imported_history(&history).unwrap();
-    context
+    if tight {
+        assert!(
+            input <= limit && limit - input <= 16,
+            "near-fit input={input} limit={limit}"
+        );
+        let mut inflated = candidate.clone();
+        inflated
+            .append_reference_event(
+                references[0].block().source,
+                references[0].block().label.clone(),
+                references[0].block().content.clone(),
+            )
+            .unwrap();
+        let (duplicated, _, _) = fixture
+            .service
+            .manual_compaction_candidate_size_for_tests(&task, inflated)
+            .unwrap();
+        assert!(
+            duplicated > limit,
+            "duplicate retained occurrence must overflow the real bound"
+        );
+    }
+    assert_eq!(
+        fixture
+            .store
+            .load_replay_epoch(&fixture.conversation, mez_agent::AgentContext::empty())
+            .unwrap()
+            .map(|(id, _)| id),
+        before
+    );
+    fixture.publish("new prefix summary");
+    let published = fixture
+        .service
+        .agent_context_for_pane_prompt("%1", "Continue after conversation compaction.", 100)
+        .unwrap()
+        .with_metadata(candidate.metadata().clone());
+    assert_eq!(candidate.blocks(), published.blocks());
+    for (left, right) in candidate.chronology().iter().zip(published.chronology()) {
+        assert_eq!(left.semantic_kind(), right.semantic_kind());
+        assert_eq!(left.retention(), right.retention());
+        assert_eq!(left.execution_group_id(), right.execution_group_id());
+        assert_eq!(left.provider_owner(), right.provider_owner());
+    }
+    for reference in &references {
+        assert!(published.chronology().contains(reference));
+    }
+    assert!(fixture.service.pending_agent_compaction_tasks().is_empty());
+    assert!(fixture.service.pending_agent_provider_tasks().is_empty());
+    assert!(fixture.service.agent_turn_ledger().turns().is_empty());
+    if headless {
+        assert!(
+            fixture
+                .store
+                .load_replay_epoch(&fixture.conversation, mez_agent::AgentContext::empty())
+                .unwrap()
+                .is_none()
+        );
+    } else {
+        let (_, cold) = AgentTranscriptStore::new(fixture.store.root())
+            .load_replay_epoch(&fixture.conversation, mez_agent::AgentContext::empty())
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            cold.context().chronology()[0].block().content,
+            "new prefix summary"
+        );
+        for reference in &references {
+            assert!(cold.context().chronology().contains(reference));
+        }
+    }
+    let turn = AgentTurnRecord {
+        turn_id: "candidate-range-parity".into(),
+        conversation_id: fixture.conversation.clone(),
+        agent_id: "agent-%1".into(),
+        pane_id: "%1".into(),
+        trigger: mez_agent::AgentTurnTrigger::UserPrompt,
+        started_at_unix_seconds: 1,
+        deadline_at_unix_millis: 0,
+        policy_profile: "runtime".into(),
+        model_profile: task.model_profile_name.clone(),
+        parent_turn_id: None,
+        state: AgentTurnState::Queued,
+        cooperation_mode: None,
+        initial_capability: None,
+    };
+    for (provider, model) in [
+        ("openai", "test"),
+        ("switched-openai", "test"),
+        ("openai", "changed-model"),
+    ] {
+        let mut profile = task.model_profile.clone();
+        profile.provider = provider.into();
+        profile.model = model.into();
+        let api = mez_agent::ProviderApiCompatibility::OpenAiResponses;
+        let before = assemble_model_request(&profile, api, &turn, &candidate).unwrap();
+        let after = assemble_model_request(&profile, api, &turn, &published).unwrap();
+        let before = mez_agent::openai_responses_request_body(&before).unwrap();
+        let after = mez_agent::openai_responses_request_body(&after).unwrap();
+        assert_eq!(before, after, "complete parity for {provider}/{model}");
+        assert_eq!(
+            mez_agent::provider_request_input_estimate_from_body(&before),
+            mez_agent::provider_request_input_estimate_from_body(&after)
+        );
+        assert_eq!(before.contains("call_retained"), provider == "openai");
+        for record in &fixture.source_records {
+            assert!(!before.contains(&String::from(record.occurrence_id())));
+        }
+    }
+    input
 }
 
-/// Runs one genuine frozen planner task through candidate and actual completion.
-/// Turn grouping determines whether the first selective range is consumed;
-/// large input allowance keeps later complete groups raw without timing tricks.
-fn qualify_candidate_ranges(
+/// Preserves the original physical range layouts. Selective formats refuse
+/// before model construction; bare raw native metadata retains pending custody.
+fn qualify_legacy_admission(
     name: &str,
     prefix: bool,
     absorbed: bool,
@@ -94,7 +238,7 @@ fn qualify_candidate_ranges(
     input_limit: Option<usize>,
     near_fit: bool,
     worker: bool,
-) -> usize {
+) {
     let mut service = test_runtime_service();
     let retention = if near_fit { 90 } else { 10 };
     let input_setting =
@@ -236,7 +380,7 @@ fn qualify_candidate_ranges(
     }
     if prefix || !ranges.is_empty() {
         store
-            .save_compaction_ranges(
+            .install_legacy_compaction_ranges_fixture(
                 &conversation,
                 offset,
                 if prefix { "old prefix summary" } else { "" },
@@ -256,235 +400,76 @@ fn qualify_candidate_ranges(
         .agent_shell_store_mut()
         .bind_conversation("%1", &conversation, rows.len() as u64)
         .unwrap();
+    if !prefix && !absorbed && surviving == 0 {
+        let context = service
+            .agent_context_for_pane_prompt("%1", "inspect original raw native history", 100)
+            .unwrap();
+        let canonical = mez_agent::ReplayEpochContext::from_owned_context(
+            mez_agent::ReplayConversationId::new(&conversation).unwrap(),
+            context,
+        )
+        .unwrap();
+        assert!(
+            canonical.context().execution_group_is_pending(&group),
+            "canonical adoption cannot infer closure from bare native metadata"
+        );
+        assert_eq!(
+            canonical
+                .context()
+                .chronology()
+                .iter()
+                .filter(|event| event.provider_owner() == Some(&owner))
+                .count(),
+            2
+        );
+        assert!(service.pending_agent_provider_tasks().is_empty());
+        assert_eq!(store.inspect(&conversation).unwrap(), rows);
+        return;
+    }
+    let paths = [
+        store.transcript_path(&conversation).unwrap(),
+        store
+            .root()
+            .join(&conversation)
+            .join("compaction-epoch.json"),
+    ];
+    let before = paths.each_ref().map(|path| std::fs::read(path).unwrap());
     if worker {
         service.use_agent_source_preparation_adapter();
     }
-    let queued = service.dispatch_runtime_control_body(
-        &format!(r#"{{"jsonrpc":"2.0","id":"{name}","method":"agent/shell/command","params":{{"idempotency_key":"{name}","input":"/compact"}}}}"#),
-        &primary,
-    );
+    let result = service
+        .execute_agent_shell_command(&primary, "/compact")
+        .unwrap();
     if worker {
-        assert!(queued.contains("state=preparing"), "{name}: {queued}");
+        assert!(result.contains("state=preparing"), "{name}: {result}");
         let source = service.take_manual_compaction_preparations().pop().unwrap();
-        let snapshot = source.execute_source();
+        let captured = source.execute_source();
         assert!(
-            service
-                .complete_manual_compaction_preparation(&source, snapshot)
-                .unwrap()
+            captured
+                .as_ref()
+                .unwrap_err()
+                .to_string()
+                .contains("normalization")
         );
-        let request = service.take_manual_compaction_requests().pop().unwrap();
-        let rendered = request.execute_request();
+        let error = service
+            .complete_manual_compaction_preparation(&source, captured)
+            .unwrap_err();
         assert!(
-            service
-                .complete_manual_compaction_request(&request, rendered)
-                .unwrap()
+            error.to_string().contains("normalization"),
+            "{name}: {error}"
         );
     } else {
-        assert!(queued.contains("state=queued"), "{name}: {queued}");
+        assert!(result.contains("normalization"), "{name}: {result}");
     }
-    let mut task = service.take_pending_agent_compaction_task("%1").unwrap();
-    let expected_boundary = offset + if absorbed { 2 } else { 1 };
+    assert!(!service.agent_is_compacting("%1"));
+    assert!(service.take_manual_compaction_requests().is_empty());
+    assert!(service.pending_agent_compaction_tasks().is_empty());
+    assert!(service.pending_agent_provider_tasks().is_empty());
     assert_eq!(
-        task.compacted_through_sequence,
-        Some(expected_boundary),
-        "{name}: actual planner boundary"
+        paths.each_ref().map(|path| std::fs::read(path).unwrap()),
+        before
     );
-    assert_eq!(
-        task.retained_transcript_entries,
-        rows.iter()
-            .filter(|row| row.sequence > expected_boundary)
-            .count() as u64,
-        "{name}: current retained counts include physical rows beneath ranges"
-    );
-    assert_eq!(
-        task.candidate_context
-            .as_ref()
-            .unwrap()
-            .blocks()
-            .iter()
-            .filter(|block| block.source == ContextSourceKind::CompactionSelective)
-            .count(),
-        0,
-        "{name}: preparation already removed cached ranges; candidate summaries must come from rebuilt replay"
-    );
-    let memory_label = format!("memory {} (note)", mez_agent::memory::new_memory_uuid());
-    task.candidate_context = Some(with_exact_references(
-        task.candidate_context.take().unwrap(),
-        &memory_label,
-    ));
-    let before_epoch = store.compaction_epoch(&conversation).unwrap();
-    let mut incomplete = task.clone();
-    assert!(!incomplete.frozen_compaction_rows.is_empty());
-    incomplete.frozen_compaction_rows.remove(0);
-    let rejected = service.manual_compaction_candidate_context(&incomplete, "new prefix summary");
-    assert!(
-        rejected.is_err(),
-        "{name}: candidate accepted an incomplete frozen prefix that publication must reject"
-    );
-    assert_eq!(store.compaction_epoch(&conversation).unwrap(), before_epoch);
-    if prefix {
-        let mut invalid = task.clone();
-        invalid.compacted_through_sequence = Some(offset - 1);
-        let error = service
-            .manual_compaction_candidate_context(&invalid, "new prefix summary")
-            .unwrap_err();
-        assert!(error.message().contains("cannot move backwards"), "{error}");
-        assert_eq!(store.compaction_epoch(&conversation).unwrap(), before_epoch);
-    }
-    let candidate = service
-        .manual_compaction_candidate_context(&task, "new prefix summary")
-        .unwrap();
-    assert_eq!(
-        store.compaction_epoch(&conversation).unwrap(),
-        before_epoch,
-        "{name}: sizing must not publish"
-    );
-    let selective = candidate
-        .blocks()
-        .iter()
-        .filter(|block| block.source == ContextSourceKind::CompactionSelective)
-        .collect::<Vec<_>>();
-    assert_eq!(
-        selective.len(),
-        surviving,
-        "{name}: each retained range must come from rebuilt replay exactly once: {selective:?}"
-    );
-    assert_eq!(
-        candidate
-            .blocks()
-            .iter()
-            .filter(|block| block.source == ContextSourceKind::CompactionPrefix)
-            .count(),
-        1,
-        "{name}"
-    );
-    let ordinary = candidate
-        .chronology()
-        .iter()
-        .find(|event| event.block().label == memory_label)
-        .unwrap();
-    assert_eq!(ordinary.retention(), ContextRetention::Exact, "{name}");
-    assert!(ordinary.execution_group_id().is_none());
-    assert!(!mez_agent::context_block_is_compaction_summary(
-        ordinary.block()
-    ));
-    assert_eq!(
-        candidate
-            .chronology()
-            .iter()
-            .filter(|event| event.provider_owner() == Some(&owner))
-            .count(),
-        2,
-        "{name}"
-    );
-    let (input, safe_limit, _) = service
-        .manual_compaction_candidate_size_for_tests(&task, candidate.clone())
-        .unwrap();
-    if near_fit && input_limit.is_some() {
-        assert!(
-            input <= safe_limit,
-            "actual request must fit: input={input} limit={safe_limit}"
-        );
-        assert!(
-            safe_limit - input <= 64,
-            "fixture must stay near the actual limit"
-        );
-        let mut inflated = candidate.clone();
-        let duplicate = (*selective[0]).clone();
-        inflated
-            .insert_typed_block(
-                duplicate.clone(),
-                duplicate.semantic_kind(),
-                duplicate.retention(),
-                duplicate.recoverable_for_compaction(),
-            )
-            .unwrap();
-        let (inflated_input, _, _) = service
-            .manual_compaction_candidate_size_for_tests(&task, inflated)
-            .unwrap();
-        assert!(
-            inflated_input > safe_limit,
-            "duplicate summary must fail the same real request bound"
-        );
-    }
-    service.claim_agent_compaction_task_state("%1", task.clone());
-    assert!(
-        service
-            .apply_agent_compaction_completed_event(
-                "%1",
-                runtime_test_compaction_response("new prefix summary")
-            )
-            .unwrap()
-    );
-    assert!(
-        service.pending_agent_compaction_tasks().is_empty(),
-        "{name}: no unnecessary shrink retry"
-    );
-    let published = with_exact_references(
-        service
-            .agent_context_for_pane_prompt("%1", "Continue after conversation compaction.", 100)
-            .unwrap(),
-        &memory_label,
-    )
-    .with_metadata(candidate.metadata().clone());
-    assert_eq!(
-        candidate.blocks(),
-        published.blocks(),
-        "{name}: complete canonical parity"
-    );
-    for (before, after) in candidate.chronology().iter().zip(published.chronology()) {
-        assert_eq!(before.semantic_kind(), after.semantic_kind(), "{name}");
-        assert_eq!(before.retention(), after.retention(), "{name}");
-        assert_eq!(
-            before.execution_group_id(),
-            after.execution_group_id(),
-            "{name}"
-        );
-        assert_eq!(before.provider_owner(), after.provider_owner(), "{name}");
-    }
-    let turn = AgentTurnRecord {
-        turn_id: "candidate-range-parity".into(),
-        conversation_id: conversation,
-        agent_id: "agent-%1".into(),
-        pane_id: "%1".into(),
-        trigger: mez_agent::AgentTurnTrigger::UserPrompt,
-        started_at_unix_seconds: 1,
-        deadline_at_unix_millis: 0,
-        policy_profile: "runtime".into(),
-        model_profile: task.model_profile_name.clone(),
-        parent_turn_id: None,
-        state: AgentTurnState::Queued,
-        cooperation_mode: None,
-        initial_capability: None,
-    };
-    for (provider, model) in [
-        ("openai", "test"),
-        ("switched-openai", "test"),
-        ("openai", "changed-model"),
-    ] {
-        let mut profile = task.model_profile.clone();
-        profile.provider = provider.into();
-        profile.model = model.into();
-        let api = mez_agent::ProviderApiCompatibility::OpenAiResponses;
-        let before = assemble_model_request(&profile, api, &turn, &candidate).unwrap();
-        let after = assemble_model_request(&profile, api, &turn, &published).unwrap();
-        let before = mez_agent::openai_responses_request_body(&before).unwrap();
-        let after = mez_agent::openai_responses_request_body(&after).unwrap();
-        assert_eq!(
-            before, after,
-            "{name}: complete wire parity for {provider}/{model}"
-        );
-        assert_eq!(
-            mez_agent::provider_request_input_estimate_from_body(&before),
-            mez_agent::provider_request_input_estimate_from_body(&after)
-        );
-        assert_eq!(
-            before.contains("call_range_tail"),
-            provider == "openai",
-            "{name}"
-        );
-    }
-    input
+    assert_eq!(store.inspect(&conversation).unwrap(), rows);
 }
 
 /// Assigns a contiguous physical source row in one task-generated conversation.

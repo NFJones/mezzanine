@@ -33,6 +33,9 @@ pub(crate) type TranscriptRowOrigins = BTreeMap<u64, ContextBlockOccurrenceId>;
 /// Private, versioned conversation payload; archives must retain it with history.
 const FILE_NAME: &str = "row-origins.sqlite3";
 
+mod content_edit;
+pub(super) use content_edit::ContentRowRevision;
+
 impl AgentTranscriptStore {
     /// Establishes the namespace before acknowledging a new raw producer. A
     /// later saved fork can then read the source without changing its payloads.

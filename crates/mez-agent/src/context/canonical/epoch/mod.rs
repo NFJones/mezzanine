@@ -44,6 +44,7 @@ mod native_groups;
 mod planning;
 mod publication;
 pub use publication::ReplayPreparedCompaction;
+mod prefix_import;
 mod source;
 use source::{ReplayExecutionClosure, ReplaySourceLifecycle};
 #[cfg(test)]
@@ -350,6 +351,17 @@ pub(super) fn instruction_source_can_complete(block: &ContextBlock) -> bool {
                 | ContextSourceKind::SkillInstruction
                 | ContextSourceKind::PersistedContextDocument
                 | ContextSourceKind::LocalMessage
+        )
+}
+
+/// Typed neutral references remain exact even when they share a source family
+/// with task instructions. Lifecycle selection must use the event's committed
+/// semantics rather than re-infer them from its read-only block projection.
+pub(super) fn instruction_event_can_complete(event: &ConversationEvent) -> bool {
+    instruction_source_can_complete(event.block())
+        && matches!(
+            event.semantic_kind(),
+            super::ContextSemanticKind::UserEvent | super::ContextSemanticKind::TaskPrelude
         )
 }
 

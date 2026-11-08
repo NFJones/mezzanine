@@ -1,45 +1,45 @@
-//! Product witness capture and terminal publication share occurrence numbering.
+//! Original execution occurrences survive rewrites and terminal append retries.
 //!
-//! A group is closed at a consumed compaction frontier, not permanently sealed
-//! against later evidence. These tests use the real compaction completion and
-//! runtime result producer; they do not assert a historical provider schedule.
+//! A current group stays raw behind its exact task root. A later result keeps
+//! that group's full chronology ordinal across another typed head publication;
+//! no selective summary/certificate is accepted as a second live authority.
+//! The historical certificate corruption guard is qualified separately as an
+//! explicit private descriptor test, not fabricated runtime summary acceptance.
 
 use super::*;
 
-/// Ordinary runtime ownership rejects evidence without its compacted assistant.
-/// Preserve that rejection, then qualify the canonical API's valid same-group
-/// assistant/evidence shape with a distinct accepted summary after an exact barrier.
-/// Certificates must match actual terminal rows, classify the split group as
-/// unsupported before append, and keep contiguous per-group ordinals even when
-/// the witness containing the later evidence is not the first witness.
 #[test]
 fn late_same_group_result_uses_full_chronology_ordinal_at_terminal_publication() {
     check_late_same_group_result(false);
 }
 
-/// Adapter-backed terminal cleanup must retain the same exact source map and
-/// unsupported split-group disposition through candidate adoption, a partial
-/// append, exact retry, stale receipt and duplicate receipt handling. None of
-/// those persistence operations may replay an action or fabricate an epoch.
 #[test]
 fn late_same_group_result_keeps_ordinals_through_candidate_and_append_retry() {
     check_late_same_group_result(true);
 }
 
-/// Qualifies the canonical same-group shape separately from the tested ordinary
-/// runtime rejection. A split group across an exact barrier uses raw authority.
+/// Drive the original chronology/result owners in controlled observation order.
+/// Both actions are inert say fixtures; neither an actual external effect nor
+/// its completion/termination evidence is invented by this controlled adapter.
 fn check_late_same_group_result(adapter: bool) {
-    let (mut service, store, turn_id) = live_fixture();
-    compact_live(&mut service, &turn_id, "FIRST_OCCURRENCE_SUMMARY", false);
-    compact_live(&mut service, &turn_id, "OTHER_GROUP_SUMMARY", false);
+    let (mut service, store, turn_id) = typed_source::pending();
     let turn = service.agent_turn_ledger().turn(&turn_id).unwrap().clone();
-    let mut response = runtime_say_response(&turn_id, &"late accepted result ".repeat(200), false);
-    let action = &mut response.action_batch.as_mut().unwrap().actions[0];
-    action.id = "late-result-in-existing-group".into();
-    let result = mez_agent::ActionResult::succeeded(
+    let mut response = runtime_say_response(&turn_id, "original two-result execution", false);
+    let batch = response.action_batch.as_mut().unwrap();
+    batch.actions[0].id = "first-original-result".into();
+    let mut second_action = batch.actions[0].clone();
+    second_action.id = "late-original-result".into();
+    batch.actions.push(second_action);
+    let first = mez_agent::ActionResult::succeeded(
         &turn,
-        action,
-        vec!["settled late evidence ".repeat(200)],
+        &batch.actions[0],
+        vec!["first original evidence".into()],
+        None,
+    );
+    let late = mez_agent::ActionResult::succeeded(
+        &turn,
+        &batch.actions[1],
+        vec!["late original evidence".into()],
         None,
     );
     let execution = mez_agent::AgentTurnExecution {
@@ -47,17 +47,14 @@ fn check_late_same_group_result(adapter: bool) {
         response,
         latest_response_usage: Default::default(),
         routing_token_usage_by_model: Default::default(),
-        action_results: vec![result.clone()],
+        action_results: Vec::new(),
         final_turn: false,
         terminal_state: AgentTurnState::Running,
     };
     service
         .append_agent_execution_chronology(&turn, &execution)
         .unwrap();
-    let group = service
-        .agent_turn_contexts()
-        .get(&turn_id)
-        .unwrap()
+    let group = service.agent_turn_contexts()[&turn_id]
         .chronology()
         .last()
         .unwrap()
@@ -66,79 +63,152 @@ fn check_late_same_group_result(adapter: bool) {
         .clone();
     assert_eq!(
         service
-            .commit_settled_action_results_context(&turn_id, std::slice::from_ref(&result))
+            .commit_settled_action_results_context(&turn_id, &[first])
             .unwrap(),
         1
     );
-    compact_live(&mut service, &turn_id, "OWNED_OCCURRENCE_SUMMARY", false);
-    // Action ownership survives accepted compaction, but ordinary provider
-    // reacceptance must not recreate a missing assistant or replay its action.
-    assert!(
-        service
-            .append_agent_execution_chronology(&turn, &execution)
-            .is_err()
-    );
+    let original_group = service.agent_turn_contexts()[&turn_id]
+        .chronology()
+        .iter()
+        .filter(|event| event.execution_group_id() == Some(&group))
+        .cloned()
+        .collect::<Vec<_>>();
+    assert_eq!(original_group.len(), 2);
+    typed_source::queue(&mut service, &turn_id, true);
+    typed_source::complete(&mut service, &turn_id, "FIRST_OCCURRENCE_SUMMARY");
+    assert!(original_group.iter().all(|event| {
+        service.agent_turn_contexts()[&turn_id]
+            .chronology()
+            .contains(event)
+    }));
     service
         .agent_turn_contexts_mut()
         .get_mut(&turn_id)
         .unwrap()
         .append_user_event("steering", "LATE_EXACT_BARRIER")
         .unwrap();
-    let before_late = service.agent_turn_contexts().get(&turn_id).unwrap().clone();
-    let error = service
-        .commit_settled_action_results_context(&turn_id, std::slice::from_ref(&result))
-        .unwrap_err();
-    assert!(
-        error
-            .message()
-            .contains("preceding owning assistant execution")
-    );
-    assert_eq!(
-        service.agent_turn_contexts().get(&turn_id),
-        Some(&before_late)
-    );
-    // The ordinary runtime guard above is intentional. The canonical API also
-    // supports a new assistant occurrence in that group; qualify its accepted
-    // witness shape without claiming an ordinary provider generated this reuse.
-    service
-        .agent_turn_contexts_mut()
-        .get_mut(&turn_id)
-        .unwrap()
-        .append_assistant_event(
-            "late same-group source",
-            "late accepted source ".repeat(200),
-            group.clone(),
-        )
-        .unwrap();
     assert_eq!(
         service
-            .commit_settled_action_results_context(&turn_id, &[result])
+            .commit_settled_action_results_context(&turn_id, std::slice::from_ref(&late))
             .unwrap(),
         1
     );
-    compact_live(&mut service, &turn_id, "LATE_OCCURRENCE_SUMMARY", false);
-    let certificate = service
-        .terminal_compaction_handoff_content(&turn_id)
+    let late_event = service.agent_turn_contexts()[&turn_id]
+        .chronology()
+        .last()
+        .unwrap()
+        .clone();
+    assert_eq!(late_event.execution_group_id(), Some(&group));
+    let before_replay = service.agent_turn_contexts()[&turn_id].clone();
+    service
+        .append_agent_execution_chronology(&turn, &execution)
+        .unwrap();
+    assert_eq!(
+        service
+            .commit_settled_action_results_context(&turn_id, &[late])
+            .unwrap(),
+        0
+    );
+    assert_eq!(service.agent_turn_contexts()[&turn_id], before_replay);
+    typed_source::queue(&mut service, &turn_id, true);
+    typed_source::complete(&mut service, &turn_id, "LATE_OCCURRENCE_SUMMARY");
+    let live = service.agent_turn_contexts()[&turn_id].clone();
+    let occurrences =
+        RuntimeSessionService::terminal_execution_occurrences(live.chronology()).unwrap();
+    let ordinals = occurrences
+        .values()
+        .filter_map(|event| match event {
+            mez_agent::TranscriptContextEvent::ExecutionBlock {
+                execution_group_id: Some(owner),
+                ordinal,
+                ..
+            } if owner == &group => *ordinal,
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(ordinals, [1, 2, 3]);
+    assert!(
+        original_group
+            .iter()
+            .all(|event| live.chronology().contains(event))
+    );
+    assert!(live.chronology().contains(&late_event));
+    assert!(
+        service
+            .terminal_compaction_handoff_content(&turn_id)
+            .unwrap()
+            .is_none()
+    );
+    let (_, accepted) = store
+        .load_replay_epoch(&turn.conversation_id, mez_agent::AgentContext::empty())
         .unwrap()
         .unwrap();
-    let proof: crate::storage::transcript::compaction_handoff::TerminalCompactionHandoff =
-        serde_json::from_str(
-            certificate
-                .strip_prefix(crate::storage::transcript::compaction_handoff::MARKER)
-                .unwrap(),
-        )
-        .unwrap();
-    assert!(proof.replacements.len() >= 2);
-    assert_eq!(
-        proof.replacements.last().unwrap().summary,
-        "LATE_OCCURRENCE_SUMMARY"
+    assert_eq!(accepted.revision().get(), 2);
+    service.stop_agent_turn_for_pane("%1").unwrap();
+    if adapter {
+        typed_source::admit_bookkeeping(&mut service);
+        let mut receipts = 0usize;
+        for effect in service
+            .drain_transcript_persistence_transition()
+            .side_effects
+        {
+            match effect {
+                RuntimeSideEffect::PersistTranscriptEntries {
+                    store: writer,
+                    batch,
+                    path,
+                } => {
+                    writer.fail_transcript_append_after_first();
+                    assert!(writer.commit_accounted_transcript_batch(&batch, 1).is_err());
+                    let bytes = writer.commit_accounted_transcript_batch(&batch, 1).unwrap();
+                    let receipt = crate::runtime::PersistenceEvent::TranscriptCompleted {
+                        conversation_id: batch.conversation_id().into(),
+                        first_sequence: batch.first_sequence(),
+                        batch,
+                        path,
+                        bytes,
+                    };
+                    let mut stale = receipt.clone();
+                    if let crate::runtime::PersistenceEvent::TranscriptCompleted {
+                        first_sequence,
+                        ..
+                    } = &mut stale
+                    {
+                        *first_sequence += 100;
+                    }
+                    assert!(!service.apply_persistence_transition(stale).unwrap().applied);
+                    assert!(
+                        service
+                            .apply_persistence_transition(receipt.clone())
+                            .unwrap()
+                            .applied
+                    );
+                    assert!(
+                        !service
+                            .apply_persistence_transition(receipt)
+                            .unwrap()
+                            .applied
+                    );
+                    receipts += 1;
+                }
+                effect => service.queue_transcript_for_tests(effect),
+            }
+        }
+        assert!(receipts > 0);
+    } else {
+        typed_source::settle(&mut service);
+    }
+    assert!(
+        service
+            .persistence
+            .pending_transcript_entries(&turn.conversation_id)
+            .is_empty()
     );
-    let certificate_ordinals = proof
-        .replacements
+    let archive = store.inspect(&turn.conversation_id).unwrap();
+    let ordinals = archive
         .iter()
-        .flat_map(|replacement| &replacement.sources)
-        .filter_map(|content| {
-            match mez_agent::TranscriptContextEvent::from_transcript_content(content) {
+        .filter_map(|row| {
+            match mez_agent::TranscriptContextEvent::from_transcript_content(&row.content) {
                 Some(mez_agent::TranscriptContextEvent::ExecutionBlock {
                     execution_group_id: Some(owner),
                     ordinal,
@@ -148,190 +218,99 @@ fn check_late_same_group_result(adapter: bool) {
             }
         })
         .collect::<Vec<_>>();
-    assert_eq!(certificate_ordinals, [1, 2, 3, 4]);
-    let late_ordinals = proof
-        .replacements
-        .last()
-        .unwrap()
-        .sources
-        .iter()
-        .map(|content| {
-            match mez_agent::TranscriptContextEvent::from_transcript_content(content).unwrap() {
-                mez_agent::TranscriptContextEvent::ExecutionBlock {
-                    ordinal: Some(ordinal),
-                    ..
-                } => ordinal,
-                _ => panic!("expected typed source occurrence"),
-            }
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(late_ordinals, [3, 4]);
-    if adapter {
-        service.use_transcript_effect_adapter();
-    }
-    complete_turn(&mut service, &turn_id);
-    if adapter {
-        let work = service.claim_bookkeeping_candidates().pop().unwrap();
-        let checked = work.execute();
-        assert!(
-            service
-                .complete_bookkeeping_candidate(work, checked)
-                .unwrap()
-        );
-        assert!(
-            !service
-                .persistence
-                .pending_transcript_entries(&turn.conversation_id)
-                .is_empty()
-        );
-        let effects = service
-            .drain_transcript_persistence_transition()
-            .side_effects;
-        let mut receipts = 0;
-        for effect in effects {
-            if let RuntimeSideEffect::PersistTranscriptEntries {
-                store: writer,
-                batch: entries,
-                path,
-            } = effect
-            {
-                writer.fail_transcript_append_after_first();
-                assert!(
-                    writer
-                        .commit_accounted_transcript_batch(&entries, 1)
-                        .is_err()
-                );
-                let bytes = writer
-                    .commit_accounted_transcript_batch(&entries, 1)
-                    .unwrap();
-                let receipt = crate::runtime::PersistenceEvent::TranscriptCompleted {
-                    conversation_id: turn.conversation_id.clone(),
-                    first_sequence: entries.first_sequence(),
-                    batch: entries,
-                    path,
-                    bytes,
-                };
-                let mut stale = receipt.clone();
-                if let crate::runtime::PersistenceEvent::TranscriptCompleted {
-                    first_sequence,
-                    ..
-                } = &mut stale
-                {
-                    *first_sequence += 100;
-                }
-                assert!(!service.apply_persistence_transition(stale).unwrap().applied);
-                assert!(
-                    service
-                        .apply_persistence_transition(receipt.clone())
-                        .unwrap()
-                        .applied
-                );
-                assert!(
-                    !service
-                        .apply_persistence_transition(receipt)
-                        .unwrap()
-                        .applied
-                );
-                receipts += 1;
-            }
-        }
-        assert!(receipts > 0);
-        assert!(
-            service
-                .persistence
-                .pending_transcript_entries(&turn.conversation_id)
-                .is_empty()
-        );
-    }
-    let archive = store.inspect(&turn.conversation_id).unwrap();
-    let expected_group = group;
-    let ordinals = archive
-        .iter()
-        .filter_map(|row| {
-            match mez_agent::TranscriptContextEvent::from_transcript_content(&row.content) {
-                Some(mez_agent::TranscriptContextEvent::ExecutionBlock {
-                    execution_group_id: Some(group),
-                    ordinal,
-                    ..
-                }) if group == expected_group => ordinal,
-                _ => None,
-            }
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(ordinals, [1, 2, 3, 4]);
-    assert!(
-        store
-            .compaction_epoch(&turn.conversation_id)
-            .unwrap()
-            .is_none()
-    );
-    assert!(
-        archive
-            .iter()
-            .any(|row| row.content.contains("noncontiguous_archive_source"))
-    );
+    assert_eq!(ordinals, [1, 2, 3]);
     assert!(!archive.iter().any(|row| {
         row.content
             .starts_with(crate::storage::transcript::compaction_handoff::MARKER)
     }));
     service.set_agent_transcript_store(AgentTranscriptStore::new(store.root()));
-    let replay = service.runtime_agent_history_epoch_context("%1").unwrap();
+    let replay = service
+        .runtime_agent_history_epoch_context("%1")
+        .unwrap()
+        .replay_owner()
+        .unwrap()
+        .unwrap();
+    assert_eq!(replay.head(), accepted.head());
+    assert_eq!(replay.revision(), accepted.revision());
     assert_eq!(
         replay
-            .blocks
+            .context()
+            .chronology()
+            .iter()
+            .filter(|event| event.record() == late_event.record())
+            .count(),
+        1
+    );
+    assert_eq!(
+        replay
+            .context()
+            .chronology()
+            .iter()
+            .find(|event| event.record() == late_event.record())
+            .unwrap(),
+        &late_event
+    );
+    assert_eq!(
+        replay
+            .context()
+            .blocks()
             .iter()
             .filter(|block| block.content == "LATE_EXACT_BARRIER")
             .count(),
         1
     );
     assert!(
-        replay
-            .blocks
-            .iter()
-            .any(|block| block.content.contains("LIVE_ORIGINAL_SOURCE"))
-    );
-    // Unsupported summary projection is explicit; the raw source remains
-    // authoritative rather than pretending these local summaries committed.
-    assert!(
         !replay
-            .blocks
+            .context()
+            .blocks()
             .iter()
-            .any(|block| block.content == "LATE_OCCURRENCE_SUMMARY")
+            .any(|block| block.content.contains("LIVE_ORIGINAL_SOURCE")
+                || block.content == "FIRST_OCCURRENCE_SUMMARY")
     );
     assert_eq!(store.inspect(&turn.conversation_id).unwrap(), archive);
-    service.terminate_all_pane_processes().unwrap();
-    drop(service);
-    std::fs::remove_dir_all(store.root()).unwrap();
 }
 
-/// Distinct accepted witnesses cannot silently substitute their source payloads
-/// at a shared sequence, even when an exact duplicate would encode identically.
-/// Deliberately corrupt only the private witness fixture after real acceptance;
-/// certificate generation must fail before any archive/epoch/candidate mutation,
-/// preserve live source and omit private payloads from its conflict diagnostic.
+/// Genuine current publication produces no legacy certificate. The retained
+/// historical capture guard still refuses duplicate/conflicting private witness
+/// descriptors before touching canonical source or any archive/epoch bytes.
 #[test]
 fn contradictory_or_duplicate_witness_sources_fail_before_certificate_capture() {
     for changed in [true, false] {
-        let (mut service, store, turn_id) = live_fixture();
-        compact_live(&mut service, &turn_id, "SOURCE_GUARD_SUMMARY_A", false);
-        compact_live(&mut service, &turn_id, "SOURCE_GUARD_SUMMARY_B", false);
+        let (mut service, store, turn_id) = typed_source::pending();
         let turn = service.agent_turn_ledger().turn(&turn_id).unwrap().clone();
-        let before_context = service.agent_turn_contexts().get(&turn_id).unwrap().clone();
-        let archive_path = store.transcript_path(&turn.conversation_id).unwrap();
-        let before_archive = archive_path
-            .exists()
-            .then(|| std::fs::read(&archive_path).unwrap());
-        let before_epoch = store.compaction_epoch(&turn.conversation_id).unwrap();
-        let handoff = service
-            .agent
-            .agent_turn_compaction_handoffs
-            .get_mut(&turn_id)
-            .unwrap();
-        assert_eq!(handoff.witnesses.len(), 2);
-        let mut substituted = handoff.witnesses[0].source.clone();
+        let source = service.agent_turn_contexts()[&turn_id]
+            .chronology()
+            .iter()
+            .filter(|event| event.execution_group_id().is_some())
+            .cloned()
+            .collect::<Vec<_>>();
+        assert!(!source.is_empty());
+        typed_source::queue(&mut service, &turn_id, true);
+        typed_source::complete(&mut service, &turn_id, "SOURCE_GUARD_SUMMARY");
+        assert!(
+            service
+                .terminal_compaction_handoff_content(&turn_id)
+                .unwrap()
+                .is_none()
+        );
+        let before_context = service.agent_turn_contexts()[&turn_id].clone();
+        let archive = store.inspect(&turn.conversation_id).unwrap();
+        let path = store
+            .root()
+            .join(&turn.conversation_id)
+            .join("compaction-epoch.json");
+        let manifest = fs::read(&path).unwrap();
+        let witness = crate::runtime::agent_state::RuntimeCompactionWitness {
+            anchor: source[0].sequence().get(),
+            source: source.clone(),
+            archived_sources: Default::default(),
+            summary: "historical private summary".into(),
+            summary_record: before_context.chronology()[0].record(),
+        };
+        let mut duplicate = witness.clone();
         if changed {
-            let target = substituted[0].sequence().get();
-            let group = substituted[0].execution_group_id().unwrap().clone();
+            let target = source[0].sequence().get();
+            let group = source[0].execution_group_id().unwrap().clone();
             let mut forged = mez_agent::AgentContext::new_durable(vec![ContextBlock::user_event(
                 "seed", "seed",
             )])
@@ -345,41 +324,28 @@ fn contradictory_or_duplicate_witness_sources_fail_before_certificate_capture() 
                     )
                     .unwrap();
             }
-            assert_eq!(forged.event_sequence_high_water_mark(), target);
-            substituted[0] = forged.chronology().last().unwrap().clone();
+            duplicate.source[0] = forged.chronology().last().unwrap().clone();
         }
-        handoff.witnesses[1].source = substituted;
-        let error = service
-            .terminal_compaction_handoff_content(&turn_id)
-            .unwrap_err();
+        let handoff = crate::runtime::agent_state::RuntimeTurnCompactionHandoff {
+            baseline: None,
+            witnesses: vec![witness, duplicate],
+        };
+        let error = RuntimeSessionService::terminal_compaction_handoff_from_source(
+            &before_context,
+            &handoff,
+        )
+        .unwrap_err();
         assert_eq!(error.kind(), crate::MezErrorKind::Conflict);
         assert!(
             error
                 .message()
-                .contains("duplicate or conflicting terminal compaction source")
+                .contains("duplicate or conflicting terminal compaction source"),
+            "{error}"
         );
         assert!(!error.message().contains("PRIVATE_CONTRADICTORY"));
-        assert_eq!(
-            service.agent_turn_contexts().get(&turn_id),
-            Some(&before_context)
-        );
-        assert_eq!(
-            archive_path
-                .exists()
-                .then(|| std::fs::read(&archive_path).unwrap()),
-            before_archive
-        );
-        assert_eq!(
-            store.compaction_epoch(&turn.conversation_id).unwrap(),
-            before_epoch
-        );
-        assert!(
-            !service
-                .persistence
-                .bookkeeping_pending(&turn.conversation_id)
-        );
-        service.terminate_all_pane_processes().unwrap();
-        drop(service);
-        std::fs::remove_dir_all(store.root()).unwrap();
+        assert_eq!(service.agent_turn_contexts()[&turn_id], before_context);
+        assert_eq!(store.inspect(&turn.conversation_id).unwrap(), archive);
+        assert_eq!(fs::read(&path).unwrap(), manifest);
+        assert!(service.take_replay_epoch_attempt_for_tests().is_none());
     }
 }

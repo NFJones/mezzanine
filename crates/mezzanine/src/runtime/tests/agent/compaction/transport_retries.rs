@@ -9,10 +9,11 @@ use crate::runtime::AgentCompactionEvent;
 #[test]
 fn compaction_transport_pause_stop_and_new_ingress() {
     for command in ["/stop", "/new", "pause"] {
-        let (mut service, _, _) = queue_observed_input_compaction_with_second_group(None);
+        let mut service = test_runtime_service();
         service
             .start_initial_pane_process(Some("cat >/dev/null"))
             .unwrap();
+        let (mut service, _, _) = replay_observed::queued_with_service(service);
         let primary = service
             .attach_primary(
                 "transport-controller",
@@ -100,7 +101,7 @@ fn compaction_transport_policy_exhaustion_and_nonretryable_controls() {
         ("conflict", true, 0),
         ("io", true, 2),
     ] {
-        let (mut service, store, turn) = queue_observed_input_compaction_with_second_group(None);
+        let (mut service, store, turn) = replay_observed::queued();
         service.configure_provider_retry_policy(mez_agent::ProviderRetryPolicy {
             max_attempts: if unlimited { 0 } else { 1 },
             unlimited,
@@ -162,7 +163,7 @@ fn compaction_transport_policy_exhaustion_and_nonretryable_controls() {
 #[test]
 fn compaction_transport_backoff_stop_replacement_and_admission_failure() {
     for disposition in ["stop", "replacement", "admission"] {
-        let (mut service, _, turn) = queue_observed_input_compaction_with_second_group(None);
+        let (mut service, _, turn) = replay_observed::queued();
         let task = service.take_pending_agent_compaction_task("%1").unwrap();
         let generation = task.task_generation;
         service.claim_agent_compaction_task_state("%1", task);
@@ -227,7 +228,7 @@ fn compaction_transport_backoff_stop_replacement_and_admission_failure() {
 /// failure/completion deliveries neither republish an epoch nor enqueue work.
 #[test]
 fn compaction_transport_success_resumes_once() {
-    let (mut service, store, turn) = queue_observed_input_compaction_with_second_group(None);
+    let (mut service, store, turn) = replay_observed::queued();
     let task = service.take_pending_agent_compaction_task("%1").unwrap();
     let generation = task.task_generation;
     let conversation = task.conversation_id.clone();
@@ -264,6 +265,8 @@ fn compaction_transport_success_resumes_once() {
                 .applied
         );
     }
+    replay_observed::adopt(&mut service, &turn);
+    replay_observed::assert_head(&service, &store, &turn, "complete compact summary");
     assert!(!service.agent_is_compacting("%1"));
     assert!(service.agent_provider_task_is_pending(&turn));
     assert_eq!(
@@ -290,40 +293,118 @@ fn compaction_transport_success_resumes_once() {
 /// interrupted request must preserve its completed siblings and pending source.
 #[test]
 fn compaction_transport_manual_chunk_position_is_frozen() {
-    let (mut service, _, _) = queue_observed_input_compaction_with_second_group(None);
-    let mut task = service.take_pending_agent_compaction_task("%1").unwrap();
-    task.target = crate::runtime::agent_state::RuntimeAgentCompactionTarget::Conversation;
-    task.resume_turn_id = None;
-    task.conversation_chunks = Some(
-        crate::runtime::agent_state::RuntimeConversationCompactionChunks {
-            current: "current source".into(),
-            pending: vec!["pending source".into()],
-            summaries: vec!["prior complete summary".into()],
-            synthesis_source_bytes: Some(123),
-            failures: 2,
-            completed: 1,
-        },
-    );
-    let generation = task.task_generation;
-    service.claim_agent_compaction_task_state("%1", task);
-    service
-        .apply_agent_compaction_transition(failed(generation, "io"))
+    const CONVERSATION: &str = "manual-transport-chunks";
+    let (mut service, store) =
+        manual_model::queued(CONVERSATION, "original manual chunk source ".repeat(4_000));
+    let before = store.inspect(CONVERSATION).unwrap();
+    // Two genuine rejected auxiliary requests create three temporary pieces.
+    // Completing the first leaves both accepted staging and pending source.
+    for _ in 0..2 {
+        let task = service.take_pending_agent_compaction_task("%1").unwrap();
+        service.claim_agent_compaction_task_state("%1", task);
+        service
+            .apply_agent_compaction_failed_event(
+                "%1",
+                "invalid_state",
+                "provider context length exceeded",
+                Some(r#"{"status_code":400,"error":{"code":"context_length_exceeded"}}"#),
+            )
+            .unwrap();
+    }
+    complete_runtime_test_compaction(&mut service, "%1", "prior complete summary");
+    for synthesis in [false, true] {
+        let task = service.take_pending_agent_compaction_task("%1").unwrap();
+        let chunks = task.conversation_chunks.clone().unwrap();
+        assert_eq!(chunks.synthesis_source_bytes.is_some(), synthesis);
+        if !synthesis {
+            assert!(!chunks.pending.is_empty());
+            assert_eq!(chunks.summaries, ["prior complete summary"]);
+            assert_eq!((chunks.failures, chunks.completed), (2, 1));
+        }
+        let request = task.request.clone();
+        let source = task.replay_source.clone().unwrap();
+        let generation = task.task_generation;
+        service.claim_agent_compaction_task_state("%1", task);
+        service
+            .apply_agent_compaction_transition(failed(generation, "io"))
+            .unwrap();
+        let retry = service
+            .pending_agent_compaction_task_for_tests("%1")
+            .unwrap();
+        let held = retry.conversation_chunks.as_ref().unwrap();
+        assert_eq!(held.current, chunks.current);
+        assert_eq!(held.pending, chunks.pending);
+        assert_eq!(held.summaries, chunks.summaries);
+        assert_eq!(
+            (held.synthesis_source_bytes, held.failures, held.completed),
+            (
+                chunks.synthesis_source_bytes,
+                chunks.failures,
+                chunks.completed
+            )
+        );
+        assert_eq!(retry.request, request);
+        assert!(std::sync::Arc::ptr_eq(
+            &source,
+            retry.replay_source.as_ref().unwrap()
+        ));
+        let generation = retry.task_generation;
+        assert!(service.release_agent_compaction_retry("%1", generation));
+        assert!(
+            store
+                .load_replay_epoch(CONVERSATION, mez_agent::AgentContext::empty())
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(store.inspect(CONVERSATION).unwrap(), before);
+        // Consume only the finite, actually queued temporary pieces. The
+        // original raw source stays frozen until the final synthesis publishes.
+        while service
+            .pending_agent_compaction_task_for_tests("%1")
+            .unwrap()
+            .conversation_chunks
+            .as_ref()
+            .unwrap()
+            .synthesis_source_bytes
+            .is_none()
+        {
+            let previous = service
+                .pending_agent_compaction_task_for_tests("%1")
+                .unwrap()
+                .conversation_chunks
+                .as_ref()
+                .unwrap()
+                .completed;
+            complete_runtime_test_compaction(&mut service, "%1", "accepted remaining chunk");
+            assert!(
+                service
+                    .pending_agent_compaction_task_for_tests("%1")
+                    .unwrap()
+                    .conversation_chunks
+                    .as_ref()
+                    .unwrap()
+                    .completed
+                    > previous
+            );
+        }
+    }
+    complete_runtime_test_compaction(&mut service, "%1", "accepted final synthesis");
+    assert!(service.agent_is_compacting("%1"));
+    let completion = replay_publication::execute_pending_publication(&mut service);
+    service.apply_replay_epoch_completion(completion).unwrap();
+    let (_, cold) = AgentTranscriptStore::new(store.root())
+        .load_replay_epoch(CONVERSATION, mez_agent::AgentContext::empty())
+        .unwrap()
         .unwrap();
-    let retry = service
-        .pending_agent_compaction_task_for_tests("%1")
-        .unwrap();
-    let chunks = retry.conversation_chunks.as_ref().unwrap();
-    assert_eq!(chunks.current, "current source");
-    assert_eq!(chunks.pending, ["pending source"]);
-    assert_eq!(chunks.summaries, ["prior complete summary"]);
     assert_eq!(
-        (
-            chunks.failures,
-            chunks.completed,
-            chunks.synthesis_source_bytes
-        ),
-        (2, 1, Some(123))
+        cold.context().chronology()[0].block().content,
+        "accepted final synthesis"
     );
+    assert_eq!(cold.revision().get(), 1);
+    assert_eq!(store.inspect(CONVERSATION).unwrap(), before);
+    assert!(!service.agent_is_compacting("%1"));
+    assert!(service.agent_turn_ledger().turns().is_empty());
+    assert!(service.pending_agent_provider_tasks().is_empty());
 }
 
 /// An interrupted HTTP 200 body is not a complete summary. Keep the frozen
@@ -331,7 +412,7 @@ fn compaction_transport_manual_chunk_position_is_frozen() {
 /// without changing authoritative history or publishing provisional text.
 #[test]
 fn compaction_transport_failure_retains_frozen_work() {
-    let (mut service, store, turn_id) = queue_observed_input_compaction_with_second_group(None);
+    let (mut service, store, turn_id) = replay_observed::queued();
     let task = service.take_pending_agent_compaction_task("%1").unwrap();
     let frozen = task.request.clone();
     let generation = task.task_generation;

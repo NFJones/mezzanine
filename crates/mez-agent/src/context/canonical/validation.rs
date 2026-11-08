@@ -258,7 +258,7 @@ impl super::AgentContext {
         for sequence in &self.historical_instruction_events {
             if !self.chronology.iter().any(|event| {
                 event.sequence() == *sequence
-                    && super::epoch::instruction_source_can_complete(event.block())
+                    && super::epoch::instruction_event_can_complete(event)
                     && event.retention() == ContextRetention::Summarizable
             }) {
                 return Err(AgentContextError::new(

@@ -40,9 +40,10 @@ pub(crate) use initial_accounting::InitialTranscriptRowAccounting;
 pub(crate) mod compaction_handoff;
 /// Versioned summary occurrence records and qualified legacy epoch imports.
 mod compaction_records;
+#[cfg(test)]
+pub(crate) use compaction_records::{CompactionSummary, prefix_summary_block};
 pub(crate) use compaction_records::{
-    CompactionSummary, CompactionSummaryRecords, compaction_epochs_match, prefix_summary_block,
-    selective_summary_block,
+    CompactionSummaryRecords, compaction_epochs_match, selective_summary_block,
 };
 /// Exposes the encoding module boundary.
 ///
@@ -63,10 +64,13 @@ mod fs;
 /// Both prompt histories share one SQLite database; the legacy TSV files are
 /// imported once and then left untouched.
 mod history;
+#[cfg(test)]
 mod prefix_projection;
 /// Atomic manual-prefix publication against frozen epoch and physical rows.
+#[cfg(test)]
 mod prefix_publication;
 mod prefix_seal;
+#[cfg(test)]
 pub(crate) use prefix_projection::{project_compaction_prefix, validate_compaction_prefix_source};
 pub(crate) use prefix_seal::{TranscriptPrefixExpectation, TranscriptPrefixSeal};
 pub(crate) mod custody;

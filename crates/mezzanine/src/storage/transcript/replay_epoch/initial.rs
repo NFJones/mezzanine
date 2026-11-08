@@ -172,28 +172,35 @@ impl ReplayForkSource {
             .context()
             .chronology()
             .iter()
-            .map(|event| {
-                (
-                    event.record().occurrence_id(),
-                    event.block().content.clone(),
-                )
-            })
+            .map(|event| (event.record().occurrence_id(), event.block()))
             .collect::<BTreeMap<_, _>>();
         let mut rows = Vec::new();
         for item in items
             .iter()
             .filter(|item| needed.contains(&item.occurrence_id()))
         {
-            let content = contents
+            let block = contents
                 .get(&item.occurrence_id())
                 .ok_or_else(|| invalid("fork source original content is missing"))?;
             let mut row = if let Some((row, record)) = authored.get(&item.occurrence_id()) {
-                if !item.matches(row, record, content) {
+                // The leased renderer may have repaired descriptive costs while
+                // preserving the original wire bytes. Revalidate that repair
+                // against this exact canonical block; occurrence, producer and
+                // semantic framing still have to match the qualified escrow.
+                // Only the independent copy gets a current cost envelope.
+                let (event, original, stable) = record.clone().into_parts();
+                let repaired = original.restored(block)?;
+                let record = TranscriptContextRecord::new(event, repaired, stable)?;
+                if !item.matches(row, &record, &block.content) {
                     return Err(invalid("fork source original wire image changed"));
                 }
-                (*row).clone()
+                let mut copy = (*row).clone();
+                if repaired != original {
+                    copy.content = record.to_transcript_content()?;
+                }
+                copy
             } else {
-                item.copy_row(content.clone(), owner.conversation_id().as_str())?
+                item.copy_row(block.content.clone(), owner.conversation_id().as_str())?
             };
             row.sequence = rows.len() as u64 + 1;
             rows.push(row);
@@ -215,6 +222,16 @@ impl ReplayForkSource {
     /// that an unsaved source has storage or restart authority.
     pub(crate) fn conversation_id(&self) -> &str {
         &self.conversation
+    }
+
+    /// Selects the renderer's checked stable accounting before copy admission.
+    /// Only records change; all instruction bytes come from the child's policy.
+    pub(crate) fn with_stable_records(
+        mut self,
+        records: Vec<mez_agent::StableContextBlockRecord>,
+    ) -> Result<Self> {
+        self.checkpoint = self.checkpoint.with_stable_records(records)?;
+        Ok(self)
     }
 
     /// Builds one independent initial copy from this immutable selection.
@@ -322,7 +339,7 @@ impl ReplayForkSource {
             ForkOrigin::Memory(origin) => (None, Some(origin.clone())),
         };
         let manifest = Manifest {
-            version: 9,
+            version: 10,
             conversation_id: target.into(),
             epoch_revision: origin.epoch_revision(),
             revision: 1,
@@ -336,6 +353,8 @@ impl ReplayForkSource {
             checkpoint,
             copy_origin,
             memory_copy_origin,
+            prefix_origin: None,
+            raw_revision_origin: None,
             source_escrow: Some(self.escrow.clone()),
             archive_cut: Some(cursor::ArchiveCut::empty()),
         };
@@ -355,7 +374,8 @@ impl InitialReplayEpoch {
     }
 
     pub(crate) fn owner(&self) -> Result<ReplayEpochContext> {
-        if !self.envelope.manifest.is_copy()
+        if self.envelope.manifest.copy_origin.is_none()
+            && self.envelope.manifest.memory_copy_origin.is_none()
             || self.envelope.manifest.archive_cut.as_ref() != Some(&cursor::ArchiveCut::empty())
             || self
                 .envelope
@@ -427,6 +447,16 @@ impl InitialReplayEpoch {
         Ok(())
     }
 
+    /// Resolves original receipt-owned source while preserving its descriptive
+    /// stable baseline. Restoring an owner without current policy slots cannot
+    /// regenerate those records; it must not replace them with an empty list.
+    pub(crate) fn checkpoint(&self) -> Result<ReplayEpochCheckpoint> {
+        Ok(self
+            .owner()?
+            .checkpoint()?
+            .with_stable_records(self.envelope.manifest.checkpoint.stable_records().to_vec())?)
+    }
+
     /// Explicit planned identity used only after initial admission. Subsequent
     /// publication first recovers that receipt and checks the actual durable
     /// identity under its lease; this descriptor cannot acknowledge a write.
@@ -439,7 +469,7 @@ impl InitialReplayEpoch {
             conversation_id: self.conversation_id().into(),
             identity: self.envelope.identity(),
             pending_initial: true,
-            checkpoint: self.owner()?.checkpoint()?,
+            checkpoint: self.checkpoint()?,
             escrow: self.envelope.manifest.source_escrow.clone(),
             copy_backing: escrow::copy_backing(
                 self.envelope

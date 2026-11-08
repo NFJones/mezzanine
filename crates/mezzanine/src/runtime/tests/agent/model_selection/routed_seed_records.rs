@@ -87,6 +87,8 @@ fn routed_seed_preserves_original_records_source_and_imported_boundary_after_rep
     let (mut service, original, parent) = admitted_parent(true);
     let boundary = service.agent_turn_imported_history_sequence_high_water(&parent);
     assert!(boundary > 0);
+    let frozen_end = service.agent_turn_contexts()[&parent].event_sequence_high_water_mark();
+    assert!(frozen_end > boundary);
     let records = service.agent_turn_contexts()[&parent]
         .chronology()
         .iter()
@@ -114,7 +116,7 @@ fn routed_seed_preserves_original_records_source_and_imported_boundary_after_rep
     assert_eq!(source.ephemeral(), Some(true));
     assert_eq!(
         service.agent_turn_imported_history_sequence_high_water(&worker.turn_id),
-        boundary
+        frozen_end
     );
     let child = &service.agent_turn_contexts()[&worker.turn_id];
     let inherited = child
@@ -190,7 +192,6 @@ fn final_execution(turn: &mez_agent::AgentTurnRecord, text: &str) -> mez_agent::
 fn routed_seed_retirement_handoff_and_repair_preserve_the_actual_canonical_owner() {
     let (mut service, original, parent) = admitted_parent(true);
     let worker = select_worker(&mut service, &parent);
-    let boundary = service.agent_turn_imported_history_sequence_high_water(&worker.turn_id);
     let context = service
         .agent_turn_contexts_mut()
         .get_mut(&worker.turn_id)
@@ -249,7 +250,9 @@ fn routed_seed_retirement_handoff_and_repair_preserve_the_actual_canonical_owner
         );
         assert_eq!(
             service.agent_turn_imported_history_sequence_high_water(&id),
-            boundary
+            next.chronology()[next.chronology().len() - 2]
+                .sequence()
+                .get()
         );
         let source = service.agent_turn_history_source(&id).unwrap();
         assert_eq!(source.store(), Some(original.clone()));
@@ -287,6 +290,7 @@ fn routed_seed_keeps_admitted_source_absence_after_store_installation() {
         0
     );
     service.set_agent_transcript_store(AgentTranscriptStore::new(temp_root("routed-late-install")));
+    let frozen_end = service.agent_turn_contexts()[&parent].event_sequence_high_water_mark();
     let worker = select_worker(&mut service, &parent);
     let source = service.agent_turn_history_source(&worker.turn_id).unwrap();
     assert!(source.store().is_none());
@@ -294,7 +298,7 @@ fn routed_seed_keeps_admitted_source_absence_after_store_installation() {
     assert_eq!(source.ephemeral(), Some(true));
     assert_eq!(
         service.agent_turn_imported_history_sequence_high_water(&worker.turn_id),
-        0
+        frozen_end
     );
     service.terminate_all_pane_processes().unwrap();
 }

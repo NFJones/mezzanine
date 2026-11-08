@@ -184,11 +184,21 @@ impl RuntimeFrozenReplayHistory {
             return Ok(None);
         };
         history.records.import_context(history.blocks.clone())?;
+        let memory = history
+            .records
+            .replay_memory_source()
+            .or_else(|| {
+                history
+                    .source
+                    .as_ref()
+                    .and_then(|source| source.memory.clone())
+            })
+            .map(Ok);
         Ok(Some(Self(Arc::new(Frozen {
             conversation,
             history,
             archive_frontier,
-            memory: None,
+            memory,
         }))))
     }
 
@@ -210,7 +220,7 @@ impl RuntimeFrozenReplayHistory {
         let owner = self.0.history.replay_owner()?.ok_or_else(|| {
             MezError::invalid_state("frozen fork has no original canonical source")
         })?;
-        match &self.0.memory {
+        let source = match &self.0.memory {
             Some(Ok(source)) => source.fork_source(&owner),
             Some(Err((kind, diagnostic))) => Err(MezError::new(*kind, diagnostic.clone())),
             None => {
@@ -224,20 +234,28 @@ impl RuntimeFrozenReplayHistory {
                 )?
                 .fork_source(&owner)
             }
-        }
+        }?;
+        // Model-only reconstruction has no current trusted policy slots. Keep
+        // the separate original accounting snapshot, including an explicit
+        // empty baseline, in the bundle consumed by both copy transactions.
+        source.with_stable_records(self.0.history.records.stable_records_for_copy()?)
     }
 
-    /// Freezes descriptive lifecycle data before the worker can run. Parent
-    /// protection handles cannot advance this capture through shared live Arcs.
+    /// Freezes descriptive lifecycle and accounting before the worker can run.
+    /// Parent protection handles cannot advance this capture through shared
+    /// live Arcs; absent policy bytes cannot erase the original stable records.
     pub(in crate::runtime) fn freeze_for_fork(&self) -> Result<Self> {
         let mut history = self.history();
         let owner = history
             .replay_owner()?
             .ok_or_else(|| MezError::invalid_state("fork source lost its canonical owner"))?;
+        let checkpoint = owner
+            .checkpoint()?
+            .with_stable_records(history.records.stable_records_for_copy()?)?;
         let (records, blocks) =
             super::context_records::RuntimeContextRecords::from_replay_checkpoint(
                 self.0.conversation.clone(),
-                owner.checkpoint()?,
+                checkpoint,
                 history.records.replay_snapshot(),
             )?;
         history.records = records;
@@ -289,7 +307,8 @@ impl RuntimeFrozenReplayHistory {
             previous
                 .and_then(|previous| previous.0.memory.as_ref())
                 .and_then(|capture| capture.as_ref().ok())
-                .map(Arc::as_ref),
+                .map(Arc::as_ref)
+                .or_else(|| source.as_ref().and_then(|source| source.memory.as_deref())),
             snapshot.as_deref(),
             producer
                 .as_ref()

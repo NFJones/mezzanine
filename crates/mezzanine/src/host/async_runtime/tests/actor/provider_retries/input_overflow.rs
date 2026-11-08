@@ -2,7 +2,8 @@
 //!
 //! Synthetic HTTP failure envelopes have no model output or partial-output
 //! state. Exact claims, classification, bounded recovery, and dispatch selection
-//! remain production-owned; no provider or action worker is run by these tests.
+//! remain production-owned. An offline completed task supplies eligible source;
+//! the rejected request runs no provider or action worker.
 
 use super::*;
 
@@ -14,6 +15,12 @@ use super::*;
 async fn async_actor_missing_code_input_overflow_queues_one_compaction() {
     for parameter in ["max_tokens", "max_output_tokens"] {
         let mut service = test_service();
+        service.set_agent_transcript_store(crate::storage::transcript::AgentTranscriptStore::new(
+            std::env::temp_dir().join(format!(
+                "mez-overflow-source-{}",
+                crate::storage::token_usage::new_token_usage_event_id()
+            )),
+        ));
         service.replace_config_layers(vec![ConfigLayer {
             name: "input-overflow".into(),
             path: None,
@@ -29,28 +36,16 @@ async fn async_actor_missing_code_input_overflow_queues_one_compaction() {
             .agent_shell_store_mut()
             .enter_or_resume("%1")
             .unwrap();
-        service
-            .execute_agent_shell_command(&primary, "preserve the exact task")
-            .unwrap();
+        crate::test_support::compaction_source::complete_task_and_admit_successor(
+            &mut service,
+            &primary,
+            &format!("ORIGINAL_OVERFLOW_SOURCE {}", "observed ".repeat(3_000)),
+            "original observation task completed",
+            "preserve the exact task",
+            mez_agent::ProviderApiCompatibility::OpenAiResponses,
+        );
         let task = service.pending_agent_provider_tasks().remove(0);
-        let context = service
-            .agent_turn_contexts_mut()
-            .get_mut(&task.turn_id)
-            .unwrap();
-        let group = mez_agent::ContextExecutionGroupId::new("settled-synthetic-work").unwrap();
-        context
-            .append_assistant_event("settled decision", "synthetic decision", group.clone())
-            .unwrap();
-        context
-            .append_evidence_event(
-                mez_agent::ContextSourceKind::ActionResult,
-                "settled result",
-                "synthetic oversized evidence ".repeat(10_000),
-                group,
-                None,
-                true,
-            )
-            .unwrap();
+        let context = service.agent_turn_contexts().get(&task.turn_id).unwrap();
         let before = context.blocks().to_vec();
         let conversation = service
             .agent_shell_store()
@@ -58,6 +53,7 @@ async fn async_actor_missing_code_input_overflow_queues_one_compaction() {
             .unwrap()
             .session_id
             .clone();
+        let prior_usage = service.agent_token_usage_for_conversation(&conversation);
         let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
             .build()
             .unwrap();
@@ -167,6 +163,13 @@ async fn async_actor_missing_code_input_overflow_queues_one_compaction() {
             exit.service.pending_agent_compaction_task_ids(),
             vec!["%1".to_string()]
         );
+        assert!(
+            exit.service
+                .pending_agent_compaction_task_for_tests("%1")
+                .unwrap()
+                .replay_source
+                .is_some()
+        );
         assert_eq!(
             exit.service
                 .agent_turn_ledger()
@@ -175,10 +178,11 @@ async fn async_actor_missing_code_input_overflow_queues_one_compaction() {
                 .state,
             mez_agent::AgentTurnState::Running
         );
-        assert!(
+        assert_eq!(
             exit.service
-                .agent_token_usage_for_conversation(&conversation)
-                .is_empty()
+                .agent_token_usage_for_conversation(&conversation),
+            prior_usage,
+            "rejected and duplicate requests cannot add usage to prior completed work",
         );
         exit.service.terminate_all_pane_processes().unwrap();
     }

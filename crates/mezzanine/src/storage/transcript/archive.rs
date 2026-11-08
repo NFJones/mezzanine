@@ -180,6 +180,7 @@ impl AgentTranscriptStore {
     pub(super) fn acquire_conversation_lock(&self, conversation_id: &str) -> Result<File> {
         let file = self.open_conversation_lock(conversation_id)?;
         flock(&file, FlockOperation::LockExclusive).map_err(std::io::Error::from)?;
+        self.recover_replay_raw_revision_locked(conversation_id)?;
         self.recover_row_origins_rewrite_locked(conversation_id)?;
         Ok(file)
     }
@@ -205,6 +206,7 @@ impl AgentTranscriptStore {
                 .map_err(std::io::Error::from)
             {
                 Ok(()) => {
+                    self.recover_replay_raw_revision_locked(conversation_id)?;
                     self.recover_row_origins_rewrite_locked(conversation_id)?;
                     return Ok(file);
                 }

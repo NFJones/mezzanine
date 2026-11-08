@@ -107,6 +107,19 @@ impl Fixture {
         actions: impl FnOnce(&std::path::Path) -> Vec<mez_agent::AgentAction>,
         prepare: impl FnOnce(&mut RuntimeSessionService, &AgentTurnRecord),
     ) -> Self {
+        Self::with_history_and_context(directory, owned_directory, actions, |_| {}, prepare)
+    }
+
+    /// Prepares actual earlier tasks before admitting the native task. History
+    /// setup precedes this task's explicit permissions and source capture, so a
+    /// configured provider cannot replace its already admitted authority.
+    fn with_history_and_context(
+        directory: Option<&str>,
+        owned_directory: bool,
+        actions: impl FnOnce(&std::path::Path) -> Vec<mez_agent::AgentAction>,
+        history: impl FnOnce(&mut RuntimeSessionService),
+        prepare: impl FnOnce(&mut RuntimeSessionService, &AgentTurnRecord),
+    ) -> Self {
         let root = temp_root("native-filesystem-attempt");
         fs::create_dir_all(&root).unwrap();
         let root = fs::canonicalize(root).unwrap();
@@ -132,6 +145,7 @@ impl Fixture {
                 .record_native_working_directory(owned, 0)
                 .unwrap();
         }
+        history(&mut service);
         let permissions = crate::runtime::config::runtime_configured_permissions_from_config(
             &serde_json::json!({"permissions":{"read_scopes":[root],"write_scopes":[root]}}),
         )

@@ -216,7 +216,7 @@ impl AgentTranscriptStore {
                     .content
                     .starts_with(super::super::compaction_handoff::MARKER)
         }) {
-            self.publish_terminal_compaction_handoffs_locked(batch.conversation_id())?;
+            self.validate_terminal_compaction_handoffs_locked(batch.conversation_id())?;
         }
         Ok(())
     }

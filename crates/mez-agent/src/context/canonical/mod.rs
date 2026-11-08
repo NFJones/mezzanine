@@ -1377,12 +1377,21 @@ impl AgentContext {
     /// The operation fails atomically on missing, reordered, duplicated, or
     /// non-monotonic group metadata instead of falling back to inferred
     /// ownership that could change provider projection or compaction behavior.
+    /// This restores descriptive framing, never a task-completion witness.
+    /// Canonical adoption independently protects imported execution groups.
+    /// Frozen owned replay must retain its typed chronology rather than restore
+    /// flat framing through this unowned import boundary.
     pub fn restore_imported_execution_events(
         &mut self,
         imported: &[ImportedExecutionEvent],
     ) -> AgentContextResult<()> {
         if imported.is_empty() {
             return Ok(());
+        }
+        if self.has_replay_owner() {
+            return Err(AgentContextError::new(
+                "owned replay cannot restore legacy execution framing",
+            ));
         }
         let mut candidate = self.clone();
         candidate.restore_imported_metadata(imported, 0, BTreeMap::new())?;
@@ -2131,7 +2140,7 @@ impl AgentContext {
         self.historical_instruction_events.retain(|sequence| {
             self.chronology.iter().any(|event| {
                 event.sequence == *sequence
-                    && epoch::instruction_source_can_complete(&event.block)
+                    && epoch::instruction_event_can_complete(event)
                     && event.retention == ContextRetention::Summarizable
             })
         });

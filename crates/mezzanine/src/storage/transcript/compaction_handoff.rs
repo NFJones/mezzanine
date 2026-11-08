@@ -2,15 +2,18 @@
 //!
 //! A terminal system row travels through ordinary exact append receipts. It is
 //! audit data, never a floating Memory block. Only complete committed typed
-//! groups can support its selective replay epoch. Publication compares the
-//! captured baseline and exact source under the epoch writer's conversation
-//! lock; append retries and restart recovery can repeat the transition safely.
-//! Fork capture uses the same source-proof derivation without publishing against
-//! the parent. Prospective admission rejects genuine occurrence conflicts while
+//! groups can qualify its historical selective projection. Receipt validation
+//! checks exact source and existing coverage under the conversation lock;
+//! incomplete replacements refuse rather than publish another selective head.
+//! Historical inspection shares that source-proof derivation without publishing
+//! against the parent. Prospective admission rejects occurrence conflicts while
 //! classifying sound split-group layouts as unsupported raw-authoritative history.
 //! Exact lookup diagnostics expose only phase and numeric indexes/counts.
 //! Accepted authority travels in the child epoch; copied audit rows
 //! use a separate inert marker and cannot replay against renumbered child rows.
+//! Historical selective source now requires explicit normalization before
+//! semantic replay; this module's validators preserve its audit evidence but
+//! cannot authorize new selective publication through the retired writer.
 
 use mez_agent::{
     TranscriptContextEvent,
@@ -282,22 +285,26 @@ impl TerminalCompactionHandoff {
 }
 
 impl AgentTranscriptStore {
-    /// Reconciles committed terminal witnesses before admitting a new replay.
-    /// Pending rows are not publication proof. Stale or conflicting evidence
-    /// leaves the old epoch authoritative and returns an explicit error.
-    pub(crate) fn publish_terminal_compaction_handoffs(&self, conversation_id: &str) -> Result<()> {
+    /// Validates historical terminal evidence without publishing a projection.
+    /// An already covered certificate may settle its original append receipt;
+    /// a pending selective rewrite requires explicit normalization instead.
+    pub(crate) fn validate_terminal_compaction_handoffs(
+        &self,
+        conversation_id: &str,
+    ) -> Result<()> {
         let _conversation_lock = self.acquire_conversation_lock(conversation_id)?;
         if self.active_delete_pending(conversation_id)? {
             return Err(MezError::invalid_state(
                 "conversation publication or deletion is incomplete",
             ));
         }
-        self.publish_terminal_compaction_handoffs_locked(conversation_id)
+        self.validate_terminal_compaction_handoffs_locked(conversation_id)
     }
 
-    /// Reconciles through the ordinary owner under an already-held mutation
-    /// lock. Fork uses this only on its new target, never on the source archive.
-    pub(super) fn publish_terminal_compaction_handoffs_locked(
+    /// Validates under an already-held conversation lease without importing
+    /// accounting or changing replay authority. Model admission separately
+    /// rejects unsupported persisted formats, even if their append is complete.
+    pub(super) fn validate_terminal_compaction_handoffs_locked(
         &self,
         conversation_id: &str,
     ) -> Result<()> {
@@ -330,48 +337,57 @@ impl AgentTranscriptStore {
                     ))
                 })?;
             handoff.validate()?;
-            self.publish_terminal_compaction_handoff(
+            let mut previous = self.read_compaction_epoch_unmigrated(conversation_id)?;
+            if let Some(epoch) = previous.as_mut()
+                && epoch.version == 3
+            {
+                epoch.restore_summary_records()?;
+            }
+            if handoff
+                .baseline
+                .as_ref()
+                .is_some_and(|baseline| baseline.conversation_id != conversation_id)
+            {
+                return Err(MezError::conflict(
+                    "terminal compaction handoff has foreign baseline identity",
+                ));
+            }
+            project_terminal_handoff(
                 conversation_id,
                 entry.sequence,
                 &entries,
                 handoff,
+                previous,
+                ProjectionPurpose::SettlementValidation,
             )?;
-        }
-        Ok(())
-    }
-
-    /// Maps exact frozen payloads to one contiguous committed occurrence and
-    /// publishes only a complete, baseline-fenced projection.
-    fn publish_terminal_compaction_handoff(
-        &self,
-        conversation_id: &str,
-        terminal_sequence: u64,
-        entries: &[TranscriptEntry],
-        handoff: TerminalCompactionHandoff,
-    ) -> Result<()> {
-        let previous = self.compaction_epoch_locked(conversation_id)?;
-        if let Some((epoch, frozen)) = project_terminal_handoff(
-            conversation_id,
-            terminal_sequence,
-            entries,
-            handoff,
-            previous.clone(),
-        )? {
-            self.save_terminal_compaction_ranges_with_proof_locked(epoch, &frozen, &previous)?;
+            if !self.compaction_epoch_marker_is_committed(conversation_id)? {
+                return Err(MezError::invalid_state(
+                    "legacy terminal compaction required-state marker is incomplete; explicit single-head normalization is required",
+                ));
+            }
         }
         Ok(())
     }
 }
 
+/// Historical inspection can describe old data; receipt settlement can only
+/// recognize an already durable replacement, never mint another selective head.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ProjectionPurpose {
+    HistoricalDescription,
+    SettlementValidation,
+}
+
 /// Derives the same exact baseline-fenced transition without storage mutation.
-/// Source occurrence, ordering and coverage checks are shared by live
-/// publication and immutable fork capture; range validation remains caller-owned.
+/// Source occurrence, ordering and coverage checks are shared by historical
+/// inspection and receipt validation; range validation remains caller-owned.
 fn project_terminal_handoff(
     conversation_id: &str,
     terminal_sequence: u64,
     entries: &[TranscriptEntry],
     handoff: TerminalCompactionHandoff,
     previous: Option<AgentCompactionEpoch>,
+    purpose: ProjectionPurpose,
 ) -> Result<Option<(AgentCompactionEpoch, Vec<TranscriptEntry>)>> {
     let mut additions = Vec::new();
     let mut frozen = Vec::new();
@@ -419,6 +435,16 @@ fn project_terminal_handoff(
                 })
         }) {
             continue;
+        }
+        if purpose == ProjectionPurpose::SettlementValidation {
+            if !super::compaction_epochs_match(&previous, &handoff.baseline) {
+                return Err(MezError::conflict(
+                    "terminal compaction epoch baseline changed",
+                ));
+            }
+            return Err(MezError::invalid_state(
+                "legacy terminal compaction requires explicit single-head normalization",
+            ));
         }
         let block = super::selective_summary_block(&range.summary);
         let record = match replacement.summary_record {
@@ -522,6 +548,7 @@ pub(crate) fn fork_terminal_projection(
             entries,
             handoff,
             epoch.clone(),
+            ProjectionPurpose::HistoricalDescription,
         )? {
             super::store::validate_compaction_ranges(
                 &proposed.ranges,

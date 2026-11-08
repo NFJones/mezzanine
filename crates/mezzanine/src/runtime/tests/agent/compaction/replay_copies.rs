@@ -37,7 +37,7 @@ fn history_with_count(
 
 /// Retires actual native/selector owners before propagating a scenario panic.
 /// A failing regression must not leave cleanup to final owner destruction.
-fn native_scenario(
+pub(super) fn native_scenario(
     service: &mut RuntimeSessionService,
     scenario: impl FnOnce(&mut RuntimeSessionService),
 ) {
@@ -141,7 +141,7 @@ fn admit_and_bootstrap_child(service: &mut RuntimeSessionService, pane: &str, co
     );
 }
 
-fn published_source() -> (RuntimeSessionService, AgentTranscriptStore, String, String) {
+pub(super) fn published_source() -> (RuntimeSessionService, AgentTranscriptStore, String, String) {
     let (mut service, store, turn) = provider_limit_replay::recovery_source(
         &format!("COVERED_PARENT_SOURCE {}", "source ".repeat(5_000)),
         "ORIGINAL_PARENT_RAW_TAIL",
@@ -1459,7 +1459,7 @@ fn nostore_subagent_fork_uses_its_latest_frozen_head_without_saving_parent() {
             &fs::read(store.root().join(&cid).join("compaction-epoch.json")).unwrap(),
         )
         .unwrap();
-        assert_eq!(stored["manifest"]["version"], 9);
+        assert_eq!(stored["manifest"]["version"], 10);
         assert!(stored["manifest"]["copy_origin"].is_null());
         assert_eq!(
             stored["manifest"]["memory_copy_origin"]["conversation"],

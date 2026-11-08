@@ -1,26 +1,24 @@
 //! Agent-shell conversation compaction commands and provider request helpers.
 //!
 //! This module owns `/compact`, queued model-backed compaction tasks,
-//! compaction provider request construction, durable summary extraction,
-//! and retained transcript-tail calculations. Keeping compaction isolated
+//! compaction provider request construction, private summary staging,
+//! and canonical replay publication. Keeping compaction isolated
 //! avoids mixing long-running summarization workflow with ordinary shell
 //! command dispatch. Manual model input keeps physical source proofs distinct
-//! from summary replacements, and prefix publication compares the frozen epoch
+//! from summary replacements, and head publication compares the frozen epoch
 //! and rows under the mutation lease before changing durable replay authority.
 //! The candidate component reconstructs prospective history and measures the
 //! complete request; source/preparation owners retain exact publication fences.
 
 use super::{
-    AGENT_COMPACT_TRANSCRIPT_ENTRY_CONTEXT_OVERHEAD_WORDS, AgentActionPayload, AgentContext,
-    AgentShellCommandOutcome, AgentTurnRecord, AgentTurnState, AllowedActionSet, ContextBlock,
-    ContextSourceKind, DEFAULT_PROVIDER_TIMEOUT_MS, MemoryRecord, MemoryScope, MemorySource,
-    MezError, ModelInteractionKind, ModelMessage, ModelMessageRole, ModelProfile, ModelRequest,
+    AgentActionPayload, AgentContext, AgentShellCommandOutcome, AgentTurnRecord, AgentTurnState,
+    AllowedActionSet, ContextBlock, ContextSourceKind, DEFAULT_PROVIDER_TIMEOUT_MS, MezError,
+    ModelInteractionKind, ModelMessage, ModelMessageRole, ModelProfile, ModelRequest,
     ModelResponse, ProviderApiCompatibility, ReqwestProviderHttpTransport, Result,
     RuntimeAgentCompactionDispatch, RuntimeAgentCompactionTask,
     RuntimeAgentProviderDispatchProvider, RuntimeSessionService, TranscriptEntry, TranscriptRole,
-    append_mcp_context, current_unix_seconds,
-    deepseek_chat_completions_provider_from_auth_store_with_provider_options, json_escape,
-    model_context_text_word_count,
+    current_unix_seconds, deepseek_chat_completions_provider_from_auth_store_with_provider_options,
+    json_escape, model_context_text_word_count,
     openai_compatible_provider_from_auth_store_with_provider_options_and_brand,
     openai_responses_provider_from_auth_store_with_provider_options, parse_slash_command,
     resolve_provider_api,
@@ -35,34 +33,30 @@ use crate::runtime::agent_state::{
     RuntimeActiveTurnCompactionTrigger, RuntimeConversationCompactionChunks,
 };
 use crate::runtime::config::runtime_effective_provider_options;
-use crate::runtime::control::runtime_agent_compaction_replay_context;
 use crate::runtime::{AgentCompactionEvent, RenderInvalidationReason, RuntimeTransition};
 use crate::security::auth::AuthProfileCredentialSource;
-use crate::storage::transcript::{AgentCompactionEpoch, AgentCompactionRange};
-use mez_agent::{ProviderErrorRetryClass, apply_model_context_compaction_plan};
+use mez_agent::ProviderErrorRetryClass;
 
 mod candidate;
 mod handoff;
-/// Ordered selective-summary projection for model input.
+/// Canonical input-boundary regressions.
+#[cfg(test)]
 mod input;
-pub(super) use input::CompactionTranscriptSource;
+mod no_work;
 mod preparation;
-/// Original accepted summary records retained across previews and publication.
-mod records;
 mod replay_epoch;
 pub(crate) use replay_epoch::{
     RuntimeCompactionReplaySource, RuntimeReplayEpochAttempt, RuntimeReplayEpochCompletion,
     RuntimeReplayEpochPublication,
 };
-mod selection;
 mod source;
 mod summary_correction;
 #[cfg(test)]
 mod tests;
+use no_work::NoWorkReason;
 pub(crate) use preparation::{
     RuntimeManualCompactionPreparation, RuntimeManualCompactionRequestWork,
 };
-use selection::{ManualCompactionSelection, NoWorkReason};
 
 /// Content-free component estimates for a failed complete provider request.
 fn runtime_compaction_candidate_size_diagnostic(
@@ -89,511 +83,7 @@ fn runtime_compaction_candidate_size_diagnostic(
     )
 }
 
-/// Durability admission for a validated closed selection. Turn-local source
-/// may be summarized but cannot publish a selective transcript epoch.
-enum CompactionSelectionDurability {
-    /// Every selected source maps exactly to contiguous committed rows.
-    Durable(AgentCompactionRange),
-    /// Valid live, pending, or legacy source lacks committed typed ownership.
-    TurnLocal,
-}
-
-/// Distinguishes absent durable ownership from conflicting committed evidence.
-/// Exact selected event identities and any existing group rows must agree;
-/// partially committed groups require a complete matching logical snapshot.
-fn classify_compaction_selection(
-    plan: &mez_agent::ModelContextCompactionPlan,
-    context: &AgentContext,
-    committed: &[TranscriptEntry],
-    logical: &[TranscriptEntry],
-    summary: &str,
-) -> Result<CompactionSelectionDurability> {
-    let mut groups = std::collections::BTreeMap::new();
-    let mut turn_local = false;
-    if plan.replacement_blocks().is_empty()
-        || plan.replacement_blocks().len() != plan.replacement_event_sequences().len()
-    {
-        return Err(MezError::conflict(
-            "compaction selected source identity changed",
-        ));
-    }
-    for (sequence, block) in plan
-        .replacement_event_sequences()
-        .iter()
-        .zip(plan.replacement_blocks())
-    {
-        let event = context
-            .chronology()
-            .iter()
-            .find(|event| event.sequence() == *sequence && event.block() == block)
-            .ok_or_else(|| MezError::conflict("compaction selected source identity changed"))?;
-        if let Some(group) = event.execution_group_id() {
-            groups
-                .entry(group.clone())
-                .or_insert_with(Vec::new)
-                .push(block);
-        } else {
-            turn_local = true;
-        }
-    }
-    for (group, blocks) in groups {
-        let group_rows = |rows: &[TranscriptEntry]| {
-            rows.iter()
-                .filter_map(
-                    |entry| match mez_agent::TranscriptContextEvent::from_transcript_content(
-                        &entry.content,
-                    ) {
-                        Some(mez_agent::TranscriptContextEvent::ExecutionBlock {
-                            source,
-                            label,
-                            content,
-                            execution_group_id: Some(candidate),
-                            ordinal,
-                            ..
-                        }) if candidate == group => Some((source, label, content, ordinal)),
-                        _ => None,
-                    },
-                )
-                .collect::<Vec<_>>()
-        };
-        let rows = group_rows(committed);
-        if rows.is_empty() {
-            turn_local = true;
-            continue;
-        }
-        let matches = |rows: &[(ContextSourceKind, String, String, Option<u64>)]| {
-            rows.len() == blocks.len()
-                && rows.iter().zip(&blocks).enumerate().all(
-                    |(index, ((source, label, content, ordinal), block))| {
-                        *source == block.source
-                            && *label == block.label
-                            && *content == block.content
-                            && *ordinal == Some(index as u64 + 1)
-                    },
-                )
-        };
-        if !matches(&rows) {
-            if rows.len() < blocks.len() && matches(&group_rows(logical)) {
-                turn_local = true;
-            } else {
-                return Err(MezError::conflict(
-                    "compaction committed group source changed",
-                ));
-            }
-        }
-    }
-    if turn_local {
-        return Ok(CompactionSelectionDurability::TurnLocal);
-    }
-    selected_durable_compaction_range(plan, context, committed, summary)
-        .map(CompactionSelectionDurability::Durable)
-        .ok_or_else(|| {
-            MezError::conflict("compaction committed selection is ambiguous or incomplete")
-        })
-}
-
-/// Maps only an exact, contiguous frozen selection to durable execution rows.
-/// Unmatched or ambiguous selections retain the existing full raw replay window.
-fn selected_durable_compaction_range(
-    plan: &mez_agent::ModelContextCompactionPlan,
-    context: &AgentContext,
-    entries: &[TranscriptEntry],
-    summary: &str,
-) -> Option<AgentCompactionRange> {
-    let selected = plan.replacement_blocks();
-    if selected.is_empty() || selected.len() != plan.replacement_event_sequences().len() {
-        return None;
-    }
-    let selected_events = plan
-        .replacement_event_sequences()
-        .iter()
-        .zip(selected)
-        .map(|(sequence, block)| {
-            context
-                .chronology()
-                .iter()
-                .find(|event| event.sequence() == *sequence && event.block() == block)
-        })
-        .collect::<Option<Vec<_>>>()?;
-    if selected_events
-        .iter()
-        .any(|event| event.execution_group_id().is_none())
-    {
-        return None;
-    }
-    let matching = entries
-        .iter()
-        .enumerate()
-        .filter(|(_, entry)| {
-            let Some(mez_agent::TranscriptContextEvent::ExecutionBlock {
-                source,
-                label,
-                content,
-                execution_group_id: Some(group),
-                ordinal: Some(ordinal),
-                ..
-            }) = mez_agent::TranscriptContextEvent::from_transcript_content(&entry.content)
-            else {
-                return false;
-            };
-            selected[0].source == source
-                && selected[0].label == label
-                && selected[0].content == content
-                && selected_events[0].execution_group_id() == Some(&group)
-                && ordinal == 1
-        })
-        .map(|(index, _)| index)
-        .collect::<Vec<_>>();
-    if matching.len() != 1 {
-        return None;
-    }
-    let start = matching[0];
-    let rows = entries.get(start..start.checked_add(selected.len())?)?;
-    let mut selected_groups = std::collections::BTreeSet::new();
-    let mut prior_group = None;
-    let mut expected_ordinal = 0_u64;
-    if !rows
-        .iter()
-        .zip(selected)
-        .zip(&selected_events)
-        .all(|((entry, block), event)| {
-            matches!(mez_agent::TranscriptContextEvent::from_transcript_content(&entry.content),
-            Some(mez_agent::TranscriptContextEvent::ExecutionBlock { source, label, content,
-                execution_group_id: Some(group), ordinal: Some(ordinal), .. })
-                if block.source == source && block.label == label && block.content == content
-                    && event.execution_group_id() == Some(&group)
-                    && {
-                        if prior_group.as_ref() != Some(&group) {
-                            if !selected_groups.insert(group.clone()) { return false; }
-                            prior_group = Some(group.clone());
-                            expected_ordinal = 0;
-                        }
-                        expected_ordinal = expected_ordinal.saturating_add(1);
-                        ordinal == expected_ordinal
-                    })
-        })
-    {
-        return None;
-    }
-    if !rows
-        .windows(2)
-        .all(|pair| pair[0].sequence.checked_add(1) == Some(pair[1].sequence))
-    {
-        return None;
-    }
-    if entries.iter().enumerate().any(|(index, entry)| {
-        (index < start || index >= start + rows.len())
-            && matches!(mez_agent::TranscriptContextEvent::from_transcript_content(&entry.content),
-                Some(mez_agent::TranscriptContextEvent::ExecutionBlock {
-                    execution_group_id: Some(candidate), ..
-                }) if selected_groups.contains(&candidate))
-    }) {
-        return None;
-    }
-    Some(AgentCompactionRange {
-        first_sequence: rows.first()?.sequence,
-        through_sequence: rows.last()?.sequence,
-        summary: summary.to_string(),
-    })
-}
-
 impl RuntimeSessionService {
-    /// Captures the authoritative epoch once for private recovery. A missing
-    /// epoch is a witness too; later stages must not refresh this baseline.
-    fn private_compaction_epoch_baseline(
-        &self,
-        task: &RuntimeAgentCompactionTask,
-    ) -> Result<Option<AgentCompactionEpoch>> {
-        if let RuntimeAgentCompactionTarget::ActiveTurn {
-            staged: Some(state),
-            ..
-        } = &task.target
-        {
-            return Ok(state.baseline_epoch.clone());
-        }
-        if let Some(history) = task
-            .source_owner
-            .as_ref()
-            .and_then(|owner| owner.history.as_ref())
-            && history.conversation_id() == Some(task.conversation_id.as_str())
-        {
-            return Ok(history.epoch.clone());
-        }
-        task.source_store()
-            .map(|store| store.compaction_epoch(&task.conversation_id))
-            .transpose()
-            .map(Option::flatten)
-    }
-
-    /// Checks whether excluding a complete group could still yield a fitting
-    /// provider request, without changing the running turn or durable epoch.
-    fn compaction_walkback_candidate_fits(
-        &mut self,
-        task: &RuntimeAgentCompactionTask,
-        turn_id: &str,
-        plan: &mez_agent::ModelContextCompactionPlan,
-    ) -> Result<bool> {
-        let Some(turn) = self
-            .agent_turn_ledger()
-            .turns()
-            .iter()
-            .find(|turn| turn.turn_id == turn_id)
-            .cloned()
-        else {
-            return Ok(false);
-        };
-        let Some(context) = self.agent_turn_contexts().get(turn_id) else {
-            return Ok(false);
-        };
-        let Some(profile) = self.agent_turn_model_profile(turn_id).cloned() else {
-            return Ok(false);
-        };
-        // One token is the smallest useful model-authored summary. A request
-        // that cannot fit even this lower bound cannot benefit from walk-back.
-        let (candidate, _) = apply_model_context_compaction_plan(context.clone(), plan, "x")
-            .map_err(|error| MezError::invalid_state(error.message()))?;
-        if let RuntimeAgentCompactionTarget::ActiveTurn {
-            trigger:
-                RuntimeActiveTurnCompactionTrigger::ObservedInputLimit {
-                    observed_input_tokens,
-                    ..
-                },
-            ..
-        } = &task.target
-        {
-            let projection =
-                self.prospective_observed_compaction_epoch(task, context, plan, "x")?;
-            let provider = self
-                .provider_registry()
-                .provider(&profile.provider)
-                .ok_or_else(|| MezError::config("compaction walk-back provider is unavailable"))?;
-            let api = resolve_provider_api(&provider.kind, provider.api.as_deref())?;
-            let options = runtime_effective_provider_options(provider, &profile);
-            if let Some(projection) = projection {
-                let (tokens, limit, _) = self
-                    .validate_observed_input_compaction_refresh_candidate(
-                        task,
-                        &turn,
-                        candidate,
-                        "x",
-                        Some(projection),
-                        *observed_input_tokens,
-                        &profile,
-                        &options,
-                        api,
-                        true,
-                    )?;
-                return Ok(tokens <= limit);
-            }
-            // An uncommitted first-turn selection has no durable replay to
-            // preview. Measure the complete turn-local candidate below instead.
-        }
-        let mcp_summary = self.mcp_registry().prompt_summary();
-        let (prepared, tools) =
-            self.prepare_agent_turn_model_context(&turn, candidate, &mcp_summary, &profile)?;
-        let provider = self
-            .provider_registry()
-            .provider(&profile.provider)
-            .ok_or_else(|| MezError::config("compaction walk-back provider is unavailable"))?;
-        let api = resolve_provider_api(&provider.kind, provider.api.as_deref())?;
-        let options = runtime_effective_provider_options(provider, &profile);
-        let mut request =
-            assemble_model_request(&profile, api, &turn, &prepared.to_agent_context())?;
-        let (actions, interaction) = self.agent_provider_request_control_for_turn(&turn)?;
-        mez_agent::apply_model_request_control(&mut request, actions, interaction);
-        mez_agent::apply_default_action_gates(
-            &mut request,
-            &tools,
-            self.runtime_persistent_memory_enabled(),
-            super::runtime_issues_enabled(self),
-        );
-        let Some(limit) = runtime_compaction_safe_input_limit(
-            profile.max_input_tokens(),
-            profile.context_window_tokens(),
-            profile.max_output_tokens(),
-        ) else {
-            return Ok(false);
-        };
-        let tokens =
-            mez_agent::provider_request_input_estimate(&request, api, &options, true)?.input_tokens;
-        if let RuntimeAgentCompactionTarget::ActiveTurn {
-            trigger:
-                RuntimeActiveTurnCompactionTrigger::ObservedInputLimit {
-                    observed_input_tokens,
-                    ..
-                },
-            ..
-        } = &task.target
-            && tokens <= limit
-            && u64::try_from(tokens).unwrap_or(u64::MAX) >= *observed_input_tokens
-        {
-            return Ok(false);
-        }
-        Ok(tokens <= limit)
-    }
-
-    /// Builds a selective epoch only when every selected row already exists durably.
-    /// Otherwise the existing raw replay boundary remains authoritative.
-    fn prospective_observed_compaction_epoch(
-        &self,
-        task: &RuntimeAgentCompactionTask,
-        context: &AgentContext,
-        plan: &mez_agent::ModelContextCompactionPlan,
-        summary: &str,
-    ) -> Result<Option<AgentCompactionEpoch>> {
-        let Some(store) = task.source_store() else {
-            return Ok(None);
-        };
-        let previous = store.compaction_epoch(&task.conversation_id)?;
-        let boundary = previous.as_ref().map_or(0, |epoch| epoch.through_sequence);
-        if matches!(&task.target, RuntimeAgentCompactionTarget::ActiveTurn {
-            staged: Some(state), ..
-        } if state.baseline_epoch != previous)
-        {
-            return Err(MezError::conflict(
-                "staged compaction epoch baseline changed",
-            ));
-        }
-        let staged = match &task.target {
-            RuntimeAgentCompactionTarget::ActiveTurn { staged, .. } => {
-                staged.as_ref().and_then(|state| state.projection.as_ref())
-            }
-            RuntimeAgentCompactionTarget::Conversation => None,
-        };
-        if staged.is_some_and(|epoch| {
-            epoch.through_sequence != boundary
-                || epoch.conversation_id != task.conversation_id
-                || epoch.summary != previous.as_ref().map_or("", |old| old.summary.as_str())
-                || !epoch.ranges.starts_with(
-                    previous
-                        .as_ref()
-                        .map_or(&[][..], |old| old.ranges.as_slice()),
-                )
-        }) {
-            return Err(MezError::invalid_state("staged compaction epoch is stale"));
-        }
-        let pending = self.compaction_pending_entries(task)?;
-        let view = store.conversation_transcript_view(
-            &task.conversation_id,
-            crate::storage::transcript::ConversationTranscriptRead::All,
-            boundary > 0 || task.transcript_entries > pending.len() as u64,
-            pending.entries(),
-        )?;
-        if task
-            .frozen_compaction_rows
-            .iter()
-            .any(|frozen| !view.committed.iter().any(|row| row == frozen))
-        {
-            return Err(MezError::conflict(
-                "staged compaction frozen source changed",
-            ));
-        }
-        // A preceding provisional summary without a durable mapping cannot
-        // become an epoch merely because later rows committed. Still read the
-        // archive above: an absent required prefix is an integrity failure.
-        if matches!(&task.target, RuntimeAgentCompactionTarget::ActiveTurn {
-            staged: Some(state), ..
-        } if state.projection.is_none())
-        {
-            // Losing publication authority does not authorize accepting
-            // conflicting committed evidence for a subsequent selection.
-            classify_compaction_selection(plan, context, &view.committed, &view.logical, summary)?;
-            return Ok(None);
-        }
-        let range = match classify_compaction_selection(
-            plan,
-            context,
-            &view.committed,
-            &view.logical,
-            summary,
-        )? {
-            CompactionSelectionDurability::Durable(range) => range,
-            CompactionSelectionDurability::TurnLocal => return Ok(None),
-        };
-        if range.first_sequence <= boundary
-            || pending
-                .iter()
-                .any(|entry| entry.sequence <= range.through_sequence)
-        {
-            if staged.is_some() {
-                return Err(MezError::invalid_state(
-                    "staged compaction range crosses a pending or compacted transcript boundary",
-                ));
-            }
-            return Ok(None);
-        }
-        let mut ranges = staged
-            .or(previous.as_ref())
-            .map_or_else(Vec::new, |epoch| epoch.ranges.clone());
-        if ranges
-            .last()
-            .is_some_and(|last| last.through_sequence >= range.first_sequence)
-        {
-            if staged.is_some() {
-                return Err(MezError::invalid_state(
-                    "staged compaction range overlaps an earlier summary",
-                ));
-            }
-            return Ok(None);
-        }
-        ranges.push(range);
-        let previous_records = staged
-            .or(previous.as_ref())
-            .map(|epoch| {
-                epoch.summary_records.as_ref().ok_or_else(|| {
-                    MezError::invalid_state("prior compaction summary records are unavailable")
-                })
-            })
-            .transpose()?;
-        let mut range_records =
-            previous_records.map_or_else(Vec::new, |records| records.ranges.clone());
-        range_records.push(task.selective_summary_record_for_preview(plan, summary)?);
-        Ok(Some(AgentCompactionEpoch {
-            summary_records: Some(crate::storage::transcript::CompactionSummaryRecords::new(
-                previous_records.and_then(|records| records.prefix),
-                range_records,
-            )),
-            version: 3,
-            conversation_id: task.conversation_id.clone(),
-            through_sequence: boundary,
-            summary: previous.map_or_else(String::new, |epoch| epoch.summary),
-            ranges,
-        }))
-    }
-
-    /// Freezes only the newly selected committed rows, retaining the source
-    /// identity of earlier provisional ranges across subsequent model calls.
-    fn frozen_observed_compaction_rows(
-        &self,
-        task: &RuntimeAgentCompactionTask,
-        context: &AgentContext,
-        plan: &mez_agent::ModelContextCompactionPlan,
-        summary: &str,
-        projection: &AgentCompactionEpoch,
-    ) -> Result<Vec<TranscriptEntry>> {
-        let store = task.source_store().ok_or_else(|| {
-            MezError::invalid_state("selective compaction requires transcript storage")
-        })?;
-        let committed = store
-            .conversation_transcript_view(
-                &task.conversation_id,
-                crate::storage::transcript::ConversationTranscriptRead::All,
-                true,
-                &[],
-            )?
-            .committed;
-        let range = selected_durable_compaction_range(plan, context, &committed, summary)
-            .ok_or_else(|| MezError::conflict("selective compaction source changed"))?;
-        if projection.ranges.last() != Some(&range) {
-            return Err(MezError::conflict("selective compaction source changed"));
-        }
-        let mut frozen = task.frozen_compaction_rows.clone();
-        frozen.extend(committed.into_iter().filter(|entry| {
-            (range.first_sequence..=range.through_sequence).contains(&entry.sequence)
-        }));
-        Ok(frozen)
-    }
-
     /// Executes `/compact` by queuing model-backed conversation compaction.
     pub(super) fn execute_agent_shell_compact_command(
         &mut self,
@@ -615,44 +105,36 @@ impl RuntimeSessionService {
         if self.agent_source_preparation_uses_adapter() {
             return self.admit_manual_compaction_preparation(pane_id);
         }
-        self.queue_agent_shell_compaction_with_model(pane_id, "manual", None, None)
+        self.queue_manual_compaction(pane_id, None)
     }
 
-    /// Queues model-backed conversation compaction and marks the pane active.
+    /// Queues manual compaction only from the shared canonical history owner.
     ///
-    /// Manual `/compact` is submitted through synchronous prompt input, so it
-    /// must publish visible state and return before provider I/O starts. The
-    /// async provider service claims the queued task and reports completion
-    /// through the runtime event loop.
-    fn queue_agent_shell_compaction_with_model(
+    /// Source preparation owns legacy import and original pending rows. Neither
+    /// pane counts nor flat transcript roles may select another summary engine.
+    /// Prepared commands retain their existing generation through request work;
+    /// inline commands capture the same source before queuing provider work.
+    fn queue_manual_compaction(
         &mut self,
         pane_id: &str,
-        source: &str,
-        resume_turn_id: Option<&str>,
         prepared: Option<(
             crate::runtime::RuntimeAgentTranscriptSnapshot,
             RuntimeManualCompactionPreparation,
         )>,
     ) -> Result<AgentShellCommandOutcome> {
-        let (conversation_id, transcript_entries, visibility, running_turn_id) = {
-            let session = self.agent_shell_store().get(pane_id).ok_or_else(|| {
+        let session = self
+            .agent_shell_store()
+            .get(pane_id)
+            .cloned()
+            .ok_or_else(|| {
                 MezError::new(
                     crate::error::MezErrorKind::NotFound,
                     "agent shell session not found for pane",
                 )
             })?;
-            (
-                session.session_id.clone(),
-                session.transcript_entries,
-                session.visibility,
-                session.running_turn_id.clone(),
-            )
-        };
-        if let Some(turn_id) = running_turn_id
-            && resume_turn_id != Some(turn_id.as_str())
-        {
+        if let Some(turn) = &session.running_turn_id {
             return Err(MezError::conflict(format!(
-                "cannot compact conversation while turn {turn_id} is running"
+                "cannot compact conversation while turn {turn} is running"
             )));
         }
         if self.agent_is_compacting(pane_id)
@@ -665,338 +147,79 @@ impl RuntimeSessionService {
             )));
         }
         let _ = self.runtime_prune_expired_persistent_memory_best_effort();
-        if transcript_entries == 0
+        let no_work = |service: &mut Self, reason: NoWorkReason| {
+            service.append_agent_status_text_to_terminal_buffer(pane_id, reason.status())?;
+            service.record_manual_compaction_no_work(
+                pane_id,
+                &session.session_id,
+                reason,
+                "manual",
+            )?;
+            Ok(AgentShellCommandOutcome::Display {
+                command: "compact".into(),
+                body: format!(
+                    "pane={} conversation={} previous_transcript_entries={} summarized_entries=0 compacted=false reason={} source=model-compact trigger=manual",
+                    json_escape(pane_id),
+                    json_escape(&session.session_id),
+                    session.transcript_entries,
+                    reason.code(),
+                ),
+            })
+        };
+        if session.transcript_entries == 0
             && prepared.is_none()
             && self.manual_source_is_known_empty(pane_id)
         {
-            let reason = NoWorkReason::NoTranscriptEntries;
-            self.append_agent_status_text_to_terminal_buffer(
-                pane_id,
-                &format!("{} reason={}", reason.status(), reason.code()),
-            )?;
-            self.record_manual_compaction_no_work(pane_id, &conversation_id, reason, source)?;
-            return Ok(AgentShellCommandOutcome::Display {
-                command: "compact".to_string(),
-                body: format!(
-                    "pane={} conversation={} previous_transcript_entries=0 summarized_entries=0 compacted=false reason={} source=model-compact trigger={}",
-                    json_escape(pane_id),
-                    json_escape(&conversation_id),
-                    reason.code(),
-                    json_escape(source)
-                ),
-            });
+            return no_work(self, NoWorkReason::NoTranscriptEntries);
         }
-        let (mut transcript_records, prepared_history, prepared_owner, projection) =
-            if let Some((snapshot, owner)) = prepared {
-                (
-                    snapshot.rows,
-                    Some(snapshot.history),
-                    Some(owner),
-                    snapshot.epoch,
-                )
-            } else if source == "manual" {
-                // Inline manual preparation retains the same live project,
-                // readiness and bookkeeping prerequisites as ordinary context
-                // assembly before capturing its immutable history inputs.
-                if self.persistence.transcript_store().is_some() {
-                    self.prepare_agent_context_prerequisites(pane_id, true)?;
-                }
-                let high_water = self
-                    .agent_shell_store()
-                    .get(pane_id)
-                    .ok_or_else(|| MezError::invalid_state("manual source session unavailable"))?
-                    .transcript_high_water;
-                let snapshot = source::ManualCompactionSourceWork::capture(
-                    self.persistence.transcript_store().cloned(),
-                    conversation_id.clone(),
-                )
-                .execute_with_history(
-                    self.prepare_runtime_agent_prompt_history_work(pane_id),
-                    high_water,
-                )?;
-                (snapshot.rows, Some(snapshot.history), None, snapshot.epoch)
-            } else {
-                (
-                    self.inspect_agent_shell_transcript_for_compaction(&conversation_id)?,
-                    None,
-                    None,
-                    None,
-                )
-            };
-        if source == "manual"
-            && let Some(history) = prepared_history.as_ref()
-            && let Some(owner) = history.replay_owner()?
-        {
+        let (snapshot, preparation) = if let Some((snapshot, preparation)) = prepared {
+            (snapshot, Some(preparation))
+        } else {
+            if self.persistence.transcript_store().is_some() {
+                self.prepare_agent_context_prerequisites(pane_id, true)?;
+            }
+            let high_water = self
+                .agent_shell_store()
+                .get(pane_id)
+                .ok_or_else(|| MezError::invalid_state("manual source session unavailable"))?
+                .transcript_high_water;
+            let snapshot = source::ManualCompactionSourceWork::capture(
+                self.persistence.transcript_store().cloned(),
+                session.session_id.clone(),
+            )
+            .execute_with_history(
+                self.prepare_runtime_agent_prompt_history_work(pane_id),
+                high_water,
+            )?;
+            (snapshot, None)
+        };
+        if let Some(owner) = snapshot.history.replay_owner()? {
             return self.queue_manual_replay_compaction(
                 pane_id,
                 owner,
-                history.clone(),
-                prepared_owner,
+                snapshot.history,
+                preparation,
             );
         }
-        if transcript_entries == 0 {
-            let reason = NoWorkReason::NoTranscriptEntries;
-            self.append_agent_status_text_to_terminal_buffer(pane_id, reason.status())?;
-            self.record_manual_compaction_no_work(pane_id, &conversation_id, reason, source)?;
-            return Ok(AgentShellCommandOutcome::Display {
-                command: "compact".into(),
-                body: format!(
-                    "pane={} conversation={} previous_transcript_entries=0 summarized_entries=0 compacted=false reason={} source=model-compact trigger={}",
-                    json_escape(pane_id),
-                    json_escape(&conversation_id),
-                    reason.code(),
-                    json_escape(source)
-                ),
-            });
+        if !snapshot.rows.is_empty()
+            || snapshot
+                .history
+                .blocks
+                .iter()
+                .any(|block| block.source != ContextSourceKind::Memory)
+        {
+            return Err(MezError::invalid_state(
+                "manual compaction history lacks its canonical source owner",
+            ));
         }
-        if let Some(epoch) = projection.as_ref() {
-            transcript_records.retain(|row| row.sequence > epoch.through_sequence);
-        }
-        let prepared_epoch = prepared_owner
-            .as_ref()
-            .map_or(0, |owner| owner.compaction_epoch);
-        if transcript_records.is_empty() {
-            let reason = NoWorkReason::NoDurableTranscript;
-            self.append_agent_status_text_to_terminal_buffer(
-                pane_id,
-                &format!("{} reason={}", reason.status(), reason.code()),
-            )?;
-            self.record_manual_compaction_no_work(pane_id, &conversation_id, reason, source)?;
-            return Ok(AgentShellCommandOutcome::Display {
-                command: "compact".to_string(),
-                body: format!(
-                    "pane={} conversation={} previous_transcript_entries={} summarized_entries=0 compacted=false reason={} source=model-compact trigger={}",
-                    json_escape(pane_id),
-                    json_escape(&conversation_id),
-                    transcript_entries,
-                    reason.code(),
-                    json_escape(source)
-                ),
-            });
-        }
-
-        let agent_id = format!("agent-{pane_id}");
-        let (model_profile_name, model_profile) =
-            self.active_model_profile_for_pane(pane_id, &agent_id, None)?;
-        let retained_tail_percent = self.agent_compaction_raw_retention_percent();
-        let context_budget_tokens = model_profile
-            .max_input_tokens()
-            .or_else(|| model_profile.context_window_tokens())
-            .map(|limit| limit.min(model_profile.context_window_tokens().unwrap_or(limit)))
-            .ok_or_else(|| {
-            MezError::invalid_state(
-                "model context compaction requires configured context_window_tokens or max_input_tokens",
-            )
-        })?;
-        let selective_ranges = projection
-            .as_ref()
-            .map_or(&[][..], |epoch| epoch.ranges.as_slice());
-        let selective_history = source == "manual" && !selective_ranges.is_empty();
-        let selection = if selective_history {
-            ManualCompactionSelection::select_projected(
-                transcript_entries,
-                &transcript_records,
-                selective_ranges,
-                context_budget_tokens,
-                retained_tail_percent,
-            )?
+        // Optional memory does not turn actual source absence into model work.
+        // Even a zero-model physical window must retain its checked importer.
+        let reason = if session.transcript_entries == 0 {
+            NoWorkReason::NoTranscriptEntries
         } else {
-            let retained_transcript_entries = if source == "manual" || resume_turn_id.is_some() {
-                runtime_compact_forced_retained_transcript_entries(
-                    transcript_entries,
-                    &transcript_records,
-                    context_budget_tokens,
-                    retained_tail_percent,
-                )
-            } else {
-                runtime_compact_retained_transcript_entries(
-                    transcript_entries,
-                    &transcript_records,
-                    context_budget_tokens,
-                    retained_tail_percent,
-                )
-            };
-            ManualCompactionSelection::select(
-                transcript_entries,
-                &transcript_records,
-                retained_transcript_entries,
-                context_budget_tokens,
-                retained_tail_percent,
-            )
+            NoWorkReason::NoDurableTranscript
         };
-        let compactable_transcript_records = selection.entries;
-        let retained_transcript_entries = selection.retained_entries;
-        if let Some(reason) = selection.no_work {
-            let retained_tail_words = selection.retained_words;
-            let retained_tail_budget_words = selection.budget_words;
-            let status = format!(
-                "{} reason={} retained_tail_words={retained_tail_words} retained_tail_budget_words={retained_tail_budget_words}",
-                reason.status(),
-                reason.code()
-            );
-            self.append_agent_status_text_to_terminal_buffer(pane_id, &status)?;
-            self.record_manual_compaction_no_work(pane_id, &conversation_id, reason, source)?;
-            let reason = reason.code();
-            return Ok(AgentShellCommandOutcome::Display {
-                command: "compact".to_string(),
-                body: format!(
-                    "pane={} conversation={} previous_transcript_entries={} summarized_entries=0 remaining_transcript_entries={} compacted=false reason={reason} retained_tail_words={retained_tail_words} retained_tail_budget_words={retained_tail_budget_words} retained_context_tail_percent={} source=model-compact trigger={}",
-                    json_escape(pane_id),
-                    json_escape(&conversation_id),
-                    transcript_entries,
-                    retained_transcript_entries,
-                    retained_tail_percent,
-                    json_escape(source)
-                ),
-            });
-        }
-
-        let selected_ranges = selective_ranges
-            .iter()
-            .filter(|range| {
-                compactable_transcript_records
-                    .first()
-                    .is_some_and(|first| range.through_sequence >= first.sequence)
-                    && compactable_transcript_records
-                        .last()
-                        .is_some_and(|last| range.first_sequence <= last.sequence)
-            })
-            .cloned()
-            .collect::<Vec<_>>();
-        self.ensure_primary_agent_name(pane_id)?;
-        let compaction_context = if let Some(history) = prepared_history {
-            self.agent_context_for_pane_prompt_with_history(
-                pane_id,
-                "[context compaction requested]",
-                false,
-                history,
-            )?
-            .context
-        } else {
-            self.agent_context_for_pane_prompt(pane_id, "[context compaction requested]", 100)?
-        };
-        let mcp_summary = self.mcp_registry().prompt_summary();
-        let summarized_entries = compactable_transcript_records.len();
-        let compacted_through_sequence = compactable_transcript_records
-            .last()
-            .map(|entry| entry.sequence);
-        let allowed_actions = self.capture_agent_session_allowed_actions_for_pane(pane_id)?;
-        self.refresh_project_trust_store_from_disk_if_changed()?;
-        if let Some(owner) = prepared_owner {
-            let work = RuntimeManualCompactionRequestWork::capture(
-                owner,
-                model_profile_name,
-                model_profile,
-                compaction_context,
-                mcp_summary,
-                allowed_actions,
-                compactable_transcript_records.to_vec(),
-                selected_ranges,
-                selective_history,
-                projection.clone(),
-                retained_transcript_entries,
-                self.capture_agent_accounting_origin_for_pane(pane_id),
-            );
-            #[cfg(test)]
-            let work = work.with_probe(self.manual_compaction_request_probe_for_tests());
-            self.queue_manual_compaction_request(work)?;
-            return Ok(AgentShellCommandOutcome::Mutated {
-                command: "compact".into(),
-                visibility,
-                body: format!(
-                    "pane={} conversation={} compacted=false state=preparing phase=request source=model-compact trigger=manual",
-                    json_escape(pane_id),
-                    json_escape(&conversation_id)
-                ),
-            });
-        }
-        let transcript_source = if selective_history {
-            CompactionTranscriptSource::projected(compactable_transcript_records, &selected_ranges)?
-        } else {
-            CompactionTranscriptSource::raw(compactable_transcript_records)
-        };
-        let compaction_context = transcript_source
-            .prepare_context(append_mcp_context(compaction_context, &mcp_summary)?)?;
-        let mut request = runtime_model_compaction_request(
-            &model_profile,
-            pane_id,
-            &conversation_id,
-            transcript_entries,
-            transcript_source,
-            &compaction_context,
-            allowed_actions,
-        )?;
-        let summary_budget_words = request
-            .messages
-            .last()
-            .map(|message| model_context_text_word_count(&message.content))
-            .unwrap_or_default()
-            .max(1);
-        runtime_limit_compaction_summary_output(&mut request, summary_budget_words);
-        let manual_retry_source = request
-            .messages
-            .last()
-            .map(|message| message.content.clone());
-        self.queue_agent_compaction_task(RuntimeAgentCompactionTask {
-            source_owner: None,
-            replay_source: None,
-            summary_proposal: None,
-            frozen_compaction_epoch: (source == "manual").then(|| projection.clone()),
-            task_generation: 0,
-            compaction_epoch: prepared_epoch,
-            transport_retry_attempts: 0,
-            transport_retry_delay_ms: None,
-            summary_correction:
-                crate::runtime::agent_state::RuntimeSummaryCorrection::for_manual_words(
-                    summary_budget_words,
-                ),
-            pane_id: pane_id.to_string(),
-            accounting_origin: self.capture_agent_accounting_origin_for_pane(pane_id),
-            conversation_id: conversation_id.clone(),
-            source: source.to_string(),
-            transcript_entries,
-            compacted_through_sequence,
-            frozen_compaction_rows: compactable_transcript_records.to_vec(),
-            retained_transcript_entries,
-            summarized_entries,
-            model_profile_name: model_profile_name.clone(),
-            model_profile: model_profile.clone(),
-            request,
-            preserve_summary_output_budget: true,
-            manual_retry_source,
-            manual_final_retry: None,
-            candidate_context: Some(compaction_context),
-            resume_turn_id: resume_turn_id.map(str::to_string),
-            target: RuntimeAgentCompactionTarget::Conversation,
-            conversation_chunks: None,
-            compaction_request_shape: None,
-        });
-        self.append_agent_status_text_to_terminal_buffer(
-            pane_id,
-            &format!(
-                "agent: compacting conversation summary trigger={} provider={} model={} previous_transcript_entries={} summarized_entries={}",
-                source,
-                model_profile.provider,
-                model_profile.model,
-                transcript_entries,
-                summarized_entries
-            ),
-        )?;
-        Ok(AgentShellCommandOutcome::Mutated {
-            command: "compact".to_string(),
-            body: format!(
-                "pane={} conversation={} previous_transcript_entries={} summarized_entries={} compacted=false state=queued source=model-compact trigger={} model_profile={} provider={} model={}",
-                json_escape(pane_id),
-                json_escape(&conversation_id),
-                transcript_entries,
-                summarized_entries,
-                json_escape(source),
-                json_escape(&model_profile_name),
-                json_escape(&model_profile.provider),
-                json_escape(&model_profile.model)
-            ),
-            visibility,
-        })
+        no_work(self, reason)
     }
 
     /// Records only source eligibility, not provider execution or completion.
@@ -1052,14 +275,6 @@ impl RuntimeSessionService {
         if turn.state != AgentTurnState::Running || self.agent_is_compacting(&turn.pane_id) {
             return Ok(false);
         }
-        if !plan.changes_context()
-            && self
-                .agent_turn_contexts()
-                .get(turn_id)
-                .is_none_or(|context| !context.has_replay_owner())
-        {
-            return Ok(false);
-        }
         let (conversation_id, transcript_entries) = self
             .agent_shell_store()
             .get(&turn.pane_id)
@@ -1070,21 +285,12 @@ impl RuntimeSessionService {
         let allowed_actions = self.capture_agent_session_allowed_actions_for_pane(&turn.pane_id)?;
         let replay_source =
             match self.prepare_active_replay_compaction(&turn, &model_profile, trigger)? {
-                replay_epoch::Preparation::Unowned => None,
-                replay_epoch::Preparation::NoWork => return Ok(false),
-                replay_epoch::Preparation::Ready(source) => Some(source),
+                replay_epoch::Preparation::NoWork(_) => return Ok(false),
+                replay_epoch::Preparation::Ready(source) => source,
             };
-        let selected = replay_source.as_ref().map(|source| source.input_blocks());
-        let mut current_blocks = runtime_redact_compaction_blocks(
-            selected
-                .as_deref()
-                .unwrap_or_else(|| plan.replacement_blocks()),
-        );
+        let selected = replay_source.input_blocks();
+        let mut current_blocks = runtime_redact_compaction_blocks(&selected);
         let mut pending_blocks = Vec::new();
-        let recovery_attempt = match trigger {
-            RuntimeActiveTurnCompactionTrigger::ProviderContextLimit { attempt } => attempt,
-            RuntimeActiveTurnCompactionTrigger::ObservedInputLimit { .. } => 0,
-        };
         let (rejected_request_bytes, rejected_request_stream) = match trigger {
             RuntimeActiveTurnCompactionTrigger::ProviderContextLimit { .. } => (
                 self.claimed_agent_provider_openai_request_bytes(turn_id),
@@ -1144,10 +350,8 @@ impl RuntimeSessionService {
         }
         self.refresh_project_trust_store_from_disk_if_changed()?;
         self.queue_agent_compaction_task(RuntimeAgentCompactionTask {
-            source_owner: replay_source.as_ref().map(|source| source.original.clone()),
-            replay_source,
-            summary_proposal: None,
-            frozen_compaction_epoch: None,
+            source_owner: Some(replay_source.original.clone()),
+            replay_source: Some(replay_source),
             task_generation: 0,
             compaction_epoch: 0,
             transport_retry_attempts: 0,
@@ -1164,41 +368,23 @@ impl RuntimeSessionService {
                     "observed-input-limit".to_string()
                 }
             },
-            // Proactive compaction must establish a durable epoch as well as
-            // replacing this turn's context. Provider-rejection recovery is
-            // intentionally turn-local because its source can include
-            // unpersisted same-turn observations.
-            transcript_entries: match trigger {
-                RuntimeActiveTurnCompactionTrigger::ProviderContextLimit { .. } => 0,
-                RuntimeActiveTurnCompactionTrigger::ObservedInputLimit { .. } => transcript_entries,
-            },
-            compacted_through_sequence: None,
-            frozen_compaction_rows: Vec::new(),
-            // The live context planner can omit exact transcript user events
-            // from summary input because they are protected barriers. Until
-            // durable replay can represent the same selected event ranges,
-            // preserve this raw window instead of silently dropping barriers.
-            retained_transcript_entries: match trigger {
-                RuntimeActiveTurnCompactionTrigger::ProviderContextLimit { .. } => 0,
-                RuntimeActiveTurnCompactionTrigger::ObservedInputLimit { .. } => transcript_entries,
-            },
-            summarized_entries: selected
-                .as_ref()
-                .map_or_else(|| plan.replacement_blocks().len(), Vec::len),
+            // These physical counts are diagnostics. Both pressure triggers
+            // retain their original source and wait for canonical publication,
+            // including backing for ordinary observations not yet archived.
+            transcript_entries,
+            summarized_entries: selected.len(),
             model_profile_name,
             model_profile,
             request,
             preserve_summary_output_budget: true,
             manual_retry_source: None,
             manual_final_retry: None,
-            candidate_context: None,
             resume_turn_id: Some(turn.turn_id.clone()),
             target: RuntimeAgentCompactionTarget::ActiveTurn {
                 turn_id: turn.turn_id.clone(),
+                #[cfg(test)]
                 trigger,
-                recovery_attempt,
                 final_request_retry: Box::default(),
-                staged: None,
                 compaction_backoff_attempt: 0,
                 rejected_request_bytes,
                 rejected_request_stream,
@@ -1611,9 +797,9 @@ impl RuntimeSessionService {
             return Ok(false);
         }
         let application = (|| -> Result<()> {
-            if task.replay_source.is_some() {
-                self.validate_replay_compaction_task(&task)?;
-            }
+            // New inference has one source contract. A missing owner cannot
+            // send an accepted result through historical publication code.
+            self.validate_replay_compaction_task(&task)?;
             let summary = self.validate_or_correct_compaction_summary(&mut task, &response)?;
             let Some(summary) = summary else {
                 return Ok(());
@@ -1651,9 +837,10 @@ impl RuntimeSessionService {
                     return Ok(());
                 }
             }
-            if task.replay_source.is_some()
-                && matches!(task.target, RuntimeAgentCompactionTarget::Conversation)
-            {
+            if matches!(task.target, RuntimeAgentCompactionTarget::Conversation) {
+                if !self.accept_manual_replay_compaction_candidate(&mut task, &summary)? {
+                    return Ok(());
+                }
                 self.queue_replay_epoch_publication(&task, summary)?;
                 return Ok(());
             }
@@ -1707,825 +894,10 @@ impl RuntimeSessionService {
                         "recursive context compaction completed without a final summary",
                     )
                 })?;
-                if task.replay_source.is_some() {
-                    self.queue_replay_epoch_publication(&task, final_summary)?;
+                if !self.accept_replay_compaction_candidate(&mut task, &final_summary)? {
                     return Ok(());
                 }
-                let (
-                    turn_id,
-                    trigger,
-                    recovery_attempt,
-                    rejected_request_bytes,
-                    rejected_request_stream,
-                    plan,
-                ) = match &task.target {
-                    RuntimeAgentCompactionTarget::ActiveTurn {
-                        turn_id,
-                        trigger,
-                        recovery_attempt,
-                        rejected_request_bytes,
-                        rejected_request_stream,
-                        plan,
-                        ..
-                    } => (
-                        turn_id.clone(),
-                        *trigger,
-                        *recovery_attempt,
-                        *rejected_request_bytes,
-                        *rejected_request_stream,
-                        plan.clone(),
-                    ),
-                    RuntimeAgentCompactionTarget::Conversation => {
-                        unreachable!("active-turn target was matched above")
-                    }
-                };
-                let Some(turn) = self
-                    .agent_turn_ledger()
-                    .turns()
-                    .iter()
-                    .find(|turn| turn.turn_id == turn_id)
-                    .cloned()
-                else {
-                    return Err(MezError::invalid_state(
-                        "active-turn compaction completed after its turn disappeared",
-                    ));
-                };
-                if turn.state != AgentTurnState::Running {
-                    return Err(MezError::invalid_state(
-                        "active-turn compaction completed after its turn became terminal",
-                    ));
-                }
-                let context = self
-                    .agent_turn_contexts()
-                    .get(&turn_id)
-                    .cloned()
-                    .ok_or_else(|| {
-                        MezError::invalid_state("active-turn compaction context is unavailable")
-                    })?;
-                let context = match &task.target {
-                    RuntimeAgentCompactionTarget::ActiveTurn {
-                        staged: Some(staged),
-                        ..
-                    } => {
-                        let mut rebased = staged.context.clone();
-                        rebased
-                            .rebase_chronology_suffix(&staged.source_chronology, &context)
-                            .map_err(|error| MezError::invalid_state(error.message()))?;
-                        rebased
-                    }
-                    _ => context,
-                };
-                let (compacted, report) = apply_model_context_compaction_plan(
-                    context.clone(),
-                    plan.as_ref(),
-                    &final_summary,
-                )
-                .map_err(|error| MezError::invalid_state(error.message()))?;
-                task.retain_selective_summary_record(&compacted, plan.as_ref(), &final_summary)?;
-                let handoff_witnesses = self.compaction_handoff_witnesses(
-                    &task,
-                    &turn_id,
-                    &context,
-                    plan.as_ref(),
-                    &final_summary,
-                )?;
-                let model_profile = self
-                    .agent_turn_model_profile(&turn_id)
-                    .cloned()
-                    .ok_or_else(|| {
-                        MezError::invalid_state(
-                            "active-turn compaction model profile is unavailable",
-                        )
-                    })?;
-                let mcp_summary = self.mcp_registry().prompt_summary();
-                let request_candidate = if matches!(
-                    trigger,
-                    RuntimeActiveTurnCompactionTrigger::ObservedInputLimit { .. }
-                ) {
-                    self.preview_turn_local_compaction_history(&task, &turn_id, compacted.clone())?
-                } else {
-                    compacted.clone()
-                };
-                let (prepared, available_mcp_tools) = self.prepare_agent_turn_model_context(
-                    &turn,
-                    request_candidate.clone(),
-                    &mcp_summary,
-                    &model_profile,
-                )?;
-                let provider_config = self
-                    .provider_registry()
-                    .provider(&model_profile.provider)
-                    .ok_or_else(|| {
-                        MezError::config(format!(
-                            "provider `{}` for active model profile is not configured",
-                            model_profile.provider
-                        ))
-                    })?;
-                let api =
-                    resolve_provider_api(&provider_config.kind, provider_config.api.as_deref())?;
-                let provider_options =
-                    runtime_effective_provider_options(provider_config, &model_profile);
-                let mut retry_request = assemble_model_request(
-                    &model_profile,
-                    api,
-                    &turn,
-                    &prepared.to_agent_context(),
-                )?;
-                let (allowed_actions, interaction_kind) =
-                    self.agent_provider_request_control_for_turn(&turn)?;
-                mez_agent::apply_model_request_control(
-                    &mut retry_request,
-                    allowed_actions,
-                    interaction_kind,
-                );
-                mez_agent::apply_default_action_gates(
-                    &mut retry_request,
-                    &available_mcp_tools,
-                    self.runtime_persistent_memory_enabled(),
-                    super::runtime_issues_enabled(self),
-                );
-                // In the observed-input path the original transport stream mode is not
-                // retained. Use streaming for conservative wire accounting; configured
-                // chat-completions adapters still honor their own streaming option.
-                let estimate_stream = rejected_request_stream.unwrap_or(true);
-                let retry_estimate = mez_agent::provider_request_input_estimate(
-                    &retry_request,
-                    api,
-                    &provider_options,
-                    estimate_stream,
-                )?;
-                // The planner describes additional eligible source, not a
-                // requirement to consume it. Size the complete refreshed
-                // request before staging another unpublished range.
-                let candidate_fits =
-                    if let RuntimeActiveTurnCompactionTrigger::ObservedInputLimit {
-                        observed_input_tokens,
-                        ..
-                    } = trigger
-                    {
-                        let projection = self.prospective_observed_compaction_epoch(
-                            &task,
-                            &context,
-                            plan.as_ref(),
-                            &final_summary,
-                        )?;
-                        if projection.is_some() {
-                            let (tokens, limit, _) = self
-                                .validate_observed_input_compaction_refresh_candidate(
-                                    &task,
-                                    &turn,
-                                    compacted.clone(),
-                                    &final_summary,
-                                    projection,
-                                    observed_input_tokens,
-                                    &model_profile,
-                                    &provider_options,
-                                    api,
-                                    estimate_stream,
-                                )?;
-                            tokens <= limit
-                        } else {
-                            runtime_compaction_safe_input_limit(
-                                model_profile.max_input_tokens(),
-                                model_profile.context_window_tokens(),
-                                model_profile.max_output_tokens(),
-                            )
-                            .is_some_and(|limit| {
-                                retry_estimate.input_tokens <= limit
-                                    && (retry_estimate.input_tokens as u64) < observed_input_tokens
-                            })
-                        }
-                    } else {
-                        runtime_compaction_safe_input_limit(
-                            model_profile.max_input_tokens(),
-                            model_profile.context_window_tokens(),
-                            model_profile.max_output_tokens(),
-                        )
-                        .is_some_and(|limit| retry_estimate.input_tokens <= limit)
-                    };
-                // A word-budgeted plan can leave byte-heavy history oversized
-                // without advertising additional segments. When shortening
-                // this summary cannot cover the complete request's excess,
-                // advance to later eligible source instead of failing the turn.
-                let later_range_budget = if matches!(
-                    trigger,
-                    RuntimeActiveTurnCompactionTrigger::ProviderContextLimit { .. }
-                ) {
-                    runtime_compaction_safe_input_limit(
-                        model_profile.max_input_tokens(),
-                        model_profile.context_window_tokens(),
-                        model_profile.max_output_tokens(),
-                    )
-                    .filter(|limit| {
-                        retry_estimate.input_tokens.saturating_sub(*limit)
-                            >= mez_agent::provider_text_input_token_estimate(&final_summary)
-                    })
-                } else {
-                    None
-                };
-                if !candidate_fits
-                    && (plan.requires_additional_segments() || later_range_budget.is_some())
-                {
-                    let attempts = match &task.target {
-                        RuntimeAgentCompactionTarget::ActiveTurn { staged, .. } => {
-                            staged.as_ref().map_or(0, |state| state.attempts)
-                        }
-                        RuntimeAgentCompactionTarget::Conversation => 0,
-                    };
-                    let projection = if matches!(
-                        trigger,
-                        RuntimeActiveTurnCompactionTrigger::ObservedInputLimit { .. }
-                    ) {
-                        self.prospective_observed_compaction_epoch(
-                            &task,
-                            &context,
-                            plan.as_ref(),
-                            &final_summary,
-                        )?
-                    } else {
-                        None
-                    };
-                    let (budget, token_costs) = if plan.requires_additional_segments() {
-                        // Preserve the frozen allowance for a plan that already
-                        // accounted for later ranges before its first summary.
-                        plan.planning_budget()
-                    } else if let Some(limit) = later_range_budget {
-                        let block_tokens = mez_agent::projected_context_block_input_tokens(
-                            &prepared.to_agent_context(),
-                            Some(mez_agent::ProviderBudgetProjection::new(
-                                api,
-                                &model_profile.provider,
-                            )),
-                        )
-                        .into_iter()
-                        .fold(0usize, usize::saturating_add);
-                        let overhead = retry_estimate.input_tokens.saturating_sub(block_tokens);
-                        (limit.saturating_sub(overhead).max(1), true)
-                    } else {
-                        plan.planning_budget()
-                    };
-                    let provider =
-                        mez_agent::ProviderBudgetProjection::new(api, &model_profile.provider);
-                    let next_plan = if token_costs {
-                        mez_agent::plan_model_context_compaction_for_provider_tokens(
-                            &compacted,
-                            budget,
-                            0,
-                            plan.consumed_sequence_high_water(),
-                            provider,
-                        )
-                    } else {
-                        mez_agent::plan_model_context_compaction_for_provider(
-                            &compacted,
-                            budget,
-                            0,
-                            plan.consumed_sequence_high_water(),
-                            provider,
-                        )
-                    }
-                    .map_err(|error| {
-                        let diagnostic = runtime_compaction_candidate_size_diagnostic(
-                            &prepared.to_agent_context(),
-                            Some(provider),
-                            retry_estimate.input_tokens,
-                            later_range_budget.unwrap_or_else(|| {
-                                runtime_compaction_safe_input_limit(
-                                    model_profile.max_input_tokens(),
-                                    model_profile.context_window_tokens(),
-                                    model_profile.max_output_tokens(),
-                                )
-                                .unwrap_or_default()
-                            }),
-                        );
-                        MezError::invalid_state(format!(
-                            "compaction cannot select another closed range: {}; {diagnostic}",
-                            error.message()
-                        ))
-                    })?;
-                    if !next_plan.changes_context() {
-                        return Err(MezError::invalid_state(
-                            "pre-summary recovery has no additional closed segment",
-                        ));
-                    }
-                    if next_plan.replacement_event_sequences().first()
-                        <= plan.replacement_event_sequences().last()
-                    {
-                        return Err(MezError::invalid_state(
-                            "pre-summary recovery did not advance to another closed segment",
-                        ));
-                    }
-                    let source_chronology = self
-                        .agent_turn_contexts()
-                        .get(&turn_id)
-                        .map(|context| context.chronology().to_vec())
-                        .ok_or_else(|| {
-                            MezError::invalid_state("staged compaction source disappeared")
-                        })?;
-                    if let Some(projection) = projection.as_ref() {
-                        task.frozen_compaction_rows = self.frozen_observed_compaction_rows(
-                            &task,
-                            &context,
-                            plan.as_ref(),
-                            &final_summary,
-                            projection,
-                        )?;
-                    }
-                    let baseline_epoch = self.private_compaction_epoch_baseline(&task)?;
-                    if let RuntimeAgentCompactionTarget::ActiveTurn {
-                        plan,
-                        staged,
-                        final_request_retry,
-                        completed_summaries,
-                        pending_blocks,
-                        synthesis_source_bytes,
-                        ..
-                    } = &mut task.target
-                    {
-                        **plan = next_plan;
-                        *staged = Some(Box::new(
-                            crate::runtime::agent_state::RuntimeStagedCompaction {
-                                context: compacted,
-                                projection,
-                                baseline_epoch,
-                                attempts: attempts.saturating_add(1),
-                                source_chronology,
-                                handoff_witnesses: handoff_witnesses.clone(),
-                            },
-                        ));
-                        final_request_retry.last_input_tokens = Some(retry_estimate.input_tokens);
-                        final_request_retry.attempts = 0;
-                        final_request_retry.summary_ceiling = None;
-                        task.summary_correction.accepted_summary = None;
-                        completed_summaries.clear();
-                        pending_blocks.clear();
-                        *synthesis_source_bytes = None;
-                        let blocks = runtime_redact_compaction_blocks(plan.replacement_blocks());
-                        runtime_rebuild_active_turn_compaction_request(&mut task, blocks)?;
-                        self.queue_agent_compaction_task(task.clone());
-                        return Ok(());
-                    }
-                }
-                if let Some(input_limit) = runtime_compaction_safe_input_limit(
-                    model_profile.max_input_tokens(),
-                    model_profile.context_window_tokens(),
-                    model_profile.max_output_tokens(),
-                ) && retry_estimate.input_tokens > input_limit
-                    && !matches!(
-                        trigger,
-                        RuntimeActiveTurnCompactionTrigger::ObservedInputLimit { .. }
-                    )
-                {
-                    if let RuntimeAgentCompactionTarget::ActiveTurn {
-                        final_request_retry,
-                        ..
-                    } = &mut task.target
-                    {
-                        let summary_tokens =
-                            mez_agent::provider_text_input_token_estimate(&final_summary);
-                        let excess = retry_estimate.input_tokens.saturating_sub(input_limit);
-                        let previous = final_request_retry.last_input_tokens;
-                        let next_budget = summary_tokens
-                            .saturating_sub(excess)
-                            .min(summary_tokens / 2);
-                        if next_budget > 0
-                            && final_request_retry
-                                .summary_ceiling
-                                .is_none_or(|ceiling| next_budget < ceiling)
-                            && previous.is_none_or(|value| retry_estimate.input_tokens < value)
-                        {
-                            final_request_retry.attempts =
-                                final_request_retry.attempts.saturating_add(1);
-                            final_request_retry.last_input_tokens =
-                                Some(retry_estimate.input_tokens);
-                            final_request_retry.summary_ceiling = Some(next_budget);
-                            let attempt = final_request_retry.attempts;
-                            let blocks =
-                                runtime_redact_compaction_blocks(plan.replacement_blocks());
-                            runtime_rebuild_active_turn_compaction_request(&mut task, blocks)?;
-                            self.append_agent_trace_turn_event(
-                                pane_id,
-                                &turn_id,
-                                &format!(
-                                    "context_compaction final_request_retry attempt={} estimated_input_tokens={} safe_input_tokens={input_limit} summary_budget_tokens={next_budget}",
-                                    attempt,
-                                    retry_estimate.input_tokens,
-                                ),
-                            )?;
-                            self.queue_agent_compaction_task(task.clone());
-                            return Ok(());
-                        }
-                    }
-                    return Err(MezError::invalid_state(format!(
-                        "context compaction candidate exceeds safe input allowance: {}",
-                        runtime_compaction_candidate_size_diagnostic(
-                            &prepared.to_agent_context(),
-                            Some(mez_agent::ProviderBudgetProjection::new(
-                                api,
-                                &model_profile.provider
-                            )),
-                            retry_estimate.input_tokens,
-                            input_limit,
-                        ),
-                    )));
-                }
-                if let (Some(rejected_bytes), Some(stream)) =
-                    (rejected_request_bytes, rejected_request_stream)
-                {
-                    let retry_bytes = mez_agent::openai_responses_request_body_with_stream(
-                        &retry_request,
-                        stream,
-                    )?
-                    .len();
-                    if retry_bytes >= rejected_bytes {
-                        return Err(MezError::invalid_state(format!(
-                            "context-limit recovery could not produce a smaller OpenAI Responses request: rejected_request_bytes={rejected_bytes} retry_request_bytes={retry_bytes}"
-                        )));
-                    }
-                    self.append_agent_trace_turn_event(
-                        pane_id,
-                        &turn_id,
-                        &format!(
-                            "context_limit_recovery request_shrunk rejected_request_bytes={rejected_bytes} retry_request_bytes={retry_bytes}"
-                        ),
-                    )?;
-                }
-                if let RuntimeActiveTurnCompactionTrigger::ObservedInputLimit {
-                    observed_input_tokens,
-                    ..
-                } = trigger
-                {
-                    let projection = self.prospective_observed_compaction_epoch(
-                        &task,
-                        &context,
-                        plan.as_ref(),
-                        &final_summary,
-                    )?;
-                    let (candidate_tokens, input_limit, diagnostic) = if projection.is_some() {
-                        self.validate_observed_input_compaction_refresh_candidate(
-                            &task,
-                            &turn,
-                            compacted.clone(),
-                            &final_summary,
-                            projection.clone(),
-                            observed_input_tokens,
-                            &model_profile,
-                            &provider_options,
-                            api,
-                            estimate_stream,
-                        )?
-                    } else {
-                        // Nothing selected is committed. The running turn can
-                        // use its compacted chronology, but durable replay must
-                        // keep every original row. Size the complete ordinary
-                        // request assembled above, not a speculative epoch.
-                        let limit = runtime_compaction_safe_input_limit(
-                            model_profile.max_input_tokens(),
-                            model_profile.context_window_tokens(),
-                            model_profile.max_output_tokens(),
-                        )
-                        .ok_or_else(|| {
-                            MezError::invalid_state(
-                                "turn-local compaction has no provider input allowance",
-                            )
-                        })?;
-                        let estimate = retry_estimate.input_tokens;
-                        if estimate <= limit && (estimate as u64) >= observed_input_tokens {
-                            return Err(MezError::invalid_state(
-                                "turn-local compaction did not reduce the triggering request",
-                            ));
-                        }
-                        (
-                            estimate,
-                            limit,
-                            runtime_compaction_candidate_size_diagnostic(
-                                &prepared.to_agent_context(),
-                                Some(mez_agent::ProviderBudgetProjection::new(
-                                    api,
-                                    &model_profile.provider,
-                                )),
-                                estimate,
-                                limit,
-                            ),
-                        )
-                    };
-                    if candidate_tokens > input_limit {
-                        let summary_tokens =
-                            mez_agent::provider_text_input_token_estimate(&final_summary);
-                        let excess = candidate_tokens.saturating_sub(input_limit);
-                        let next_budget = summary_tokens
-                            .saturating_sub(excess)
-                            .min(summary_tokens / 2);
-                        // Once this summary cannot account for the remaining excess,
-                        // search the next closed segment in the unpublished context.
-                        // Neither the live context nor its epoch changes until the
-                        // combined projection has passed the complete request check.
-                        if next_budget == 0 {
-                            let budget = model_profile
-                                .max_input_tokens()
-                                .or_else(|| model_profile.context_window_tokens())
-                                .unwrap_or(input_limit)
-                                .max(1);
-                            let next_plan =
-                                mez_agent::plan_model_context_compaction_for_provider_tokens(
-                                    &compacted,
-                                    budget,
-                                    0,
-                                    plan.consumed_sequence_high_water(),
-                                    mez_agent::ProviderBudgetProjection::new(
-                                        api,
-                                        &model_profile.provider,
-                                    ),
-                                )
-                                .map_err(|error| MezError::invalid_state(error.message()))?;
-                            let source_chronology = self
-                                .agent_turn_contexts()
-                                .get(&turn_id)
-                                .map(|context| context.chronology().to_vec())
-                                .ok_or_else(|| {
-                                    MezError::invalid_state("staged compaction source disappeared")
-                                })?;
-                            let baseline_epoch = self.private_compaction_epoch_baseline(&task)?;
-                            let mut staged_task = task.clone();
-                            if let RuntimeAgentCompactionTarget::ActiveTurn { staged, .. } =
-                                &mut staged_task.target
-                            {
-                                *staged = Some(Box::new(
-                                    crate::runtime::agent_state::RuntimeStagedCompaction {
-                                        context: compacted.clone(),
-                                        projection: projection.clone(),
-                                        baseline_epoch: baseline_epoch.clone(),
-                                        attempts: 0,
-                                        source_chronology: source_chronology.clone(),
-                                        handoff_witnesses: handoff_witnesses.clone(),
-                                    },
-                                ));
-                            }
-                            let next_range_advances = next_plan.changes_context()
-                                && next_plan.replacement_event_sequences().first()
-                                    > plan.replacement_event_sequences().last();
-                            let next_range_is_durable = next_range_advances
-                                && self
-                                    .prospective_observed_compaction_epoch(
-                                        &staged_task,
-                                        &compacted,
-                                        &next_plan,
-                                        "x",
-                                    )?
-                                    .is_some();
-                            if next_range_advances {
-                                if let Some(projection_ref) = projection.as_ref() {
-                                    task.frozen_compaction_rows = self
-                                        .frozen_observed_compaction_rows(
-                                            &task,
-                                            &context,
-                                            plan.as_ref(),
-                                            &final_summary,
-                                            projection_ref,
-                                        )?;
-                                }
-                                let RuntimeAgentCompactionTarget::ActiveTurn {
-                                    plan,
-                                    staged,
-                                    final_request_retry,
-                                    completed_summaries,
-                                    pending_blocks,
-                                    synthesis_source_bytes,
-                                    ..
-                                } = &mut task.target
-                                else {
-                                    unreachable!()
-                                };
-                                **plan = next_plan;
-                                let attempts = staged.as_ref().map_or(0, |state| state.attempts);
-                                *staged = Some(Box::new(
-                                    crate::runtime::agent_state::RuntimeStagedCompaction {
-                                        context: compacted.clone(),
-                                        projection: if next_range_is_durable {
-                                            projection.clone()
-                                        } else {
-                                            None
-                                        },
-                                        baseline_epoch,
-                                        attempts: attempts.saturating_add(1),
-                                        source_chronology: source_chronology.clone(),
-                                        handoff_witnesses: handoff_witnesses.clone(),
-                                    },
-                                ));
-                                final_request_retry.last_input_tokens = Some(candidate_tokens);
-                                final_request_retry.attempts = 0;
-                                final_request_retry.summary_ceiling = None;
-                                task.summary_correction.accepted_summary = None;
-                                completed_summaries.clear();
-                                pending_blocks.clear();
-                                *synthesis_source_bytes = None;
-                                let blocks =
-                                    runtime_redact_compaction_blocks(plan.replacement_blocks());
-                                runtime_rebuild_active_turn_compaction_request(&mut task, blocks)?;
-                                self.queue_agent_compaction_task(task.clone());
-                                return Ok(());
-                            }
-                        }
-                        if let RuntimeAgentCompactionTarget::ActiveTurn {
-                            final_request_retry,
-                            ..
-                        } = &mut task.target
-                            && next_budget > 0
-                            && final_request_retry
-                                .summary_ceiling
-                                .is_none_or(|ceiling| next_budget < ceiling)
-                            && final_request_retry
-                                .last_input_tokens
-                                .is_none_or(|previous| candidate_tokens < previous)
-                        {
-                            final_request_retry.attempts =
-                                final_request_retry.attempts.saturating_add(1);
-                            final_request_retry.last_input_tokens = Some(candidate_tokens);
-                            final_request_retry.summary_ceiling = Some(next_budget);
-                            let blocks =
-                                runtime_redact_compaction_blocks(plan.replacement_blocks());
-                            runtime_rebuild_active_turn_compaction_request(&mut task, blocks)?;
-                            self.queue_agent_compaction_task(task.clone());
-                            return Ok(());
-                        }
-                        return Err(MezError::invalid_state(format!(
-                            "active-turn compaction refreshed candidate exceeds safe input allowance: {}",
-                            diagnostic,
-                        )));
-                    }
-                    if projection.is_none() {
-                        // Keep the original transcript authoritative: the
-                        // selected source is visible to this turn but has no
-                        // committed rows an epoch may reference. The complete
-                        // retry request was checked above before this mutation.
-                        self.retain_compaction_handoff(&task, &turn_id, handoff_witnesses.clone())?;
-                        self.agent_turn_contexts_mut()
-                            .insert(turn_id.clone(), request_candidate);
-                        self.clear_agent_turn_provider_request_chain(&turn_id);
-                        self.checkpoint_compaction_replacement_usage(&task.conversation_id)?;
-                        self.queue_agent_provider_recovery_task_after_compaction(
-                            &turn_id,
-                            "observed_input_limit_turn_local_compaction",
-                        )?;
-                        self.append_agent_status_text_to_terminal_buffer(
-                            pane_id,
-                            "agent: observed input recovery applied turn-local model summary; raw transcript remains authoritative",
-                        )?;
-                        return Ok(());
-                    }
-                    self.persist_agent_compaction_epoch(
-                        pane_id,
-                        &task,
-                        &final_summary,
-                        projection.as_ref(),
-                        Some((&context, plan.as_ref())),
-                    )?;
-                    self.agent_turn_contexts_mut()
-                        .insert(turn_id.clone(), compacted.clone());
-                    self.checkpoint_compaction_replacement_usage(&task.conversation_id)?;
-                    if self.refresh_running_turn_context_after_conversation_compaction(&turn_id)? {
-                        self.clear_agent_turn_provider_request_chain(&turn_id);
-                        self.queue_agent_provider_recovery_task_after_compaction(
-                            &turn_id,
-                            "observed_input_limit_compaction",
-                        )?;
-                        self.append_agent_status_text_to_terminal_buffer(
-                            pane_id,
-                            &format!(
-                                "agent: observed execution input compaction applied durable model summary observed_input_tokens={} compacted_blocks={}",
-                                match trigger {
-                                    RuntimeActiveTurnCompactionTrigger::ObservedInputLimit { observed_input_tokens, .. } => observed_input_tokens,
-                                    RuntimeActiveTurnCompactionTrigger::ProviderContextLimit { .. } => unreachable!("configured compaction trigger was matched above"),
-                                },
-                                report.compacted_blocks
-                            ),
-                        )?;
-                        self.append_agent_trace_turn_event(
-                            pane_id,
-                            &turn_id,
-                            "provider_request recovery_resuming reason=observed_input_limit_compaction_completed",
-                        )?;
-                        return Ok(());
-                    }
-                }
-                self.retain_compaction_handoff(&task, &turn_id, handoff_witnesses)?;
-                self.agent_turn_contexts_mut()
-                    .insert(turn_id.clone(), compacted);
-                self.clear_agent_turn_provider_request_chain(&turn_id);
-                // Observed-input durable replacements were already checkpointed
-                // above, even if refreshing the running context found no work.
-                if matches!(
-                    trigger,
-                    RuntimeActiveTurnCompactionTrigger::ProviderContextLimit { .. }
-                ) {
-                    self.checkpoint_compaction_replacement_usage(&task.conversation_id)?;
-                }
-                match trigger {
-                    RuntimeActiveTurnCompactionTrigger::ProviderContextLimit { .. } => {
-                        self.queue_agent_provider_recovery_task_after_context_compaction(
-                            &turn_id,
-                            recovery_attempt,
-                        )?;
-                    }
-                    RuntimeActiveTurnCompactionTrigger::ObservedInputLimit { .. } => {
-                        self.queue_agent_provider_recovery_task_after_compaction(
-                            &turn_id,
-                            "observed_input_limit_compaction",
-                        )?;
-                    }
-                }
-                let (status, trace) = match trigger {
-                    RuntimeActiveTurnCompactionTrigger::ProviderContextLimit { .. } => (
-                        format!(
-                            "agent: provider context recovery applied model summary compacted_blocks={}",
-                            report.compacted_blocks
-                        ),
-                        "provider_request recovery_resuming reason=provider_context_limit_compaction_completed",
-                    ),
-                    RuntimeActiveTurnCompactionTrigger::ObservedInputLimit {
-                        observed_input_tokens,
-                        ..
-                    } => (
-                        format!(
-                            "agent: observed execution input compaction applied model summary observed_input_tokens={observed_input_tokens} compacted_blocks={}",
-                            report.compacted_blocks
-                        ),
-                        "provider_request recovery_resuming reason=observed_input_limit_compaction_completed",
-                    ),
-                };
-                self.append_agent_status_text_to_terminal_buffer(pane_id, &status)?;
-                self.append_agent_trace_turn_event(pane_id, &turn_id, trace)?;
-                return Ok(());
-            }
-            task.retain_prefix_summary_record(&summary)?;
-            if matches!(task.target, RuntimeAgentCompactionTarget::Conversation)
-                && task.candidate_context.is_some()
-            {
-                let (candidate_tokens, input_limit, diagnostic) =
-                    self.validate_manual_compaction_candidate(&task, &summary)?;
-                if candidate_tokens > input_limit {
-                    let summary_tokens = mez_agent::provider_text_input_token_estimate(&summary);
-                    let next_budget = summary_tokens
-                        .saturating_sub(candidate_tokens.saturating_sub(input_limit))
-                        .min(summary_tokens / 2);
-                    let (previous, attempts) = task.manual_final_retry.unwrap_or((usize::MAX, 0));
-                    if next_budget > 0
-                        && task
-                            .summary_correction
-                            .effective_input_tokens
-                            .is_none_or(|ceiling| next_budget < ceiling)
-                        && candidate_tokens < previous
-                    {
-                        let source = task.manual_retry_source.clone().ok_or_else(|| {
-                            MezError::invalid_state("manual compaction retry source is unavailable")
-                        })?;
-                        runtime_prepare_conversation_compaction_chunks(&mut task)?;
-                        runtime_rebuild_conversation_compaction_request(&mut task, source)?;
-                        if let Some(chunks) = task.conversation_chunks.as_mut() {
-                            chunks.summaries.clear();
-                            chunks.pending.clear();
-                        }
-                        task.manual_final_retry =
-                            Some((candidate_tokens, attempts.saturating_add(1)));
-                        task.summary_correction.effective_input_tokens = Some(next_budget);
-                        task.summary_correction.reset_progress();
-                        summary_correction::communicate_summary_target(
-                            &mut task.request,
-                            next_budget,
-                            true,
-                        );
-                        self.queue_agent_compaction_task(task.clone());
-                        return Ok(());
-                    }
-                    return Err(MezError::invalid_state(format!(
-                        "manual compaction candidate exceeds safe input allowance: {}",
-                        diagnostic,
-                    )));
-                }
-            }
-            self.persist_agent_compaction_epoch(pane_id, &task, &summary, None, None)?;
-            self.checkpoint_compaction_replacement_usage(&task.conversation_id)?;
-            if let Some(resume_turn_id) = task.resume_turn_id.as_deref() {
-                let refreshed = self
-                    .refresh_running_turn_context_after_conversation_compaction(resume_turn_id)?;
-                if refreshed {
-                    let recovery_reason = match task.source.as_str() {
-                        "provider-output-limit" => "output_limit_compaction",
-                        "observed-input-limit" => "observed_input_limit_compaction",
-                        "provider-context-limit" => "provider_context_limit_compaction",
-                        _ => "conversation_compaction",
-                    };
-                    self.queue_agent_provider_recovery_task_after_compaction(
-                        resume_turn_id,
-                        recovery_reason,
-                    )?;
-                    self.append_agent_trace_turn_event(
-                        pane_id,
-                        resume_turn_id,
-                        &format!(
-                            "provider_request recovery_resuming reason={recovery_reason}_completed"
-                        ),
-                    )?;
-                }
+                self.queue_replay_epoch_publication(&task, final_summary)?;
             }
             Ok(())
         })();
@@ -2586,284 +958,6 @@ impl RuntimeSessionService {
         Ok(())
     }
 
-    /// Validates the full refreshed request, including transcript entries added
-    /// while observed-input compaction was running, before the durable epoch is committed.
-    #[allow(clippy::too_many_arguments)]
-    fn validate_observed_input_compaction_refresh_candidate(
-        &mut self,
-        task: &RuntimeAgentCompactionTask,
-        turn: &AgentTurnRecord,
-        compacted: AgentContext,
-        summary: &str,
-        projection: Option<AgentCompactionEpoch>,
-        observed_input_tokens: u64,
-        model_profile: &ModelProfile,
-        provider_options: &std::collections::BTreeMap<String, String>,
-        api: ProviderApiCompatibility,
-        stream: bool,
-    ) -> Result<(usize, usize, String)> {
-        let memory_id =
-            mez_agent::memory::canonical_memory_uuid(&format!("compact-{}", task.conversation_id));
-        let summary_block = ContextBlock::reference_event(
-            ContextSourceKind::CompactionPrefix,
-            format!("memory {memory_id} (conversation)"),
-            runtime_model_compact_memory_content(
-                &task.pane_id,
-                &task.conversation_id,
-                task.transcript_entries,
-                task.summarized_entries,
-                &task.model_profile_name,
-                model_profile,
-                summary,
-            ),
-        );
-        let mut mcp_epoch_blocks = Vec::new();
-        if let Some(catalog) = mez_agent::configured_mcp_catalog_snapshot_content(
-            &self.mcp_registry().prompt_summary(),
-            self.integration.always_exposed_mcp_servers(),
-        ) {
-            mcp_epoch_blocks.push(ContextBlock::reference_event(
-                ContextSourceKind::McpCatalogSnapshot,
-                mez_agent::MCP_CATALOG_SNAPSHOT_CONTEXT_LABEL,
-                catalog,
-            ));
-        }
-        mcp_epoch_blocks.push(ContextBlock {
-            source: ContextSourceKind::Configuration,
-            placement: mez_agent::ContextPlacement::ConversationAppend,
-            label: "MCP compaction re-retrieval guidance".to_string(),
-            content: "Conversation compaction cleared previously retrieved MCP tool contracts. Before using mcp_call, retrieve the needed server again with mcp_server_get; existing directory, reference, and search evidence may still make a server referencable.".to_string(),
-        });
-        // A prefix preview must render its prospective retained ranges too;
-        // overlaying a new prefix on the old epoch can leave absorbed summaries
-        // behind. A source without a mapped durable boundary keeps the existing
-        // local-only fallback and gains no publication or replay authority.
-        let projection = match (
-            projection,
-            task.compacted_through_sequence,
-            task.source_store(),
-        ) {
-            (Some(projection), _, _) => Some(projection),
-            (None, Some(boundary), Some(store)) => {
-                let previous = store.compaction_epoch(&task.conversation_id)?;
-                Some(crate::storage::transcript::project_compaction_prefix(
-                    &task.conversation_id,
-                    previous.as_ref(),
-                    boundary,
-                    crate::storage::transcript::CompactionSummary {
-                        content: &summary_block.content,
-                        record: task.prefix_summary_record_for_preview(summary)?,
-                    },
-                )?)
-            }
-            (None, _, _) => None,
-        };
-        let Some(candidate) = self.preview_running_turn_context_after_conversation_compaction(
-            &turn.turn_id,
-            compacted,
-            summary_block,
-            mcp_epoch_blocks,
-            projection,
-        )?
-        else {
-            return Err(MezError::invalid_state(
-                "observed-input compaction refreshed context is unavailable",
-            ));
-        };
-        let mcp_summary = self.mcp_registry().prompt_summary();
-        let (prepared, available_mcp_tools) =
-            self.prepare_agent_turn_model_context(turn, candidate, &mcp_summary, model_profile)?;
-        let mut request =
-            assemble_model_request(model_profile, api, turn, &prepared.to_agent_context())?;
-        let (allowed_actions, interaction_kind) =
-            self.agent_provider_request_control_for_turn(turn)?;
-        mez_agent::apply_model_request_control(&mut request, allowed_actions, interaction_kind);
-        mez_agent::apply_default_action_gates(
-            &mut request,
-            &available_mcp_tools,
-            self.runtime_persistent_memory_enabled(),
-            super::runtime_issues_enabled(self),
-        );
-        let estimate =
-            mez_agent::provider_request_input_estimate(&request, api, provider_options, stream)?;
-        let safe_limit = runtime_compaction_safe_input_limit(
-            model_profile.max_input_tokens(),
-            model_profile.context_window_tokens(),
-            model_profile.max_output_tokens(),
-        )
-        .ok_or_else(|| {
-            MezError::invalid_state(
-                "active-turn compaction refresh has no configured provider input allowance",
-            )
-        })?;
-        let estimated_input_tokens = u64::try_from(estimate.input_tokens).unwrap_or(u64::MAX);
-        if estimate.input_tokens <= safe_limit && estimated_input_tokens >= observed_input_tokens {
-            return Err(MezError::invalid_state(format!(
-                "observed-input compaction refreshed candidate did not reduce the triggering request: estimated_input_tokens={estimated_input_tokens} observed_input_tokens={observed_input_tokens}",
-            )));
-        }
-        let diagnostic = runtime_compaction_candidate_size_diagnostic(
-            &prepared.to_agent_context(),
-            Some(mez_agent::ProviderBudgetProjection::new(
-                api,
-                &model_profile.provider,
-            )),
-            estimate.input_tokens,
-            safe_limit,
-        );
-        Ok((estimate.input_tokens, safe_limit, diagnostic))
-    }
-
-    /// Persists one compacted conversation epoch and removes its summarized raw replay prefix.
-    fn persist_agent_compaction_epoch(
-        &mut self,
-        pane_id: &str,
-        task: &RuntimeAgentCompactionTask,
-        summary: &str,
-        projection: Option<&AgentCompactionEpoch>,
-        final_range: Option<(&AgentContext, &mez_agent::ModelContextCompactionPlan)>,
-    ) -> Result<()> {
-        let content = runtime_model_compact_memory_content(
-            pane_id,
-            &task.conversation_id,
-            task.transcript_entries,
-            task.summarized_entries,
-            &task.model_profile_name,
-            &task.model_profile,
-            summary,
-        );
-        let mut published_boundary = None;
-        let mut checked_next_sequence = None;
-        if let Some(store) = task.source_store() {
-            let previous = store.compaction_epoch(&task.conversation_id)?;
-            let previous_boundary = previous.as_ref().map_or(0, |epoch| epoch.through_sequence);
-            let boundary = task.compacted_through_sequence.unwrap_or(previous_boundary);
-            if let Some(baseline) = task.frozen_compaction_epoch.as_ref() {
-                if projection.is_some() {
-                    return Err(MezError::invalid_state(
-                        "manual prefix cannot publish a selective proposal",
-                    ));
-                }
-                let pending = self.compaction_pending_entries(task)?;
-                checked_next_sequence = Some(store.save_compaction_prefix_with_proof(
-                    &task.conversation_id,
-                    boundary,
-                    crate::storage::transcript::CompactionSummary {
-                        content: &content,
-                        record: task.accepted_prefix_summary_record(summary)?,
-                    },
-                    &task.frozen_compaction_rows,
-                    baseline,
-                    pending.entries(),
-                )?);
-            } else if let Some(projection) = projection {
-                let prior_ranges = previous
-                    .as_ref()
-                    .map_or(&[][..], |epoch| epoch.ranges.as_slice());
-                if projection.through_sequence != boundary
-                    || previous
-                        .as_ref()
-                        .map_or_else(String::new, |epoch| epoch.summary.clone())
-                        != projection.summary
-                    || !projection.ranges.starts_with(prior_ranges)
-                    || projection.ranges.len() <= prior_ranges.len()
-                {
-                    return Err(MezError::invalid_state(
-                        "selective compaction boundary changed",
-                    ));
-                }
-                let (context, plan) = final_range.ok_or_else(|| {
-                    MezError::invalid_state("selective compaction source proof is unavailable")
-                })?;
-                let frozen =
-                    self.frozen_observed_compaction_rows(task, context, plan, summary, projection)?;
-                store.save_compaction_ranges_with_proof(projection.clone(), &frozen)?;
-            } else {
-                let proposed = crate::storage::transcript::project_compaction_prefix(
-                    &task.conversation_id,
-                    previous.as_ref(),
-                    boundary,
-                    crate::storage::transcript::CompactionSummary {
-                        content: &content,
-                        record: task.accepted_prefix_summary_record(summary)?,
-                    },
-                )?;
-                store.save_compaction_projection(proposed, None, None)?;
-            }
-            published_boundary = Some(boundary);
-        } else if task.compacted_through_sequence.is_some() {
-            return Err(MezError::invalid_state(
-                "durable compaction requires a transcript store",
-            ));
-        }
-        let mcp_catalog_snapshot = mez_agent::configured_mcp_catalog_snapshot_content(
-            &self.mcp_registry().prompt_summary(),
-            self.integration.always_exposed_mcp_servers(),
-        );
-        let post_plan_transcript_entries = self
-            .agent_shell_store()
-            .get(pane_id)
-            .filter(|session| session.session_id == task.conversation_id)
-            .map(|session| {
-                session
-                    .transcript_entries
-                    .saturating_sub(task.transcript_entries)
-            })
-            .unwrap_or_default();
-        let mcp_epoch_entries = self.persist_mcp_compaction_epoch_transcript(
-            pane_id,
-            &task.conversation_id,
-            task.source_store(),
-            mcp_catalog_snapshot,
-            checked_next_sequence,
-        )?;
-        let retained = if let Some(boundary) = published_boundary {
-            self.agent_shell_store()
-                .get(pane_id)
-                .ok_or_else(|| MezError::invalid_state("compaction session disappeared"))?
-                .transcript_high_water
-                .checked_sub(boundary)
-                .ok_or_else(|| {
-                    MezError::invalid_state(
-                        "published compaction boundary exceeds logical frontier",
-                    )
-                })?
-        } else {
-            task.retained_transcript_entries
-                .saturating_add(post_plan_transcript_entries)
-                .saturating_add(mcp_epoch_entries as u64)
-        };
-        let remaining_transcript_entries = self
-            .agent_shell_store_mut()
-            .retain_recent_transcript_entries(pane_id, retained)?
-            .transcript_entries;
-        let now = current_unix_seconds().max(1);
-        let memory_id =
-            mez_agent::memory::canonical_memory_uuid(&format!("compact-{}", task.conversation_id));
-        // Optional memory is a projection, not the source of continuity.
-        let _ = self.upsert_session_memory(MemoryRecord::new_with_defaults(
-            memory_id.clone(),
-            MemoryScope::Pane {
-                session_id: self.session.id.to_string(),
-                pane_id: pane_id.to_string(),
-            },
-            now,
-            now,
-            MemorySource::Agent,
-            224,
-            content,
-        ));
-        self.clear_agent_conversation_provider_request_chain(&task.conversation_id);
-        self.append_agent_status_text_to_terminal_buffer(
-            pane_id,
-            &format!(
-                "agent: compacted conversation summary memory_id={} summarized_entries={} remaining_transcript_entries={} source=model-compact trigger={}",
-                memory_id, task.summarized_entries, remaining_transcript_entries, task.source
-            ),
-        )?;
-        Ok(())
-    }
-
     /// Applies a failed model-backed compaction worker result.
     #[cfg(test)]
     pub fn apply_agent_compaction_failed_event(
@@ -2894,6 +988,15 @@ impl RuntimeSessionService {
         message: &str,
         provider_failure_json: Option<&str>,
     ) -> Result<bool> {
+        // Accepted inference transferred this generation to persistence. Only
+        // that publication owner can settle it; late provider results cannot
+        // cancel a pending write or discard a returned but unadopted receipt.
+        if self
+            .replay_epoch_publication(pane_id, task_generation)
+            .is_some()
+        {
+            return Ok(false);
+        }
         if !self.agent_compaction_task_is_claimed(pane_id, task_generation) {
             return Ok(false);
         }
@@ -2922,15 +1025,37 @@ impl RuntimeSessionService {
             }
             return Ok(failed.had_task());
         };
-        if let Some(mut task) = self.finish_agent_compaction_task(pane_id, task_generation) {
-            if provider_failure_json
-                .and_then(|payload| serde_json::from_str::<serde_json::Value>(payload).ok())
-                .is_some_and(|payload| {
-                    payload.get("type").and_then(serde_json::Value::as_str)
-                        == Some("malformed_model_output")
-                })
-            {
-                if let Err(error) = self.correct_malformed_compaction_response(&mut task) {
+        let malformed = provider_failure_json
+            .and_then(|payload| serde_json::from_str::<serde_json::Value>(payload).ok())
+            .is_some_and(|payload| {
+                payload.get("type").and_then(serde_json::Value::as_str)
+                    == Some("malformed_model_output")
+            });
+        // Canonical source validation requires the original current claim.
+        // Retire it only after correction admission; a replacement generation
+        // queued by that admission must retain its independent ownership.
+        if let Some(task) = self
+            .claimed_agent_compaction_task(pane_id, task_generation)
+            .cloned()
+            && let Err(error) = self.validate_replay_compaction_task(&task)
+        {
+            self.finish_agent_compaction_task(pane_id, task_generation);
+            if let Some(turn) = task.resume_turn_id.as_deref() {
+                self.fail_running_turn_after_compaction_error(turn, &task.source, &error)?;
+            }
+            return Ok(true);
+        }
+        let task = if malformed {
+            self.claimed_agent_compaction_task(pane_id, task_generation)
+                .cloned()
+        } else {
+            self.finish_agent_compaction_task(pane_id, task_generation)
+        };
+        if let Some(mut task) = task {
+            if malformed {
+                let correction = self.correct_malformed_compaction_response(&mut task);
+                self.finish_agent_compaction_task(pane_id, task_generation);
+                if let Err(error) = correction {
                     if let Some(facts) = error.compaction_failure() {
                         self.append_agent_status_text_to_terminal_buffer(
                             pane_id,
@@ -3034,63 +1159,8 @@ impl RuntimeSessionService {
             if retry_class == ProviderErrorRetryClass::ContextLimit
                 && matches!(task.target, RuntimeAgentCompactionTarget::ActiveTurn { .. })
             {
-                // Before splitting all selected source into temporary chunks, try
-                // retaining the newest complete group exactly. This is useful only
-                // when the resulting *full* provider request can still fit; the
-                // excluded group is never silently dropped from the live context.
-                let walkback = match &task.target {
-                    RuntimeAgentCompactionTarget::ActiveTurn {
-                        turn_id,
-                        plan,
-                        pending_blocks,
-                        completed_summaries,
-                        current_blocks,
-                        ..
-                    } if pending_blocks.is_empty()
-                        && completed_summaries.is_empty()
-                        && current_blocks.len() == plan.replacement_blocks().len() =>
-                    {
-                        Some((turn_id.clone(), plan.as_ref().clone()))
-                    }
-                    _ => None,
-                };
-                if let Some((turn_id, mut candidate)) = walkback {
-                    while candidate.exclude_newest_replacement_group() {
-                        let fits = match self
-                            .compaction_walkback_candidate_fits(&task, &turn_id, &candidate)
-                        {
-                            Ok(fits) => fits,
-                            Err(error) => {
-                                self.fail_running_turn_after_compaction_failure(
-                                    &turn_id,
-                                    &task.source,
-                                    error.message(),
-                                )?;
-                                let _ = self.append_agent_status_text_to_terminal_buffer(
-                                    pane_id,
-                                    &format!(
-                                        "agent: compact walk-back validation failed: {}",
-                                        error.message()
-                                    ),
-                                );
-                                return Ok(true);
-                            }
-                        };
-                        if !fits {
-                            continue;
-                        }
-                        let blocks =
-                            runtime_redact_compaction_blocks(candidate.replacement_blocks());
-                        if let RuntimeAgentCompactionTarget::ActiveTurn { plan, .. } =
-                            &mut task.target
-                        {
-                            **plan = candidate;
-                        }
-                        runtime_rebuild_active_turn_compaction_request(&mut task, blocks)?;
-                        self.queue_agent_compaction_task(task.clone());
-                        return Ok(true);
-                    }
-                }
+                // Keep the frozen canonical selection; only temporary input
+                // may shrink after a provider rejection.
                 let failed_request_bytes = {
                     let (api, options, stream) =
                         task.compaction_request_shape.as_ref().ok_or_else(|| {
@@ -3274,37 +1344,20 @@ impl RuntimeSessionService {
         }
         Ok(())
     }
-
-    /// Runs the inspect agent shell transcript for compaction operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    fn inspect_agent_shell_transcript_for_compaction(
-        &self,
-        conversation_id: &str,
-    ) -> Result<Vec<TranscriptEntry>> {
-        source::ManualCompactionSourceWork::capture(
-            self.persistence.transcript_store().cloned(),
-            conversation_id.to_string(),
-        )
-        .execute()
-    }
 }
 
-/// Builds the provider request used for model-authored conversation compaction.
-pub(super) fn runtime_model_compaction_request(
+/// Wraps already rendered source as compactor data. This does not reconstruct
+/// task lifecycle, native ownership, ordinary turn admission or publication.
+fn runtime_model_compaction_request_from_source(
     profile: &ModelProfile,
     pane_id: &str,
     conversation_id: &str,
-    transcript_entries: u64,
-    source: CompactionTranscriptSource<'_>,
-    context: &AgentContext,
+    source_text: String,
     allowed_actions: AllowedActionSet,
-) -> Result<ModelRequest> {
+) -> ModelRequest {
     let agent_id = format!("agent-{pane_id}");
     let turn_id = format!("compact-{conversation_id}");
-    Ok(ModelRequest {
+    ModelRequest {
         provider: profile.provider.clone(),
         model: profile.model.clone(),
         model_capabilities: profile.model_capabilities.clone(),
@@ -3348,16 +1401,10 @@ pub(super) fn runtime_model_compaction_request(
                 role: ModelMessageRole::User,
                 source: ContextSourceKind::Transcript,
                 placement: mez_agent::ContextPlacement::ConversationAppend,
-                content: runtime_model_compaction_source(
-                    pane_id,
-                    conversation_id,
-                    transcript_entries,
-                    source,
-                    context,
-                )?,
+                content: source_text,
             },
         ].into(),
-    })
+    }
 }
 
 /// Returns the content-free label for one recorded compaction trigger.
@@ -3516,7 +1563,6 @@ fn runtime_rebuild_active_turn_compaction_request(
         &blocks,
         task.request.allowed_actions.clone(),
     )?;
-    runtime_limit_compaction_summary_output(&mut task.request, plan.summary_budget_words());
     let effective = final_request_retry.summary_ceiling;
     task.summary_correction.effective_input_tokens = effective;
     let (ceiling, tokens) = if let Some(target) = task.summary_correction.guidance_target {
@@ -3526,7 +1572,12 @@ fn runtime_rebuild_active_turn_compaction_request(
     } else {
         (plan.summary_budget_words(), plan.planning_budget().1)
     };
-    summary_correction::communicate_summary_target(&mut task.request, ceiling, tokens);
+    // A legacy no-work advisory has no output allowance. Canonical selection
+    // remains independently eligible, including during private backoff and
+    // synthesis; preserve the initial request's absence of a zero-word order.
+    if ceiling > 0 {
+        summary_correction::communicate_summary_target(&mut task.request, ceiling, tokens);
+    }
     let mut messages = task.request.messages.iter().cloned().collect::<Vec<_>>();
     for message in correction_guidance {
         messages.insert(2.min(messages.len()), message);
@@ -3547,25 +1598,25 @@ fn runtime_limit_compaction_summary_output(
     summary_correction::communicate_summary_target(request, summary_budget_words, false);
 }
 
-/// Builds one compactor request from temporary active-turn source blocks.
-fn runtime_model_compaction_request_for_blocks(
+/// Renders the frozen plan's read-only projection or private inference chunks.
+/// Reimporting those blocks would reactivate historical user roots and invent
+/// lifecycle for native fragments. Source selection and publication retain the
+/// original typed owner independently of this auxiliary text envelope.
+pub(super) fn runtime_model_compaction_request_for_blocks(
     profile: &ModelProfile,
     pane_id: &str,
     conversation_id: &str,
     blocks: &[ContextBlock],
     allowed_actions: AllowedActionSet,
 ) -> Result<ModelRequest> {
-    let source_context = AgentContext::new_durable(blocks.to_vec())
-        .map_err(|error| MezError::invalid_state(error.message()))?;
-    runtime_model_compaction_request(
+    let source_text = runtime_model_compaction_source_for_blocks(pane_id, conversation_id, blocks)?;
+    Ok(runtime_model_compaction_request_from_source(
         profile,
         pane_id,
         conversation_id,
-        0,
-        CompactionTranscriptSource::raw(&[]),
-        &source_context,
+        source_text,
         allowed_actions,
-    )
+    ))
 }
 
 /// Splits only temporary compactor input while leaving the atomic source plan unchanged.
@@ -3612,30 +1663,28 @@ fn runtime_compaction_summary_blocks(summaries: Vec<String>) -> Vec<ContextBlock
         .collect()
 }
 
-/// Formats bounded semantic transcript source for a model compaction request.
-/// Malformed reserved accounting records abort construction; physical source
-/// proofs remain unchanged and accounting never enters credential redaction.
-pub(super) fn runtime_model_compaction_source(
+/// Formats source as reference text without constructing an ordinary context.
+/// Original labels, roles and redaction are unchanged; descriptive accounting
+/// and lifecycle authority remain outside this provider-visible projection.
+fn runtime_model_compaction_source_for_blocks(
     pane_id: &str,
     conversation_id: &str,
-    transcript_entries: u64,
-    source: CompactionTranscriptSource<'_>,
-    context: &AgentContext,
+    blocks: &[ContextBlock],
 ) -> Result<String> {
+    if blocks
+        .iter()
+        .any(|block| block.placement != mez_agent::ContextPlacement::ConversationAppend)
+    {
+        return Err(MezError::invalid_state(
+            "compactor input must be selected chronological source",
+        ));
+    }
     let mut lines = vec![
         format!("Pane: {pane_id}"),
         format!("Conversation: {conversation_id}"),
-        format!("Transcript entries before compaction: {transcript_entries}"),
-        format!(
-            "Durable entries supplied for compaction: {}",
-            source.rows.len()
-        ),
-        format!(
-            "Provider-bound context blocks supplied: {}",
-            context.blocks().len()
-        ),
+        format!("Provider-bound context blocks supplied: {}", blocks.len()),
     ];
-    for (index, block) in context.blocks().iter().enumerate() {
+    for (index, block) in blocks.iter().enumerate() {
         lines.push(format!(
             "context_block={} source={} label={} content={}",
             index,
@@ -3644,7 +1693,6 @@ pub(super) fn runtime_model_compaction_source(
             runtime_model_compaction_entry_content(&block.content)
         ));
     }
-    source.append_lines(&mut lines)?;
     Ok(lines.join("\n"))
 }
 
@@ -3722,323 +1770,6 @@ pub(super) fn runtime_model_compaction_summary_from_response(
     })
 }
 
-/// Formats the durable memory record stored after model-authored compaction.
-pub(super) fn runtime_model_compact_memory_content(
-    _pane_id: &str,
-    _conversation_id: &str,
-    _transcript_entries: u64,
-    _summarized_entries: usize,
-    _model_profile_name: &str,
-    _profile: &ModelProfile,
-    summary: &str,
-) -> String {
-    [
-        "Older durable transcript entries were summarized; this summary is lossy and only the retained recent raw tail is exact. Reinspect source when exact details matter.".to_string(),
-        summary.trim().to_string(),
-    ]
-    .join("\n")
-}
-
-/// Removes raw transcript replay and all members of its captured execution
-/// groups so the compactor sees selected source once and never a retained tail.
-/// Source labels identify replay owners; canonical group identities identify
-/// their evidence, including native, action and MCP events. Unrelated exact
-/// references keep their original metadata and order, even with identical bytes.
-///
-/// # Parameters
-/// - `context`: The provider context assembled for the compaction turn.
-pub(super) fn runtime_compaction_context_without_transcript_blocks(
-    mut context: AgentContext,
-) -> Result<AgentContext> {
-    let replay_groups = context
-        .chronology()
-        .iter()
-        .filter(|event| runtime_context_block_is_transcript_replay(event.block()))
-        .filter_map(|event| event.execution_group_id().cloned())
-        .collect::<std::collections::BTreeSet<_>>();
-    context.retain_blocks_with_metadata(|block, metadata| {
-        !runtime_context_block_is_transcript_replay(block)
-            && !metadata
-                .execution_group_id()
-                .is_some_and(|group| replay_groups.contains(group))
-    })?;
-    Ok(context.revalidate()?)
-}
-
-/// Returns true when a context block is raw transcript replay.
-///
-/// # Parameters
-/// - `block`: The context block being classified.
-pub(super) fn runtime_context_block_is_transcript_replay(block: &ContextBlock) -> bool {
-    matches!(
-        block.source,
-        ContextSourceKind::Transcript
-            | ContextSourceKind::TranscriptUser
-            | ContextSourceKind::TranscriptAssistant
-            | ContextSourceKind::TranscriptTool
-    )
-}
-
-/// Returns how many recent durable transcript entries should remain in raw
-/// replay after a compaction summary is stored.
-///
-/// # Parameters
-/// - `transcript_entries`: The active raw replay count before compaction.
-/// - `durable_entries`: The durable transcript entries found for the
-///   conversation.
-/// - `context_budget_words`: The estimated context budget for the active model.
-/// - `retained_tail_percent`: The model-context percentage reserved for raw replay.
-pub(super) fn runtime_compact_retained_transcript_entries(
-    transcript_entries: u64,
-    durable_entries: &[TranscriptEntry],
-    context_budget_words: usize,
-    retained_tail_percent: usize,
-) -> u64 {
-    let active_count =
-        runtime_compact_active_transcript_entry_count(transcript_entries, durable_entries.len());
-    if active_count == 0 {
-        return 0;
-    }
-    let active_entries = &durable_entries[durable_entries.len() - active_count..];
-    let groups = runtime_compact_transcript_execution_groups(active_entries);
-    if groups.is_empty() {
-        return 0;
-    }
-    let closed_group_count = groups
-        .iter()
-        .position(|group| {
-            !active_entries[group.clone()]
-                .iter()
-                .any(|entry| entry.role == TranscriptRole::Assistant)
-        })
-        .unwrap_or(groups.len());
-    let tail_budget = runtime_compact_retained_context_tail_budget_words(
-        context_budget_words,
-        retained_tail_percent,
-    );
-    let mut retained_words = 0usize;
-    let mut tail_start = active_count;
-    for (group_index, group) in groups.iter().enumerate().rev() {
-        let group_words = active_entries[group.clone()]
-            .iter()
-            .map(runtime_compact_transcript_entry_context_words)
-            .fold(0usize, usize::saturating_add);
-        let must_retain = group_index >= closed_group_count;
-        if !must_retain && retained_words.saturating_add(group_words) >= tail_budget {
-            break;
-        }
-        retained_words = retained_words.saturating_add(group_words);
-        tail_start = group.start;
-    }
-    let retained_entries = active_count.saturating_sub(tail_start);
-    u64::try_from(retained_entries).unwrap_or(u64::MAX)
-}
-
-/// Estimates the context words in the raw suffix that would remain after
-/// compaction. This is used to distinguish a fitting tail from exact unfinished
-/// transcript material that cannot be safely summarized as a complete group.
-fn runtime_compact_retained_transcript_tail_context_words(
-    transcript_entries: u64,
-    durable_entries: &[TranscriptEntry],
-    retained_transcript_entries: u64,
-) -> usize {
-    let active_count =
-        runtime_compact_active_transcript_entry_count(transcript_entries, durable_entries.len());
-    let active_start = durable_entries.len().saturating_sub(active_count);
-    let retained_count = usize::try_from(retained_transcript_entries)
-        .unwrap_or(usize::MAX)
-        .min(active_count);
-    let retained_start = active_start.saturating_add(active_count.saturating_sub(retained_count));
-    durable_entries[retained_start..active_start.saturating_add(active_count)]
-        .iter()
-        .map(runtime_compact_transcript_entry_context_words)
-        .fold(0usize, usize::saturating_add)
-}
-
-/// Returns the raw tail count for an explicit user-forced compaction.
-///
-/// Manual `/compact` is an explicit request to compact, so it should not skip
-/// only because all active entries currently fit inside the retained-tail
-/// budget. Keep the normal budget-derived tail when it already leaves a prefix
-/// to summarize, otherwise shrink the tail enough to summarize at least one
-/// active durable entry.
-///
-/// # Parameters
-/// - `transcript_entries`: The active raw replay count before compaction.
-/// - `durable_entries`: The durable transcript entries found for the
-///   conversation.
-/// - `context_budget_words`: The estimated context budget for the active model.
-/// - `retained_tail_percent`: The model-context percentage reserved for raw replay.
-pub(super) fn runtime_compact_forced_retained_transcript_entries(
-    transcript_entries: u64,
-    durable_entries: &[TranscriptEntry],
-    context_budget_words: usize,
-    retained_tail_percent: usize,
-) -> u64 {
-    let retained = runtime_compact_retained_transcript_entries(
-        transcript_entries,
-        durable_entries,
-        context_budget_words,
-        retained_tail_percent,
-    );
-    let active_count =
-        runtime_compact_active_transcript_entry_count(transcript_entries, durable_entries.len());
-    if active_count == 0 {
-        return 0;
-    }
-    if !runtime_compact_transcript_entries_for_summary(
-        transcript_entries,
-        durable_entries,
-        retained,
-    )
-    .is_empty()
-    {
-        return retained;
-    }
-    let active_entries = &durable_entries[durable_entries.len() - active_count..];
-    let groups = runtime_compact_transcript_execution_groups(active_entries);
-    let Some(first_closed_group) = groups
-        .iter()
-        .find(|group| runtime_compaction_group_is_summarizable(&active_entries[(*group).clone()]))
-    else {
-        return u64::try_from(active_count).unwrap_or(u64::MAX);
-    };
-    u64::try_from(active_count.saturating_sub(first_closed_group.end)).unwrap_or(u64::MAX)
-}
-
-/// Returns the active transcript entry count represented by the current shell
-/// session and durable store.
-///
-/// # Parameters
-/// - `transcript_entries`: The active raw replay count before compaction.
-/// - `durable_entries`: The number of durable transcript entries found.
-pub(super) fn runtime_compact_active_transcript_entry_count(
-    transcript_entries: u64,
-    durable_entries: usize,
-) -> usize {
-    usize::try_from(transcript_entries)
-        .unwrap_or(usize::MAX)
-        .min(durable_entries)
-}
-
-/// Returns the durable transcript prefix that should be summarized, excluding
-/// the exact raw tail retained for future turns.
-///
-/// # Parameters
-/// - `transcript_entries`: The active raw replay count before compaction.
-/// - `durable_entries`: The durable transcript entries found for the
-///   conversation.
-/// - `retained_transcript_entries`: The retained raw tail count.
-pub(super) fn runtime_compact_transcript_entries_for_summary(
-    transcript_entries: u64,
-    durable_entries: &[TranscriptEntry],
-    retained_transcript_entries: u64,
-) -> &[TranscriptEntry] {
-    let active_count =
-        runtime_compact_active_transcript_entry_count(transcript_entries, durable_entries.len());
-    let retained_count = usize::try_from(retained_transcript_entries)
-        .unwrap_or(usize::MAX)
-        .min(active_count);
-    let active_start = durable_entries.len().saturating_sub(active_count);
-    let active_entries = &durable_entries[active_start..];
-    let requested_compactable_count = active_count.saturating_sub(retained_count);
-    let compactable_count = runtime_compact_transcript_execution_groups(active_entries)
-        .into_iter()
-        .take_while(|group| group.end <= requested_compactable_count)
-        .take_while(|group| {
-            runtime_compaction_group_is_summarizable(&active_entries[group.clone()])
-        })
-        .map(|group| group.end)
-        .last()
-        .unwrap_or(0);
-    &active_entries[..compactable_count]
-}
-
-/// Returns whether one complete transcript group can enter a compacted prefix.
-///
-/// Ordinary groups require an assistant response. The dedicated MCP epoch and
-/// compact directory snapshot are durable control metadata that replace older
-/// MCP authority at each compaction boundary, so they may be summarized as one
-/// intact group during a subsequent compaction.
-fn runtime_compaction_group_is_summarizable(entries: &[TranscriptEntry]) -> bool {
-    entries
-        .iter()
-        .any(|entry| entry.role == TranscriptRole::Assistant)
-        || entries
-            .iter()
-            .all(runtime_compaction_control_entry_is_summarizable)
-}
-
-/// Classifies the dedicated control rows allowed in a closed compaction group.
-/// Other exact system references remain protected by the existing barrier rule.
-fn runtime_compaction_control_entry_is_summarizable(entry: &TranscriptEntry) -> bool {
-    if entry.role != TranscriptRole::System {
-        return false;
-    }
-    match mez_agent::TranscriptContextEvent::from_transcript_content(&entry.content) {
-        Some(mez_agent::TranscriptContextEvent::McpCompactionEpoch)
-        | Some(mez_agent::TranscriptContextEvent::McpCatalogSnapshot { .. }) => true,
-        Some(mez_agent::TranscriptContextEvent::PromptBoundary {
-            source: ContextSourceKind::Configuration,
-            label,
-            ..
-        }) => label == "MCP compaction re-retrieval guidance",
-        _ => false,
-    }
-}
-
-/// Returns contiguous durable execution groups keyed by stable turn id.
-///
-/// All request messages, provider-native events, assistant output, and action
-/// results emitted by terminal persistence share one turn id. Grouping by that
-/// identity prevents compaction from separating any of those records.
-fn runtime_compact_transcript_execution_groups(
-    entries: &[TranscriptEntry],
-) -> Vec<std::ops::Range<usize>> {
-    let mut groups = Vec::new();
-    let mut start = 0usize;
-    for index in 1..entries.len() {
-        if entries[index].turn_id != entries[start].turn_id {
-            groups.push(start..index);
-            start = index;
-        }
-    }
-    if start < entries.len() {
-        groups.push(start..entries.len());
-    }
-    groups
-}
-
-/// Returns the word budget reserved for retained exact transcript replay.
-///
-/// # Parameters
-/// - `context_budget_words`: The estimated context budget for the active model.
-/// - `retained_tail_percent`: The model-context percentage reserved for raw replay.
-pub(super) fn runtime_compact_retained_context_tail_budget_words(
-    context_budget_words: usize,
-    retained_tail_percent: usize,
-) -> usize {
-    context_budget_words
-        .saturating_mul(runtime_compact_retained_tail_percent(retained_tail_percent))
-        .saturating_div(100)
-        .max(1)
-}
-
-/// Normalizes retained-tail percentages for defensive runtime callers.
-pub(super) fn runtime_compact_retained_tail_percent(retained_tail_percent: usize) -> usize {
-    retained_tail_percent.clamp(1, 100)
-}
-
-/// Estimates one transcript entry's provider-context footprint.
-///
-/// # Parameters
-/// - `entry`: The transcript entry being estimated.
-pub(super) fn runtime_compact_transcript_entry_context_words(entry: &TranscriptEntry) -> usize {
-    AGENT_COMPACT_TRANSCRIPT_ENTRY_CONTEXT_OVERHEAD_WORDS.saturating_add(
-        mez_agent::provider_text_input_token_estimate(&entry.content),
-    )
-}
-
 /// Runs the runtime compact redact sensitive token operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
@@ -4063,130 +1794,9 @@ pub(super) fn runtime_compact_redact_sensitive_token(token: &str) -> String {
     }
 }
 
-/// Runs the runtime transcript role name operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(super) fn runtime_transcript_role_name(role: TranscriptRole) -> &'static str {
-    match role {
-        TranscriptRole::User => "user",
-        TranscriptRole::Assistant => "assistant",
-        TranscriptRole::Tool => "tool",
-        TranscriptRole::System => "system",
-    }
-}
-
 #[cfg(test)]
 mod size_diagnostic_tests {
     use super::*;
-
-    /// Group-aware start matching must still reject missing rows, duplicate
-    /// owner identities, sequence gaps, and incomplete execution groups.
-    #[test]
-    fn durable_compaction_mapping_rejects_incomplete_or_ambiguous_identity() {
-        let group = mez_agent::ContextExecutionGroupId::new("mapping-group").unwrap();
-        let mut context = AgentContext::new_durable(vec![ContextBlock::user_event(
-            "user prompt",
-            "retain this exact instruction",
-        )])
-        .unwrap();
-        context
-            .append_assistant_event("answer", "answer ".repeat(300), group.clone())
-            .unwrap();
-        context
-            .append_evidence_event(
-                ContextSourceKind::ActionResult,
-                "result",
-                "result ".repeat(300),
-                group.clone(),
-                None,
-                true,
-            )
-            .unwrap();
-        let plan = mez_agent::plan_model_context_compaction_at_consumed_sequence(
-            &context,
-            1_000,
-            1,
-            context.event_sequence_high_water_mark(),
-        )
-        .unwrap();
-        assert_eq!(plan.replacement_blocks().len(), 2);
-        let rows = plan
-            .replacement_blocks()
-            .iter()
-            .enumerate()
-            .map(|(index, block)| TranscriptEntry {
-                conversation_id: "mapping-conversation".to_string(),
-                sequence: index as u64 + 1,
-                created_at_unix_seconds: 1,
-                role: TranscriptRole::System,
-                turn_id: "mapping-turn".to_string(),
-                agent_id: "agent-%1".to_string(),
-                pane_id: "%1".to_string(),
-                content: mez_agent::TranscriptContextEvent::execution_block_with_metadata(
-                    block.source,
-                    block.label.clone(),
-                    block.content.clone(),
-                    group.clone(),
-                    index as u64 + 1,
-                    None,
-                )
-                .unwrap()
-                .to_transcript_content(),
-            })
-            .collect::<Vec<_>>();
-        assert!(selected_durable_compaction_range(&plan, &context, &rows, "summary").is_some());
-        assert!(matches!(
-            classify_compaction_selection(&plan, &context, &rows, &rows, "summary").unwrap(),
-            CompactionSelectionDurability::Durable(_)
-        ));
-        assert!(matches!(
-            classify_compaction_selection(&plan, &context, &[], &[], "summary").unwrap(),
-            CompactionSelectionDurability::TurnLocal
-        ));
-        assert!(matches!(
-            classify_compaction_selection(&plan, &context, &rows[..1], &rows, "summary").unwrap(),
-            CompactionSelectionDurability::TurnLocal
-        ));
-        assert!(
-            classify_compaction_selection(&plan, &context, &rows[..1], &rows[..1], "summary")
-                .is_err()
-        );
-        assert!(
-            selected_durable_compaction_range(&plan, &context, &rows[..1], "summary").is_none()
-        );
-        let mut duplicate = rows.clone();
-        duplicate.push(rows[0].clone());
-        assert!(
-            classify_compaction_selection(&plan, &context, &duplicate, &duplicate, "summary")
-                .is_err()
-        );
-        assert!(
-            selected_durable_compaction_range(&plan, &context, &duplicate, "summary").is_none()
-        );
-        let mut gap = rows.clone();
-        gap[1].sequence = 3;
-        assert!(classify_compaction_selection(&plan, &context, &gap, &gap, "summary").is_err());
-        assert!(selected_durable_compaction_range(&plan, &context, &gap, "summary").is_none());
-        let mut incomplete = rows.clone();
-        let mut extra = rows[1].clone();
-        extra.sequence = 3;
-        extra.content = mez_agent::TranscriptContextEvent::execution_block_with_metadata(
-            ContextSourceKind::ActionResult,
-            "later result",
-            "not selected",
-            group,
-            3,
-            None,
-        )
-        .unwrap()
-        .to_transcript_content();
-        incomplete.push(extra);
-        assert!(
-            selected_durable_compaction_range(&plan, &context, &incomplete, "summary").is_none()
-        );
-    }
 
     /// A synthesis round must shrink the frozen source; equal, growing, and
     /// empty candidates cannot cause another model request.

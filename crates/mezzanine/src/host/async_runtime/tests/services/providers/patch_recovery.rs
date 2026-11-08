@@ -516,9 +516,14 @@ async fn qualify_with_lifecycle(
         writer_stopped.notified().await;
         handle.shutdown().await.unwrap();
     };
-    let ((), report, (), (), mut exit) = tokio::time::timeout(Duration::from_secs(30), async {
-        tokio::join!(client, provider, server, writer, actor.run())
-    })
+    // Keep the composite five-owner join off this enclosing poll frame. Its
+    // debug construction/poll temporaries otherwise consume over half a MiB
+    // before entering actual actor/native work on an ordinary test stack.
+    // This changes neither task scheduling nor the original cleanup deadline.
+    let ((), report, (), (), mut exit) = tokio::time::timeout(
+        Duration::from_secs(30),
+        Box::pin(async { tokio::join!(client, provider, server, writer, actor.run()) }),
+    )
     .await
     .unwrap();
     if lifecycle != Lifecycle::Keep {

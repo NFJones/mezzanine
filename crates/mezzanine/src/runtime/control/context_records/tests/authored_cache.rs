@@ -97,6 +97,33 @@ fn authored_cost_repair_is_persisted_for_unchanged_cold_replay() {
     assert_eq!(cold.records.estimate_recomputations(), 0);
     assert_eq!(std::fs::read(&database).unwrap(), before);
     assert_eq!(std::fs::read(&path).unwrap(), raw);
+    // The independent copy carries the repaired record, not the stale parent
+    // envelope. The original audit bytes above must remain untouched.
+    let owner = first.replay_owner().unwrap().unwrap();
+    let fork = first
+        .records
+        .replay_memory_source()
+        .unwrap()
+        .fork_source(&owner)
+        .unwrap();
+    let batch = fork.initial_batch("repaired-cost-child", 2).unwrap();
+    store.accept_transcript_append_receipt(&batch, 1).unwrap();
+    store.settle_transcript_append_receipt(&batch, 1).unwrap();
+    let child = execute_runtime_agent_history_epoch_work(RuntimeAgentHistoryEpochWork {
+        pending_capture_error: None,
+        store: AgentTranscriptStore::new(store.root()),
+        inputs: RuntimeAgentHistoryEpochInputs {
+            pane_id: "original-pane".into(),
+            conversation_id: "repaired-cost-child".into(),
+            ephemeral_source_entries: None,
+            active_entries: Some(100),
+            pending_entries: Default::default(),
+        },
+    })
+    .unwrap();
+    assert_eq!(child.records.indices_with_offset(0).unwrap(), records);
+    assert_eq!(child.records.estimate_recomputations(), 0);
+    assert_eq!(std::fs::read(&path).unwrap(), raw);
 }
 
 /// Valid authored snapshots already own their estimates. A real leased read

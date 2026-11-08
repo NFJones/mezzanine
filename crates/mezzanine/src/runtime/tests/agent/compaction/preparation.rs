@@ -15,7 +15,7 @@ mod late_append;
 mod selective;
 
 /// Captures one genuine preparation through the command entry point. The store
-/// has closed eligible rows; no injected model task or completion is needed.
+/// has eligible historical references; no model task or completion is injected.
 fn fixture(label: &str) -> (RuntimeSessionService, ClientId, AgentTranscriptStore) {
     fixture_with_adapter(label, true)
 }
@@ -25,25 +25,78 @@ fn fixture_with_adapter(
     label: &str,
     adapter: bool,
 ) -> (RuntimeSessionService, ClientId, AgentTranscriptStore) {
+    fixture_with_cursor(label, adapter, false)
+}
+
+/// The cached-cursor case settles its original first append once, before any
+/// history capture. It never primes a cursor by duplicating committed rows.
+fn fixture_with_cursor(
+    label: &str,
+    adapter: bool,
+    cached_cursor: bool,
+) -> (RuntimeSessionService, ClientId, AgentTranscriptStore) {
     let mut service = test_runtime_service();
     service.replace_config_layers(vec![ConfigLayer {name:"manual-request-parity".into(),path:None,format:ConfigFormat::Toml,scope:ConfigScope::Primary,trusted:true,
         text:"[agents]\ndefault_provider=\"openai\"\ndefault_model_profile=\"default\"\n[providers.openai]\nkind=\"openai\"\nmodels=[\"fixture-model\"]\ndefault_model=\"fixture-model\"\n[model_profiles.default]\nprovider=\"openai\"\nmodel=\"fixture-model\"\ncontext_window_tokens=128000\n".into()}]).unwrap();
     let store = AgentTranscriptStore::new(temp_root(label));
-    for sequence in 1..=3 {
-        store
-            .append(&TranscriptEntry {
-                conversation_id: "prepare-owned".into(),
-                sequence,
-                created_at_unix_seconds: sequence,
-                role: TranscriptRole::Assistant,
-                turn_id: format!("owned-{sequence}"),
-                agent_id: "agent-%1".into(),
-                pane_id: "%1".into(),
-                content: format!("completed source {sequence}"),
-            })
-            .unwrap();
-    }
+    let rows = (1..=3)
+        .map(|sequence| TranscriptEntry {
+            conversation_id: "prepare-owned".into(),
+            sequence,
+            created_at_unix_seconds: sequence,
+            // These request/status tests need neutral eligible history.
+            // An assistant role alone cannot certify a completed execution.
+            role: TranscriptRole::User,
+            turn_id: format!("owned-{sequence}"),
+            agent_id: "agent-%1".into(),
+            pane_id: "%1".into(),
+            content: format!("completed source {sequence}"),
+        })
+        .collect::<Vec<_>>();
     service.set_agent_transcript_store(store.clone());
+    if cached_cursor {
+        service.use_transcript_effect_adapter();
+        let batch = crate::storage::transcript::TranscriptAppendBatch::rows(rows).unwrap();
+        let path = store.transcript_path("prepare-owned").unwrap();
+        service
+            .persistence
+            .queue_transcript(RuntimeSideEffect::PersistTranscriptEntries {
+                store: store.clone(),
+                path: path.clone(),
+                batch,
+            });
+        let mut effects = service.persistence.take_transcript_effects();
+        assert_eq!(effects.len(), 1);
+        let RuntimeSideEffect::PersistTranscriptEntries {
+            store: original,
+            path,
+            batch,
+        } = effects.pop().unwrap()
+        else {
+            panic!("original fixture append owner");
+        };
+        original
+            .accept_transcript_append_receipt(&batch, 1)
+            .unwrap();
+        original.append_many(batch.entries()).unwrap();
+        original
+            .settle_transcript_append_receipt(&batch, 1)
+            .unwrap();
+        assert!(service.persistence.settle_transcript_write_at_path(
+            "prepare-owned",
+            1,
+            &path,
+            &batch
+        ));
+        assert_eq!(
+            service
+                .persistence
+                .deferred_transcript_next_sequence("prepare-owned"),
+            Some(4)
+        );
+    } else {
+        store.append_many(&rows).unwrap();
+    }
     service
         .agent_shell_store_mut()
         .enter_or_resume("%1")
@@ -469,15 +522,9 @@ fn runtime_manual_compaction_request_matches_synchronous_task() {
         .unwrap();
     let work = request_work(&mut asynchronous, &primary);
     let actual = work.execute_request().unwrap();
-    assert_eq!(
-        actual.compacted_through_sequence,
-        expected.compacted_through_sequence
-    );
+    assert!(actual.replay_source.is_some() && expected.replay_source.is_some());
     assert_eq!(actual.summarized_entries, expected.summarized_entries);
-    assert_eq!(
-        actual.retained_transcript_entries,
-        expected.retained_transcript_entries
-    );
+    assert_eq!(actual.transcript_entries, expected.transcript_entries);
     assert_eq!(actual.model_profile_name, expected.model_profile_name);
     assert_eq!(actual.request.provider, expected.request.provider);
     assert_eq!(actual.request.model, expected.request.model);
@@ -548,6 +595,32 @@ fn runtime_manual_compaction_request_adoption_rechecks_freshness_and_errors() {
         assert!(store.compaction_epoch("prepare-owned").unwrap().is_none());
         assert_eq!(store.inspect("prepare-owned").unwrap(), original);
     }
+}
+
+/// Matching generation/counts/model and conversation text cannot authorize a
+/// worker result captured from another actual store/source operation.
+#[test]
+fn runtime_manual_compaction_request_rejects_foreign_canonical_source() {
+    let (mut service, primary, store) = fixture("manual-request-original-source");
+    let (mut foreign, other_primary, other_store) = fixture("manual-request-foreign-source");
+    let work = request_work(&mut service, &primary);
+    let other = request_work(&mut foreign, &other_primary);
+    let result = other.execute_request().unwrap();
+    assert_eq!(result.conversation_id, work.owner.conversation_id);
+    assert_eq!(result.compaction_epoch, work.owner.compaction_epoch);
+    let before = store.inspect("prepare-owned").unwrap();
+    let other_before = other_store.inspect("prepare-owned").unwrap();
+    let error = service
+        .complete_manual_compaction_request(&work, Ok(result))
+        .unwrap_err();
+    assert_eq!(error.kind(), crate::MezErrorKind::Conflict);
+    assert!(!service.agent_is_compacting("%1"));
+    assert!(service.pending_agent_compaction_task_ids().is_empty());
+    assert!(service.pending_agent_provider_tasks().is_empty());
+    assert_eq!(store.inspect("prepare-owned").unwrap(), before);
+    assert_eq!(other_store.inspect("prepare-owned").unwrap(), other_before);
+    assert!(foreign.agent_is_compacting("%1"));
+    foreign.cancel_current_agent_compaction_task("%1");
 }
 
 /// A late rendered request from a cancelled operation cannot clear or queue
@@ -751,6 +824,38 @@ fn runtime_manual_compaction_preparation_rejects_changed_source_ownership() {
         assert!(service.pending_agent_compaction_task_ids().is_empty());
         assert!(store.compaction_epoch("prepare-owned").unwrap().is_none());
     }
+}
+
+/// Original rows and pane counts cannot revive the retired legacy factory if
+/// a source callback loses its canonical ownership. Reject before request work,
+/// preserving the original archive and retiring only the exact preparation.
+#[test]
+fn runtime_manual_compaction_preparation_rejects_unowned_model_source() {
+    let (mut service, primary, store) = fixture("manual-unowned-source");
+    let before = store.inspect("prepare-owned").unwrap();
+    service
+        .execute_agent_shell_command(&primary, "/compact")
+        .unwrap();
+    let work = service.take_manual_compaction_preparations().pop().unwrap();
+    let mut result = work.execute_source().unwrap();
+    assert!(result.history.replay_owner().unwrap().is_some());
+    result.history.records = Default::default();
+    let error = service
+        .complete_manual_compaction_preparation(&work, Ok(result))
+        .unwrap_err();
+    assert!(error.message().contains("lacks its canonical source owner"));
+    assert!(!service.agent_is_compacting("%1"));
+    assert!(service.pending_agent_compaction_task_ids().is_empty());
+    assert!(service.take_manual_compaction_requests().is_empty());
+    assert!(service.pending_agent_provider_tasks().is_empty());
+    assert!(service.agent_turn_ledger().turns().is_empty());
+    assert_eq!(store.inspect("prepare-owned").unwrap(), before);
+    assert!(
+        store
+            .load_replay_epoch("prepare-owned", mez_agent::AgentContext::empty())
+            .unwrap()
+            .is_none()
+    );
 }
 
 /// A cancelled old source callback cannot clear or adopt into a replacement

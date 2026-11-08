@@ -367,6 +367,7 @@ impl RuntimePersistenceComponent {
                 _ => true,
             });
         self.cancel_transcript_admissions_for_conversation(conversation_id);
+        self.cancel_unissued_terminal_bookkeeping(conversation_id);
     }
 
     /// Queues one archive lifecycle operation unless that conversation already has work pending.
@@ -620,6 +621,7 @@ impl RuntimePersistenceComponent {
                 self.in_flight_transcript_entries.remove(&key);
             }
         }
+        self.settle_terminal_bookkeeping_append(path, entries);
         true
     }
 

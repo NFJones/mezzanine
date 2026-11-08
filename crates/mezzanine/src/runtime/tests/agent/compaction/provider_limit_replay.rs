@@ -503,93 +503,13 @@ pub(super) fn recovery_source(
     answer: &str,
     retained_percent: u8,
 ) -> (RuntimeSessionService, AgentTranscriptStore, String) {
-    let mut service = test_runtime_service();
-    let store = AgentTranscriptStore::new(temp_root("canonical-provider-limit-recovery"));
-    service.set_agent_transcript_store(store.clone());
-    service
-        .replace_config_layers(vec![ConfigLayer {
-            name: "provider-context-limit-recovery".to_string(),
-            path: None,
-            format: ConfigFormat::Toml,
-            scope: ConfigScope::Primary,
-            trusted: true,
-            text: format!(
-                r#"[agents]
-default_provider = "runtime-batch"
-default_model_profile = "provider-context-limit-test"
-shell_mode = "pane"
-compaction_raw_retention_percent = {retained_percent}
-[providers.runtime-batch]
-kind = "openai"
-models = ["test"]
-default_model = "test"
-[model_profiles.provider-context-limit-test]
-provider = "runtime-batch"
-model = "test"
-context_window_tokens = 40000
-"#
-            ),
-        }])
-        .unwrap();
-    let primary = service
-        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
-        .unwrap();
-    service
-        .agent_shell_store_mut()
-        .enter_or_resume("%1")
-        .unwrap();
-
-    // Original prior-task admission, provider execution and terminal append
-    // create this source. The successor's actual admission retires its exact
-    // instruction; replacing the current sealed body would lose that proof.
-    let predecessor = service
-        .start_agent_prompt_turn("%1", historical_prompt)
-        .unwrap();
-    let original_root = service.agent_turn_contexts()[&predecessor.turn_id]
-        .chronology()
-        .iter()
-        .find(|event| event.block().source == ContextSourceKind::UserInstruction)
-        .unwrap()
-        .clone();
-    let profile = service
-        .agent_turn_model_profile(&predecessor.turn_id)
-        .unwrap()
-        .clone();
-    let provider = RuntimeBatchProvider {
-        response: runtime_say_response(&predecessor.turn_id, answer, true),
-    };
-    assert_eq!(
-        service
-            .execute_agent_turn_with_provider(&predecessor.turn_id, &provider, profile)
-            .unwrap()
-            .terminal_state,
-        AgentTurnState::Completed
-    );
-
-    let start = service.dispatch_runtime_control_body(
-        r#"{"jsonrpc":"2.0","id":"agent-prompt","method":"agent/shell/command","params":{"idempotency_key":"agent-context-limit-recovery","input":"continue with the large observation"}}"#,
-        &primary,
-    );
-    assert!(start.contains(r#""state":"running""#), "{start}");
-    let turn_id = service
-        .agent_shell_store()
-        .get("%1")
-        .unwrap()
-        .running_turn_id
-        .clone()
-        .unwrap();
-    let context = &service.agent_turn_contexts()[&turn_id];
-    assert!(context.has_replay_owner());
-    assert_eq!(
-        context
-            .chronology()
-            .iter()
-            .find(|event| event.record() == original_root.record())
-            .unwrap()
-            .retention(),
-        mez_agent::ContextRetention::Summarizable
-    );
-    (service, store, turn_id)
+    crate::test_support::compaction_source::recovery_source(
+        test_runtime_service(),
+        temp_root("canonical-provider-limit-recovery"),
+        historical_prompt,
+        answer,
+        retained_percent,
+    )
 }
 
 /// Verifies provider context-limit API errors trigger active-turn compaction

@@ -6,10 +6,10 @@
 //! describe queued or claimed work across async boundaries.
 
 use super::{
-    AgentContext, AgentTurnExecution, AgentTurnRecord, DeepSeekChatCompletionsProvider,
-    MemoryScope, ModelProfile, ModelRequest, OpenAiCompatibleChatCompletionsProvider,
-    OpenAiResponsesProvider, PathScopes, PermissionPolicy, ReqwestProviderHttpTransport,
-    RuntimeAutoSizingDispatch, SessionApprovalStore, SubagentScopeDeclaration,
+    AgentTurnExecution, AgentTurnRecord, DeepSeekChatCompletionsProvider, MemoryScope,
+    ModelProfile, ModelRequest, OpenAiCompatibleChatCompletionsProvider, OpenAiResponsesProvider,
+    PathScopes, PermissionPolicy, ReqwestProviderHttpTransport, RuntimeAutoSizingDispatch,
+    SessionApprovalStore, SubagentScopeDeclaration,
 };
 use crate::integrations::agent::provider::AnthropicMessagesProvider;
 use crate::runtime::processes::NativeShellContext;
@@ -676,8 +676,6 @@ pub struct RuntimeAgentCompactionTask {
     pub(crate) source_owner: Option<std::sync::Arc<RuntimeCompactionSourceOwner>>,
     /// Exact canonical prefix frozen before rendering the actual provider input.
     pub(crate) replay_source: Option<std::sync::Arc<crate::runtime::RuntimeCompactionReplaySource>>,
-    /// Original accepted summary record, retained through sizing and I/O retry.
-    pub(crate) summary_proposal: Option<RuntimeCompactionSummaryProposal>,
     /// Unique queued/claimed task generation used to reject stale worker outcomes.
     pub task_generation: u64,
     /// Transport retries consumed by this logical auxiliary operation.
@@ -698,17 +696,6 @@ pub struct RuntimeAgentCompactionTask {
     pub source: String,
     /// Active physical raw-row count before compaction, including pending rows.
     pub transcript_entries: u64,
-    /// Captured logical boundary represented by the prefix input.
-    pub compacted_through_sequence: Option<u64>,
-    /// Physical source rows captured for prefix or selective publication.
-    /// Pending rows must commit unchanged before they can qualify a write.
-    pub frozen_compaction_rows: Vec<mez_agent::transcript::TranscriptEntry>,
-    /// Exact authoritative source epoch for manual prefix publication. The outer
-    /// absence denotes a different producer; `Some(None)` freezes no prior epoch.
-    /// Owned metadata survives correction/transport retries without rediscovery.
-    pub frozen_compaction_epoch: Option<Option<crate::storage::transcript::AgentCompactionEpoch>>,
-    /// Raw recent transcript entries to retain after summary insertion.
-    pub retained_transcript_entries: u64,
     /// Physical transcript rows represented by the selected compactor source.
     pub summarized_entries: usize,
     /// Active model profile name used for the compactor request.
@@ -724,8 +711,6 @@ pub struct RuntimeAgentCompactionTask {
     pub manual_retry_source: Option<String>,
     /// Last complete manual candidate estimate and bounded final-output retry count.
     pub manual_final_retry: Option<(usize, u32)>,
-    /// Stable non-transcript context captured for pre-commit manual candidate sizing.
-    pub candidate_context: Option<AgentContext>,
     /// Running turn to requeue after this compaction completes.
     pub resume_turn_id: Option<String>,
     /// Exact compaction target retained across the provider worker boundary.
@@ -789,6 +774,19 @@ impl RuntimeSummaryCorrection {
         self.guidance_target = None;
         self.guidance_is_input_tokens = false;
     }
+
+    /// Starts another complete-fit candidate on the same frozen source. Drop
+    /// the earlier output's measurements, but retain its content-free count of
+    /// actual corrections so later failure cannot erase auxiliary provenance.
+    pub(in crate::runtime) fn reset_for_candidate_retry(&mut self) {
+        let corrections = self.corrections_admitted.saturating_add(
+            self.accepted_summary
+                .take()
+                .map_or(0, |receipt| receipt.corrections_admitted),
+        );
+        self.reset_progress();
+        self.corrections_admitted = corrections;
+    }
 }
 
 /// Bounded work remaining before one manual conversation summary can commit.
@@ -826,24 +824,6 @@ pub enum RuntimeActiveTurnCompactionTrigger {
     },
 }
 
-/// Unpublished ordered recovery state, committed only after the full request fits.
-#[derive(Debug, Clone)]
-pub struct RuntimeStagedCompaction {
-    /// Prospective live context after earlier summaries.
-    pub context: super::AgentContext,
-    /// Prospective durable replay projection, absent for turn-local recovery.
-    pub projection: Option<crate::storage::transcript::AgentCompactionEpoch>,
-    /// Authoritative epoch captured before private staging; retained even when
-    /// selective publication becomes ineligible. None witnesses no prior epoch.
-    pub baseline_epoch: Option<crate::storage::transcript::AgentCompactionEpoch>,
-    /// Number of additional closed ranges attempted.
-    pub attempts: u32,
-    /// Frozen authoritative chronology for append-only arrival validation.
-    pub source_chronology: Vec<mez_agent::ConversationEvent>,
-    /// Source witnesses for private summaries, not selective publication authority.
-    pub(crate) handoff_witnesses: Vec<RuntimeCompactionWitness>,
-}
-
 /// An accepted summary's immutable original source occurrences.
 #[derive(Debug, Clone)]
 pub(crate) struct RuntimeCompactionWitness {
@@ -860,17 +840,6 @@ pub(crate) struct RuntimeCompactionWitness {
     pub(crate) summary: String,
     /// Actual accepted canonical summary, independent of its ordering anchor.
     pub(crate) summary_record: mez_agent::ContextBlockRecord,
-}
-
-/// One accepted auxiliary result and its exact frozen replacement owner.
-#[derive(Debug, Clone)]
-pub(crate) struct RuntimeCompactionSummaryProposal {
-    /// Exact model-authored output, before prefix explanatory framing.
-    pub(crate) summary: String,
-    /// Frozen active selection; empty for a conversation prefix proposal.
-    pub(crate) source_sequences: Vec<mez_agent::ContextEventSequence>,
-    /// Original record for the actual rendered prefix or selective block.
-    pub(crate) record: mez_agent::ContextBlockRecord,
 }
 
 /// Independent terminal handoff evidence retained until bookkeeping captures it.
@@ -902,14 +871,12 @@ pub enum RuntimeAgentCompactionTarget {
     ActiveTurn {
         /// Running turn that owns the frozen durable context.
         turn_id: String,
-        /// Typed reason this active-turn compaction was requested.
+        /// Historical fixture diagnostics; production keeps its typed trigger
+        /// on the original canonical source, not a second target owner.
+        #[cfg(test)]
         trigger: RuntimeActiveTurnCompactionTrigger,
-        /// Provider retry attempt deferred while model compaction runs.
-        recovery_attempt: u32,
         /// Bounded shorter-summary retries after an oversized final request.
         final_request_retry: Box<RuntimeFinalRequestRetry>,
-        /// Unpublished context and ordered ranges for a bounded staged pass.
-        staged: Option<Box<RuntimeStagedCompaction>>,
         /// Number of provider context-limit backoff attempts already applied.
         compaction_backoff_attempt: u32,
         /// Complete rejected OpenAI Responses body bytes, when applicable.

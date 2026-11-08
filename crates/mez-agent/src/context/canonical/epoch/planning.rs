@@ -126,7 +126,7 @@ impl ReplayEpochContext {
                     !owned.insert(*sequence)
                         || !self.context.chronology().iter().any(|event| {
                             event.sequence() == *sequence
-                                && instruction_source_can_complete(event.block())
+                                && instruction_event_can_complete(event)
                                 && event.retention() == ContextRetention::Exact
                         })
                 })
@@ -137,7 +137,7 @@ impl ReplayEpochContext {
             }
         }
         if self.context.chronology().iter().any(|event| {
-            instruction_source_can_complete(event.block())
+            instruction_event_can_complete(event)
                 && event.retention() != ContextRetention::Exact
                 && !self
                     .context

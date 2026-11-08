@@ -234,6 +234,8 @@ impl AgentTranscriptStore {
         ) -> Result<(T, Vec<(u64, mez_agent::ContextBlockRecord)>)>,
     ) -> Result<(ConversationReplaySnapshot, T)> {
         let lease = self.acquire_conversation_lock(conversation_id)?;
+        self.check_replay_compatibility_locked(conversation_id)?;
+        self.validate_terminal_compaction_handoffs_locked(conversation_id)?;
         self.recover_accounted_appends_for_replay_locked(conversation_id, &lease)?;
         let mut replay = self.replay_epoch_snapshot_locked(conversation_id)?;
         let frontier = frontiers
@@ -363,6 +365,9 @@ impl AgentTranscriptStore {
         required_archive: bool,
     ) -> Result<ResumeReplaySnapshot> {
         let (lease, presentation_entries, _) = self.lock_presentation_snapshot(conversation_id)?;
+        self.check_replay_compatibility_locked(conversation_id)?;
+        self.validate_terminal_compaction_handoffs_locked(conversation_id)?;
+        let replay = self.replay_epoch_snapshot_locked(conversation_id)?;
         let logical_high_water = match self.validate_restored_transcript(conversation_id) {
             Ok(count) => count,
             Err(error)
@@ -374,9 +379,15 @@ impl AgentTranscriptStore {
             }
             Err(error) => return Err(error),
         };
-        let prefix = self
-            .compaction_epoch_locked(conversation_id)?
-            .map_or(0, |epoch| epoch.through_sequence);
+        // A typed authority owns retained membership independently of physical
+        // row counts. Reuse its checked cut for counters; never decode that
+        // manifest as a legacy prefix or infer its head from the pane count.
+        let prefix = match replay {
+            Some(replay) => replay.covered_archive_frontier(),
+            None => self
+                .compaction_epoch_locked(conversation_id)?
+                .map_or(0, |epoch| epoch.through_sequence),
+        };
         let active_raw_entries = logical_high_water.checked_sub(prefix).ok_or_else(|| {
             MezError::invalid_state("compaction prefix exceeds checked transcript frontier")
         })?;

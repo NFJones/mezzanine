@@ -272,7 +272,7 @@ fn fork_epoch_pending_publication_is_hidden_and_recovered() {
     );
     assert!(
         store
-            .publish_terminal_compaction_handoffs("target")
+            .validate_terminal_compaction_handoffs("target")
             .is_err()
     );
     assert!(
@@ -413,9 +413,22 @@ fn fork_epoch_concurrent_capture_and_exclusive_target_creation() {
     fs::remove_dir_all(root).unwrap();
 }
 
-/// Pending terminal witnesses with a nonempty prefix baseline reconcile only on
-/// the target. Already-covered witnesses remain idempotent, while foreign or
-/// stale baseline evidence fails closed and compensates only the target.
+/// Installs historical covered state using the original pure source validator,
+/// without invoking a product writer whose selective mode has been retired.
+fn install_covered_terminal_fixture(store: &AgentTranscriptStore) {
+    let projected = crate::storage::transcript::compaction_handoff::fork_terminal_projection(
+        "source",
+        &store.inspect("source").unwrap(),
+        store.compaction_epoch("source").unwrap(),
+    )
+    .unwrap()
+    .unwrap();
+    store.install_legacy_compaction_fixture(projected).unwrap();
+}
+
+/// Historical witnesses cannot install a retired selective projection in a
+/// child. Covered source requires normalization; stale/foreign evidence still
+/// fails its original validation. Every refusal preserves the original source.
 #[test]
 fn fork_epoch_terminal_handoffs_translate_and_reconcile_only_target() {
     use crate::storage::transcript::compaction_handoff::{
@@ -448,39 +461,21 @@ fn fork_epoch_terminal_handoffs_translate_and_reconcile_only_target() {
         // an interrupted append-receipt handoff; it does not execute actions.
         store.append(&witness).unwrap();
         if state == "covered" {
-            store
-                .publish_terminal_compaction_handoffs("source")
-                .unwrap();
+            install_covered_terminal_fixture(&store);
         } else if state == "stale" {
             store
                 .save_compaction_epoch("source", 1, "newer independent summary")
                 .unwrap();
         }
         let before = source_bytes(&root);
-        let result = store.fork("source", "target", 99);
-        if matches!(state, "foreign" | "stale") {
-            assert!(result.is_err(), "{state}");
-            assert!(!root.join("target").exists(), "{state}");
-        } else {
-            result.unwrap();
-            let epoch = store.compaction_epoch("target").unwrap().unwrap();
-            assert_eq!(epoch.conversation_id, "target");
-            assert_eq!(epoch.through_sequence, 1);
-            assert_eq!(epoch.summary, "prefix model summary");
-            assert_eq!(
-                epoch.ranges,
-                vec![AgentCompactionRange {
-                    first_sequence: 2,
-                    through_sequence: 3,
-                    summary: "accepted model handoff summary".into(),
-                }]
-            );
-            store
-                .publish_terminal_compaction_handoffs("target")
-                .unwrap();
-            assert_eq!(store.compaction_epoch("target").unwrap(), Some(epoch));
-            assert_eq!(store.inspect("target").unwrap()[1].content, rows[1].content);
-        }
+        let error = store.fork("source", "target", 99).unwrap_err();
+        let expected = match state {
+            "covered" => "normalization",
+            "pending" => "normalization",
+            _ => "baseline",
+        };
+        assert!(error.to_string().contains(expected), "{state}: {error}");
+        assert!(!root.join("target").exists(), "{state}");
         assert_eq!(source_bytes(&root), before, "{state}");
         fs::remove_dir_all(root).unwrap();
     }
@@ -488,10 +483,9 @@ fn fork_epoch_terminal_handoffs_translate_and_reconcile_only_target() {
 
 /// An archived legacy terminal certificate keeps its original v1/v2 baseline
 /// even after descriptive migration assigns the current sidecar's records.
-/// Fork must translate a matching old baseline using those captured records,
-/// reconcile only the child, and remain idempotent for already covered work.
-/// A later equal-text publication with new records must still invalidate the
-/// historical baseline instead of acquiring authority from matching bytes.
+/// Refused forks must preserve those original records and baseline evidence.
+/// A later equal-text historical publication still cannot acquire authority
+/// from matching bytes; no refused case may expose a target or rewrite source.
 #[test]
 fn fork_epoch_preserves_legacy_terminal_baselines_after_summary_import() {
     use crate::storage::transcript::compaction_handoff::{
@@ -543,50 +537,31 @@ fn fork_epoch_preserves_legacy_terminal_baselines_after_summary_import() {
             let imported = store.compaction_epoch("source").unwrap().unwrap();
             assert!(imported.matches_expected(&legacy));
             if state == "covered" {
-                store
-                    .publish_terminal_compaction_handoffs("source")
-                    .unwrap();
+                install_covered_terminal_fixture(&store);
             } else if state == "replaced" {
                 let mut replacement = imported.clone();
                 replacement.allocate_summary_records().unwrap();
                 store
-                    .save_compaction_projection(replacement, None, None)
+                    .install_legacy_compaction_fixture(replacement)
                     .unwrap();
             }
             let source_epoch = store.compaction_epoch("source").unwrap().unwrap();
             let before = source_bytes(&root);
-            let result = store.fork("source", "target", 99);
-            if matches!(state, "replaced" | "foreign") {
-                assert!(result.is_err(), "v{version} {state}");
-                assert!(!root.join("target").exists());
+            let error = store.fork("source", "target", 99).unwrap_err();
+            let expected = if version == 2 || matches!(state, "covered" | "pending") {
+                "normalization"
             } else {
-                result.unwrap();
-                let child = store.compaction_epoch("target").unwrap().unwrap();
-                assert_eq!(child.summary, legacy.summary);
-                assert_eq!(child.ranges.len(), if version == 2 { 2 } else { 1 });
-                assert_eq!(child.ranges[0].summary, "legacy terminal summary");
-                assert_eq!(
-                    child
-                        .summary_records
-                        .as_ref()
-                        .unwrap()
-                        .prefix
-                        .unwrap()
-                        .occurrence_id(),
-                    source_epoch
-                        .summary_records
-                        .as_ref()
-                        .unwrap()
-                        .prefix
-                        .unwrap()
-                        .occurrence_id(),
-                );
-                store
-                    .publish_terminal_compaction_handoffs("target")
-                    .unwrap();
-                assert_eq!(store.compaction_epoch("target").unwrap(), Some(child));
-                assert_eq!(store.inspect("target").unwrap()[1].content, rows[1].content);
-            }
+                "baseline"
+            };
+            assert!(
+                error.to_string().contains(expected),
+                "v{version} {state}: {error}"
+            );
+            assert!(!root.join("target").exists());
+            assert_eq!(
+                store.compaction_epoch("source").unwrap(),
+                Some(source_epoch)
+            );
             assert_eq!(source_bytes(&root), before, "v{version} {state}");
             assert_eq!(store.inspect("source").unwrap().last(), Some(&witness));
             fs::remove_dir_all(root).unwrap();
@@ -675,10 +650,9 @@ fn source_bytes(root: &std::path::Path) -> BTreeMap<PathBuf, Vec<u8>> {
         .collect()
 }
 
-/// Both prefix-zero selective history and combined prefix/selective history
-/// retain inclusive anchors, exact gaps, fresh target identity and independently
-/// appendable archives after reopening. No terminal handoff reconstruction is
-/// available in this fixture: only the authoritative epoch proves the summary.
+/// Both historical selective layouts require normalization and preserve exact
+/// inclusive anchors/gaps. Refusing them leaves independent supported forks
+/// appendable in the same store; it cannot disable unrelated conversations.
 #[test]
 fn fork_epoch_preserves_selective_projection_and_independent_append() {
     for prefix in [0, 1] {
@@ -710,36 +684,33 @@ fn fork_epoch_preserves_selective_projection_and_independent_append() {
             ],
         };
         epoch.allocate_summary_records().unwrap();
-        let proof = rows
-            .iter()
-            .filter(|row| matches!(row.sequence, 2..=3 | 6..=7))
-            .cloned()
-            .collect::<Vec<_>>();
         store
-            .save_compaction_ranges_with_proof(epoch.clone(), &proof)
+            .install_legacy_compaction_fixture(epoch.clone())
             .unwrap();
         let before = source_bytes(&root);
-        store.fork("source", "target", 99).unwrap();
+        let error = store.fork("source", "target", 99).unwrap_err();
+        assert!(error.to_string().contains("normalization"), "{error}");
+        assert!(!root.join("target").exists());
         let reopened = AgentTranscriptStore::new(root.clone());
-        let mut expected = epoch;
-        expected.retarget_summary_records("target").unwrap();
-        assert_eq!(reopened.compaction_epoch("target").unwrap(), Some(expected));
-        let copied = reopened.inspect("target").unwrap();
-        for (original, copied) in rows.iter().zip(&copied) {
-            let mut expected = original.clone();
-            expected.conversation_id = "target".into();
-            expected.created_at_unix_seconds = 99;
-            assert_eq!(*copied, expected);
-        }
+        assert_eq!(reopened.compaction_epoch("source").unwrap(), Some(epoch));
         assert_eq!(source_bytes(&root), before);
-        let mut later = entry("source", 10, TranscriptRole::User);
+        let control = entry("control", 1, TranscriptRole::User);
+        store.append(&control).unwrap();
+        store.fork("control", "target", 99).unwrap();
+        let copied = reopened.inspect("target").unwrap();
+        let mut expected = control;
+        expected.conversation_id = "target".into();
+        expected.created_at_unix_seconds = 99;
+        assert_eq!(copied, vec![expected]);
+        assert_eq!(source_bytes(&root), before);
+        let mut later = entry("control", 2, TranscriptRole::User);
         store.append(&later).unwrap();
         later.conversation_id = "target".into();
         later.content = "independent target append".into();
         reopened.append(&later).unwrap();
         assert_ne!(
-            store.inspect("source").unwrap()[9].content,
-            reopened.inspect("target").unwrap()[9].content
+            store.inspect("control").unwrap()[1].content,
+            reopened.inspect("target").unwrap()[1].content
         );
         fs::remove_dir_all(root).unwrap();
     }

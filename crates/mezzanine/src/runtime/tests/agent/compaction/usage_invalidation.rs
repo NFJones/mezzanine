@@ -8,7 +8,9 @@ use crate::runtime::AgentCompactionEvent;
 /// Completes an earlier task with an offline provider, then admits its actual
 /// successor. The old instruction becomes eligible through real task admission;
 /// no sealed chronology is replaced to fabricate source or execution closure.
-fn local_usage_compaction() -> (RuntimeSessionService, AgentTranscriptStore, String) {
+fn local_usage_compaction(
+    consumed_sample: bool,
+) -> (RuntimeSessionService, AgentTranscriptStore, String) {
     let mut service = test_runtime_service();
     let store = AgentTranscriptStore::new(temp_root("local-compaction-usage"));
     service.set_agent_transcript_store(store.clone());
@@ -82,12 +84,29 @@ fn local_usage_compaction() -> (RuntimeSessionService, AgentTranscriptStore, Str
         cache_write_input_tokens: Some(50),
     };
     service.record_agent_provider_token_usage_with_profile("%1", sample, sample, Some(&profile));
-    assert!(service.queue_agent_active_turn_compaction(
+    if consumed_sample {
+        let turn = service.agent_turn_ledger().turn(&turn_id).unwrap().clone();
+        let request = crate::integrations::agent::context::assemble_model_request(
+            &profile,
+            mez_agent::ProviderApiCompatibility::OpenAiResponses,
+            &turn,
+            &service.agent_turn_contexts()[&turn_id],
+        )
+        .unwrap();
+        service.retain_agent_provider_request_chain(&turn, request.clone());
+        assert!(
+            service
+                .defer_agent_provider_for_observed_input_limit(&turn, &profile, sample, &request)
+                .unwrap()
+        );
+    } else {
+        assert!(service.queue_agent_active_turn_compaction(
         &turn_id, "local-usage".into(), profile,
         crate::runtime::agent_state::RuntimeActiveTurnCompactionTrigger::ObservedInputLimit {
             observed_input_tokens: 20_000, max_input_tokens: 20_000,
         }, plan,
-    ).unwrap());
+        ).unwrap());
+    }
     service.checkpoint_agent_session_metadata().unwrap();
     assert!(
         service
@@ -119,6 +138,194 @@ fn publish_usage_compaction(service: &mut RuntimeSessionService) {
             .unwrap()
             .applied
     );
+}
+
+/// A failed physical attempt and a successful write alone retain live request
+/// state. Only acceptance resets the baseline/lineage and revokes old retrieval
+/// availability, preserving exact evidence, expense and the consumed sample.
+/// Repeated delivery cannot revoke fresh retrieval or clear a newer baseline.
+#[test]
+fn local_compaction_acceptance_resets_request_cache_and_grants_once() {
+    let (mut service, store, turn_id) = local_usage_compaction(true);
+    let turn = service.agent_turn_ledger().turn(&turn_id).unwrap().clone();
+    let conversation = turn.conversation_id.clone();
+    assert!(service.agent_turn_has_consumed_observed_input_for_tests(&turn_id));
+    assert!(service.agent_conversation_has_provider_request_chain_for_tests(&conversation));
+    let grant = |service: &mut RuntimeSessionService, id: &str| {
+        // Public discovery-result rendering supplies scope-bound availability;
+        // this fixture executes no MCP call and mints no native/effect receipt.
+        let result = mez_agent::ActionResult {
+            protocol: "maap/1".into(), turn_id: turn_id.clone(), agent_id: turn.agent_id.clone(),
+            action_id: id.into(), action_type: "mcp_server_get", status: mez_agent::ActionStatus::Succeeded,
+            content: Vec::new(), structured_content_json: Some(serde_json::json!({"server":{
+                "server_id":"availability-fixture", "state":"available", "display_name":"Fixture",
+                "purpose":"acceptance coverage", "usage_instructions":"Use echo", "tools":[{
+                    "name":"echo", "state":"available", "description":"fixture echo",
+                    "input_schema":{"type":"object","properties":{}}
+                }]
+            }}).to_string()), permission_evaluation: None, is_error: false, error: None,
+        };
+        let context = service.agent_turn_contexts_mut().get_mut(&turn_id).unwrap();
+        let (server, content) =
+            mez_agent::mcp_retrieved_manifest_for_action_result(&result, context).unwrap();
+        let group = mez_agent::ContextExecutionGroupId::new(format!("retrieval-{id}")).unwrap();
+        context
+            .append_assistant_event(
+                "MCP fixture lookup",
+                "retrieve availability metadata",
+                group.clone(),
+            )
+            .unwrap();
+        context
+            .append_evidence_event(
+                ContextSourceKind::McpRetrievedManifest,
+                format!(
+                    "{}{server}",
+                    mez_agent::MCP_RETRIEVED_MANIFEST_CONTEXT_LABEL_PREFIX
+                ),
+                content,
+                group,
+                None,
+                true,
+            )
+            .unwrap();
+        context.chronology().last().unwrap().clone()
+    };
+    let available = |service: &RuntimeSessionService| {
+        mez_agent::invoked_mcp_tools_for_context(
+            &service.agent_turn_contexts()[&turn_id],
+            &mez_agent::McpPromptSummary {
+                available_servers: Vec::new(),
+                available_tools: Vec::new(),
+                unavailable_servers: Vec::new(),
+            },
+        )
+    };
+    let original = grant(&mut service, "before-rewrite");
+    assert_eq!(available(&service).len(), 1);
+    let before = service.agent_turn_contexts()[&turn_id].clone();
+    let lineage = before.metadata().prompt_cache_lineage_id.clone();
+    let task = service.take_pending_agent_compaction_task("%1").unwrap();
+    let generation = task.task_generation;
+    service.claim_agent_compaction_task_state("%1", task);
+    service
+        .apply_agent_compaction_completed_event(
+            "%1",
+            runtime_test_compaction_response("accepted replacement"),
+        )
+        .unwrap();
+    let expense = service.agent_token_usage_for_conversation(&conversation);
+    assert_eq!(service.agent_turn_contexts()[&turn_id], before);
+    assert_eq!(available(&service).len(), 1);
+    assert!(service.agent_conversation_has_provider_request_chain_for_tests(&conversation));
+    store.inject_replay_epoch_fault(
+        crate::storage::transcript::replay_epoch::Phase::BeforeManifestSwap,
+        1,
+        false,
+    );
+    let failed = service
+        .take_replay_epoch_attempt_for_tests()
+        .unwrap()
+        .execute();
+    assert!(failed.error().is_some());
+    service.apply_replay_epoch_completion(failed).unwrap();
+    assert_eq!(service.agent_turn_contexts()[&turn_id], before);
+    assert_eq!(available(&service).len(), 1);
+    assert!(service.agent_conversation_has_provider_request_chain_for_tests(&conversation));
+    assert!(service.agent_turn_has_consumed_observed_input_for_tests(&turn_id));
+    assert_eq!(
+        service.agent_token_usage_for_conversation(&conversation),
+        expense
+    );
+    service
+        .poll_replay_epoch_publication("%1", generation)
+        .unwrap();
+    let committed = replay_publication::execute_pending_publication(&mut service);
+    assert!(committed.error().is_none());
+    assert_eq!(service.agent_turn_contexts()[&turn_id], before);
+    assert_eq!(available(&service).len(), 1);
+    assert!(service.agent_conversation_has_provider_request_chain_for_tests(&conversation));
+    service
+        .apply_replay_epoch_completion(committed.clone())
+        .unwrap();
+    let accepted = service.agent_turn_contexts()[&turn_id].clone();
+    assert_ne!(accepted.metadata().prompt_cache_lineage_id, lineage);
+    assert_eq!(
+        accepted.metadata().prompt_cache_lineage_id,
+        Some(
+            service
+                .agent_shell_store()
+                .get("%1")
+                .unwrap()
+                .prompt_cache_lineage_id
+                .clone()
+        )
+    );
+    assert!(!service.agent_conversation_has_provider_request_chain_for_tests(&conversation));
+    assert!(available(&service).is_empty());
+    assert_eq!(
+        accepted
+            .chronology()
+            .iter()
+            .find(|event| event.record().occurrence_id() == original.record().occurrence_id()),
+        Some(&original)
+    );
+    assert!(service.agent_turn_has_consumed_observed_input_for_tests(&turn_id));
+    assert_eq!(
+        service.agent_token_usage_for_conversation(&conversation),
+        expense
+    );
+    let (_, cold) = store
+        .load_replay_epoch(&conversation, mez_agent::AgentContext::empty())
+        .unwrap()
+        .unwrap();
+    assert!(
+        mez_agent::invoked_mcp_tools_for_context(
+            cold.context(),
+            &mez_agent::McpPromptSummary {
+                available_servers: Vec::new(),
+                available_tools: Vec::new(),
+                unavailable_servers: Vec::new(),
+            }
+        )
+        .is_empty()
+    );
+    assert!(cold.context().chronology().contains(&original));
+    let fresh = grant(&mut service, "after-rewrite");
+    assert_ne!(
+        fresh.record().occurrence_id(),
+        original.record().occurrence_id()
+    );
+    assert_eq!(available(&service).len(), 1);
+    let profile = service.agent_turn_model_profile(&turn_id).unwrap().clone();
+    let request = crate::integrations::agent::context::assemble_model_request(
+        &profile,
+        mez_agent::ProviderApiCompatibility::OpenAiResponses,
+        &turn,
+        &service.agent_turn_contexts()[&turn_id],
+    )
+    .unwrap();
+    service.retain_agent_provider_request_chain(&turn, request);
+    assert!(
+        !service
+            .apply_replay_epoch_completion(committed)
+            .unwrap()
+            .applied
+    );
+    assert!(service.agent_conversation_has_provider_request_chain_for_tests(&conversation));
+    assert_eq!(available(&service).len(), 1);
+    assert_eq!(
+        service.agent_turn_contexts()[&turn_id]
+            .metadata()
+            .prompt_cache_lineage_id,
+        accepted.metadata().prompt_cache_lineage_id
+    );
+    assert!(service.agent_turn_has_consumed_observed_input_for_tests(&turn_id));
+    assert_eq!(
+        service.agent_token_usage_for_conversation(&conversation),
+        expense
+    );
+    service.terminate_all_pane_processes().unwrap();
 }
 
 /// Checks every execution presentation owner, not just raw accounting: frame,
@@ -153,7 +360,7 @@ fn assert_unknown(service: &mut RuntimeSessionService, conversation: &str) {
 /// a later positive ordinary response owns the new display and cache ratio.
 #[test]
 fn local_compaction_usage_success_clears_display_and_metadata() {
-    let (mut service, store, turn_id) = local_usage_compaction();
+    let (mut service, store, turn_id) = local_usage_compaction(false);
     let conversation = service
         .agent_shell_store()
         .get("%1")
@@ -299,7 +506,7 @@ fn local_compaction_usage_success_clears_display_and_metadata() {
 /// replacement usage stays unknown, and cumulative expense remains untouched.
 #[test]
 fn local_compaction_usage_checkpoint_failure_precedes_recovery_admission() {
-    let (mut service, store, turn_id) = local_usage_compaction();
+    let (mut service, store, turn_id) = local_usage_compaction(false);
     let conversation = service
         .agent_shell_store()
         .get("%1")
@@ -370,7 +577,7 @@ fn local_compaction_usage_checkpoint_failure_precedes_recovery_admission() {
 #[test]
 fn local_compaction_usage_failed_and_stale_preserve_new_sample() {
     for stale in [false, true] {
-        let (mut service, store, turn_id) = local_usage_compaction();
+        let (mut service, store, turn_id) = local_usage_compaction(false);
         let conversation = service
             .agent_shell_store()
             .get("%1")
@@ -470,7 +677,7 @@ fn local_compaction_usage_failed_and_stale_preserve_new_sample() {
 fn local_compaction_usage_deferred_checkpoint_retry_keeps_exact_owner() {
     use crate::runtime::{PersistenceEvent, RuntimeSideEffect};
 
-    let (mut service, store, turn_id) = local_usage_compaction();
+    let (mut service, store, turn_id) = local_usage_compaction(false);
     let conversation = service
         .agent_shell_store()
         .get("%1")

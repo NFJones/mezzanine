@@ -386,30 +386,17 @@ context_window_tokens = 40000
             );
         }
         Family::Compaction => {
-            service
-                .execute_agent_shell_command(&primary, "continue after compaction")
-                .unwrap();
-            let context = service.agent_turn_contexts_mut().get_mut("turn-1").unwrap();
-            for label in ["older", "newer"] {
-                let group = mez_agent::ContextExecutionGroupId::new(format!(
-                    "auxiliary-fault:{}",
-                    context.event_sequence_high_water_mark().saturating_add(1)
-                ))
-                .unwrap();
-                context
-                    .append_assistant_event("generated evidence", "inspect evidence", group.clone())
-                    .unwrap();
-                context
-                    .append_evidence_event(
-                        ContextSourceKind::ActionResult,
-                        label,
-                        "evidence ".repeat(3000),
-                        group,
-                        None,
-                        true,
-                    )
-                    .unwrap();
-            }
+            // Only genuine successor admission retires the original user task.
+            // Fault qualification must not manufacture an eligible closed group
+            // behind an active first-task instruction.
+            let turn = crate::test_support::compaction_source::complete_task_and_admit_successor(
+                &mut service,
+                &primary,
+                &format!("earlier auxiliary source {}", "evidence ".repeat(6000)),
+                "original completed auxiliary evidence",
+                "continue after compaction",
+                mez_agent::ProviderApiCompatibility::OpenAiChatCompletions,
+            );
             let error = MezError::invalid_state("provider context length exceeded")
                 .with_provider_failure_json(
                     r#"{"status_code":400,"error":{"code":"context_length_exceeded"}}"#,
@@ -417,7 +404,7 @@ context_window_tokens = 40000
             service
                 .schedule_agent_provider_retry_transition(
                     &AgentId::opaque("agent-%1").unwrap(),
-                    "turn-1",
+                    &turn,
                     ProviderErrorRetryClass::ContextLimit,
                     &error,
                 )
@@ -438,6 +425,10 @@ context_window_tokens = 40000
 /// continues to answer an ordinary command after the request-local unwind.
 async fn qualify_panic(family: Family, construction: bool) -> usize {
     let (_root, service, primary, conversation) = queued_fixture(family);
+    let compaction_turn = service
+        .agent_shell_store()
+        .get("%1")
+        .and_then(|session| session.running_turn_id.clone());
     let compaction_generation = service.pending_agent_compaction_task_generation("%1");
     let observation = service
         .pending_agent_remember_observation_id("%1")
@@ -605,7 +596,7 @@ async fn qualify_panic(family: Family, construction: bool) -> usize {
             assert_eq!(
                 exit.service
                     .agent_turn_ledger()
-                    .turn("turn-1")
+                    .turn(compaction_turn.as_deref().unwrap())
                     .unwrap()
                     .state,
                 AgentTurnState::Failed

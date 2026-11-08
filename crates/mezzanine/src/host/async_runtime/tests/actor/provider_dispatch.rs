@@ -715,45 +715,31 @@ async fn async_actor_compaction_claim_timer_admission_failure_settles_turn() {
 }
 
 /// Exercises expiry and saturated admission with the same compaction owner.
+/// Real eligible history is supplied by completed task execution, never a
+/// synthetic closed flag appended into the still-active current instruction.
+fn compaction_claim_source() -> (
+    crate::runtime::RuntimeSessionService,
+    crate::storage::transcript::AgentTranscriptStore,
+    String,
+) {
+    let root = std::env::temp_dir().canonicalize().unwrap().join(format!(
+        "mez-compaction-claim-source-{}",
+        crate::storage::token_usage::new_token_usage_event_id(),
+    ));
+    crate::test_support::compaction_source::recovery_source(
+        test_service(),
+        root,
+        &format!(
+            "original completed claim source {}",
+            "evidence ".repeat(3_000)
+        ),
+        "original task completed",
+        10,
+    )
+}
+
 async fn run_compaction_claim_admission(saturate: bool) {
-    let mut service = test_service();
-    service.replace_config_layers(vec![ConfigLayer {
-        name: "compaction-claim-test".to_string(), path: None,
-        format: ConfigFormat::Toml, scope: ConfigScope::Primary, trusted: true,
-        text: "[agents]\ndefault_provider = \"runtime-batch\"\ndefault_model_profile = \"default\"\nshell_mode = \"pane\"\n[permissions]\nsandbox = \"policy-only\"\n[providers.runtime-batch]\nkind = \"openai\"\nmodels = [\"test\"]\ndefault_model = \"test\"\n[model_profiles.default]\nprovider = \"runtime-batch\"\nmodel = \"test\"\ncontext_window_tokens = 40000\n".to_string(),
-    }]).unwrap();
-    let primary = service
-        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
-        .unwrap();
-    service
-        .agent_shell_store_mut()
-        .enter_or_resume("%1")
-        .unwrap();
-    let start = service
-        .execute_agent_shell_command(&primary, "continue after compaction")
-        .unwrap();
-    assert!(start.contains(r#""state":"running""#), "{start}");
-    let context = service.agent_turn_contexts_mut().get_mut("turn-1").unwrap();
-    for label in ["older", "newer"] {
-        let group = mez_agent::ContextExecutionGroupId::new(format!(
-            "compaction-claim-test:{}",
-            context.event_sequence_high_water_mark().saturating_add(1)
-        ))
-        .unwrap();
-        context
-            .append_assistant_event("synthetic evidence", "inspect evidence", group.clone())
-            .unwrap();
-        context
-            .append_evidence_event(
-                mez_agent::ContextSourceKind::ActionResult,
-                label.to_string(),
-                "evidence ".repeat(3_000),
-                group,
-                None,
-                true,
-            )
-            .unwrap();
-    }
+    let (mut service, _store, turn) = compaction_claim_source();
     let error = MezError::invalid_state("provider context length exceeded")
         .with_provider_failure_json(
             r#"{"status_code":400,"error":{"code":"context_length_exceeded"}}"#,
@@ -761,7 +747,7 @@ async fn run_compaction_claim_admission(saturate: bool) {
     service
         .schedule_agent_provider_retry_transition(
             &AgentId::opaque("agent-%1").unwrap(),
-            "turn-1",
+            &turn,
             mez_agent::ProviderErrorRetryClass::ContextLimit,
             &error,
         )
@@ -844,11 +830,7 @@ async fn run_compaction_claim_admission(saturate: bool) {
     let ((), mut exit) = tokio::join!(client, actor.run());
     assert!(!exit.service.agent_is_compacting("%1"));
     assert_eq!(
-        exit.service
-            .agent_turn_ledger()
-            .turn("turn-1")
-            .unwrap()
-            .state,
+        exit.service.agent_turn_ledger().turn(&turn).unwrap().state,
         mez_agent::AgentTurnState::Failed
     );
     exit.service.terminate_all_pane_processes().unwrap();
@@ -876,11 +858,14 @@ async fn async_actor_compaction_replacement_keeps_old_claim_expiry() {
                 conversation_id: "old-lease".to_string(),
                 sequence,
                 created_at_unix_seconds: sequence,
-                role: mez_agent::transcript::TranscriptRole::Assistant,
+                role: mez_agent::transcript::TranscriptRole::User,
                 turn_id: format!("turn-{sequence}"),
                 agent_id: "agent-%1".to_string(),
                 pane_id: "%1".to_string(),
-                content: format!("old {sequence} {}", "history ".repeat(1_500)),
+                content: format!(
+                    "literal historical reference {sequence} {}",
+                    "history ".repeat(1_500)
+                ),
             })
             .unwrap();
     }
@@ -982,44 +967,7 @@ async fn async_actor_compaction_replacement_keeps_old_claim_expiry() {
 /// settle a replacement generation or repeat the failure.
 #[tokio::test(flavor = "current_thread")]
 async fn async_actor_compaction_failure_cancels_claim_lease() {
-    let mut service = test_service();
-    service.replace_config_layers(vec![ConfigLayer {
-        name: "compaction-lease-cancel".to_string(), path: None,
-        format: ConfigFormat::Toml, scope: ConfigScope::Primary, trusted: true,
-        text: "[agents]\ndefault_provider = \"runtime-batch\"\ndefault_model_profile = \"default\"\n[providers.runtime-batch]\nkind = \"openai\"\nmodels = [\"test\"]\ndefault_model = \"test\"\n[model_profiles.default]\nprovider = \"runtime-batch\"\nmodel = \"test\"\ncontext_window_tokens = 40000\n".to_string(),
-    }]).unwrap();
-    let primary = service
-        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
-        .unwrap();
-    service
-        .agent_shell_store_mut()
-        .enter_or_resume("%1")
-        .unwrap();
-    let start = service
-        .execute_agent_shell_command(&primary, "continue after compaction")
-        .unwrap();
-    assert!(start.contains(r#""state":"running""#), "{start}");
-    let context = service.agent_turn_contexts_mut().get_mut("turn-1").unwrap();
-    for label in ["older", "newer"] {
-        let group = mez_agent::ContextExecutionGroupId::new(format!(
-            "lease-cancel:{}",
-            context.event_sequence_high_water_mark().saturating_add(1)
-        ))
-        .unwrap();
-        context
-            .append_assistant_event("synthetic evidence", "inspect evidence", group.clone())
-            .unwrap();
-        context
-            .append_evidence_event(
-                mez_agent::ContextSourceKind::ActionResult,
-                label.to_string(),
-                "evidence ".repeat(3_000),
-                group,
-                None,
-                true,
-            )
-            .unwrap();
-    }
+    let (mut service, _store, turn) = compaction_claim_source();
     let error = MezError::invalid_state("provider context length exceeded")
         .with_provider_failure_json(
             r#"{"status_code":400,"error":{"code":"context_length_exceeded"}}"#,
@@ -1027,7 +975,7 @@ async fn async_actor_compaction_failure_cancels_claim_lease() {
     service
         .schedule_agent_provider_retry_transition(
             &AgentId::opaque("agent-%1").unwrap(),
-            "turn-1",
+            &turn,
             mez_agent::ProviderErrorRetryClass::ContextLimit,
             &error,
         )
@@ -1085,11 +1033,7 @@ async fn async_actor_compaction_failure_cancels_claim_lease() {
     let ((), mut exit) = tokio::join!(client, actor.run());
     assert!(!exit.service.agent_is_compacting("%1"));
     assert_eq!(
-        exit.service
-            .agent_turn_ledger()
-            .turn("turn-1")
-            .unwrap()
-            .state,
+        exit.service.agent_turn_ledger().turn(&turn).unwrap().state,
         mez_agent::AgentTurnState::Failed
     );
     exit.service.terminate_all_pane_processes().unwrap();

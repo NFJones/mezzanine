@@ -1,7 +1,8 @@
 //! Exact-generation auxiliary source recovery under finite committed pressure.
 //!
 //! Real synchronous `/compact` admission builds the pending task from generated
-//! durable history. Only the human-pause fixture owns a live pane root for
+//! literal historical references, without claiming execution closure. Only the
+//! human-pause fixture owns a live pane root for
 //! lifecycle authority; no inference, native action or persistence worker runs.
 //! A recovered descriptor transfers neither a claim nor timer authority.
 
@@ -75,11 +76,14 @@ fn pending_compaction_with_lifecycle_owner(
                 conversation_id: "handoff-compaction".into(),
                 sequence,
                 created_at_unix_seconds: sequence,
-                role: mez_agent::transcript::TranscriptRole::Assistant,
+                role: mez_agent::transcript::TranscriptRole::User,
                 turn_id: format!("completed-{sequence}"),
                 agent_id: "agent-%1".into(),
                 pane_id: "%1".into(),
-                content: format!("completed source {sequence}"),
+                content: format!(
+                    "literal historical reference {sequence} {}",
+                    "source ".repeat(5_000)
+                ),
             })
             .unwrap();
     }

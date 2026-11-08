@@ -103,7 +103,7 @@ impl RuntimeSessionService {
             .get(pane_id)
             .ok_or_else(|| MezError::invalid_state("manual compaction session unavailable"))?;
         if session.transcript_entries == 0 && self.manual_source_is_known_empty(pane_id) {
-            return self.queue_agent_shell_compaction_with_model(pane_id, "manual", None, None);
+            return self.queue_manual_compaction(pane_id, None);
         }
         if session.running_turn_id.is_some() || self.agent_is_compacting(pane_id) {
             return Err(MezError::conflict(
@@ -171,12 +171,7 @@ impl RuntimeSessionService {
         }
         let freshness = self.validate_manual_compaction_owner(work);
         let outcome = freshness.and(result).and_then(|snapshot| {
-            self.queue_agent_shell_compaction_with_model(
-                &work.pane_id,
-                "manual",
-                None,
-                Some((snapshot, work.clone())),
-            )
+            self.queue_manual_compaction(&work.pane_id, Some((snapshot, work.clone())))
         });
         if outcome.is_err() || matches!(outcome, Ok(AgentShellCommandOutcome::Display { .. })) {
             self.fail_agent_compaction_task(&work.pane_id, work.task_generation);
@@ -250,6 +245,7 @@ impl RuntimeSessionService {
                 || task.compaction_epoch != owner.compaction_epoch || task.transcript_entries != owner.transcript_entries {
                 return Err(MezError::conflict("manual rendered request owner changed"));
             }
+            work.validate_task(&task)?;
             let status = format!("agent: compacting conversation summary trigger=manual provider={} model={} previous_transcript_entries={} summarized_entries={}",
                 task.model_profile.provider,task.model_profile.model,task.transcript_entries,task.summarized_entries);
             self.queue_agent_compaction_task(task);

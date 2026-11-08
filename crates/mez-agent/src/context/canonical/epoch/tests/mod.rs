@@ -5,9 +5,11 @@ use super::*;
 
 mod checkpoint;
 mod continuation;
+mod edits;
 mod execution_state;
 mod mcp_grants;
 mod observations;
+mod prefix_import;
 mod publication;
 mod source;
 mod task_admission;

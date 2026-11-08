@@ -875,7 +875,7 @@ fn compaction_ranges_reject_protected_and_split_history() {
     for (first_sequence, through_sequence) in [(1, 1), (2, 2), (1, 3)] {
         assert!(
             store
-                .save_compaction_ranges(
+                .install_legacy_compaction_ranges_fixture(
                     "ranges",
                     0,
                     "older summary",
@@ -893,7 +893,7 @@ fn compaction_ranges_reject_protected_and_split_history() {
         );
     }
     store
-        .save_compaction_ranges(
+        .install_legacy_compaction_ranges_fixture(
             "ranges",
             0,
             "older summary",
@@ -1060,9 +1060,8 @@ fn selective_publication_rejects_gapped_committed_archive() {
     let _ = fs::remove_dir_all(root);
 }
 
-/// A later independent compaction task proves only its newly selected rows;
-/// the already published range is validated as part of the existing epoch,
-/// but its source is not part of the new task's frozen selection.
+/// A valid proof for later raw source cannot authorize extension of a retired
+/// selective mode. Original retained summary records and raw bytes stay intact.
 #[test]
 fn selective_publication_extends_prior_range_with_new_source_proof() {
     let root = temp_root("successive-selective-source");
@@ -1102,8 +1101,9 @@ fn selective_publication_extends_prior_range_with_new_source_proof() {
     };
     epoch.allocate_summary_records().unwrap();
     store
-        .save_compaction_ranges_with_proof(epoch.clone(), &rows[..1])
+        .install_legacy_compaction_fixture(epoch.clone())
         .unwrap();
+    let original = epoch.clone();
     epoch.ranges.push(super::AgentCompactionRange {
         first_sequence: 3,
         through_sequence: 3,
@@ -1123,18 +1123,24 @@ fn selective_publication_extends_prior_range_with_new_source_proof() {
             .is_err(),
         "a new-range proof cannot replace an unchanged older summary occurrence"
     );
-    store
+    let error = store
         .save_compaction_ranges_with_proof(epoch.clone(), &rows[1..])
-        .unwrap();
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("selective compaction publication"),
+        "{error}"
+    );
     assert_eq!(
         store.compaction_epoch("successive-source").unwrap(),
-        Some(epoch)
+        Some(original)
     );
     let _ = fs::remove_dir_all(root);
 }
 
-/// An interrupted selective epoch replacement leaves its previous projection
-/// and exact append-only source unchanged rather than exposing a partial range.
+/// Refusing a retired selective publication leaves the complete previous prefix
+/// and exact append-only source unchanged, rather than exposing a partial range.
 #[test]
 fn compaction_ranges_failed_publication_keeps_previous_epoch() {
     let root = temp_root("compaction-ranges-atomic");
@@ -1156,20 +1162,28 @@ fn compaction_ranges_failed_publication_keeps_previous_epoch() {
         .save_compaction_epoch("ranges-atomic", 0, "previous")
         .unwrap();
     let previous = store.compaction_epoch("ranges-atomic").unwrap().unwrap();
-    store.fail_next_compaction_epoch_write();
-    assert!(
-        store
-            .save_compaction_ranges(
-                "ranges-atomic",
-                0,
-                "previous",
-                vec![super::types::AgentCompactionRange {
+    let error = store
+        .save_compaction_ranges_with_proof(
+            super::AgentCompactionEpoch {
+                version: 2,
+                conversation_id: "ranges-atomic".into(),
+                through_sequence: 0,
+                summary: "previous".into(),
+                summary_records: None,
+                ranges: vec![super::types::AgentCompactionRange {
                     first_sequence: 1,
                     through_sequence: 1,
                     summary: "replacement".to_string(),
-                },]
-            )
-            .is_err()
+                }],
+            },
+            std::slice::from_ref(&row),
+        )
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("selective compaction publication"),
+        "{error}"
     );
     assert_eq!(
         store.compaction_epoch("ranges-atomic").unwrap(),

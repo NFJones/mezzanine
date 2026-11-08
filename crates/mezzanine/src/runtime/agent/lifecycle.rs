@@ -576,6 +576,13 @@ impl RuntimeSessionService {
         }
         self.clear_terminal_agent_turn_runtime_state(&turn.turn_id)?;
         let session = if pane_present {
+            // A sealed own-loop restore intentionally retained this exact old
+            // slot while rebinding its parent. Release it only after required
+            // terminal cleanup; arbitrary replacement conversations stay inert.
+            if self.completion_provider_loop_slot_owned(turn) {
+                self.agent_shell_store_mut()
+                    .finish_turn(&turn.pane_id, &turn.turn_id)?;
+            }
             Some(
                 self.agent_shell_store_mut()
                     .ensure_session(&turn.pane_id)?

@@ -7,7 +7,6 @@
 
 use super::fork_fixtures::{CONVERSATION, resumed_source};
 use super::*;
-use crate::storage::transcript::AgentCompactionRange;
 
 /// Checks both domains against current durable evidence, then verifies that
 /// context projection and an actual fork-source read agree with those domains.
@@ -16,7 +15,15 @@ fn assert_position(service: &mut RuntimeSessionService, store: &AgentTranscriptS
     let session = service.agent_shell_store().get("%1").unwrap();
     assert_eq!(session.session_id, CONVERSATION);
     assert_eq!(session.transcript_high_water, high);
-    assert_eq!(session.transcript_entries, high - prefix);
+    // The original legacy prefix cut can become a typed archive cut through all
+    // migrated rows. Exact retained members still replay from immutable backing;
+    // their cardinality is independent of later physical post-cut rows.
+    let position = store
+        .lock_resume_replay_snapshot(CONVERSATION, true)
+        .unwrap()
+        .position;
+    assert_eq!(position.logical_high_water, high);
+    assert_eq!(session.transcript_entries, position.active_raw_entries);
     let context = service
         .agent_context_for_pane_prompt("%1", "continue", 0)
         .unwrap();
@@ -42,34 +49,17 @@ fn assert_position(service: &mut RuntimeSessionService, store: &AgentTranscriptS
         .unwrap();
     assert_eq!(snapshot.source_high_water, high);
     assert_eq!(snapshot.entries.len() as u64, high - prefix);
-    assert_eq!(
-        snapshot.compaction_epoch,
-        store.compaction_epoch(CONVERSATION).unwrap()
-    );
+    assert!(snapshot.compaction_epoch.is_none());
 }
 
 /// Repeated real resume and daemon checkpoint/restore retain the same position
-/// semantics for a selective suffix and a fully compacted archive. Selective
-/// summaries reduce model content without reducing physical replay cardinality;
-/// restart diagnostics may extend both domains but cannot resurrect the prefix.
+/// semantics for a retained suffix and a fully compacted archive. Prefix
+/// normalization selects one head; restart diagnostics may extend both domains
+/// but cannot resurrect its covered source.
 #[test]
 fn runtime_conversation_positions_survive_repeated_resume_and_daemon_restore() {
     for prefix in [1, 5] {
         let (mut service, store, primary) = resumed_source(5, prefix);
-        if prefix == 1 {
-            store
-                .save_compaction_ranges(
-                    CONVERSATION,
-                    prefix,
-                    "FROZEN_PREFIX",
-                    vec![AgentCompactionRange {
-                        first_sequence: 2,
-                        through_sequence: 3,
-                        summary: "SELECTIVE_POSITION".into(),
-                    }],
-                )
-                .unwrap();
-        }
         for _ in 0..2 {
             assert_position(&mut service, &store, prefix);
             service
@@ -96,26 +86,6 @@ fn runtime_conversation_positions_survive_repeated_resume_and_daemon_restore() {
             1
         );
         assert_position(&mut restarted, &store, prefix);
-        let context = restarted
-            .agent_context_for_pane_prompt("%1", "continue", 0)
-            .unwrap();
-        if prefix == 1 {
-            assert_eq!(
-                context
-                    .blocks()
-                    .iter()
-                    .filter(|block| block.content == "SELECTIVE_POSITION")
-                    .count(),
-                1
-            );
-            assert!(
-                !context
-                    .blocks()
-                    .iter()
-                    .any(|block| block.content.contains("raw source 2")
-                        || block.content.contains("raw source 3"))
-            );
-        }
     }
 }
 

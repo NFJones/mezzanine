@@ -5,14 +5,120 @@
 //! and an idle completion never creates an ordinary provider continuation.
 
 use super::super::{
-    AgentShellCommandOutcome, AllowedActionSet, ModelProfile, NoWorkReason,
-    RuntimeAgentCompactionTarget, RuntimeAgentCompactionTask, RuntimeManualCompactionPreparation,
+    AgentShellCommandOutcome, AllowedActionSet, ModelProfile, RuntimeAgentCompactionTarget,
+    RuntimeAgentCompactionTask, RuntimeManualCompactionPreparation,
     RuntimeManualCompactionRequestWork, model_context_text_word_count,
     runtime_limit_compaction_summary_output, runtime_model_compaction_request_for_blocks,
+    runtime_prepare_conversation_compaction_chunks,
+    runtime_rebuild_conversation_compaction_request,
 };
 use super::*;
 
 impl RuntimeSessionService {
+    /// Previews the frozen head/tail with the same current policy and next
+    /// prompt composition used after publication. No history reread, ordinary
+    /// turn, permission, append acknowledgment or live cache rewrite is created.
+    pub(in crate::runtime::commands::compaction) fn manual_replay_compaction_candidate_context(
+        &mut self,
+        task: &RuntimeAgentCompactionTask,
+        summary: &str,
+    ) -> Result<AgentContext> {
+        self.validate_replay_compaction_task(task)?;
+        let source = task.replay_source.as_ref().ok_or_else(|| {
+            MezError::invalid_state("manual canonical candidate source disappeared")
+        })?;
+        if source.turn_id().is_some() {
+            return Err(MezError::invalid_state(
+                "manual candidate requires an idle canonical source",
+            ));
+        }
+        let current = ReplayEpochContext::from_owned_context(
+            ReplayConversationId::new(&task.conversation_id)?,
+            source.current_body(self)?,
+        )?;
+        let proposed = current.prepare_compaction_publication(
+            source.plan.clone(),
+            ReplayHeadPublication::Summary(summary.into()),
+        )?;
+        let history = crate::runtime::control::RuntimeAgentTranscriptContext::for_replay_preview(
+            proposed.candidate().clone(),
+        )?;
+        let steering = self.agent_compaction_steering_for_candidate(
+            &task.pane_id,
+            &task.conversation_id,
+            task.compaction_epoch,
+        );
+        let prompt = if steering.is_empty() {
+            "Continue after conversation compaction.".into()
+        } else {
+            steering.join("\n\n")
+        };
+        let mut context = self
+            .agent_context_for_pane_prompt_with_history(&task.pane_id, &prompt, false, history)?
+            .context;
+        let mut metadata = context.metadata().clone();
+        metadata.prompt_cache_lineage_id =
+            Some("compaction-00000000-0000-0000-0000-000000000000".into());
+        context.set_metadata(metadata);
+        Ok(context)
+    }
+
+    /// Admits a fitting complete preview, or requeues the same original source
+    /// with a strictly smaller advisory target. No output is published while
+    /// its complete request remains oversized; repeated size cannot loop.
+    pub(in crate::runtime::commands::compaction) fn accept_manual_replay_compaction_candidate(
+        &mut self,
+        task: &mut RuntimeAgentCompactionTask,
+        summary: &str,
+    ) -> Result<bool> {
+        let (tokens, limit, diagnostic) =
+            self.validate_manual_compaction_candidate(task, summary)?;
+        if tokens <= limit {
+            return Ok(true);
+        }
+        let summary_tokens = mez_agent::provider_text_input_token_estimate(summary);
+        let next = summary_tokens
+            .saturating_sub(tokens.saturating_sub(limit))
+            .min(summary_tokens / 2)
+            .min(
+                task.summary_correction
+                    .effective_input_tokens
+                    .map_or(usize::MAX, |previous| previous / 2),
+            );
+        let (previous, attempts) = task.manual_final_retry.unwrap_or((usize::MAX, 0));
+        if next > 0
+            && tokens < previous
+            && task
+                .summary_correction
+                .effective_input_tokens
+                .is_none_or(|ceiling| next < ceiling)
+        {
+            let source = task.manual_retry_source.clone().ok_or_else(|| {
+                MezError::invalid_state("canonical manual retry source disappeared")
+            })?;
+            runtime_prepare_conversation_compaction_chunks(task)?;
+            runtime_rebuild_conversation_compaction_request(task, source)?;
+            if let Some(chunks) = task.conversation_chunks.as_mut() {
+                chunks.pending.clear();
+                chunks.summaries.clear();
+                chunks.synthesis_source_bytes = None;
+            }
+            task.manual_final_retry = Some((tokens, attempts.saturating_add(1)));
+            task.summary_correction.effective_input_tokens = Some(next);
+            task.summary_correction.reset_for_candidate_retry();
+            super::super::summary_correction::communicate_summary_target(
+                &mut task.request,
+                next,
+                true,
+            );
+            self.queue_agent_compaction_task(task.clone());
+            return Ok(false);
+        }
+        Err(MezError::invalid_state(format!(
+            "canonical manual compaction candidate cannot fit its complete input allowance: {diagnostic}"
+        )))
+    }
+
     pub(in crate::runtime::commands::compaction) fn queue_manual_replay_compaction(
         &mut self,
         pane: &str,
@@ -45,21 +151,18 @@ impl RuntimeSessionService {
             .prepare_manual_replay_compaction(pane, owner, &name, &profile, original)?
         {
             Preparation::Ready(source) => source,
-            Preparation::NoWork => {
-                let reason = NoWorkReason::NoEligibleClosedPrefix;
+            Preparation::NoWork(reason) => {
                 self.append_agent_status_text_to_terminal_buffer(pane, reason.status())?;
                 self.record_manual_compaction_no_work(pane, &session.session_id, reason, "manual")?;
                 return Ok(AgentShellCommandOutcome::Display {
                     command: "compact".into(),
                     body: format!(
-                        "pane={pane} conversation={} compacted=false reason={} source=model-compact trigger=manual",
+                        "pane={pane} conversation={} previous_transcript_entries={} summarized_entries=0 compacted=false reason={} source=model-compact trigger=manual",
                         session.session_id,
+                        session.transcript_entries,
                         reason.code()
                     ),
                 });
-            }
-            Preparation::Unowned => {
-                return Err(MezError::conflict("manual canonical source lost ownership"));
             }
         };
         let allowed = self.capture_agent_session_allowed_actions_for_pane(pane)?;
@@ -69,17 +172,10 @@ impl RuntimeSessionService {
                 preparation,
                 name,
                 profile,
-                source.owner.clone().into_owned_context(),
-                self.mcp_registry().prompt_summary(),
+                source,
                 allowed,
-                Vec::new(),
-                Vec::new(),
-                false,
-                None,
-                session.transcript_entries,
                 origin,
-            )
-            .with_replay_source(source);
+            );
             #[cfg(test)]
             let work = work.with_probe(self.manual_compaction_request_probe_for_tests());
             self.queue_manual_compaction_request(work)?;
@@ -156,8 +252,6 @@ pub(in crate::runtime::commands::compaction) fn manual_replay_task(
     Ok(RuntimeAgentCompactionTask {
         source_owner: Some(source.original.clone()),
         replay_source: Some(source.clone()),
-        summary_proposal: None,
-        frozen_compaction_epoch: None,
         task_generation: 0,
         compaction_epoch: operation_epoch,
         transport_retry_attempts: 0,
@@ -170,9 +264,6 @@ pub(in crate::runtime::commands::compaction) fn manual_replay_task(
         conversation_id: source.owner.conversation_id().as_str().to_owned(),
         source: "manual".into(),
         transcript_entries,
-        compacted_through_sequence: None,
-        frozen_compaction_rows: Vec::new(),
-        retained_transcript_entries: transcript_entries,
         summarized_entries: blocks.len(),
         model_profile_name: name.to_owned(),
         model_profile: profile.clone(),
@@ -180,7 +271,6 @@ pub(in crate::runtime::commands::compaction) fn manual_replay_task(
         preserve_summary_output_budget: true,
         manual_retry_source: retry,
         manual_final_retry: None,
-        candidate_context: Some(source.owner.clone().into_owned_context()),
         resume_turn_id: None,
         target: RuntimeAgentCompactionTarget::Conversation,
         conversation_chunks: None,

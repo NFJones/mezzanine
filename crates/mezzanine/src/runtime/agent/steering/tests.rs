@@ -1282,6 +1282,14 @@ fn steering_receipts_prompt_identity_tracks_interrupted_remapping() {
         .unwrap();
     assert!(continued);
     assert!(sequence.get() > previous);
+    assert!(
+        mez_agent::ReplayEpochContext::from_owned_context(
+            mez_agent::ReplayConversationId::new(&turn.conversation_id).unwrap(),
+            context.clone(),
+        )
+        .is_ok(),
+        "redirection must preserve the original private source seal"
+    );
     let event = context
         .chronology()
         .iter()

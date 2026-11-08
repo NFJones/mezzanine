@@ -8,13 +8,22 @@ use super::*;
 /// ordinary continuation. All requests are offline loopback traffic.
 #[tokio::test(flavor = "current_thread")]
 async fn async_compaction_invalid_completed_output_repairs_before_ordinary_dispatch() {
-    for kind in ["budget", "empty", "bytes", "malformed"] {
+    for kind in ["empty", "bytes", "malformed"] {
         Box::pin(qualify_completed_output(kind)).await;
     }
 }
 
+/// Exceeding the advisory word target alone is valid. The actual complete
+/// provider request still fits; publication must precede one ordinary request
+/// without another auxiliary model call or a size-repair generation.
+#[tokio::test(flavor = "current_thread")]
+async fn async_compaction_word_target_is_advisory_before_ordinary_dispatch() {
+    Box::pin(qualify_completed_output("budget")).await;
+}
+
 /// Owns fake server, real worker and actor futures with explicit response gates.
 async fn qualify_completed_output(kind: &str) {
+    let advisory = kind == "budget";
     let exhausted = kind.ends_with("-exhaust");
     let malformed = kind.starts_with("malformed");
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -53,60 +62,53 @@ async fn qualify_completed_output(kind: &str) {
         .unwrap()
         .session_id
         .clone();
-    for sequence in 1..=3 {
-        let group =
-            mez_agent::ContextExecutionGroupId::new(format!("summary-source-{sequence}")).unwrap();
-        store
-            .append(&mez_agent::transcript::TranscriptEntry {
-                conversation_id: conversation.clone(),
-                sequence,
-                created_at_unix_seconds: sequence,
-                role: mez_agent::transcript::TranscriptRole::System,
-                turn_id: format!("old-{sequence}"),
-                agent_id: "agent-%1".into(),
-                pane_id: "%1".into(),
-                content: mez_agent::TranscriptContextEvent::execution_block_with_metadata(
-                    mez_agent::ContextSourceKind::TranscriptAssistant,
-                    "closed evidence",
-                    format!("FROZEN_SOURCE_{sequence} {}", "evidence ".repeat(1000)),
-                    group,
-                    1,
-                    None,
-                )
-                .unwrap()
-                .to_transcript_content(),
-            })
-            .unwrap();
+    let turn = crate::test_support::compaction_source::complete_task_and_admit_successor(
+        &mut service,
+        &primary,
+        &format!("FROZEN_SOURCE_1 {}", "evidence ".repeat(3_000)),
+        "original source task completed",
+        "continue after observed compaction",
+        mez_agent::ProviderApiCompatibility::OpenAiChatCompletions,
+    );
+    let context = service.agent_turn_contexts().get(&turn).unwrap();
+    let projection = mez_agent::ProviderBudgetProjection::new(
+        mez_agent::ProviderApiCompatibility::OpenAiChatCompletions,
+        "local-chat",
+    );
+    let plan = if advisory {
+        // Only this output target is word-budgeted and deliberately smaller
+        // than the unchanged real 20k-token request allowance. Repeating a
+        // token allowance as words would create actual complete-request
+        // overflow rather than isolate advisory-word acceptance.
+        mez_agent::plan_model_context_compaction_for_provider(
+            context,
+            1_000,
+            10,
+            context.event_sequence_high_water_mark(),
+            projection,
+        )
+    } else {
+        mez_agent::plan_model_context_compaction_for_provider_tokens(
+            context,
+            20_000,
+            10,
+            context.event_sequence_high_water_mark(),
+            projection,
+        )
     }
-    service
-        .agent_shell_store_mut()
-        .bind_conversation("%1", &conversation, 3)
-        .unwrap();
-    service
-        .execute_agent_shell_command(&primary, "continue after observed compaction")
-        .unwrap();
-    let context = service.agent_turn_contexts().get("turn-1").unwrap();
-    let plan = mez_agent::plan_model_context_compaction_for_provider_tokens(
-        context,
-        20000,
-        10,
-        context.event_sequence_high_water_mark(),
-        mez_agent::ProviderBudgetProjection::new(
-            mez_agent::ProviderApiCompatibility::OpenAiChatCompletions,
-            "local-chat",
-        ),
-    )
     .unwrap();
-    let budget = plan.summary_budget_words();
+    if advisory {
+        assert!(!plan.planning_budget().1, "advisory target must be words");
+    }
     assert!(
         plan.changes_context(),
         "fixture must contain closed history: {context:#?}"
     );
-    let profile = service.agent_turn_model_profile("turn-1").unwrap().clone();
+    let profile = service.agent_turn_model_profile(&turn).unwrap().clone();
     assert!(
         service
             .queue_agent_active_turn_compaction(
-                "turn-1",
+                &turn,
                 "default".into(),
                 profile,
                 crate::runtime::RuntimeActiveTurnCompactionTrigger::ObservedInputLimit {
@@ -117,10 +119,18 @@ async fn qualify_completed_output(kind: &str) {
             )
             .unwrap()
     );
+    let task = service
+        .pending_agent_compaction_task_for_tests("%1")
+        .unwrap();
+    assert!(task.replay_source.is_some());
+    let crate::runtime::RuntimeAgentCompactionTarget::ActiveTurn { plan, .. } = &task.target else {
+        panic!("expected active turn source");
+    };
+    let budget = plan.summary_budget_words();
     let invalid = match kind {
-        "budget" => "INVALID_SUMMARY ".repeat(budget + 1),
+        "budget" => "word ".repeat(budget + 1),
         "empty" | "empty-exhaust" => " \n\t".into(),
-        "malformed" | "malformed-exhaust" => "{broken".into(),
+        "malformed" | "malformed-exhaust" => "```mezzanine-action-json\n{}\n```".into(),
         _ => "界".repeat(128 * 1024 / 3 + 1),
     };
     let started = StdArc::new(tokio::sync::Notify::new());
@@ -128,13 +138,22 @@ async fn qualify_completed_output(kind: &str) {
     let generation = service
         .pending_agent_compaction_task_generation("%1")
         .unwrap();
+    let phase = std::sync::atomic::AtomicUsize::new(0);
     let server = async {
         let mut requests = Vec::new();
-        for step in 0..3 {
+        for step in 0..(if advisory { 2 } else { 3 }) {
             let (mut stream, _) = listener.accept().await.unwrap();
             requests.push(async_provider_concurrency_read_http_request(&mut stream).await);
+            phase.store(10 + step, Ordering::SeqCst);
             match step {
                 0 => {
+                    if advisory {
+                        assert!(
+                            requests[0]
+                                .contains(&format!("within {budget} whitespace-delimited words"))
+                        );
+                        assert!(invalid.split_whitespace().count() > budget);
+                    }
                     async_provider_concurrency_write_chat_content_response(
                         &mut stream,
                         "local-chat-model",
@@ -143,6 +162,18 @@ async fn qualify_completed_output(kind: &str) {
                     .await
                 }
                 1 => {
+                    if advisory {
+                        assert!(requests[1].contains(invalid.trim()));
+                        assert!(!requests[1].contains("VALID_REPAIRED_SUMMARY"));
+                        started.notify_one();
+                        release.notified().await;
+                        async_provider_concurrency_write_chat_response(
+                            &mut stream,
+                            "ordinary repaired continuation completed",
+                        )
+                        .await;
+                        continue;
+                    }
                     assert!(requests[1].contains("FROZEN_SOURCE_1"));
                     assert!(!requests[1].contains("INVALID_SUMMARY"));
                     started.notify_one();
@@ -210,8 +241,31 @@ async fn qualify_completed_output(kind: &str) {
             }])
             .await
             .unwrap();
-        started.notified().await;
-        assert!(handle.agent_turn_is_running("turn-1").await.unwrap());
+        // Drive the real publication owner while waiting. A valid first reply
+        // must publish before its ordinary HTTP request can reach the gate.
+        loop {
+            tokio::select! {
+                _ = started.notified() => break,
+                _ = tokio::time::sleep(Duration::from_millis(5)) => {
+                    for effect in handle.drain_timer_side_effects(32).await.unwrap() {
+                        if let RuntimeSideEffect::ScheduleTimer { key, .. } = effect
+                            && key.kind == RuntimeTimerKind::CompactionRetry {
+                            let mut events = RuntimeEventBatch::new();
+                            events.push(RuntimeEvent::Timer(TimerEvent { key, now_ms: 1 }));
+                            assert_eq!(handle.submit_runtime_events(events).await.unwrap().applied, 1);
+                        }
+                    }
+                    run_async_persistence_side_effect_service(
+                        &handle,
+                        AsyncRuntimeSideEffectServiceConfig {
+                            max_polls: 4, drain_limit: 64,
+                            idle_interval: Duration::from_millis(1),
+                        }, |_, _| false,
+                    ).await.unwrap();
+                }
+            }
+        }
+        assert!(handle.agent_turn_is_running(&turn).await.unwrap());
         assert!(
             handle
                 .pending_agent_provider_tasks()
@@ -219,9 +273,46 @@ async fn qualify_completed_output(kind: &str) {
                 .unwrap()
                 .is_empty()
         );
-        assert!(store.compaction_epoch(&conversation).unwrap().is_none());
+        let published = store
+            .load_replay_epoch(&conversation, mez_agent::AgentContext::empty())
+            .unwrap();
+        if advisory {
+            let (_, owner) =
+                published.expect("valid first summary must publish before ordinary dispatch");
+            assert_eq!(
+                owner.context().chronology()[0].block().content,
+                invalid.trim()
+            );
+        } else {
+            assert!(published.is_none());
+        }
         release.notify_one();
         loop {
+            // Adapter-level completed-output failures can use supervised
+            // auxiliary backoff. Drive its actual timer, never a fake reply.
+            for effect in handle.drain_timer_side_effects(32).await.unwrap() {
+                if let RuntimeSideEffect::ScheduleTimer { key, .. } = effect
+                    && key.kind == RuntimeTimerKind::CompactionRetry
+                {
+                    let mut events = RuntimeEventBatch::new();
+                    events.push(RuntimeEvent::Timer(TimerEvent { key, now_ms: 1 }));
+                    assert_eq!(
+                        handle.submit_runtime_events(events).await.unwrap().applied,
+                        1
+                    );
+                }
+            }
+            run_async_persistence_side_effect_service(
+                &handle,
+                AsyncRuntimeSideEffectServiceConfig {
+                    max_polls: 4,
+                    drain_limit: 64,
+                    idle_interval: Duration::from_millis(1),
+                },
+                |_, _| false,
+            )
+            .await
+            .unwrap();
             let view = handle
                 .render_client_view(
                     ClientViewRole::Primary,
@@ -266,37 +357,54 @@ async fn qualify_completed_output(kind: &str) {
         )
     })
     .await
-    .unwrap();
-    assert_eq!(requests.len(), 3);
+    .unwrap_or_else(|_| {
+        panic!(
+            "summary correction deadline: kind={kind} phase={}",
+            phase.load(Ordering::SeqCst)
+        )
+    });
+    assert_eq!(requests.len(), if advisory { 2 } else { 3 });
     // Typed malformed wire content is a failed worker result, not a completed
     // value; the HTTP inventory still proves all three inference attempts.
     assert_eq!(
         report.executions,
-        if malformed {
+        if advisory {
+            2
+        } else if malformed {
             if exhausted { 0 } else { 2 }
         } else {
             3
         }
     );
     if exhausted {
-        assert!(store.compaction_epoch(&conversation).unwrap().is_none());
+        assert!(
+            store
+                .load_replay_epoch(&conversation, mez_agent::AgentContext::empty())
+                .unwrap()
+                .is_none()
+        );
         assert!(
             !requests
                 .iter()
                 .any(|request| request.contains("VALID_REPAIRED_SUMMARY"))
         );
     } else {
-        let epoch = store.compaction_epoch(&conversation).unwrap().unwrap();
-        assert_eq!(epoch.ranges.len(), 1);
-        assert_eq!(epoch.ranges[0].summary, "VALID_REPAIRED_SUMMARY");
+        let (_, cold) = AgentTranscriptStore::new(store.root())
+            .load_replay_epoch(&conversation, mez_agent::AgentContext::empty())
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            cold.context().chronology()[0].block().content,
+            if advisory {
+                invalid.trim()
+            } else {
+                "VALID_REPAIRED_SUMMARY"
+            }
+        );
     }
     assert!(!exit.service.agent_is_compacting("%1"));
     assert_eq!(
-        exit.service
-            .agent_turn_ledger()
-            .turn("turn-1")
-            .unwrap()
-            .state,
+        exit.service.agent_turn_ledger().turn(&turn).unwrap().state,
         if exhausted {
             mez_agent::AgentTurnState::Failed
         } else {
