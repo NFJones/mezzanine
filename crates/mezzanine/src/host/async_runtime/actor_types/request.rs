@@ -1022,6 +1022,16 @@ pub(in crate::host::async_runtime) enum AsyncRuntimeRequest {
         /// boundary and should remain aligned with the owning type invariant.
         reply: oneshot::Sender<Result<bool>>,
     },
+    /// Checks an already issued compaction claim without claiming or dispatching
+    /// new work. A stopped/replaced generation must not keep its producer alive.
+    AgentCompactionClaimIsCurrent {
+        /// Original pane, never the currently focused pane.
+        pane_id: String,
+        /// Exact issued task generation whose conversation must still match.
+        task_generation: u64,
+        /// Read-only liveness result; not authority to publish a summary.
+        reply: oneshot::Sender<Result<bool>>,
+    },
     /// Represents the Queue Provider Poll Timer If Needed case for this enumeration.
     ///
     /// Callers use this variant to describe one explicit state or command path
@@ -1742,6 +1752,7 @@ impl AsyncRuntimeRequest {
             | Self::CompleteBookkeepingCandidate { .. }
             | Self::PendingAgentProviderTasks { .. }
             | Self::AgentTurnIsRunning { .. }
+            | Self::AgentCompactionClaimIsCurrent { .. }
             | Self::QueueProviderPollTimerIfNeeded { .. }
             | Self::PrepareConfiguredAgentProviderTask { .. }
             | Self::ClaimConfiguredAgentProviderTask { .. }

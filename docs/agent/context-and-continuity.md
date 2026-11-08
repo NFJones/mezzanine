@@ -378,7 +378,10 @@ Interrupted compactor responses (including HTTP 200 with an incomplete body)
 retry the same frozen auxiliary work with the configured provider retry budget
 and jittered backoff. The ordinary turn waits; settled actions are not replayed.
 Manual and observed-input compaction use the same policy. Stop and human pause
-remain effective during backoff. Exhausted or nonretryable failures are terminal,
+remain effective during backoff. Stop also retires an in-flight compaction
+request while preserving its reported usage and keeping the actor available.
+A claim stopped before worker admission cannot start another request.
+Exhausted or nonretryable failures are terminal,
 and incomplete summaries never replace authoritative history.
 The product adapters check completed summaries before private chunk/synthesis
 staging. Only the complete accepted result can reach the canonical epoch

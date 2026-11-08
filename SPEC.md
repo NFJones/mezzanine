@@ -16158,6 +16158,10 @@ The baseline command capabilities are:
   place, and configured prompt or instruction text MUST never be displayed.
 - `/stop`: Stop background jobs owned by the agent. User-initiated stops MUST
   settle the affected turn as interrupted/cancelled rather than failed.
+  Before constructing a compaction request producer, the runtime MUST verify
+  its exact claimed generation and original conversation. Stop MUST retire an
+  owned compaction producer without requiring global actor shutdown, and its
+  already reported expense MUST settle once under the original request owner.
 - `/fork`: Fork the current conversation into a new agent thread.
 - `/resume`: Resume a saved conversation.
 - `/new`: Start a new conversation.

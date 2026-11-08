@@ -1298,6 +1298,22 @@ impl AsyncRuntimeSessionHandle {
             .await?
     }
 
+    /// Checks whether an issued compaction still owns its original pane and
+    /// conversation. This read does not claim work or authorize publication;
+    /// the worker owner still retires the producer and settles known expense.
+    pub(in crate::host::async_runtime) async fn agent_compaction_claim_is_current(
+        &self,
+        pane_id: &str,
+        task_generation: u64,
+    ) -> Result<bool> {
+        self.request(|reply| AsyncRuntimeRequest::AgentCompactionClaimIsCurrent {
+            pane_id: pane_id.to_owned(),
+            task_generation,
+            reply,
+        })
+        .await?
+    }
+
     /// Claims one queued model-backed compaction task for async execution.
     pub async fn claim_agent_compaction_task(
         &self,

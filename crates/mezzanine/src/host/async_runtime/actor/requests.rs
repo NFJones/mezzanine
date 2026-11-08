@@ -3099,6 +3099,21 @@ impl AsyncRuntimeSessionActor {
                 let _ = reply.send(Ok(self.service.agent_turn_is_running(&turn_id)));
                 false
             }
+            AsyncRuntimeRequest::AgentCompactionClaimIsCurrent {
+                pane_id,
+                task_generation,
+                reply,
+            } => {
+                let current = self
+                    .service
+                    .agent_compaction_task_is_current(&pane_id, task_generation)
+                    && self
+                        .service
+                        .agent_compaction_task_is_claimed(&pane_id, task_generation)
+                    && self.service.agent_shell_store().get(&pane_id).is_some();
+                let _ = reply.send(Ok(current));
+                false
+            }
             AsyncRuntimeRequest::QueueProviderPollTimerIfNeeded {
                 generation,
                 delay_ms,

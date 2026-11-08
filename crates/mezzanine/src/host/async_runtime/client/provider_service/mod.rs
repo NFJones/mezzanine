@@ -1832,7 +1832,9 @@ pub(in crate::host::async_runtime) fn classify_provider_monitor_liveness(
     }
 }
 
-/// Runs one model-backed compaction worker while honoring shutdown.
+/// Runs one model-backed compaction worker while honoring exact claim retirement
+/// and shutdown. Stop or conversation replacement drops its request future;
+/// retained worker ownership still joins destruction and conserves known usage.
 /// The executor factory constructs only request-local work inside the owned
 /// child; captured identity, observations and actor ingress stay monitor-owned.
 async fn monitor_runtime_agent_compaction_dispatch<Factory, WorkerFuture>(
@@ -1852,6 +1854,17 @@ where
     let mut side_effect_watcher = handle.side_effect_delivery_watcher();
     let task_generation = dispatch.task.task_generation;
     let conversation_id = dispatch.task.conversation_id.clone();
+    if is_terminal_runtime_lifecycle_state(*lifecycle.borrow()) {
+        return Ok(None);
+    }
+    if !classify_provider_monitor_liveness(
+        handle
+            .agent_compaction_claim_is_current(&pane_id, task_generation)
+            .await,
+        &lifecycle,
+    )? {
+        return Ok(None);
+    }
     let drain_key = ProviderObservationOwner::Compaction(pane_id.clone(), task_generation);
     let pending: PendingProviderWireObservations = Default::default();
     let reported: SharedProviderReportedUsage = Default::default();
@@ -1907,6 +1920,14 @@ where
             }
         }
         if is_terminal_runtime_lifecycle_state(*lifecycle.borrow()) {
+            return Ok(None);
+        }
+        if !classify_provider_monitor_liveness(
+            handle
+                .agent_compaction_claim_is_current(&pane_id, task_generation)
+                .await,
+            &lifecycle,
+        )? {
             return Ok(None);
         }
     }

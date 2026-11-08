@@ -8,6 +8,162 @@
 
 use super::*;
 
+/// Stop retires the original compaction producer without shutting down its
+/// actor. Its completed wire receipt must survive cancellation of the pending
+/// terminal outcome, and the actor must remain available for another command.
+#[tokio::test]
+async fn auxiliary_compaction_stop_retires_worker_and_conserves_reported_expense() {
+    qualify_compaction_stop(false).await;
+}
+
+/// A claim retired before monitor admission cannot construct another request.
+/// Its accounting owner still retires without manufacturing provider expense.
+#[tokio::test]
+async fn auxiliary_compaction_stopped_claim_never_constructs_worker() {
+    qualify_compaction_stop(true).await;
+}
+
+/// Exercises the same actor/claim/retirement boundary on both sides of physical
+/// request construction, without relying on a scheduling delay to hit the race.
+async fn qualify_compaction_stop(stop_before_worker: bool) {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+    };
+
+    struct Destroyed(Arc<AtomicBool>);
+    impl Drop for Destroyed {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+
+    let (_root, service, primary, conversation) = queued_fixture(Family::Compaction);
+    let generation = service
+        .pending_agent_compaction_task_generation("%1")
+        .unwrap();
+    let (handle, actor) = AsyncRuntimeSessionActor::new(service, Default::default()).unwrap();
+    let actor = tokio::spawn(actor.run());
+    let dispatch = handle
+        .claim_agent_compaction_task("%1".into(), generation)
+        .await
+        .unwrap()
+        .unwrap();
+    if stop_before_worker {
+        handle
+            .execute_agent_shell_command(primary.clone(), "/stop".into())
+            .await
+            .unwrap();
+    }
+    let mut workers = JoinSet::new();
+    let mut owners = Default::default();
+    let drains: ProviderObservationDrains = Default::default();
+    let requests = Arc::new(AtomicUsize::new(0));
+    let constructions = Arc::new(AtomicUsize::new(0));
+    let destroyed = Arc::new(AtomicBool::new(false));
+    let worker_requests = requests.clone();
+    let worker_constructions = constructions.clone();
+    let worker_destroyed = destroyed.clone();
+    let (started, ready) = tokio::sync::oneshot::channel();
+    let owner = ProviderWorkerOwner::compaction(&dispatch);
+    spawn_owned_agent_provider_worker(
+        &mut workers,
+        &mut owners,
+        Some(owner),
+        monitor_runtime_agent_compaction_dispatch(
+            handle.clone(),
+            "%1".into(),
+            dispatch,
+            drains.clone(),
+            move |dispatch, observer| {
+                worker_constructions.fetch_add(1, Ordering::SeqCst);
+                async move {
+                    let _destroyed = Destroyed(worker_destroyed);
+                    let provider = ReportedMemoryProvider(worker_requests);
+                    let _unpublished = observed_provider_request(
+                        &provider,
+                        &observer,
+                        ProviderRequestPurpose::Compaction,
+                        &dispatch.task.request,
+                    )
+                    .await
+                    .unwrap();
+                    let _ = started.send(());
+                    std::future::pending::<Result<ModelResponse>>().await
+                }
+            },
+        ),
+    );
+    if !stop_before_worker {
+        tokio::time::timeout(Duration::from_secs(5), ready)
+            .await
+            .unwrap()
+            .unwrap();
+        handle
+            .execute_agent_shell_command(primary.clone(), "/stop".into())
+            .await
+            .unwrap();
+    }
+    let settled = tokio::time::timeout(Duration::from_secs(5), workers.join_next_with_id()).await;
+    let retired_without_shutdown = settled.is_ok();
+    let mut report = AsyncAgentProviderPollReport {
+        polls: 0,
+        executions: 0,
+        idle_polls: 0,
+        terminal_state: *handle.lifecycle_state_watcher().borrow(),
+    };
+    if let Ok(Some(joined)) = settled {
+        record_owned_agent_provider_worker(joined, &handle, &mut report, &mut owners, &drains)
+            .await
+            .unwrap();
+    } else {
+        // Also retire the failed regression's actual producer before asserting,
+        // so a RED result does not leave a request or actor running behind it.
+        workers.abort_all();
+    }
+    while let Some(joined) = workers.join_next_with_id().await {
+        record_owned_agent_provider_worker(joined, &handle, &mut report, &mut owners, &drains)
+            .await
+            .unwrap();
+    }
+    let ingress = handle
+        .execute_agent_shell_command(primary, "/help".into())
+        .await;
+    handle.shutdown().await.unwrap();
+    let mut exit = actor.await.unwrap();
+    exit.service.terminate_all_pane_processes().unwrap();
+
+    assert!(
+        retired_without_shutdown,
+        "Stop must retire its exact compaction worker"
+    );
+    ingress.unwrap();
+    assert_eq!(destroyed.load(Ordering::SeqCst), !stop_before_worker);
+    assert_eq!(
+        constructions.load(Ordering::SeqCst),
+        usize::from(!stop_before_worker)
+    );
+    assert_eq!(
+        requests.load(Ordering::SeqCst),
+        usize::from(!stop_before_worker)
+    );
+    assert!(!exit.service.agent_is_compacting("%1"));
+    assert!(exit.service.pending_agent_compaction_tasks().is_empty());
+    assert!(owners.is_empty());
+    assert!(drains.lock().unwrap().is_empty());
+    let usage = exit
+        .service
+        .agent_token_usage_for_conversation(&conversation);
+    let key = mez_agent::ModelTokenUsageKey::new("local-chat", "test");
+    assert_eq!(
+        usage
+            .get(&key)
+            .map(|usage| (usage.input_tokens, usage.output_tokens))
+            .unwrap_or_default(),
+        if stop_before_worker { (0, 0) } else { (17, 3) }
+    );
+}
+
 /// Aborting the complete provider-service wrapper must keep the actual driver
 /// alive through request destruction, exact memory-claim retirement and known
 /// expense adoption. This uses the production builder/supervisor plus one real
