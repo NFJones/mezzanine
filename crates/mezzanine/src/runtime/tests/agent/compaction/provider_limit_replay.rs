@@ -85,14 +85,12 @@ fn runtime_provider_context_limit_error_compacts_context_multiple_times() {
         );
         assert_eq!(service.agent_turn_contexts()[&turn_id], before);
         assert!(!service.agent_provider_task_is_pending(&turn_id));
-        let input = &service
-            .pending_agent_compaction_task_for_tests("%1")
-            .unwrap()
-            .request
-            .messages
-            .last()
-            .unwrap()
-            .content;
+        let input = crate::test_support::compaction_source::rendered_source(
+            service
+                .pending_agent_compaction_task_for_tests("%1")
+                .unwrap(),
+        )
+        .unwrap();
         if attempt == 1 {
             assert!(input.contains("ORIGINAL_FIRST_EPOCH_SOURCE"));
             assert!(!input.contains("ORIGINAL_INHERITED_TAIL"));
@@ -235,18 +233,15 @@ fn runtime_zero_budget_recovery_resumes_fitting_first_segment() {
                 "provider-context-limit-test".into(),
                 profile,
                 1,
-                legacy,
             )
             .unwrap()
     );
-    let input = &service
-        .pending_agent_compaction_task_for_tests("%1")
-        .unwrap()
-        .request
-        .messages
-        .last()
-        .unwrap()
-        .content;
+    let input = crate::test_support::compaction_source::rendered_source(
+        service
+            .pending_agent_compaction_task_for_tests("%1")
+            .unwrap(),
+    )
+    .unwrap();
     assert!(input.contains("FIRST_PREFIX_SOURCE"));
     assert!(!input.contains("SECOND_LIVE_SOURCE"));
     complete_runtime_test_compaction(&mut service, "%1", "first completed prefix summarized");
@@ -361,7 +356,7 @@ fn runtime_context_limit_recovery_replans_retained_tail_noop() {
             .pending_agent_compaction_task_for_tests("%1")
             .unwrap();
         assert!(task.replay_source.is_some());
-        let input = &task.request.messages.last().unwrap().content;
+        let input = crate::test_support::compaction_source::rendered_source(task).unwrap();
         assert!(!task.request.messages.iter().any(|message| {
             message
                 .content

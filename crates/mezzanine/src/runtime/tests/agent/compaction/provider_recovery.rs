@@ -5,7 +5,6 @@
 //! auxiliary results remain private until physical publication and adoption.
 
 use super::*;
-use std::collections::BTreeSet;
 
 /// Owns only isolated fixture state and its physical native pane, if requested.
 struct Recovery {
@@ -158,22 +157,29 @@ impl Recovery {
         );
     }
 
-    fn input(&self) -> &str {
-        &self
-            .service
-            .pending_agent_compaction_task_for_tests("%1")
-            .unwrap()
-            .request
-            .messages
-            .last()
-            .unwrap()
-            .content
+    fn input(&self) -> String {
+        crate::test_support::compaction_source::rendered_source(
+            self.service
+                .pending_agent_compaction_task_for_tests("%1")
+                .unwrap(),
+        )
+        .unwrap()
     }
 
     fn publish(&mut self, summary: &str) {
         let before = self.service.agent_turn_contexts()[&self.turn].clone();
-        complete_runtime_test_compaction(&mut self.service, "%1", summary);
-        assert_eq!(self.service.agent_turn_contexts()[&self.turn], before);
+        let mut waves = 0;
+        while self
+            .service
+            .pending_agent_compaction_task_for_tests("%1")
+            .is_some()
+        {
+            waves += 1;
+            assert!(waves <= 32, "fixture model work must terminate");
+            complete_runtime_test_compaction(&mut self.service, "%1", summary);
+            assert_eq!(self.service.agent_turn_contexts()[&self.turn], before);
+            assert!(!self.service.agent_provider_task_is_pending(&self.turn));
+        }
         replay_observed::adopt(&mut self.service, &self.turn);
         replay_observed::assert_head(&self.service, &self.store, &self.turn, summary);
     }
@@ -310,17 +316,12 @@ fn runtime_provider_compaction_continues_after_word_budget_underestimates_retain
     fixture.reject(1);
     assert!(fixture.input().contains("BYTE_HEAVY_SOURCE"));
     let audit = fixture.store.inspect(&fixture.conversation()).unwrap();
-    let mut requests = BTreeSet::new();
+    let mut requests = 0;
     let mut outputs = 0usize;
     let mut rejections = 0usize;
-    let final_summary = loop {
-        let mut task = fixture
-            .service
-            .take_pending_agent_compaction_task("%1")
-            .unwrap();
-        // A repeated complete auxiliary request is a cycle, not progress. This
-        // bounds the real source/chunk transitions without an arbitrary retry cap.
-        assert!(requests.insert(format!("{:?}", task.request)));
+    let mut actual_cap = None;
+    let final_summary = "all prior evidence summarized in one final head";
+    while let Some(task) = fixture.service.take_pending_agent_compaction_task("%1") {
         let provider = fixture
             .service
             .provider_registry()
@@ -331,55 +332,52 @@ fn runtime_provider_compaction_continues_after_word_budget_underestimates_retain
             provider,
             &task.model_profile,
         );
-        let estimate =
-            mez_agent::provider_request_input_estimate(&task.request, api, &options, false)
-                .unwrap();
-        task.compaction_request_shape = Some((api, options, false));
         fixture
             .service
-            .claim_agent_compaction_task_state("%1", task);
-        if estimate.input_tokens > 28_500 {
-            rejections += 1;
-            assert!(
-                fixture
-                    .service
-                    .apply_agent_compaction_failed_event(
-                        "%1",
-                        "invalid_state",
-                        "provider context length exceeded",
-                        Some(r#"{"status_code":400,"error":{"code":"context_length_exceeded"}}"#),
-                    )
-                    .unwrap()
-            );
-        } else {
-            outputs += 1;
-            let summary = format!("all prior evidence summarized in result {outputs}");
-            assert!(
-                fixture
-                    .service
-                    .apply_agent_compaction_completed_event(
-                        "%1",
-                        runtime_test_compaction_response(&summary)
-                    )
-                    .unwrap()
-            );
-            if fixture
-                .service
-                .pending_agent_compaction_task_for_tests("%1")
-                .is_none()
-            {
-                break summary;
-            }
-        }
+            .claim_agent_compaction_task_state("%1", task.clone());
+        let (result, _) = crate::test_support::compaction_source::execute_with_inference(
+            &fixture.service,
+            &task,
+            |request| {
+                // Equal text can belong to disjoint original byte intervals.
+                // The engine's typed coverage, not body equality, proves work.
+                requests += 1;
+                assert!(requests <= 64);
+                let measured =
+                    mez_agent::provider_request_input_estimate(request, api, &options, false)
+                        .unwrap()
+                        .input_tokens;
+                // The first actually packed request meets a lower real provider
+                // ceiling. Subsequent input is checked against that same ceiling.
+                let limit = *actual_cap.get_or_insert(measured - 1);
+                if measured > limit {
+                    rejections += 1;
+                    Err(MezError::invalid_state("provider context length exceeded")
+                        .with_provider_failure_json(
+                            r#"{"status_code":400,"error":{"code":"context_length_exceeded"}}"#,
+                        ))
+                } else {
+                    outputs += 1;
+                    Ok(runtime_test_compaction_response(final_summary))
+                }
+            },
+        );
+        result
+            .as_ref()
+            .expect("common engine handles genuine input rejection privately");
+        fixture
+            .service
+            .apply_agent_compaction_transition(
+                crate::test_support::compaction_source::model_result_event(
+                    "%1",
+                    task.task_generation,
+                    result,
+                ),
+            )
+            .unwrap();
         assert_eq!(fixture.service.agent_turn_contexts()[&fixture.turn], before);
         assert!(fixture.service.pending_agent_provider_tasks().is_empty());
-        assert!(
-            fixture
-                .service
-                .take_replay_epoch_attempt_for_tests()
-                .is_none()
-        );
-    };
+    }
     assert!(rejections > 0);
     assert!(outputs > 1);
     replay_observed::adopt(&mut fixture.service, &fixture.turn);
@@ -387,7 +385,7 @@ fn runtime_provider_compaction_continues_after_word_budget_underestimates_retain
         &fixture.service,
         &fixture.store,
         &fixture.turn,
-        &final_summary,
+        final_summary,
     );
     assert!(
         !fixture.service.agent_turn_contexts()[&fixture.turn]

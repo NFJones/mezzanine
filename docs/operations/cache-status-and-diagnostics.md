@@ -94,8 +94,8 @@ See the [qualification matrix](../reference-manual/cli.md).
 | `cache_write_input` | Provider-reported cache-write detail. For OpenAI Responses it is a subset of input, not extra tokens to add to the total. |
 
 An accepted compaction replacement clears both context percentage and latest
-request cache reuse to `unknown`, including observed-input recovery that installs
-only a turn-local summary. Cumulative token and cache expense stays recorded.
+request cache reuse to `unknown` after the committed canonical head is adopted.
+Cumulative token and cache expense stays recorded.
 Compactor/router usage and omitted or zero ordinary input usage do not repopulate
 these samples; the next positive ordinary execution response does. A failed or
 stale completion that never installs a replacement does not clear a newer sample.

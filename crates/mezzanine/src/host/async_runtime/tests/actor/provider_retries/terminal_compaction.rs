@@ -30,7 +30,7 @@ async fn async_terminal_compaction_receipt_retry_preserves_reopened_continuity()
         .agent_shell_store_mut()
         .enter_or_resume("%1")
         .unwrap();
-    let turn = crate::test_support::compaction_source::complete_task_and_admit_successor(
+    let mut turn = crate::test_support::compaction_source::complete_task_and_admit_successor(
         &mut service,
         &primary,
         &format!("ASYNC_RAW_SOURCE {}", "source ".repeat(5_000)),
@@ -50,6 +50,27 @@ async fn async_terminal_compaction_receipt_retry_preserves_reopened_continuity()
             r#"{"status_code":400,"error":{"code":"context_length_exceeded"}}"#,
         );
     for index in 0..2 {
+        if index > 0 {
+            // A successor admission supplies genuinely new closed history;
+            // unchanged automatic pressure is not permission to recompact.
+            crate::test_support::compaction_source::complete_task(
+                &mut service,
+                &turn,
+                "first compacted task completed",
+                mez_agent::ProviderApiCompatibility::OpenAiResponses,
+            );
+            let started = service
+                .execute_agent_shell_command(&primary, "continue with a new exact task")
+                .unwrap();
+            assert!(started.contains(r#""state":"running""#), "{started}");
+            turn = service
+                .agent_shell_store()
+                .get("%1")
+                .unwrap()
+                .running_turn_id
+                .clone()
+                .unwrap();
+        }
         assert!(
             service
                 .schedule_agent_provider_retry_transition(
@@ -63,20 +84,28 @@ async fn async_terminal_compaction_receipt_retry_preserves_reopened_continuity()
         );
         let task = service.take_pending_agent_compaction_task("%1").unwrap();
         assert!(task.replay_source.is_some());
-        service.claim_agent_compaction_task_state("%1", task);
+        service.claim_agent_compaction_task_state("%1", task.clone());
+        let (result, _) = crate::test_support::compaction_source::execute_wave(
+            &service,
+            &task,
+            Ok(mez_agent::ModelResponse {
+                provider: "fixture".into(),
+                model: "test".into(),
+                raw_text: format!("ASYNC_SUMMARY_{index}"),
+                usage: Default::default(),
+                latest_request_usage: None,
+                quota_usage: Default::default(),
+                action_batch: None,
+                provider_transcript_events: Vec::new(),
+            }),
+        );
         service
-            .apply_agent_compaction_completed_event(
-                "%1",
-                mez_agent::ModelResponse {
-                    provider: "fixture".into(),
-                    model: "test".into(),
-                    raw_text: format!("ASYNC_SUMMARY_{index}"),
-                    usage: Default::default(),
-                    latest_request_usage: None,
-                    quota_usage: Default::default(),
-                    action_batch: None,
-                    provider_transcript_events: Vec::new(),
-                },
+            .apply_agent_compaction_transition(
+                crate::test_support::compaction_source::model_result_event(
+                    "%1",
+                    task.task_generation,
+                    result,
+                ),
             )
             .unwrap();
         assert!(!service.agent_provider_task_is_pending(&turn));
@@ -233,7 +262,12 @@ async fn async_terminal_compaction_receipt_retry_preserves_reopened_continuity()
         hints[0].block().source,
         mez_agent::ContextSourceKind::RuntimeHint
     );
-    assert!(hints[0].block().content.contains("ASYNC_INITIAL_PROMPT"));
+    assert!(
+        hints[0]
+            .block()
+            .content
+            .contains("continue with a new exact task")
+    );
     assert!(reopened.pending_agent_compaction_task_ids().is_empty());
     assert_eq!(store.inspect(&conversation).unwrap(), rows);
     reopened.terminate_all_pane_processes().unwrap();

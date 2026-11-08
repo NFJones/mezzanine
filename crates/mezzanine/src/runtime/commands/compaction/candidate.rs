@@ -11,20 +11,6 @@
 use super::*;
 
 impl RuntimeSessionService {
-    /// Validates the provider request that would follow a manual compaction.
-    ///
-    /// This runs before durable epoch mutation. It reconstructs the active
-    /// summary, retained raw tail (including entries written while the
-    /// compactor was running), current MCP catalog, and accepted steering.
-    pub(super) fn validate_manual_compaction_candidate(
-        &mut self,
-        task: &RuntimeAgentCompactionTask,
-        summary: &str,
-    ) -> Result<(usize, usize, String)> {
-        let candidate_context = self.manual_compaction_candidate_context(task, summary)?;
-        self.estimate_manual_compaction_candidate(task, candidate_context)
-    }
-
     /// Previews only the original canonical source. Source custody, task and
     /// model freshness are checked without rebuilding an archive-row projection
     /// or creating another summary identity/publication authority.

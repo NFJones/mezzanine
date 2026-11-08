@@ -115,9 +115,13 @@ impl RuntimeSessionService {
                     "context-limit compaction does not resume the rejected turn",
                 ));
             }
-            let request = task.request.clone();
-            self.claim_agent_compaction_task_state(&pane_id, task);
-            match provider.send_request(&request) {
+            self.claim_agent_compaction_task_state(&pane_id, task.clone());
+            let (result, _) = crate::test_support::compaction_source::execute_with_inference(
+                self,
+                &task,
+                |request| provider.send_request(request),
+            );
+            match result {
                 Ok(response) => {
                     self.apply_agent_compaction_completed_event(&pane_id, response)?;
                     // This synchronous test adapter substitutes for the actor's
@@ -136,7 +140,7 @@ impl RuntimeSessionService {
                 Err(error) => {
                     self.apply_agent_compaction_failed_event(
                         &pane_id,
-                        runtime_mezzanine_error_code(error.kind()),
+                        mez_agent::ProviderErrorKind::from(error.kind()).as_str(),
                         error.message(),
                         error.provider_failure_json(),
                     )?;

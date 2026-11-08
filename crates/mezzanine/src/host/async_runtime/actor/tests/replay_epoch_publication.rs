@@ -96,13 +96,6 @@ async fn case(ephemeral: bool) -> Case {
         .update_replay_owner(|owner| owner.capture_execution_owner(&fixture.group, native_sequence))
         .unwrap();
     let before = context.clone();
-    let legacy = mez_agent::context_compaction::plan_model_context_compaction_at_consumed_sequence(
-        context,
-        16000,
-        1,
-        context.event_sequence_high_water_mark(),
-    )
-    .unwrap();
     let profile = service.agent_turn_model_profile(&turn).unwrap().clone();
     assert!(
         service
@@ -113,7 +106,6 @@ async fn case(ephemeral: bool) -> Case {
                 crate::runtime::RuntimeActiveTurnCompactionTrigger::ProviderContextLimit {
                     attempt: 1
                 },
-                legacy
             )
             .unwrap()
     );
@@ -138,14 +130,7 @@ async fn case(ephemeral: bool) -> Case {
         .await;
     let dispatch = response.await.unwrap().unwrap().unwrap();
     assert!(dispatch.task.replay_source.is_some());
-    let input = dispatch
-        .task
-        .request
-        .messages
-        .last()
-        .unwrap()
-        .content
-        .as_str();
+    let input = crate::test_support::compaction_source::rendered_source(&dispatch.task).unwrap();
     assert!(input.contains("model head 3"));
     assert!(input.contains("synthetic historical source"));
     assert!(!input.contains("COVERED_SOURCE_SENTINEL"));
@@ -178,13 +163,20 @@ fn response() -> ModelResponse {
 }
 
 async fn complete(case: &mut Case) -> crate::runtime::RuntimeReplayEpochAttempt {
+    let task = case
+        .actor
+        .service
+        .claimed_agent_compaction_task("%1", case.generation)
+        .unwrap()
+        .clone();
+    let (result, _) = crate::test_support::compaction_source::execute_wave(
+        &case.actor.service,
+        &task,
+        Ok(response()),
+    );
     let mut batch = RuntimeEventBatch::default();
     batch.push(RuntimeEvent::AgentCompaction(
-        crate::runtime::AgentCompactionEvent::Completed {
-            pane_id: "%1".into(),
-            task_generation: case.generation,
-            response: Box::new(response()),
-        },
+        crate::test_support::compaction_source::model_result_event("%1", case.generation, result),
     ));
     case.actor.apply_runtime_event_batch(batch).await.unwrap();
     assert!(

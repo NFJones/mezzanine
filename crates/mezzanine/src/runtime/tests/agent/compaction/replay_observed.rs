@@ -53,7 +53,6 @@ fn runtime_active_compaction_rejects_unowned_source_before_model_queue() {
             task.model_profile_name,
             task.model_profile,
             trigger,
-            plan,
         );
         assert!(result.is_err(), "unowned source admitted: {result:?}");
         assert!(!service.agent_is_compacting("%1"));
@@ -150,24 +149,12 @@ pub(super) fn queued_with_service(
         "the original task completed",
         10,
     );
-    let context = &service.agent_turn_contexts()[&turn];
-    let plan = mez_agent::plan_model_context_compaction_for_provider_tokens(
-        context,
-        40_000,
-        1,
-        context.event_sequence_high_water_mark(),
-        mez_agent::ProviderBudgetProjection::new(
-            mez_agent::ProviderApiCompatibility::OpenAiResponses,
-            "runtime-batch",
-        ),
-    )
-    .unwrap();
     let profile = service.agent_turn_model_profile(&turn).unwrap().clone();
     assert!(service.queue_agent_active_turn_compaction(
         &turn, "provider-context-limit-test".into(), profile,
         crate::runtime::agent_state::RuntimeActiveTurnCompactionTrigger::ObservedInputLimit {
             observed_input_tokens: 40_000, max_input_tokens: 40_000,
-        }, plan,
+        },
     ).unwrap());
     (service, store, turn)
 }

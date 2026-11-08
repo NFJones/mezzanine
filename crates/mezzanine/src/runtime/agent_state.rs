@@ -16,8 +16,8 @@ use crate::runtime::processes::NativeShellContext;
 use crate::storage::issues::IssueStore;
 use crate::storage::memory::PersistentMemoryStore;
 use mez_agent::{
-    AutoSizingRoutingSelection, McpPromptTool, ModelContextCompactionPlan, PreparedModelContext,
-    ShellExecutionOutput, ShellExecutionRequest,
+    AutoSizingRoutingSelection, McpPromptTool, PreparedModelContext, ShellExecutionOutput,
+    ShellExecutionRequest,
 };
 
 /// Carries Runtime Agent Provider Task state for this subsystem.
@@ -682,8 +682,6 @@ pub struct RuntimeAgentCompactionTask {
     pub transport_retry_attempts: u64,
     /// Pending supervised backoff; a held task cannot be dispatched or claimed.
     pub transport_retry_delay_ms: Option<u64>,
-    /// Private completed-output correction progress for the current frozen source.
-    pub summary_correction: RuntimeSummaryCorrection,
     /// Frozen project provenance of this model request, retained across retries.
     pub(crate) accounting_origin: crate::storage::token_usage::AccountingOrigin,
     /// Logical compaction epoch retained across recursive and retry generations.
@@ -704,106 +702,14 @@ pub struct RuntimeAgentCompactionTask {
     pub model_profile: ModelProfile,
     /// Provider request submitted by the async compaction worker.
     pub request: ModelRequest,
-    /// Preserve configured provider output allocation on auxiliary retry; this
-    /// is not a semantic allowance or evidence of wire support.
-    pub preserve_summary_output_budget: bool,
-    /// Original manual-compactor source, retained across temporary chunk/synthesis work.
-    pub manual_retry_source: Option<String>,
-    /// Last complete manual candidate estimate and bounded final-output retry count.
-    pub manual_final_retry: Option<(usize, u32)>,
     /// Running turn to requeue after this compaction completes.
     pub resume_turn_id: Option<String>,
-    /// Exact compaction target retained across the provider worker boundary.
-    pub target: RuntimeAgentCompactionTarget,
-    /// Temporary manual-compactor chunks, never a committed replay boundary.
-    pub conversation_chunks: Option<RuntimeConversationCompactionChunks>,
     /// Resolved wire shape captured at claim for context-limit retry sizing.
     pub compaction_request_shape: Option<(
         mez_agent::ProviderApiCompatibility,
         std::collections::BTreeMap<String, String>,
         bool,
     )>,
-}
-
-/// Completed-output correction state, reset only after accepting a bounded
-/// summary and advancing to another frozen chunk/range/synthesis source.
-#[derive(Debug, Clone, Default)]
-pub struct RuntimeSummaryCorrection {
-    /// Manual frozen word allowance, captured by preparation, never from a
-    /// correction target or provider output allocation. Active tasks use plan.
-    pub manual_words: Option<usize>,
-    /// Advisory complete-candidate replan target in estimated INPUT tokens.
-    /// Only the measured final-fit owner may replace it. Frozen-valid output
-    /// still reaches complete-fit/no-progress validation above this target.
-    pub effective_input_tokens: Option<usize>,
-    /// Empty/malformed corrections consumed for this source; always finite.
-    pub empty_attempts: u8,
-    /// Last size-bearing rejection with its fixed unit. Empty/malformed output
-    /// cannot replace this predecessor with an unmeasured zero semantic cost.
-    pub last_rejection: Option<mez_agent::context_compaction::ModelCompactionSummaryRejection>,
-    /// First correction generation for this exact source, not provider calls.
-    pub source_generation: Option<u64>,
-    /// Corrections admitted for this source; transport retries are separate.
-    pub corrections_admitted: u32,
-    /// Advisory nonzero target, never an acceptance threshold or wire cap.
-    pub guidance_target: Option<usize>,
-    /// Unit attached to guidance_target, not inferred from another target.
-    pub guidance_is_input_tokens: bool,
-    /// Content-free receipt of the last accepted source, retained through its
-    /// complete-fit validation. Never used as another source's progress state.
-    pub(crate) accepted_summary: Option<Box<crate::error::CompactionFailureEvidence>>,
-}
-
-impl RuntimeSummaryCorrection {
-    /// Starts manual work with an immutable word allowance independent of the
-    /// provider allocation. Progress resets must retain this authority.
-    pub fn for_manual_words(words: usize) -> Self {
-        Self {
-            manual_words: Some(words),
-            ..Self::default()
-        }
-    }
-
-    /// Advances valid source without forgetting frozen authority, final-fit
-    /// advisory state or its content-free accepted-output receipt.
-    pub fn reset_progress(&mut self) {
-        self.empty_attempts = 0;
-        self.last_rejection = None;
-        self.source_generation = None;
-        self.corrections_admitted = 0;
-        self.guidance_target = None;
-        self.guidance_is_input_tokens = false;
-    }
-
-    /// Starts another complete-fit candidate on the same frozen source. Drop
-    /// the earlier output's measurements, but retain its content-free count of
-    /// actual corrections so later failure cannot erase auxiliary provenance.
-    pub(in crate::runtime) fn reset_for_candidate_retry(&mut self) {
-        let corrections = self.corrections_admitted.saturating_add(
-            self.accepted_summary
-                .take()
-                .map_or(0, |receipt| receipt.corrections_admitted),
-        );
-        self.reset_progress();
-        self.corrections_admitted = corrections;
-    }
-}
-
-/// Bounded work remaining before one manual conversation summary can commit.
-#[derive(Debug, Clone)]
-pub struct RuntimeConversationCompactionChunks {
-    /// Current redacted source fragment sent to the compactor.
-    pub current: String,
-    /// Remaining source fragments, in reverse processing order.
-    pub pending: Vec<String>,
-    /// Model-authored summaries awaiting final synthesis.
-    pub summaries: Vec<String>,
-    /// Length of the prior synthesis source, used to reject nonreducing rounds.
-    pub synthesis_source_bytes: Option<usize>,
-    /// Number of provider context-limit retries in this recursive operation.
-    pub failures: u32,
-    /// Total model responses consumed by this operation.
-    pub completed: usize,
 }
 
 /// Identifies why one active-turn context compaction was requested.
@@ -849,53 +755,6 @@ pub(crate) struct RuntimeTurnCompactionHandoff {
     pub(crate) baseline: Option<crate::storage::transcript::AgentCompactionEpoch>,
     /// Ordered witnessed model replacements.
     pub(crate) witnesses: Vec<RuntimeCompactionWitness>,
-}
-
-/// Bounded complete-request retry accounting across compactor rebuilds.
-#[derive(Debug, Clone, Default)]
-pub struct RuntimeFinalRequestRetry {
-    /// Number of shorter-summary attempts for this selected range.
-    pub attempts: u32,
-    /// Last complete candidate estimate; retries must strictly reduce it.
-    pub last_input_tokens: Option<usize>,
-    /// Output ceiling retained through temporary chunk and synthesis rebuilds.
-    pub summary_ceiling: Option<usize>,
-}
-
-/// Durable target for one model-backed compaction request.
-#[derive(Debug, Clone)]
-pub enum RuntimeAgentCompactionTarget {
-    /// Summarize persisted conversation transcript and retain its raw tail.
-    Conversation,
-    /// Apply a model-authored summary to a frozen active-turn context plan.
-    ActiveTurn {
-        /// Running turn that owns the frozen durable context.
-        turn_id: String,
-        /// Historical fixture diagnostics; production keeps its typed trigger
-        /// on the original canonical source, not a second target owner.
-        #[cfg(test)]
-        trigger: RuntimeActiveTurnCompactionTrigger,
-        /// Bounded shorter-summary retries after an oversized final request.
-        final_request_retry: Box<RuntimeFinalRequestRetry>,
-        /// Number of provider context-limit backoff attempts already applied.
-        compaction_backoff_attempt: u32,
-        /// Complete rejected OpenAI Responses body bytes, when applicable.
-        rejected_request_bytes: Option<usize>,
-        /// Streaming mode used by the rejected OpenAI Responses request.
-        rejected_request_stream: Option<bool>,
-        /// Temporary source blocks owned by the current compactor request.
-        current_blocks: Vec<super::ContextBlock>,
-        /// Remaining temporary chunks in the current recursive summary round.
-        pending_blocks: Vec<Vec<super::ContextBlock>>,
-        /// Completed chunk summaries awaiting one final synthesis request.
-        completed_summaries: Vec<String>,
-        /// Prior synthesis source size; later synthesis rounds must shrink.
-        synthesis_source_bytes: Option<usize>,
-        /// Total provider responses consumed across recursive compaction rounds.
-        completed_responses: usize,
-        /// Deterministic selection and application contract.
-        plan: Box<ModelContextCompactionPlan>,
-    },
 }
 
 /// Claimed model compaction dispatch owned by an async provider worker.

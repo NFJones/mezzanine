@@ -15,6 +15,7 @@ struct StagedFixture {
     tail: Vec<mez_agent::ConversationEvent>,
     archive: Vec<mez_agent::transcript::TranscriptEntry>,
     baseline: Option<Vec<mez_agent::ConversationEvent>>,
+    requests: Vec<mez_agent::ModelRequest>,
 }
 
 impl StagedFixture {
@@ -198,6 +199,7 @@ max_input_tokens=40000
             tail,
             archive,
             baseline,
+            requests: Vec::new(),
         }
     }
 
@@ -205,15 +207,6 @@ max_input_tokens=40000
         self.service
             .pending_agent_compaction_task_for_tests("%1")
             .unwrap()
-    }
-
-    fn blocks(&self) -> &[ContextBlock] {
-        let crate::runtime::RuntimeAgentCompactionTarget::ActiveTurn { current_blocks, .. } =
-            &self.task().target
-        else {
-            panic!("active target")
-        };
-        current_blocks
     }
 
     fn assert_unpublished(&mut self) {
@@ -261,56 +254,49 @@ max_input_tokens=40000
         ));
     }
 
-    /// Claim and reject the actual encoded auxiliary request. The resulting
-    /// smaller request keeps the original source and queues genuine siblings.
+    /// A real provider result rejects admitted work through the common port.
+    /// The next actor generation retains the original source and private graph.
     fn reject(&mut self) {
-        let mut task = self
-            .service
-            .take_pending_agent_compaction_task("%1")
-            .unwrap();
-        let provider = self
-            .service
-            .provider_registry()
-            .provider(&task.model_profile.provider)
-            .unwrap();
-        let api = mez_agent::resolve_provider_api(&provider.kind, provider.api.as_deref()).unwrap();
-        let options = crate::runtime::config::runtime_effective_provider_options(
-            provider,
-            &task.model_profile,
+        let requests = run_runtime_test_compaction_wave(
+            &mut self.service,
+            "%1",
+            Err(MezError::invalid_state("provider context length exceeded")
+                .with_provider_failure_json(
+                    r#"{"status_code":400,"error":{"code":"context_length_exceeded"}}"#,
+                )),
         );
-        let bytes = mez_agent::provider_request_input_estimate(&task.request, api, &options, false)
-            .unwrap()
-            .wire_bytes;
-        task.compaction_request_shape = Some((api, options.clone(), false));
-        self.service.claim_agent_compaction_task_state("%1", task);
-        assert!(
-            self.service
-                .apply_agent_compaction_failed_event(
-                    "%1",
-                    "invalid_state",
-                    "provider context length exceeded",
-                    Some(r#"{"status_code":400,"error":{"code":"context_length_exceeded"}}"#)
-                )
-                .unwrap()
-        );
-        let next =
-            mez_agent::provider_request_input_estimate(&self.task().request, api, &options, false)
-                .unwrap()
-                .wire_bytes;
-        assert!(next < bytes);
+        assert!(!requests.is_empty());
+        self.requests.extend(requests);
         self.assert_unpublished();
     }
 
     fn temporary(&mut self, summary: &str) {
         let before = self.service.agent_turn_contexts()[&self.turn].clone();
-        complete_runtime_test_compaction(&mut self.service, "%1", summary);
+        self.requests.extend(run_runtime_test_compaction_wave(
+            &mut self.service,
+            "%1",
+            Ok(runtime_test_compaction_response(summary)),
+        ));
         assert_eq!(self.service.agent_turn_contexts()[&self.turn], before);
         self.assert_unpublished();
     }
 
     fn publish(&mut self, summary: &str) {
         let before = self.service.agent_turn_contexts()[&self.turn].clone();
-        complete_runtime_test_compaction(&mut self.service, "%1", summary);
+        for _ in 0..128 {
+            if self.service.pending_agent_compaction_tasks().is_empty() {
+                break;
+            }
+            self.requests.extend(run_runtime_test_compaction_wave(
+                &mut self.service,
+                "%1",
+                Ok(runtime_test_compaction_response(summary)),
+            ));
+        }
+        assert!(
+            self.service.pending_agent_compaction_tasks().is_empty(),
+            "finite source did not finish"
+        );
         assert_eq!(self.service.agent_turn_contexts()[&self.turn], before);
         replay_observed::adopt(&mut self.service, &self.turn);
         replay_observed::assert_head(&self.service, &self.store, &self.turn, summary);
@@ -372,7 +358,6 @@ pub(super) fn legacy_source_survives_publication(prefix: bool) {
         &fixture.turn,
         "EXACT_EXTERNAL_LATE_USER",
     );
-    fixture.temporary("second private summary");
     // The immutable manifest covers frozen live members. External archive
     // arrivals are joined by a fresh ordinary history read, not by inference.
     fixture.publish("one combined authoritative head");
@@ -443,7 +428,6 @@ pub(super) fn changed_epoch_rejects_publication() {
         .store
         .compaction_epoch(&fixture.original.conversation_id)
         .unwrap();
-    complete_runtime_test_compaction(&mut fixture.service, "%1", "second private summary");
     complete_runtime_test_compaction(&mut fixture.service, "%1", "stale combined summary");
     assert_eq!(
         fixture.service.agent_turn_contexts()[&fixture.turn],
@@ -540,7 +524,6 @@ pub(super) fn pending_live_source_survives_publication() {
             .unwrap(),
         fixture.archive
     );
-    fixture.temporary("second private summary");
     assert!(
         !fixture
             .task()
@@ -566,14 +549,13 @@ pub(super) fn pending_live_source_survives_publication() {
     );
 }
 
-/// A real rejected input creates two private stages. Exact steering arriving
-/// after the first stage makes even a tiny synthesis irreducible; no private
-/// summary may acquire publication authority or discard either original task.
+/// A provider refusal after accepted private siblings leaves all original
+/// authority and late exact instructions intact, without publishing a partial head.
 pub(super) fn second_range_failure_keeps_original_epoch() {
     let mut fixture = StagedFixture::new(&prompts(), 1);
     fixture.reject();
-    fixture.temporary("first summary");
-    let steering = "EXACT_OVERSIZED_STAGED_STEERING ".repeat(8_000);
+    fixture.temporary("first private summary");
+    let steering = "EXACT_OVERSIZED_STAGED_STEERING ".repeat(8000);
     fixture
         .service
         .agent_turn_contexts_mut()
@@ -581,30 +563,15 @@ pub(super) fn second_range_failure_keeps_original_epoch() {
         .unwrap()
         .append_user_event("late exact steering", steering.clone())
         .unwrap();
-    fixture.temporary("second summary");
-    assert!(
-        fixture
-            .blocks()
-            .iter()
-            .all(|block| block.source == ContextSourceKind::Memory)
+    run_runtime_test_compaction_wave(
+        &mut fixture.service,
+        "%1",
+        Err(MezError::new(
+            crate::error::MezErrorKind::Forbidden,
+            "private synthesis refused",
+        )),
     );
-    assert!(
-        fixture
-            .service
-            .observed_compaction_candidate_input_tokens_for_tests("%1", "tiny final synthesis",)
-            .unwrap()
-            > 40_000
-    );
-    complete_runtime_test_compaction(&mut fixture.service, "%1", "tiny final synthesis");
-    assert_eq!(
-        fixture
-            .service
-            .agent_turn_ledger()
-            .turn(&fixture.turn)
-            .unwrap()
-            .state,
-        AgentTurnState::Failed
-    );
+    assert!(!fixture.service.agent_is_compacting("%1"));
     assert!(
         !fixture
             .service
@@ -625,6 +592,15 @@ pub(super) fn second_range_failure_keeps_original_epoch() {
             )
             .unwrap()
             .is_none()
+    );
+    assert_eq!(
+        fixture
+            .service
+            .agent_turn_ledger()
+            .turn(&fixture.turn)
+            .unwrap()
+            .state,
+        AgentTurnState::Failed
     );
     let rows = fixture
         .store
@@ -636,186 +612,59 @@ pub(super) fn second_range_failure_keeps_original_epoch() {
             .any(|row| row.content.contains("SECOND_RANGE_SOURCE"))
     );
     assert!(rows.iter().any(|row| row.content.contains(&steering)));
+}
+
+/// More than 32 actual model requests complete a real large source. No
+/// synthetic response counter or arbitrary semantic retry ceiling is injected.
+#[test]
+fn runtime_compaction_completes_source_requiring_more_than_32_actual_calls() {
+    let mut fixture = StagedFixture::new(&["finite source evidence ".repeat(300_000)], 1);
+    fixture.publish("one accepted head covering the entire finite source");
     assert!(
-        !fixture
-            .service
-            .agent_turn_contexts()
-            .contains_key(&fixture.turn)
+        fixture.requests.len() > 32,
+        "actual calls={}",
+        fixture.requests.len()
     );
 }
 
-/// A large response count cannot terminate a finite remaining source. Only the
-/// diagnostic counter is advanced; the sibling comes from a real rejected
-/// request and retains its exact original source position and publication.
-#[test]
-fn runtime_compaction_continues_pending_chunk_after_32_responses() {
-    let mut fixture = StagedFixture::new(&prompts(), 1);
-    fixture.reject();
-    let mut task = fixture
-        .service
-        .take_pending_agent_compaction_task("%1")
-        .unwrap();
-    let crate::runtime::RuntimeAgentCompactionTarget::ActiveTurn {
-        completed_responses,
-        pending_blocks,
-        ..
-    } = &mut task.target
-    else {
-        panic!("active target")
-    };
-    *completed_responses = 32;
-    let sibling = pending_blocks.last().unwrap().clone();
-    fixture.service.queue_agent_compaction_task(task);
-    fixture.temporary("first temporary summary");
-    let crate::runtime::RuntimeAgentCompactionTarget::ActiveTurn {
-        completed_responses,
-        current_blocks,
-        ..
-    } = &fixture.task().target
-    else {
-        panic!("active target")
-    };
-    assert_eq!(*completed_responses, 33);
-    assert_eq!(current_blocks, &sibling);
-    fixture.temporary("second temporary summary");
-    fixture.publish("one accepted head after response thirty-four");
-}
-
-/// Actual rejection splits one repetitive original occurrence into equal text
-/// halves. Both positions must advance through inference without text-based
-/// deduplication, and all other original siblings still reach one final head.
+/// Equal historical text from different tasks remains two canonical occurrences
+/// and reaches the model twice, without source-kind/text deduplication.
 #[test]
 fn runtime_compaction_accepts_equal_content_sibling_chunks() {
-    let mut fixture = StagedFixture::new(&["REPEATED_SOURCE ".repeat(80)], 1);
-    while fixture.blocks().len() > 1 {
-        fixture.reject();
-    }
-    let original = fixture.blocks()[0].clone();
-    assert_eq!(original.content, "REPEATED_SOURCE ".repeat(80));
-    fixture.reject();
-    let first = fixture.blocks().to_vec();
-    let crate::runtime::RuntimeAgentCompactionTarget::ActiveTurn { pending_blocks, .. } =
-        &fixture.task().target
-    else {
-        panic!("active target")
-    };
-    assert_eq!(pending_blocks.last().unwrap(), &first);
-    assert_eq!(first[0].content.repeat(2), original.content);
-    fixture.temporary("first half summarized");
-    assert_eq!(fixture.blocks(), first);
-    fixture.temporary("second half summarized");
-    // Finish genuine remaining source, stopping at the synthesis request.
-    for index in 0..32 {
-        if fixture.blocks()[0].source == ContextSourceKind::Memory {
-            break;
-        }
-        fixture.temporary(&format!("remaining source summary {index}"));
-    }
-    assert_eq!(fixture.blocks()[0].source, ContextSourceKind::Memory);
-    let input = &fixture.task().request.messages.last().unwrap().content;
-    assert!(input.contains("first half summarized"));
-    assert!(input.contains("second half summarized"));
-    fixture.publish("one head covering both equal source halves");
-}
-
-/// Repeated synthesis of actual temporary outputs must reduce its previous
-/// source. A genuine second round with unchanged outputs fails without writing
-/// a durable head or waking the ordinary provider.
-#[test]
-fn runtime_compaction_rejects_nonreducing_active_synthesis() {
-    let mut fixture = StagedFixture::new(&prompts(), 1);
-    fixture.reject();
-    fixture.temporary("earlier summary");
-    fixture.temporary("earlier summary");
-    assert_eq!(fixture.blocks().len(), 2);
-    assert!(
-        fixture
-            .blocks()
-            .iter()
-            .all(|block| block.source == ContextSourceKind::Memory)
+    let text = "REPEATED_SOURCE ".repeat(80);
+    let mut fixture = StagedFixture::new(&[text.clone(), text.clone()], 1);
+    let equal = fixture
+        .selected
+        .iter()
+        .filter(|event| event.block().content == text)
+        .collect::<Vec<_>>();
+    assert_eq!(equal.len(), 2);
+    assert_ne!(
+        equal[0].record().occurrence_id(),
+        equal[1].record().occurrence_id()
     );
-    fixture.reject();
-    fixture.temporary("earlier summary");
-    complete_runtime_test_compaction(&mut fixture.service, "%1", "earlier summary");
-    assert!(!fixture.service.agent_is_compacting("%1"));
-    assert!(fixture.service.pending_agent_compaction_tasks().is_empty());
-    assert!(
-        fixture
-            .service
-            .take_replay_epoch_attempt_for_tests()
-            .is_none()
-    );
+    fixture.publish("one head covering both original equal occurrences");
+    assert_eq!(fixture.requests.len(), 1);
     assert_eq!(
-        fixture
-            .service
-            .agent_turn_ledger()
-            .turn(&fixture.turn)
+        fixture.requests[0]
+            .messages
+            .last()
             .unwrap()
-            .state,
-        AgentTurnState::Failed
-    );
-    assert!(
-        !fixture
-            .service
-            .agent_provider_task_is_pending(&fixture.turn)
-    );
-    assert!(
-        fixture
-            .store
-            .load_replay_epoch(
-                &fixture.original.conversation_id,
-                mez_agent::AgentContext::empty()
-            )
-            .unwrap()
-            .is_none()
-    );
-    assert!(
-        fixture
-            .store
-            .inspect(&fixture.original.conversation_id)
-            .unwrap()
-            .starts_with(&fixture.archive)
+            .content
+            .matches("REPEATED_SOURCE")
+            .count(),
+        160
     );
 }
 
+/// A fitting source accepts a usable long/nonreducing final in one inference;
+/// it never asks the model to optimize a successful summary's length.
 #[test]
-fn runtime_observed_compaction_stages_second_range_before_publication() {
+fn runtime_compaction_accepts_nonreducing_active_final_once() {
     let mut fixture = StagedFixture::new(&prompts(), 1);
-    fixture.reject();
-    fixture.temporary("first summary");
-    let start = fixture.service.agent_turn_contexts()[&fixture.turn]
-        .chronology()
-        .len();
-    fixture
-        .service
-        .agent_turn_contexts_mut()
-        .get_mut(&fixture.turn)
-        .unwrap()
-        .append_user_event("late steering", "EXACT_STAGED_STEERING")
-        .unwrap();
-    fixture.tail.extend_from_slice(
-        &fixture.service.agent_turn_contexts()[&fixture.turn].chronology()[start..],
-    );
-    fixture.temporary("second summary");
-    assert_eq!(fixture.blocks().len(), 2);
-    assert_eq!(fixture.blocks()[0].content, "first summary");
-    assert_eq!(fixture.blocks()[1].content, "second summary");
-    fixture.publish("one model-authored combined head");
-    let next = fixture
-        .service
-        .agent_context_for_pane_prompt("%1", "next", 0)
-        .unwrap();
-    assert!(
-        !next
-            .blocks()
-            .iter()
-            .any(|block| block.content.contains("SECOND_RANGE_SOURCE"))
-    );
-    assert!(
-        next.blocks()
-            .iter()
-            .any(|block| block.content == "EXACT_STAGED_STEERING")
-    );
+    let summary = format!("{}END", "usable continuation ".repeat(5000));
+    fixture.publish(&summary);
+    assert_eq!(fixture.requests.len(), 1);
 }
 
 /// Equal native projections in genuinely different completed execution groups
@@ -841,7 +690,6 @@ fn runtime_observed_compaction_stages_repeated_content_by_group_identity() {
     );
     fixture.reject();
     fixture.temporary("first summary");
-    fixture.temporary("second summary");
     fixture.publish("one summary covering both original occurrences");
 }
 
@@ -955,7 +803,6 @@ fn runtime_staged_compaction_preserves_late_peer_occurrences() {
         &fixture.service.agent_turn_contexts()[&fixture.turn].chronology()[start..],
         suffix
     );
-    fixture.temporary("second summary");
     fixture.publish("one head preserving original peer arrivals");
     assert_eq!(
         fixture
@@ -981,18 +828,18 @@ fn runtime_staged_compaction_preserves_late_peer_occurrences() {
     );
 }
 
-/// The legacy advisory plan is intentionally empty. It supplies neither source
-/// nor lifecycle authority: canonical admission must independently select the
-/// real closed prefix, never advertise a zero-output target, and still publish
-/// only after both temporary summaries have been synthesized into one head.
+/// A zero-sized legacy advisory is not source admission. Canonical capture
+/// independently selects its real closed prefix and publishes one fitting result.
 #[test]
-fn runtime_observed_zero_budget_stages_durable_ranges() {
+fn runtime_observed_zero_budget_cannot_veto_canonical_source() {
     let mut fixture = StagedFixture::new(&prompts(), 1);
-    let crate::runtime::RuntimeAgentCompactionTarget::ActiveTurn { trigger, .. } =
-        fixture.original.target
-    else {
-        panic!("active target")
-    };
+    let trigger = fixture
+        .original
+        .replay_source
+        .as_ref()
+        .unwrap()
+        .trigger()
+        .unwrap();
     let context = &fixture.service.agent_turn_contexts()[&fixture.turn];
     let advisory =
         mez_agent::plan_model_context_compaction_at_consumed_sequence(context, 40_000, 0, 0)
@@ -1007,77 +854,32 @@ fn runtime_observed_zero_budget_stages_durable_ranges() {
                 &fixture.turn,
                 fixture.original.model_profile_name.clone(),
                 fixture.original.model_profile.clone(),
-                trigger,
-                advisory
+                trigger
             )
             .unwrap()
     );
     fixture.original = fixture.task().clone();
-    assert!(
-        !fixture
-            .task()
-            .request
-            .messages
-            .iter()
-            .any(|message| message.content.contains("within 0 "))
-    );
-    fixture.reject();
-    fixture.temporary("");
-    fixture.temporary("x");
-    fixture.temporary("x");
-    assert_eq!(fixture.blocks().len(), 2);
-    assert!(fixture.blocks().iter().all(|block| block.content == "x"));
-    fixture.publish("combined small head");
-    let next = fixture
-        .service
-        .agent_context_for_pane_prompt("%1", "next", 0)
-        .unwrap();
-    for index in 1..5 {
-        assert!(
-            next.blocks()
-                .iter()
-                .any(|block| block.content == format!("EXACT_STEERING_{index}"))
-        );
-    }
-    assert!(
-        !next
-            .blocks()
-            .iter()
-            .any(|block| block.content.contains("SECOND_RANGE_SOURCE"))
-    );
+    fixture.publish("one canonical head independent of the old advisory");
+    assert_eq!(fixture.requests.len(), 1);
 }
 
-/// Four real auxiliary context rejections leave five finite source positions.
-/// All five responses remain private until one synthesis covers the complete
-/// original prefix; current exact steering never moves into model input.
+/// Five fitting closed tasks use one frozen input and one final publication.
+/// Exact active steering is retained outside source and survives unchanged.
 #[test]
-fn runtime_context_recovery_stages_five_distinct_closed_ranges() {
+fn runtime_context_recovery_covers_five_closed_tasks_in_one_fitting_request() {
     let history = (0..5)
         .map(|index| format!("decision-{index} outcome-{index} ").repeat(80))
         .collect::<Vec<_>>();
     let mut fixture = StagedFixture::new(&history, 1);
-    for _ in 0..4 {
-        fixture.reject();
-    }
-    let crate::runtime::RuntimeAgentCompactionTarget::ActiveTurn { pending_blocks, .. } =
-        &fixture.task().target
-    else {
-        panic!("active target")
-    };
-    assert_eq!(pending_blocks.len(), 4);
-    let mut inputs = Vec::new();
-    for index in 0..5 {
-        inputs.push(fixture.blocks().to_vec());
-        fixture.temporary(&format!("summary-{index}"));
-    }
-    assert!(inputs.windows(2).all(|pair| pair[0] != pair[1]));
-    assert_eq!(fixture.blocks().len(), 5);
-    for index in 0..5 {
-        assert_eq!(fixture.blocks()[index].content, format!("summary-{index}"));
-    }
     fixture.publish("one summary covering all five completed tasks");
+    assert_eq!(fixture.requests.len(), 1);
+    let input = &fixture.requests[0].messages.last().unwrap().content;
+    for index in 0..5 {
+        assert!(input.contains(&format!("decision-{index}")));
+    }
     let context = &fixture.service.agent_turn_contexts()[&fixture.turn];
     for index in 1..5 {
+        assert!(!input.contains(&format!("EXACT_STEERING_{index}")));
         assert!(
             context
                 .blocks()
@@ -1131,7 +933,7 @@ fn runtime_manual_compaction_first_head_keeps_completed_task_roots_historical() 
         .pending_agent_compaction_task_for_tests("%1")
         .unwrap();
     assert!(task.replay_source.is_some());
-    let input = &task.request.messages.last().unwrap().content;
+    let input = crate::test_support::compaction_source::rendered_source(task).unwrap();
     assert!(input.contains("FIRST_RANGE_SOURCE") && input.contains("SECOND_RANGE_SOURCE"));
     assert!(!input.contains("CURRENT_USER_PROMPT"));
     let summary = "one manual head over completed task roots";

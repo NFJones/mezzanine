@@ -116,6 +116,8 @@ use crate::ui::command::{
     execute_mark_pane_ready_command, key_chord_notation,
 };
 use crate::ui::readline::{ReadlineInputDecoder, ReadlinePrompt, ReadlinePromptKind};
+#[cfg(test)]
+pub(crate) use config::runtime_effective_provider_options;
 use mez_agent::mcp::{
     McpApprovalSetting, McpExternalCapability, McpRegistry, McpServerKind, McpServerStatus,
     McpStartupPlan, McpStartupTransportPlan, McpToolCallPlan, McpToolCallRequest,
@@ -437,7 +439,7 @@ pub(crate) use agent::{RuntimeProviderLogInput, execute_agent_provider_persisten
 #[cfg(test)]
 pub(crate) use agent::{SessionTitleDenial, session_title_task_id};
 #[cfg(test)]
-pub(crate) use agent_state::{RuntimeActiveTurnCompactionTrigger, RuntimeAgentCompactionTarget};
+pub(crate) use agent_state::RuntimeActiveTurnCompactionTrigger;
 pub use agent_state::{
     RuntimeAgentCompactionDispatch, RuntimeAgentCompactionTask, RuntimeAgentLoopContinuation,
     RuntimeAgentLoopState, RuntimeAgentLoopTurn, RuntimeAgentLoopTurnKind,

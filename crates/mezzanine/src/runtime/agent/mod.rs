@@ -5,8 +5,8 @@
 //! interact through typed APIs instead of duplicating subsystem details.
 
 use super::agent_state::{
-    RuntimeAgentCompactionTarget, RuntimeAgentLoopCompletion, RuntimeAgentLoopSettlement,
-    RuntimeAgentProviderClaim, RuntimeNativeShellDispatch,
+    RuntimeAgentLoopCompletion, RuntimeAgentLoopSettlement, RuntimeAgentProviderClaim,
+    RuntimeNativeShellDispatch,
 };
 use super::commands::RuntimeModelCatalog;
 use super::config::SubagentNameMode;
@@ -321,10 +321,16 @@ const RETIRED_PERSISTENT_SUBAGENT_LIMIT: usize = 256;
 pub(crate) struct RuntimeCompactionStatus {
     /// Original logical operation start, independent of provider claim deadlines.
     pub(crate) started_at: u64,
-    /// Preparing, queued or claimed; claimed does not prove wire execution.
+    /// Actual preparation/model/publication phase; no phase proves wire delivery.
     pub(crate) phase: &'static str,
     /// Current logical operation epoch, retained across chunk/retry generations.
     pub(crate) epoch: u64,
+    /// Exact current worker generation, distinct from the logical epoch.
+    pub(crate) dispatch_generation: u64,
+    /// Calls into the provider port, including failed calls and repairs.
+    pub(crate) model_calls: u64,
+    /// Longest necessary model dependency chain, excluding transport retries.
+    pub(crate) serial_depth: usize,
     /// Existing human-pause presentation, without changing that owner's state.
     pub(crate) pause: Option<&'static str>,
 }
@@ -3132,6 +3138,21 @@ impl RuntimeSessionService {
         self.agent.agent_compacting_panes.get(pane_id).copied()
     }
 
+    /// Reads the original exact operation clock for terminal diagnostics after
+    /// logical retirement. An inactive cached clock cannot imply active work.
+    pub(crate) fn agent_compaction_operation_started_at(
+        &self,
+        task: &RuntimeAgentCompactionTask,
+    ) -> Option<u64> {
+        self.agent
+            .compaction_operation_starts
+            .get(&task.pane_id)
+            .filter(|(conversation, epoch, _)| {
+                conversation == &task.conversation_id && *epoch == task.compaction_epoch
+            })
+            .map(|(_, _, started)| *started)
+    }
+
     /// Reports when durable-memory generation started for one pane.
     pub(crate) fn agent_remember_started_at(&self, pane_id: &str) -> Option<u64> {
         self.agent.agent_remembering_panes.get(pane_id).copied()
@@ -3230,6 +3251,7 @@ impl RuntimeSessionService {
     }
 
     /// Copies steering still owned by one conversation and compaction epoch.
+    #[cfg(test)]
     pub(crate) fn agent_compaction_steering_for_candidate(
         &self,
         pane_id: &str,
@@ -3273,18 +3295,22 @@ impl RuntimeSessionService {
         if self.agent_shell_store().get(pane)?.session_id != *conversation {
             return None;
         }
-        let phase = if self
+        let claimed = self
             .agent
             .claimed_agent_compaction_tasks
-            .contains_key(&(pane.to_string(), *generation))
-        {
-            "claimed"
-        } else if self
+            .get(&(pane.to_string(), *generation));
+        let pending = self
             .agent
             .pending_agent_compaction_tasks
             .get(pane)
-            .is_some_and(|task| task.task_generation == *generation)
-        {
+            .filter(|task| task.task_generation == *generation);
+        let progress = claimed
+            .or(pending)
+            .and_then(|task| task.replay_source.as_ref())
+            .map(|source| source.model_progress());
+        let phase = if claimed.is_some() {
+            progress.map_or("claimed", |progress| progress.phase)
+        } else if pending.is_some() {
             "queued"
         } else {
             "preparing"
@@ -3293,6 +3319,9 @@ impl RuntimeSessionService {
             started_at,
             phase,
             epoch: self.agent_compaction_epoch(pane),
+            dispatch_generation: *generation,
+            model_calls: progress.map_or(0, |progress| progress.model_calls),
+            serial_depth: progress.map_or(0, |progress| progress.serial_depth),
             pause: self.agent_human_pause_status(pane),
         })
     }
@@ -3349,10 +3378,7 @@ impl RuntimeSessionService {
     /// Queues one compaction task and marks its pane active.
     pub(crate) fn queue_agent_compaction_task(&mut self, mut task: RuntimeAgentCompactionTask) {
         if task.source_owner.is_none() {
-            let turn_id = match &task.target {
-                RuntimeAgentCompactionTarget::ActiveTurn { turn_id, .. } => Some(turn_id.as_str()),
-                RuntimeAgentCompactionTarget::Conversation => task.resume_turn_id.as_deref(),
-            };
+            let turn_id = task.resume_turn_id.as_deref();
             let history = turn_id
                 .and_then(|turn_id| self.agent.agent_turn_history_sources.get(turn_id))
                 .cloned();
@@ -4087,15 +4113,6 @@ impl RuntimeSessionService {
         self.agent.pending_agent_compaction_tasks.get(pane_id)
     }
 
-    /// Returns one queued compaction task for focused state-boundary tests.
-    #[cfg(test)]
-    pub(crate) fn pending_agent_compaction_task_mut_for_tests(
-        &mut self,
-        pane_id: &str,
-    ) -> Option<&mut RuntimeAgentCompactionTask> {
-        self.agent.pending_agent_compaction_tasks.get_mut(pane_id)
-    }
-
     /// Reports whether one provider turn is queued for dispatch.
     pub(crate) fn agent_provider_task_is_pending(&self, turn_id: &str) -> bool {
         self.agent.pending_agent_provider_tasks.contains(turn_id)
@@ -4185,28 +4202,6 @@ impl RuntimeSessionService {
         &self,
     ) -> impl Iterator<Item = &String> {
         self.agent.pending_agent_provider_persistence.iter()
-    }
-
-    /// Returns the complete rejected OpenAI request size owned by one claim.
-    pub(crate) fn claimed_agent_provider_openai_request_bytes(
-        &self,
-        turn_id: &str,
-    ) -> Option<usize> {
-        self.agent
-            .claimed_agent_provider_tasks
-            .get(turn_id)
-            .and_then(|claim| claim.openai_request_bytes)
-    }
-
-    /// Returns the OpenAI Responses streaming mode owned by one claimed request.
-    pub(crate) fn claimed_agent_provider_openai_request_stream(
-        &self,
-        turn_id: &str,
-    ) -> Option<bool> {
-        self.agent
-            .claimed_agent_provider_tasks
-            .get(turn_id)
-            .and_then(|claim| claim.openai_request_stream)
     }
 
     /// Clears all queued and claimed provider work for session replacement.

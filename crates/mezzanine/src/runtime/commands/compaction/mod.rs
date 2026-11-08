@@ -7,36 +7,35 @@
 //! command dispatch. Manual model input keeps physical source proofs distinct
 //! from summary replacements, and head publication compares the frozen epoch
 //! and rows under the mutation lease before changing durable replay authority.
-//! The candidate component reconstructs prospective history and measures the
-//! complete request; source/preparation owners retain exact publication fences.
+//! Test-only candidate previews measure prospective requests without affecting
+//! acceptance; source/preparation owners retain exact publication fences.
 
 use super::{
     AgentContext, AgentShellCommandOutcome, AgentTurnRecord, AgentTurnState, AllowedActionSet,
-    ContextBlock, ContextSourceKind, DEFAULT_PROVIDER_TIMEOUT_MS, MezError, ModelInteractionKind,
-    ModelMessage, ModelMessageRole, ModelProfile, ModelRequest, ModelResponse,
-    ProviderApiCompatibility, ReqwestProviderHttpTransport, Result, RuntimeAgentCompactionDispatch,
-    RuntimeAgentCompactionTask, RuntimeAgentProviderDispatchProvider, RuntimeSessionService,
-    TranscriptEntry, TranscriptRole, current_unix_seconds,
+    ContextSourceKind, DEFAULT_PROVIDER_TIMEOUT_MS, MezError, ModelProfile, ModelRequest,
+    ModelResponse, ProviderApiCompatibility, ReqwestProviderHttpTransport, Result,
+    RuntimeAgentCompactionDispatch, RuntimeAgentCompactionTask,
+    RuntimeAgentProviderDispatchProvider, RuntimeSessionService, TranscriptEntry, TranscriptRole,
     deepseek_chat_completions_provider_from_auth_store_with_provider_options, json_escape,
-    model_context_text_word_count,
     openai_compatible_provider_from_auth_store_with_provider_options_and_brand,
     openai_responses_provider_from_auth_store_with_provider_options, parse_slash_command,
     resolve_provider_api,
 };
+#[cfg(test)]
+use super::{ContextBlock, ModelInteractionKind, current_unix_seconds};
+#[cfg(test)]
 use crate::integrations::agent::context::assemble_model_request;
 use crate::integrations::agent::provider::{
     anthropic_provider_from_auth_store_with_provider_options, bounded_provider_event_kind,
     provider_error_retry_class_from_parts, provider_event_error_kind,
 };
-use crate::runtime::agent_state::RuntimeAgentCompactionTarget;
-use crate::runtime::agent_state::{
-    RuntimeActiveTurnCompactionTrigger, RuntimeConversationCompactionChunks,
-};
+use crate::runtime::agent_state::RuntimeActiveTurnCompactionTrigger;
 use crate::runtime::config::runtime_effective_provider_options;
 use crate::runtime::{AgentCompactionEvent, RenderInvalidationReason, RuntimeTransition};
 use crate::security::auth::AuthProfileCredentialSource;
 use mez_agent::ProviderErrorRetryClass;
 
+#[cfg(test)]
 mod candidate;
 mod handoff;
 /// Canonical input-boundary regressions.
@@ -50,7 +49,6 @@ pub(crate) use replay_epoch::{
     RuntimeReplayEpochPublication,
 };
 mod source;
-mod summary_correction;
 #[cfg(test)]
 mod tests;
 use no_work::NoWorkReason;
@@ -59,6 +57,7 @@ pub(crate) use preparation::{
 };
 
 /// Content-free component estimates for a failed complete provider request.
+#[cfg(test)]
 fn runtime_compaction_candidate_size_diagnostic(
     context: &AgentContext,
     projection: Option<mez_agent::ProviderBudgetProjection<'_>>,
@@ -241,7 +240,6 @@ impl RuntimeSessionService {
         model_profile_name: String,
         model_profile: ModelProfile,
         recovery_attempt: u32,
-        plan: mez_agent::ModelContextCompactionPlan,
     ) -> Result<bool> {
         self.queue_agent_active_turn_compaction(
             turn_id,
@@ -250,7 +248,6 @@ impl RuntimeSessionService {
             RuntimeActiveTurnCompactionTrigger::ProviderContextLimit {
                 attempt: recovery_attempt,
             },
-            plan,
         )
     }
 
@@ -261,7 +258,6 @@ impl RuntimeSessionService {
         model_profile_name: String,
         model_profile: ModelProfile,
         trigger: RuntimeActiveTurnCompactionTrigger,
-        plan: mez_agent::ModelContextCompactionPlan,
     ) -> Result<bool> {
         let Some(turn) = self
             .agent_turn_ledger()
@@ -288,66 +284,14 @@ impl RuntimeSessionService {
                 replay_epoch::Preparation::NoWork(_) => return Ok(false),
                 replay_epoch::Preparation::Ready(source) => source,
             };
-        let selected = replay_source.input_blocks();
-        let mut current_blocks = runtime_redact_compaction_blocks(&selected);
-        let mut pending_blocks = Vec::new();
-        let (rejected_request_bytes, rejected_request_stream) = match trigger {
-            RuntimeActiveTurnCompactionTrigger::ProviderContextLimit { .. } => (
-                self.claimed_agent_provider_openai_request_bytes(turn_id),
-                self.claimed_agent_provider_openai_request_stream(turn_id),
-            ),
-            RuntimeActiveTurnCompactionTrigger::ObservedInputLimit { .. } => (None, None),
-        };
-        let mut request = runtime_model_compaction_request_for_blocks(
+        let summarized_entries = replay_source.input_entry_count();
+        let request = runtime_model_compaction_request_from_source(
             &model_profile,
             &turn.pane_id,
             &conversation_id,
-            &current_blocks,
-            allowed_actions.clone(),
-        )?;
-        // A legacy no-work projection has no summary allowance. Independently
-        // selected canonical work must not inherit its zero-output guidance.
-        if plan.summary_budget_words() > 0 {
-            runtime_limit_compaction_summary_output(&mut request, plan.summary_budget_words());
-            summary_correction::communicate_summary_target(
-                &mut request,
-                plan.summary_budget_words(),
-                plan.planning_budget().1,
-            );
-        }
-        if let (Some(rejected_bytes), Some(stream)) =
-            (rejected_request_bytes, rejected_request_stream)
-        {
-            while runtime_openai_compaction_request_bytes(&request, Some(stream))?
-                .is_some_and(|request_bytes| request_bytes >= rejected_bytes)
-            {
-                let Some((first, second)) = runtime_split_compaction_blocks(&current_blocks) else {
-                    return Err(MezError::invalid_state(format!(
-                        "context-limit recovery could not form a smaller compactor request: rejected_request_bytes={rejected_bytes}"
-                    )));
-                };
-                pending_blocks.push(second);
-                current_blocks = first;
-                request = runtime_model_compaction_request_for_blocks(
-                    &model_profile,
-                    &turn.pane_id,
-                    &conversation_id,
-                    &current_blocks,
-                    allowed_actions.clone(),
-                )?;
-                if plan.summary_budget_words() > 0 {
-                    runtime_limit_compaction_summary_output(
-                        &mut request,
-                        plan.summary_budget_words(),
-                    );
-                    summary_correction::communicate_summary_target(
-                        &mut request,
-                        plan.summary_budget_words(),
-                        plan.planning_budget().1,
-                    );
-                }
-            }
-        }
+            String::new(),
+            allowed_actions,
+        );
         self.refresh_project_trust_store_from_disk_if_changed()?;
         self.queue_agent_compaction_task(RuntimeAgentCompactionTask {
             source_owner: Some(replay_source.original.clone()),
@@ -356,7 +300,6 @@ impl RuntimeSessionService {
             compaction_epoch: 0,
             transport_retry_attempts: 0,
             transport_retry_delay_ms: None,
-            summary_correction: Default::default(),
             pane_id: turn.pane_id.clone(),
             accounting_origin: self.capture_agent_accounting_origin_for_pane(&turn.pane_id),
             conversation_id,
@@ -372,30 +315,11 @@ impl RuntimeSessionService {
             // retain their original source and wait for canonical publication,
             // including backing for ordinary observations not yet archived.
             transcript_entries,
-            summarized_entries: selected.len(),
+            summarized_entries,
             model_profile_name,
             model_profile,
             request,
-            preserve_summary_output_budget: true,
-            manual_retry_source: None,
-            manual_final_retry: None,
             resume_turn_id: Some(turn.turn_id.clone()),
-            target: RuntimeAgentCompactionTarget::ActiveTurn {
-                turn_id: turn.turn_id.clone(),
-                #[cfg(test)]
-                trigger,
-                final_request_retry: Box::default(),
-                compaction_backoff_attempt: 0,
-                rejected_request_bytes,
-                rejected_request_stream,
-                current_blocks,
-                pending_blocks,
-                completed_summaries: Vec::new(),
-                synthesis_source_bytes: None,
-                completed_responses: 0,
-                plan: Box::new(plan),
-            },
-            conversation_chunks: None,
             compaction_request_shape: None,
         });
         self.remove_pending_agent_provider_task(turn_id);
@@ -458,6 +382,9 @@ impl RuntimeSessionService {
             return Ok(None);
         }
         self.claim_agent_compaction_task_state(pane_id, task.clone());
+        // Source/configuration/process authority must still hold before a new
+        // credential lookup or model producer, including successor wave claims.
+        self.validate_replay_compaction_task(&task)?;
         let provider_config = self
             .provider_registry()
             .provider(&task.model_profile.provider)
@@ -549,64 +476,6 @@ impl RuntimeSessionService {
                 .map(RuntimeAgentProviderDispatchProvider::Anthropic)
             }
         }?;
-        if let Some(max_input_tokens) = task.model_profile.max_input_tokens() {
-            loop {
-                let estimate = mez_agent::provider_request_input_estimate(
-                    &task.request,
-                    provider_api,
-                    &provider_options,
-                    provider.request_stream(&task.request),
-                )?;
-                if !estimate.exceeds_explicit_cap(max_input_tokens) {
-                    break;
-                }
-                if matches!(task.target, RuntimeAgentCompactionTarget::Conversation) {
-                    runtime_prepare_conversation_compaction_chunks(&mut task)?;
-                    let current = task
-                        .conversation_chunks
-                        .as_ref()
-                        .ok_or_else(|| {
-                            MezError::invalid_state(
-                                "conversation compactor temporary source is unavailable",
-                            )
-                        })?
-                        .current
-                        .clone();
-                    let (first, second) = runtime_split_conversation_compaction_source(&current)
-                        .ok_or_else(|| MezError::invalid_state(format!(
-                            "conversation compactor request cannot fit configured input cap: estimated_input_tokens={} max_input_tokens={max_input_tokens}",
-                            estimate.input_tokens
-                        )))?;
-                    let chunks = task.conversation_chunks.as_mut().ok_or_else(|| {
-                        MezError::invalid_state(
-                            "conversation compactor temporary source is unavailable",
-                        )
-                    })?;
-                    chunks.pending.push(second);
-                    runtime_rebuild_conversation_compaction_request(&mut task, first)?;
-                    continue;
-                }
-                let RuntimeAgentCompactionTarget::ActiveTurn {
-                    current_blocks,
-                    pending_blocks,
-                    ..
-                } = &mut task.target
-                else {
-                    return Err(MezError::invalid_state(format!(
-                        "conversation compactor request exceeds configured input cap: estimated_input_tokens={} max_input_tokens={max_input_tokens}",
-                        estimate.input_tokens
-                    )));
-                };
-                let Some((first, second)) = runtime_split_compaction_blocks(current_blocks) else {
-                    return Err(MezError::invalid_state(format!(
-                        "active-turn compactor request cannot be split below configured input cap: estimated_input_tokens={} max_input_tokens={max_input_tokens}",
-                        estimate.input_tokens
-                    )));
-                };
-                pending_blocks.push(second);
-                runtime_rebuild_active_turn_compaction_request(&mut task, first)?;
-            }
-        }
         self.append_credential_access_audit(
             &task.model_profile.provider,
             &provider_config.auth_profile,
@@ -782,7 +651,7 @@ impl RuntimeSessionService {
         } else {
             self.finish_agent_compaction_task(pane_id, task_generation)
         };
-        let Some(mut task) = claimed else {
+        let Some(task) = claimed else {
             return Ok(false);
         };
         self.record_agent_provider_quota_usage_for_conversation(
@@ -800,104 +669,16 @@ impl RuntimeSessionService {
             // New inference has one source contract. A missing owner cannot
             // send an accepted result through historical publication code.
             self.validate_replay_compaction_task(&task)?;
-            let summary = self.validate_or_correct_compaction_summary(&mut task, &response)?;
-            let Some(summary) = summary else {
-                return Ok(());
-            };
-            if let Some(chunks) = task.conversation_chunks.as_mut() {
-                chunks.completed = chunks.completed.checked_add(1).ok_or_else(|| {
-                    MezError::invalid_state("conversation compactor response count overflow")
-                })?;
-                chunks.summaries.push(summary.clone());
-                if let Some(next) = chunks.pending.pop() {
-                    task.summary_correction.accepted_summary = None;
-                    runtime_rebuild_conversation_compaction_request(&mut task, next)?;
-                    self.queue_agent_compaction_task(task.clone());
-                    return Ok(());
+            let source = task.replay_source.as_ref().ok_or_else(|| {
+                MezError::invalid_state("compaction result lost its frozen source")
+            })?;
+            match source.model_wave_outcome(task_generation)? {
+                replay_epoch::WaveOutcome::Continue => {
+                    self.queue_agent_compaction_task(task.clone())
                 }
-                if chunks.summaries.len() > 1 {
-                    let synthesis = chunks
-                        .summaries
-                        .iter()
-                        .enumerate()
-                        .map(|(index, content)| {
-                            format!("Chunk {} summary:\n{}", index + 1, content)
-                        })
-                        .collect::<Vec<_>>()
-                        .join("\n\n");
-                    runtime_require_smaller_synthesis(
-                        chunks.synthesis_source_bytes,
-                        synthesis.len(),
-                    )?;
-                    chunks.synthesis_source_bytes = Some(synthesis.len());
-                    chunks.summaries.clear();
-                    task.summary_correction.accepted_summary = None;
-                    runtime_rebuild_conversation_compaction_request(&mut task, synthesis)?;
-                    self.queue_agent_compaction_task(task.clone());
-                    return Ok(());
+                replay_epoch::WaveOutcome::Complete(accepted) => {
+                    self.queue_accepted_replay_epoch_publication(&task, &accepted)?;
                 }
-            }
-            if matches!(task.target, RuntimeAgentCompactionTarget::Conversation) {
-                if !self.accept_manual_replay_compaction_candidate(&mut task, &summary)? {
-                    return Ok(());
-                }
-                self.queue_replay_epoch_publication(&task, summary)?;
-                return Ok(());
-            }
-            if matches!(task.target, RuntimeAgentCompactionTarget::ActiveTurn { .. }) {
-                let (next_blocks, final_summary) = {
-                    let RuntimeAgentCompactionTarget::ActiveTurn {
-                        pending_blocks,
-                        completed_summaries,
-                        synthesis_source_bytes,
-                        completed_responses,
-                        ..
-                    } = &mut task.target
-                    else {
-                        unreachable!("active-turn target was matched above");
-                    };
-                    *completed_responses = completed_responses.checked_add(1).ok_or_else(|| {
-                        MezError::invalid_state("active-turn compactor response count overflow")
-                    })?;
-                    completed_summaries.push(summary);
-                    if let Some(blocks) = pending_blocks.pop() {
-                        if blocks.is_empty() {
-                            return Err(MezError::invalid_state(
-                                "active-turn compactor pending source did not advance",
-                            ));
-                        }
-                        (Some(blocks), None)
-                    } else if completed_summaries.len() == 1 {
-                        (None, completed_summaries.pop())
-                    } else {
-                        let summaries = std::mem::take(completed_summaries);
-                        let blocks = runtime_compaction_summary_blocks(summaries);
-                        let bytes = blocks.iter().map(|block| block.content.len()).sum();
-                        runtime_require_smaller_synthesis(*synthesis_source_bytes, bytes)?;
-                        *synthesis_source_bytes = Some(bytes);
-                        (Some(blocks), None)
-                    }
-                };
-                if let Some(blocks) = next_blocks {
-                    task.summary_correction.accepted_summary = None;
-                    runtime_rebuild_active_turn_compaction_request(&mut task, blocks)?;
-                    self.append_agent_trace_turn_event(
-                        pane_id,
-                        task.resume_turn_id.as_deref().unwrap_or("unknown"),
-                        "context_limit_recovery compactor_continuing recursive_summary=true",
-                    )?;
-                    self.queue_agent_compaction_task(task.clone());
-                    return Ok(());
-                }
-                let final_summary = final_summary.ok_or_else(|| {
-                    MezError::invalid_state(
-                        "recursive context compaction completed without a final summary",
-                    )
-                })?;
-                if !self.accept_replay_compaction_candidate(&mut task, &final_summary)? {
-                    return Ok(());
-                }
-                self.queue_replay_epoch_publication(&task, final_summary)?;
             }
             Ok(())
         })();
@@ -909,22 +690,7 @@ impl RuntimeSessionService {
             self.finish_agent_compaction_task(pane_id, task_generation);
         }
         if let Err(error) = application {
-            let error = if error.compaction_failure().is_some() {
-                error
-            } else {
-                error.with_compaction_failure(summary_correction::compaction_failure_evidence(
-                    &task,
-                    None,
-                    crate::error::CompactionFailurePhase::CompleteCandidate,
-                    crate::error::CompactionFailureDisposition::CandidateRejected,
-                ))
-            };
-            if let Some(facts) = error.compaction_failure() {
-                self.append_agent_status_text_to_terminal_buffer(
-                    pane_id,
-                    &facts.diagnostic_line(),
-                )?;
-            }
+            let error = self.compaction_failure_with_progress(&task, error);
             self.append_agent_status_text_to_terminal_buffer(
                 pane_id,
                 &format!(
@@ -956,6 +722,30 @@ impl RuntimeSessionService {
         self.restore_agent_context_usage(conversation_id, None, None);
         self.checkpoint_agent_session_metadata()?;
         Ok(())
+    }
+
+    /// Captures bounded observations from the original opaque operation before
+    /// exact task retirement. This does not infer provider recovery authority.
+    pub(in crate::runtime) fn compaction_failure_with_progress(
+        &self,
+        task: &RuntimeAgentCompactionTask,
+        error: MezError,
+    ) -> MezError {
+        let Some(source) = task.replay_source.as_ref() else {
+            return error;
+        };
+        let progress = source.model_progress();
+        error.with_compaction_failure(crate::error::CompactionFailureEvidence {
+            phase: progress.phase,
+            operation_epoch: task.compaction_epoch,
+            dispatch_generation: task.task_generation,
+            model_calls: progress.model_calls,
+            serial_depth: progress.serial_depth,
+            elapsed_seconds: crate::runtime::current_unix_seconds().saturating_sub(
+                self.agent_compaction_operation_started_at(task)
+                    .unwrap_or_else(crate::runtime::current_unix_seconds),
+            ),
+        })
     }
 
     /// Applies a failed model-backed compaction worker result.
@@ -1025,12 +815,6 @@ impl RuntimeSessionService {
             }
             return Ok(failed.had_task());
         };
-        let malformed = provider_failure_json
-            .and_then(|payload| serde_json::from_str::<serde_json::Value>(payload).ok())
-            .is_some_and(|payload| {
-                payload.get("type").and_then(serde_json::Value::as_str)
-                    == Some("malformed_model_output")
-            });
         // Canonical source validation requires the original current claim.
         // Retire it only after correction admission; a replacement generation
         // queued by that admission must retain its independent ownership.
@@ -1039,47 +823,23 @@ impl RuntimeSessionService {
             .cloned()
             && let Err(error) = self.validate_replay_compaction_task(&task)
         {
+            let error = self.compaction_failure_with_progress(&task, error);
             self.finish_agent_compaction_task(pane_id, task_generation);
             if let Some(turn) = task.resume_turn_id.as_deref() {
                 self.fail_running_turn_after_compaction_error(turn, &task.source, &error)?;
             }
             return Ok(true);
         }
-        let task = if malformed {
-            self.claimed_agent_compaction_task(pane_id, task_generation)
-                .cloned()
-        } else {
-            self.finish_agent_compaction_task(pane_id, task_generation)
-        };
-        if let Some(mut task) = task {
-            if malformed {
-                let correction = self.correct_malformed_compaction_response(&mut task);
-                self.finish_agent_compaction_task(pane_id, task_generation);
-                if let Err(error) = correction {
-                    if let Some(facts) = error.compaction_failure() {
-                        self.append_agent_status_text_to_terminal_buffer(
-                            pane_id,
-                            &facts.diagnostic_line(),
-                        )?;
-                    }
-                    self.append_agent_status_text_to_terminal_buffer(
-                        pane_id,
-                        &format!(
-                            "agent: compact failed while correcting completed output: {}",
-                            error.message()
-                        ),
-                    )?;
-                    if let Some(turn) = task.resume_turn_id.as_deref() {
-                        self.fail_running_turn_after_compaction_error(turn, &task.source, &error)?;
-                    }
-                }
-                return Ok(true);
-            }
+        if let Some(mut task) = self.finish_agent_compaction_task(pane_id, task_generation) {
             let retry_class =
                 provider_error_retry_class_from_parts(parsed_kind, message, provider_failure_json);
             let policy = self.provider_retry_policy();
             if retry_class == ProviderErrorRetryClass::RetryableTransport
                 && policy.should_retry(task.transport_retry_attempts, retry_class)
+                && task
+                    .replay_source
+                    .as_ref()
+                    .is_some_and(|source| source.model_work_can_retry(task_generation))
             {
                 task.transport_retry_attempts = task.transport_retry_attempts.saturating_add(1);
                 task.transport_retry_delay_ms = Some(
@@ -1099,158 +859,6 @@ impl RuntimeSessionService {
                 self.queue_agent_compaction_task(task);
                 return Ok(true);
             }
-            if retry_class == ProviderErrorRetryClass::ContextLimit
-                && matches!(task.target, RuntimeAgentCompactionTarget::Conversation)
-            {
-                runtime_prepare_conversation_compaction_chunks(&mut task)?;
-                let (api, options, stream) = task
-                    .compaction_request_shape
-                    .as_ref()
-                    .map(|(api, options, stream)| (*api, options.clone(), *stream))
-                    .unwrap_or((
-                        ProviderApiCompatibility::OpenAiResponses,
-                        Default::default(),
-                        false,
-                    ));
-                let failed_bytes = mez_agent::provider_request_input_estimate(
-                    &task.request,
-                    api,
-                    &options,
-                    stream,
-                )?
-                .wire_bytes;
-                let chunks = task.conversation_chunks.as_mut().ok_or_else(|| {
-                    MezError::invalid_state(
-                        "conversation compactor temporary source is unavailable",
-                    )
-                })?;
-                {
-                    chunks.failures = chunks.failures.checked_add(1).ok_or_else(|| {
-                        MezError::invalid_state("conversation compactor backoff count overflow")
-                    })?;
-                    let mut source = chunks.current.clone();
-                    let mut siblings = Vec::new();
-                    while let Some((first, second)) =
-                        runtime_split_conversation_compaction_source(&source)
-                    {
-                        siblings.push(second);
-                        runtime_rebuild_conversation_compaction_request(&mut task, first.clone())?;
-                        let candidate_bytes = mez_agent::provider_request_input_estimate(
-                            &task.request,
-                            api,
-                            &options,
-                            stream,
-                        )?
-                        .wire_bytes;
-                        if candidate_bytes < failed_bytes {
-                            let chunks = task.conversation_chunks.as_mut().ok_or_else(|| {
-                                MezError::invalid_state(
-                                    "conversation compactor temporary source is unavailable",
-                                )
-                            })?;
-                            chunks.pending.extend(siblings);
-                            self.queue_agent_compaction_task(task);
-                            return Ok(true);
-                        }
-                        source = first;
-                    }
-                }
-            }
-            if retry_class == ProviderErrorRetryClass::ContextLimit
-                && matches!(task.target, RuntimeAgentCompactionTarget::ActiveTurn { .. })
-            {
-                // Keep the frozen canonical selection; only temporary input
-                // may shrink after a provider rejection.
-                let failed_request_bytes = {
-                    let (api, options, stream) =
-                        task.compaction_request_shape.as_ref().ok_or_else(|| {
-                            MezError::invalid_state("compactor request wire shape is unavailable")
-                        })?;
-                    mez_agent::provider_request_input_estimate(
-                        &task.request,
-                        *api,
-                        options,
-                        *stream,
-                    )?
-                    .wire_bytes
-                };
-                let mut blocks = {
-                    let RuntimeAgentCompactionTarget::ActiveTurn {
-                        compaction_backoff_attempt,
-                        current_blocks,
-                        ..
-                    } = &mut task.target
-                    else {
-                        unreachable!("active-turn target was matched above");
-                    };
-                    *compaction_backoff_attempt = compaction_backoff_attempt.saturating_add(1);
-                    current_blocks.clone()
-                };
-                let mut queued_siblings = Vec::new();
-                let mut retry_ready = false;
-                while let Some((first, second)) = runtime_split_compaction_blocks(&blocks) {
-                    queued_siblings.push(second);
-                    runtime_rebuild_active_turn_compaction_request(&mut task, first.clone())?;
-                    let (api, options, stream) =
-                        task.compaction_request_shape.as_ref().ok_or_else(|| {
-                            MezError::invalid_state("compactor request wire shape is unavailable")
-                        })?;
-                    let candidate_bytes = mez_agent::provider_request_input_estimate(
-                        &task.request,
-                        *api,
-                        options,
-                        *stream,
-                    )?
-                    .wire_bytes;
-                    if candidate_bytes < failed_request_bytes {
-                        retry_ready = true;
-                        break;
-                    }
-                    blocks = first;
-                }
-                if retry_ready {
-                    let RuntimeAgentCompactionTarget::ActiveTurn { pending_blocks, .. } =
-                        &mut task.target
-                    else {
-                        unreachable!("active-turn target was matched above");
-                    };
-                    pending_blocks.extend(queued_siblings);
-                    let attempt = match &task.target {
-                        RuntimeAgentCompactionTarget::ActiveTurn {
-                            compaction_backoff_attempt,
-                            ..
-                        } => *compaction_backoff_attempt,
-                        RuntimeAgentCompactionTarget::Conversation => 0,
-                    };
-                    self.append_agent_status_text_to_terminal_buffer(
-                    pane_id,
-                    &format!(
-                            "agent: compaction request exceeded provider context; retrying with smaller recursive input attempt={attempt}"
-                    ),
-                )?;
-                    self.queue_agent_compaction_task(task);
-                    return Ok(true);
-                }
-            }
-            let disposition = match retry_class {
-                ProviderErrorRetryClass::RetryableTransport => {
-                    crate::error::CompactionFailureDisposition::TransportExhausted
-                }
-                ProviderErrorRetryClass::OutputLimit => {
-                    crate::error::CompactionFailureDisposition::OutputLimit
-                }
-                ProviderErrorRetryClass::ContextLimit => {
-                    crate::error::CompactionFailureDisposition::ContextFloor
-                }
-                _ => crate::error::CompactionFailureDisposition::ProviderRejected,
-            };
-            let facts = summary_correction::compaction_failure_evidence(
-                &task,
-                None,
-                crate::error::CompactionFailurePhase::ProviderInference,
-                disposition,
-            );
-            self.append_agent_status_text_to_terminal_buffer(pane_id, &facts.diagnostic_line())?;
             self.append_agent_status_text_to_terminal_buffer(
                 pane_id,
                 &format!("agent: compact failed during provider request: {message}"),
@@ -1259,7 +867,10 @@ impl RuntimeSessionService {
                 self.fail_running_turn_after_compaction_error(
                     resume_turn_id,
                     &task.source,
-                    &MezError::invalid_state(message).with_compaction_failure(facts),
+                    &self.compaction_failure_with_progress(
+                        &task,
+                        MezError::new(parsed_kind, message),
+                    ),
                 )?;
             }
             return Ok(true);
@@ -1374,26 +985,13 @@ fn runtime_compaction_failure_source_label(source: &str) -> &'static str {
     }
 }
 
-/// Returns the complete serialized OpenAI Responses size for one compactor request.
-fn runtime_openai_compaction_request_bytes(
-    request: &ModelRequest,
-    stream: Option<bool>,
-) -> Result<Option<usize>> {
-    stream
-        .map(|stream| {
-            mez_agent::openai_responses_request_body_with_stream(request, stream)
-                .map(|body| body.len())
-                .map_err(MezError::from)
-        })
-        .transpose()
-}
-
 /// Derives a conservative input allowance from configured provider limits.
 ///
 /// Explicit input caps already account for provider output reservations. When
 /// only a context window is configured, reserve the profile's output cap first.
 /// Keep five percent headroom for deterministic-estimator and provider tokenizer
 /// drift. `Some(0)` deliberately means that no request can safely fit.
+#[cfg(test)]
 pub(super) fn runtime_compaction_safe_input_limit(
     max_input_tokens: Option<usize>,
     context_window_tokens: Option<usize>,
@@ -1411,321 +1009,9 @@ pub(super) fn runtime_compaction_safe_input_limit(
     Some(configured_limit.saturating_sub(headroom))
 }
 
-/// Replaces only the temporary manual-compactor source, keeping its system and
-/// developer instructions and the frozen durable selection unchanged.
-fn runtime_rebuild_conversation_compaction_request(
-    task: &mut RuntimeAgentCompactionTask,
-    source: String,
-) -> Result<()> {
-    let mut messages = task.request.messages.iter().cloned().collect::<Vec<_>>();
-    let last = messages.last_mut().ok_or_else(|| {
-        MezError::invalid_state("conversation compactor request has no source message")
-    })?;
-    last.content = source.clone();
-    task.request.messages = messages.into();
-    let chunks = task.conversation_chunks.as_mut().ok_or_else(|| {
-        MezError::invalid_state("conversation compactor temporary source is unavailable")
-    })?;
-    chunks.current = source;
-    Ok(())
-}
-
-/// Splits a redacted temporary source at a UTF-8 boundary; no durable rows are
-/// moved into the retained tail, and an irreducible envelope fails visibly.
-fn runtime_split_conversation_compaction_source(source: &str) -> Option<(String, String)> {
-    let midpoint = source.len() / 2;
-    let split_at = source
-        .char_indices()
-        .map(|(index, _)| index)
-        .find(|index| *index >= midpoint)?;
-    (split_at > 0 && split_at < source.len()).then(|| {
-        (
-            source[..split_at].to_string(),
-            source[split_at..].to_string(),
-        )
-    })
-}
-
-/// Admit the first synthesis round, then require every later round to shrink
-/// its preceding synthesis source; an empty candidate never makes progress.
-fn runtime_require_smaller_synthesis(previous: Option<usize>, candidate: usize) -> Result<()> {
-    if candidate == 0 || previous.is_some_and(|bytes| candidate >= bytes) {
-        return Err(MezError::invalid_state(
-            "conversation compactor synthesis did not make progress",
-        ));
-    }
-    Ok(())
-}
-
-/// Starts bounded recursive manual work only after freezing and redacting the
-/// original source in the already prepared compactor request.
-fn runtime_prepare_conversation_compaction_chunks(
-    task: &mut RuntimeAgentCompactionTask,
-) -> Result<()> {
-    if task.conversation_chunks.is_none() {
-        let current = task
-            .request
-            .messages
-            .last()
-            .ok_or_else(|| {
-                MezError::invalid_state("conversation compactor request has no source message")
-            })?
-            .content
-            .clone();
-        task.conversation_chunks = Some(RuntimeConversationCompactionChunks {
-            current,
-            pending: Vec::new(),
-            summaries: Vec::new(),
-            synthesis_source_bytes: None,
-            failures: 0,
-            completed: 0,
-        });
-    }
-    Ok(())
-}
-
-/// Rebuilds one active-turn compactor request from temporary source blocks.
-fn runtime_rebuild_active_turn_compaction_request(
-    task: &mut RuntimeAgentCompactionTask,
-    blocks: Vec<ContextBlock>,
-) -> Result<()> {
-    let RuntimeAgentCompactionTarget::ActiveTurn {
-        plan,
-        current_blocks,
-        final_request_retry,
-        ..
-    } = &mut task.target
-    else {
-        return Err(MezError::invalid_state(
-            "active-turn compaction request rebuild requires an active-turn target",
-        ));
-    };
-    let blocks = runtime_redact_compaction_blocks(&blocks);
-    task.summarized_entries = blocks.len();
-    let correction_guidance = task
-        .request
-        .messages
-        .iter()
-        .filter(|message| {
-            message.role == ModelMessageRole::Developer
-                && message.source == ContextSourceKind::Configuration
-                && message.content.starts_with("[private summary correction]")
-        })
-        .cloned()
-        .collect::<Vec<_>>();
-    task.request = runtime_model_compaction_request_for_blocks(
-        &task.model_profile,
-        &task.pane_id,
-        &task.conversation_id,
-        &blocks,
-        task.request.allowed_actions.clone(),
-    )?;
-    let effective = final_request_retry.summary_ceiling;
-    task.summary_correction.effective_input_tokens = effective;
-    let (ceiling, tokens) = if let Some(target) = task.summary_correction.guidance_target {
-        (target, task.summary_correction.guidance_is_input_tokens)
-    } else if let Some(target) = effective {
-        (target, true)
-    } else {
-        (plan.summary_budget_words(), plan.planning_budget().1)
-    };
-    // A legacy no-work advisory has no output allowance. Canonical selection
-    // remains independently eligible, including during private backoff and
-    // synthesis; preserve the initial request's absence of a zero-word order.
-    if ceiling > 0 {
-        summary_correction::communicate_summary_target(&mut task.request, ceiling, tokens);
-    }
-    let mut messages = task.request.messages.iter().cloned().collect::<Vec<_>>();
-    for message in correction_guidance {
-        messages.insert(2.min(messages.len()), message);
-    }
-    task.request.messages = messages.into();
-    *current_blocks = blocks;
-    Ok(())
-}
-
-/// Communicates the semantic word allowance without changing provider output
-/// allocation. Words, estimated input tokens and provider generation tokens are
-/// different units. Canonical adapters alone determine supported wire controls;
-/// OpenAI deliberately transmits no max_output_tokens in any request.
-fn runtime_limit_compaction_summary_output(
-    request: &mut ModelRequest,
-    summary_budget_words: usize,
-) {
-    summary_correction::communicate_summary_target(request, summary_budget_words, false);
-}
-
-/// Renders the frozen plan's read-only projection or private inference chunks.
-/// Reimporting those blocks would reactivate historical user roots and invent
-/// lifecycle for native fragments. Source selection and publication retain the
-/// original typed owner independently of this auxiliary text envelope.
-pub(super) fn runtime_model_compaction_request_for_blocks(
-    profile: &ModelProfile,
-    pane_id: &str,
-    conversation_id: &str,
-    blocks: &[ContextBlock],
-    allowed_actions: AllowedActionSet,
-) -> Result<ModelRequest> {
-    let source_text = runtime_model_compaction_source_for_blocks(pane_id, conversation_id, blocks)?;
-    Ok(runtime_model_compaction_request_from_source(
-        profile,
-        pane_id,
-        conversation_id,
-        source_text,
-        allowed_actions,
-    ))
-}
-
-/// Splits only temporary compactor input while leaving the atomic source plan unchanged.
-fn runtime_split_compaction_blocks(
-    blocks: &[ContextBlock],
-) -> Option<(Vec<ContextBlock>, Vec<ContextBlock>)> {
-    if blocks.len() > 1 {
-        let split_at = blocks.len().div_ceil(2);
-        return Some((blocks[..split_at].to_vec(), blocks[split_at..].to_vec()));
-    }
-    let block = blocks.first()?;
-    if block.content.len() < 2 {
-        return None;
-    }
-    let midpoint = block.content.len() / 2;
-    let split_at = block
-        .content
-        .char_indices()
-        .map(|(index, _)| index)
-        .find(|index| *index >= midpoint)
-        .unwrap_or(block.content.len());
-    if split_at == 0 || split_at >= block.content.len() {
-        return None;
-    }
-    let mut first = block.clone();
-    first.content = block.content[..split_at].to_string();
-    let mut second = block.clone();
-    second.content = block.content[split_at..].to_string();
-    Some((vec![first], vec![second]))
-}
-
-/// Converts completed temporary summaries into one new synthesis round.
-fn runtime_compaction_summary_blocks(summaries: Vec<String>) -> Vec<ContextBlock> {
-    summaries
-        .into_iter()
-        .enumerate()
-        .map(|(index, summary)| {
-            ContextBlock::reference_event(
-                ContextSourceKind::Memory,
-                format!("recursive compaction summary {}", index.saturating_add(1)),
-                summary,
-            )
-        })
-        .collect()
-}
-
-/// Formats source as reference text without constructing an ordinary context.
-/// Original labels, roles and redaction are unchanged; descriptive accounting
-/// and lifecycle authority remain outside this provider-visible projection.
-fn runtime_model_compaction_source_for_blocks(
-    pane_id: &str,
-    conversation_id: &str,
-    blocks: &[ContextBlock],
-) -> Result<String> {
-    if blocks
-        .iter()
-        .any(|block| block.placement != mez_agent::ContextPlacement::ConversationAppend)
-    {
-        return Err(MezError::invalid_state(
-            "compactor input must be selected chronological source",
-        ));
-    }
-    let mut lines = vec![
-        format!("Pane: {pane_id}"),
-        format!("Conversation: {conversation_id}"),
-        format!("Provider-bound context blocks supplied: {}", blocks.len()),
-    ];
-    for (index, block) in blocks.iter().enumerate() {
-        lines.push(format!(
-            "context_block={} source={} label={} content={}",
-            index,
-            runtime_context_source_kind_name(block.source),
-            json_escape(&block.label),
-            runtime_model_compaction_entry_content(&block.content)
-        ));
-    }
-    Ok(lines.join("\n"))
-}
-
-/// Returns a stable source label for context included in compaction input.
-pub(super) fn runtime_context_source_kind_name(source: ContextSourceKind) -> &'static str {
-    mez_agent::epoch_compaction::provider::source_kind_name(source)
-}
-
-/// Redacts one transcript entry before sending it for compaction while
-/// preserving its structural whitespace for model interpretation.
-pub(super) fn runtime_model_compaction_entry_content(content: &str) -> String {
-    mez_agent::epoch_compaction::provider::redact_content(content)
-}
-
-/// Creates temporary compactor source blocks whose content is redacted before
-/// request sizing or UTF-8-boundary splitting. The frozen replacement plan
-/// continues to own the original context and is applied only after synthesis.
-fn runtime_redact_compaction_blocks(blocks: &[ContextBlock]) -> Vec<ContextBlock> {
-    blocks
-        .iter()
-        .cloned()
-        .map(|mut block| {
-            block.content = runtime_model_compaction_entry_content(&block.content);
-            block
-        })
-        .collect()
-}
-
-/// Extracts the completed payload through the same local optional-frame decoder
-/// used before frozen-budget validation. Parser errors carry no response text.
-pub(super) fn runtime_model_compaction_summary_from_response(
-    response: &ModelResponse,
-    turn_id: &str,
-    agent_id: &str,
-) -> Result<String> {
-    summary_correction::completed_summary(response, turn_id, agent_id).map_err(|()| {
-        MezError::invalid_state("model compaction response contained a malformed summary frame")
-    })
-}
-
 #[cfg(test)]
 mod size_diagnostic_tests {
     use super::*;
-
-    /// A synthesis round must shrink the frozen source; equal, growing, and
-    /// empty candidates cannot cause another model request.
-    #[test]
-    fn manual_synthesis_requires_strict_source_reduction() {
-        assert!(runtime_require_smaller_synthesis(Some(100), 99).is_ok());
-        assert!(runtime_require_smaller_synthesis(Some(100), 100).is_err());
-        assert!(runtime_require_smaller_synthesis(Some(100), 101).is_err());
-        assert!(runtime_require_smaller_synthesis(Some(100), 0).is_err());
-        assert!(runtime_require_smaller_synthesis(None, 1).is_ok());
-    }
-
-    /// A single oversized source can be split repeatedly without cutting a
-    /// Unicode scalar or losing its final sentinel between temporary chunks.
-    #[test]
-    fn active_turn_chunk_split_preserves_unicode_and_tail() {
-        let source = format!("{}END_SENTINEL", "文🙂".repeat(1024));
-        let mut fragments = vec![ContextBlock::assistant_event("source", source.clone())];
-        for _ in 0..5 {
-            let first = fragments.remove(0);
-            let (left, right) = runtime_split_compaction_blocks(&[first]).unwrap();
-            fragments.insert(0, right.into_iter().next().unwrap());
-            fragments.insert(0, left.into_iter().next().unwrap());
-        }
-        assert_eq!(
-            fragments
-                .iter()
-                .map(|block| block.content.as_str())
-                .collect::<String>(),
-            source
-        );
-        assert!(fragments.last().unwrap().content.ends_with("END_SENTINEL"));
-    }
 
     /// Irreducible diagnostics report only estimated component sizes, never
     /// the protected instruction or recoverable source supplied by the user.

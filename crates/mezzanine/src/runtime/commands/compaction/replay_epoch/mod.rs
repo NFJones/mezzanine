@@ -12,6 +12,9 @@ use std::sync::Arc;
 
 mod adoption;
 mod manual;
+mod operation;
+pub(in crate::runtime::commands::compaction) use operation::WaveOutcome;
+#[cfg(test)]
 mod recovery;
 pub(in crate::runtime::commands::compaction) use manual::manual_replay_task;
 mod source;

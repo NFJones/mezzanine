@@ -129,14 +129,6 @@ async fn raw_replay_bootstrap_protected_first_source_queues_no_compactor() {
         let (fixture, mut service, conversation, turn, _) = fresh(ephemeral);
         let before = service.agent_turn_contexts()[&turn].clone();
         assert!(before.has_replay_owner());
-        let legacy =
-            mez_agent::context_compaction::plan_model_context_compaction_at_consumed_sequence(
-                &before,
-                16000,
-                1,
-                before.event_sequence_high_water_mark(),
-            )
-            .unwrap();
         let profile = service.agent_turn_model_profile(&turn).unwrap().clone();
         assert!(
             !service
@@ -147,7 +139,6 @@ async fn raw_replay_bootstrap_protected_first_source_queues_no_compactor() {
                     crate::runtime::RuntimeActiveTurnCompactionTrigger::ProviderContextLimit {
                         attempt: 1
                     },
-                    legacy
                 )
                 .unwrap()
         );
@@ -462,13 +453,6 @@ async fn first_saved_head_uses_actual_raw_producer(pending_append: bool) {
         .find(|event| event.block().content == "ACTIVE_RAW_TASK stays exact")
         .unwrap()
         .clone();
-    let legacy = mez_agent::context_compaction::plan_model_context_compaction_at_consumed_sequence(
-        context,
-        16000,
-        1,
-        context.event_sequence_high_water_mark(),
-    )
-    .unwrap();
     let profile = service.agent_turn_model_profile(&next).unwrap().clone();
     assert!(
         service
@@ -479,7 +463,6 @@ async fn first_saved_head_uses_actual_raw_producer(pending_append: bool) {
                 crate::runtime::RuntimeActiveTurnCompactionTrigger::ProviderContextLimit {
                     attempt: 1
                 },
-                legacy,
             )
             .unwrap()
     );
@@ -540,7 +523,7 @@ async fn first_saved_head_uses_actual_raw_producer(pending_append: bool) {
         .await;
     let dispatch = response.await.unwrap().unwrap().unwrap();
     assert!(dispatch.task.replay_source.is_some());
-    let input = &dispatch.task.request.messages.last().unwrap().content;
+    let input = crate::test_support::compaction_source::rendered_source(&dispatch.task).unwrap();
     assert!(input.contains("ORIGINAL_RAW_TASK"));
     assert!(!input.contains("ACTIVE_RAW_TASK"));
     let mut batch = RuntimeEventBatch::default();
@@ -548,16 +531,24 @@ async fn first_saved_head_uses_actual_raw_producer(pending_append: bool) {
         crate::runtime::AgentCompactionEvent::Completed {
             pane_id: "%1".into(),
             task_generation: generation,
-            response: Box::new(mez_agent::ModelResponse {
-                provider: "runtime-batch".into(),
-                model: "test".into(),
-                raw_text: "first raw task summarized".into(),
-                usage: Default::default(),
-                latest_request_usage: None,
-                quota_usage: Vec::new(),
-                action_batch: None,
-                provider_transcript_events: Vec::new(),
-            }),
+            response: Box::new(
+                crate::test_support::compaction_source::execute_wave(
+                    &actor.service,
+                    &dispatch.task,
+                    Ok(mez_agent::ModelResponse {
+                        provider: "runtime-batch".into(),
+                        model: "test".into(),
+                        raw_text: "first raw task summarized".into(),
+                        usage: Default::default(),
+                        latest_request_usage: None,
+                        quota_usage: Vec::new(),
+                        action_batch: None,
+                        provider_transcript_events: Vec::new(),
+                    }),
+                )
+                .0
+                .unwrap(),
+            ),
         },
     ));
     actor.apply_runtime_event_batch(batch).await.unwrap();
@@ -848,7 +839,8 @@ async fn raw_replay_bootstrap_manual_uses_owned_history_without_a_new_task() {
             .await;
         let dispatch = response.await.unwrap().unwrap().unwrap();
         assert!(dispatch.task.replay_source.is_some());
-        let input = &dispatch.task.request.messages.last().unwrap().content;
+        let input =
+            crate::test_support::compaction_source::rendered_source(&dispatch.task).unwrap();
         assert!(input.contains("original long task"));
         assert!(!input.contains("context compaction requested"));
         let mut batch = RuntimeEventBatch::default();
@@ -856,16 +848,24 @@ async fn raw_replay_bootstrap_manual_uses_owned_history_without_a_new_task() {
             crate::runtime::AgentCompactionEvent::Completed {
                 pane_id: "%1".into(),
                 task_generation: generation,
-                response: Box::new(mez_agent::ModelResponse {
-                    provider: "runtime-batch".into(),
-                    model: "test".into(),
-                    raw_text: "manual canonical head".into(),
-                    usage: Default::default(),
-                    latest_request_usage: None,
-                    quota_usage: Vec::new(),
-                    action_batch: None,
-                    provider_transcript_events: Vec::new(),
-                }),
+                response: Box::new(
+                    crate::test_support::compaction_source::execute_wave(
+                        &actor.service,
+                        &dispatch.task,
+                        Ok(mez_agent::ModelResponse {
+                            provider: "runtime-batch".into(),
+                            model: "test".into(),
+                            raw_text: "manual canonical head".into(),
+                            usage: Default::default(),
+                            latest_request_usage: None,
+                            quota_usage: Vec::new(),
+                            action_batch: None,
+                            provider_transcript_events: Vec::new(),
+                        }),
+                    )
+                    .0
+                    .unwrap(),
+                ),
             },
         ));
         actor.apply_runtime_event_batch(batch).await.unwrap();

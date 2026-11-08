@@ -841,18 +841,20 @@ async fn recovered_compaction_does_not_accelerate_transport_retry() {
     let (_root, mut actor, primary, generation) = pending_compaction_at_capacity();
     refuse_and_offer(&mut actor, generation);
     actor.drain_timer_side_effects(64).unwrap();
-    let _dispatch = claim(&mut actor, generation).await.unwrap().unwrap();
+    let dispatch = claim(&mut actor, generation).await.unwrap().unwrap();
+    let (result, _) = crate::test_support::compaction_source::execute_wave(
+        &actor.service,
+        &dispatch.task,
+        Err(MezError::new(
+            crate::error::MezErrorKind::Io,
+            "provider HTTP response read failed: unexpected EOF",
+        )),
+    );
     let transition = actor
         .service
-        .apply_agent_compaction_transition(crate::runtime::AgentCompactionEvent::Failed {
-            pane_id: "%1".into(),
-            task_generation: generation,
-            kind: "io".into(),
-            message: "provider HTTP response read failed: unexpected EOF".into(),
-            usage: Default::default(),
-            provider_failure_json: None,
-            provider_raw_text: None,
-        })
+        .apply_agent_compaction_transition(
+            crate::test_support::compaction_source::model_result_event("%1", generation, result),
+        )
         .unwrap();
     let retry = actor
         .service

@@ -379,12 +379,10 @@ fn runtime_manual_compaction_candidate_retains_native_execution_ownership() {
                 .count(),
             2
         );
-        let mut advisory = task.clone();
-        advisory.summary_correction.manual_words = Some(1);
         assert!(
             fixture
                 .service
-                .manual_compaction_candidate_context(&advisory, "two valid words")
+                .manual_compaction_candidate_context(&task, "two valid words")
                 .is_ok()
         );
         assert!(
@@ -562,7 +560,12 @@ fn runtime_manual_compaction_candidate_retains_native_execution_ownership() {
             .unwrap();
         assert_eq!(after.blocks(), candidate.blocks());
         let auxiliary = fixture.queue(worker);
-        let body = mez_agent::openai_responses_request_body(&auxiliary.request).unwrap();
+        let mut request = auxiliary.request.clone();
+        let mut messages = request.messages.iter().cloned().collect::<Vec<_>>();
+        messages.last_mut().unwrap().content =
+            crate::test_support::compaction_source::rendered_source(&auxiliary).unwrap();
+        request.messages = messages.into();
+        let body = mez_agent::openai_responses_request_body(&request).unwrap();
         assert!(body.contains("RAW_RETAINED_FACT"));
         assert!(
             !body.contains("call_retained"),
@@ -581,147 +584,44 @@ fn runtime_manual_compaction_candidate_retains_native_execution_ownership() {
     }
 }
 
-/// A complete candidate, rather than its advisory output target, decides the
-/// manual retry. Repeated oversize stops without another head; an independently
-/// fitting response publishes through the original worker and no ordinary turn.
+/// A complete manual final above the next ordinary request estimate publishes
+/// immediately on both inline and prepared command paths, preserving native tail.
 #[test]
-fn runtime_canonical_manual_candidate_requires_complete_size_progress() {
-    let large = "large-summary ".repeat(8_000);
+fn runtime_canonical_manual_candidate_accepts_usable_output_without_fit_retry() {
+    let large = format!("{}END", "large-summary ".repeat(8000));
     let mut calibration = CanonicalManualFixture::new(None, 90, true);
     let task = calibration.queue(false);
-    let small = calibration
-        .service
-        .manual_compaction_candidate_context(&task, "valid manual candidate")
-        .unwrap();
-    let (minimum, _, _) = calibration
-        .service
-        .manual_compaction_candidate_size_for_tests(&task, small)
-        .unwrap();
-    let big = calibration
+    let preview = calibration
         .service
         .manual_compaction_candidate_context(&task, &large)
         .unwrap();
     let (maximum, _, _) = calibration
         .service
-        .manual_compaction_candidate_size_for_tests(&task, big)
+        .manual_compaction_candidate_size_for_tests(&task, preview)
         .unwrap();
-    assert!(maximum > minimum + 1_000);
-    let cap = ((minimum + (maximum - minimum) / 2) * 20).div_ceil(19);
+    let cap = maximum.saturating_sub(1000);
     for worker in [false, true] {
-        for reduces in [false, true] {
-            let mut fixture = CanonicalManualFixture::new(Some(cap), 90, true);
-            let task = fixture.queue(worker);
-            let before = fixture
-                .store
-                .load_replay_epoch(&fixture.conversation, mez_agent::AgentContext::empty())
-                .unwrap()
-                .unwrap()
-                .0;
-            let small = fixture
-                .service
-                .manual_compaction_candidate_context(&task, "valid manual candidate")
-                .unwrap();
-            let (small_size, limit, _) = fixture
-                .service
-                .manual_compaction_candidate_size_for_tests(&task, small)
-                .unwrap();
-            let big = fixture
-                .service
-                .manual_compaction_candidate_context(&task, &large)
-                .unwrap();
-            let (big_size, _, _) = fixture
-                .service
-                .manual_compaction_candidate_size_for_tests(&task, big)
-                .unwrap();
-            assert!(small_size < limit && big_size > limit);
-            if reduces {
-                // Real output correction must remain visible across every
-                // complete-fit retry on this same original manual source.
-                complete_runtime_test_compaction(&mut fixture.service, "%1", "");
-                assert!(fixture.service.agent_is_compacting("%1"));
-            }
-            complete_runtime_test_compaction(&mut fixture.service, "%1", &large);
-            assert!(
-                fixture
-                    .service
-                    .take_replay_epoch_attempt_for_tests()
-                    .is_none()
-            );
-            assert_eq!(
-                fixture
-                    .store
-                    .load_replay_epoch(&fixture.conversation, mez_agent::AgentContext::empty())
-                    .unwrap()
-                    .unwrap()
-                    .0,
-                before
-            );
-            let retry = fixture
-                .service
-                .pending_agent_compaction_task_for_tests("%1")
-                .unwrap();
-            assert!(
-                retry
-                    .manual_final_retry
-                    .is_some_and(|(_, count)| count == 1)
-            );
-            assert!(fixture.service.pending_agent_provider_tasks().is_empty());
-            if reduces {
-                for (index, words) in [7_000, 6_000].into_iter().enumerate() {
-                    complete_runtime_test_compaction(
-                        &mut fixture.service,
-                        "%1",
-                        &"large-summary ".repeat(words),
-                    );
-                    assert!(
-                        fixture
-                            .service
-                            .take_replay_epoch_attempt_for_tests()
-                            .is_none()
-                    );
-                    let retry = fixture
-                        .service
-                        .pending_agent_compaction_task_for_tests("%1")
-                        .unwrap();
-                    assert_eq!(retry.manual_final_retry.unwrap().1, index as u32 + 2);
-                    assert_eq!(retry.summary_correction.corrections_admitted, 1);
-                    assert!(std::sync::Arc::ptr_eq(
-                        retry.replay_source.as_ref().unwrap(),
-                        task.replay_source.as_ref().unwrap()
-                    ));
-                }
-                fixture.publish("valid manual candidate");
-                let (_, cold) = fixture
-                    .store
-                    .load_replay_epoch(&fixture.conversation, mez_agent::AgentContext::empty())
-                    .unwrap()
-                    .unwrap();
-                assert_eq!(
-                    cold.context().chronology()[0].block().content,
-                    "valid manual candidate"
-                );
-            } else {
-                complete_runtime_test_compaction(&mut fixture.service, "%1", &large);
-                assert!(!fixture.service.agent_is_compacting("%1"));
-                assert!(
-                    fixture
-                        .service
-                        .take_replay_epoch_attempt_for_tests()
-                        .is_none()
-                );
-                assert_eq!(
-                    fixture
-                        .store
-                        .load_replay_epoch(&fixture.conversation, mez_agent::AgentContext::empty())
-                        .unwrap()
-                        .unwrap()
-                        .0,
-                    before
-                );
-            }
-            assert!(fixture.service.agent_turn_ledger().turns().is_empty());
-            assert!(fixture.service.pending_agent_provider_tasks().is_empty());
-        }
+        let mut fixture = CanonicalManualFixture::new(Some(cap), 90, true);
+        let task = fixture.queue(worker);
+        let preview = fixture
+            .service
+            .manual_compaction_candidate_context(&task, &large)
+            .unwrap();
+        let (estimate, limit, _) = fixture
+            .service
+            .manual_compaction_candidate_size_for_tests(&task, preview)
+            .unwrap();
+        assert!(estimate > limit);
+        fixture.publish(&large);
+        let (_, cold) = fixture
+            .store
+            .load_replay_epoch(&fixture.conversation, mez_agent::AgentContext::empty())
+            .unwrap()
+            .unwrap();
+        assert_eq!(cold.context().chronology()[0].block().content, large);
+        assert!(cold.context().execution_group_is_pending(&fixture.group));
+        assert!(fixture.service.agent_turn_ledger().turns().is_empty());
+        assert!(fixture.service.pending_agent_provider_tasks().is_empty());
     }
 }
 

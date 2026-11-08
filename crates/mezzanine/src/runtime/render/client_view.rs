@@ -1244,12 +1244,13 @@ impl RuntimeSessionService {
         if let Some(operation) = self.runtime_compaction_status(pane_id) {
             let elapsed = current_unix_seconds().saturating_sub(operation.started_at);
             return Some(format!(
-                "compacting ({}{} • {} • esc to interrupt)",
+                "compacting ({}{} • {} calls • {} • esc to interrupt)",
                 operation.phase,
                 operation
                     .pause
                     .map(|pause| format!(" • {pause}"))
                     .unwrap_or_default(),
+                operation.model_calls,
                 runtime_agent_turn_duration_display(elapsed)
             ));
         }

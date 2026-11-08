@@ -1,7 +1,6 @@
 //! Rejected completed summaries remain private while exact auxiliary work repairs them.
 
 use super::*;
-use crate::runtime::RuntimeAgentCompactionTarget;
 
 /// Canonical raw-text auxiliary responses may contain dense Unicode JSON or an
 /// optional final-say frame. Measure and publish the payload, never its wrapper;
@@ -45,14 +44,10 @@ fn runtime_compaction_raw_and_framed_payloads_preserve_summary_identity() {
         ),
     ] {
         let (mut service, store, turn) = replay_observed::queued();
-        let task = service.take_pending_agent_compaction_task("%1").unwrap();
-        service.claim_agent_compaction_task_state("%1", task);
         let mut response = runtime_test_compaction_response("");
         response.action_batch = None;
         response.raw_text = raw.clone();
-        service
-            .apply_agent_compaction_completed_event("%1", response)
-            .unwrap();
+        run_runtime_test_compaction_wave(&mut service, "%1", Ok(response));
         replay_observed::adopt(&mut service, &turn);
         assert!(!service.agent_is_compacting("%1"));
         assert!(service.agent_provider_task_is_pending(&turn));
@@ -80,169 +75,105 @@ fn runtime_compaction_raw_malformed_frames_exhaust_finitely() {
             .unwrap()
             .conversation_id
             .clone();
-        for attempt in 0..3 {
-            let task = service.take_pending_agent_compaction_task("%1").unwrap();
-            assert_eq!(task.summary_correction.corrections_admitted, attempt);
-            service.claim_agent_compaction_task_state("%1", task);
+        for _ in 0..3 {
             let mut response = runtime_test_compaction_response("");
             response.action_batch = None;
             response.raw_text = raw.to_string();
-            service
-                .apply_agent_compaction_completed_event("%1", response)
-                .unwrap();
+            run_runtime_test_compaction_wave(&mut service, "%1", Ok(response));
             assert!(store.compaction_epoch(&conversation).unwrap().is_none());
         }
         assert!(!service.agent_is_compacting("%1"));
         let failure = persisted_compaction_failure(&service, &store, &conversation, &turn);
-        assert!(failure.contains("disposition=EmptyOrMalformedExhausted"));
-        assert!(failure.contains("corrections_admitted=2"));
+        assert!(failure.contains("invalid-output repair allowance exhausted"));
+        assert!(failure.contains("phase=validating"));
+        assert!(failure.contains("model_calls=3"));
+        assert!(failure.contains("serial_depth=1"));
         assert!(!failure.contains(raw));
     }
 }
 
-/// Dense one-word output exceeds the byte bound and records estimated token
-/// progress across real corrections. Guidance keeps its token unit and original
-/// provider allocation; final bounded output publishes through the same source.
+/// A real decoded-summary memory overflow fails once, preserving original source.
+/// Resource limits do not create a semantic length-reduction model loop.
 #[test]
-fn runtime_compaction_summary_correction_token_budget_requires_size_progress() {
+fn runtime_compaction_summary_byte_overflow_fails_without_regeneration() {
     let (mut service, store, turn) = replay_observed::queued();
-    let original = service
-        .pending_agent_compaction_task_for_tests("%1")
+    let conversation = service
+        .agent_turn_ledger()
+        .turn(&turn)
         .unwrap()
+        .conversation_id
         .clone();
-    let mut source_generation = None;
-    let mut previous_cost = usize::MAX;
-    let mut previous_bytes = usize::MAX;
-    for extra in [16, 8] {
-        // Real byte overflow supplies dense one-word token evidence; an
-        // advisory word/token target cannot reject canonical output by itself.
-        complete_runtime_test_compaction(&mut service, "%1", &"界".repeat(128 * 1024 / 3 + extra));
-        let retry = service
-            .pending_agent_compaction_task_for_tests("%1")
-            .unwrap();
-        let rejected = retry.summary_correction.last_rejection.unwrap();
-        assert!(rejected.estimated_tokens);
-        assert!(rejected.cost < previous_cost && rejected.bytes < previous_bytes);
-        previous_cost = rejected.cost;
-        previous_bytes = rejected.bytes;
-        let generation = retry.summary_correction.source_generation.unwrap();
-        assert_eq!(*source_generation.get_or_insert(generation), generation);
-        assert_eq!(
-            retry.request.max_output_tokens,
-            original.request.max_output_tokens
-        );
-        assert_eq!(retry.compaction_epoch, original.compaction_epoch);
-        assert!(
-            retry
-                .request
-                .messages
-                .iter()
-                .any(|m| m.content.contains("estimated input tokens"))
-        );
-        assert!(
-            store
-                .load_replay_epoch(&original.conversation_id, mez_agent::AgentContext::empty())
-                .unwrap()
-                .is_none()
-        );
-        assert!(!service.agent_provider_task_is_pending(&turn));
-    }
-    complete_runtime_test_compaction(&mut service, "%1", "accepted token-progress summary");
-    replay_observed::adopt(&mut service, &turn);
-    replay_observed::assert_head(&service, &store, &turn, "accepted token-progress summary");
-}
-
-/// Empty/malformed output consumes its separate finite budget but cannot erase
-/// the last size-bearing predecessor. Initial blank -> oversize and oversize ->
-/// blank -> improving oversize both remain eligible on the same frozen source.
-#[test]
-fn runtime_compaction_mixed_summary_defects_preserve_measured_progress() {
-    for malformed in [false, true] {
-        let (mut service, store, turn) = replay_observed::queued();
-        let task = service
-            .pending_agent_compaction_task_for_tests("%1")
-            .unwrap()
-            .clone();
-        for step in 0..4 {
-            if step % 2 == 0 && malformed {
-                let pending = service.take_pending_agent_compaction_task("%1").unwrap();
-                service.claim_agent_compaction_task_state("%1", pending);
-                let mut response = runtime_test_compaction_response("not semantic size evidence");
-                response.action_batch = Some(mez_agent::MaapBatch {
-                    rationale: "malformed fixture".into(),
-                    actions: vec![],
-                });
-                service
-                    .apply_agent_compaction_completed_event("%1", response)
-                    .unwrap();
-            } else {
-                let output = if step % 2 == 0 {
-                    String::new()
-                } else {
-                    // Byte overflow is a real semantic rejection for canonical
-                    // output; the advisory word target is not an acceptance cap.
-                    "界".repeat(128 * 1024 / 3 + 4 - step)
-                };
-                complete_runtime_test_compaction(&mut service, "%1", &output);
-            }
-            assert!(
-                service
-                    .pending_agent_compaction_task_for_tests("%1")
-                    .is_some(),
-                "step={step} malformed={malformed}"
-            );
-            assert!(
-                store
-                    .compaction_epoch(&task.conversation_id)
-                    .unwrap()
-                    .is_none()
-            );
-        }
-        complete_runtime_test_compaction(&mut service, "%1", "short accepted mixed-defect summary");
-        replay_observed::adopt(&mut service, &turn);
-        replay_observed::assert_head(
-            &service,
-            &store,
-            &turn,
-            "short accepted mixed-defect summary",
-        );
-        assert!(!service.agent_is_compacting("%1"));
-        assert!(service.agent_provider_task_is_pending(&turn));
-    }
-}
-
-/// Correction history survives a subsequent nonretryable provider failure and
-/// automatic terminal wrapping. It is auxiliary evidence, not synthetic MAAP
-/// attribution, and no rejected summary or partial epoch becomes authoritative.
-#[test]
-fn runtime_compaction_provider_failure_preserves_correction_provenance() {
-    let (mut service, store, turn) = replay_observed::queued();
-    complete_runtime_test_compaction(&mut service, "%1", "");
-    let mut task = service.take_pending_agent_compaction_task("%1").unwrap();
-    task.compaction_request_shape = Some((
-        mez_agent::ProviderApiCompatibility::OpenAiResponses,
-        Default::default(),
-        false,
-    ));
-    let conversation = task.conversation_id.clone();
-    service.claim_agent_compaction_task_state("%1", task);
-    assert!(
-        service
-            .apply_agent_compaction_failed_event(
-                "%1",
-                "forbidden",
-                "synthetic provider refusal",
-                None
-            )
-            .unwrap()
+    let requests = run_runtime_test_compaction_wave(
+        &mut service,
+        "%1",
+        Ok(runtime_test_compaction_response(
+            &"界".repeat(128 * 1024 / 3 + 1),
+        )),
     );
+    assert_eq!(requests.len(), 1);
     assert!(!service.agent_is_compacting("%1"));
+    assert!(service.pending_agent_compaction_tasks().is_empty());
+    assert!(service.take_replay_epoch_attempt_for_tests().is_none());
     assert!(store.compaction_epoch(&conversation).unwrap().is_none());
-    let failure = persisted_compaction_failure(&service, &store, &conversation, &turn);
-    assert!(failure.contains("phase=ProviderInference"));
-    assert!(failure.contains("corrections_admitted=1"));
-    assert!(failure.contains("disposition=ProviderRejected"));
-    assert!(failure.contains("openai_max_output_tokens_transmitted=Some(false)"));
+    assert_eq!(
+        service.agent_turn_ledger().turn(&turn).unwrap().state,
+        AgentTurnState::Failed
+    );
+}
+
+/// Invalid-output repair cannot turn a later resource overflow into another
+/// arbitrary shortening attempt; the original epoch remains authoritative.
+#[test]
+fn runtime_compaction_mixed_defects_do_not_regenerate_resource_overflow() {
+    for first in ["", "```mezzanine-action-json\n{}\n```"] {
+        let (mut service, store, turn) = replay_observed::queued();
+        let conversation = service
+            .agent_turn_ledger()
+            .turn(&turn)
+            .unwrap()
+            .conversation_id
+            .clone();
+        complete_runtime_test_compaction(&mut service, "%1", first);
+        assert!(
+            service
+                .pending_agent_compaction_task_for_tests("%1")
+                .is_some()
+        );
+        complete_runtime_test_compaction(&mut service, "%1", &"界".repeat(128 * 1024 / 3 + 1));
+        assert!(!service.agent_is_compacting("%1"));
+        assert!(service.take_replay_epoch_attempt_for_tests().is_none());
+        assert!(store.compaction_epoch(&conversation).unwrap().is_none());
+    }
+}
+
+/// A nonretryable provider failure after private repair retires the exact
+/// operation, without accepting rejected output or waking ordinary inference.
+#[test]
+fn runtime_compaction_provider_failure_after_repair_preserves_original_epoch() {
+    let (mut service, store, turn) = replay_observed::queued();
+    let conversation = service
+        .agent_turn_ledger()
+        .turn(&turn)
+        .unwrap()
+        .conversation_id
+        .clone();
+    complete_runtime_test_compaction(&mut service, "%1", "");
+    let requests = run_runtime_test_compaction_wave(
+        &mut service,
+        "%1",
+        Err(MezError::new(
+            crate::error::MezErrorKind::Forbidden,
+            "synthetic provider refusal",
+        )),
+    );
+    assert_eq!(requests.len(), 1);
+    assert!(!service.agent_is_compacting("%1"));
+    assert!(service.pending_agent_provider_tasks().is_empty());
+    assert!(store.compaction_epoch(&conversation).unwrap().is_none());
+    assert_eq!(
+        service.agent_turn_ledger().turn(&turn).unwrap().state,
+        AgentTurnState::Failed
+    );
 }
 
 /// Manual compaction uses the same bounded completed-output repair and frozen
@@ -291,7 +222,6 @@ fn qualify_manual_summary_correction(mutate: bool, raw: Option<(&str, &str)>, re
         &original,
         retry.replay_source.as_ref().unwrap()
     ));
-    assert_eq!(retry.summary_correction.corrections_admitted, 1);
     assert!(
         store
             .compaction_epoch("manual-correction")
@@ -325,14 +255,10 @@ fn qualify_manual_summary_correction(mutate: bool, raw: Option<(&str, &str)>, re
         None
     };
     let expected = if let Some((raw, expected)) = raw {
-        let task = service.take_pending_agent_compaction_task("%1").unwrap();
-        service.claim_agent_compaction_task_state("%1", task);
         let mut response = runtime_test_compaction_response("");
         response.action_batch = None;
         response.raw_text = raw.to_string();
-        service
-            .apply_agent_compaction_completed_event("%1", response)
-            .unwrap();
+        run_runtime_test_compaction_wave(&mut service, "%1", Ok(response));
         expected
     } else {
         complete_runtime_test_compaction(&mut service, "%1", "short accepted manual summary");
@@ -438,173 +364,99 @@ fn runtime_compaction_summary_correction_respects_human_pause_and_stop() {
     service.terminate_all_pane_processes().unwrap();
 }
 
-/// Context rejection during a correction splits only temporary input. The
-/// fresh request must retain the advisory target/unit and correction
-/// guidance, then complete frozen chunks and synthesis without ordinary replay.
+/// An actual input rejection during output repair repacks the same frozen
+/// source. It never changes profile output controls or publication ownership.
 #[test]
-fn runtime_compaction_summary_correction_preserves_ceiling_after_context_split() {
+fn runtime_compaction_output_repair_input_rejection_preserves_frozen_source() {
     let (mut service, store, turn) = replay_observed::queued();
-    complete_runtime_test_compaction(&mut service, "%1", &"too big ".repeat(50_000));
-    let mut task = service.take_pending_agent_compaction_task("%1").unwrap();
-    let allocation = task.request.max_output_tokens;
-    let guidance = task.summary_correction.guidance_target;
-    let epoch = task.compaction_epoch;
-    let conversation = task.conversation_id.clone();
-    task.compaction_request_shape = Some((
-        mez_agent::ProviderApiCompatibility::OpenAiResponses,
-        Default::default(),
-        false,
-    ));
-    service.claim_agent_compaction_task_state("%1", task);
-    assert!(
-        service
-            .apply_agent_compaction_failed_event(
-                "%1",
-                "invalid_state",
-                "context length exceeded",
-                Some(r#"{"error":{"code":"context_length_exceeded"}}"#)
-            )
-            .unwrap()
-    );
-    let split = service
-        .pending_agent_compaction_task_for_tests("%1")
-        .unwrap();
-    assert_eq!(split.request.max_output_tokens, allocation);
-    assert_eq!(split.summary_correction.guidance_target, guidance);
-    assert_eq!(split.compaction_epoch, epoch);
-    assert!(
-        split
-            .request
-            .messages
-            .iter()
-            .any(|message| message.content.starts_with("[private summary correction]"))
-    );
-    assert!(store.compaction_epoch(&conversation).unwrap().is_none());
-    let mut completed_summaries = 0;
-    for _ in 0..8 {
-        if service
-            .pending_agent_compaction_task_for_tests("%1")
-            .is_none()
-        {
-            break;
-        }
-        complete_runtime_test_compaction(&mut service, "%1", "bounded split summary");
-        completed_summaries += 1;
-    }
-    assert!(
-        completed_summaries >= 2,
-        "split input must complete multiple auxiliary responses"
-    );
-    replay_observed::adopt(&mut service, &turn);
-    replay_observed::assert_head(&service, &store, &turn, "bounded split summary");
-    assert!(!service.agent_is_compacting("%1"));
-    assert!(service.agent_provider_task_is_pending(&turn));
-}
-
-/// Invalid later chunks preserve earlier accepted summaries and pending input;
-/// invalid synthesis repeats the exact private synthesis request rather than
-/// re-staging its rejected text. A valid next response advances finite source.
-#[test]
-fn runtime_compaction_invalid_chunk_preserves_accepted_staging_and_synthesis() {
-    let (mut service, store, turn) = replay_observed::queued();
-    let mut task = service.take_pending_agent_compaction_task("%1").unwrap();
-    let conversation = task.conversation_id.clone();
-    task.compaction_request_shape = Some((
-        mez_agent::ProviderApiCompatibility::OpenAiResponses,
-        Default::default(),
-        false,
-    ));
-    service.claim_agent_compaction_task_state("%1", task);
-    assert!(
-        service
-            .apply_agent_compaction_failed_event(
-                "%1",
-                "invalid_state",
-                "context length exceeded",
-                Some(r#"{"error":{"code":"context_length_exceeded"}}"#)
-            )
-            .unwrap()
-    );
-    // Accept a genuine first chunk before rejecting the next issued chunk.
-    // No completed count or accepted summary is assigned by the fixture.
-    complete_runtime_test_compaction(&mut service, "%1", "accepted earlier chunk");
-    let before = service
+    let original = service
         .pending_agent_compaction_task_for_tests("%1")
         .unwrap()
         .clone();
-    let RuntimeAgentCompactionTarget::ActiveTurn {
-        completed_summaries: accepted,
-        pending_blocks: pending,
-        current_blocks: current,
-        completed_responses: count,
-        ..
-    } = &before.target
-    else {
-        panic!("active turn");
-    };
-    assert_eq!(accepted, &["accepted earlier chunk"]);
     complete_runtime_test_compaction(&mut service, "%1", "");
+    let rejected = run_runtime_test_compaction_wave(
+        &mut service,
+        "%1",
+        Err(MezError::invalid_state("context length exceeded")
+            .with_provider_failure_json(r#"{"error":{"code":"context_length_exceeded"}}"#)),
+    );
+    assert_eq!(rejected.len(), 1);
     let retry = service
         .pending_agent_compaction_task_for_tests("%1")
         .unwrap();
-    let RuntimeAgentCompactionTarget::ActiveTurn {
-        completed_summaries,
-        pending_blocks,
-        current_blocks,
-        completed_responses,
-        ..
-    } = &retry.target
-    else {
-        panic!("active turn");
-    };
-    assert_eq!(completed_summaries, accepted);
-    assert_eq!(pending_blocks, pending);
-    assert_eq!(current_blocks, current);
-    assert_eq!(completed_responses, count);
-    for _ in 0..8 {
-        let next = service
-            .pending_agent_compaction_task_for_tests("%1")
-            .unwrap();
-        if matches!(
-            &next.target,
-            RuntimeAgentCompactionTarget::ActiveTurn {
-                synthesis_source_bytes: Some(_),
-                ..
-            }
-        ) {
-            break;
-        }
-        complete_runtime_test_compaction(&mut service, "%1", "accepted later chunk");
-    }
-    let synthesis = service
-        .pending_agent_compaction_task_for_tests("%1")
-        .unwrap()
-        .clone();
-    assert!(matches!(
-        &synthesis.target,
-        RuntimeAgentCompactionTarget::ActiveTurn {
-            synthesis_source_bytes: Some(_),
-            ..
-        }
-    ));
-    let input = &synthesis.request.messages.last().unwrap().content;
-    assert!(input.contains("accepted earlier chunk") && input.contains("accepted later chunk"));
-    complete_runtime_test_compaction(&mut service, "%1", "");
-    let correction = service
-        .pending_agent_compaction_task_for_tests("%1")
-        .unwrap();
     assert_eq!(
-        correction.request.messages.last(),
-        synthesis.request.messages.last()
+        retry.request.max_output_tokens,
+        original.request.max_output_tokens
     );
+    assert_eq!(retry.compaction_epoch, original.compaction_epoch);
+    assert!(std::sync::Arc::ptr_eq(
+        retry.replay_source.as_ref().unwrap(),
+        original.replay_source.as_ref().unwrap()
+    ));
     assert!(
         store
-            .load_replay_epoch(&conversation, mez_agent::AgentContext::empty())
+            .compaction_epoch(&original.conversation_id)
             .unwrap()
             .is_none()
     );
-    assert!(!service.agent_provider_task_is_pending(&turn));
-    complete_runtime_test_compaction(&mut service, "%1", "accepted final synthesis");
+    for _ in 0..8 {
+        if service.pending_agent_compaction_tasks().is_empty() {
+            break;
+        }
+        complete_runtime_test_compaction(&mut service, "%1", "bounded split summary");
+    }
+    replay_observed::adopt(&mut service, &turn);
+    replay_observed::assert_head(&service, &store, &turn, "bounded split summary");
+}
+
+/// Invalid synthesis retries the same private material while accepted raw
+/// siblings remain represented. No original source is regenerated for repair.
+#[test]
+fn runtime_compaction_invalid_chunk_preserves_accepted_staging_and_synthesis() {
+    let (mut service, store, turn) = replay_observed::queued();
+    let conversation = service
+        .agent_turn_ledger()
+        .turn(&turn)
+        .unwrap()
+        .conversation_id
+        .clone();
+    run_runtime_test_compaction_wave(
+        &mut service,
+        "%1",
+        Err(MezError::invalid_state("context length exceeded")
+            .with_provider_failure_json(r#"{"error":{"code":"context_length_exceeded"}}"#)),
+    );
+    let raw = run_runtime_test_compaction_wave(
+        &mut service,
+        "%1",
+        Ok(runtime_test_compaction_response(
+            "accepted private material",
+        )),
+    );
+    assert!(!raw.is_empty(), "genuine rejected input must repack");
+    assert!(service.take_replay_epoch_attempt_for_tests().is_none());
+    let invalid = run_runtime_test_compaction_wave(
+        &mut service,
+        "%1",
+        Ok(runtime_test_compaction_response("")),
+    );
+    assert_eq!(invalid.len(), 1);
+    assert!(
+        invalid[0]
+            .messages
+            .last()
+            .unwrap()
+            .content
+            .contains("accepted private material")
+    );
+    assert!(store.compaction_epoch(&conversation).unwrap().is_none());
+    let repaired = run_runtime_test_compaction_wave(
+        &mut service,
+        "%1",
+        Ok(runtime_test_compaction_response("accepted final synthesis")),
+    );
+    assert_eq!(repaired.len(), 1);
+    assert_eq!(invalid[0].messages.last(), repaired[0].messages.last());
     replay_observed::adopt(&mut service, &turn);
     replay_observed::assert_head(&service, &store, &turn, "accepted final synthesis");
 }
@@ -621,18 +473,12 @@ fn runtime_compaction_malformed_completed_batch_is_private_and_bounded() {
         .conversation_id
         .clone();
     for attempt in 0..3 {
-        let task = service.take_pending_agent_compaction_task("%1").unwrap();
-        service.claim_agent_compaction_task_state("%1", task);
         let mut response = runtime_test_compaction_response("must not use malformed raw fallback");
         response.action_batch = Some(mez_agent::MaapBatch {
             rationale: "malformed fixture".into(),
             actions: vec![],
         });
-        assert!(
-            service
-                .apply_agent_compaction_completed_event("%1", response)
-                .unwrap()
-        );
+        run_runtime_test_compaction_wave(&mut service, "%1", Ok(response));
         assert_eq!(service.agent_is_compacting("%1"), attempt < 2);
         assert!(store.compaction_epoch(&conversation).unwrap().is_none());
     }
@@ -666,7 +512,7 @@ fn runtime_compaction_summary_correction_exhausts_without_publication() {
             // bounded payload size to establish a rejected complete summary.
             "x ".repeat(70_000)
         };
-        let attempts = if empty { 3 } else { 2 };
+        let attempts = if empty { 3 } else { 1 };
         for index in 0..attempts {
             complete_runtime_test_compaction(&mut service, "%1", &invalid);
             assert!(
@@ -685,72 +531,22 @@ fn runtime_compaction_summary_correction_exhausts_without_publication() {
     }
 }
 
-/// A frozen-valid summary is accepted even after guidance reached one. A later
-/// still-invalid but improving completion at that issued floor fails finitely
-/// and reports real auxiliary counts without manufacturing MAAP attribution.
+/// A usable long final after one empty output is accepted immediately. The
+/// repair allowance is not a token/word target or a nonreducing-output fence.
 #[test]
-fn runtime_compaction_summary_correction_floor_validates_before_exhaustion() {
-    for valid in [true, false] {
-        let (mut service, store, turn) = replay_observed::queued();
-        let original = service
-            .pending_agent_compaction_task_for_tests("%1")
-            .unwrap()
-            .clone();
-        let mut completed = 0;
-        // Actual rejected responses reach the issued floor through fresh claims;
-        // the fixture does not assign a count or a private rejection predecessor.
-        for step in 0..32 {
-            if service
-                .pending_agent_compaction_task_for_tests("%1")
-                .unwrap()
-                .summary_correction
-                .guidance_target
-                == Some(1)
-            {
-                break;
-            }
-            complete_runtime_test_compaction(
-                &mut service,
-                "%1",
-                &"界".repeat(128 * 1024 / 3 + 256 - 4 * step),
-            );
-            completed += 1;
-        }
-        let floor = service
-            .pending_agent_compaction_task_for_tests("%1")
-            .unwrap();
-        assert_eq!(floor.summary_correction.guidance_target, Some(1));
-        assert_eq!(floor.summary_correction.corrections_admitted, completed);
-        assert!(completed > 0);
-        assert_eq!(
-            floor.request.max_output_tokens,
-            original.request.max_output_tokens
-        );
-        let response = if valid {
-            "valid bounded summary".to_string()
-        } else {
-            "界".repeat(128 * 1024 / 3 + 256 - 4 * usize::try_from(completed).unwrap())
-        };
-        complete_runtime_test_compaction(&mut service, "%1", &response);
-        if valid {
-            replay_observed::adopt(&mut service, &turn);
-            replay_observed::assert_head(&service, &store, &turn, &response);
-        } else {
-            assert!(!service.agent_is_compacting("%1"));
-            assert!(!service.agent_provider_task_is_pending(&turn));
-            assert!(
-                store
-                    .load_replay_epoch(&original.conversation_id, mez_agent::AgentContext::empty())
-                    .unwrap()
-                    .is_none()
-            );
-            let failure =
-                persisted_compaction_failure(&service, &store, &original.conversation_id, &turn);
-            assert!(failure.contains("disposition=GuidanceFloor"));
-            assert!(failure.contains(&format!("corrections_admitted={completed}")));
-            assert!(!failure.contains(&response));
-        }
-    }
+fn runtime_compaction_repaired_long_final_is_accepted_without_size_chasing() {
+    let (mut service, store, turn) = replay_observed::queued();
+    complete_runtime_test_compaction(&mut service, "%1", "");
+    let summary = format!("{}END", "usable continuation ".repeat(4000));
+    let sent = run_runtime_test_compaction_wave(
+        &mut service,
+        "%1",
+        Ok(runtime_test_compaction_response(&summary)),
+    );
+    assert_eq!(sent.len(), 1);
+    assert!(service.pending_agent_compaction_tasks().is_empty());
+    replay_observed::adopt(&mut service, &turn);
+    replay_observed::assert_head(&service, &store, &turn, &summary);
 }
 
 /// A selected-source rewrite is an integrity failure even when output is blank.
@@ -806,26 +602,23 @@ fn runtime_compaction_invalid_summary_does_not_retry_mutated_source() {
 #[test]
 fn runtime_compaction_invalid_summary_usage_duplicate_and_cancel_are_exact() {
     let (mut service, store, turn) = replay_observed::queued();
-    let task = service.take_pending_agent_compaction_task("%1").unwrap();
+    let task = service
+        .pending_agent_compaction_task_for_tests("%1")
+        .unwrap()
+        .clone();
     let generation = task.task_generation;
     let conversation = task.conversation_id.clone();
     let before = service.agent_token_usage_for_conversation(&conversation);
     let sample = service.agent_latest_request_usage(&conversation).cloned();
-    service.claim_agent_compaction_task_state("%1", task);
     let mut response = runtime_test_compaction_response("");
     response.usage.input_tokens = 37;
     response.usage.output_tokens = 5;
     let event = crate::runtime::AgentCompactionEvent::Completed {
         pane_id: "%1".into(),
         task_generation: generation,
-        response: Box::new(response),
+        response: Box::new(response.clone()),
     };
-    assert!(
-        service
-            .apply_agent_compaction_transition(event.clone())
-            .unwrap()
-            .applied
-    );
+    run_runtime_test_compaction_wave(&mut service, "%1", Ok(response));
     let expense = service.agent_token_usage_for_conversation(&conversation);
     assert_ne!(expense, before);
     assert!(
@@ -920,76 +713,55 @@ fn runtime_compaction_late_failed_callback_cannot_cancel_accepted_publication() 
     }
 }
 
-/// Empty and byte-heavy outputs require private correction before publication.
-/// A bounded summary above the advisory word target still reaches actual final
-/// request sizing and can publish without an unnecessary inference retry.
+/// Empty output repairs privately; a valid over-advisory final publishes
+/// without another call, while genuine byte-resource overflow fails once.
 #[test]
-fn runtime_compaction_corrects_invalid_completed_summary_before_publication() {
-    for kind in ["budget", "empty", "bytes"] {
-        let (mut service, store, turn_id) = replay_observed::queued();
+fn runtime_compaction_completed_output_uses_validity_and_resource_limits() {
+    for kind in ["long", "empty", "bytes"] {
+        let (mut service, store, turn) = replay_observed::queued();
         let original = service
             .pending_agent_compaction_task_for_tests("%1")
             .unwrap()
             .clone();
-        let crate::runtime::agent_state::RuntimeAgentCompactionTarget::ActiveTurn { plan, .. } =
-            &original.target
-        else {
-            panic!("expected active turn");
+        let summary = match kind {
+            "empty" => String::new(),
+            "bytes" => "界".repeat(128 * 1024 / 3 + 1),
+            _ => format!("{}END", "usable summary ".repeat(4000)),
         };
-        let invalid = match kind {
-            "budget" => "word "
-                .repeat(plan.summary_budget_words() + 1)
-                .trim()
-                .to_owned(),
-            "empty" => " \n\t".to_string(),
-            _ => "界".repeat(128 * 1024 / 3 + 1),
-        };
-        complete_runtime_test_compaction(&mut service, "%1", &invalid);
-        if kind == "budget" {
-            assert!(service.pending_agent_compaction_tasks().is_empty());
+        complete_runtime_test_compaction(&mut service, "%1", &summary);
+        if kind == "bytes" {
+            assert!(!service.agent_is_compacting("%1"));
+            assert!(service.take_replay_epoch_attempt_for_tests().is_none());
             assert!(
                 store
-                    .load_replay_epoch(&original.conversation_id, mez_agent::AgentContext::empty())
+                    .compaction_epoch(&original.conversation_id)
                     .unwrap()
                     .is_none()
             );
-            replay_observed::adopt(&mut service, &turn_id);
-            replay_observed::assert_head(&service, &store, &turn_id, &invalid);
-            continue;
+        } else {
+            let expected = if kind == "empty" {
+                let retry = service
+                    .pending_agent_compaction_task_for_tests("%1")
+                    .unwrap();
+                assert_ne!(retry.task_generation, original.task_generation);
+                assert_eq!(retry.compaction_epoch, original.compaction_epoch);
+                let requests = run_runtime_test_compaction_wave(
+                    &mut service,
+                    "%1",
+                    Ok(runtime_test_compaction_response("valid repaired summary")),
+                );
+                assert!(requests[0].messages.iter().any(|message| {
+                    message
+                        .content
+                        .starts_with("[private epoch compaction output repair]")
+                }));
+                "valid repaired summary"
+            } else {
+                &summary
+            };
+            replay_observed::adopt(&mut service, &turn);
+            replay_observed::assert_head(&service, &store, &turn, expected);
+            assert!(service.agent_provider_task_is_pending(&turn));
         }
-        let retry = service
-            .pending_agent_compaction_task_for_tests("%1")
-            .unwrap_or_else(|| panic!("{kind}: invalid output must queue auxiliary correction"));
-        assert_ne!(retry.task_generation, original.task_generation);
-        assert_eq!(retry.compaction_epoch, original.compaction_epoch);
-        assert_eq!(retry.resume_turn_id, original.resume_turn_id);
-        let guidance = &retry
-            .request
-            .messages
-            .iter()
-            .find(|message| message.content.starts_with("[private summary correction]"))
-            .unwrap()
-            .content;
-        assert!(guidance.contains("complete proposed request"));
-        assert!(!guidance.contains("authoritative semantic allowance"));
-        assert!(!service.agent_provider_task_is_pending(&turn_id));
-        assert!(
-            store
-                .load_replay_epoch(&original.conversation_id, mez_agent::AgentContext::empty())
-                .unwrap()
-                .is_none()
-        );
-        assert!(
-            service
-                .agent_turn_ledger()
-                .turns()
-                .iter()
-                .any(|turn| turn.turn_id == turn_id && turn.state == AgentTurnState::Running)
-        );
-        complete_runtime_test_compaction(&mut service, "%1", "valid short summary");
-        replay_observed::adopt(&mut service, &turn_id);
-        replay_observed::assert_head(&service, &store, &turn_id, "valid short summary");
-        assert!(service.agent_provider_task_is_pending(&turn_id));
-        assert!(!service.agent_is_compacting("%1"));
     }
 }

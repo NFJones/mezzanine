@@ -24,6 +24,12 @@ to remove or rename ids still referenced by `default_model` or a model profile.
 Use `/model`, `/routing`, and `/thinking` for pane-scoped runtime choices where
 supported.
 
+`agents.compaction_raw_retention_percent` selects the same complete raw tail
+for manual, observed-input and provider-input-rejection compaction. Private
+input packing and transport retries preserve that reservation. Advisory summary
+length does not change it or create a provider generation cap. See
+[context and continuity](../agent/context-and-continuity.md).
+
 Provider outages use actor-owned exponential backoff. By default, Mez retries
 eligible transport failures, rate limits, retry hints, 5xx responses, and
 temporary provider unavailability five times. Configure the finite count with

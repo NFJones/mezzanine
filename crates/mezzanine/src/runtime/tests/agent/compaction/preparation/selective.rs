@@ -311,14 +311,7 @@ fn runtime_manual_compaction_selective_epoch_edit_survives_old_completion() {
         )
         .unwrap();
     let replacement = store.publish_replay_epoch(&proposal).unwrap();
-    let task = service.take_pending_agent_compaction_task("%1").unwrap();
-    service.claim_agent_compaction_task_state("%1", task);
-    service
-        .apply_agent_compaction_completed_event(
-            "%1",
-            runtime_test_compaction_response("OLD_CAPTURED_RESULT"),
-        )
-        .unwrap();
+    complete_runtime_test_compaction(&mut service, "%1", "OLD_CAPTURED_RESULT");
     let completion = service
         .take_replay_epoch_attempt_for_tests()
         .unwrap()

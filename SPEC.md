@@ -11915,17 +11915,12 @@ of any output-limit continuation; the same dispatch receipt MUST count once.
 Intermediate
 summaries MUST remain private; only one typed final with its original plan and
 complete coverage witnesses may reach the publication adapter. This model-work
-API does not replace live runtime generation, cancellation, usage or commit
-owners. Final all-trigger integration removes the superseded trigger-local
-complete-fit policies described below; this foundation adds no selectable mode.
-
-This is the pure canonical API contract. Integrating all product triggers,
-versioned durable epoch publication and user-selectable summary-free retention
-are separate adapter work; this foundation adds no product configuration or
-old/new engine switch. In-memory task completion and owner allocation fences
-MUST NOT be reconstructed from bare block labels after restart. Durable restore
-requires an explicit typed lifecycle/membership witness; until such an adapter
-exists, bare block imports retain conservative exact instruction semantics.
+API MUST use existing runtime generation, cancellation, usage and commit owners.
+All three product triggers use this contract; user-selectable summary-free
+retention remains separate policy work on the same lifecycle. No old/new engine
+switch is introduced. In-memory completion and owner allocation fences MUST NOT
+be reconstructed from bare labels after restart. Durable restore requires typed
+lifecycle/membership witnesses; bare imports retain conservative protection.
 
 The harness MUST distinguish terminal bytes, user text, local messages, project
 files, web content, and model output as separate context sources.
@@ -12098,8 +12093,7 @@ selective histories require the visible incompatible-state refusal defined
 above. Owned active-turn and manual history use the shared canonical replay-epoch
 API. Historical range and terminal-certificate rules below preserve existing
 data and recovery obligations, not another selectable compaction engine. Current
-selection follows the canonical source-tail contract above; output framing and
-correction rules continue to apply to the shared current adapters.
+selection and output acceptance follow the common canonical contract above.
 
 Historical complete-group range publications summarize only a closed
 prefix of complete execution groups. Their retained data MUST NOT split request messages,
@@ -12120,11 +12114,9 @@ tail MUST preserve author roles and exact visible assistant/user text so terse
 follow-up prompts can resolve recent references such as numbered list items.
 Older closed groups outside the raw tail SHOULD be represented by compact
 memory rather than replayed verbatim.
-Observed-input proactive compaction MUST validate the complete proposed replay
-and running-turn request before publication. Provisional chunk and synthesis
-results MUST remain private until the complete candidate fits. Valid live,
-pending and legacy source MUST use the same canonical publisher and original
-source qualification; physical row counts or interleaved display rows MUST NOT
+Observed-input compaction MUST use the common canonical publisher and original
+source qualification. A typed final, not prospective ordinary-request fit,
+authorizes publication. Physical row counts or interleaved display rows MUST NOT
 select another model producer. Unowned or ambiguous source MUST refuse before
 model admission. Failed or stale publication MUST retain the prior authority;
 ordinary rows committing later do not authorize an abandoned candidate.
@@ -12169,83 +12161,33 @@ raw replay remains authoritative for that historical state. Terminal
 handoff MUST NOT opportunistically republish an abandoned staged operation.
 Missing required archives, changed frozen rows, conflicting typed ownership,
 overlap and stale epochs remain integrity failures, not fallback admission.
-Complete candidate request validation MUST include exact externally owned transcript
-arrivals after the captured history boundary without restoring summarized
-prefixes or admitting those arrivals to the frozen compaction selection.
-Completed compactor output that is empty, malformed, or over the canonical UTF-8
-block-byte bound MUST be rejected privately before chunk/synthesis staging or
-publication. Owned replay summaries above an advisory word/token target MUST
-reach complete candidate sizing; that target MUST NOT become a second semantic
-acceptance cap. Raw-text compaction
-MUST also decode a recognizable optional final-say JSON or
-`mezzanine-action-json` frame locally, validate only its one final payload, and
-never publish its envelope or execute enclosed actions. Unframed JSON is an
-envelope only with top-level rationale and an actions array containing type-tagged
-objects (or empty actions); recognition MUST NOT require those actions to be valid.
-Isolated/nested action or rationale data, generic code fences and syntactically
-incomplete unframed JSON remain raw summary text subject to semantic bounds;
-explicit MAAP fences identify malformed/incomplete frames unambiguously.
-With independently
-validated frozen source, Mezzanine MUST admit bounded auxiliary correction under
-a fresh exact task generation while preserving the waiting turn, logical epoch,
-current source and earlier accepted staging. The model MUST receive the actual
-local target unit (words or estimated input tokens) and independent byte bound.
-Frozen semantic acceptance MUST NOT shrink merely because advisory correction
-guidance becomes shorter. OpenAI MUST NEVER receive `max_output_tokens`, for
-ordinary execution, manual/automatic compaction, corrections, auxiliary work,
-transport/output-limit/context-split retries, or either streaming mode. Canonical
-omission and cache controls MUST remain unchanged; no compactor exception,
-provider/API switch or guessed alternate field may substitute for this contract.
-Other providers' genuinely supported generation controls remain separate from
-semantic units and retain configured response-framing/reasoning allocation.
-Oversize corrections MUST request a shorter nonzero advisory target and strictly
-improve each still-invalid fixed size dimension; repeated output MUST fail
-without publication. Frozen-valid output MUST be considered before guidance-floor
-exhaustion and proceed to the existing complete-request fit/no-progress owner.
-Still-invalid output after the issued floor MUST terminate with typed evidence,
-not halve to zero, accept invalid output or inflate budgets. Empty/malformed
-output MUST have a finite per-source correction budget, independent of unlimited
-transport retry policy. Legitimately advancing chunks/ranges MUST NOT be capped
-by an arbitrary total response count. Known incurred auxiliary usage MUST count
-once even when text is discarded, without replacing execution usage. Source,
-chronology, epoch and durable-evidence corruption remain terminal integrity
-failures, not output correction. No ordinary request or settled action may replay
-before accepted compaction and complete-request fit; cancellation, pause, stale
-delivery and failed admission retain existing exact-ownership semantics.
-If the complete candidate after a model-authored summary exceeds the safe input
-allowance, compaction MAY request a shorter model-authored summary of the same
-frozen source while the complete candidate estimate and independently labeled
-advisory input-token target strictly decrease. Only that complete-fit/replan
-owner may derive a tighter target from measured context; word and estimated
-input-token allowances MUST NOT be numerically conflated with provider output
-tokens. A repeated or non-improving candidate MUST fail
-without publication. If that summary cannot cover the excess,
-provider-context recovery MUST attempt another eligible closed range beyond an
-exact barrier before declaring exhaustion, even when the initial planner's
-word allowance did not advertise additional segments. This fallback MUST use
-provider-projected token estimates with complete-request overhead reserved;
-an already staged plan MUST retain its frozen allowance and progress guards.
-All earlier summaries MUST remain provisional until the combined replay passes
-the complete request check and publishes one atomic epoch. Each attempted
-complete candidate MUST make bounded progress; no failed candidate may publish
-an epoch or resume the provider turn. Exhaustion MUST fail visibly with
-content-free component-size estimates without dropping the original context.
-Auxiliary failure provenance MUST distinguish summary/synthesis/complete-fit
-phase, exact source/task generations, observed defect, frozen allowance/unit,
-measured cost/bytes, advisory target/unit and admitted correction count from
-ordinary MAAP recovery counts. Typed disposition MUST identify no-progress,
-finite blank/malformed exhaustion, guidance floor or complete-fit failure.
-Canonical OpenAI omission MUST be explicit when its wire shape is resolved;
-an internal ModelRequest allocation is not evidence of a transmitted field.
-Diagnostics MUST NOT include summary/prompt/HTTP/secret content or manufacture
-ordinary correction counts from missing auxiliary provenance.
+Completed compactor output MUST satisfy the common nonempty, well-formed and
+bounded-resource contract before acceptance. Raw-text compaction MUST decode a
+recognizable optional final-say JSON or `mezzanine-action-json` frame locally,
+validate its single final payload, and never execute enclosed actions or publish
+the envelope. Unframed JSON is an envelope only with top-level rationale and an
+actions array containing type-tagged objects (or empty actions); isolated/nested
+action data and ordinary code fences remain authored raw text. Explicit MAAP
+fences identify malformed/incomplete frames unambiguously.
+OpenAI MUST NEVER receive `max_output_tokens` for ordinary execution,
+manual/automatic compaction, repairs, auxiliary work, transport/output-limit/
+context-split retries, or either streaming mode. Canonical omission and cache
+controls MUST remain unchanged; no guessed alternate field or provider switch
+may substitute. Other providers retain genuinely supported generation controls
+independently of advisory word/token units.
+Auxiliary failure provenance MUST distinguish phase, logical operation, exact
+dispatch generation, actual model-call count, serial depth and elapsed time
+from ordinary MAAP recovery counts. Diagnostics MUST NOT contain source,
+summary, HTTP or credential payloads, nor manufacture ordinary recovery facts.
+Known expense counts once even when output is discarded. Source, chronology,
+epoch and durable-evidence corruption remain terminal integrity failures.
 Late append-only arrivals, including peer sends and runtime task-result mail,
 MUST survive staged compaction in their original order, occurrence identity,
 source, trust, retention, and execution ownership. Rebase MUST validate that
 the frozen authoritative chronology remains unchanged; genuine source rewrites
 MUST fail closed. Accepted mail MUST NOT be relabeled as direct-user input,
-acknowledged twice, or summarized before consumption. The complete request
-budget check MUST include the retained arrivals before any epoch publishes.
+acknowledged twice, or summarized before consumption. Their estimated cost
+MUST NOT reject an otherwise usable frozen final; they remain exact raw input.
 Prospective manual candidates MUST import retained structural occurrence and
 accounting records before restoring execution ownership. Reconstructing the
 same bytes with fresh IDs MUST NOT break a valid retained native group or leak
@@ -12255,43 +12197,18 @@ semantic event before redaction and serialization, preserving the original
 physical rows for publication proof. Malformed or unsupported reserved system
 records MUST fail request construction; literal non-system source text retains
 its existing authored meaning.
-An additional eligible closed range is not required when the complete refreshed
-request already fits and satisfies the triggering request's reduction rule.
-Before requesting the first summary, a zero allowance for one segment MUST NOT
-be treated as irreducible while later closed, consumed segments remain eligible.
-The planner MAY account for replacing those later segments, but each model
-summary MUST remain anchored on its original side of exact barriers. No
-provisional summary may publish or resume a turn until the remaining required
-segments have been summarized and the complete next request fits. Exact,
-incomplete, unconsumed, and mandatory raw-tail context MUST remain protected;
-each additional segment MUST select strictly later closed event identities than
-the preceding range. An arbitrary total segment count MUST NOT stop such
-forward progress.
-Temporary compactor-source splitting MUST preserve all frozen source bytes at
-UTF-8 boundaries. Each temporary split MUST strictly shorten the request's
-current source while retaining the ordered remainder, and every subsequent
-synthesis round MUST reduce its prior synthesis source. An arbitrary total
-chunk, response, or context-limit backoff count MUST NOT stop demonstrable
-forward progress; per-request limits and timeouts still apply. Exhaustion or
-no progress MUST NOT publish a partial summary or resume settled execution.
-Provider-limit and manual compaction MUST expose at most one model-visible
-compaction block per eligible exact-barrier-delimited segment. A prior
-summary-only segment MUST NOT prevent selecting later closed, consumed history
-in another segment; its summary and intervening exact barriers remain in their
-original chronological positions. Later compaction MAY replace prior local or
-compatible legacy compaction blocks together with other eligible blocks within
-the same segment, but MUST NOT gather source across exact barriers or retained
-ineligible groups. Prefix and selective summaries MUST carry explicit semantic
-provenance from their owning producer through canonical blocks and projected
-model messages. A UUID-shaped ordinary Memory label alone MUST NOT establish a
-summary epoch. The established legacy summary labels remain recognized; the
-shared classifier MUST govern planning, continuity and provider cache generation.
-This provenance MUST preserve reference semantics and existing model-visible
-labels/content, and MUST NOT imply a new compactor operation or durable publication.
-The compact-memory block itself MUST explain that older durable
-transcript entries were summarized, that the summary is lossy, and that only
-the retained recent raw tail remains exact; a separate compaction notice MUST
-NOT be injected.
+Private work MUST preserve complete frozen redacted coverage at UTF-8
+boundaries. Necessary source and merge work MAY advance without an arbitrary
+total response cap, subject to finite resource bounds and provider retry policy.
+A usable final MUST NOT require another model call merely to shorten it or fit
+the next ordinary request. Exhaustion MUST NOT publish a partial summary.
+Current publication MUST expose one canonical head plus exact retained raw
+members and arrivals. Historical selective summary provenance MUST remain
+available for explicit integrity checks/import refusal, not another writer or
+current range planner. A UUID-shaped ordinary Memory label alone MUST NOT
+establish a summary epoch or imply a compactor dispatch. The compact-memory
+block MUST explain that older transcript entries were summarized lossily and
+only the retained raw tail remains exact; no separate notice is injected.
 
 Transcript replay MUST omit durable-storage metadata that is not useful for the
 next model decision, including transcript reference handles, per-entry sequence
@@ -12372,27 +12289,13 @@ validation and the original typed publication owner remain independent gates.
 An absent advisory allowance MUST NOT introduce a zero-output directive when
 rebuilding temporary source or synthesis requests for eligible canonical work.
 Changed live ownership MUST fail before dispatch retirement or retry admission.
-The final canonical continuation MUST pass complete-request sizing with current
-policy, tools, controls and native projection before publication. A retained
-rejected request's full wire size MUST decrease strictly. Shorter-summary retries
-MUST decrease the complete candidate estimate and issued ceiling; they MUST NOT
-publish an oversized head or resume actions while only inference has completed.
-When fixed retained context produces an unchanged calculated fitting target,
-the next issued ceiling MUST still decrease while actual candidate progress
-remains independently required. Earlier output-correction counts MUST survive
-these same-source complete-fit retries without retaining stale candidate costs
-or manufacturing ordinary execution recovery facts.
-
-Idle manual compaction MUST preview the same typed head and raw membership
-through ordinary prompt composition, preserving retained native ownership,
-ordinals, records, costs and exact references. That hypothetical prompt MUST NOT
-admit a turn, consume messages, change live cache lineage or grant an append or
-publication receipt. A delayed ordinary copy of already owned source MUST remain
-one occurrence before and after its actual append acknowledgment. Manual output
-targets remain advisory; complete-request fit, source integrity and bounded
-output decide acceptance. An oversized manual candidate MAY retry only with
-strictly decreasing complete estimates and targets, without another raw-tail
-selection or an ordinary provider continuation.
+Idle manual previews MUST use the same typed head and raw membership through
+ordinary prompt composition, retaining native ownership, ordinals, records,
+costs and exact references. A preview MUST NOT admit a turn, consume messages,
+change live cache lineage or grant an append/publication receipt. A delayed
+ordinary copy of already owned source MUST remain one occurrence before and
+after its actual append acknowledgment. Preview sizing and advisory targets
+MUST NOT reject a usable final, change the raw tail or trigger shortening.
 
 ### 9.7 Model Request and Response
 
@@ -14591,124 +14494,69 @@ Agents MUST support task planning when requested by the user.
 Agents MUST support session continuation after the agent shell is hidden and
 shown again.
 
-The following provider-limit range/recovery procedure describes the currently
-wired product adapters. The shared canonical replay-epoch foundation in Section
-9.6 instead consumes the current head and explicit membership with one common
-source-tail policy; its usable-summary publication contract has no advisory
-shrink/word ladder. Wiring that foundation into every trigger remains separate
-adapter work, not a runtime compatibility mode.
+Manual `/compact`, observed ordinary-request input pressure and authoritative
+provider input-context rejection MUST use the same canonical replay-epoch
+planner, private model-work engine and single-head publisher in Section 9.6.
+The source owner MUST freeze the parent, canonical members and arrival frontier,
+exact active task, configured raw-tail policy, model and provider projection
+before inference. Active instructions, unfinished groups and unsafe source MUST
+remain raw; later arrivals MUST NOT enter frozen input. Closed historical tasks
+may enter the selected prefix. The previous head enters once with that prefix.
+Mezzanine MUST NOT truncate source, invent semantic summary prose locally, or
+revive covered ancestors. Source labels, chronology and secret redaction MUST
+survive rendering before temporary UTF-8 input packing.
 
-Agents MUST support model-generated conversation compaction or summarization
-when explicit user action or provider feedback shows that context reduction is
-needed. The agent harness MUST NOT block prompt submission or provider request
-assembly solely because a local fallback estimate predicts high context
-pressure. Compaction MUST operate on durable context before request-local live
-state is attached. Exact user prompts, every user-steering event, active
-skill/task preludes, delegated or routed task statements required to interpret
-the work, and existing summary epochs MUST be non-crossable barriers. The
-compactor MUST split chronology at those barriers, form closed contiguous
-assistant/action/result execution ranges only within each segment, and prefer
-the oldest eligible ranges for summarization. Assistant blocks,
-provider-native tool events, and their settled results MUST move together when
-they are contiguous inside one segment. An execution owner that appears on both
-sides of a barrier because already-dispatched work settled later makes both
-fragments ineligible for grouped replacement; ownership MUST NOT be used to
-move or gather either fragment across the barrier.
+Only explicit manual action, a qualifying ordinary execution usage sample, or
+an authoritative provider input-context rejection MAY initiate history
+compaction. Local ordinary-request estimates MUST NOT block prompt submission,
+preflight history compaction, or reject a usable completed summary. Output
+exhaustion alone MUST NOT compact history. All three triggers MUST share the
+configured `agents.compaction_raw_retention_percent` reservation against the
+selected model input/context allowance, without retention walk-down. Protected
+exact source remains raw even when it exceeds that reservation.
 
-Each model-authored summary MUST replace its selected contiguous range at the
-range's original position. It MUST NOT be moved to the start or end of the
-conversation or across a user/task barrier. Existing epochs MUST remain
-byte-stable during later provider context-limit recovery. Direct user and task
-instructions MUST remain byte-for-byte exact. Mezzanine MUST NOT synthesize
-semantic summary prose locally or partially truncate blocks. Non-model-visible
-request metadata remains outside summary input; all model-visible recovery facts
-are already durable chronology before compaction begins.
+Rendering, packing and private result processing MUST run outside the actor
+under finite original preparation capacity. Logical cancellation MUST NOT
+release capacity still owned by blocking work. Each actor-admitted generation
+MAY issue a bounded wave of necessary requests. In-flight work, source bytes,
+work nodes and private buffered output MUST remain bounded. Rolling carry or
+parallel reduction MAY satisfy the operation. Every frozen redacted member
+MUST be covered; intermediates MUST remain private until one typed complete
+result reaches publication. A fitting source and usable response MUST require
+one auxiliary request. No verifier model, semantic size-halving, reduction-ratio
+gate, or next-ordinary-request-fit loop may add work after a usable final exists.
 
-Provider-limit recovery MUST plan compaction only for events at or below the
-event-sequence high-water mark consumed by the rejected provider request.
-Events committed after that boundary, including steering, local messages, and
-later action results, MUST remain exact and raw. Semantic reduction MUST come
-from a validated compactor-model response; deterministic local logic is limited
-to selection, group and barrier safety, exact-tail handling, accounting,
-validation, and bounded orchestration. A range whose required content is not
-safely recoverable MUST remain raw or cause typed unrecoverable overflow.
+Empty, malformed or explicitly incomplete auxiliary output MAY receive at most
+two repairs per logical work item, without resetting on transport retries.
+Genuine decoded-summary resource overflow MUST fail without another model call
+to shorten it. New engine summaries MUST fit the canonical 128-KiB resource
+bound. Genuine auxiliary input rejection MAY lower actual packed input capacity
+and split private work, preserving the complete selection and raw tail. Advisory
+word/token targets, valid long output and nonreducing output MUST NOT cause
+regeneration. Raw text or one valid final-say frame MAY supply the summary;
+decoding MUST NOT execute actions.
 
-Every selected model-visible source range MUST reach at least one compactor
-request in full after sensitive-token redaction. Mezzanine MUST NOT silently
-replace a source prefix with an elision marker before temporary compactor input
-chunking. Temporary input MAY split at UTF-8 boundaries to meet provider
-limits, but redaction MUST happen before splitting and all chunks MUST remain
-attributable to their selected source range.
+Provider input-context classification MUST preserve missing-code messages
+about oversized input even when they advise reducing `max_tokens` or
+`max_output_tokens`. Such advice alone MUST NOT select output-limit recovery;
+structured context, transport and output categories retain precedence. A
+rejected ordinary turn MUST wait for publication or terminal recovery failure.
+Retryable auxiliary transport failures, including interrupted HTTP 200 bodies
+or SSE, MUST retain exact failed requests and accepted private siblings under
+the configured retry policy and supervised backoff. Retry, pause, Stop and
+worker/timer admission failure MUST settle only the exact conversation and
+generation. Stale callbacks MUST NOT clear newer work. All admitted siblings
+MUST physically retire before a failed wave returns.
 
-Within each barrier-delimited segment, compaction MUST retain a bounded recent
-raw suffix of complete execution groups so exact recent references remain
-available after context reduction.
-Selection MUST stop at the first non-fitting or ineligible older group rather
-than filling a budget gap with still-older groups. If the newest eligible
-closed group alone exceeds the raw-tail budget, no older closed group may be
-retained in its place; that group MUST enter validated summary input when it
-is safely recoverable. Exact and unconsumed groups remain raw and cannot be
-split to fit the budget.
-The raw tail size MUST follow `agents.compaction_raw_retention_percent`, which
-defaults to retaining approximately the newest 10% of the available context-block
-allowance after fixed request overhead and protected exact blocks, by estimated
-replay tokens. Provider-invisible blocks have zero cost. These are local estimates,
-not provider-reported per-block token counts; the complete request is checked
-before publication.
-After an authoritative provider context-limit rejection, an unchanged plan
-under that ordinary reservation MUST NOT be treated as global exhaustion.
-Recovery MAY replan locally with progressively smaller optional raw-tail
-reservations down to the planner's one-percent minimum, without resending an
-identical provider request. This fallback MUST retain complete execution
-groups and protected exact barriers; normal and manual compaction retain their
-configured reservation. Only after bounded replanning finds no viable
-replacement MAY recovery report that no replacement is available.
-Missing-code provider failure messages that diagnose context-length exhaustion,
-oversized input, excessive input tokens, an overlong prompt, or a request too
-large for the model MUST retain context-limit classification when the same
-message field advises reducing `max_tokens` or `max_output_tokens`. A parameter
-name in that advice MUST NOT alone select output-limit recovery, which requires
-typed partial-output evidence. Explicit structured transport, context, and output
-categories retain their precedence; genuine output-budget validation and
-specific output-limit wording MUST NOT be
-reclassified merely because they mention a context window or its maximum length.
-If the provider rejects a request because the input context exceeds a
-provider or model limit, Mezzanine MUST treat that failure as recoverable while
-the turn remains running, MUST NOT ask the provider for a failure-summary
-response with the same oversized context, and MUST queue asynchronous
-model-backed compaction before retrying within the bounded provider retry
-policy. A rejected turn MUST remain deferred until validated compactor output
-is applied or compaction fails terminally. A compaction request rejected for
-context length MUST recursively split only temporary compactor input and MUST
-prove that each replacement compactor request is smaller than the rejected
-request using the complete serialized provider request shape when available.
-The original selected execution groups MUST remain unchanged until validated
-chunk summaries are synthesized and atomically applied as one summary epoch;
-rejected source MUST NOT be moved into a verbatim final-request tail merely to
-shrink compactor input. Retryable auxiliary transport failures, including an
-interrupted HTTP 200 response body or incomplete SSE response, MUST use the
-effective provider retry limit/unlimited policy and bounded jittered backoff.
-The actor MUST retire the failed dispatch's exact lease and retain the frozen
-request, selected source, staged position, logical epoch and waiting turn under
-a fresh generation with supervised timer admission. Backoff MUST NOT dispatch
-the ordinary rejected request, replay settled actions, publish partial output
-or alter authoritative source context. Known incurred usage MUST be accounted
-exactly once per dispatch; absent usage remains unknown. Stale results and
-timers MUST be inert, and Stop, replacement, teardown and human pause MUST
-remain effective. Exhaustion, nonretryable failures, worker loss and failed
-timer admission MUST settle exact ownership without stranding compaction.
-This policy applies to manual and observed-input compaction as well as
-provider-limit recovery. Before a
-normal OpenAI Responses retry is queued, its complete serialized request body,
-including instructions, input, tools, wrappers, request controls, and dynamic
-suffixes, MUST be strictly smaller than the rejected request. An unchanged or
-larger candidate MUST fail closed with bounded size diagnostics and MUST NOT be
-submitted or automatically replay the failed command. If protected exact
-content plus the minimum required request state cannot fit the provider context
-window, Mezzanine MUST report an explicit unrecoverable-context overflow and MUST NOT
-truncate or summarize the protected instructions. Recovery MUST stop when the
-bounded retry policy is exhausted or no eligible complete group remains, and
-MUST leave source context unchanged on terminal failure.
+Known incurred expense MUST checkpoint once through the original accounting
+owner before private work advances; final/cancellation settlement adds only
+uncheckpointed expense. Auxiliary expense MUST NOT become ordinary pressure.
+Only the original checked publication receipt MAY adopt the new head, reset
+provider/cache/MCP lineage and execution usage display, and admit one ordinary
+continuation. Lost acknowledgment MUST recover that same proposal/receipt
+without provider redispatch, action replay or inferred rollback. Storage,
+source or configuration failure MUST preserve old-or-new complete authority;
+partial replacements MUST NOT publish.
 
 Agents MUST support optional routing model sizing. When routing
 is enabled for a pane, agent, or subagent, the first provider step for each new
@@ -15837,7 +15685,8 @@ The baseline command capabilities are:
   occurrences MUST NOT satisfy an old expectation. Legacy terminal summary
   import MUST use its actual archived certificate occurrence and replacement
   slot, independently of the covered raw-row anchor.
-  Summary text remains bounded to one MiB per summary. Legacy sidecars remain
+  Imported legacy summaries remain bounded to one MiB; new engine summaries
+  use the 128-KiB resource bound above. Legacy sidecars remain
   bounded to one MiB encoded; version-3 sidecars MAY use up to sixteen MiB for
   structural accounting overhead without truncating a valid legacy summary.
   The encoded semantic projection MUST still fit the one-MiB legacy bound;
@@ -15904,10 +15753,11 @@ The baseline command capabilities are:
   The selected prefix MUST enter compactor source exactly once; the retained raw
   tail MUST NOT also enter through ordinary context blocks.
   If the manual compactor's complete request exceeds a configured input cap or
-  the provider rejects it for context length, it MUST split redacted temporary
-  source at UTF-8 boundaries, summarize bounded chunks in source order, and
-  synthesize one final model-authored summary before committing the durable
-  epoch. An irreducible request, non-context failure, or exhausted bound MUST
+  the provider rejects it for context length, the common engine MUST pack
+  redacted temporary source at UTF-8 boundaries and produce one complete final
+  model summary before committing the epoch. Rolling carry or parallel
+  reduction MAY satisfy this without a separate synthesis call.
+  An irreducible request, non-context failure, or exhausted bound MUST
   leave the previous summary and raw replay boundary unchanged.
   Terminal transcript persistence
   MUST be idempotent by conversation and turn so duplicate lifecycle
@@ -18590,7 +18440,12 @@ presentation MUST NOT create a turn to explain auxiliary work. The pane/footer
 and `/status` MUST use the same current ownership and retain compacting visibility
 during permitted read-only inspections. Diagnostics MUST distinguish preparing,
 queued and claimed work and existing pause state; claimed is not proof of a sent
-provider request. Display elapsed time MUST retain the original conversation and
+provider request. Model work MUST expose packing, inference, validation and
+publication phases, actual provider-port call counts and serial dependency
+depth without acquiring the worker's session lock. Status MUST show logical
+epoch and current dispatch generation separately; the footer MUST show phase
+and call count. Invocation is not proof of HTTP delivery.
+Display elapsed time MUST retain the original conversation and
 logical-compaction-epoch start across handoffs/chunks/retries, independently of
 per-request claim deadlines. Inactive cached starts MUST NOT imply active work,
 and a genuinely new operation MUST receive a new start.

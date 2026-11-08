@@ -323,7 +323,7 @@ impl EpochCompactionEngine {
         })
     }
 
-    fn is_complete(&self) -> bool {
+    pub(super) fn is_complete(&self) -> bool {
         self.claims.is_empty()
             && self.nodes.len() == 1
             && self.nodes.values().next().is_some_and(|node| {

@@ -10,10 +10,7 @@ use thiserror::Error;
 
 mod compaction;
 mod teardown;
-pub(crate) use compaction::{
-    CompactionCostUnit, CompactionFailureDisposition, CompactionFailureEvidence,
-    CompactionFailurePhase,
-};
+pub(crate) use compaction::CompactionFailureEvidence;
 pub(crate) use teardown::TeardownErrors;
 
 /// Defines the Result type used by this subsystem.

@@ -327,9 +327,8 @@ Accounting and audit remain outside provider input. Invalid accounting envelopes
 stop admission, while literal marker text in user or assistant rows remains
 authored content. Candidate preview preserves unrelated optional memory, exact
 references and native group metadata without rebuilding a legacy range projection.
-Fit checks still measure the complete provider request with tools, controls and
-output/headroom allowance; projection changes do not relax the request limit or
-replay an action.
+Read-only candidate previews measure the next request with tools and controls;
+they do not decide summary acceptance or replay an action.
 
 If an earlier accepted prompt or command is still preparing its history, a new
 `/compact` is refused before changing the conversation epoch. The earlier input
@@ -338,8 +337,10 @@ continues normally; this also protects guidance resumed after cancelling compact
 The pane/footer, `agent/list` and `/status` agree that the current operation is
 compacting even when there is no ordinary user turn. Allowed inspections do not
 replace that footer with a generic command-running label. The footer and status
-diagnostics show preparing/queued/claimed and existing pause detail; a claim is
-not evidence that a provider has received a request. Elapsed time starts once
+diagnostics show preparation, queued/claimed work, packing, inference,
+validation or publication, call count and existing pause detail. `/status`
+also shows logical epoch, dispatch generation and serial depth. Invocation is
+not proof of HTTP delivery. Elapsed time starts once
 per logical operation and does not reset for source/request handoffs or compactor
 chunks/retries. Completed or cancelled work no longer appears active.
 
@@ -387,41 +388,36 @@ request while preserving its reported usage and keeping the actor available.
 A claim stopped before worker admission cannot start another request.
 Exhausted or nonretryable failures are terminal,
 and incomplete summaries never replace authoritative history.
-The product adapters check completed summaries before private chunk/synthesis
-staging. Only the complete accepted result can reach the canonical epoch
-publisher described below.
-Empty or malformed output, oversized UTF-8 text, and text above the frozen word
-or estimated-input-token allowance retry only auxiliary summarization of the
-same validated source. The rejected text is not published or quoted back. The
-model receives the actual word/input-token unit and independent UTF-8 byte bound.
-Compaction keeps its raw-text provider contract. If the model instead returns
-the requested final-say JSON or `mezzanine-action-json` frame, local validation
-extracts that one final payload before measuring or publishing it; malformed
-frames consume the same finite correction budget, never execution authority.
-Unframed JSON is recognized only by a top-level rationale plus an actions array
-with type-tagged objects (or empty actions), not an isolated field name. Unknown
-or non-final typed actions still fail validation. Ordinary JSON/data/code fences
-and incomplete unframed JSON remain raw summary text under the same local bounds;
-an explicit `mezzanine-action-json` fence also identifies incomplete frames.
-Shorter correction guidance never becomes a stricter semantic acceptance limit:
-a summary fitting the original allowance proceeds to complete-request fit even
-above guidance. OpenAI never receives `max_output_tokens` in ordinary, compaction,
-auxiliary or retry requests, streaming or not. Existing omission/cache behavior
-is intentional; other providers retain genuinely supported generation controls
-and configured framing/reasoning headroom. Still-invalid output must shrink each
-fixed invalid dimension. Guidance stays nonzero and invalid output at the issued
-floor fails with typed, content-free provenance rather than halving to zero.
-Full-request fit and nonreducing-candidate checks still decide publication; no
-summary is truncated and no ordinary action is replayed. Auxiliary diagnostics
-separate phase/generation, frozen units, measured sizes, advisory targets and
-actual admitted corrections from ordinary MAAP recovery counts.
-Empty/malformed output gets at most two corrections per current
-source, even with unlimited transport retries. Advancing legitimate chunks or
-ranges has no arbitrary total-response cap. Earlier accepted summaries stay
-private until the complete replay fits. Known auxiliary expense counts once,
-but does not become an ordinary execution sample. Changed source, stale epochs
-and corrupt required history are integrity failures, not retryable output.
-Missing or corrupt required history is reported rather than silently omitted.
+All three triggers use one frozen-source model operation. It packs actual
+provider requests outside the actor, retaining the selected prefix, raw tail,
+model and source owner across waves. Rolling carry or parallel reduction can
+satisfy the operation; four concurrent requests is a ceiling, not a promised
+fanout. A fitting source and usable final require one auxiliary call. Only a
+complete typed result reaches the original publisher.
+
+Empty, malformed or explicitly incomplete output gets at most two repairs per
+logical work item, including with unlimited transport retries. Genuine summary
+memory overflow fails without a shortening loop. New summaries have a 128-KiB
+decoded resource bound. Advisory word/token targets, equal-size output and a
+large next ordinary-request estimate cannot reject a usable final or generate
+another summary. Actual input rejection repacks private work without changing
+the selected source or raw tail.
+
+Raw text remains supported. A valid final-say JSON or
+`mezzanine-action-json` frame contributes its single final payload without
+executing any action. Malformed recognized frames consume the repair allowance.
+Unframed JSON requires a top-level rationale plus an actions array with typed
+objects (or empty actions); ordinary JSON/data/code fences remain raw text.
+An explicit action fence also identifies incomplete framed output. OpenAI
+requests always omit `max_output_tokens`, streaming or not; other providers
+retain their supported generation controls.
+
+Auxiliary diagnostics record only phase, operation, dispatch generation, actual
+model-call count, serial dependency depth and elapsed time. Retries and repairs
+count as calls without increasing logical dependency depth. Known expense counts
+once without becoming an ordinary execution sample. Changed source, stale
+epochs and corrupt required history remain integrity failures; missing history
+is reported rather than silently omitted.
 For a canonical first task, its active user instruction protects the prefix even
 when later execution groups have completed. Input pressure does not permit
 selective summaries after that instruction. Eligibility is checked before local
@@ -566,18 +562,10 @@ Safe completion settlement observations enter the original canonical context
 before archive projection. Repeated staging reuses their occurrence and cost;
 publication and cold replay preserve that same evidence. These observations
 cannot complete an action group or acknowledge an ordinary archive append.
-When an older planning estimate supplies no advisory allowance, temporary
-requests and synthesis omit a zero-output directive. The actual frozen source,
-bounded output and complete continuation fit still decide whether work can publish.
-Before writing a canonical head, Mez sizes the complete ordinary continuation
-with current policy, tools, controls and native projection. A known rejected
-wire request must get strictly smaller. Shorter-summary retries must reduce the
-complete estimate and their issued ceiling; an advisory target cannot itself
-authorize publication or provider continuation.
-When fixed retained context yields the same calculated fitting target, Mez still
-reduces the next guidance while requiring the actual candidate to shrink. Output
-correction counts remain attached to the operation across complete-fit retries;
-accepting an intermediate summary cannot erase that failure provenance.
+A valid final goes directly to checked publication. There is no complete
+ordinary-request fit check or shortening loop between that result and the
+publisher. Large exact arrivals remain raw, even if they make the next request
+too large. Ordinary bounded recovery never authorizes truncating them.
 
 Manual preview uses that same typed owner and normal next-prompt composition.
 It keeps native call/result ownership, ordering, costs and exact references;

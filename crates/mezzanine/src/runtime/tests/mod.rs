@@ -1374,24 +1374,47 @@ fn runtime_test_compaction_response(summary: &str) -> mez_agent::ModelResponse {
     }
 }
 
-/// Applies a queued `/compact` provider result without leaving the actor path.
+/// Runs the real bounded worker and applies its generation-correlated outcome.
+/// Only inference is replaced; the engine creates its own private work and
+/// typed final proof. A raw synthetic response alone cannot publish a head.
 fn complete_runtime_test_compaction(
     service: &mut RuntimeSessionService,
     pane_id: &str,
     summary: &str,
 ) {
+    run_runtime_test_compaction_wave(
+        service,
+        pane_id,
+        Ok(runtime_test_compaction_response(summary)),
+    );
+}
+
+/// Delivers a deterministic provider outcome to every request in one wave and
+/// returns the actual requests for source/retry assertions. No legacy planner
+/// or test-only publication algorithm supplies accepted history.
+fn run_runtime_test_compaction_wave(
+    service: &mut RuntimeSessionService,
+    pane_id: &str,
+    result: crate::Result<mez_agent::ModelResponse>,
+) -> Vec<mez_agent::ModelRequest> {
     let task = service
         .take_pending_agent_compaction_task(pane_id)
         .expect("queued compaction task");
-    service.claim_agent_compaction_task_state(pane_id, task);
+    service.claim_agent_compaction_task_state(pane_id, task.clone());
+    let (result, requests) =
+        crate::test_support::compaction_source::execute_wave(service, &task, result);
+    let event = crate::test_support::compaction_source::model_result_event(
+        pane_id,
+        task.task_generation,
+        result,
+    );
     assert!(
         service
-            .apply_agent_compaction_completed_event(
-                pane_id,
-                runtime_test_compaction_response(summary)
-            )
+            .apply_agent_compaction_transition(event)
             .unwrap()
+            .applied
     );
+    requests
 }
 
 /// Runs the execute runtime send message action operation for this subsystem.

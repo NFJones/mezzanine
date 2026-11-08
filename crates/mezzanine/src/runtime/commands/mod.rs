@@ -51,7 +51,6 @@ use crate::runtime::config::{
     runtime_recommended_model_for_provider,
 };
 use mez_agent::ModelResponse;
-use mez_agent::model_context_text_word_count;
 use mez_agent::{
     AgentActionPayload, AgentTurnSteering, AllowedActionSet, DEFAULT_PROVIDER_TIMEOUT_MS,
     ModelCatalog, ModelCatalogCandidate, ModelCatalogEntry, ModelCatalogInput,
@@ -108,10 +107,6 @@ use approval::{
     agent_approve_control_error_message, agent_approve_pending_display, agent_path_preview,
     agent_project_trust_log_line, agent_project_trust_pending_display,
     agent_resolve_project_trust_target, parse_agent_approve_selection,
-};
-#[cfg(test)]
-use compaction::{
-    runtime_model_compaction_request_for_blocks, runtime_model_compaction_summary_from_response,
 };
 pub(super) use model_catalog::RuntimeModelCatalog;
 use model_catalog::runtime_markdown_table;
@@ -2436,8 +2431,7 @@ mod tests {
         AgentContext, BTreeMap, ContextBlock, ContextSourceKind, ModelInteractionKind,
         ModelProfile, ModelResponse, RuntimeAgentLoopMode, RuntimeAgentLoopState,
         parse_agent_loop_args, runtime_agent_loop_work_prompt,
-        runtime_model_catalog_unavailable_reason, runtime_model_compaction_request_for_blocks,
-        runtime_model_compaction_summary_from_response,
+        runtime_model_catalog_unavailable_reason,
     };
     use mez_agent::{AgentAction, AllowedActionSet, MaapBatch};
 
@@ -2468,7 +2462,7 @@ mod tests {
             provider_transcript_events: Vec::new(),
         };
 
-        let summary = runtime_model_compaction_summary_from_response(
+        let summary = mez_agent::epoch_compaction::decode_completed_summary(
             &response,
             "compact-fixture",
             "agent-%1",
@@ -2514,14 +2508,13 @@ mod tests {
         }])
         .unwrap();
         let allowed_actions = AllowedActionSet::all_enabled();
-        let request = runtime_model_compaction_request_for_blocks(
+        let request = mez_agent::epoch_compaction::provider::request_from_source(
             &profile,
             "%1",
             "as1",
-            context.blocks(),
+            context.blocks()[0].content.clone(),
             allowed_actions.clone(),
-        )
-        .unwrap();
+        );
 
         assert_eq!(request.interaction_kind, ModelInteractionKind::Compaction);
         assert_eq!(request.allowed_actions, allowed_actions);

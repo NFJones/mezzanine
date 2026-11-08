@@ -66,6 +66,11 @@ configuration or start a new session before relying on the changes. `mez mcp
 list` and `inspect` show configuration, whereas `/list-mcp` in the agent shell
 shows live availability, tools, and failure reasons.
 
+Compaction changes MCP lineage when the complete canonical head is accepted.
+Private intermediates and failed or stale callbacks do not reset it. Retrieved
+tool contracts must be rediscovered for the accepted epoch; publication and
+its MCP controls retain the original conversation store.
+
 ### Limit tools and authority
 
 ```console

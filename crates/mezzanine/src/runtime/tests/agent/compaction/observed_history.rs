@@ -181,7 +181,7 @@ pub(super) fn queued_with_cap(
         .pending_agent_compaction_task_for_tests("%1")
         .unwrap();
     assert!(task.replay_source.is_some());
-    let input = &task.request.messages.last().unwrap().content;
+    let input = crate::test_support::compaction_source::rendered_source(task).unwrap();
     assert!(input.contains("TYPED_OLD_WORK"));
     for marker in [
         "CURRENT_USER_PROMPT",

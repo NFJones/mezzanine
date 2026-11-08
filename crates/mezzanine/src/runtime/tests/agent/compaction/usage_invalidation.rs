@@ -104,7 +104,7 @@ fn local_usage_compaction(
         &turn_id, "local-usage".into(), profile,
         crate::runtime::agent_state::RuntimeActiveTurnCompactionTrigger::ObservedInputLimit {
             observed_input_tokens: 20_000, max_input_tokens: 20_000,
-        }, plan,
+        },
         ).unwrap());
     }
     service.checkpoint_agent_session_metadata().unwrap();
@@ -205,15 +205,12 @@ fn local_compaction_acceptance_resets_request_cache_and_grants_once() {
     assert_eq!(available(&service).len(), 1);
     let before = service.agent_turn_contexts()[&turn_id].clone();
     let lineage = before.metadata().prompt_cache_lineage_id.clone();
-    let task = service.take_pending_agent_compaction_task("%1").unwrap();
+    let task = service
+        .pending_agent_compaction_task_for_tests("%1")
+        .unwrap()
+        .clone();
     let generation = task.task_generation;
-    service.claim_agent_compaction_task_state("%1", task);
-    service
-        .apply_agent_compaction_completed_event(
-            "%1",
-            runtime_test_compaction_response("accepted replacement"),
-        )
-        .unwrap();
+    complete_runtime_test_compaction(&mut service, "%1", "accepted replacement");
     let expense = service.agent_token_usage_for_conversation(&conversation);
     assert_eq!(service.agent_turn_contexts()[&turn_id], before);
     assert_eq!(available(&service).len(), 1);
@@ -375,9 +372,11 @@ fn local_compaction_usage_success_clears_display_and_metadata() {
             .as_deref(),
         Some("50%")
     );
-    let task = service.take_pending_agent_compaction_task("%1").unwrap();
+    let task = service
+        .pending_agent_compaction_task_for_tests("%1")
+        .unwrap()
+        .clone();
     let generation = task.task_generation;
-    service.claim_agent_compaction_task_state("%1", task);
     let mut response = runtime_test_compaction_response("closed work summarized");
     response.usage = mez_agent::ModelTokenUsage {
         input_tokens: 17,
@@ -388,14 +387,9 @@ fn local_compaction_usage_success_clears_display_and_metadata() {
     let event = AgentCompactionEvent::Completed {
         pane_id: "%1".into(),
         task_generation: generation,
-        response: Box::new(response),
+        response: Box::new(response.clone()),
     };
-    assert!(
-        service
-            .apply_agent_compaction_transition(event.clone())
-            .unwrap()
-            .applied
-    );
+    run_runtime_test_compaction_wave(&mut service, "%1", Ok(response));
     publish_usage_compaction(&mut service);
     assert_unknown(&mut service, &conversation);
     let (_, published) = store
@@ -514,21 +508,18 @@ fn local_compaction_usage_checkpoint_failure_precedes_recovery_admission() {
         .session_id
         .clone();
     let before = service.agent_token_usage_for_conversation(&conversation);
-    let task = service.take_pending_agent_compaction_task("%1").unwrap();
+    let task = service
+        .pending_agent_compaction_task_for_tests("%1")
+        .unwrap()
+        .clone();
     let generation = task.task_generation;
-    service.claim_agent_compaction_task_state("%1", task);
     store.fail_next_agent_session_metadata_write();
     let event = AgentCompactionEvent::Completed {
         pane_id: "%1".into(),
         task_generation: generation,
         response: Box::new(runtime_test_compaction_response("closed work summarized")),
     };
-    assert!(
-        service
-            .apply_agent_compaction_transition(event.clone())
-            .unwrap()
-            .applied
-    );
+    complete_runtime_test_compaction(&mut service, "%1", "closed work summarized");
     publish_usage_compaction(&mut service);
     let trace = service.agent_pane_trace_log_text("%1").unwrap_or_default();
     assert!(

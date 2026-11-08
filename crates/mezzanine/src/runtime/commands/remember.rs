@@ -5,7 +5,6 @@
 //! record construction, and persistence helpers together so durable-memory
 //! command behavior is isolated from unrelated command families.
 
-use super::compaction;
 use super::{
     AgentActionPayload, AgentContext, AgentShellCommandOutcome, ConfigFormat, ConfigMutation,
     ConfigMutationOperation, ConfigMutationValue, ConfigPaths, ConfigScope, ContextSourceKind,
@@ -92,9 +91,9 @@ pub(super) fn runtime_remember_context_source(pane_id: &str, context: &AgentCont
         lines.push(format!(
             "context_block={} source={} label={} content={}",
             index,
-            compaction::runtime_context_source_kind_name(block.source),
+            mez_agent::epoch_compaction::provider::source_kind_name(block.source),
             json_escape(&block.label),
-            compaction::runtime_model_compaction_entry_content(&block.content)
+            mez_agent::epoch_compaction::provider::redact_content(&block.content)
         ));
     }
     lines.join("\n")

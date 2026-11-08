@@ -59,7 +59,7 @@ fn qualify_canonical_candidate(
     let task = fixture.queue(worker);
     assert!(task.replay_source.is_some());
     assert!(fixture.service.agent_turn_ledger().turns().is_empty());
-    let source = task.request.messages.last().unwrap().content.clone();
+    let source = crate::test_support::compaction_source::rendered_source(&task).unwrap();
     assert!(source.contains("ELIGIBLE_OLD_PREFIX"));
     assert_eq!(source.contains("previous canonical head"), !headless);
     let before = fixture

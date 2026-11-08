@@ -8,7 +8,7 @@ use super::*;
 /// ordinary continuation. All requests are offline loopback traffic.
 #[tokio::test(flavor = "current_thread")]
 async fn async_compaction_invalid_completed_output_repairs_before_ordinary_dispatch() {
-    for kind in ["empty", "bytes", "malformed"] {
+    for kind in ["empty", "malformed"] {
         Box::pin(qualify_completed_output(kind)).await;
     }
 }
@@ -21,11 +21,18 @@ async fn async_compaction_word_target_is_advisory_before_ordinary_dispatch() {
     Box::pin(qualify_completed_output("budget")).await;
 }
 
+/// A genuine decoded-summary resource overflow is terminal after one request;
+/// it cannot start a model-driven shortening loop or publish a partial epoch.
+#[tokio::test(flavor = "current_thread")]
+async fn async_compaction_summary_byte_overflow_fails_once() {
+    Box::pin(qualify_completed_output("bytes")).await;
+}
+
 /// Owns fake server, real worker and actor futures with explicit response gates.
 async fn qualify_completed_output(kind: &str) {
     let advisory = kind == "budget";
-    let exhausted = kind.ends_with("-exhaust");
-    let malformed = kind.starts_with("malformed");
+    let resource = kind == "bytes";
+    let exhausted = resource || kind.ends_with("-exhaust");
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let root = std::env::temp_dir().join(format!(
@@ -70,40 +77,6 @@ async fn qualify_completed_output(kind: &str) {
         "continue after observed compaction",
         mez_agent::ProviderApiCompatibility::OpenAiChatCompletions,
     );
-    let context = service.agent_turn_contexts().get(&turn).unwrap();
-    let projection = mez_agent::ProviderBudgetProjection::new(
-        mez_agent::ProviderApiCompatibility::OpenAiChatCompletions,
-        "local-chat",
-    );
-    let plan = if advisory {
-        // Only this output target is word-budgeted and deliberately smaller
-        // than the unchanged real 20k-token request allowance. Repeating a
-        // token allowance as words would create actual complete-request
-        // overflow rather than isolate advisory-word acceptance.
-        mez_agent::plan_model_context_compaction_for_provider(
-            context,
-            1_000,
-            10,
-            context.event_sequence_high_water_mark(),
-            projection,
-        )
-    } else {
-        mez_agent::plan_model_context_compaction_for_provider_tokens(
-            context,
-            20_000,
-            10,
-            context.event_sequence_high_water_mark(),
-            projection,
-        )
-    }
-    .unwrap();
-    if advisory {
-        assert!(!plan.planning_budget().1, "advisory target must be words");
-    }
-    assert!(
-        plan.changes_context(),
-        "fixture must contain closed history: {context:#?}"
-    );
     let profile = service.agent_turn_model_profile(&turn).unwrap().clone();
     assert!(
         service
@@ -115,7 +88,6 @@ async fn qualify_completed_output(kind: &str) {
                     observed_input_tokens: 20000,
                     max_input_tokens: 20000,
                 },
-                plan
             )
             .unwrap()
     );
@@ -123,10 +95,7 @@ async fn qualify_completed_output(kind: &str) {
         .pending_agent_compaction_task_for_tests("%1")
         .unwrap();
     assert!(task.replay_source.is_some());
-    let crate::runtime::RuntimeAgentCompactionTarget::ActiveTurn { plan, .. } = &task.target else {
-        panic!("expected active turn source");
-    };
-    let budget = plan.summary_budget_words();
+    let budget = 100;
     let invalid = match kind {
         "budget" => "word ".repeat(budget + 1),
         "empty" | "empty-exhaust" => " \n\t".into(),
@@ -141,18 +110,25 @@ async fn qualify_completed_output(kind: &str) {
     let phase = std::sync::atomic::AtomicUsize::new(0);
     let server = async {
         let mut requests = Vec::new();
-        for step in 0..(if advisory { 2 } else { 3 }) {
+        for step in 0..(if resource {
+            1
+        } else if advisory {
+            2
+        } else {
+            3
+        }) {
             let (mut stream, _) = listener.accept().await.unwrap();
             requests.push(async_provider_concurrency_read_http_request(&mut stream).await);
             phase.store(10 + step, Ordering::SeqCst);
             match step {
                 0 => {
                     if advisory {
-                        assert!(
-                            requests[0]
-                                .contains(&format!("within {budget} whitespace-delimited words"))
-                        );
+                        assert!(requests[0].contains("Any token or word target is advisory"));
                         assert!(invalid.split_whitespace().count() > budget);
+                    }
+                    if resource {
+                        started.notify_one();
+                        release.notified().await;
                     }
                     async_provider_concurrency_write_chat_content_response(
                         &mut stream,
@@ -363,15 +339,26 @@ async fn qualify_completed_output(kind: &str) {
             phase.load(Ordering::SeqCst)
         )
     });
-    assert_eq!(requests.len(), if advisory { 2 } else { 3 });
-    // Typed malformed wire content is a failed worker result, not a completed
-    // value; the HTTP inventory still proves all three inference attempts.
+    assert_eq!(
+        requests.len(),
+        if resource {
+            1
+        } else if advisory {
+            2
+        } else {
+            3
+        }
+    );
+    // A wave returning private repair is a completed worker outcome. The final
+    // exhausted/resource failure is not, independently of HTTP response count.
     assert_eq!(
         report.executions,
-        if advisory {
+        if resource {
+            0
+        } else if advisory {
             2
-        } else if malformed {
-            if exhausted { 0 } else { 2 }
+        } else if exhausted {
+            2
         } else {
             3
         }

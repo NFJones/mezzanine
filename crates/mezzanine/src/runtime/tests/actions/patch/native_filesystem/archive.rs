@@ -290,18 +290,6 @@ max_input_tokens = 20000
                     .iter()
                     .any(|row| row.content.contains("ORIGINAL_COMPACTION_RAW"))
             );
-            let context = &service.agent_turn_contexts()[&turn.turn_id];
-            let plan = mez_agent::plan_model_context_compaction_for_provider_tokens(
-                context,
-                40_000,
-                1,
-                context.event_sequence_high_water_mark(),
-                mez_agent::ProviderBudgetProjection::new(
-                    mez_agent::ProviderApiCompatibility::OpenAiResponses,
-                    "runtime-batch",
-                ),
-            )
-            .unwrap();
             let profile = service
                 .agent_turn_model_profile(&turn.turn_id)
                 .unwrap()
@@ -310,7 +298,7 @@ max_input_tokens = 20000
                 &turn.turn_id, "native-archive".into(), profile,
                 crate::runtime::agent_state::RuntimeActiveTurnCompactionTrigger::ObservedInputLimit {
                     observed_input_tokens: 40_000, max_input_tokens: 40_000,
-                }, plan,
+                },
             ).unwrap());
             assert!(
                 service

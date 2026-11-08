@@ -272,105 +272,12 @@ impl RuntimeSessionService {
             &stored_model_profile,
             auto_sizing.as_ref(),
         );
-        let context = self
-            .agent_turn_contexts()
-            .get(turn_id)
-            .cloned()
-            .ok_or_else(|| MezError::invalid_state("runtime agent turn context is unavailable"))?;
-        let consumed_sequence_high_water = self
-            .agent
-            .claimed_agent_provider_tasks
-            .get(turn_id)
-            .map(|claim| claim.context_event_high_water_mark)
-            .unwrap_or_else(|| context.event_sequence_high_water_mark());
-        let configured_profile_budget_words = model_profile.context_window_budget_words();
-        let observed_context_words = context
-            .blocks()
-            .iter()
-            .map(|block| {
-                mez_agent::model_context_text_word_count(&mez_agent::model_context_block_header(
-                    block,
-                ))
-                .saturating_add(mez_agent::model_context_text_word_count(&block.content))
-            })
-            .fold(0usize, usize::saturating_add)
-            .max(1);
-        let profile_budget_words =
-            configured_profile_budget_words.unwrap_or(observed_context_words);
         let recovery_attempt = attempt.max(1);
-        let reduction_step = if configured_profile_budget_words.is_some() {
-            recovery_attempt.saturating_sub(1)
-        } else {
-            recovery_attempt
-        };
-        let recovery_budget_words = match reduction_step {
-            0 => profile_budget_words,
-            1 => profile_budget_words.saturating_mul(3).saturating_div(4),
-            2 => profile_budget_words.saturating_div(2),
-            _ => profile_budget_words.saturating_div(4),
-        }
-        .max(1);
-        let configured_tail_percent = self.agent_compaction_raw_retention_percent();
-        let provider_projection = self.agent_provider_budget_projection(&model_profile);
-        // Legacy projections can lower their optional reservation. Canonical
-        // owners instead use the configured policy and oldest-closed-unit
-        // progress rule at queue admission; this legacy projection cannot veto
-        // that decision or change its retained tail.
-        let mut retained_tail_percent = configured_tail_percent;
-        let mut plan = self.plan_agent_context_compaction(
-            provider_projection,
-            &context,
-            recovery_budget_words,
-            retained_tail_percent,
-            consumed_sequence_high_water,
-        )?;
-        if !context.has_replay_owner() {
-            for percent in [5, 2, 1] {
-                if plan.changes_context() || percent >= retained_tail_percent {
-                    continue;
-                }
-                retained_tail_percent = percent;
-                plan = self.plan_agent_context_compaction(
-                    provider_projection,
-                    &context,
-                    recovery_budget_words,
-                    retained_tail_percent,
-                    consumed_sequence_high_water,
-                )?;
-            }
-        }
-        if !plan.changes_context() && !context.has_replay_owner() {
-            self.append_agent_trace_turn_event(
-                &turn.pane_id,
-                turn_id,
-                &format!(
-                    "context_limit_recovery skipped attempt={} consumed_event_sequence={} profile_budget_words={} recovery_budget_words={} configured_tail_percent={} attempted_tail_percent={} error_kind={} no_viable_replacement=true",
-                    recovery_attempt,
-                    consumed_sequence_high_water,
-                    profile_budget_words,
-                    recovery_budget_words,
-                    configured_tail_percent,
-                    retained_tail_percent,
-                    runtime_mezzanine_error_code(error.kind())
-                ),
-            )?;
-            self.append_agent_status_text_to_terminal_buffer(
-                &turn.pane_id,
-                &format!(
-                    "agent: provider rejected context as too large; no viable compaction replacement after reducing optional raw-tail retention profile_budget_words={} recovery_budget_words={} minimum_tail_percent={}",
-                    profile_budget_words,
-                    recovery_budget_words,
-                    retained_tail_percent
-                ),
-            )?;
-            return Ok(false);
-        }
         if !self.queue_agent_context_limit_recovery_compaction(
             turn_id,
             turn.model_profile.clone(),
             model_profile.clone(),
             recovery_attempt,
-            plan,
         )? {
             return Ok(false);
         }
@@ -378,86 +285,31 @@ impl RuntimeSessionService {
             &turn.pane_id,
             turn_id,
             &format!(
-                "context_limit_recovery queued trigger=provider_context_limit provider={} model={} context_window_tokens={} max_input_tokens={} attempt={} consumed_event_sequence={} profile_budget_words={} recovery_budget_words={} retained_tail_percent={} error_kind={}",
+                "context_limit_recovery queued trigger=provider_context_limit provider={} model={} context_window_tokens={} max_input_tokens={} attempt={} retained_tail_percent={} error_kind={}",
                 model_profile.provider,
                 model_profile.model,
                 model_profile.context_window_tokens().unwrap_or(0),
                 model_profile.max_input_tokens().unwrap_or(0),
                 recovery_attempt,
-                consumed_sequence_high_water,
-                profile_budget_words,
-                recovery_budget_words,
-                retained_tail_percent,
+                self.agent_compaction_raw_retention_percent(),
                 runtime_mezzanine_error_code(error.kind())
             ),
         )?;
         Ok(true)
     }
 
-    /// Resolves the active provider's budget projection for one model profile.
-    ///
-    /// A missing provider record or an unknown configured API leaves the
-    /// projection unresolved, and the planner then budgets for every block - the
-    /// conservative previous behavior - instead of failing a recovery that is
-    /// already reducing context. Provider ownership is exclusive, so a resolved
-    /// projection can only make the budget more accurate.
-    fn agent_provider_budget_projection<'a>(
-        &self,
-        model_profile: &'a ModelProfile,
-    ) -> Option<mez_agent::ProviderBudgetProjection<'a>> {
-        let provider_config = self.provider_registry().provider(&model_profile.provider)?;
-        let api =
-            mez_agent::resolve_provider_api(&provider_config.kind, provider_config.api.as_deref())
-                .ok()?;
-        Some(mez_agent::ProviderBudgetProjection::new(
-            api,
-            &model_profile.provider,
-        ))
-    }
-
-    /// Plans model-authored compaction against the active provider's projection.
-    ///
-    /// Blocks the active provider never renders are excluded from the word
-    /// accounting, so a durable block owned by another provider cannot consume the
-    /// budget that decides whether a summary can be requested at all.
-    fn plan_agent_context_compaction(
-        &self,
-        provider_projection: Option<mez_agent::ProviderBudgetProjection<'_>>,
-        context: &mez_agent::AgentContext,
-        context_budget_words: usize,
-        retained_tail_percent: usize,
-        consumed_sequence_high_water: u64,
-    ) -> Result<mez_agent::ModelContextCompactionPlan> {
-        let plan = match provider_projection {
-            Some(provider_projection) => mez_agent::plan_model_context_compaction_for_provider(
-                context,
-                context_budget_words,
-                retained_tail_percent,
-                consumed_sequence_high_water,
-                provider_projection,
-            ),
-            None => mez_agent::plan_model_context_compaction_at_consumed_sequence(
-                context,
-                context_budget_words,
-                retained_tail_percent,
-                consumed_sequence_high_water,
-            ),
-        };
-        plan.map_err(|error| MezError::invalid_state(error.message()))
-    }
-
     /// Queues one compaction at a safe continuation boundary after an ordinary
     /// execution response reports input at or above its configured threshold.
     ///
-    /// The response sample is authoritative for the triggering decision. The
-    /// planner's token budget is only a bounded summary-sizing heuristic; it is
-    /// not a second request-submission gate.
+    /// The reported sample alone selects this trigger. Common canonical source
+    /// admission owns eligibility and retention; no ordinary request estimate
+    /// selects another history algorithm or shortens its retention policy.
     pub(crate) fn defer_agent_provider_for_observed_input_limit(
         &mut self,
         turn: &AgentTurnRecord,
         model_profile: &ModelProfile,
         observed_usage: mez_agent::ModelTokenUsage,
-        accepted_request: &mez_agent::ModelRequest,
+        _accepted_request: &mez_agent::ModelRequest,
     ) -> Result<bool> {
         let Some(max_input_tokens) = model_profile.max_input_tokens() else {
             return Ok(false);
@@ -470,114 +322,15 @@ impl RuntimeSessionService {
         {
             return Ok(false);
         }
-        let context = self
-            .agent_turn_contexts()
-            .get(&turn.turn_id)
-            .cloned()
-            .ok_or_else(|| MezError::invalid_state("runtime agent turn context is unavailable"))?;
-        if context.has_replay_owner() {
-            // Eligibility precedes the legacy summary-sizing estimate. A
-            // provider has already accepted this execution; an exhausted local
-            // allowance cannot fail it when the canonical prefix is protected.
-            // Queue admission independently freezes any actual eligible work.
-            let owner = mez_agent::ReplayEpochContext::from_owned_context(
-                mez_agent::ReplayConversationId::new(&turn.conversation_id)?,
-                context.clone(),
-            )?;
-            let budget = max_input_tokens.min(
-                model_profile
-                    .context_window_tokens()
-                    .unwrap_or(max_input_tokens),
-            );
-            let retained =
-                u8::try_from(self.agent_compaction_raw_retention_percent()).map_err(|_| {
-                    MezError::invalid_state("invalid canonical raw retention percentage")
-                })?;
-            if matches!(
-                owner.prepare_compaction(mez_agent::ReplayTailPolicy::new(budget, retained)?)?,
-                mez_agent::ReplayCompactionPreparation::NoWork(_)
-            ) {
-                self.agent
-                    .agent_turn_observed_input_compaction_turns
-                    .remove(&turn.turn_id);
-                return Ok(false);
-            }
-        }
-        let provider_projection = self.agent_provider_budget_projection(model_profile);
-        let block_estimates =
-            mez_agent::projected_context_block_input_tokens(&context, provider_projection);
-        let visible_block_estimate = block_estimates
-            .iter()
-            .copied()
-            .fold(0usize, usize::saturating_add);
-        let provider_config = self
-            .provider_registry()
-            .provider(&model_profile.provider)
-            .ok_or_else(|| {
-                MezError::invalid_state("observed-input provider configuration is unavailable")
-            })?;
-        let api =
-            mez_agent::resolve_provider_api(&provider_config.kind, provider_config.api.as_deref())?;
-        let options = crate::runtime::config::runtime_effective_provider_options(
-            provider_config,
-            model_profile,
-        );
-        let complete_estimate =
-            mez_agent::provider_request_input_estimate(accepted_request, api, &options, true)?;
-        let attribution = mez_agent::provider_context_input_attribution(
-            &context,
-            provider_projection,
-            accepted_request,
-            complete_estimate,
-            Some(observed_usage.input_tokens),
-        );
-        let block_budget = max_input_tokens
-            .saturating_sub(attribution.non_block_estimate)
-            .saturating_mul(3)
-            .saturating_div(4)
-            .max(1);
-        let plan = if attribution.accepted_block_estimate == 0 {
-            // Legacy/test requests can carry no recognizable context snapshot.
-            // Do not charge their unrelated schema envelope against these blocks.
-            self.plan_agent_context_compaction(
-                provider_projection,
-                &context,
-                max_input_tokens.saturating_mul(3).saturating_div(4).max(1),
-                0,
-                context.event_sequence_high_water_mark(),
-            )?
-        } else {
-            match provider_projection {
-                Some(projection) => mez_agent::plan_model_context_compaction_for_provider_tokens(
-                    &context,
-                    block_budget,
-                    0,
-                    context.event_sequence_high_water_mark(),
-                    projection,
-                ),
-                None => mez_agent::plan_model_context_compaction_at_consumed_sequence(
-                    &context,
-                    model_profile
-                        .context_window_budget_words()
-                        .unwrap_or(block_budget),
-                    0,
-                    context.event_sequence_high_water_mark(),
-                ),
-            }
-            .map_err(|error| MezError::invalid_state(error.message()))?
-        };
-        if !plan.changes_context()
-            || !self.queue_agent_active_turn_compaction(
-                &turn.turn_id,
-                turn.model_profile.clone(),
-                model_profile.clone(),
-                crate::runtime::agent_state::RuntimeActiveTurnCompactionTrigger::ObservedInputLimit {
-                    observed_input_tokens: observed_usage.input_tokens,
-                    max_input_tokens,
-                },
-                plan,
-            )?
-        {
+        if !self.queue_agent_active_turn_compaction(
+            &turn.turn_id,
+            turn.model_profile.clone(),
+            model_profile.clone(),
+            crate::runtime::agent_state::RuntimeActiveTurnCompactionTrigger::ObservedInputLimit {
+                observed_input_tokens: observed_usage.input_tokens,
+                max_input_tokens,
+            },
+        )? {
             self.agent
                 .agent_turn_observed_input_compaction_turns
                 .remove(&turn.turn_id);
@@ -587,16 +340,12 @@ impl RuntimeSessionService {
             &turn.pane_id,
             &turn.turn_id,
             &format!(
-                "observed_input_limit queued trigger=observed_input_limit provider={} model={} observed_input_tokens={} max_input_tokens={} context_window_tokens={} displayed_usage_sample=prior_successful_request estimated_visible_block_tokens={} accounted_blocks={} block_size_provenance=local_estimate estimated_complete_request_tokens={} estimated_non_block_tokens={}",
+                "observed_input_limit queued trigger=observed_input_limit provider={} model={} observed_input_tokens={} max_input_tokens={} context_window_tokens={} displayed_usage_sample=prior_successful_request",
                 model_profile.provider,
                 model_profile.model,
                 observed_usage.input_tokens,
                 max_input_tokens,
                 model_profile.context_window_tokens().unwrap_or(0),
-                visible_block_estimate,
-                block_estimates.len(),
-                attribution.complete_request_estimate,
-                attribution.non_block_estimate,
             ),
         )?;
         Ok(true)

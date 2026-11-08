@@ -61,37 +61,32 @@ fn runtime_observed_input_limit_compaction_failure_keeps_its_trigger() {
     assert!(store.inspect(&conversation).unwrap().starts_with(&original));
 }
 
-/// A genuine post-plan exact instruction makes every possible summary unfit.
-/// Reject before storage admission and preserve original ordinary source; a
-/// consumed pressure sample cannot authorize a partial head or MCP rewrite.
+/// A post-plan exact arrival can exceed the next request allowance. It remains
+/// raw through the one valid publication; that estimate cannot regenerate or
+/// reject the frozen summary, nor authorize summarizing the new instruction.
 #[test]
-fn runtime_observed_input_limit_rejects_over_cap_candidate_without_commit() {
+fn runtime_observed_input_limit_preserves_over_cap_arrival_after_commit() {
     let (mut service, store, turn) = observed_history::queued();
     let task = service
         .pending_agent_compaction_task_for_tests("%1")
         .unwrap()
         .clone();
     assert_eq!(task.source, "observed-input-limit");
-    let crate::runtime::RuntimeAgentCompactionTarget::ActiveTurn {
-        trigger:
+    assert!(matches!(
+        task.replay_source.as_ref().unwrap().trigger(),
+        Some(
             crate::runtime::RuntimeActiveTurnCompactionTrigger::ObservedInputLimit {
-                observed_input_tokens,
-                max_input_tokens,
-            },
-        ..
-    } = task.target
-    else {
-        panic!("observed trigger")
-    };
-    assert_eq!((observed_input_tokens, max_input_tokens), (20_000, 20_000));
+                observed_input_tokens: 20_000,
+                max_input_tokens: 20_000,
+            }
+        )
+    ));
+    let exact = "OVERSIZED_EXACT_STEERING ".repeat(5_000);
     service
         .agent_turn_contexts_mut()
         .get_mut(&turn)
         .unwrap()
-        .append_user_event(
-            "over-cap exact steering",
-            "OVERSIZED_EXACT_STEERING ".repeat(5_000),
-        )
+        .append_user_event("over-cap exact steering", exact.clone())
         .unwrap();
     let before = service.agent_turn_contexts()[&turn].clone();
     let retained = before.chronology().last().unwrap().clone();
@@ -103,44 +98,34 @@ fn runtime_observed_input_limit_rejects_over_cap_candidate_without_commit() {
             > 20_000
     );
     let original = store.inspect(&task.conversation_id).unwrap();
-    complete_runtime_test_compaction(&mut service, "%1", "observed input summary");
+    let requests = run_runtime_test_compaction_wave(
+        &mut service,
+        "%1",
+        Ok(runtime_test_compaction_response("observed input summary")),
+    );
+    assert_eq!(requests.len(), 1);
+    assert!(
+        !requests[0]
+            .messages
+            .iter()
+            .any(|message| message.content.contains(&exact))
+    );
+    assert_eq!(service.agent_turn_contexts()[&turn], before);
+    assert!(!service.agent_provider_task_is_pending(&turn));
+    replay_observed::adopt(&mut service, &turn);
+    replay_observed::assert_head(&service, &store, &turn, "observed input summary");
     assert_eq!(
         service.agent_turn_ledger().turn(&turn).unwrap().state,
-        AgentTurnState::Failed
+        AgentTurnState::Running
     );
-    assert!(!service.agent_is_compacting("%1"));
-    assert!(service.pending_agent_provider_tasks().is_empty());
-    assert!(service.take_replay_epoch_attempt_for_tests().is_none());
     assert!(
-        store
-            .load_replay_epoch(&task.conversation_id, mez_agent::AgentContext::empty())
-            .unwrap()
-            .is_none()
+        service.agent_turn_contexts()[&turn]
+            .chronology()
+            .contains(&retained)
     );
-    let pending = service
-        .persistence
-        .pending_transcript_entries(&task.conversation_id);
-    let rows = store.inspect(&task.conversation_id).unwrap();
-    assert!(rows.starts_with(&original));
-    for row in rows.iter().chain(pending.iter()) {
-        assert!(!row.content.contains("observed input summary"));
-        assert!(!row.content.contains("mcp_compaction_epoch"));
-    }
-    // Terminal bookkeeping must retain the actual accepted exact occurrence,
-    // independently of whether its ordinary append was already committed.
-    assert_eq!(
-        rows.iter()
-            .chain(pending.iter())
-            .filter_map(|row| {
-                mez_agent::transcript::TranscriptContextRecord::from_transcript_content(
-                    &row.content,
-                )
-                .unwrap()
-            })
-            .filter(|record| record.record() == retained.record())
-            .count(),
-        1
-    );
+    assert!(service.agent_provider_task_is_pending(&turn));
+    assert!(service.pending_agent_compaction_tasks().is_empty());
+    assert_eq!(store.inspect(&task.conversation_id).unwrap(), original);
 }
 
 /// Owns only this fixture's physical pane processes, including panic cleanup.

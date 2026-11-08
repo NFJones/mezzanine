@@ -414,9 +414,9 @@ fn runtime_manual_legacy_prefix_uses_canonical_source_and_publication() {
         .prefix
         .unwrap();
     let task = fixture.queue();
-    let source = task.request.messages.last().unwrap();
-    assert!(source.content.contains("original historical prefix"));
-    assert!(source.content.contains("original old reference"));
+    let source = crate::test_support::compaction_source::rendered_source(&task).unwrap();
+    assert!(source.contains("original historical prefix"));
+    assert!(source.contains("original old reference"));
     let (_, imported) = fixture
         .store
         .load_replay_epoch(CONVERSATION, mez_agent::AgentContext::empty())

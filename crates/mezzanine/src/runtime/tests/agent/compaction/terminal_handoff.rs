@@ -49,44 +49,28 @@ fn mixed_staged_recovery_publishes_only_at_distinct_terminal_handoff() {
         .load_replay_epoch(&conversation, mez_agent::AgentContext::empty())
         .unwrap();
     assert!(baseline.is_none());
-    let mut task = service.take_pending_agent_compaction_task("%1").unwrap();
-    let input = &task.request.messages.last().unwrap().content;
-    assert!(input.contains("TYPED_OLD_WORK") && input.contains("MIXED_PENDING_SOURCE"));
-    let provider = service
-        .provider_registry()
-        .provider(&task.model_profile.provider)
-        .unwrap();
-    let api = mez_agent::resolve_provider_api(&provider.kind, provider.api.as_deref()).unwrap();
-    let options =
-        crate::runtime::config::runtime_effective_provider_options(provider, &task.model_profile);
-    task.compaction_request_shape = Some((api, options, false));
-    service.claim_agent_compaction_task_state("%1", task);
-    assert!(
-        service
-            .apply_agent_compaction_failed_event(
-                "%1",
-                "invalid_state",
-                "provider context length exceeded",
-                Some(r#"{"status_code":400,"error":{"code":"context_length_exceeded"}}"#),
-            )
-            .unwrap()
+    let rejected = run_runtime_test_compaction_wave(
+        &mut service,
+        "%1",
+        Err(MezError::invalid_state("provider context length exceeded")
+            .with_provider_failure_json(
+                r#"{"status_code":400,"error":{"code":"context_length_exceeded"}}"#,
+            )),
     );
-    let mut responses = 0usize;
-    while let Some(task) = service.pending_agent_compaction_task_for_tests("%1") {
-        let crate::runtime::RuntimeAgentCompactionTarget::ActiveTurn { current_blocks, .. } =
-            &task.target
-        else {
-            panic!("active target");
-        };
-        let synthesis = current_blocks
-            .iter()
-            .all(|block| block.source == ContextSourceKind::Memory);
-        let summary = if synthesis {
-            "MIXED_FINAL_HEAD".into()
-        } else {
-            format!("private mixed summary {responses}")
-        };
-        complete_runtime_test_compaction(&mut service, "%1", &summary);
+    assert_eq!(rejected.len(), 1);
+    let input = &rejected[0].messages.last().unwrap().content;
+    assert!(input.contains("TYPED_OLD_WORK") && input.contains("MIXED_PENDING_SOURCE"));
+    let mut responses = 0;
+    for _ in 0..16 {
+        if service.pending_agent_compaction_tasks().is_empty() {
+            break;
+        }
+        let sent = run_runtime_test_compaction_wave(
+            &mut service,
+            "%1",
+            Ok(runtime_test_compaction_response("MIXED_FINAL_HEAD")),
+        );
+        responses += sent.len();
         assert_eq!(service.agent_turn_contexts()[&turn_id], original);
         assert!(!service.agent_provider_task_is_pending(&turn_id));
         assert!(
@@ -95,17 +79,8 @@ fn mixed_staged_recovery_publishes_only_at_distinct_terminal_handoff() {
                 .unwrap()
                 .is_none()
         );
-        responses += 1;
-        assert!(
-            responses < 16,
-            "finite original chunks must reach one synthesis"
-        );
-        if synthesis {
-            break;
-        }
-        assert!(service.take_replay_epoch_attempt_for_tests().is_none());
     }
-    assert!(responses >= 3);
+    assert!(responses >= 2, "actual raw fragment and final carry");
     let completion = replay_publication::execute_pending_publication(&mut service);
     assert!(!service.agent_provider_task_is_pending(&turn_id));
     assert!(
@@ -324,7 +299,7 @@ fn queue_live_compaction(service: &mut RuntimeSessionService, turn_id: &str, obs
     };
     assert!(
         service
-            .queue_agent_active_turn_compaction(turn_id, "live".into(), profile, trigger, plan)
+            .queue_agent_active_turn_compaction(turn_id, "live".into(), profile, trigger)
             .unwrap()
     );
 }

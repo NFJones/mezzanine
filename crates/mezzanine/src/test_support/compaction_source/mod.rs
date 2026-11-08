@@ -13,6 +13,11 @@ use mez_agent::{AgentTurnState, ContextRetention, ContextSourceKind};
 use mez_mux::layout::Size;
 use std::path::PathBuf;
 
+mod model_work;
+pub(crate) use model_work::{
+    execute_wave, execute_with_inference, model_result_event, rendered_source,
+};
+
 /// Completes a historical task and admits its successor under a real 40k-token
 /// profile. The caller owns the service, isolated store location and any later
 /// compaction/lease/publication assertions. No provider network is contacted.

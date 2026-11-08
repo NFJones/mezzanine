@@ -12,19 +12,19 @@ enum RetryPath {
     Direct,
     /// Incomplete HTTP body, followed by the exact frozen request.
     Transport,
-    /// Typed provider generation cutoff, handled by auxiliary helper once.
+    /// Typed provider generation cutoff, handled by the common output repair.
     OutputLimit,
     /// Compactor context rejection requiring smaller private source input.
     ContextSplit,
 }
 
-/// An ordinary context rejection must freeze auxiliary work, reject oversized
-/// byte-bound output, accept a summary above halved guidance, pass the complete
-/// request fit and dispatch exactly one ordinary continuation after publication.
+/// An ordinary context rejection freezes one fitting auxiliary input. A usable
+/// long final publishes once and admits one ordinary continuation without size
+/// chasing or a prospective ordinary-request fit gate.
 /// Every captured canonical OpenAI body omits max_output_tokens, with and
 /// without an internal allocation and in streaming and nonstreaming modes.
 #[tokio::test(flavor = "current_thread")]
-async fn async_openai_compaction_converges_against_original_allowance() {
+async fn async_openai_compaction_accepts_usable_long_final_once() {
     for stream in [false, true] {
         for allocation in [false, true] {
             Box::pin(qualify(false, stream, allocation, RetryPath::Direct)).await;
@@ -32,11 +32,11 @@ async fn async_openai_compaction_converges_against_original_allowance() {
     }
 }
 
-/// Manual preparation freezes words rather than borrowing provider output
-/// tokens. The same correction/wire owner must publish one complete epoch
+/// Manual preparation freezes canonical source and profile controls. The
+/// common worker publishes one usable long final in one inference,
 /// without dispatching an ordinary turn, in both stream/allocation modes.
 #[tokio::test(flavor = "current_thread")]
-async fn async_openai_manual_compaction_keeps_frozen_word_allowance() {
+async fn async_openai_manual_compaction_accepts_usable_long_final_once() {
     for stream in [false, true] {
         for allocation in [false, true] {
             Box::pin(qualify(true, stream, allocation, RetryPath::Direct)).await;
@@ -226,54 +226,18 @@ async fn qualify(manual: bool, streaming: bool, allocation: bool, retry: RetryPa
             } else {
                 assert!(
                     next.to_string()
-                        .contains("[ephemeral compaction output-limit retry]")
+                        .contains("[private epoch compaction output repair]")
                 );
             }
             body = next;
         }
-        let text = body.to_string();
-        let target = text.split_once("[compaction summary target]").unwrap().1;
-        let budget: usize = target
-            .split_once("within ")
-            .unwrap()
-            .1
-            .split_whitespace()
-            .next()
-            .unwrap()
-            .parse()
-            .unwrap();
-        assert!(budget > 8);
-        let token_mode = target
-            .chars()
-            .take(200)
-            .collect::<String>()
-            .contains("estimated input tokens (approximately");
-        // Advisory word/token targets alone cannot reject canonical output.
-        // This definite block-byte violation exercises actual private repair.
-        let invalid = "界".repeat(128 * 1024 / 3 + 1);
-        requests.push(body);
-        respond(&mut socket, &invalid, streaming).await;
-        let corrected = if !token_mode {
-            // One-byte words keep the independent byte/full-request fit small;
-            // the word cost still exceeds the halved advisory target.
-            "v ".repeat(budget / 2 + 1).trim().to_string()
+        // A fitting source with usable output needs one auxiliary call. Long
+        // output is accepted without word targets or prospective fit correction.
+        let corrected = if retry == RetryPath::Direct {
+            format!("{}END", "v ".repeat(50_000))
         } else {
-            "abcd".repeat(budget / 2 + 1)
+            "CANONICAL_ACCEPTED_PRIVATE".to_owned()
         };
-        mez_agent::context_compaction::validate_model_compaction_summary(
-            &corrected, budget, token_mode,
-        )
-        .unwrap();
-        let corrected_cost = if !token_mode {
-            mez_agent::model_context_text_word_count(&corrected)
-        } else {
-            mez_agent::provider_text_input_token_estimate(&corrected)
-        };
-        assert!(corrected_cost > budget / 2);
-        let (mut socket, _) = listener.accept().await.unwrap();
-        let body = read_body(&mut socket, streaming).await;
-        assert!(body.to_string().contains("[private summary correction]"));
-        assert!(!body.to_string().contains(&invalid));
         phase.store(3, Ordering::SeqCst);
         requests.push(body);
         started.notify_one();
@@ -296,23 +260,14 @@ async fn qualify(manual: bool, streaming: bool, allocation: bool, retry: RetryPa
                 if retry == RetryPath::ContextSplit && next.contains("conversation compactor") {
                     extra_summaries += 1;
                     assert!(extra_summaries <= 8, "finite frozen chunk/synthesis work");
-                    assert!(!next.contains(&invalid));
                     requests.push(body);
                     final_summary = "CANONICAL_ACCEPTED_SYNTHESIS".into();
                     respond(&mut socket, &final_summary, streaming).await;
                     continue;
                 }
-                let next_target = next
-                    .split_once("[compaction summary target]")
-                    .and_then(|(_, value)| value.split_once("within "))
-                    .and_then(|(_, value)| value.split_whitespace().next())
-                    .and_then(|value| value.parse::<usize>().ok());
                 assert!(
                     next.contains(&final_summary),
-                    "next request: compactor={} correction={} synthesis={} budget={budget} token_mode={token_mode} corrected_cost={corrected_cost} next_target={next_target:?}",
-                    next.contains("conversation compactor"),
-                    next.contains("[private summary correction]"),
-                    next.contains("Chunk 1 summary")
+                    "ordinary request must use the accepted head"
                 );
                 phase.store(4, Ordering::SeqCst);
                 requests.push(body);
@@ -452,16 +407,21 @@ async fn qualify(manual: bool, streaming: bool, allocation: bool, retry: RetryPa
     }).await.unwrap_or_else(|_| panic!("canonical fixture deadline: manual={manual} streaming={streaming} allocation={allocation} phase={}", phase.load(Ordering::SeqCst)));
     assert_eq!(
         requests.len(),
-        (if manual { 2 } else { 4 }) + usize::from(retry != RetryPath::Direct) + extra_summaries
+        (if manual { 1 } else { 3 }) + usize::from(retry != RetryPath::Direct) + extra_summaries
     );
     assert_eq!(
         report.executions,
-        (if manual { 2 } else { 3 }) + extra_summaries as u64
+        (if manual { 1 } else { 2 })
+            + extra_summaries as u64
+            + u64::from(matches!(
+                retry,
+                RetryPath::OutputLimit | RetryPath::ContextSplit
+            ))
     );
     if retry == RetryPath::ContextSplit {
         assert!(
-            extra_summaries >= 2,
-            "later chunk and synthesis must execute: manual={manual} streaming={streaming} extra={extra_summaries}"
+            extra_summaries >= 1,
+            "rejected source must complete its remaining private work: manual={manual} streaming={streaming} extra={extra_summaries}"
         );
     }
     assert!(!exit.service.agent_is_compacting("%1"));
@@ -473,8 +433,9 @@ async fn qualify(manual: bool, streaming: bool, allocation: bool, retry: RetryPa
     let input: u64 = usage.values().map(|value| value.input_tokens).sum();
     let output: u64 = usage.values().map(|value| value.output_tokens).sum();
     let cutoff = u64::from(retry == RetryPath::OutputLimit);
-    assert_eq!(input, report.executions * 100 + cutoff * 10);
-    assert_eq!(output, report.executions * 10 + cutoff);
+    let complete_responses = (if manual { 1 } else { 2 }) + extra_summaries as u64;
+    assert_eq!(input, complete_responses * 100 + cutoff * 10);
+    assert_eq!(output, complete_responses * 10 + cutoff);
     let (_, cold) = AgentTranscriptStore::new(store.root())
         .load_replay_epoch(&conversation, mez_agent::AgentContext::empty())
         .unwrap()

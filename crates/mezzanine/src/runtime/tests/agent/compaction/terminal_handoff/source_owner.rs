@@ -93,12 +93,7 @@ fn compaction_uses_original_history_before_and_after_store_replacement() {
                     task.source_owner.as_ref().unwrap().store.as_ref(),
                     Some(&original)
                 );
-                let input = task
-                    .request
-                    .messages
-                    .iter()
-                    .map(|message| message.content.as_str())
-                    .collect::<String>();
+                let input = crate::test_support::compaction_source::rendered_source(task).unwrap();
                 assert!(input.contains("ORIGINAL_IMPORTED_PREFIX"));
                 assert!(input.contains("LIVE_ORIGINAL_SOURCE"));
                 assert!(!input.contains("REPLACEMENT_SOURCE_MUST_NOT_BE_ADOPTED"));
@@ -338,17 +333,6 @@ fn compaction_preserves_original_missing_store_before_dispatch() {
         let before = service.agent_turn_contexts()[&turn_id].clone();
         let replacement = AgentTranscriptStore::new(temp_root("missing-store-protected-root"));
         service.set_agent_transcript_store(replacement.clone());
-        let plan = mez_agent::plan_model_context_compaction_for_provider_tokens(
-            &before,
-            20_000,
-            0,
-            before.event_sequence_high_water_mark(),
-            mez_agent::ProviderBudgetProjection::new(
-                mez_agent::ProviderApiCompatibility::OpenAiResponses,
-                "runtime-batch",
-            ),
-        )
-        .unwrap();
         let profile = service.agent_turn_model_profile(&turn_id).unwrap().clone();
         let trigger = if observed {
             crate::runtime::agent_state::RuntimeActiveTurnCompactionTrigger::ObservedInputLimit {
@@ -362,7 +346,7 @@ fn compaction_preserves_original_missing_store_before_dispatch() {
         };
         assert!(
             !service
-                .queue_agent_active_turn_compaction(&turn_id, "live".into(), profile, trigger, plan)
+                .queue_agent_active_turn_compaction(&turn_id, "live".into(), profile, trigger)
                 .unwrap()
         );
         assert!(

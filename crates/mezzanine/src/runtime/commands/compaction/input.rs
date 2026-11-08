@@ -58,7 +58,12 @@ context_window_tokens=40000
             })?;
         assert!(task.replay_source.is_some());
         assert!(service.agent_turn_ledger().turns().is_empty());
-        Ok(task.request.clone())
+        let mut request = task.request.clone();
+        let mut messages = request.messages.iter().cloned().collect::<Vec<_>>();
+        messages.last_mut().unwrap().content =
+            crate::test_support::compaction_source::rendered_source(task)?;
+        request.messages = messages.into();
+        Ok(request)
     })();
     if root.exists() {
         std::fs::remove_dir_all(root)?;

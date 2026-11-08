@@ -48,6 +48,7 @@ pub struct EpochCompactionProviderWork {
     id: EpochCompactionWorkId,
     request: std::sync::Arc<ModelRequest>,
     raw_coverage: Vec<std::ops::Range<usize>>,
+    serial_depth: usize,
 }
 
 impl EpochCompactionProviderWork {
@@ -64,6 +65,12 @@ impl EpochCompactionProviderWork {
     /// Other input consists of private model-authored intermediate summaries.
     pub fn raw_coverage(&self) -> &[std::ops::Range<usize>] {
         &self.raw_coverage
+    }
+
+    /// Returns the longest necessary model dependency chain for this work.
+    /// Transport retries and invalid-output repairs retain this logical depth.
+    pub fn serial_depth(&self) -> usize {
+        self.serial_depth
     }
 }
 
@@ -212,6 +219,7 @@ impl EpochCompactionProviderSession {
                     id: work.id(),
                     request: std::sync::Arc::new(self.projection.request(work.input())?),
                     raw_coverage: work.raw_coverage().to_vec(),
+                    serial_depth: work.serial_depth(),
                 };
                 self.claims.insert(
                     work.id,
@@ -329,6 +337,12 @@ impl EpochCompactionProviderSession {
         self.input_tokens = input_tokens;
         self.projection.template.max_input_tokens = Some(input_tokens);
         Ok(())
+    }
+
+    /// Reports a complete final without claiming work or consuming its proof.
+    /// Runtime wave boundaries use this probe before the next actor admission.
+    pub fn is_complete(&self) -> bool {
+        !self.failed && self.claims.is_empty() && self.engine.is_complete()
     }
 
     /// Returns one final summary with the original publisher source witnesses.

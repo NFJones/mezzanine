@@ -11,6 +11,12 @@ Complete [authentication](../getting-started/authentication.md) and open the
 active pane's agent shell. Keep credentials in `mez auth`, not configuration
 or prompts.
 
+Compaction freezes its model and provider request shape for the operation.
+Genuine auxiliary input rejection repacks that source; transport retries keep
+the failed request exactly. A usable final publishes without checking an
+ordinary follow-up estimate. OpenAI requests omit `max_output_tokens` for
+compaction and ordinary execution. See [context and continuity](context-and-continuity.md).
+
 ## Choose a provider
 
 Mez has adapters for OpenAI Responses, Anthropic Messages, DeepSeek Chat

@@ -1033,18 +1033,6 @@ mod tests {
             "original completed answer",
             10,
         );
-        let context = &service.agent_turn_contexts()[&turn];
-        let plan = mez_agent::plan_model_context_compaction_for_provider_tokens(
-            context,
-            40_000,
-            1,
-            context.event_sequence_high_water_mark(),
-            mez_agent::ProviderBudgetProjection::new(
-                mez_agent::ProviderApiCompatibility::OpenAiResponses,
-                "runtime-batch",
-            ),
-        )
-        .unwrap();
         let profile = service.agent_turn_model_profile(&turn).unwrap().clone();
         assert!(
             service
@@ -1056,7 +1044,6 @@ mod tests {
                         observed_input_tokens: 40_000,
                         max_input_tokens: 40_000,
                     },
-                    plan,
                 )
                 .unwrap()
         );
@@ -1069,18 +1056,24 @@ mod tests {
             .unwrap();
         assert!(task.replay_source.is_some());
         let generation = task.task_generation;
-        actor.service.claim_agent_compaction_task_state("%1", task);
+        actor
+            .service
+            .claim_agent_compaction_task_state("%1", task.clone());
+        let (result, _) = crate::test_support::compaction_source::execute_wave(
+            &actor.service,
+            &task,
+            Err(MezError::new(
+                crate::error::MezErrorKind::Io,
+                "provider HTTP response read failed: unexpected EOF",
+            )),
+        );
         let transition = actor
             .service
-            .apply_agent_compaction_transition(crate::runtime::AgentCompactionEvent::Failed {
-                pane_id: "%1".into(),
-                task_generation: generation,
-                kind: "io".into(),
-                message: "provider HTTP response read failed: unexpected EOF".into(),
-                usage: Default::default(),
-                provider_failure_json: None,
-                provider_raw_text: None,
-            })
+            .apply_agent_compaction_transition(
+                crate::test_support::compaction_source::model_result_event(
+                    "%1", generation, result,
+                ),
+            )
             .unwrap();
         let timer = transition.side_effects.into_iter().find(|effect| matches!(effect,
             RuntimeSideEffect::ScheduleTimer { key, .. } if key.kind == RuntimeTimerKind::CompactionRetry

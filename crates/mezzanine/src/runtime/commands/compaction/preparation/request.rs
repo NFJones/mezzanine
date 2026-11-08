@@ -79,7 +79,6 @@ impl RuntimeManualCompactionRequestWork {
             || task.model_profile_name != self.profile_name
             || task.source != "manual"
             || task.resume_turn_id.is_some()
-            || !matches!(&task.target, RuntimeAgentCompactionTarget::Conversation)
         {
             return Err(MezError::conflict(
                 "manual rendered request source/model changed",

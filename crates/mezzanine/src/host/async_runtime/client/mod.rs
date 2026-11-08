@@ -33,8 +33,8 @@ use crate::integrations::http::ReqwestProviderHttpTransport;
 use crate::runtime::runtime_execute_auto_sizing_with_async_provider;
 use mez_agent::AgentTurnRecord;
 use mez_agent::{
-    AgentTurnExecution, AgentTurnState, ContextSourceKind, ModelMessage, ModelMessageRole,
-    ModelProfile, ModelRequest, ModelResponse, ProviderErrorRetryClass,
+    AgentTurnExecution, AgentTurnState, ModelProfile, ModelRequest, ModelResponse,
+    ProviderErrorRetryClass,
 };
 use mez_core::ids::AgentId;
 use mez_terminal::TerminalStyleSpan;

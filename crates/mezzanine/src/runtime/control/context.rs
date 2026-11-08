@@ -36,6 +36,7 @@ impl RuntimeAgentTranscriptContext {
     /// Composes a hypothetical canonical head through normal prompt assembly.
     /// This carries the actual cloned owner, never a forged durable snapshot or
     /// source receipt. It must remain a preview and cannot authorize bookkeeping.
+    #[cfg(test)]
     pub(in crate::runtime) fn for_replay_preview(
         owner: mez_agent::ReplayEpochContext,
     ) -> Result<Self> {

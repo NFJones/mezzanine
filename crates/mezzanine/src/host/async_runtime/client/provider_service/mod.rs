@@ -8,9 +8,8 @@
 use super::{
     AgentCompactionEvent, AgentId, AgentProviderEvent, AgentRememberEvent, AgentTurnLedger,
     AgentTurnRecord, AgentTurnRunner, AgentTurnState, AsyncAgentProviderPollReport,
-    AsyncAgentProviderServiceConfig, AsyncModelProvider, AsyncRuntimeSessionHandle,
-    ContextSourceKind, JoinSet, MezError, MezErrorKind, ModelMessage, ModelMessageRole,
-    ModelProfile, ModelRequest, ModelResponse, ProviderErrorRetryClass,
+    AsyncAgentProviderServiceConfig, AsyncModelProvider, AsyncRuntimeSessionHandle, JoinSet,
+    MezError, MezErrorKind, ModelProfile, ModelRequest, ModelResponse, ProviderErrorRetryClass,
     ReqwestProviderHttpTransport, Result, RuntimeAgentCompactionDispatch,
     RuntimeAgentProviderDispatch, RuntimeAgentProviderDispatchProvider,
     RuntimeAgentRememberDispatch, RuntimeApprovedExternalActionDispatch,
@@ -30,6 +29,8 @@ use crate::runtime::{
     RuntimeAgentProviderWorkerOutcome, RuntimeAgentSessionTitleDispatch,
     RuntimeApprovedExternalActionProgress,
 };
+#[cfg(test)]
+use mez_agent::ContextSourceKind;
 use std::future::Future;
 use std::pin::Pin;
 use std::time::{Duration, Instant};
@@ -2513,6 +2514,17 @@ async fn execute_runtime_agent_compaction_dispatch(
         provider_options,
         stream,
     } = dispatch;
+    let source = task.replay_source.as_ref().ok_or_else(|| {
+        MezError::invalid_state("compaction dispatch lacks its frozen epoch source")
+    })?;
+    let api = task
+        .compaction_request_shape
+        .as_ref()
+        .map(|shape| shape.0)
+        .ok_or_else(|| {
+            MezError::invalid_state("compaction dispatch lacks its frozen provider shape")
+        })?;
+    let shape = (api, provider_options, stream);
     match provider {
         RuntimeAgentProviderDispatchProvider::OpenAi(provider) => {
             let provider = ObservedAsyncModelProvider::new(
@@ -2520,15 +2532,7 @@ async fn execute_runtime_agent_compaction_dispatch(
                 &observer,
                 ProviderRequestPurpose::Compaction,
             );
-            runtime_send_compaction_request_with_output_limit_retry(
-                &provider,
-                task.request,
-                &task.model_profile,
-                task.preserve_summary_output_budget,
-                &provider_options,
-                stream,
-            )
-            .await
+            source.execute_model_wave(&provider, &task, shape).await
         }
         RuntimeAgentProviderDispatchProvider::DeepSeek(provider) => {
             let provider = ObservedAsyncModelProvider::new(
@@ -2536,15 +2540,7 @@ async fn execute_runtime_agent_compaction_dispatch(
                 &observer,
                 ProviderRequestPurpose::Compaction,
             );
-            runtime_send_compaction_request_with_output_limit_retry(
-                &provider,
-                task.request,
-                &task.model_profile,
-                task.preserve_summary_output_budget,
-                &provider_options,
-                stream,
-            )
-            .await
+            source.execute_model_wave(&provider, &task, shape).await
         }
         RuntimeAgentProviderDispatchProvider::Anthropic(provider) => {
             let provider = ObservedAsyncModelProvider::new(
@@ -2552,15 +2548,7 @@ async fn execute_runtime_agent_compaction_dispatch(
                 &observer,
                 ProviderRequestPurpose::Compaction,
             );
-            runtime_send_compaction_request_with_output_limit_retry(
-                &provider,
-                task.request,
-                &task.model_profile,
-                task.preserve_summary_output_budget,
-                &provider_options,
-                stream,
-            )
-            .await
+            source.execute_model_wave(&provider, &task, shape).await
         }
         RuntimeAgentProviderDispatchProvider::OpenAiCompatible(provider) => {
             let provider = ObservedAsyncModelProvider::new(
@@ -2568,15 +2556,7 @@ async fn execute_runtime_agent_compaction_dispatch(
                 &observer,
                 ProviderRequestPurpose::Compaction,
             );
-            runtime_send_compaction_request_with_output_limit_retry(
-                &provider,
-                task.request,
-                &task.model_profile,
-                task.preserve_summary_output_budget,
-                &provider_options,
-                stream,
-            )
-            .await
+            source.execute_model_wave(&provider, &task, shape).await
         }
     }
 }
@@ -2805,91 +2785,6 @@ async fn runtime_execute_observed_auto_sizing(
     }
 }
 
-/// Sends a model compaction request and retries once with stricter output
-/// guidance when the provider cuts off generation at its output-token limit.
-async fn runtime_send_compaction_request_with_output_limit_retry<P: AsyncModelProvider>(
-    provider: &P,
-    mut request: ModelRequest,
-    model_profile: &ModelProfile,
-    preserve_summary_output_budget: bool,
-    provider_options: &std::collections::BTreeMap<String, String>,
-    stream: bool,
-) -> Result<ModelResponse> {
-    match provider.send_request_async(&request).await {
-        Ok(response) => Ok(response),
-        Err(error)
-            if matches!(
-                provider_error_retry_class(&error),
-                ProviderErrorRetryClass::OutputLimit
-            ) =>
-        {
-            let prior_usage = error.provider_incurred_usage();
-            request = runtime_agent_compaction_request_with_output_limit_retry(
-                request,
-                model_profile,
-                preserve_summary_output_budget,
-            );
-            request.messages.push(ModelMessage {
-                role: ModelMessageRole::Developer,
-                source: ContextSourceKind::Configuration,
-                placement: mez_agent::ContextPlacement::StablePrefix,
-                content: "[ephemeral compaction output-limit retry]\n\
-                    The previous compaction response was incomplete at the provider's generation limit. \
-                    Return exactly one final say action containing a compact durable summary. \
-                    Keep the summary brief: preserve only active goals, decisions, changed files, validations, blockers, and next steps. \
-                    Do not include full logs, transcript excerpts, plans, or explanations. \
-                    This retry instruction is not durable transcript or future-turn context."
-                    .to_string(),
-            });
-            if let Some(cap) = request.max_input_tokens {
-                let estimate = mez_agent::provider_request_input_estimate(
-                    &request,
-                    provider.api_compatibility(),
-                    provider_options,
-                    stream,
-                )
-                .map_err(|error| MezError::from(error).with_provider_incurred_usage(prior_usage))?;
-                if estimate.exceeds_explicit_cap(cap) {
-                    return Err(MezError::invalid_state(format!(
-                        "compaction output-limit retry exceeds configured input cap: estimated_input_tokens={} max_input_tokens={cap}",
-                        estimate.input_tokens
-                    ))
-                    .with_provider_failure_json(
-                        r#"{"error":{"code":"context_length_exceeded"}}"#,
-                    ).with_provider_incurred_usage(prior_usage));
-                }
-            }
-            match provider.send_request_async(&request).await {
-                Ok(mut response) => {
-                    response.usage.add_assign(prior_usage);
-                    Ok(response)
-                }
-                Err(error) => {
-                    let mut total = prior_usage;
-                    total.add_assign(error.provider_incurred_usage());
-                    Err(error.with_provider_incurred_usage(total))
-                }
-            }
-        }
-        Err(error) => Err(error),
-    }
-}
-
-/// Preserves compaction allocation, or selects the configured auxiliary retry
-/// allocation. Only the canonical adapter decides whether a wire control is
-/// supported; internal max_output_tokens does not establish OpenAI wire support.
-fn runtime_agent_compaction_request_with_output_limit_retry(
-    mut request: ModelRequest,
-    model_profile: &ModelProfile,
-    preserve_summary_output_budget: bool,
-) -> ModelRequest {
-    let retry_output_limit = model_profile.output_limit_retry_tokens();
-    if !preserve_summary_output_budget {
-        request.max_output_tokens = retry_output_limit;
-    }
-    request
-}
-
 /// Runs the provider worker error kind operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
@@ -2915,148 +2810,9 @@ mod tests {
 
     mod auxiliary_actor_faults;
     mod auxiliary_containment;
+    mod compaction_waves;
     mod incomplete;
     mod network_progress;
-
-    /// A paid cutoff followed by success, another cutoff or ordinary failure
-    /// retains every reported counter through worker events and exact auxiliary
-    /// settlement. Duplicate delivery cannot charge the retained owner twice.
-    #[tokio::test]
-    async fn compactor_output_limit_retry_conserves_incurred_usage() {
-        use std::sync::atomic::{AtomicUsize, Ordering};
-        struct RetryProvider {
-            calls: AtomicUsize,
-            outcome: u8,
-        }
-        impl AsyncModelProvider for RetryProvider {
-            fn provider_id(&self) -> &str {
-                "fixture"
-            }
-            fn api_compatibility(&self) -> mez_agent::ProviderApiCompatibility {
-                mez_agent::ProviderApiCompatibility::OpenAiResponses
-            }
-            fn send_request_async<'a>(
-                &'a self,
-                _request: &'a ModelRequest,
-            ) -> std::pin::Pin<Box<dyn Future<Output = Result<ModelResponse>> + Send + 'a>>
-            {
-                Box::pin(async move {
-                    let first = self.calls.fetch_add(1, Ordering::SeqCst) == 0;
-                    if first || self.outcome == 1 {
-                        let usage = mez_agent::ModelTokenUsage {
-                            input_tokens: if first { 17 } else { 11 },
-                            output_tokens: 3,
-                            ..Default::default()
-                        };
-                        return Err(MezError::invalid_state("paid cutoff")
-                            .with_provider_failure_json(r#"{"error":{"code":"max_tokens"}}"#)
-                            .with_provider_output_limit_state(mez_agent::ProviderOutputLimitState::new(
-                                "fixture", "openai-responses", "max_tokens", None, "", 0, 0, usage,
-                                mez_agent::ProviderOutputLimitContinuationDisposition::ContinueVisibleText)));
-                    }
-                    if self.outcome == 2 {
-                        return Err(MezError::invalid_state("ordinary failure"));
-                    }
-                    Ok(ModelResponse {
-                        provider: "fixture".into(),
-                        model: "model".into(),
-                        raw_text: "summary".into(),
-                        usage: mez_agent::ModelTokenUsage {
-                            input_tokens: 11,
-                            output_tokens: 2,
-                            ..Default::default()
-                        },
-                        latest_request_usage: None,
-                        quota_usage: Vec::new(),
-                        action_batch: None,
-                        provider_transcript_events: Vec::new(),
-                    })
-                })
-            }
-        }
-        for (outcome, expected) in [(0, 28), (1, 28), (2, 17)] {
-            let provider = RetryProvider {
-                calls: AtomicUsize::new(0),
-                outcome,
-            };
-            let profile = ModelProfile {
-                provider: "fixture".into(),
-                model: "model".into(),
-                ..Default::default()
-            };
-            let request = mez_agent::session_title::session_title_request(
-                &profile,
-                "agent-%1",
-                &mez_agent::session_title::SessionTitleGenerationInputs {
-                    objective: Some("compact source"),
-                    ..Default::default()
-                },
-                mez_agent::AllowedActionSet::say_only(),
-            );
-            let result = runtime_send_compaction_request_with_output_limit_retry(
-                &provider,
-                request.clone(),
-                &profile,
-                false,
-                &Default::default(),
-                false,
-            )
-            .await;
-            assert_eq!(provider.calls.load(Ordering::SeqCst), 2);
-            let (RuntimeEvent::AgentCompaction(event), _) =
-                compaction_worker_event("%1".into(), 1, Ok(result))
-            else {
-                panic!("compaction event");
-            };
-            let mut service = crate::test_support::runtime::RuntimeServiceFixture::new().build();
-            service
-                .agent_shell_store_mut()
-                .enter_or_resume("%1")
-                .unwrap();
-            let conversation = service
-                .agent_shell_store()
-                .get("%1")
-                .unwrap()
-                .session_id
-                .clone();
-            service.claim_agent_compaction_task_state(
-                "%1",
-                crate::runtime::RuntimeAgentCompactionTask {
-                    source_owner: None,
-                    replay_source: None,
-                    task_generation: 1,
-                    transport_retry_attempts: 0,
-                    transport_retry_delay_ms: None,
-                    summary_correction: Default::default(),
-                    accounting_origin: crate::storage::token_usage::AccountingOrigin::Unattributed,
-                    compaction_epoch: 1,
-                    pane_id: "%1".into(),
-                    conversation_id: conversation.clone(),
-                    source: "fixture".into(),
-                    transcript_entries: 0,
-                    summarized_entries: 0,
-                    model_profile_name: "fixture".into(),
-                    model_profile: profile,
-                    request,
-                    preserve_summary_output_budget: false,
-                    manual_retry_source: None,
-                    manual_final_retry: None,
-                    resume_turn_id: None,
-                    target: crate::runtime::RuntimeAgentCompactionTarget::Conversation,
-                    conversation_chunks: None,
-                    compaction_request_shape: None,
-                },
-            );
-            service.cancel_current_agent_compaction_task("%1");
-            service
-                .apply_agent_compaction_transition(event.clone())
-                .unwrap();
-            service.apply_agent_compaction_transition(event).unwrap();
-            let total = service.agent_token_usage_for_conversation(&conversation);
-            assert_eq!(total.values().next().unwrap().input_tokens, expected);
-            assert!(service.agent_latest_request_usage(&conversation).is_none());
-        }
-    }
 
     /// The observed title worker preserves normalized incurred usage even when
     /// sanitization rejects the response. Neither branch exposes rejected text,
@@ -3353,202 +3109,6 @@ mod tests {
         let observation = receiver.recv().await.unwrap();
         assert_eq!(observation.purpose, ProviderRequestPurpose::Execution);
         assert!(!observation.succeeded);
-    }
-
-    /// A compactor output-limit response must not cause a second request whose
-    /// added guidance exceeds the configured input cap.
-    #[tokio::test]
-    async fn compactor_output_limit_retry_does_not_send_over_input_cap() {
-        use std::sync::atomic::{AtomicUsize, Ordering};
-
-        struct CutoffProvider(AtomicUsize);
-        impl AsyncModelProvider for CutoffProvider {
-            fn provider_id(&self) -> &str {
-                "openai"
-            }
-            fn api_compatibility(&self) -> mez_agent::ProviderApiCompatibility {
-                mez_agent::ProviderApiCompatibility::OpenAiResponses
-            }
-            fn send_request_async<'a>(
-                &'a self,
-                _request: &'a ModelRequest,
-            ) -> std::pin::Pin<Box<dyn Future<Output = Result<ModelResponse>> + Send + 'a>>
-            {
-                Box::pin(async move {
-                    self.0.fetch_add(1, Ordering::SeqCst);
-                    Err(MezError::invalid_state("provider output exhausted")
-                        .with_provider_failure_json(r#"{"error":{"code":"max_tokens"}}"#)
-                        .with_provider_output_limit_state(mez_agent::ProviderOutputLimitState::new(
-                            "openai", "openai-responses", "max_tokens", None, "", 0, 0,
-                            mez_agent::ModelTokenUsage { input_tokens: 17, output_tokens: 3, ..Default::default() },
-                            mez_agent::ProviderOutputLimitContinuationDisposition::ContinueVisibleText,
-                        )))
-                })
-            }
-        }
-        let provider = CutoffProvider(AtomicUsize::new(0));
-        let request = ModelRequest {
-            provider: "openai".into(),
-            model: "test".into(),
-            model_capabilities: Default::default(),
-            max_input_tokens: None,
-            reasoning_effort: None,
-            thinking_enabled: None,
-            latency_preference: None,
-            prompt_cache_retention: None,
-            max_output_tokens: Some(128),
-            temperature: None,
-            prompt_cache_session_id: None,
-            prompt_cache_lineage_id: None,
-            turn_id: "compact-test".into(),
-            agent_id: "agent-%1".into(),
-            available_mcp_tools: Vec::new(),
-            memory_actions_enabled: false,
-            issue_actions_enabled: false,
-            interaction_kind: mez_agent::ModelInteractionKind::Compaction,
-            allowed_actions: mez_agent::AllowedActionSet::default(),
-            stop: None,
-            messages: vec![ModelMessage {
-                role: ModelMessageRole::User,
-                source: ContextSourceKind::Transcript,
-                placement: mez_agent::ContextPlacement::ConversationAppend,
-                content: "compact the source".into(),
-            }]
-            .into(),
-        };
-        let options = std::collections::BTreeMap::new();
-        let cap = mez_agent::provider_request_input_estimate(
-            &request,
-            provider.api_compatibility(),
-            &options,
-            false,
-        )
-        .unwrap()
-        .input_tokens;
-        let mut request = request;
-        request.max_input_tokens = Some(cap);
-        let error = runtime_send_compaction_request_with_output_limit_retry(
-            &provider,
-            request,
-            &ModelProfile::default(),
-            false,
-            &options,
-            false,
-        )
-        .await
-        .unwrap_err();
-        assert!(
-            error
-                .message()
-                .contains("retry exceeds configured input cap")
-        );
-        assert_eq!(
-            provider_error_retry_class(&error),
-            ProviderErrorRetryClass::ContextLimit
-        );
-        assert_eq!(provider.0.load(Ordering::SeqCst), 1);
-        let (RuntimeEvent::AgentCompaction(AgentCompactionEvent::Failed { usage, .. }), _) =
-            compaction_worker_event("%1".into(), 1, Ok(Err(error)))
-        else {
-            panic!("failure event");
-        };
-        assert_eq!(
-            usage.input_tokens, 17,
-            "preflight rejection must retain earlier paid expense"
-        );
-    }
-
-    /// A plan-derived compaction output ceiling is frozen across provider
-    /// output-limit retry, while an ordinary profile-sized request may still
-    /// use the configured retry escalation.
-    #[test]
-    fn compactor_output_limit_retry_preserves_frozen_summary_ceiling() {
-        let profile = ModelProfile {
-            provider_options: std::collections::BTreeMap::from([(
-                "max_output_tokens".to_string(),
-                "4096".to_string(),
-            )]),
-            ..ModelProfile::default()
-        };
-        let request = ModelRequest {
-            provider: "openai".into(),
-            model: "test".into(),
-            model_capabilities: Default::default(),
-            max_input_tokens: None,
-            reasoning_effort: None,
-            thinking_enabled: None,
-            latency_preference: None,
-            prompt_cache_retention: None,
-            max_output_tokens: Some(512),
-            temperature: None,
-            prompt_cache_session_id: None,
-            prompt_cache_lineage_id: None,
-            turn_id: "compact-test".into(),
-            agent_id: "agent-%1".into(),
-            available_mcp_tools: Vec::new(),
-            memory_actions_enabled: false,
-            issue_actions_enabled: false,
-            interaction_kind: mez_agent::ModelInteractionKind::Compaction,
-            allowed_actions: mez_agent::AllowedActionSet::default(),
-            stop: None,
-            messages: vec![ModelMessage {
-                role: ModelMessageRole::User,
-                source: ContextSourceKind::Transcript,
-                placement: mez_agent::ContextPlacement::ConversationAppend,
-                content: "compact the source".into(),
-            }]
-            .into(),
-        };
-
-        assert_eq!(
-            runtime_agent_compaction_request_with_output_limit_retry(
-                request.clone(),
-                &profile,
-                true,
-            )
-            .max_output_tokens,
-            Some(512)
-        );
-
-        let uncapped_profile = ModelProfile::default();
-        assert_eq!(
-            runtime_agent_compaction_request_with_output_limit_retry(
-                request.clone(),
-                &uncapped_profile,
-                true,
-            )
-            .max_output_tokens,
-            Some(512)
-        );
-
-        let equal_cap_profile = ModelProfile {
-            provider_options: std::collections::BTreeMap::from([(
-                "max_output_tokens".to_string(),
-                "512".to_string(),
-            )]),
-            ..ModelProfile::default()
-        };
-        assert_eq!(
-            runtime_agent_compaction_request_with_output_limit_retry(
-                request.clone(),
-                &equal_cap_profile,
-                true,
-            )
-            .max_output_tokens,
-            Some(512)
-        );
-
-        let mut ordinary_request = request;
-        ordinary_request.max_output_tokens = Some(4096);
-        assert_eq!(
-            runtime_agent_compaction_request_with_output_limit_retry(
-                ordinary_request,
-                &profile,
-                false,
-            )
-            .max_output_tokens,
-            Some(8192)
-        );
     }
 
     /// Verifies title failure reasons come from the typed error, not its text.

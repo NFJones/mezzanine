@@ -19,6 +19,8 @@ pub(crate) struct RuntimeCompactionReplaySource {
     config_layers: Vec<crate::config::ConfigLayer>,
     process: Option<crate::runtime::processes::RuntimePaneProcessIdentity>,
     model_profile: Option<mez_agent::ModelProfile>,
+    /// One private graph, retained across physical wave and retry generations.
+    operation: operation::Operation,
 }
 
 /// An active turn has a mutable canonical body. Idle manual work retains the
@@ -102,6 +104,11 @@ impl RuntimeSessionService {
             store: self.agent_turn_transcript_store(&turn.turn_id),
             history,
         });
+        let permit = self
+            .agent_source_preparation_uses_adapter()
+            .then(|| self.reserve_agent_source_preparation())
+            .transpose()?;
+        let operation = operation::Operation::new(plan.clone(), permit);
         Ok(Preparation::Ready(Arc::new(
             RuntimeCompactionReplaySource {
                 owner,
@@ -117,6 +124,7 @@ impl RuntimeSessionService {
                 config_layers: self.integration.config_layers().to_vec(),
                 process: self.steering_process_binding(&turn.pane_id)?,
                 model_profile: self.agent_turn_model_profile(&turn.turn_id).cloned(),
+                operation,
             },
         )))
     }
@@ -130,6 +138,7 @@ impl RuntimeSessionService {
         profile_name: &str,
         profile: &mez_agent::ModelProfile,
         history: Option<Arc<crate::runtime::control::RuntimeAgentHistorySource>>,
+        permit: Option<Arc<tokio::sync::OwnedSemaphorePermit>>,
     ) -> Result<Preparation> {
         let session = self
             .agent_shell_store()
@@ -179,6 +188,7 @@ impl RuntimeSessionService {
             "manual-compaction-{}",
             String::from(mez_agent::ContextBlockOccurrenceId::allocate())
         );
+        let model_work = operation::Operation::new(plan.clone(), permit);
         Ok(Preparation::Ready(Arc::new(
             RuntimeCompactionReplaySource {
                 owner,
@@ -200,12 +210,64 @@ impl RuntimeSessionService {
                 config_layers: self.integration.config_layers().to_vec(),
                 process: self.steering_process_binding(pane)?,
                 model_profile: Some(profile.clone()),
+                operation: model_work,
             },
         )))
     }
 }
 
 impl RuntimeCompactionReplaySource {
+    /// Nonblocking, content-free display observation, never a wave receipt.
+    pub(crate) fn model_progress(&self) -> operation::Snapshot {
+        self.operation.progress()
+    }
+
+    /// Uses the existing observed provider/expense owner for one bounded wave.
+    pub(crate) async fn execute_model_wave<
+        P: crate::integrations::agent::provider::AsyncModelProvider,
+    >(
+        &self,
+        provider: &P,
+        task: &crate::runtime::RuntimeAgentCompactionTask,
+        shape: (
+            mez_agent::ProviderApiCompatibility,
+            std::collections::BTreeMap<String, String>,
+            bool,
+        ),
+    ) -> Result<mez_agent::ModelResponse> {
+        let input = task
+            .model_profile
+            .max_input_tokens()
+            .or_else(|| task.model_profile.context_window_tokens())
+            .map(|limit| limit.min(task.model_profile.context_window_tokens().unwrap_or(limit)))
+            .ok_or_else(|| {
+                MezError::invalid_state("compaction requires a provider input capacity")
+            })?;
+        self.operation
+            .execute(
+                provider,
+                task.task_generation,
+                task.request.clone(),
+                shape,
+                input,
+            )
+            .await
+    }
+
+    pub(in crate::runtime::commands::compaction) fn model_wave_outcome(
+        &self,
+        generation: u64,
+    ) -> Result<WaveOutcome> {
+        self.operation.outcome(generation)
+    }
+
+    pub(in crate::runtime::commands::compaction) fn model_work_can_retry(
+        &self,
+        generation: u64,
+    ) -> bool {
+        self.operation.can_retry(generation)
+    }
+
     pub(super) fn turn_id(&self) -> Option<&str> {
         match &self.target {
             SourceTarget::Turn { turn, .. } => Some(turn),
@@ -257,14 +319,25 @@ impl RuntimeCompactionReplaySource {
             None => Ok(self.owner.clone().into_owned_context()),
         }
     }
-    pub(in crate::runtime::commands::compaction) fn input_blocks(
-        &self,
-    ) -> Vec<mez_agent::ContextBlock> {
-        self.plan
-            .summary_input()
-            .iter()
-            .map(|event| event.block().clone())
-            .collect()
+    /// Number of immutable source occurrences, without cloning source bodies
+    /// on actor admission just to populate content-free status metadata.
+    pub(in crate::runtime::commands::compaction) fn input_entry_count(&self) -> usize {
+        self.plan.summary_input().len()
+    }
+
+    /// Borrows the original frozen selection for publication/inspection tests.
+    /// This is not a mutable planner or another admission path.
+    #[cfg(test)]
+    pub(crate) fn frozen_plan(&self) -> &mez_agent::ReplayCompactionPlan {
+        &self.plan
+    }
+
+    #[cfg(test)]
+    pub(crate) fn trigger(&self) -> Option<RuntimeActiveTurnCompactionTrigger> {
+        match &self.target {
+            SourceTarget::Turn { trigger, .. } => Some(*trigger),
+            SourceTarget::Manual(_) => None,
+        }
     }
 
     /// Checks live ownership without allocating a new head or performing I/O.

@@ -407,7 +407,7 @@ use crate::runtime::RuntimeSessionService;
 
 /// Auxiliary scheduler whose actual task is admitted by one fixture.
 #[derive(Clone, Copy, Debug)]
-enum Family {
+pub(super) enum Family {
     Compaction,
     Remember,
     Title,
@@ -422,7 +422,7 @@ enum Owner {
 }
 
 /// Keeps generated config/auth/transcript storage alive through actor teardown.
-struct FixtureRoot(std::path::PathBuf);
+pub(super) struct FixtureRoot(std::path::PathBuf);
 impl Drop for FixtureRoot {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.0);
@@ -565,7 +565,9 @@ fn request_fault<Output: Send + 'static>(
 
 /// Admits one actual family task with a real configured, credential-free local
 /// provider constructor. The loopback endpoint is never contacted by fault work.
-fn queued_fixture(family: Family) -> (FixtureRoot, RuntimeSessionService, ClientId, String) {
+pub(super) fn queued_fixture(
+    family: Family,
+) -> (FixtureRoot, RuntimeSessionService, ClientId, String) {
     use crate::config::{ConfigFormat, ConfigLayer, ConfigScope};
     let root = FixtureRoot(std::env::temp_dir().join(format!(
         "mez-auxiliary-actor-fault-{:032x}",

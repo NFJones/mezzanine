@@ -59,8 +59,8 @@ Agent logs can optionally show captured UTC occurrence times with bounded
 fixed-width clock formats, without changing copied or model-facing content.
 Timestamps default off; see [terminal appearance](docs/configuration/appearance-and-terminal.md).
 
-Compaction validates summaries against frozen local allowances and complete
-request fit, independently of provider generation controls. OpenAI requests
+Manual and automatic compaction share one frozen-source engine and publisher.
+Usable summaries publish without length-reduction or next-request-fit loops. OpenAI requests
 always omit `max_output_tokens`; see [context and continuity](docs/agent/context-and-continuity.md).
 Forked subagents retain compacted summaries, including conversations with no
 remaining raw history, before starting their first provider request.

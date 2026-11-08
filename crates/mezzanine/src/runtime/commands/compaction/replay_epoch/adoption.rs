@@ -6,6 +6,26 @@ use super::*;
 use crate::runtime::{RuntimeSideEffect, RuntimeTransition};
 
 impl RuntimeSessionService {
+    /// The common graph transfers a complete typed proof, never reconstructed
+    /// from an arbitrary worker response. The publisher retains the identical
+    /// frozen source plan and checks its live/store fences again at mutation.
+    pub(in crate::runtime::commands::compaction) fn queue_accepted_replay_epoch_publication(
+        &mut self,
+        task: &crate::runtime::RuntimeAgentCompactionTask,
+        accepted: &mez_agent::epoch_compaction::AcceptedEpochCompaction,
+    ) -> Result<()> {
+        let source = task
+            .replay_source
+            .as_ref()
+            .ok_or_else(|| MezError::invalid_state("accepted compaction has no original source"))?;
+        if accepted.plan() != &source.plan {
+            return Err(MezError::conflict(
+                "accepted compaction belongs to another frozen epoch",
+            ));
+        }
+        self.queue_replay_epoch_publication(task, accepted.summary().to_owned())
+    }
+
     pub(in crate::runtime::commands::compaction) fn validate_replay_compaction_task(
         &self,
         task: &crate::runtime::RuntimeAgentCompactionTask,

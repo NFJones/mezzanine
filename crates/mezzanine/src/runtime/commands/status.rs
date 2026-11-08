@@ -318,6 +318,9 @@ impl RuntimeSessionService {
             vec!["Compaction".to_string(), if compaction.is_some() { "compacting" } else { "none" }.to_string()],
             vec!["Compaction phase".to_string(), compaction.map_or("none", |operation| operation.phase).to_string()],
             vec!["Compaction epoch".to_string(), compaction.map(|operation| operation.epoch.to_string()).unwrap_or_else(|| "none".to_string())],
+            vec!["Compaction dispatch".to_string(), compaction.map(|operation| operation.dispatch_generation.to_string()).unwrap_or_else(|| "none".to_string())],
+            vec!["Compaction model calls".to_string(), compaction.map(|operation| operation.model_calls.to_string()).unwrap_or_else(|| "none".to_string())],
+            vec!["Compaction serial depth".to_string(), compaction.map(|operation| operation.serial_depth.to_string()).unwrap_or_else(|| "none".to_string())],
             vec!["Compaction elapsed".to_string(), compaction.map(|operation| runtime_agent_turn_duration_display(current_unix_seconds().saturating_sub(operation.started_at))).unwrap_or_else(|| "none".to_string())],
             vec!["Compaction pause".to_string(), compaction.and_then(|operation| operation.pause).unwrap_or("none").to_string()],
             vec![

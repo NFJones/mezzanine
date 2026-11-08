@@ -6,7 +6,6 @@
 
 use super::*;
 use crate::runtime::RuntimeAgentCompactionTask;
-use crate::runtime::agent_state::RuntimeAgentCompactionTarget;
 use mez_agent::AutoSizingRoutingSelection;
 
 mod cleanup;
@@ -2218,7 +2217,6 @@ fn runtime_routed_child_malformed_compaction_completion_recovers_parent() {
             compaction_epoch: 0,
             transport_retry_attempts: 0,
             transport_retry_delay_ms: None,
-            summary_correction: Default::default(),
             pane_id: worker_turn.pane_id.clone(),
             conversation_id,
             source: "provider-output-limit".to_string(),
@@ -2230,12 +2228,7 @@ fn runtime_routed_child_malformed_compaction_completion_recovers_parent() {
                 &worker_turn.turn_id,
                 &worker_turn.agent_id,
             ),
-            preserve_summary_output_budget: false,
-            manual_retry_source: None,
-            manual_final_retry: None,
             resume_turn_id: Some(worker_turn.turn_id.clone()),
-            target: RuntimeAgentCompactionTarget::Conversation,
-            conversation_chunks: None,
             compaction_request_shape: None,
             accounting_origin: crate::storage::token_usage::AccountingOrigin::Unattributed,
         },
@@ -2303,7 +2296,6 @@ fn runtime_routed_child_post_summary_compaction_failure_recovers_parent() {
             compaction_epoch: 0,
             transport_retry_attempts: 0,
             transport_retry_delay_ms: None,
-            summary_correction: Default::default(),
             pane_id: worker_turn.pane_id.clone(),
             conversation_id,
             source: "provider-output-limit".to_string(),
@@ -2315,12 +2307,7 @@ fn runtime_routed_child_post_summary_compaction_failure_recovers_parent() {
                 &worker_turn.turn_id,
                 &worker_turn.agent_id,
             ),
-            preserve_summary_output_budget: false,
-            manual_retry_source: None,
-            manual_final_retry: None,
             resume_turn_id: Some(worker_turn.turn_id.clone()),
-            target: RuntimeAgentCompactionTarget::Conversation,
-            conversation_chunks: None,
             compaction_request_shape: None,
             accounting_origin: crate::storage::token_usage::AccountingOrigin::Unattributed,
         },
