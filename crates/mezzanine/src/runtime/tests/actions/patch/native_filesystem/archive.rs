@@ -321,12 +321,6 @@ max_input_tokens = 20000
                     .pending_agent_compaction_task_for_tests("%1")
                     .is_none()
             );
-            assert!(
-                !service
-                    .agent
-                    .agent_turn_compaction_handoffs
-                    .contains_key(&turn.turn_id)
-            );
             // Publication primes the archive/index with an empty file, while
             // these raw rows remain owned by their original pending append.
             assert!(store.inspect(&turn.conversation_id).unwrap().is_empty());

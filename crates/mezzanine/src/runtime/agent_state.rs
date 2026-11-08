@@ -730,33 +730,6 @@ pub enum RuntimeActiveTurnCompactionTrigger {
     },
 }
 
-/// An accepted summary's immutable original source occurrences.
-#[derive(Debug, Clone)]
-pub(crate) struct RuntimeCompactionWitness {
-    /// Original chronological anchor inherited by the model summary.
-    pub(crate) anchor: u64,
-    /// Original source, expanded through earlier witnessed local summaries.
-    pub(crate) source: Vec<mez_agent::ConversationEvent>,
-    /// Exact imported archive images keyed by their original occurrence, kept
-    /// across summary expansion. None identifies an actual ordinary legacy row
-    /// without certificate ownership; live source uses the canonical encoder.
-    pub(crate) archived_sources:
-        std::collections::BTreeMap<mez_agent::ContextBlockOccurrenceId, Option<String>>,
-    /// Accepted bounded model-authored summary.
-    pub(crate) summary: String,
-    /// Actual accepted canonical summary, independent of its ordering anchor.
-    pub(crate) summary_record: mez_agent::ContextBlockRecord,
-}
-
-/// Independent terminal handoff evidence retained until bookkeeping captures it.
-#[derive(Debug, Clone)]
-pub(crate) struct RuntimeTurnCompactionHandoff {
-    /// Prior authoritative epoch, never refreshed after acceptance.
-    pub(crate) baseline: Option<crate::storage::transcript::AgentCompactionEpoch>,
-    /// Ordered witnessed model replacements.
-    pub(crate) witnesses: Vec<RuntimeCompactionWitness>,
-}
-
 /// Claimed model compaction dispatch owned by an async provider worker.
 #[derive(Debug, Clone)]
 pub struct RuntimeAgentCompactionDispatch {

@@ -364,7 +364,6 @@ impl RuntimeSessionService {
             self.agent_turn_contexts_mut().remove(turn_id);
             self.agent.agent_turn_history_sources.remove(turn_id);
         }
-        self.agent.agent_turn_compaction_handoffs.remove(turn_id);
         self.agent
             .agent_turn_native_shell_timeout_ms
             .remove(turn_id);

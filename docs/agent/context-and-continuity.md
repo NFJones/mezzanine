@@ -441,7 +441,9 @@ encoding as terminal bookkeeping. Recompacting a summary preserves required
 original backing; changed source fails qualification rather than replacing its
 proof. Historical terminal certificates and inherited audit remain inspectable
 recovery evidence, excluded from compactor input along with nested accounting
-data. Their receipt settlement does not select another replay history.
+data. Their receipt settlement does not select another replay history. Current
+bookkeeping projects the actual canonical chronology and emits no new terminal
+compaction certificate or private replacement witness.
 
 Unowned or ambiguous source fails before model work is queued. Interleaved
 display rows do not grant ownership or require a separate selective compactor;

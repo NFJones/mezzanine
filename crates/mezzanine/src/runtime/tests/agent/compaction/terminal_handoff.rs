@@ -98,12 +98,6 @@ fn mixed_staged_recovery_publishes_only_at_distinct_terminal_handoff() {
         accepted.context().chronology()[0].block().content,
         "MIXED_FINAL_HEAD"
     );
-    assert!(
-        service
-            .terminal_compaction_handoff_content(&turn_id)
-            .unwrap()
-            .is_none()
-    );
     service.stop_agent_turn_for_pane("%1").unwrap();
     typed_source::settle(&mut service);
     let archive = store.inspect(&conversation).unwrap();
@@ -653,12 +647,6 @@ fn interleaved_approval_history_remains_usable_after_terminalization() {
         .load_replay_epoch(&conversation, mez_agent::AgentContext::empty())
         .unwrap()
         .unwrap();
-    assert!(
-        service
-            .terminal_compaction_handoff_content(&turn_id)
-            .unwrap()
-            .is_none()
-    );
     crate::test_support::compaction_source::complete_task(
         &mut service,
         &turn_id,

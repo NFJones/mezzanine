@@ -1,15 +1,14 @@
 //! Explicit canonical transcript projection without ambient runtime ownership.
 //!
 //! Live callers capture one source view; failed completion groups retain the
-//! actual moved context and its imported-history/compaction/routing metadata.
+//! actual moved context and its imported-history/routing metadata.
 //! Original archive ownership and admitted save policy move with that context;
 //! a retained projection cannot acquire a replacement store's write target.
 //! The same encoding/occurrence logic serves both paths, preserving original
-//! witness anchors and full-chronology ordinals. Projection neither installs
+//! original occurrence records and full-chronology ordinals. Projection neither installs
 //! runtime maps nor accepts archive writes, continuations or producer transfer.
 
 use super::*;
-use crate::runtime::agent_state::RuntimeTurnCompactionHandoff;
 
 /// Non-context metadata needed to project the same original canonical source.
 pub(in crate::runtime::agent) struct RuntimeTranscriptProjectionMetadata {
@@ -19,12 +18,10 @@ pub(in crate::runtime::agent) struct RuntimeTranscriptProjectionMetadata {
     native_owned_peers: std::collections::BTreeSet<u64>,
     /// Imported occurrences are restored for ordinal assignment, not reappended.
     imported_history_high_water: u64,
-    /// Exact accepted witnesses and prior epoch, independent of later live maps.
-    compaction: Option<RuntimeTurnCompactionHandoff>,
     /// Original routed parent policy, not a replacement workflow lookup.
     routed_presentation: bool,
-    /// Forced original archive needs a witness even while effect slots remain
-    /// running; this never certifies worker termination or custody transfer.
+    /// Forced original archive retains its canonical append obligation even
+    /// while effect slots remain running; it proves no physical retirement.
     terminal_archive: bool,
 }
 
@@ -38,8 +35,6 @@ pub(in crate::runtime::agent) struct RuntimeTranscriptProjection<'a> {
     pub(super) context: Option<&'a mez_agent::AgentContext>,
     /// Imported boundary from the same actual original source.
     imported_history_high_water: u64,
-    /// Borrowed witnesses avoid cloning raw source during live projection.
-    compaction: Option<&'a RuntimeTurnCompactionHandoff>,
     /// Original routed-parent policy for this projection.
     routed_presentation: bool,
     /// Original forced-archive intent, never a worker termination receipt.
@@ -63,7 +58,6 @@ impl RuntimeSessionService {
                 .agent_turn_imported_history_sequence_high_water
                 .remove(turn_id)
                 .unwrap_or(0),
-            compaction: self.agent.agent_turn_compaction_handoffs.remove(turn_id),
             routed_presentation,
             terminal_archive: true,
         }
@@ -81,14 +75,13 @@ impl<'a> RuntimeTranscriptProjection<'a> {
             context,
             native_owned_peers: metadata.native_owned_peers.clone(),
             imported_history_high_water: metadata.imported_history_high_water,
-            compaction: metadata.compaction.as_ref(),
             routed_presentation: metadata.routed_presentation,
             terminal_archive: metadata.terminal_archive,
         }
     }
 
-    /// Borrows live context/witnesses once at the explicit source boundary.
-    /// Subsequent row encoding performs no ambient lookup or witness cloning.
+    /// Borrows live context once at the explicit original source boundary.
+    /// Subsequent row encoding performs no ambient history lookup.
     pub(super) fn live(service: &'a RuntimeSessionService, turn_id: &str) -> Self {
         Self {
             history_source: service.agent_turn_history_source(turn_id),
@@ -96,7 +89,6 @@ impl<'a> RuntimeTranscriptProjection<'a> {
             native_owned_peers: service.native_owned_peer_events(turn_id),
             imported_history_high_water: service
                 .agent_turn_imported_history_sequence_high_water(turn_id),
-            compaction: service.agent.agent_turn_compaction_handoffs.get(turn_id),
             routed_presentation: service.routed_presentation_turn(turn_id),
             terminal_archive: false,
         }
@@ -201,23 +193,6 @@ impl<'a> RuntimeTranscriptProjection<'a> {
                 content,
             )?;
         }
-        if self.terminal_archive
-            || execution.final_turn
-            || matches!(
-                execution.terminal_state,
-                mez_agent::AgentTurnState::Completed
-                    | mez_agent::AgentTurnState::Failed
-                    | mez_agent::AgentTurnState::Interrupted
-            )
-        {
-            self.append_terminal_compaction_handoff_entry(
-                &mut execution_entries,
-                conversation_id,
-                sequence,
-                created_at_unix_seconds,
-                turn,
-            )?;
-        }
         Ok(execution_entries)
     }
 
@@ -256,10 +231,7 @@ impl<'a> RuntimeTranscriptProjection<'a> {
         let context = self.context.ok_or_else(|| {
             MezError::invalid_state("canonical recovery diagnostic lost its original context")
         })?;
-        let chronology = RuntimeSessionService::terminal_compaction_source_chronology_from_source(
-            context,
-            self.compaction,
-        )?;
+        let chronology = context.chronology();
         if !chronology.iter().any(|event| {
             event.execution_group_id() == Some(&group)
                 && event.sequence().get() > self.imported_history_high_water
@@ -476,11 +448,8 @@ impl<'a> RuntimeTranscriptProjection<'a> {
             .last()
             .map_or(first_sequence, |entry| entry.sequence.saturating_add(1));
         let mut active_user_seen = false;
-        let chronology = RuntimeSessionService::terminal_compaction_source_chronology_from_source(
-            context,
-            self.compaction,
-        )?;
-        let occurrences = RuntimeSessionService::terminal_execution_occurrences(&chronology)?;
+        let chronology = context.chronology();
+        let occurrences = RuntimeSessionService::canonical_execution_occurrences(chronology)?;
         for event in chronology
             .iter()
             .filter(|event| event.sequence().get() > imported_history_sequence_high_water)
@@ -643,44 +612,6 @@ impl<'a> RuntimeTranscriptProjection<'a> {
             }
             entries.push(row);
         }
-        Ok(())
-    }
-
-    /// Captures terminal source proof into the ordinary append-receipt pipeline
-    /// before turn cleanup. This audit row is never directly rendered to models.
-    pub(super) fn append_terminal_compaction_handoff_entry(
-        &self,
-        entries: &mut Vec<TranscriptEntry>,
-        conversation_id: &str,
-        first_sequence: u64,
-        created_at_unix_seconds: u64,
-        turn: &AgentTurnRecord,
-    ) -> Result<()> {
-        let Some(handoff) = self.compaction else {
-            return Ok(());
-        };
-        let context = self.context.ok_or_else(|| {
-            MezError::invalid_state("terminal projection lost original compaction context")
-        })?;
-        let Some(content) =
-            RuntimeSessionService::terminal_compaction_handoff_from_source(context, handoff)?
-        else {
-            return Ok(());
-        };
-        let entry = TranscriptEntry {
-            conversation_id: conversation_id.to_string(),
-            sequence: entries
-                .last()
-                .map_or(first_sequence, |row| row.sequence.saturating_add(1)),
-            created_at_unix_seconds,
-            role: TranscriptRole::System,
-            turn_id: turn.turn_id.clone(),
-            agent_id: turn.agent_id.clone(),
-            pane_id: turn.pane_id.clone(),
-            content,
-        };
-        entry.validate()?;
-        entries.push(entry);
         Ok(())
     }
 

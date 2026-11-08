@@ -123,12 +123,6 @@ fn compaction_uses_original_history_before_and_after_store_replacement() {
                     replacement.compaction_epoch(&conversation).unwrap(),
                     replacement_epoch
                 );
-                assert!(
-                    service
-                        .terminal_compaction_handoff_content(&turn_id)
-                        .unwrap()
-                        .is_none()
-                );
             }
         }
     }

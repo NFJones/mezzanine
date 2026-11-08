@@ -905,9 +905,6 @@ pub(crate) struct RuntimeAgentComponent {
     /// Original replay read/store ownership for each actual admitted context.
     agent_turn_history_sources:
         BTreeMap<String, std::sync::Arc<crate::runtime::control::RuntimeAgentHistorySource>>,
-    /// Accepted local summary coverage, captured by terminal bookkeeping before cleanup.
-    pub(in crate::runtime) agent_turn_compaction_handoffs:
-        BTreeMap<String, crate::runtime::agent_state::RuntimeTurnCompactionHandoff>,
     /// Receiver-owned peer presentation receipts awaiting durable pane settlement.
     received_peer_message_presentations: BTreeMap<String, RuntimeReceivedPeerMessagePresentation>,
     /// One real original-root absence result awaiting a canonical receive.

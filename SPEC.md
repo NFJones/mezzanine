@@ -12121,7 +12121,11 @@ select another model producer. Unowned or ambiguous source MUST refuse before
 model admission. Failed or stale publication MUST retain the prior authority;
 ordinary rows committing later do not authorize an abandoned candidate.
 Historical turn-local replacements may have archived terminal handoffs. These
-certificates MUST NOT publish new selective authority. Existing data MUST retain the
+certificates MUST NOT publish new selective authority. Current runtime
+projection MUST NOT retain private replacement witnesses or emit new terminal
+compaction certificates; canonical publication already owns accepted history.
+Historical decoding, exact-source validation and append recovery remain required.
+Existing data MUST retain the
 accepted summary's chronological anchor and original source occurrences,
 including immutable execution-group identity and provider ownership. Certificate
 source and terminal rows MUST use one occurrence map over the restored full

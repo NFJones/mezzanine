@@ -114,7 +114,7 @@ fn check_late_same_group_result(adapter: bool) {
     typed_source::complete(&mut service, &turn_id, "LATE_OCCURRENCE_SUMMARY");
     let live = service.agent_turn_contexts()[&turn_id].clone();
     let occurrences =
-        RuntimeSessionService::terminal_execution_occurrences(live.chronology()).unwrap();
+        RuntimeSessionService::canonical_execution_occurrences(live.chronology()).unwrap();
     let ordinals = occurrences
         .values()
         .filter_map(|event| match event {
@@ -133,12 +133,6 @@ fn check_late_same_group_result(adapter: bool) {
             .all(|event| live.chronology().contains(event))
     );
     assert!(live.chronology().contains(&late_event));
-    assert!(
-        service
-            .terminal_compaction_handoff_content(&turn_id)
-            .unwrap()
-            .is_none()
-    );
     let (_, accepted) = store
         .load_replay_epoch(&turn.conversation_id, mez_agent::AgentContext::empty())
         .unwrap()
@@ -270,29 +264,20 @@ fn check_late_same_group_result(adapter: bool) {
     assert_eq!(store.inspect(&turn.conversation_id).unwrap(), archive);
 }
 
-/// Genuine current publication produces no legacy certificate. The retained
-/// historical capture guard still refuses duplicate/conflicting private witness
-/// descriptors before touching canonical source or any archive/epoch bytes.
+/// Historical certificate admission retains exact occurrence guards after the
+/// runtime writer is retired. Missing/duplicated source cannot alter a current
+/// canonical head, its archive, or the waiting task; diagnostics omit payloads.
 #[test]
 fn contradictory_or_duplicate_witness_sources_fail_before_certificate_capture() {
+    use crate::storage::transcript::compaction_handoff::{
+        TerminalCompactionHandoff, TerminalCompactionReplacement,
+        terminal_handoff_source_is_contiguous,
+    };
     for changed in [true, false] {
-        let (mut service, store, turn_id) = typed_source::pending();
+        let (mut service, store, turn_id) = typed_source::saved(true);
         let turn = service.agent_turn_ledger().turn(&turn_id).unwrap().clone();
-        let source = service.agent_turn_contexts()[&turn_id]
-            .chronology()
-            .iter()
-            .filter(|event| event.execution_group_id().is_some())
-            .cloned()
-            .collect::<Vec<_>>();
-        assert!(!source.is_empty());
         typed_source::queue(&mut service, &turn_id, true);
         typed_source::complete(&mut service, &turn_id, "SOURCE_GUARD_SUMMARY");
-        assert!(
-            service
-                .terminal_compaction_handoff_content(&turn_id)
-                .unwrap()
-                .is_none()
-        );
         let before_context = service.agent_turn_contexts()[&turn_id].clone();
         let archive = store.inspect(&turn.conversation_id).unwrap();
         let path = store
@@ -300,49 +285,37 @@ fn contradictory_or_duplicate_witness_sources_fail_before_certificate_capture() 
             .join(&turn.conversation_id)
             .join("compaction-epoch.json");
         let manifest = fs::read(&path).unwrap();
-        let witness = crate::runtime::agent_state::RuntimeCompactionWitness {
-            anchor: source[0].sequence().get(),
-            source: source.clone(),
-            archived_sources: Default::default(),
-            summary: "historical private summary".into(),
-            summary_record: before_context.chronology()[0].record(),
-        };
-        let mut duplicate = witness.clone();
-        if changed {
-            let target = source[0].sequence().get();
-            let group = source[0].execution_group_id().unwrap().clone();
-            let mut forged = mez_agent::AgentContext::new_durable(vec![ContextBlock::user_event(
-                "seed", "seed",
-            )])
-            .unwrap();
-            while forged.event_sequence_high_water_mark() < target {
-                forged
-                    .append_assistant_event(
-                        "PRIVATE_CONTRADICTORY_LABEL",
-                        "PRIVATE_CONTRADICTORY_SOURCE",
-                        group.clone(),
-                    )
-                    .unwrap();
-            }
-            duplicate.source[0] = forged.chronology().last().unwrap().clone();
-        }
-        let handoff = crate::runtime::agent_state::RuntimeTurnCompactionHandoff {
+        // Explicit legacy fixture data exercises the retained storage codec;
+        // no runtime producer can construct this alternative history anymore.
+        let content = TerminalCompactionHandoff {
             baseline: None,
-            witnesses: vec![witness, duplicate],
-        };
-        let error = RuntimeSessionService::terminal_compaction_handoff_from_source(
-            &before_context,
-            &handoff,
-        )
-        .unwrap_err();
+            replacements: vec![TerminalCompactionReplacement {
+                summary_record: None,
+                sources: vec![archive[0].content.clone()],
+                summary: "PRIVATE_LEGACY_SUMMARY".into(),
+            }],
+        }
+        .to_content()
+        .unwrap();
+        let mut conflicting = archive.clone();
+        if changed {
+            conflicting[0].content = archive[1].content.clone();
+        } else {
+            conflicting.push(archive[0].clone());
+        }
+        let error = terminal_handoff_source_is_contiguous(&content, &conflicting).unwrap_err();
         assert_eq!(error.kind(), crate::MezErrorKind::Conflict);
+        assert!(error.message().contains("phase=preappend"), "{error}");
         assert!(
-            error
-                .message()
-                .contains("duplicate or conflicting terminal compaction source"),
+            error.message().contains(if changed {
+                "match_count=0"
+            } else {
+                "match_count=2"
+            }),
             "{error}"
         );
-        assert!(!error.message().contains("PRIVATE_CONTRADICTORY"));
+        assert!(!error.message().contains("PRIVATE_LEGACY_SUMMARY"));
+        assert!(!error.message().contains("LEGACY_ORIGINAL_SOURCE"));
         assert_eq!(service.agent_turn_contexts()[&turn_id], before_context);
         assert_eq!(store.inspect(&turn.conversation_id).unwrap(), archive);
         assert_eq!(fs::read(&path).unwrap(), manifest);

@@ -10,19 +10,19 @@
 //! Test-only candidate previews measure prospective requests without affecting
 //! acceptance; source/preparation owners retain exact publication fences.
 
+#[cfg(test)]
+use super::{AgentContext, ContextBlock, ModelInteractionKind, current_unix_seconds};
 use super::{
-    AgentContext, AgentShellCommandOutcome, AgentTurnRecord, AgentTurnState, AllowedActionSet,
-    ContextSourceKind, DEFAULT_PROVIDER_TIMEOUT_MS, MezError, ModelProfile, ModelRequest,
-    ModelResponse, ProviderApiCompatibility, ReqwestProviderHttpTransport, Result,
-    RuntimeAgentCompactionDispatch, RuntimeAgentCompactionTask,
-    RuntimeAgentProviderDispatchProvider, RuntimeSessionService, TranscriptEntry, TranscriptRole,
+    AgentShellCommandOutcome, AgentTurnRecord, AgentTurnState, AllowedActionSet, ContextSourceKind,
+    DEFAULT_PROVIDER_TIMEOUT_MS, MezError, ModelProfile, ModelRequest, ModelResponse,
+    ProviderApiCompatibility, ReqwestProviderHttpTransport, Result, RuntimeAgentCompactionDispatch,
+    RuntimeAgentCompactionTask, RuntimeAgentProviderDispatchProvider, RuntimeSessionService,
+    TranscriptEntry, TranscriptRole,
     deepseek_chat_completions_provider_from_auth_store_with_provider_options, json_escape,
     openai_compatible_provider_from_auth_store_with_provider_options_and_brand,
     openai_responses_provider_from_auth_store_with_provider_options, parse_slash_command,
     resolve_provider_api,
 };
-#[cfg(test)]
-use super::{ContextBlock, ModelInteractionKind, current_unix_seconds};
 #[cfg(test)]
 use crate::integrations::agent::context::assemble_model_request;
 use crate::integrations::agent::provider::{
@@ -37,7 +37,7 @@ use mez_agent::ProviderErrorRetryClass;
 
 #[cfg(test)]
 mod candidate;
-mod handoff;
+mod historical_handoff;
 /// Canonical input-boundary regressions.
 #[cfg(test)]
 mod input;

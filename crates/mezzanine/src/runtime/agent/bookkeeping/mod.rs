@@ -25,6 +25,7 @@ pub(crate) use physical_source::RuntimeTranscriptPrefixReceipt;
 mod completion_archive;
 pub(crate) use checked_source::RuntimeCompletionCheckedSource;
 mod message_prefix;
+mod occurrences;
 mod projection;
 use crate::runtime::persistence::RuntimeBookkeepingClaimIdentity;
 use completion_archive::RuntimeCompletionArchiveRead;
@@ -49,8 +50,6 @@ pub(crate) struct RuntimeBookkeepingTranscriptReadWork {
     compaction_epoch: u64,
     committed_prefix_required: bool,
     pending: Vec<TranscriptEntry>,
-    /// Terminal coverage needs the complete archive, not only this turn's delta.
-    terminal_handoff: bool,
     /// Completion handoff reads keep their original store/frontier/epoch even
     /// after the live pane moves. They confer no authority on a later binding.
     frozen_completion: bool,
@@ -89,7 +88,7 @@ impl RuntimeBookkeepingTranscriptReadWork {
             .store
             .conversation_transcript_view(
                 &self.conversation_id,
-                if self.terminal_handoff || self.frozen_completion {
+                if self.frozen_completion {
                     ConversationTranscriptRead::All
                 } else {
                     ConversationTranscriptRead::ForTurn(&self.turn_id)
@@ -270,7 +269,6 @@ impl RuntimeBookkeepingCandidate {
             frontier: u64,
             epoch: u64,
             committed_prefix_required: bool,
-            terminal_handoff: bool,
             frozen_completion: bool,
             pending: Vec<Entry<'a>>,
             persistence_key: &'a (String, String),
@@ -291,7 +289,6 @@ impl RuntimeBookkeepingCandidate {
             frontier: self.read.transcript_entries,
             epoch: self.read.compaction_epoch,
             committed_prefix_required: self.read.committed_prefix_required,
-            terminal_handoff: self.read.terminal_handoff,
             frozen_completion: self.read.frozen_completion,
             pending: self
                 .read
@@ -384,7 +381,7 @@ impl RuntimeSessionService {
         candidate: RuntimeBookkeepingCandidate,
     ) -> RuntimeBookkeepingCandidateWork {
         let mut read_capture_error = None;
-        let mut read = if !candidate.read.frozen_completion
+        let read = if !candidate.read.frozen_completion
             && self
                 .agent_shell_store()
                 .get(&candidate.turn.pane_id)
@@ -402,7 +399,6 @@ impl RuntimeSessionService {
         } else {
             candidate.read.clone()
         };
-        read.terminal_handoff |= candidate.read.terminal_handoff;
         let captured = if candidate.read.frozen_completion {
             Some(self.capture_completion_archive_read(&candidate))
         } else {
@@ -846,10 +842,6 @@ impl RuntimeSessionService {
             compaction_epoch: self.agent_compaction_epoch(&turn.pane_id),
             committed_prefix_required,
             pending,
-            terminal_handoff: self
-                .agent
-                .agent_turn_compaction_handoffs
-                .contains_key(&turn.turn_id),
             frozen_completion: false,
         })
     }
@@ -1401,13 +1393,6 @@ impl RuntimeSessionService {
         };
         interrupted_entry.validate()?;
         entries.push(interrupted_entry);
-        projection.append_terminal_compaction_handoff_entry(
-            &mut entries,
-            &turn.conversation_id,
-            first_sequence,
-            created_at_unix_seconds,
-            turn,
-        )?;
         if self.persistence.transcript_uses_adapter() {
             self.persistence
                 .queue_bookkeeping_candidate(RuntimeBookkeepingCandidate {

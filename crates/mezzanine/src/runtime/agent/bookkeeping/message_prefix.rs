@@ -19,11 +19,8 @@ impl RuntimeSessionService {
         imported_high_water: u64,
         before_event_sequence: u64,
     ) -> Result<Vec<TranscriptEntry>> {
-        let chronology = Self::terminal_compaction_source_chronology_from_source(
-            context,
-            self.agent.agent_turn_compaction_handoffs.get(&turn.turn_id),
-        )?;
-        let occurrences = Self::terminal_execution_occurrences(&chronology)?;
+        let chronology = context.chronology();
+        let occurrences = Self::canonical_execution_occurrences(chronology)?;
         let native_owned = self.native_owned_peer_events(&turn.turn_id);
         let mut rows = Vec::new();
         for event in chronology.iter().filter(|event| {
