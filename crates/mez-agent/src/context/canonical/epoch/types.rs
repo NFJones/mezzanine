@@ -252,6 +252,24 @@ impl ReplayCompactionPlan {
     pub fn summary_input(&self) -> &[ConversationEvent] {
         &self.frozen[..self.prefix_events]
     }
+    /// Returns whole source units in chronological order, with the prior head
+    /// first when present. Noncontiguous/overlapping execution groups use the
+    /// same ownership spans as source selection. These slices are auxiliary
+    /// input boundaries, never permission to publish a partial replacement.
+    pub fn summary_units(&self) -> Vec<&[ConversationEvent]> {
+        let offset = usize::from(self.head.is_some());
+        let mut units = Vec::new();
+        if offset != 0 {
+            units.push(&self.frozen[..offset]);
+        }
+        let raw = &self.summary_input()[offset..];
+        units.extend(
+            super::planning::execution_units(raw)
+                .into_iter()
+                .map(|range| &raw[range]),
+        );
+        units
+    }
     /// Returns exact raw tail retained outside this model summary input.
     pub fn retained_tail(&self) -> &[ConversationEvent] {
         &self.frozen[self.prefix_events..]

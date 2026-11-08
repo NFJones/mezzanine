@@ -199,7 +199,7 @@ impl ReplayEpochContext {
 /// Partitions raw chronology into disjoint whole ownership spans and singleton
 /// ungrouped occurrences. Overlapping/noncontiguous groups merge in O(n log n)
 /// work rather than repeatedly rescanning every group at each boundary.
-fn execution_units(raw: &[ConversationEvent]) -> Vec<std::ops::Range<usize>> {
+pub(super) fn execution_units(raw: &[ConversationEvent]) -> Vec<std::ops::Range<usize>> {
     let mut bounds = BTreeMap::<ContextExecutionGroupId, (usize, usize)>::new();
     for (index, event) in raw.iter().enumerate() {
         if let Some(group) = event.execution_group_id() {

@@ -52,6 +52,8 @@ pub mod continuation;
 pub mod deepseek;
 /// Provider-independent DeepSeek Chat Completions response parsing.
 pub mod deepseek_response;
+/// Frozen epoch source packing and bounded auxiliary summary reduction.
+pub mod epoch_compaction;
 /// Provider-independent action execution ports and transport records.
 pub mod execution;
 /// Provider-independent agent execution transcript projection.
