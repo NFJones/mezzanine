@@ -11,14 +11,14 @@
 //! complete request; source/preparation owners retain exact publication fences.
 
 use super::{
-    AgentActionPayload, AgentContext, AgentShellCommandOutcome, AgentTurnRecord, AgentTurnState,
-    AllowedActionSet, ContextBlock, ContextSourceKind, DEFAULT_PROVIDER_TIMEOUT_MS, MezError,
-    ModelInteractionKind, ModelMessage, ModelMessageRole, ModelProfile, ModelRequest,
-    ModelResponse, ProviderApiCompatibility, ReqwestProviderHttpTransport, Result,
-    RuntimeAgentCompactionDispatch, RuntimeAgentCompactionTask,
-    RuntimeAgentProviderDispatchProvider, RuntimeSessionService, TranscriptEntry, TranscriptRole,
-    current_unix_seconds, deepseek_chat_completions_provider_from_auth_store_with_provider_options,
-    json_escape, model_context_text_word_count,
+    AgentContext, AgentShellCommandOutcome, AgentTurnRecord, AgentTurnState, AllowedActionSet,
+    ContextBlock, ContextSourceKind, DEFAULT_PROVIDER_TIMEOUT_MS, MezError, ModelInteractionKind,
+    ModelMessage, ModelMessageRole, ModelProfile, ModelRequest, ModelResponse,
+    ProviderApiCompatibility, ReqwestProviderHttpTransport, Result, RuntimeAgentCompactionDispatch,
+    RuntimeAgentCompactionTask, RuntimeAgentProviderDispatchProvider, RuntimeSessionService,
+    TranscriptEntry, TranscriptRole, current_unix_seconds,
+    deepseek_chat_completions_provider_from_auth_store_with_provider_options, json_escape,
+    model_context_text_word_count,
     openai_compatible_provider_from_auth_store_with_provider_options_and_brand,
     openai_responses_provider_from_auth_store_with_provider_options, parse_slash_command,
     resolve_provider_api,
@@ -1355,56 +1355,13 @@ fn runtime_model_compaction_request_from_source(
     source_text: String,
     allowed_actions: AllowedActionSet,
 ) -> ModelRequest {
-    let agent_id = format!("agent-{pane_id}");
-    let turn_id = format!("compact-{conversation_id}");
-    ModelRequest {
-        provider: profile.provider.clone(),
-        model: profile.model.clone(),
-        model_capabilities: profile.model_capabilities.clone(),
-        max_input_tokens: None,
-        reasoning_effort: profile
-            .provider_options
-            .get("reasoning_effort")
-            .cloned()
-            .or_else(|| profile.reasoning_profile.clone()),
-        thinking_enabled: profile.thinking_enabled(),
-        prompt_cache_retention: profile.provider_options.get("prompt_cache_retention").cloned(),
-        latency_preference: profile.latency_preference.clone(),
-        max_output_tokens: profile.max_output_tokens(),
-        temperature: None,
-        stop: None,
-        prompt_cache_session_id: None,
-                prompt_cache_lineage_id: None,
-        turn_id,
-        agent_id,
-        available_mcp_tools: Vec::new(),
-                memory_actions_enabled: false,
-                issue_actions_enabled: true,
-        interaction_kind: ModelInteractionKind::Compaction,
+    mez_agent::epoch_compaction::provider::request_from_source(
+        profile,
+        pane_id,
+        conversation_id,
+        source_text,
         allowed_actions,
-        messages: vec![
-            ModelMessage {
-                role: ModelMessageRole::System,
-                source: ContextSourceKind::System,
-                placement: mez_agent::ContextPlacement::StablePrefix,
-                content: "You are Mezzanine's conversation compactor. Produce durable, concise summaries that preserve task-critical context and omit secrets."
-                    .to_string(),
-            },
-            ModelMessage {
-                role: ModelMessageRole::Developer,
-                source: ContextSourceKind::DeveloperInstruction,
-                placement: mez_agent::ContextPlacement::StablePrefix,
-                content: "Return exactly one `say` action with `status` set to `final` and `content_type` set to `text/markdown; charset=utf-8`. Summarize only essential user goals, current decisions and state, blockers, pending work, and usable references for the next turn. Omit audit identities, counts, repeated history, and unsupported completion claims. Redact credentials and secrets."
-                    .to_string(),
-            },
-            ModelMessage {
-                role: ModelMessageRole::User,
-                source: ContextSourceKind::Transcript,
-                placement: mez_agent::ContextPlacement::ConversationAppend,
-                content: source_text,
-            },
-        ].into(),
-    }
+    )
 }
 
 /// Returns the content-free label for one recorded compaction trigger.
@@ -1698,50 +1655,13 @@ fn runtime_model_compaction_source_for_blocks(
 
 /// Returns a stable source label for context included in compaction input.
 pub(super) fn runtime_context_source_kind_name(source: ContextSourceKind) -> &'static str {
-    match source {
-        ContextSourceKind::System => "system",
-        ContextSourceKind::UserInstruction => "user-instruction",
-        ContextSourceKind::SkillInstruction => "skill-instruction",
-        ContextSourceKind::DeveloperInstruction => "developer-instruction",
-        ContextSourceKind::Policy => "policy",
-        ContextSourceKind::Configuration => "configuration",
-        ContextSourceKind::LocalMessage => "local-message",
-        ContextSourceKind::PeerMessage => "peer-message",
-        ContextSourceKind::RuntimeHint => "runtime-hint",
-        ContextSourceKind::ProjectGuidance => "project-guidance",
-        ContextSourceKind::Memory
-        | ContextSourceKind::CompactionPrefix
-        | ContextSourceKind::CompactionSelective => "memory",
-        ContextSourceKind::PersistedContextDocument => "persisted-context-document",
-        ContextSourceKind::Transcript => "transcript",
-        ContextSourceKind::TranscriptUser => "transcript-user",
-        ContextSourceKind::TranscriptAssistant => "transcript-assistant",
-        ContextSourceKind::TranscriptTool => "transcript-tool",
-        ContextSourceKind::CommittedEvidence => "committed-evidence",
-        ContextSourceKind::RoutedHandoff => "routed-handoff",
-        ContextSourceKind::ActionResult => "action-result",
-        ContextSourceKind::McpCatalogSnapshot => "mcp-catalog-snapshot",
-        ContextSourceKind::McpServerReference => "mcp-server-reference",
-        ContextSourceKind::McpServerSearchResult => "mcp-server-search-result",
-        ContextSourceKind::McpRetrievedManifest => "mcp-retrieved-manifest",
-    }
+    mez_agent::epoch_compaction::provider::source_kind_name(source)
 }
 
 /// Redacts one transcript entry before sending it for compaction while
 /// preserving its structural whitespace for model interpretation.
 pub(super) fn runtime_model_compaction_entry_content(content: &str) -> String {
-    content
-        .split_inclusive(char::is_whitespace)
-        .map(|segment| {
-            let token = segment.trim_end_matches(char::is_whitespace);
-            let whitespace = &segment[token.len()..];
-            format!(
-                "{}{}",
-                runtime_compact_redact_sensitive_token(token),
-                whitespace
-            )
-        })
-        .collect()
+    mez_agent::epoch_compaction::provider::redact_content(content)
 }
 
 /// Creates temporary compactor source blocks whose content is redacted before
@@ -1768,30 +1688,6 @@ pub(super) fn runtime_model_compaction_summary_from_response(
     summary_correction::completed_summary(response, turn_id, agent_id).map_err(|()| {
         MezError::invalid_state("model compaction response contained a malformed summary frame")
     })
-}
-
-/// Runs the runtime compact redact sensitive token operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(super) fn runtime_compact_redact_sensitive_token(token: &str) -> String {
-    let lower = token.to_ascii_lowercase();
-    if lower.contains("private")
-        || lower.contains("api_key")
-        || lower.contains("apikey")
-        || lower == "api"
-        || lower.contains("password")
-        || lower.contains("token")
-        || lower.contains("credential")
-        || lower.contains("secret")
-        || token.contains("sk-")
-        || token.contains('@') && token.contains('.')
-    {
-        "[redacted]".to_string()
-    } else {
-        token.to_string()
-    }
 }
 
 #[cfg(test)]

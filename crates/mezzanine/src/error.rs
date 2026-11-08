@@ -246,6 +246,9 @@ impl From<mez_agent::ProviderResponseError> for MezError {
         if let Some(state) = error.output_limit_state() {
             product_error = product_error.with_provider_output_limit_state(state.clone());
         }
+        if let Some(usage) = error.incurred_usage() {
+            product_error = product_error.with_provider_incurred_usage(usage);
+        }
         product_error
     }
 }

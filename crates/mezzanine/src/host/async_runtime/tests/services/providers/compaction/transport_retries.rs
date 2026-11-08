@@ -229,6 +229,11 @@ async fn qualify_transport_retry(sse: bool) {
                     .lines
                     .iter()
                     .any(|line| line.contains("ordinary resumed exactly once"))
+                    // Streaming presentation can precede the worker's terminal
+                    // actor event. Do not stop the driver while that turn is
+                    // still running; the final Completed assertion below
+                    // remains the authoritative completion check.
+                    && !handle.agent_turn_is_running(&turn).await.unwrap()
                 {
                     break;
                 }

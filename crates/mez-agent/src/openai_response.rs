@@ -56,14 +56,18 @@ pub fn parse_openai_responses_http_body(
     let value: serde_json::Value = serde_json::from_str(body).map_err(|error| {
         ProviderResponseError::invalid_state(format!("OpenAI response was not JSON: {error}"))
     })?;
+    let reported_usage = reported_openai_usage(&value);
     if let Some(error) = value.get("error").filter(|error| !error.is_null()) {
         let message = error
             .get("message")
             .and_then(serde_json::Value::as_str)
             .unwrap_or("OpenAI response contained an error");
         let message = sanitize_provider_primary_error_text(message);
-        return Err(ProviderResponseError::invalid_state(message)
-            .with_provider_failure_json(openai_provider_failure_event_json(&value)));
+        return Err(with_observed_usage(
+            ProviderResponseError::invalid_state(message)
+                .with_provider_failure_json(openai_provider_failure_event_json(&value)),
+            reported_usage,
+        ));
     }
     if value.get("status").and_then(serde_json::Value::as_str) == Some("incomplete") {
         let stop_reason = value
@@ -119,17 +123,19 @@ pub fn parse_openai_responses_http_body(
     if let Some(status) = value.get("status").and_then(serde_json::Value::as_str)
         && status != "completed"
     {
-        return Err(
+        return Err(with_observed_usage(
             ProviderResponseError::invalid_state("OpenAI response did not complete")
                 .with_provider_failure_json(openai_provider_failure_event_json(&value)),
-        );
+            reported_usage,
+        ));
     }
     let model = value
         .get("model")
         .and_then(serde_json::Value::as_str)
         .unwrap_or(fallback_model)
         .to_string();
-    let raw_text = collect_openai_maap_function_call_arguments(&value)?
+    let raw_text = collect_openai_maap_function_call_arguments(&value)
+        .map_err(|error| with_observed_usage(error, reported_usage))?
         .or_else(|| {
             value
                 .get("output_text")
@@ -138,8 +144,11 @@ pub fn parse_openai_responses_http_body(
         })
         .or_else(|| collect_openai_output_text(&value));
     let Some(raw_text) = raw_text else {
-        return Err(ProviderResponseError::invalid_state(
-            "OpenAI response did not contain text or MAAP function-call output",
+        return Err(with_observed_usage(
+            ProviderResponseError::invalid_state(
+                "OpenAI response did not contain text or MAAP function-call output",
+            ),
+            reported_usage,
         ));
     };
     let usage = openai_token_usage_from_response_value(&value);
@@ -153,6 +162,9 @@ pub struct OpenAiResponsesStreamDecoder {
     model: Option<String>,
     completed: bool,
     usage: ModelTokenUsage,
+    /// Numeric receipt survives unusable/partial output without granting it
+    /// output-limit continuation or execution authority.
+    reported_usage: Option<ModelTokenUsage>,
     function_calls: BTreeMap<u64, OpenAiFunctionCallAccumulator>,
     completed_output_items: BTreeMap<u64, serde_json::Value>,
     completed_response_output: Option<Vec<serde_json::Value>>,
@@ -161,8 +173,25 @@ pub struct OpenAiResponsesStreamDecoder {
 }
 
 impl OpenAiResponsesStreamDecoder {
+    /// Returns the last numeric receipt actually observed while streaming,
+    /// independently of text completion. Transports use it when I/O fails
+    /// before a body or parser finish result can carry the expense forward.
+    pub fn incurred_usage(&self) -> Option<ModelTokenUsage> {
+        self.reported_usage
+    }
+
     /// Applies one complete SSE event and returns display-safe text progress.
     pub fn push_event(
+        &mut self,
+        event: &crate::SseEvent,
+    ) -> ProviderResponseResult<Option<String>> {
+        self.push_event_inner(event)
+            .map_err(|error| with_observed_usage(error, self.reported_usage))
+    }
+
+    /// Accumulates one event; the public boundary attaches previously observed
+    /// expense even when later malformed data prevents a usable completion.
+    fn push_event_inner(
         &mut self,
         event: &crate::SseEvent,
     ) -> ProviderResponseResult<Option<String>> {
@@ -175,6 +204,7 @@ impl OpenAiResponsesStreamDecoder {
                 "OpenAI stream event was not JSON: {error}"
             ))
         })?;
+        self.reported_usage = reported_openai_usage(&value).or(self.reported_usage);
         if let Some(error) = value.get("error").filter(|error| !error.is_null()) {
             let message = error
                 .get("message")
@@ -341,6 +371,22 @@ impl OpenAiResponsesStreamDecoder {
         ModelTokenUsage,
         Vec<ProviderTranscriptEvent>,
     )> {
+        let reported_usage = self.reported_usage;
+        self.finish_inner(fallback_model)
+            .map_err(|error| with_observed_usage(error, reported_usage))
+    }
+
+    /// Consumes private buffers without letting their usability erase the
+    /// independent usage receipt retained by the public finishing boundary.
+    fn finish_inner(
+        self,
+        fallback_model: &str,
+    ) -> ProviderResponseResult<(
+        String,
+        String,
+        ModelTokenUsage,
+        Vec<ProviderTranscriptEvent>,
+    )> {
         if !self.completed {
             return Err(ProviderResponseError::invalid_state(
                 "OpenAI stream closed before response.completed",
@@ -407,6 +453,7 @@ pub fn parse_openai_responses_stream_body(
     let mut model = None;
     let mut completed = false;
     let mut usage = ModelTokenUsage::default();
+    let mut reported_usage = None;
     let mut function_calls = BTreeMap::<u64, OpenAiFunctionCallAccumulator>::new();
     let mut completed_output_items = BTreeMap::<u64, serde_json::Value>::new();
     let mut completed_response_output = None;
@@ -426,6 +473,7 @@ pub fn parse_openai_responses_stream_body(
                     "OpenAI stream event was not JSON: {error}"
                 ))
             })?;
+            reported_usage = reported_openai_usage(&value).or(reported_usage);
             if let Some(error) = value.get("error").filter(|error| !error.is_null()) {
                 let message = error
                     .get("message")
@@ -573,16 +621,19 @@ pub fn parse_openai_responses_stream_body(
             }
             Ok(())
         },
-    )?;
+    )
+    .map_err(|error| with_observed_usage(error, reported_usage))?;
 
     let output_item_text_empty = output_item_text.is_empty();
     if !completed {
-        return Err(ProviderResponseError::invalid_state(
-            "OpenAI stream closed before response.completed",
+        return Err(with_observed_usage(
+            ProviderResponseError::invalid_state("OpenAI stream closed before response.completed"),
+            reported_usage,
         ));
     }
     let raw_text = if let Some(arguments) =
-        collect_openai_maap_function_call_arguments_from_accumulators(&function_calls)?
+        collect_openai_maap_function_call_arguments_from_accumulators(&function_calls)
+            .map_err(|error| with_observed_usage(error, reported_usage))?
     {
         arguments
     } else if output_item_text_empty {
@@ -591,8 +642,11 @@ pub fn parse_openai_responses_stream_body(
         output_item_text
     };
     if raw_text.is_empty() {
-        return Err(ProviderResponseError::invalid_state(
-            "OpenAI stream did not contain text or MAAP function-call output",
+        return Err(with_observed_usage(
+            ProviderResponseError::invalid_state(
+                "OpenAI stream did not contain text or MAAP function-call output",
+            ),
+            reported_usage,
         ));
     }
     let native_output =
@@ -618,6 +672,38 @@ fn openai_response_output_event(value: &serde_json::Value) -> Vec<ProviderTransc
         .and_then(ProviderTranscriptEvent::validated_openai_response_output)
         .into_iter()
         .collect()
+}
+
+/// Retains an actual numeric usage receipt without inventing one from absent
+/// or empty metadata. Explicit zero counters remain distinct from no receipt.
+fn reported_openai_usage(value: &serde_json::Value) -> Option<ModelTokenUsage> {
+    let usage = value
+        .get("usage")
+        .or_else(|| value.pointer("/response/usage"))
+        .filter(|value| value.is_object())?;
+    let parsed = openai_token_usage_from_response_value(value);
+    let has_counter = [
+        "input_tokens",
+        "prompt_tokens",
+        "output_tokens",
+        "completion_tokens",
+        "reasoning_tokens",
+    ]
+    .iter()
+    .any(|key| usage.get(key).and_then(serde_json::Value::as_u64).is_some());
+    (has_counter || parsed != ModelTokenUsage::default()).then_some(parsed)
+}
+
+/// Attaches one selected receipt; it is never added to output-limit state for
+/// the same dispatch, preventing duplicate expense on error conversion/retry.
+fn with_observed_usage(
+    error: ProviderResponseError,
+    usage: Option<ModelTokenUsage>,
+) -> ProviderResponseError {
+    match usage {
+        Some(usage) => error.with_incurred_usage(usage),
+        None => error,
+    }
 }
 
 /// Extracts OpenAI-style token usage from a response or stream event object.
@@ -1451,6 +1537,74 @@ mod tests {
             parse_openai_responses_http_body(r#"{"model":"gpt-test","output":[]}"#, "gpt-test")
                 .unwrap_err();
         assert_eq!(missing.kind(), ProviderResponseErrorKind::InvalidState);
+    }
+
+    /// A completed empty response was still charged. Reject its output while
+    /// retaining the independent usage receipt; no fake output-limit state or
+    /// rejected provider text is needed to carry numeric accounting metadata.
+    #[test]
+    fn openai_unusable_output_retains_reported_usage() {
+        let body = serde_json::json!({"model":"test", "status":"completed", "output":[],
+            "usage":{"input_tokens":11,"output_tokens":7,"input_tokens_details":{"cached_tokens":3}}}).to_string();
+        let error = parse_openai_responses_http_body(&body, "test").unwrap_err();
+        let usage = error
+            .incurred_usage()
+            .expect("known failed-dispatch expense");
+        assert_eq!(
+            (
+                usage.input_tokens,
+                usage.output_tokens,
+                usage.cached_input_tokens
+            ),
+            (11, 7, Some(3))
+        );
+        assert!(error.output_limit_state().is_none());
+        assert!(error.provider_raw_text().is_none());
+        let unknown = parse_openai_responses_http_body(r#"{"output":[]}"#, "test").unwrap_err();
+        assert!(unknown.incurred_usage().is_none());
+        let empty =
+            parse_openai_responses_http_body(r#"{"output":[],"usage":{}}"#, "test").unwrap_err();
+        assert!(empty.incurred_usage().is_none());
+        let zero = parse_openai_responses_http_body(
+            r#"{"output":[],"usage":{"input_tokens":0,"output_tokens":0}}"#,
+            "test",
+        )
+        .unwrap_err();
+        assert_eq!(zero.incurred_usage(), Some(ModelTokenUsage::default()));
+    }
+
+    /// Both buffered and incremental SSE paths retain the last actual usage
+    /// receipt if the stream is interrupted or completes without usable text.
+    #[test]
+    fn openai_unusable_stream_retains_reported_usage() {
+        for event_type in ["response.in_progress", "response.completed"] {
+            let event = crate::SseEvent {
+                name: Some(event_type.into()),
+                data: serde_json::json!({"type":event_type,"response":{"model":"test","output":[],
+                    "usage":{"input_tokens":13,"output_tokens":5}}})
+                .to_string(),
+            };
+            let body = format!("event: {event_type}\ndata: {}\n\n", event.data);
+            let mut decoder = OpenAiResponsesStreamDecoder::default();
+            decoder.push_event(&event).unwrap();
+            let bad = crate::SseEvent {
+                name: None,
+                data: "{invalid".into(),
+            };
+            let malformed = decoder.push_event(&bad).unwrap_err();
+            assert_eq!(malformed.incurred_usage().unwrap().input_tokens, 13);
+            let buffered_bad =
+                parse_openai_responses_stream_body(&format!("{body}data: {{invalid\n\n"), "test")
+                    .unwrap_err();
+            assert_eq!(buffered_bad.incurred_usage().unwrap().input_tokens, 13);
+            let buffered = parse_openai_responses_stream_body(&body, "test").unwrap_err();
+            let incremental = parse_openai_responses_stream_events([event], "test").unwrap_err();
+            for error in [buffered, incremental] {
+                let usage = error.incurred_usage().expect("known stream expense");
+                assert_eq!((usage.input_tokens, usage.output_tokens), (13, 5));
+                assert!(error.output_limit_state().is_none());
+            }
+        }
     }
 
     /// Verifies the unary Responses error path withholds provider-authored

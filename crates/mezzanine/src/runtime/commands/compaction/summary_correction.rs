@@ -251,56 +251,8 @@ pub(super) fn completed_summary(
     turn_id: &str,
     agent_id: &str,
 ) -> std::result::Result<String, ()> {
-    let raw = response.raw_text.trim();
-    let decoded = if response.action_batch.is_none() {
-        // Recognition is not validation: empty/unknown/nonfinal typed actions
-        // still enter the canonical parser and finite malformed-output policy.
-        // Isolated field names in raw summary data confer no framing authority.
-        // Invalid unframed JSON remains text; an explicit MAAP fence is the
-        // unambiguous way to identify a syntactically incomplete frame.
-        let envelope = serde_json::from_str::<serde_json::Value>(raw)
-            .ok()
-            .and_then(|value| value.as_object().cloned())
-            .is_some_and(|object| {
-                object.contains_key("rationale")
-                    && object
-                        .get("actions")
-                        .and_then(serde_json::Value::as_array)
-                        .is_some_and(|actions| {
-                            actions.is_empty()
-                                || actions.iter().any(|action| {
-                                    action
-                                        .as_object()
-                                        .is_some_and(|action| action.contains_key("type"))
-                                })
-                        })
-            });
-        if envelope {
-            Some(
-                mez_agent::parse_maap_action_batch_json_for_turn(raw, turn_id, agent_id)
-                    .map_err(|_| ())?,
-            )
-        } else {
-            mez_agent::parse_fenced_maap_action_batch_for_turn(raw, turn_id, agent_id)
-                .map_err(|_| ())?
-        }
-    } else {
-        None
-    };
-    match response.action_batch.as_ref().or(decoded.as_ref()) {
-        Some(batch) => match batch.actions.as_slice() {
-            [action] => match &action.payload {
-                AgentActionPayload::Say {
-                    status: mez_agent::SayStatus::Final,
-                    text,
-                    ..
-                } => Ok(text.trim().to_string()),
-                _ => Err(()),
-            },
-            _ => Err(()),
-        },
-        None => Ok(raw.to_string()),
-    }
+    mez_agent::epoch_compaction::decode_completed_summary(response, turn_id, agent_id)
+        .map_err(|_| ())
 }
 
 /// Computes finite advisory progress using measured invalid dimensions, never

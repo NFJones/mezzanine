@@ -49,6 +49,7 @@ impl EpochCompactionEngine {
             nodes,
             claims: BTreeMap::new(),
             next_id: 0,
+            operation: uuid::Uuid::new_v4(),
             work_count: 0,
             buffered_summary_bytes: 0,
         })
@@ -77,6 +78,16 @@ impl EpochCompactionEngine {
             return Ok(EpochCompactionStep::Waiting);
         }
         let mut chosen = None;
+        // Prefer a necessary merge before filling the remaining held-summary
+        // budget with more source results. This is resource scheduling only;
+        // accepted output retains its independent parser/memory contract.
+        let memory_pressure = self.buffered_summary_bytes > 0
+            && self.buffered_summary_bytes
+                >= self.limits.buffered_summary_bytes.saturating_sub(
+                    self.limits
+                        .summary_bytes
+                        .saturating_mul(self.limits.in_flight),
+                );
         if self.schedule.selected == CompactionSchedule::Rolling {
             for (&start, node) in &self.nodes {
                 if matches!(node.material, Material::Summary(_)) {
@@ -86,6 +97,9 @@ impl EpochCompactionEngine {
                     }
                 }
             }
+        }
+        if chosen.is_none() && memory_pressure {
+            chosen = self.merge_candidate(false, &measure)?;
         }
         if chosen.is_none() {
             for (&start, node) in &self.nodes {
@@ -98,16 +112,14 @@ impl EpochCompactionEngine {
             }
         }
         if chosen.is_none() {
-            for (&start, node) in &self.nodes {
-                if matches!(node.material, Material::Summary(_)) {
-                    chosen = self.candidate(start, false, true, &measure)?;
-                    if chosen.is_some() {
-                        break;
-                    }
-                }
-            }
+            chosen = self.merge_candidate(!self.claims.is_empty() && !memory_pressure, &measure)?;
         }
-        let Some((children, input)) = chosen else {
+        let Some(PackedWork {
+            children,
+            input,
+            remainder,
+        }) = chosen
+        else {
             return if self.claims.is_empty() {
                 Err(invalid(
                     "remaining compaction source cannot fit a necessary merge",
@@ -116,7 +128,10 @@ impl EpochCompactionEngine {
                 Ok(EpochCompactionStep::Waiting)
             };
         };
-        let id = EpochCompactionWorkId(self.next_id);
+        let id = EpochCompactionWorkId {
+            operation: self.operation,
+            sequence: self.next_id,
+        };
         let next_id = self
             .next_id
             .checked_add(1)
@@ -149,6 +164,9 @@ impl EpochCompactionEngine {
         };
         for node in &children {
             self.nodes.remove(&node.coverage.start);
+        }
+        if let Some(node) = remainder {
+            self.nodes.insert(node.coverage.start, node);
         }
         self.nodes.insert(
             work.coverage.start,
@@ -230,6 +248,14 @@ impl EpochCompactionEngine {
                 "input rejection did not lower usable compactor capacity",
             ));
         }
+        let limits = EpochCompactionLimits {
+            input_tokens,
+            ..self.limits
+        };
+        let schedule = CompactionScheduleEstimate::new(
+            self.source.plan.input_estimates().source_input_tokens()?,
+            limits,
+        );
         let claim = self
             .claims
             .get(&id)
@@ -270,6 +296,7 @@ impl EpochCompactionEngine {
             .collect();
         self.claims.remove(&id);
         self.limits.input_tokens = input_tokens;
+        self.schedule = schedule;
         Ok(())
     }
 

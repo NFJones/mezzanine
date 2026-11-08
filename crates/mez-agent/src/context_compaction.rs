@@ -20,7 +20,7 @@ use crate::{
 use std::ops::Range;
 
 /// Maximum bytes from one context block retained in a raw suffix.
-const MODEL_CONTEXT_BLOCK_LIMIT_BYTES: usize = 128 * 1024;
+const MODEL_CONTEXT_BLOCK_LIMIT_BYTES: usize = crate::epoch_compaction::MAX_SUMMARY_BYTES;
 /// Default raw suffix percent retained around model-authored compaction.
 pub const DEFAULT_MODEL_CONTEXT_RETAINED_TAIL_PERCENT: usize = 10;
 

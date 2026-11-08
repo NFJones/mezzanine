@@ -78,6 +78,7 @@ use std::process::{Command, Output, Stdio};
 use std::thread;
 use std::time::Duration;
 
+mod epoch_compaction;
 mod fixtures;
 
 /// Assembles a test request with the provider kind's known default API.

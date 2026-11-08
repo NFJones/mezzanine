@@ -1053,6 +1053,15 @@ exact, while explicitly completed task instructions can become historical
 source without changing their authorship. Covered raw source remains archive
 history rather than becoming active replay again.
 
+The shared epoch model-work API packs that frozen selection using the actual
+auxiliary request shape. A fitting source takes one call. Oversized source uses
+bounded temporary chunks and necessary merges, preserving redacted bytes and
+whole-group publication ownership. A completed usable final is accepted without
+word-target, compression-ratio or next-request-size retries. Empty, malformed or
+incomplete output has finite private repair; transport retry resends the same
+work. Intermediate summaries never become visible history. These are model-work
+contracts; trigger integration and runtime settlement remain separate adapters.
+
 This foundation does not change the current command or storage behavior described
 above. Durable lifecycle restoration, all-trigger integration and configurable
 summary-free retention require their own adapters. See the

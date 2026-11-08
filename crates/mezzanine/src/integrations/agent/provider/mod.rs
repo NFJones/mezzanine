@@ -67,6 +67,19 @@ fn openai_response_is_json(headers: &BTreeMap<String, String>) -> bool {
         })
 }
 
+/// Preserves already observed streaming expense when transport/status failure
+/// bypasses parser finalization. Missing receipts remain unknown, never zero
+/// counters manufactured from request estimates or source text.
+fn openai_error_with_incurred_usage(
+    error: MezError,
+    usage: Option<mez_agent::ModelTokenUsage>,
+) -> MezError {
+    match usage {
+        Some(usage) => error.with_provider_incurred_usage(usage),
+        None => error,
+    }
+}
+
 /// Extracts a completed Responses identifier for private comparison lineage.
 ///
 /// The identifier is never projected into observations or transcript content.
@@ -2523,23 +2536,29 @@ impl<T: AsyncProviderHttpTransport> OpenAiResponsesProvider<T> {
                 };
                 self.transport
                     .send_async_with_sse_events(&http_request, &mut on_event)
-                    .await?
+                    .await
             } else {
-                self.transport.send_async(&http_request).await?
-            };
+                self.transport.send_async(&http_request).await
+            }
+            .map_err(|error| {
+                openai_error_with_incurred_usage(error.into(), stream_decoder.incurred_usage())
+            })?;
             let response_diagnostics = openai_response_diagnostics(&response);
             if !(200..300).contains(&response.status_code) {
-                return Err(MezError::invalid_state(format!(
-                    "OpenAI Responses API returned status {}: {}",
-                    response.status_code,
-                    openai_provider_error_detail(&response.body)
-                ))
-                .with_provider_failure_json(
-                    openai_provider_failure_json_with_retry_headers(
-                        Some(response.status_code),
-                        &response.body,
-                        &response.headers,
+                return Err(openai_error_with_incurred_usage(
+                    MezError::invalid_state(format!(
+                        "OpenAI Responses API returned status {}: {}",
+                        response.status_code,
+                        openai_provider_error_detail(&response.body)
+                    ))
+                    .with_provider_failure_json(
+                        openai_provider_failure_json_with_retry_headers(
+                            Some(response.status_code),
+                            &response.body,
+                            &response.headers,
+                        ),
                     ),
+                    stream_decoder.incurred_usage(),
                 ));
             }
             self.capture_chatgpt_turn_state(request, &response.headers);

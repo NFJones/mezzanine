@@ -14,13 +14,20 @@ use crate::{
 use std::{collections::BTreeMap, ops::Range, sync::Arc};
 
 mod controller;
+mod output;
+pub use output::{CompactionSummaryDecodeError, decode_completed_summary};
 mod packing;
+/// Canonical request projection and finite output repair, without transport I/O.
+pub mod provider;
 mod scheduling;
 pub use scheduling::{CompactionSchedule, CompactionScheduleEstimate};
 mod source;
 pub use source::{CompactionSourceUnit, FrozenEpochCompactionSource};
 #[cfg(test)]
 mod tests;
+
+/// Canonical summary block resource limit, independent of word/token targets.
+pub const MAX_SUMMARY_BYTES: usize = 128 * 1024;
 
 /// Genuine resource bounds, supplied by the existing request/worker owner.
 /// Output bounds are parser/memory limits, not semantic compression targets.
@@ -33,7 +40,8 @@ pub struct EpochCompactionLimits {
     pub framing_tokens: usize,
     /// Maximum total rendered redacted source bytes held by this operation.
     pub source_bytes: usize,
-    /// Maximum bytes in one decoded completed provider summary.
+    /// Maximum bytes in one decoded completed provider summary, at most
+    /// `MAX_SUMMARY_BYTES`, the canonical publication resource bound.
     pub summary_bytes: usize,
     /// Maximum total retained intermediate summary bytes.
     pub buffered_summary_bytes: usize,
@@ -50,6 +58,7 @@ impl EpochCompactionLimits {
         if self.input_tokens <= self.framing_tokens
             || self.source_bytes == 0
             || self.summary_bytes == 0
+            || self.summary_bytes > MAX_SUMMARY_BYTES
             || self.buffered_summary_bytes < self.summary_bytes
             || self.work_nodes == 0
             || self.in_flight == 0
@@ -64,7 +73,10 @@ impl EpochCompactionLimits {
 /// Opaque logical work identity, separate from physical provider dispatch IDs,
 /// runtime generations and canonical source/publication occurrence identities.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub struct EpochCompactionWorkId(u64);
+pub struct EpochCompactionWorkId {
+    operation: uuid::Uuid,
+    sequence: u64,
+}
 
 /// One exact private auxiliary input. Cloning for a transport retry preserves
 /// the same input and work identity; incurred usage belongs to each dispatch.
@@ -191,6 +203,12 @@ struct Claim {
     children: Vec<Node>,
 }
 
+struct PackedWork {
+    children: Vec<Node>,
+    input: String,
+    remainder: Option<Node>,
+}
+
 /// Deterministic bounded work controller. Dropping it cancels private work and
 /// cannot alter the original epoch. Runtime fences remain adapter-owned.
 pub struct EpochCompactionEngine {
@@ -200,6 +218,9 @@ pub struct EpochCompactionEngine {
     nodes: BTreeMap<usize, Node>,
     claims: BTreeMap<EpochCompactionWorkId, Claim>,
     next_id: u64,
+    /// A cancelled/dropped operation cannot collide with a replacement's
+    /// first logical claim, even when both freeze the exact same source.
+    operation: uuid::Uuid,
     work_count: u64,
     buffered_summary_bytes: usize,
 }

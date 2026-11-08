@@ -565,3 +565,153 @@ fn frozen_provider_projection_and_occurrence_identity_survive_reduction() {
     );
     assert_eq!(owner, before);
 }
+
+/// A rolling carry shares actual remaining capacity with temporary fragments
+/// of an oversized original unit. It does not spend a call on a small leftover
+/// fragment or run a dedicated final synthesis when more raw source can fit.
+#[test]
+fn rolling_oversized_unit_packs_carry_with_contiguous_fragments_without_extra_merge() {
+    let mut owner = owner();
+    let original = "x".repeat(5000);
+    owner.append_fact("large", &original).unwrap();
+    let mut bounds = limits(1000);
+    bounds.in_flight = 1;
+    let mut engine = EpochCompactionEngine::new(source(plan(&owner, 0)), bounds, measure).unwrap();
+    assert_eq!(engine.schedule().selected, CompactionSchedule::Rolling);
+    let mut reconstructed = String::new();
+    let mut calls = 0;
+    loop {
+        match engine.next(measure).unwrap() {
+            EpochCompactionStep::Work(work) => {
+                assert!(!work.raw_coverage().is_empty(), "unnecessary synthesis");
+                if calls > 0 {
+                    assert!(work.input().contains("[private compaction intermediate]"));
+                }
+                for range in work.raw_coverage() {
+                    reconstructed.push_str(&original[range.clone()]);
+                }
+                engine.complete(work.id(), "carry".into()).unwrap();
+                calls += 1;
+            }
+            EpochCompactionStep::Complete => break,
+            EpochCompactionStep::Waiting => panic!("no outstanding claim"),
+        }
+    }
+    assert_eq!(reconstructed, original);
+    assert_eq!(calls, 6);
+    assert_eq!(engine.into_result().unwrap().serial_depth(), calls);
+}
+
+#[test]
+fn replaced_operation_rejects_foreign_completion_even_for_same_frozen_source() {
+    let mut owner = owner();
+    owner.append_fact("source", "identical source").unwrap();
+    let frozen = plan(&owner, 0);
+    let mut cancelled =
+        EpochCompactionEngine::new(source(frozen.clone()), limits(100), measure).unwrap();
+    let mut replacement = EpochCompactionEngine::new(source(frozen), limits(100), measure).unwrap();
+    let old = work(&mut cancelled);
+    let new = work(&mut replacement);
+    assert_ne!(old.id(), new.id());
+    drop(cancelled);
+    assert!(replacement.complete(old.id(), "stale".into()).is_err());
+    replacement
+        .complete(new.id(), "current final".into())
+        .unwrap();
+    assert_eq!(
+        replacement.into_result().unwrap().summary(),
+        "current final"
+    );
+    assert_eq!(owner.revision().get(), 0);
+}
+
+#[test]
+fn genuine_capacity_change_refreshes_cheap_schedule_estimate_without_model_discovery() {
+    let mut owner = owner();
+    owner.append_fact("large", "a ".repeat(5000)).unwrap();
+    let mut engine =
+        EpochCompactionEngine::new(source(plan(&owner, 0)), limits(20_000), measure).unwrap();
+    assert_eq!(engine.schedule().selected, CompactionSchedule::Rolling);
+    let rejected = work(&mut engine);
+    engine.reject_input(rejected.id(), 500, measure).unwrap();
+    assert_eq!(engine.work_count, 1);
+    assert_eq!(engine.schedule().selected, CompactionSchedule::Parallel);
+    assert!(engine.schedule().initial_source_batches > 1);
+    assert_eq!(owner.revision().get(), 0);
+}
+
+/// Returning two early batches must not create a merge that becomes redundant
+/// when the other two already claimed batches finish. All four summaries fit
+/// one final synthesis, so the required total is four leaves plus one merge.
+#[test]
+fn parallel_batches_wait_for_claimed_results_before_unnecessary_partial_merge() {
+    let mut owner = owner();
+    for _ in 0..4 {
+        owner.append_fact("unit", "x".repeat(1800)).unwrap();
+    }
+    let token_measure = |text: &str| Ok(text.len().div_ceil(4) + 10);
+    let mut engine =
+        EpochCompactionEngine::new(source(plan(&owner, 0)), limits(500), token_measure).unwrap();
+    assert_eq!(engine.schedule().selected, CompactionSchedule::Parallel);
+    let mut claims = Vec::new();
+    for _ in 0..4 {
+        let EpochCompactionStep::Work(work) = engine.next(token_measure).unwrap() else {
+            panic!("expected leaf");
+        };
+        claims.push(work);
+    }
+    engine.complete(claims[0].id(), "first".into()).unwrap();
+    engine.complete(claims[1].id(), "second".into()).unwrap();
+    assert!(matches!(
+        engine.next(token_measure).unwrap(),
+        EpochCompactionStep::Waiting
+    ));
+    engine.complete(claims[3].id(), "fourth".into()).unwrap();
+    engine.complete(claims[2].id(), "third".into()).unwrap();
+    let EpochCompactionStep::Work(merge) = engine.next(token_measure).unwrap() else {
+        panic!("expected final merge");
+    };
+    assert!(merge.input().find("first").unwrap() < merge.input().find("second").unwrap());
+    assert!(merge.input().find("second").unwrap() < merge.input().find("third").unwrap());
+    assert!(merge.input().find("third").unwrap() < merge.input().find("fourth").unwrap());
+    engine.complete(merge.id(), "final".into()).unwrap();
+    let result = engine.into_result().unwrap();
+    assert_eq!(result.work_count(), 5);
+    assert_eq!(result.serial_depth(), 2);
+}
+
+#[test]
+fn parallel_buffer_pressure_prioritizes_necessary_merge_over_more_source() {
+    let mut owner = owner();
+    for _ in 0..6 {
+        owner.append_fact("unit", "x".repeat(1800)).unwrap();
+    }
+    let token_measure = |text: &str| Ok(text.len().div_ceil(4) + 10);
+    let bounds = EpochCompactionLimits {
+        summary_bytes: 100,
+        buffered_summary_bytes: 400,
+        ..limits(500)
+    };
+    let mut engine =
+        EpochCompactionEngine::new(source(plan(&owner, 0)), bounds, token_measure).unwrap();
+    assert_eq!(engine.schedule().selected, CompactionSchedule::Parallel);
+    let mut claims = Vec::new();
+    for _ in 0..4 {
+        let EpochCompactionStep::Work(work) = engine.next(token_measure).unwrap() else {
+            panic!("expected leaf");
+        };
+        claims.push(work);
+    }
+    engine.complete(claims[0].id(), "s".repeat(80)).unwrap();
+    engine.complete(claims[1].id(), "s".repeat(80)).unwrap();
+    let EpochCompactionStep::Work(merge) = engine.next(token_measure).unwrap() else {
+        panic!("expected pressure relief");
+    };
+    assert!(
+        merge.raw_coverage().is_empty(),
+        "dispatched more raw source despite buffered summary pressure"
+    );
+    engine.complete(merge.id(), "merged".into()).unwrap();
+    assert_eq!(engine.buffered_summary_bytes, 6);
+    assert_eq!(owner.revision().get(), 0);
+}

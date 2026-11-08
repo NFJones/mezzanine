@@ -11876,6 +11876,42 @@ missing an advisory word count or shrink target. Blank model output MUST NOT
 be interpreted as intentional head absence: absence requires a separately
 selected publication policy. Summary is the default policy.
 
+The canonical auxiliary model-work API MUST freeze the prior head and the entire
+selected eligible prefix once. Its cached source cost divided by actual auxiliary
+input capacity minus instructions/framing is an initial source-batch lower-bound
+estimate, not a total-call promise. Complete serialized auxiliary requests MUST
+determine input admission. One fitting source MUST require exactly one model
+call, with no mandatory synthesis or verifier. Oversized source MUST use bounded
+rolling carry or parallel batches with necessary chronological merges, comparing
+expected serial depth and call cost without optimization/model-discovery calls.
+Both schedules MUST share the same source, acceptance and typed final contract.
+
+Authoritative ownership groups MUST remain indivisible. An oversized auxiliary
+unit MAY be temporarily fragmented at UTF-8 boundaries after redaction, retaining
+original occurrence and byte-interval attribution. All selected redacted bytes
+and structural whitespace MUST survive; no tail walk-down, prefix truncation or
+movement of rejected source into the retained tail is permitted. Genuine input
+rejection MAY repack this same frozen source. Transport retry MUST preserve the
+exact current auxiliary request. Resource owners MUST bound held source, graph
+nodes, intermediate summary memory and worker fan-out.
+
+Completed decoded nonempty output within canonical parser/memory bounds MUST be
+accepted without semantic cost ceilings, output-guidance halving/floors, strict
+byte reduction or prospective ordinary-request fit retries. Measurements MAY
+serve metadata and packing subsequent necessary source/merge work only. An
+intermediate that cannot fit any necessary next work MUST fail truthfully before
+final success, without unary shortening or a nonprogressing synthesis loop.
+Empty/malformed/incomplete output MUST have a finite repair allowance, separate
+from transport retry, and rejected actions MUST never execute. Parser rejection
+of empty or interrupted output MUST retain observed provider usage independently
+of any output-limit continuation; the same dispatch receipt MUST count once.
+Intermediate
+summaries MUST remain private; only one typed final with its original plan and
+complete coverage witnesses may reach the publication adapter. This model-work
+API does not replace live runtime generation, cancellation, usage or commit
+owners. Final all-trigger integration removes the superseded trigger-local
+complete-fit policies described below; this foundation adds no selectable mode.
+
 This is the pure canonical API contract. Integrating all product triggers,
 versioned durable epoch publication and user-selectable summary-free retention
 are separate adapter work; this foundation adds no product configuration or

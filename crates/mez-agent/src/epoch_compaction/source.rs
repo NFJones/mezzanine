@@ -81,6 +81,11 @@ impl FrozenEpochCompactionSource {
         &self.units
     }
 
+    /// Returns the exact canonical source/parent and frozen provider view.
+    pub fn plan(&self) -> &ReplayCompactionPlan {
+        &self.plan
+    }
+
     /// Returns the exact concatenation passed to inference before fragmentation.
     pub fn text(&self) -> &str {
         &self.text

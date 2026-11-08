@@ -957,6 +957,7 @@ pub struct ProviderResponseError {
     provider_failure_json: Option<String>,
     provider_raw_text: Option<String>,
     output_limit_state: Option<Box<ProviderOutputLimitState>>,
+    incurred_usage: Option<Box<crate::ModelTokenUsage>>,
 }
 
 impl ProviderResponseError {
@@ -968,6 +969,7 @@ impl ProviderResponseError {
             provider_failure_json: None,
             provider_raw_text: None,
             output_limit_state: None,
+            incurred_usage: None,
         }
     }
 
@@ -994,6 +996,20 @@ impl ProviderResponseError {
     /// Returns bounded safe continuation state for output-token exhaustion.
     pub fn output_limit_state(&self) -> Option<&ProviderOutputLimitState> {
         self.output_limit_state.as_deref()
+    }
+
+    /// Retains provider-reported expense when response parsing fails, even
+    /// without an output-limit continuation. This is one dispatch's receipt,
+    /// not an additional amount to sum with the same output-limit state.
+    pub fn with_incurred_usage(mut self, usage: crate::ModelTokenUsage) -> Self {
+        self.incurred_usage = Some(Box::new(usage));
+        self
+    }
+
+    /// Returns observed expense independently of response usability. None means
+    /// no receipt was available; it does not establish that inference was free.
+    pub fn incurred_usage(&self) -> Option<crate::ModelTokenUsage> {
+        self.incurred_usage.as_deref().copied()
     }
 
     /// Returns the stable response failure category.
