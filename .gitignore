@@ -52,6 +52,7 @@ node_modules/
 
 # Added by cargo
 
+/crates/*/target
 /target
 .aider*
 .codex
