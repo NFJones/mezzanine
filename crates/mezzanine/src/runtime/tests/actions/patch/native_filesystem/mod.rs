@@ -794,6 +794,9 @@ mod async_producer;
 #[cfg(target_os = "linux")]
 mod canonical;
 
+#[cfg(target_os = "linux")]
+mod line_accounting;
+
 mod hooks;
 
 #[cfg(target_os = "linux")]

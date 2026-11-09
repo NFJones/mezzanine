@@ -31,6 +31,12 @@ process stays in its own directory. See [native workspace navigation](../agent/c
 for literal path syntax, authorized context preparation and cancellation.
 The optional `--sync-pane` replacement form is currently unavailable.
 
+`/list-modified-files` shows cumulative added and removed lines for the current
+conversation, not a net Git diff. Native patches count only changed raw lines;
+unchanged context and semantic no-ops add nothing. Repeated edits count each
+operation once, even if a later edit reverses an earlier one. Preview truncation
+does not reduce these counts.
+
 Type a request and press Enter. Use `Ctrl+J` for a newline without submitting.
 In native shell mode, `Ctrl+V` pastes host clipboard text into the prompt,
 preserving multiline text. Completion supports slash commands, `$` skills,

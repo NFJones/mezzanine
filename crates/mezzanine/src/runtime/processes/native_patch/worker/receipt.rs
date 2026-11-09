@@ -55,9 +55,9 @@ pub(crate) struct NativePatchEndpointReceipt {
     pub(crate) parent_target: Option<NativeParentTarget>,
     /// Aggregate-budgeted native diff; directories have no file diff.
     pub(crate) diff: String,
-    /// Full-file native additions, zero for directory effects.
+    /// Actual inserted raw lines for this operation, zero for directory effects.
     pub(crate) added_lines: usize,
-    /// Full-file native removals, zero for directory effects.
+    /// Actual deleted raw lines for this operation, zero for directory effects.
     pub(crate) removed_lines: usize,
     /// Display truncation cannot remove this authoritative fact.
     pub(crate) diff_truncated: bool,

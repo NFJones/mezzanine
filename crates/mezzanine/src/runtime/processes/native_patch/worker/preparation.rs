@@ -111,8 +111,8 @@ pub(super) fn prepare(
                 },
                 parent_target: None,
                 diff: diff.source,
-                added_lines: diff.new_lines,
-                removed_lines: diff.old_lines,
+                added_lines: diff.added_lines,
+                removed_lines: diff.removed_lines,
                 diff_truncated: diff.truncated,
             };
             facts += file.metadata(false).to_string().len() + 1;

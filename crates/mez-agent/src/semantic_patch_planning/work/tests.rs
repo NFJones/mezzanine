@@ -193,6 +193,29 @@ fn native_diff_rejects_oversized_label() {
     assert!(native_unified_diff(&change, 1024, &PatchWorkControl::native(&checkpoint)).is_err());
 }
 
+/// A difficult exact count exhausts the SAME remaining action allowance even
+/// with no display. No approximate count or partial preview may escape failure.
+#[test]
+fn native_line_delta_exhaustion_is_sticky_with_zero_preview() {
+    let checkpoint = || Ok(());
+    let work = PatchWorkControl::native(&checkpoint);
+    work.remaining.set(100_000);
+    let change = ApplyPatchFileChange {
+        path: "a".into(),
+        resolved_path: "/fixture/a".into(),
+        original: ApplyPatchOriginalState::Regular(b"old\n".repeat(200)),
+        final_bytes: Some(b"new\n".repeat(200)),
+    };
+    let error = native_unified_diff(&change, 0, &work).unwrap_err();
+    assert!(
+        error
+            .message()
+            .contains("computational work budget exceeded")
+    );
+    assert_eq!(work.check().unwrap_err(), error);
+    assert!(native_unified_diff(&change, usize::MAX, &work).is_err());
+}
+
 /// A pane adapter must not inherit the native text-line limit merely because
 /// both adapters share parsing and matching helpers. This uses actual line
 /// construction beyond that boundary, without filesystem or process effects.

@@ -13808,7 +13808,16 @@ an external utility. The current native diff adapter uses linear full-file
 unified hunks rather than minimal edit scripts, capped at 256 KiB of UTF-8 display
 source. Its source, snapshot, per-file and retained-plan budgets are respectively
 1 MiB, 32 MiB, 16 MiB and 64 MiB, with at most 1,024 operations. Display truncation
-MUST NOT remove typed changes or confirmations. Canonical native result projection
+MUST NOT remove typed changes or confirmations. Native endpoint receipts MUST
+count actual inserted and deleted raw lines, not full-file preview sizes. An
+exact shortest insertion/deletion distance is computed independently of preview
+retention, including zero/exhausted display budgets, under the original bounded
+cooperative work control before mutation. Exhaustion MUST refuse preparation,
+not publish approximate statistics. Raw line terminators participate in equality.
+Conversation modified-file statistics MUST accumulate these per-operation deltas
+exactly once, including repeated edits, rather than a net working-tree diff.
+Semantic no-ops contribute no counts; directory effects contribute zero.
+Canonical native result projection
 MUST bind the exact plan and action, verify endpoint kind/order and retain both
 move endpoints independently. Confirmed success requires all planned endpoints;
 only a positively planned no-op may succeed without mutation confirmations.

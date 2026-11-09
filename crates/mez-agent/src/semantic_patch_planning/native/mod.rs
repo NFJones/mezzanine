@@ -5,9 +5,11 @@
 //! retains its ordinal and move endpoint dependency, including intermediate
 //! states when several operations touch one file. Errors do not erase earlier
 //! plans. Exact raw preimages remain distinct from normalized matching text.
-//! Diffs are bounded linear full-file unified hunks, not minimal edit scripts:
-//! this avoids quadratic diff work without an additional dependency. Display
-//! truncation never changes authoritative plans or final bytes.
+//! Previews are bounded linear full-file unified hunks, not minimal edit scripts.
+//! They require no quadratic display trace or additional dependency. Display
+//! truncation never changes authoritative plans or final bytes. Authoritative
+//! changed-line statistics are computed separately under the original work
+//! budget; full-file preview sizes are never used as edit statistics.
 
 use std::collections::BTreeMap;
 
@@ -18,6 +20,8 @@ use super::{
 };
 use crate::native_action::{NativePatchOperation, PatchEffect};
 use crate::semantic_patch::{MezPatch, SemanticPatchPlanningError, SemanticPatchPlanningResult};
+
+mod line_delta;
 
 /// Maximum total captured bytes accepted by one pure planning invocation.
 pub const NATIVE_PATCH_SNAPSHOT_BYTES: usize = 32 * 1024 * 1024;
@@ -254,6 +258,10 @@ pub struct NativeUnifiedDiff {
     pub old_lines: usize,
     /// Full final raw line count, independent of display truncation.
     pub new_lines: usize,
+    /// Actual inserted raw lines, independent of preview size/truncation.
+    pub added_lines: usize,
+    /// Actual deleted raw lines, independent of preview size/truncation.
+    pub removed_lines: usize,
 }
 
 /// Writes one fragment into the bounded UTF-8 source buffer.
@@ -296,11 +304,14 @@ pub fn native_unified_diff(
     let new_count = line_count(new, work)?;
     let old = work.decode_text(old)?;
     let new = work.decode_text(new)?;
+    let (added_lines, removed_lines) = line_delta::count(&old, &new, work)?;
     let mut diff = NativeUnifiedDiff {
         source: String::new(),
         truncated: false,
         old_lines: old_count,
         new_lines: new_count,
+        added_lines,
+        removed_lines,
     };
     if work.equal(&old, &new)
         && matches!(change.original, ApplyPatchOriginalState::Regular(_))
