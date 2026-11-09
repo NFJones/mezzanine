@@ -15,7 +15,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 pub(super) struct CopyOrigin {
     pub(super) conversation: String,
     pub(super) identity: ReplayEpochIdentity,
-    pub(super) head: ContextBlockOccurrenceId,
+    pub(super) head: Option<ContextBlockOccurrenceId>,
 }
 
 impl CopyOrigin {
@@ -32,7 +32,7 @@ impl CopyOrigin {
             bytes: 0,
         }
         .validate_format()?;
-        if !matches!(manifest.version, 8..=10)
+        if !matches!(manifest.version, 8..=10 | MODE_MANIFEST_VERSION)
             || manifest.memory_copy_origin.is_some()
             || manifest.prefix_origin.is_some()
             || self.conversation == manifest.conversation_id
@@ -59,14 +59,14 @@ impl CopyOrigin {
 pub(super) struct MemoryCopyOrigin {
     pub(super) conversation: String,
     pub(super) epoch_revision: u64,
-    pub(super) head: ContextBlockOccurrenceId,
+    pub(super) head: Option<ContextBlockOccurrenceId>,
     pub(super) capture: ContextBlockOccurrenceId,
 }
 
 impl MemoryCopyOrigin {
     pub(super) fn validate(&self, manifest: &Manifest) -> Result<()> {
         mez_agent::transcript::validate_conversation_id(&self.conversation)?;
-        if !matches!(manifest.version, 9 | 10)
+        if !matches!(manifest.version, 9 | 10 | MODE_MANIFEST_VERSION)
             || manifest.copy_origin.is_some()
             || manifest.prefix_origin.is_some()
             || self.conversation == manifest.conversation_id
@@ -91,6 +91,7 @@ impl MemoryCopyOrigin {
 pub(in crate::storage::transcript) struct ReplayEpochCopy {
     target: String,
     origin: CopyOrigin,
+    head_policy: ReplayHeadPolicy,
     checkpoint: ReplayEpochCheckpoint<Payload>,
     escrow: Vec<escrow::EscrowOccurrence>,
     frontier: Option<u64>,
@@ -107,7 +108,7 @@ impl ReplayEpochCopy {
         cut: cursor::ArchiveCut,
     ) -> Result<(Envelope, BTreeMap<String, String>)> {
         let manifest = Manifest {
-            version: 10,
+            version: MODE_MANIFEST_VERSION,
             conversation_id: self.target,
             epoch_revision: self.origin.epoch_revision(),
             revision: 1,
@@ -115,6 +116,7 @@ impl ReplayEpochCopy {
             expected_parent: None,
             parent_head: None,
             head: self.origin.head,
+            head_policy: Some(self.head_policy),
             covered: Vec::new(),
             frozen_arrival_frontier: self.frontier,
             source_checkpoint: self.checkpoint.clone(),
@@ -202,6 +204,7 @@ impl AgentTranscriptStore {
         }
         Ok(Some(ReplayEpochCopy {
             target: target.to_owned(),
+            head_policy: owner.head_policy(),
             origin: CopyOrigin {
                 conversation: source.to_owned(),
                 identity: envelope.identity(),

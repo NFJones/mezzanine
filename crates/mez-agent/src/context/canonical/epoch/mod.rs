@@ -168,6 +168,11 @@ impl ReplayEpochContext {
     pub fn revision(&self) -> ReplayEpochRevision {
         self.revision
     }
+    /// Returns the policy of the committed epoch, independently from current
+    /// product configuration or a target policy in an uncommitted plan.
+    pub fn head_policy(&self) -> ReplayHeadPolicy {
+        self.policy
+    }
     /// Returns the one current summary identity, if this policy has a head.
     pub fn head(&self) -> Option<&ReplaySummaryIdentity> {
         self.head.as_ref()

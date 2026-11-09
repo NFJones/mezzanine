@@ -21,7 +21,7 @@ impl PrefixOrigin {
     pub(super) fn validate(&self, manifest: &Manifest) -> Result<()> {
         self.authority.validate_format()?;
         if self.authority.bytes as u64 > MANIFEST_LIMIT
-            || manifest.version != 10
+            || !matches!(manifest.version, 10 | MODE_MANIFEST_VERSION)
             || manifest.copy_origin.is_some()
             || manifest.memory_copy_origin.is_some()
             || manifest.epoch_revision != 1
@@ -29,7 +29,7 @@ impl PrefixOrigin {
             || manifest.expected_parent.is_some()
             || manifest.parent_head.is_some()
             || !manifest.covered.is_empty()
-            || manifest.head != self.head
+            || manifest.head != Some(self.head)
             || manifest.source_checkpoint != manifest.checkpoint
             || manifest
                 .archive_cut
@@ -254,14 +254,15 @@ impl AgentTranscriptStore {
         payloads.insert(origin.authority.sha256.clone(), original);
         let checkpoint = externalize(proposed_checkpoint, &mut payloads)?;
         let manifest = Manifest {
-            version: 10,
+            version: MODE_MANIFEST_VERSION,
             conversation_id: conversation.into(),
             epoch_revision: 1,
             revision: 1,
             publication: ContextBlockOccurrenceId::allocate(),
             expected_parent: None,
             parent_head: None,
-            head,
+            head: Some(head),
+            head_policy: Some(owner.head_policy()),
             covered: Vec::new(),
             frozen_arrival_frontier: owner
                 .context()

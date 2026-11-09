@@ -1,6 +1,6 @@
 //! Bounded proof of non-model content changes within one canonical epoch.
 //!
-//! Every revision points directly to the original unedited head receipt. Repeat
+//! Every revision points directly to the original unedited epoch receipt. Repeat
 //! edits flatten against that same base, so ordinary replay never walks a chain
 //! of edits or resolves covered model source. The enclosing mutation owner must
 //! separately qualify the actual parent, raw rows, index and archive replacement;
@@ -26,10 +26,10 @@ impl RawRevisionOrigin {
     pub(super) fn validate(&self, manifest: &Manifest) -> Result<()> {
         self.base.validate_format()?;
         if self.base.bytes as u64 > MANIFEST_LIMIT
-            || manifest.version != 11
+            || !matches!(manifest.version, 11 | MODE_MANIFEST_VERSION)
             || manifest.is_source_preserving_root()
             || manifest.expected_parent.is_none()
-            || manifest.parent_head != Some(manifest.head)
+            || manifest.parent_head != manifest.head
         {
             return Err(invalid("raw revision has invalid original provenance"));
         }
@@ -51,9 +51,11 @@ impl RawRevisionOrigin {
             .map_err(|_| invalid("invalid original raw revision receipt"))?;
         base.validate(&manifest.conversation_id)?;
         if base.manifest.raw_revision_origin.is_some()
-            || base.manifest.version > 10
+            || base.manifest.version > MODE_MANIFEST_VERSION
+            || manifest.version == 11 && base.manifest.version > 10
             || base.manifest.epoch_revision != manifest.epoch_revision
             || base.manifest.head != manifest.head
+            || base.manifest.committed_head_policy() != current.head_policy()
             || base
                 .manifest
                 .archive_cut
@@ -75,12 +77,13 @@ impl RawRevisionOrigin {
         // base receipt. It never selects the base as an alternative history.
         let original = base.restore(AgentContext::empty(), &mut *resolve)?;
         let mut expected_checkpoint = inline_checkpoint(&base.manifest.checkpoint, &original)?;
+        let offset = usize::from(original.head().is_some());
         for (old, new) in original
             .context()
             .chronology()
             .iter()
-            .skip(1)
-            .zip(current.context().chronology().iter().skip(1))
+            .skip(offset)
+            .zip(current.context().chronology().iter().skip(offset))
         {
             if old.block().content != new.block().content {
                 expected_checkpoint = expected_checkpoint
@@ -94,11 +97,13 @@ impl RawRevisionOrigin {
             ));
         }
         let mut expected = base.manifest;
-        expected.version = 11;
+        expected.version = manifest.version;
+        expected.head_policy =
+            (manifest.version == MODE_MANIFEST_VERSION).then_some(current.head_policy());
         expected.revision = manifest.revision;
         expected.publication = manifest.publication;
         expected.expected_parent = manifest.expected_parent.clone();
-        expected.parent_head = Some(expected.head);
+        expected.parent_head = expected.head;
         expected.copy_origin = None;
         expected.memory_copy_origin = None;
         expected.prefix_origin = None;

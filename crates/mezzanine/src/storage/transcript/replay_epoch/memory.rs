@@ -279,7 +279,7 @@ impl ReplayMemorySource {
             .map(|item| item.for_unsettled_copy())
             .collect::<Vec<_>>();
         escrow::validate(&items)?;
-        if !needed.is_empty() || owner.head().is_some() {
+        if !needed.is_empty() || owner.revision().get() > 0 {
             escrow::validate_current(&items, owner, &[])?;
         }
         let current = owner
@@ -319,7 +319,7 @@ impl ReplayMemorySource {
             payloads,
             controls: Vec::new(),
         };
-        if owner.head().is_none() && !needed.is_empty() {
+        if owner.revision().get() == 0 && !needed.is_empty() {
             capture.capture_raw_controls(owner, previous, durable, rows)?;
         }
         Ok(capture)
@@ -328,11 +328,11 @@ impl ReplayMemorySource {
     /// Creates descriptive memory provenance, never a made-up committed parent
     /// identity. Native wire projection remains independently checked.
     pub(crate) fn fork_source(&self, owner: &ReplayEpochContext) -> Result<ReplayForkSource> {
-        let origin = owner.head().map(|head| {
+        let origin = (owner.revision().get() > 0).then(|| {
             initial::ForkOrigin::Memory(copy::MemoryCopyOrigin {
                 conversation: owner.conversation_id().as_str().into(),
                 epoch_revision: owner.revision().get(),
-                head: head.occurrence_id(),
+                head: owner.head().map(|head| head.occurrence_id()),
                 capture: ContextBlockOccurrenceId::allocate(),
             })
         });
@@ -343,7 +343,7 @@ impl ReplayMemorySource {
             &self.rows,
             self.payloads.clone(),
         )?;
-        if owner.head().is_none() {
+        if owner.revision().get() == 0 {
             source.append_raw_controls(&self.controls)?;
         }
         Ok(source)

@@ -41,7 +41,7 @@ impl ForkOrigin {
             Self::Memory(origin) => origin.epoch_revision,
         }
     }
-    fn head(&self) -> ContextBlockOccurrenceId {
+    fn head(&self) -> Option<ContextBlockOccurrenceId> {
         match self {
             Self::Durable(origin) => origin.head,
             Self::Memory(origin) => origin.head,
@@ -122,10 +122,7 @@ impl ReplayEpochSnapshot {
             Some(ForkOrigin::Durable(copy::CopyOrigin {
                 conversation: self.conversation_id.clone(),
                 identity: self.identity.clone(),
-                head: owner
-                    .head()
-                    .ok_or_else(|| invalid("fork source has no typed head"))?
-                    .occurrence_id(),
+                head: owner.head().map(|head| head.occurrence_id()),
             })),
             owner,
             items,
@@ -145,6 +142,9 @@ impl ReplayForkSource {
         original_rows: &[TranscriptEntry],
         backing_payloads: BTreeMap<String, String>,
     ) -> Result<Self> {
+        if origin.is_some() != (owner.revision().get() > 0) {
+            return Err(invalid("fork source lost its committed epoch provenance"));
+        }
         escrow::validate(&items)?;
         escrow::validate_current(&items, owner, &[])?;
         let needed = owner
@@ -271,7 +271,7 @@ impl ReplayForkSource {
         }
         let accounting = InitialTranscriptRowAccounting::new(origins, records)
             .with_stable_records(Some(self.checkpoint.stable_records().to_vec()))?;
-        let batch = if self.has_head() {
+        let batch = if self.has_epoch() {
             TranscriptAppendBatch::initial_replay(self.for_target(target)?, rows)?
         } else {
             TranscriptAppendBatch::rows(rows)?
@@ -279,8 +279,9 @@ impl ReplayForkSource {
         batch.with_initial_row_accounting(accounting)
     }
 
-    /// A raw capture has no summary identity or compaction manifest to copy.
-    pub(crate) fn has_head(&self) -> bool {
+    /// A committed epoch remains typed even when raw policy omitted its head.
+    /// Only a pre-publication raw capture has no epoch receipt to copy.
+    pub(crate) fn has_epoch(&self) -> bool {
         self.origin.is_some()
     }
 
@@ -293,9 +294,9 @@ impl ReplayForkSource {
         &mut self,
         controls: &[(ContextBlockOccurrenceId, TranscriptEntry)],
     ) -> Result<()> {
-        if self.has_head() {
+        if self.has_epoch() {
             return Err(invalid(
-                "raw lifecycle controls cannot extend a copied head",
+                "raw lifecycle controls cannot extend a copied epoch",
             ));
         }
         for (origin, row) in controls {
@@ -319,15 +320,16 @@ impl ReplayForkSource {
             .origin
             .as_ref()
             .ok_or_else(|| invalid("raw initial source has no compaction publication identity"))?;
-        let frontier = ReplayEpochContext::from_checkpoint(
+        let owner = ReplayEpochContext::from_checkpoint(
             ReplayConversationId::new(origin.conversation())?,
             self.checkpoint.clone(),
             AgentContext::empty(),
-        )?
-        .context()
-        .chronology()
-        .last()
-        .map(|event| event.sequence().get());
+        )?;
+        let frontier = owner
+            .context()
+            .chronology()
+            .last()
+            .map(|event| event.sequence().get());
         let checkpoint = self
             .checkpoint
             .clone()
@@ -339,7 +341,7 @@ impl ReplayForkSource {
             ForkOrigin::Memory(origin) => (None, Some(origin.clone())),
         };
         let manifest = Manifest {
-            version: 10,
+            version: MODE_MANIFEST_VERSION,
             conversation_id: target.into(),
             epoch_revision: origin.epoch_revision(),
             revision: 1,
@@ -347,6 +349,7 @@ impl ReplayForkSource {
             expected_parent: None,
             parent_head: None,
             head: origin.head(),
+            head_policy: Some(owner.head_policy()),
             covered: Vec::new(),
             frozen_arrival_frontier: frontier,
             source_checkpoint: checkpoint.clone(),
@@ -416,7 +419,7 @@ impl InitialReplayEpoch {
             .context()
             .chronology()
             .iter()
-            .skip(1)
+            .skip(usize::from(owner.head().is_some()))
             .map(|event| event.record().occurrence_id())
             .collect::<BTreeSet<_>>();
         if ids != needed {

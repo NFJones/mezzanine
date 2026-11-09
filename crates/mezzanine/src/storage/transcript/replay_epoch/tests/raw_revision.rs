@@ -68,11 +68,15 @@ fn revised(
         }
     };
     let mut manifest = parent.manifest.clone();
-    manifest.version = 11;
+    manifest.version = if parent.manifest.version == MODE_MANIFEST_VERSION {
+        MODE_MANIFEST_VERSION
+    } else {
+        11
+    };
     manifest.revision += 1;
     manifest.publication = ContextBlockOccurrenceId::allocate();
     manifest.expected_parent = Some(parent.identity());
-    manifest.parent_head = Some(manifest.head);
+    manifest.parent_head = manifest.head;
     manifest.copy_origin = None;
     manifest.memory_copy_origin = None;
     manifest.prefix_origin = None;
@@ -99,6 +103,33 @@ fn install(fixture: &Fixture, envelope: &Envelope, payloads: &BTreeMap<String, S
     let bytes = encode(envelope).unwrap();
     payload::publish(&directory, &digest(&bytes), &bytes, || Ok(())).unwrap();
     fs::write(directory.join(MANIFEST_NAME), bytes).unwrap();
+}
+
+/// Read the genuine headed v11 encoding with its direct v10 base. The new
+/// optional-head representation must preserve both original immutable digests.
+#[test]
+fn legacy_headed_raw_revision_keeps_original_receipt_encoding() {
+    let (fixture, current, selected) = with_tail();
+    let mut legacy = current;
+    legacy.manifest.version = 10;
+    legacy.manifest.head_policy = None;
+    legacy.sha256 = digest(&encode(&legacy.manifest).unwrap());
+    install(&fixture, &legacy, &BTreeMap::new());
+    let (edited, payloads) = revised(&fixture, &legacy, selected, "old-format edited source");
+    assert_eq!(edited.manifest.version, 11);
+    assert!(edited.manifest.head_policy.is_none());
+    let bytes = encode(&edited).unwrap();
+    let decoded: Envelope = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(encode(&decoded).unwrap(), bytes);
+    assert_eq!(decoded.sha256, digest(&encode(&decoded.manifest).unwrap()));
+    install(&fixture, &edited, &payloads);
+    let (_, owner) = fixture.load();
+    assert_eq!(owner.head_policy(), ReplayHeadPolicy::Summary);
+    assert!(owner.head().is_some());
+    assert_eq!(
+        owner.context().chronology()[1].block().content,
+        "old-format edited source"
+    );
 }
 
 /// A content edit is a storage revision, never another model summary. Repeated

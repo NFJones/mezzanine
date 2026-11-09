@@ -16,6 +16,7 @@ mod memory;
 mod native_edits;
 mod raw_edits;
 mod raw_revision;
+mod raw_tail;
 
 /// Owns an isolated physical temporary directory on Linux and macOS, removed
 /// after every scenario. Source and archive bytes are synthetic and task-owned.
@@ -792,7 +793,7 @@ fn header_semantics_and_source_namespace_are_checked() {
     for corrupt in 0..5 {
         let mut envelope = prepared.envelope.clone();
         match corrupt {
-            0 => envelope.manifest.covered = vec![envelope.manifest.head],
+            0 => envelope.manifest.covered = vec![envelope.manifest.head.unwrap()],
             1 => envelope.manifest.covered = vec![live.members()[1].occurrence_id()],
             2 => envelope.manifest.frozen_arrival_frontier = None,
             3 => envelope.manifest.epoch_revision += 1,
@@ -1195,7 +1196,7 @@ fn version_five_source_upgrades_through_qualified_publication() {
     assert!(mez_agent::invoked_mcp_tools_for_context(current.context(), &summary).is_empty());
     current.append_fact("new", "new exact source").unwrap();
     let next = proposal(&fixture, &current, Some(parent), "current version head");
-    assert_eq!(next.envelope.manifest.version, 10);
+    assert_eq!(next.envelope.manifest.version, MODE_MANIFEST_VERSION);
     assert!(next.envelope.manifest.archive_cut.is_some());
     fixture.store.publish_replay_epoch(&next).unwrap();
     assert_eq!(fixture.load().0, next.identity());
@@ -1210,6 +1211,7 @@ fn version_six_source_upgrades_without_reinterpreting_task_lifecycle() {
     fixture.store.publish_replay_epoch(&first).unwrap();
     let mut old = first.envelope.clone();
     old.manifest.version = 6;
+    old.manifest.head_policy = None;
     old.sha256 = digest(&encode(&old.manifest).unwrap());
     let directory = fixture.root.join("conversation-a");
     let bytes = encode(&old).unwrap();
@@ -1220,7 +1222,7 @@ fn version_six_source_upgrades_without_reinterpreting_task_lifecycle() {
         .append_fact("arrival", "original arrival bytes")
         .unwrap();
     let next = proposal(&fixture, &current, Some(parent), "new head");
-    assert_eq!(next.envelope.manifest.version, 10);
+    assert_eq!(next.envelope.manifest.version, MODE_MANIFEST_VERSION);
     fixture.store.publish_replay_epoch(&next).unwrap();
     assert_eq!(fixture.load().0, next.identity());
 }
@@ -1241,6 +1243,7 @@ fn earlier_manifest_cannot_claim_explicit_task_boundary_source() {
     for version in [5, 6] {
         let mut old = current.envelope.clone();
         old.manifest.version = version;
+        old.manifest.head_policy = None;
         if version == 5 {
             old.manifest.archive_cut = None;
         }
@@ -1252,6 +1255,8 @@ fn earlier_manifest_cannot_claim_explicit_task_boundary_source() {
 /// Reproduce the actual old nested format, rather than relabeling a current
 /// checkpoint. Skipping the absent field preserves immutable receipt hashes.
 fn original_checkpoint_format(mut envelope: Envelope) -> Envelope {
+    // The original headed manifest did not serialize a policy selector.
+    envelope.manifest.head_policy = None;
     for checkpoint in [
         &mut envelope.manifest.source_checkpoint,
         &mut envelope.manifest.checkpoint,

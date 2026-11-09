@@ -120,7 +120,7 @@ impl AgentTranscriptStore {
                 .context()
                 .chronology()
                 .iter()
-                .skip(1)
+                .skip(usize::from(owner.head().is_some()))
                 .find(|event| event.record().occurrence_id() == id)
         });
         let zero = zero_projection(&rows)?;
@@ -268,14 +268,15 @@ impl AgentTranscriptStore {
         envelope.manifest.archive_cut = Some(cursor::ArchiveCut::for_revised_rows(
             cid, &rows, through, last,
         )?);
-        envelope.manifest.version = 11;
+        envelope.manifest.version = MODE_MANIFEST_VERSION;
+        envelope.manifest.head_policy = Some(revised_owner.head_policy());
         envelope.manifest.revision = parent
             .revision
             .checked_add(1)
             .ok_or_else(|| invalid("content edit revision exhausted"))?;
         envelope.manifest.publication = ContextBlockOccurrenceId::allocate();
         envelope.manifest.expected_parent = Some(parent.clone());
-        envelope.manifest.parent_head = Some(envelope.manifest.head);
+        envelope.manifest.parent_head = envelope.manifest.head;
         envelope.manifest.copy_origin = None;
         envelope.manifest.memory_copy_origin = None;
         envelope.manifest.prefix_origin = None;
@@ -414,7 +415,7 @@ impl AgentTranscriptStore {
             payload::read(&directory, &reference)
         })?;
         replacement.verify_escrow_payloads(&directory)?;
-        if replacement.manifest.version != 11
+        if !matches!(replacement.manifest.version, 11 | MODE_MANIFEST_VERSION)
             || replacement.manifest.expected_parent.as_ref() != Some(&intent.parent)
         {
             return Err(invalid("content edit replacement parent changed"));

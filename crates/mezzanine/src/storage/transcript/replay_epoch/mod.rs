@@ -1,9 +1,11 @@
 //! Immutable single-head source backing and expected-parent publication.
 //!
 //! The existing conversation mutation lease serializes this writer with archive,
-//! editing and persistence owners. Model publications use version ten of the
-//! authoritative compaction sidecar; version eleven validates raw revisions in
-//! the same epoch, never a parallel selectable history. Payloads are private,
+//! editing and persistence owners. New publications and raw revisions use
+//! version twelve of the same sidecar, binding an explicit head policy and
+//! optional summary. Headed versions four through eleven retain their original
+//! encodings and validation; absence cannot reinterpret a damaged old summary.
+//! No format is a parallel selectable history. Payloads are private,
 //! content-addressed immutable files; retained bytes are reused across epochs.
 //! A prepared proposal retains its original publication identity and summary so
 //! uncertain acknowledgments can settle the exact committed result. It neither
@@ -25,7 +27,8 @@ use super::AgentTranscriptStore;
 use crate::{MezError, Result};
 use mez_agent::{
     AgentContext, ContextBlockOccurrenceId, ReplayCompactionPlan, ReplayConversationId,
-    ReplayEpochCheckpoint, ReplayEpochContext, ReplayHeadPublication, ReplayPreparedCompaction,
+    ReplayEpochCheckpoint, ReplayEpochContext, ReplayHeadPolicy, ReplayHeadPublication,
+    ReplayPreparedCompaction,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -81,6 +84,8 @@ const MANIFEST_NAME: &str = "compaction-epoch.json";
 const MANIFEST_LIMIT: u64 = 16 * 1024 * 1024;
 /// Bounds the complete current source, not a lifetime audit-history scan.
 const SOURCE_LIMIT: usize = 64 * 1024 * 1024;
+/// Explicit policy-qualified head absence on the same authority and receipts.
+const MODE_MANIFEST_VERSION: u32 = 12;
 
 /// Exact committed parent, distinct from attempt generations and cache lineage.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -175,7 +180,11 @@ struct Manifest {
     publication: ContextBlockOccurrenceId,
     expected_parent: Option<ReplayEpochIdentity>,
     parent_head: Option<ContextBlockOccurrenceId>,
-    head: ContextBlockOccurrenceId,
+    head: Option<ContextBlockOccurrenceId>,
+    /// Absent only in headed formats4..11. Keeping it omitted on re-encoding
+    /// preserves their exact immutable receipt digests.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    head_policy: Option<ReplayHeadPolicy>,
     covered: Vec<ContextBlockOccurrenceId>,
     frozen_arrival_frontier: Option<u64>,
     /// Immutable pre-rewrite source, used for audit and publication proof only.
@@ -203,6 +212,12 @@ struct Manifest {
 }
 
 impl Manifest {
+    /// Older complete formats are unambiguously summary epochs. The envelope
+    /// separately refuses absent heads or policy fields in those old formats.
+    fn committed_head_policy(&self) -> ReplayHeadPolicy {
+        self.head_policy.unwrap_or(ReplayHeadPolicy::Summary)
+    }
+
     fn is_source_preserving_root(&self) -> bool {
         self.copy_origin.is_some()
             || self.memory_copy_origin.is_some()
@@ -429,15 +444,13 @@ impl ReplayEpochPublication {
             != expected_parent
                 .as_ref()
                 .map_or(0, |parent| parent.epoch_revision)
-            || !plan.requires_model_summary()
         {
             return Err(MezError::conflict(
                 "replay source does not match its expected parent",
             ));
         }
         let covered = plan
-            .summary_input()
-            .iter()
+            .removed_events()
             .filter(|event| !mez_agent::context_block_is_compaction_summary(event.block()))
             .map(|event| event.record().occurrence_id())
             .collect();
@@ -446,10 +459,7 @@ impl ReplayEpochPublication {
             .prepare_compaction_publication(plan, summary)
             .map_err(context_error)?;
         let candidate = prepared.candidate();
-        let head = candidate
-            .head()
-            .ok_or_else(|| invalid("publication has no summary head"))?
-            .occurrence_id();
+        let head = candidate.head().map(|head| head.occurrence_id());
         let mut payloads = BTreeMap::new();
         let source_checkpoint =
             externalize(source.checkpoint().map_err(context_error)?, &mut payloads)?;
@@ -458,7 +468,7 @@ impl ReplayEpochPublication {
             &mut payloads,
         )?;
         let manifest = Manifest {
-            version: 10,
+            version: MODE_MANIFEST_VERSION,
             conversation_id: conversation_id.to_owned(),
             epoch_revision: candidate.revision().get(),
             revision: expected_parent
@@ -470,6 +480,7 @@ impl ReplayEpochPublication {
             expected_parent,
             parent_head: source.head().map(|head| head.occurrence_id()),
             head,
+            head_policy: Some(candidate.head_policy()),
             covered,
             frozen_arrival_frontier: frontier,
             source_checkpoint,
@@ -553,55 +564,81 @@ impl ReplayEpochPublication {
         let count = covered.len();
         let raw_offset = usize::from(source.head().is_some());
         let source_raw = &source.context().chronology()[raw_offset..];
+        let covered_ids = covered.iter().copied().collect::<BTreeSet<_>>();
+        let selected = source_raw
+            .iter()
+            .filter(|event| covered_ids.contains(&event.record().occurrence_id()))
+            .collect::<Vec<_>>();
+        let retained = source_raw
+            .iter()
+            .filter(|event| !covered_ids.contains(&event.record().occurrence_id()))
+            .collect::<Vec<_>>();
+        let summary = envelope.manifest.committed_head_policy() == ReplayHeadPolicy::Summary;
+        let candidate_offset = usize::from(candidate.head().is_some());
         if source.revision().get().checked_add(1) != Some(candidate.revision().get())
             || source.head().map(|head| head.occurrence_id()) != envelope.manifest.parent_head
             || count > source.members().len()
-            || !source
+            || !selected
+                .iter()
+                .map(|event| event.record().occurrence_id())
+                .eq(covered.iter().copied())
+            || !candidate.members().iter().eq(source
                 .members()
                 .iter()
-                .take(count)
-                .map(|member| member.occurrence_id())
-                .eq(covered.iter().copied())
-            || candidate.members() != &source.members()[count..]
-            || candidate.context().chronology()[1..] != source_raw[count..]
-            || source.head().map(|head| head.occurrence_id()) == Some(envelope.manifest.head)
+                .filter(|member| !covered_ids.contains(&member.occurrence_id())))
+            || !candidate.context().chronology()[candidate_offset..]
+                .iter()
+                .eq(retained.iter().copied())
+            || envelope.manifest.head.is_some()
+                && source.head().map(|head| head.occurrence_id()) == envelope.manifest.head
+            || summary
+                && (count == 0
+                    || !source
+                        .members()
+                        .iter()
+                        .take(count)
+                        .map(|member| member.occurrence_id())
+                        .eq(covered.iter().copied()))
+            || !summary && count == 0 && source.head().is_none()
             || envelope.manifest.source_checkpoint.next_event_sequence()
                 != envelope.manifest.checkpoint.next_event_sequence()
-            || source
-                .context()
-                .chronology()
-                .first()
-                .map(|event| event.sequence())
-                != candidate
+            || summary
+                && source
                     .context()
                     .chronology()
                     .first()
                     .map(|event| event.sequence())
+                    != candidate
+                        .context()
+                        .chronology()
+                        .first()
+                        .map(|event| event.sequence())
         {
             return Err(invalid(
                 "immutable source receipt does not qualify the proposed rewrite",
             ));
         }
-        let selected_groups = source_raw[..count]
+        let selected_groups = selected
             .iter()
             .filter_map(|event| event.execution_group_id())
             .collect::<BTreeSet<_>>();
-        if source_raw[..count].iter().any(|event| {
+        if selected.iter().any(|event| {
             event.retention() == mez_agent::ContextRetention::Exact
                 || !event.recoverable_for_compaction()
                 || source.context().peer_message_is_pending(event.sequence())
                 || event
                     .execution_group_id()
                     .is_some_and(|group| source.context().execution_group_is_pending(group))
-        }) || source_raw[count..]
+        }) || retained
             .iter()
             .filter_map(|event| event.execution_group_id())
             .any(|group| selected_groups.contains(group))
             || !source.context().chronology().iter().any(|event| {
                 Some(event.sequence().get()) == envelope.manifest.frozen_arrival_frontier
             })
-            || source_raw[count - 1].sequence().get()
-                > envelope.manifest.frozen_arrival_frontier.unwrap_or(0)
+            || selected.iter().any(|event| {
+                event.sequence().get() > envelope.manifest.frozen_arrival_frontier.unwrap_or(0)
+            })
         {
             return Err(invalid(
                 "immutable source receipt has protected or unfrozen covered members",
@@ -713,8 +750,7 @@ impl AgentTranscriptStore {
             &source_backing,
             source,
             &plan
-                .summary_input()
-                .iter()
+                .removed_events()
                 .map(|event| event.record().occurrence_id())
                 .collect::<Vec<_>>(),
             expected_parent.is_none() && !has_archive,
@@ -1029,7 +1065,8 @@ impl AgentTranscriptStore {
             .is_some_and(|current| current == &proposal.envelope);
         if !exact_retry
             && (current.as_ref().map(Envelope::identity) != manifest.expected_parent
-                || current.as_ref().map(|current| current.manifest.head) != manifest.parent_head)
+                || current.as_ref().and_then(|current| current.manifest.head)
+                    != manifest.parent_head)
         {
             return Err(MezError::conflict(
                 "replay epoch parent changed before publication",
@@ -1305,7 +1342,7 @@ impl Envelope {
             .checkpoint
             .clone()
             .try_map_payloads(|id, payload| {
-                if id != self.manifest.head {
+                if Some(id) != self.manifest.head {
                     current.insert(id);
                 }
                 Ok::<_, MezError>(payload)
@@ -1364,15 +1401,34 @@ impl Envelope {
                     .map(|origin| origin.epoch_revision)
             })
             .unwrap_or(1);
+        let valid_head_policy = matches!(
+            (manifest.version, manifest.head_policy, manifest.head),
+            (4..=11, None, Some(_))
+                | (
+                    MODE_MANIFEST_VERSION,
+                    Some(ReplayHeadPolicy::Summary),
+                    Some(_)
+                )
+                | (
+                    MODE_MANIFEST_VERSION,
+                    Some(ReplayHeadPolicy::IntentionalOmission),
+                    None
+                )
+        );
+        let empty_raw_root = manifest.version == MODE_MANIFEST_VERSION
+            && manifest.committed_head_policy() == ReplayHeadPolicy::IntentionalOmission
+            && manifest.is_source_preserving_root();
         if !matches!(
             (
                 manifest.version,
                 manifest.source_escrow.is_some(),
                 manifest.archive_cut.is_some()
             ),
-            (4, false, false) | (5, true, false) | (6..=11, true, true)
+            (4, false, false) | (5, true, false) | (6..=12, true, true)
         ) || manifest.conversation_id != conversation_id
-            || (manifest.version == 11) != manifest.raw_revision_origin.is_some()
+            || !valid_head_policy
+            || manifest.version < 11 && manifest.raw_revision_origin.is_some()
+            || manifest.version == 11 && manifest.raw_revision_origin.is_none()
             || manifest.revision == 0
             || manifest.epoch_revision == 0
             || self.sha256 != digest(&encode(manifest)?)
@@ -1392,13 +1448,16 @@ impl Envelope {
                     }
                 })
                 != Some(manifest.epoch_revision)
-            || manifest
-                .frozen_arrival_frontier
-                .is_none_or(|frontier| frontier == 0)
-            || manifest.expected_parent.is_some() != manifest.parent_head.is_some()
+            || manifest.frozen_arrival_frontier == Some(0)
+            || manifest.frozen_arrival_frontier.is_none() && !empty_raw_root
+            || manifest.version < MODE_MANIFEST_VERSION
+                && manifest.expected_parent.is_some() != manifest.parent_head.is_some()
+            || manifest.expected_parent.is_none() && manifest.parent_head.is_some()
             || (manifest.covered.is_empty()
                 && !manifest.is_source_preserving_root()
-                && manifest.raw_revision_origin.is_none())
+                && manifest.raw_revision_origin.is_none()
+                && !(manifest.committed_head_policy() == ReplayHeadPolicy::IntentionalOmission
+                    && manifest.parent_head.is_some()))
             || manifest
                 .covered
                 .iter()
@@ -1476,13 +1535,17 @@ impl Envelope {
             .copied()
             .collect::<BTreeSet<_>>();
         if owner.revision().get() != self.manifest.epoch_revision
-            || owner.head().map(|head| head.occurrence_id()) != Some(self.manifest.head)
-            || covered.contains(&self.manifest.head)
+            || owner.head_policy() != self.manifest.committed_head_policy()
+            || owner.head().map(|head| head.occurrence_id()) != self.manifest.head
+            || self.manifest.head.is_some_and(|head| covered.contains(&head))
+            || self.manifest.frozen_arrival_frontier.is_none() && !owner.members().is_empty()
             || owner
                 .members()
                 .iter()
                 .any(|member| covered.contains(&member.occurrence_id()))
-            || owner.context().chronology().first().is_none_or(|head| {
+            // A head preserves its old ordering anchor. In raw mode all old
+            // members may be omitted, leaving only genuine later arrivals.
+            || owner.head().is_some() && owner.context().chronology().first().is_none_or(|head| {
                 self.manifest
                     .frozen_arrival_frontier
                     .is_none_or(|frontier| frontier < head.sequence().get())

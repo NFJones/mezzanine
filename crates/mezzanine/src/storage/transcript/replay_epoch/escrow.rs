@@ -719,12 +719,13 @@ pub(super) fn validate_current(
     source: &ReplayEpochContext,
     covered: &[ContextBlockOccurrenceId],
 ) -> Result<()> {
-    // A copied head-only root has no covered or retained originals to back.
+    // A copied empty epoch has no covered or retained originals to back, with
+    // or without a summary head. It still needs the enclosing typed receipt.
     // Ordinary rewrites still require escrow for their covered membership.
     if items.is_empty()
         && covered.is_empty()
-        && source.head().is_some()
-        && source.context().chronology().len() == 1
+        && source.revision().get() > 0
+        && source.members().is_empty()
     {
         return Ok(());
     }

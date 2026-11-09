@@ -719,20 +719,27 @@ keeping the archive entry count at zero. Discovery checks the saved header and
 its original receipt; actual replay independently checks the required source and
 payloads before admitting a request.
 Saved typed sources can be forked repeatedly even with no audit rows. Each
-target owns a genuine empty archive and its independent head. If a retained task
+target owns a genuine empty archive and its independent epoch. If a retained task
 root still references an earlier covered prelude, that original backing travels
 with the copy without returning the prelude to the model. Removing required
 boundary backing is corruption, even when those bytes are outside model history.
 Saved copies validate the original indexed cut and bind those row fingerprints
 to the child's actual copied bytes before publishing its independent root.
 
-Model-head publications and source-preserving roots use sidecar version ten.
-It retains version-seven
+New publications, source-preserving roots and raw-content revisions use sidecar
+version twelve. It records an explicit summary or intentional-omission policy;
+only the latter permits an absent head. A raw epoch remains typed even with no
+retained members or physical child rows. Reopen and both fork paths preserve
+that epoch and its mode without consulting current configuration or restoring
+omitted source from the archive. A missing legacy summary remains corruption.
+Older headed formats keep their original encodings and immutable receipt hashes.
+The current format retains version-seven
 original-source escrow and version-eight independently backed saved-copy roots,
 and adds a distinct memory-origin root for frozen NoStore copies. A memory
 origin records a capture identity rather than claiming a saved parent publication.
-Version-eleven raw revisions verify edits against one immutable
-original head receipt. It keeps the same summary, canonical epoch, occurrence
+Version-eleven raw revisions and their version-twelve extension verify edits
+against one immutable original epoch receipt. They keep the same optional head,
+head policy, canonical epoch, occurrence
 membership, source framing and lifecycle metadata; only edited raw bytes and
 their estimates change. Repeated edits reference that same original receipt,
 and a saved fork independently backs the edited source. This validation is
@@ -745,12 +752,12 @@ before other mutations. Changed or missing recovery source fails visibly and
 retains the intent. Covered rows remain protected; the physical archive cut
 alone does not make a retained raw member immutable. Native lifecycle and
 custody controls cannot be created or changed through ordinary content editing.
-An edited head still needs its immutable original-head proof and the raw source
+An edited epoch still needs its immutable original-epoch proof and the raw source
 that proof describes. An interrupted save additionally needs its exact operation
 receipts until recovery finishes. Missing required source blocks recovery and
 cleanup while preserving the intent. Conversation cleanup removes its own
 namespace; saved forks keep independent backing. Archiving and restoring an
-edited conversation preserves its head, edited bytes and required proof.
+edited conversation preserves its optional head, edited bytes and required proof.
 If ordinary rows arrive after several summaries, replay
 checks their original turn, occurrence, bytes and native metadata before
 deduplicating them. Earlier covered source and display copies do not reenter
@@ -863,8 +870,9 @@ another head; the latter keeps its receipt and reports normalization required.
 
 Loading a complete saved prefix history converts its existing single summary
 and active raw tail to the typed format without asking a model for another
-summary. The original archive and summary identity remain intact. Version ten
-keeps the original prefix sidecar as integrity-checked migration provenance;
+summary. The original archive and summary identity remain intact. The
+version-ten migration provenance remains supported in the current format and
+keeps the original prefix sidecar as integrity-checked evidence;
 missing or damaged required provenance fails visibly. Pending writes remain
 owned by their existing persistence receipts. Historical execution groups with
 missing completion evidence stay protected, without claiming a new producer

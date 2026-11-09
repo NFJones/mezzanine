@@ -507,8 +507,8 @@ impl RuntimeSubagentForkSnapshot {
                 );
             }
         }
-        let has_head = replay.has_head();
-        let source_high_water = if has_head {
+        let has_epoch = replay.has_epoch();
+        let source_high_water = if has_epoch {
             source_high_water
         } else {
             entries.len() as u64
@@ -517,7 +517,7 @@ impl RuntimeSubagentForkSnapshot {
             prompt_cache_lineage_id,
             entries,
             compaction_epoch: None,
-            replay: has_head.then(|| std::sync::Arc::new(replay)),
+            replay: has_epoch.then(|| std::sync::Arc::new(replay)),
             source_high_water,
             row_origins: origins,
             row_records: records,

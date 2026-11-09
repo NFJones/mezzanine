@@ -11333,8 +11333,8 @@ source escrow. Version eight adds independently backed saved-copy roots.
 Version nine additionally distinguishes frozen memory-source copies from
 copies of committed publications. Version ten adds a source-preserving prefix
 migration root with the original sidecar's immutable payload reference and
-coverage boundary. Model-head publications and source-preserving roots use
-version ten; these do not change checkpoint, append-receipt, row-accounting or
+coverage boundary. Model-head publications and source-preserving roots formerly
+used version ten; these do not change checkpoint, append-receipt, row-accounting or
 configuration versions.
 Version eleven describes raw-content revisions within that same canonical
 epoch. Its storage CAS revision advances, while the summary head, canonical
@@ -11351,6 +11351,36 @@ model rewrite MUST advance the canonical epoch exactly once from the actual
 edited storage parent. This proof does not itself grant archive mutation or
 append rights: the edit transaction MUST separately keep raw bytes, original
 row images/accounting, cut and authority coherent across failure and recovery.
+
+Version twelve uses the same authoritative file, immutable receipts, source
+escrow, required marker and expected-parent CAS for new publications, copies and
+content revisions. It MUST bind an explicit `head_policy`: `summary` requires a
+real nonempty summary head; `intentional_omission` requires an absent head. The
+canonical checkpoint MUST agree with that persisted policy, independently of
+current configuration. Versions four through eleven MUST retain their original
+headed encodings, validation and receipt digests; the new policy field MUST
+remain absent when re-encoding those formats. An absent or damaged legacy head
+MUST NOT become an intentional omission merely because the new decoder accepts
+optional heads.
+
+An omission receipt MUST preserve the exact ordered complement of its covered
+current raw occurrences, including mandatory groups outside the optional suffix
+and post-frontier arrivals. Summary receipts MUST retain their closed-prefix and
+ordering-anchor checks. A head-only transition MAY intentionally remove the
+previous summary without covering raw members; otherwise a publication MUST
+make actual source progress. A headless parent MUST still match its exact
+committed CAS identity; absence MUST NOT be confused with an unpublished source.
+A committed empty raw epoch MUST remain typed through reopen, saved copy and
+in-memory fork, with its positive canonical revision and intentional-omission
+policy preserved. It MAY have zero physical child rows. Only an explicitly
+empty raw copy root MAY omit an arrival frontier. Missing required authority or
+source MUST continue to fail visibly rather than reopen older archive history.
+Version-twelve content revisions MUST preserve the committed policy and optional
+head, verify the original unedited epoch receipt directly, and treat the first
+raw event as editable membership when no head exists. They MUST retain the
+version-eleven constraints on source custody, metadata and recovery. These
+storage-format changes do not change configuration or append-receipt versions.
+
 Raw content CAS MUST check the original pane and full-row revision under the
 conversation mutation lease. A synced bounded operation intent MUST bind exact
 old/new physical archives, original/replacement epoch receipts and selected
@@ -11364,8 +11394,8 @@ The physical cut MUST NOT blanket-protect retained raw members. Ordinary content
 editing MUST NOT introduce or alter lifecycle or native custody controls.
 An unresolved content edit MUST retain its exact original and replacement
 receipts and all source required to validate that operation, including after
-the raw archive rename. The original unedited-head receipt and its current
-checkpoint payloads MUST remain required while a raw-revised head depends on
+the raw archive rename. The original unedited-epoch receipt and its current
+checkpoint payloads MUST remain required while a raw-revised epoch depends on
 them. Intermediate edit parents MUST NOT become a lifetime replay chain after
 operation settlement. Conversation deletion, retention and archival MUST share
 mutation ownership and MUST NOT discard an unresolved intent when required
@@ -11389,7 +11419,7 @@ or unsettled, even if that earlier occurrence already entered the archive cut.
 Earlier manifests MUST NOT carry version-seven boundary metadata. This changes
 conversation persistence only and does not change the configuration schema.
 
-A saved copy MUST preserve the selected head occurrence, canonical epoch and raw
+A saved copy MUST preserve the optional selected head, canonical epoch and raw
 membership while rebinding conversation ownership and revoking retrieved MCP
 grants. Its copied root MUST start a distinct storage CAS chain, bind
 the original conversation/publication identity, and claim no summary rewrite or
