@@ -7,6 +7,8 @@
 //! assets without exposing runtime records or filesystem access.
 //! Native continuity replaces neutral history only for complete, uninterrupted
 //! original call/result groups; late results never reorder the conversation.
+//! Owned replay validation retains its private completed-task witness. Unowned
+//! context imports keep flat ordering and semantic checks without such custody.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -89,8 +91,15 @@ fn assemble_model_request_from_context_for_api(
     prompt_assets: &impl AgentPromptAssetSource,
 ) -> AgentRequestAssemblyResult<ModelRequest> {
     validate_model_profile_request(profile, identity.turn_id)?;
-    validate_context_placement_order(context.blocks())?;
-    validate_context_semantics(context.blocks())?;
+    if context.has_replay_owner() {
+        // Owned chronology retains completed instructions with their original
+        // roles. Validate its private lifecycle witness instead of reactivating
+        // historical user roots through the flat projection.
+        context.validate_durable()?;
+    } else {
+        validate_context_placement_order(context.blocks())?;
+        validate_context_semantics(context.blocks())?;
+    }
 
     let blocks = context.blocks();
     let is_deepseek = api == Some(ProviderApiCompatibility::DeepSeekChatCompletions);
@@ -473,6 +482,123 @@ mod tests {
         fn provider_fragment<'a>(&'a self, _path: &str) -> crate::AgentPromptResult<&'a str> {
             Ok("provider contract")
         }
+    }
+
+    /// A compaction head can retain a completed user task before the current
+    /// skill prelude. Its original role/bytes remain historical under the
+    /// canonical witness, including after cold replay; request assembly must
+    /// not reactivate that old user prompt and reject the current skill.
+    #[test]
+    fn model_request_assembly_accepts_active_skill_after_compacted_retained_tasks() {
+        use crate::{
+            ReplayCompactionPreparation, ReplayConversationId, ReplayEpochContext,
+            ReplayHeadPublication, ReplayTailPolicy,
+        };
+        let mut replay = ReplayEpochContext::new(
+            ReplayConversationId::new("retained-skill-conversation").unwrap(),
+            AgentContext::empty(),
+        )
+        .unwrap();
+        for prompt in ["completed task one", "completed task two"] {
+            replay
+                .admit_instruction_task(
+                    vec![ContextBlock::user_event("user prompt", prompt)],
+                    &[],
+                    &[],
+                    0,
+                )
+                .unwrap();
+        }
+        replay
+            .admit_instruction_task(
+                vec![
+                    ContextBlock::task_prelude(
+                        ContextSourceKind::SkillInstruction,
+                        "current skill",
+                        "current exact skill",
+                    ),
+                    ContextBlock::user_event("user prompt", "current task three"),
+                ],
+                &[],
+                &[],
+                1,
+            )
+            .unwrap();
+        let ReplayCompactionPreparation::Ready(plan) = replay
+            .prepare_compaction(ReplayTailPolicy::new(40_000, 100).unwrap())
+            .unwrap()
+        else {
+            panic!("completed oldest task must be eligible");
+        };
+        assert_eq!(plan.summary_input().len(), 1);
+        assert_eq!(
+            plan.summary_input()[0].block().content,
+            "completed task one"
+        );
+        let tail = plan.retained_tail().to_vec();
+        replay
+            .publish_compaction(
+                plan,
+                ReplayHeadPublication::Summary("accepted summary".into()),
+            )
+            .unwrap();
+        assert_eq!(&replay.context().chronology()[1..], tail);
+        let chronology = replay.context().chronology().to_vec();
+        let cold = ReplayEpochContext::from_checkpoint(
+            ReplayConversationId::new("retained-skill-conversation").unwrap(),
+            replay.checkpoint().unwrap(),
+            AgentContext::empty(),
+        )
+        .unwrap();
+        for context in [replay.into_owned_context(), cold.into_owned_context()] {
+            context.validate_durable().unwrap();
+            assert_eq!(context.chronology(), chronology);
+            let request = assemble_model_request_from_context_with_api(
+                &model_profile("openai"),
+                ProviderApiCompatibility::OpenAiResponses,
+                ModelRequestIdentity {
+                    turn_id: "turn-3",
+                    agent_id: "agent-1",
+                    pane_id: "%1",
+                },
+                &context,
+                &TestPromptAssets,
+            )
+            .expect("compacted retained history must preserve usable current skill instructions");
+            for text in [
+                "accepted summary",
+                "completed task two",
+                "current exact skill",
+                "current task three",
+            ] {
+                assert!(
+                    request
+                        .messages
+                        .iter()
+                        .any(|message| message.content.contains(text))
+                );
+            }
+        }
+    }
+
+    /// Labels do not grant historical instruction custody to an unowned import.
+    /// A genuine current user followed by a new prelude must still fail closed.
+    #[test]
+    fn model_request_import_rejects_unowned_skill_after_active_user() {
+        let error = AgentContext::new(vec![
+            ContextBlock::user_event("claimed historical user", "still an active user"),
+            ContextBlock::task_prelude(
+                ContextSourceKind::SkillInstruction,
+                "claimed historical skill",
+                "new unowned prelude",
+            ),
+        ])
+        .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("task prelude cannot appear after the active user prompt")
+        );
     }
 
     /// Verifies lower request assembly preserves hidden provider events and
