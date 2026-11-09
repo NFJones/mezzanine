@@ -21,6 +21,29 @@ pub(super) fn enable_raw(service: &mut RuntimeSessionService) {
     assert!(service.auth_store().is_none());
 }
 
+/// Even an accidental call into the model worker must stop before inference.
+/// The fake port panics on ANY request; it supplies no dummy model response.
+fn assert_no_raw_inference(
+    service: &RuntimeSessionService,
+    task: &crate::runtime::RuntimeAgentCompactionTask,
+) {
+    assert!(task.request.is_none());
+    let (result, requests) =
+        crate::test_support::compaction_source::execute_with_inference(service, task, |_| {
+            panic!("raw mode invoked a compactor provider")
+        });
+    assert!(result.is_err());
+    assert!(requests.is_empty());
+    assert_eq!(
+        task.replay_source
+            .as_ref()
+            .unwrap()
+            .model_progress()
+            .model_calls,
+        0
+    );
+}
+
 /// Live pane overrides do not change config generation. Narrowing authority
 /// after source capture must nevertheless refuse the stale raw claim before
 /// persistence, with no model dispatch or orphan compaction marker.
@@ -166,6 +189,14 @@ fn runtime_raw_tail_pressure_claims_publish_without_model_dispatch() {
     for provider_rejection in [false, true] {
         let (mut service, store, turn) = observed_history::prepared_with_cap(20_000, false);
         enable_raw(&mut service);
+        let peer = service
+            .agent_turn_contexts_mut()
+            .get_mut(&turn)
+            .unwrap()
+            .update_replay_owner(|owner| {
+                owner.append_pending_peer("pending peer", "RAW_EXACT_PEER_DEPENDENCY")
+            })
+            .unwrap();
         let profile = service.agent_turn_model_profile(&turn).unwrap().clone();
         if provider_rejection {
             let error = MezError::invalid_state("provider context length exceeded")
@@ -204,6 +235,7 @@ fn runtime_raw_tail_pressure_claims_publish_without_model_dispatch() {
             task.request.is_none(),
             "raw mode constructed a compactor request"
         );
+        assert_no_raw_inference(&service, &task);
         let archive = store.inspect(&task.conversation_id).unwrap();
         let plan = task.replay_source.as_ref().unwrap().frozen_plan();
         assert_eq!(
@@ -245,6 +277,7 @@ fn runtime_raw_tail_pressure_claims_publish_without_model_dispatch() {
         )
         .unwrap();
         assert!(owner.head().is_none());
+        assert!(after.peer_message_is_pending(peer));
         assert_eq!(
             owner.head_policy(),
             mez_agent::ReplayHeadPolicy::IntentionalOmission
@@ -293,7 +326,7 @@ fn runtime_raw_tail_manual_command_publishes_without_credentials() {
         .pending_agent_compaction_task_for_tests("%1")
         .unwrap()
         .clone();
-    assert!(task.request.is_none());
+    assert_no_raw_inference(&service, &task);
     let archive = store.inspect(&task.conversation_id).unwrap();
     assert!(
         service

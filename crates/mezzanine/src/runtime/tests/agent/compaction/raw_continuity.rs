@@ -81,6 +81,44 @@ fn finish(service: &mut RuntimeSessionService, turn: &str) {
     service.checkpoint_agent_session_metadata().unwrap();
 }
 
+/// Rewrite the actual NoStore body after inheriting a raw epoch. Deleting its
+/// saved ancestor makes any accidental resampling fail instead of hiding it.
+fn prepare_memory_raw(
+    service: &mut RuntimeSessionService,
+    store: &AgentTranscriptStore,
+    parent_turn: &str,
+    ancestor: &str,
+) -> String {
+    finish(service, parent_turn);
+    let source = service.freeze_agent_replay_history("%1").unwrap().unwrap();
+    service
+        .bind_ephemeral_replay_history("%1", "raw-nostore-parent", &source, None)
+        .unwrap();
+    let turn = service
+        .start_agent_prompt_turn("%1", "RAW_NOSTORE_EXACT_PROMPT")
+        .unwrap();
+    let raw = publish_raw(service, &turn.turn_id);
+    assert_eq!(
+        raw.revision().get(),
+        source
+            .history()
+            .replay_owner()
+            .unwrap()
+            .unwrap()
+            .revision()
+            .get()
+            + 1
+    );
+    assert!(
+        !store
+            .root()
+            .join("raw-nostore-parent/compaction-epoch.json")
+            .exists()
+    );
+    store.delete(ancestor).unwrap();
+    turn.turn_id
+}
+
 fn change_mode(service: &mut RuntimeSessionService, next: &str) {
     let previous = service.agent_compaction_mode().name();
     let mut layers = service.config_layers().to_vec();
@@ -297,11 +335,33 @@ fn runtime_raw_tail_daemon_snapshot_restore_preserves_membership() {
 /// actor adoption rather than merely calling the storage copy helper.
 #[test]
 fn runtime_raw_tail_saved_fork_command_keeps_headless_membership() {
+    saved_fork_keeps_headless_membership(false);
+}
+
+/// Explicit saving materializes the latest raw memory epoch independently;
+/// neither the NoStore parent nor its deleted ancestor supplies durable fallback.
+#[test]
+fn runtime_raw_tail_nostore_saved_fork_keeps_latest_headless_membership() {
+    saved_fork_keeps_headless_membership(true);
+}
+
+fn saved_fork_keeps_headless_membership(memory: bool) {
     let (mut service, store, turn, conversation) = published_raw();
+    let turn = if memory {
+        prepare_memory_raw(&mut service, &store, &turn, &conversation)
+    } else {
+        turn
+    };
     finish(&mut service, &turn);
     replay_copies::native_scenario(&mut service, |service| {
         service.start_initial_pane_process(Some("cat")).unwrap();
-        let expected = stored(&store, &conversation);
+        let expected = execute_runtime_agent_prompt_history_work(
+            service.prepare_runtime_agent_prompt_history_work("%1"),
+        )
+        .unwrap()
+        .replay_owner()
+        .unwrap()
+        .unwrap();
         let primary = service.session.layout_owner_client_id().unwrap().clone();
         service
             .execute_agent_shell_command(&primary, "/fork raw-command-child")
@@ -332,6 +392,15 @@ fn runtime_raw_tail_saved_fork_command_keeps_headless_membership() {
                 "raw-command-child",
             ),
         );
+        if memory {
+            assert!(service.agent_shell_store().get("%1").unwrap().ephemeral);
+            assert!(
+                !store
+                    .root()
+                    .join("raw-nostore-parent/compaction-epoch.json")
+                    .exists()
+            );
+        }
     });
 }
 
@@ -339,7 +408,23 @@ fn runtime_raw_tail_saved_fork_command_keeps_headless_membership() {
 /// preserve the raw epoch even with no head. Its new prompt is distinct source.
 #[test]
 fn runtime_raw_tail_subagent_fork_keeps_headless_membership() {
-    let (mut service, store, turn, _conversation) = published_raw();
+    subagent_fork_keeps_headless_membership(false);
+}
+
+/// A subagent consumes the newest raw NoStore root through its actual initial
+/// receipt and startup gate, preserving IDs after its saved ancestor is gone.
+#[test]
+fn runtime_raw_tail_nostore_subagent_fork_keeps_latest_headless_membership() {
+    subagent_fork_keeps_headless_membership(true);
+}
+
+fn subagent_fork_keeps_headless_membership(memory: bool) {
+    let (mut service, store, turn, conversation) = published_raw();
+    let turn = if memory {
+        prepare_memory_raw(&mut service, &store, &turn, &conversation)
+    } else {
+        turn
+    };
     let expected = owner(&service, &turn);
     replay_copies::native_scenario(&mut service, |service| {
         service.use_transcript_effect_adapter();
@@ -387,5 +472,14 @@ fn runtime_raw_tail_subagent_fork_keeps_headless_membership() {
             &expected,
             &stored(&AgentTranscriptStore::new(store.root()), &conversation),
         );
+        if memory {
+            assert!(service.agent_shell_store().get("%1").unwrap().ephemeral);
+            assert!(
+                !store
+                    .root()
+                    .join("raw-nostore-parent/compaction-epoch.json")
+                    .exists()
+            );
+        }
     });
 }

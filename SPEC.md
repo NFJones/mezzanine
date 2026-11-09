@@ -12021,8 +12021,9 @@ Intermediate
 summaries MUST remain private; only one typed final with its original plan and
 complete coverage witnesses may reach the publication adapter. This model-work
 API MUST use existing runtime generation, cancellation, usage and commit owners.
-All three product triggers use this contract; user-selectable summary-free
-retention remains separate policy work on the same lifecycle. No old/new engine
+All three product triggers use this model-work contract in `summary` mode.
+User-selectable `raw_tail` MUST bypass model work and use intentional omission
+on the same source/claim/publication/adoption lifecycle. No old/new engine
 switch is introduced. In-memory completion and owner allocation fences MUST NOT
 be reconstructed from bare labels after restart. Durable restore requires typed
 lifecycle/membership witnesses; bare imports retain conservative protection.
@@ -14605,8 +14606,12 @@ shown again.
 
 Manual `/compact`, observed ordinary-request input pressure and authoritative
 provider input-context rejection MUST use the same canonical replay-epoch
-planner, private model-work engine and single-head publisher in Section 9.6.
-The source owner MUST freeze the parent, canonical members and arrival frontier,
+planner and publication/adoption lifecycle in Section 9.6, with mode and config
+generation captured at admission. `raw_tail` MUST use the omission contract in
+that section without compactor inference; the model-rendering, packing and
+repair requirements below apply to `summary` mode.
+For summary work, the source owner MUST freeze the parent, canonical members
+and arrival frontier,
 exact active task, configured raw-tail policy, model and provider projection
 before inference. Active instructions, unfinished groups and unsafe source MUST
 remain raw; later arrivals MUST NOT enter frozen input. Closed historical tasks
@@ -15789,14 +15794,17 @@ The baseline command capabilities are:
   structured runtime patch records rather than rendered pane text or compacted
   transcript summaries.
 - `/clear`: Clear the terminal view and start a fresh visible conversation.
-- `/compact`: Ask the active model to summarize older conversation content
-  outside the retained raw tail when model-backed command execution is
-  available, commit the summary with its replay boundary in conversation
-  storage, optionally project it as pane-scoped memory, and retain only a
-  bounded raw recent transcript tail plus the compacted summary for model
-  context. The first epoch sidecar MUST be durable before metadata requires it.
-  New compaction epochs MUST use the single-head replay contract in §9.6,
-  preserving the accepted head occurrence, exact raw membership and versioned
+- `/compact`: Apply `agents.compaction_mode` to the current epoch's eligible
+  source, without arguments. In `summary` mode, ask the active model for a
+  summary outside the retained raw tail and commit its replay boundary. In
+  `raw_tail` mode, intentionally omit optional old model input without a
+  compactor request, summary, Memory or elision block; retain one bounded newest
+  complete optional suffix plus exact active/open source and later arrivals.
+  Both modes MUST preserve the original archive. The first epoch sidecar MUST
+  be durable before metadata requires it.
+  New compaction epochs MUST use the canonical replay-epoch contract in §9.6,
+  preserving the accepted head occurrence when present, exact raw membership and
+  versioned
   estimated-cost records. Historical version-3 prefix/selective sidecars are
   explicit import or incompatible-state inputs, never a second manual writer;
   their original summary records MUST remain intact on refusal. Candidate sizing,
@@ -15850,20 +15858,27 @@ The baseline command capabilities are:
   append-only transcript replayable; an interruption after publication MUST
   leave the complete sidecar readable. Once metadata requires an epoch, a
   missing or corrupt sidecar MUST fail visibly rather than silently replay a
-  shortened transcript. The raw tail MUST cover approximately
+  shortened transcript. The optional raw reservation MUST use
   `agents.compaction_raw_retention_percent` of the active model context budget
-  by estimated replay size, defaulting to 10%. Non-model
-  runtime command paths MAY produce an implementation summary, but an explicit
-  user `/compact` MUST attempt real transcript compaction whenever active
+  by estimated replay size, defaulting to 10%; protected source MAY exceed that
+  reservation. An explicit user `/compact` MUST use the selected policy. In
+  `summary` mode it MUST attempt real transcript compaction whenever active
   durable transcript entries exist, regardless of retained-tail budget. It MUST
   no-op only when there are no closed transcript execution groups to compact or
-  no durable transcript entries are available.
+  no durable transcript entries are available. In `raw_tail` mode, no-work
+  feedback MUST distinguish retained source that already fits
+  (`retained-raw-tail-unchanged`) from fixed plus stable/protected input above
+  capacity (`protected-input-exceeds-budget`).
+  These raw outcomes MUST NOT publish an epoch or create inference work.
   Manual no-work feedback MUST distinguish `no-transcript-entries`,
   `no-durable-transcript`, `no-eligible-closed-prefix` and
   `irreducible-exact-retained-tail`. Forced empty-prefix selection MUST NOT cite
-  retained-budget fit as its eligibility cause. Leading exact/open groups MUST
+  retained-budget fit as its eligibility cause in summary mode. For summary
+  selection, leading exact/open groups MUST
   remain barriers; later completed groups MUST NOT be selectively skipped into
-  a prefix. Forced and final selection MUST share the narrow eligibility of
+  a summary prefix. Raw omission instead protects whole mandatory groups around
+  its one optional suffix, without backfill or inferring task completion.
+  Forced and final summary selection MUST share the narrow eligibility of
   canonical closed source. An MCP epoch marker alone has no model-visible
   source and MUST NOT cause a model call; a catalog's exact retention MUST
   remain protected. A protected prefix whose mandatory raw estimate exceeds
@@ -15986,7 +16001,7 @@ The baseline command capabilities are:
   persistent memory is enabled and a config root is available, `/compact`
   SHOULD opportunistically prune expired persistent-memory records before it
   builds compaction context or queues model-backed work.
-  Each queued model-backed compaction MUST have a unique task generation scoped
+  Each queued compaction MUST have a unique task generation scoped
   to its pane. Dispatch and worker-result events MUST carry that generation,
   and settlement MUST match both the generation and originating conversation
   before changing transcript, context, task ownership, status, or resume state.

@@ -19,6 +19,7 @@ struct Case {
     native_owner: mez_agent::ReplayExecutionOwner,
     native_sequence: mez_agent::ContextEventSequence,
     before: AgentContext,
+    raw: bool,
 }
 
 pub(super) fn setup() -> (
@@ -187,6 +188,7 @@ async fn case_with_mode(ephemeral: bool, raw: bool) -> Case {
         native_owner,
         native_sequence,
         before,
+        raw,
     }
 }
 
@@ -338,6 +340,7 @@ async fn async_raw_tail_publication_routes_and_recovers_lost_callback() {
         );
         timer(&mut case).unwrap();
         assert_eq!(case.actor.service.agent_turn_contexts()[&case.turn], after);
+        assert_adopted(&mut case);
         if !ephemeral {
             let (_, reopened) = case
                 .fixture
@@ -781,10 +784,19 @@ fn assert_adopted(case: &mut Case) {
     )
     .unwrap();
     assert_eq!(owner.revision().get(), 4);
-    assert_eq!(
-        owner.context().chronology()[0].block().content,
-        "accepted canonical head"
-    );
+    if case.raw {
+        assert!(owner.head().is_none());
+        assert_eq!(
+            owner.head_policy(),
+            mez_agent::ReplayHeadPolicy::IntentionalOmission
+        );
+    } else {
+        assert_eq!(
+            owner.context().chronology()[0].block().content,
+            "accepted canonical head"
+        );
+        assert_eq!(owner.head_policy(), mez_agent::ReplayHeadPolicy::Summary);
+    }
     assert_eq!(
         owner
             .context()
@@ -792,7 +804,7 @@ fn assert_adopted(case: &mut Case) {
             .iter()
             .filter(|event| event.block().source == mez_agent::ContextSourceKind::CompactionPrefix)
             .count(),
-        1
+        usize::from(!case.raw)
     );
 }
 
@@ -1067,7 +1079,18 @@ async fn async_replay_epoch_publication_no_store_adopts_without_durable_authorit
 /// the parent becomes unreadable and the runtime installs a different store.
 #[tokio::test(flavor = "current_thread")]
 async fn async_replay_epoch_publication_frozen_source_ignores_later_parent_and_store() {
-    let mut case = case(true).await;
+    frozen_source_ignores_later_parent_and_store(false).await;
+}
+
+/// Raw NoStore publication keeps original custody after both its saved parent
+/// and newly installed store become unsuitable. Neither may retarget the work.
+#[tokio::test(flavor = "current_thread")]
+async fn async_raw_tail_publication_frozen_source_ignores_later_parent_and_store() {
+    frozen_source_ignores_later_parent_and_store(true).await;
+}
+
+async fn frozen_source_ignores_later_parent_and_store(raw: bool) {
+    let mut case = case_with_mode(true, raw).await;
     let before = case
         .actor
         .service
@@ -1309,6 +1332,130 @@ async fn async_replay_epoch_publication_loop_restores_no_store_parent_policy() {
                 .join("compaction-epoch.json")
                 .exists()
         );
+    }
+}
+
+/// An original durable receipt cannot mutate a replacement pane binding. The
+/// new owner keeps its session/cache identity while the old turn is isolated.
+///
+/// Raw work also refuses a late source/config/action-scope replacement. Its
+/// exact receipt has already committed, so refusal cannot roll durable truth
+/// back to the old summary or erase the newly authoritative membership.
+#[tokio::test(flavor = "current_thread")]
+async fn async_raw_tail_publication_stale_callback_keeps_durable_truth() {
+    for change in ["config", "actions", "source", "pane"] {
+        let mut case = case_with_mode(false, true).await;
+        let attempt = take_attempt(&mut case);
+        let completion = tokio::task::spawn_blocking(move || attempt.execute())
+            .await
+            .unwrap();
+        assert!(completion.error().is_none());
+        let path = case
+            .fixture
+            .root
+            .join(CONVERSATION)
+            .join("compaction-epoch.json");
+        let committed = std::fs::read(&path).unwrap();
+        match change {
+            "config" => {
+                let mut layers = case.actor.service.config_layers().to_vec();
+                layers[0]
+                    .text
+                    .push_str("\n# changed after durable publication\n");
+                case.actor.service.replace_config_layers(layers).unwrap();
+            }
+            "actions" | "pane" => {
+                let mut replacement = case
+                    .actor
+                    .service
+                    .agent_shell_store()
+                    .get("%1")
+                    .unwrap()
+                    .clone();
+                if change == "actions" {
+                    replacement.allowed_actions = Some(mez_agent::AllowedActionSet::say_only());
+                } else {
+                    replacement.session_id =
+                        String::from(mez_agent::ContextBlockOccurrenceId::allocate());
+                    replacement.running_turn_id = None;
+                    replacement.prompt_cache_lineage_id = "replacement-cache-lineage".into();
+                }
+                case.actor
+                    .service
+                    .agent_shell_store_mut()
+                    .restore_session("%1", replacement)
+                    .unwrap();
+            }
+            "source" => {
+                case.actor.service.agent_turn_contexts_mut().insert(
+                    case.turn.clone(),
+                    AgentContext::new_durable(vec![mez_agent::ContextBlock::user_event(
+                        "replacement source",
+                        "new unowned body",
+                    )])
+                    .unwrap(),
+                );
+            }
+            _ => unreachable!(),
+        }
+        let expected = case
+            .actor
+            .service
+            .agent_shell_store()
+            .get("%1")
+            .unwrap()
+            .clone();
+        deliver(&mut case, completion.clone()).await;
+        assert!(!case.actor.service.agent_is_compacting("%1"), "{change}");
+        assert!(
+            !case
+                .actor
+                .service
+                .agent_provider_task_is_pending(&case.turn),
+            "{change}"
+        );
+        assert_eq!(
+            case.actor
+                .service
+                .agent_turn_ledger()
+                .turn(&case.turn)
+                .unwrap()
+                .state,
+            if change == "source" {
+                // Lost semantic ownership cannot authorize terminal bookkeeping.
+                // Preserve the explicit refusal instead of inventing retirement.
+                mez_agent::AgentTurnState::Blocked
+            } else {
+                mez_agent::AgentTurnState::Failed
+            },
+            "{change}"
+        );
+        let current = case.actor.service.agent_shell_store().get("%1").unwrap();
+        assert_eq!(current.session_id, expected.session_id, "{change}");
+        assert_eq!(
+            current.prompt_cache_lineage_id, expected.prompt_cache_lineage_id,
+            "{change}"
+        );
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            committed,
+            "stale callback rewrote committed authority: {change}"
+        );
+        let (_, cold) = case
+            .fixture
+            .store
+            .load_replay_epoch(CONVERSATION, AgentContext::empty())
+            .unwrap()
+            .unwrap();
+        assert_eq!(cold.revision().get(), 4);
+        assert!(cold.head().is_none());
+        assert_eq!(
+            cold.head_policy(),
+            mez_agent::ReplayHeadPolicy::IntentionalOmission
+        );
+        deliver(&mut case, completion).await;
+        assert_eq!(std::fs::read(&path).unwrap(), committed);
+        assert!(!timer(&mut case).unwrap().applied);
     }
 }
 

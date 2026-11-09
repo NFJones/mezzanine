@@ -428,7 +428,8 @@ request while preserving its reported usage and keeping the actor available.
 A claim stopped before worker admission cannot start another request.
 Exhausted or nonretryable failures are terminal,
 and incomplete summaries never replace authoritative history.
-All three triggers use one frozen-source model operation. It packs actual
+In summary mode, all three triggers use one frozen-source model operation. It
+packs actual
 provider requests outside the actor, retaining the selected prefix, raw tail,
 model and source owner across waves. Rolling carry or parallel reduction can
 satisfy the operation; four concurrent requests is a ceiling, not a promised
@@ -1109,14 +1110,16 @@ updates its affected groups; explicit retirement changes eligibility. Provider
 changes reuse validated block estimates, and a changed provider/model descriptor
 invalidates an earlier frozen publication plan without changing source or usage.
 
-The shared canonical API defines one summary head and explicit retained raw
-membership. Summaries are reference material: they cannot enable tools or grant
+The shared canonical API defines an explicit summary or intentional-omission
+head policy and exact retained raw membership. Summaries are reference material:
+they cannot enable tools or grant
 access. Current controlling instructions and unresolved call/result groups stay
 exact, while explicitly completed task instructions can become historical
 source without changing their authorship. Covered raw source remains archive
 history rather than becoming active replay again.
 
-The shared epoch model-work API packs that frozen selection using the actual
+For summary policy, the shared epoch model-work API packs that frozen selection
+using the actual
 auxiliary request shape. A fitting source takes one call. Oversized source uses
 bounded temporary chunks and necessary merges, preserving redacted bytes and
 whole-group publication ownership. A completed usable final is accepted without
@@ -1125,9 +1128,9 @@ incomplete output has finite private repair; transport retry resends the same
 work. Intermediate summaries never become visible history. These are model-work
 contracts; trigger integration and runtime settlement remain separate adapters.
 
-This foundation does not change the current command or storage behavior described
-above. Durable lifecycle restoration, all-trigger integration and configurable
-summary-free retention require their own adapters. See the
+The product runtime connects both modes to all three triggers, durable restore,
+forks and the same ordered publication/receipt/adoption owners. Raw-tail policy
+bypasses the model-work API entirely. See the
 [architecture contract](../contributing/architecture.md#product-composition) for
 those boundaries; an in-memory completion marker is not a durable receipt.
 
