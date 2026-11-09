@@ -550,6 +550,58 @@ fn runtime_manual_compaction_request_matches_synchronous_task() {
     );
 }
 
+/// Original preparation errors carry known zero model counts through logical
+/// retirement without publishing a head, starting a turn or changing history.
+#[test]
+fn runtime_manual_compaction_preparation_failure_retains_operation_diagnostics() {
+    for request_phase in [false, true] {
+        let (mut service, primary, store) = fixture("manual-preparation-failure-diagnostics");
+        let archive = store.inspect("prepare-owned").unwrap();
+        let (generation, epoch, error) = if request_phase {
+            let work = request_work(&mut service, &primary);
+            let generation = work.owner.task_generation;
+            let epoch = work.owner.compaction_epoch;
+            let error = service
+                .complete_manual_compaction_request(
+                    &work,
+                    Err(MezError::invalid_state(
+                        "request preparation fixture failure",
+                    )),
+                )
+                .unwrap_err();
+            (generation, epoch, error)
+        } else {
+            let command = service
+                .execute_agent_shell_command(&primary, "/compact")
+                .unwrap();
+            assert!(command.contains("state=preparing"), "{command}");
+            let work = service.take_manual_compaction_preparations().pop().unwrap();
+            let error = service
+                .complete_manual_compaction_preparation(
+                    &work,
+                    Err(MezError::invalid_state(
+                        "source preparation fixture failure",
+                    )),
+                )
+                .unwrap_err();
+            (work.task_generation, work.compaction_epoch, error)
+        };
+        let facts = error
+            .compaction_failure()
+            .expect("original preparation observations");
+        assert_eq!(facts.phase, "preparing");
+        assert_eq!(facts.operation_epoch, epoch);
+        assert_eq!(facts.dispatch_generation, generation);
+        assert_eq!(facts.model_calls, Some(0));
+        assert_eq!(facts.serial_depth, Some(0));
+        assert!(!service.agent_is_compacting("%1"));
+        assert!(service.pending_agent_compaction_task_ids().is_empty());
+        assert!(service.pending_agent_provider_tasks().is_empty());
+        assert_eq!(store.inspect("prepare-owned").unwrap(), archive);
+        assert!(store.compaction_epoch("prepare-owned").unwrap().is_none());
+    }
+}
+
 /// Recheck actual final-request callbacks under store/count/config changes and
 /// worker error. A valid previously rendered request cannot override fresh actor
 /// evidence. Errors retire exactly this operation with no provider dispatch or

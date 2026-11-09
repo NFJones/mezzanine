@@ -4,6 +4,7 @@ use super::*;
 use crate::runtime::{current_unix_seconds, execute_runtime_agent_prompt_history_work};
 use mez_agent::messaging::{Envelope, MessageScope};
 
+mod failure_diagnostics;
 mod first_turn;
 mod legacy_raw;
 mod manual_commands;
@@ -13,6 +14,7 @@ mod observed_continuation;
 mod observed_fit;
 mod observed_history;
 mod observed_staging;
+mod parity;
 mod preparation;
 mod prompt_display;
 mod provider_backoff;

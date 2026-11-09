@@ -988,26 +988,17 @@ impl crate::host::power_inhibition::PowerInhibitionBackend for TestPowerInhibiti
     }
 }
 
-/// State removed when a compaction worker reports failure.
+/// Exact logical retirement summary, without physical producer-exit authority.
 #[derive(Debug, Default)]
 pub(crate) struct RuntimeAgentCompactionFailureState {
     /// Whether pending, claimed, or active compaction state existed.
     had_task: bool,
-    /// Running provider turn that must fail when recovery compaction failed.
-    resume_turn_id: Option<String>,
-    /// Content-free trigger recorded when the recovery compaction was queued.
-    source: Option<String>,
 }
 
 impl RuntimeAgentCompactionFailureState {
     /// Reports whether any compaction state was removed.
     pub(crate) fn had_task(&self) -> bool {
         self.had_task
-    }
-
-    /// Takes the running turn and trigger awaiting failed recovery compaction.
-    pub(crate) fn take_resume_turn_and_source(&mut self) -> Option<(String, String)> {
-        self.resume_turn_id.take().zip(self.source.take())
     }
 }
 
@@ -3854,7 +3845,6 @@ impl RuntimeSessionService {
         }
         RuntimeAgentCompactionFailureState {
             had_task: self.agent.agent_compacting_panes.remove(pane_id).is_some(),
-            ..Default::default()
         }
     }
 
@@ -3866,7 +3856,7 @@ impl RuntimeSessionService {
             .remove(turn_id);
     }
 
-    /// Removes all compaction state after provider failure.
+    /// Retires one exact logical owner while retaining unsettled expense custody.
     pub(crate) fn fail_agent_compaction_task(
         &mut self,
         pane_id: &str,
@@ -3898,14 +3888,6 @@ impl RuntimeSessionService {
             .agent
             .pending_manual_compaction_requests
             .remove(&(pane_id.to_string(), task_generation));
-        let resume_turn_id = claimed
-            .as_ref()
-            .or(pending.as_ref())
-            .and_then(|task| task.resume_turn_id.clone());
-        let source = claimed
-            .as_ref()
-            .or(pending.as_ref())
-            .map(|task| task.source.clone());
         let marker_matches = self
             .agent
             .agent_compaction_task_owners
@@ -3920,11 +3902,7 @@ impl RuntimeSessionService {
             || preparation.is_some()
             || request.is_some()
             || marker_matches;
-        RuntimeAgentCompactionFailureState {
-            had_task,
-            resume_turn_id,
-            source,
-        }
+        RuntimeAgentCompactionFailureState { had_task }
     }
 
     /// Fails the current compaction task for crate-local synchronous callers.
@@ -3947,7 +3925,6 @@ impl RuntimeSessionService {
         }
         RuntimeAgentCompactionFailureState {
             had_task: self.agent.agent_compacting_panes.remove(pane_id).is_some(),
-            ..Default::default()
         }
     }
 

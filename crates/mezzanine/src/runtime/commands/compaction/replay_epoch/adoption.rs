@@ -332,17 +332,31 @@ impl RuntimeSessionService {
         let current = self.agent_compaction_task_is_current(work.pane(), work.generation());
         let owns_generation =
             self.agent_compaction_generation_is_current(work.pane(), work.generation());
+        let task = self
+            .claimed_agent_compaction_task(work.pane(), work.generation())
+            .cloned();
         self.fail_agent_compaction_task(work.pane(), work.generation());
         if current {
-            if let Some(turn) = work.source().turn_id() {
-                self.fail_running_turn_after_compaction_error(
-                    turn,
-                    "canonical_epoch_compaction",
+            if let Some(task) = task.as_ref() {
+                self.report_compaction_failure(
+                    task,
+                    "canonical compaction publication failed",
                     error,
                 )?;
+            } else {
+                // Preserve failure containment even if the original claim was
+                // lost; scalar work identity cannot reconstruct its authority.
+                if let Some(turn) = work.source().turn_id() {
+                    self.fail_running_turn_after_compaction_error(
+                        turn,
+                        "canonical_epoch_compaction",
+                        error,
+                    )?;
+                }
+                let _ =
+                    self.append_agent_error_text_to_terminal_buffer(work.pane(), error.message());
+                self.resume_agent_compaction_steering(work.pane())?;
             }
-            let _ = self.append_agent_error_text_to_terminal_buffer(work.pane(), error.message());
-            self.resume_agent_compaction_steering(work.pane())?;
         } else if owns_generation
             && let Some(turn) = work
                 .source()

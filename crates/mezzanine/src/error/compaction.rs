@@ -9,8 +9,9 @@ pub(crate) struct CompactionFailureEvidence {
     pub(crate) phase: &'static str,
     pub(crate) operation_epoch: u64,
     pub(crate) dispatch_generation: u64,
-    pub(crate) model_calls: u64,
-    pub(crate) serial_depth: usize,
+    /// Missing source cannot manufacture a zero invocation/dependency count.
+    pub(crate) model_calls: Option<u64>,
+    pub(crate) serial_depth: Option<usize>,
     pub(crate) elapsed_seconds: u64,
 }
 
@@ -22,8 +23,10 @@ impl CompactionFailureEvidence {
             self.phase,
             self.operation_epoch,
             self.dispatch_generation,
-            self.model_calls,
-            self.serial_depth,
+            self.model_calls
+                .map_or_else(|| "unknown".to_owned(), |count| count.to_string()),
+            self.serial_depth
+                .map_or_else(|| "unknown".to_owned(), |depth| depth.to_string()),
             self.elapsed_seconds,
         )
     }

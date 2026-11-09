@@ -556,31 +556,12 @@ impl RuntimeSessionService {
             return Ok(false);
         };
         let current = self.agent_compaction_task_is_current(pane_id, task_generation);
-        let error = self.compaction_failure_with_progress(&task, cause.clone());
         // Clear exact logical and zero-expense ownership before fallible
         // terminal presentation or recovery of separately accepted steering.
         self.record_compaction_failure_usage(pane_id, task_generation, Default::default());
-        let mut failed = self.fail_agent_compaction_task(pane_id, task_generation);
+        self.fail_agent_compaction_task(pane_id, task_generation);
         if current {
-            let terminal = if let Some((turn, source)) = failed.take_resume_turn_and_source() {
-                self.fail_running_turn_after_compaction_error(&turn, &source, &error)
-            } else {
-                Ok(())
-            };
-            let facts = error
-                .compaction_failure()
-                .map(|facts| format!("\n{}", facts.diagnostic_line()))
-                .unwrap_or_default();
-            let presentation = self.append_agent_status_text_to_terminal_buffer(
-                pane_id,
-                &format!(
-                    "agent: compact was not dispatched: {}{facts}",
-                    error.message()
-                ),
-            );
-            let steering = self.resume_agent_compaction_steering(pane_id);
-            // Attempt all independent obligations and preserve the first error.
-            terminal.and(presentation).and(steering)?;
+            self.report_compaction_failure(&task, "compact was not dispatched", cause)?;
         }
         Ok(true)
     }
@@ -592,22 +573,21 @@ impl RuntimeSessionService {
         pane_id: &str,
         task_generation: u64,
     ) -> Result<bool> {
-        let claimed = self.agent_compaction_task_is_claimed(pane_id, task_generation);
-        if !claimed {
+        let Some(task) = self
+            .claimed_agent_compaction_task(pane_id, task_generation)
+            .cloned()
+        else {
             return Ok(false);
-        }
+        };
         let current = self.agent_compaction_task_is_current(pane_id, task_generation);
-        let mut failed = self.fail_agent_compaction_task(pane_id, task_generation);
+        self.fail_agent_compaction_task(pane_id, task_generation);
         if current {
             let diagnostic = "compaction worker result was not delivered before its claim deadline; provider execution outcome is unknown";
-            if let Some((turn_id, source)) = failed.take_resume_turn_and_source() {
-                self.fail_running_turn_after_compaction_failure(&turn_id, &source, diagnostic)?;
-            }
-            let _ = self.append_agent_status_text_to_terminal_buffer(
-                pane_id,
-                &format!("agent: {diagnostic}"),
-            );
-            self.resume_agent_compaction_steering(pane_id)?;
+            self.report_compaction_failure(
+                &task,
+                "compaction claim expired",
+                &MezError::invalid_state(diagnostic),
+            )?;
         }
         Ok(true)
     }
@@ -624,14 +604,20 @@ impl RuntimeSessionService {
         {
             return Ok(false);
         }
-        let mut failed = self.fail_agent_compaction_task(pane_id, task_generation);
+        let Some(task) = self
+            .retained_agent_compaction_task(pane_id, task_generation)
+            .cloned()
+        else {
+            return Ok(false);
+        };
+        self.fail_agent_compaction_task(pane_id, task_generation);
         let diagnostic =
             "compaction transport retry timer admission failed; retry request was not dispatched";
-        if let Some((turn_id, source)) = failed.take_resume_turn_and_source() {
-            self.fail_running_turn_after_compaction_failure(&turn_id, &source, diagnostic)?;
-        }
-        self.append_agent_status_text_to_terminal_buffer(pane_id, &format!("agent: {diagnostic}"))?;
-        self.resume_agent_compaction_steering(pane_id)?;
+        self.report_compaction_failure(
+            &task,
+            "compaction retry was not dispatched",
+            &MezError::invalid_state(diagnostic),
+        )?;
         Ok(true)
     }
 
@@ -781,21 +767,11 @@ impl RuntimeSessionService {
             self.finish_agent_compaction_task(pane_id, task_generation);
         }
         if let Err(error) = application {
-            let error = self.compaction_failure_with_progress(&task, error);
-            self.append_agent_status_text_to_terminal_buffer(
-                pane_id,
-                &format!(
-                    "agent: compact failed while applying completion: {}",
-                    error.message()
-                ),
+            self.report_compaction_failure(
+                &task,
+                "compact failed while applying completion",
+                &error,
             )?;
-            if let Some(resume_turn_id) = task.resume_turn_id.as_deref() {
-                self.fail_running_turn_after_compaction_error(
-                    resume_turn_id,
-                    &task.source,
-                    &error,
-                )?;
-            }
         }
         Ok(true)
     }
@@ -822,21 +798,65 @@ impl RuntimeSessionService {
         task: &RuntimeAgentCompactionTask,
         error: MezError,
     ) -> MezError {
-        let Some(source) = task.replay_source.as_ref() else {
-            return error;
-        };
-        let progress = source.model_progress();
+        let progress = task
+            .replay_source
+            .as_ref()
+            .map(|source| source.model_progress());
         error.with_compaction_failure(crate::error::CompactionFailureEvidence {
-            phase: progress.phase,
+            phase: progress.map_or("unavailable", |progress| progress.phase),
             operation_epoch: task.compaction_epoch,
             dispatch_generation: task.task_generation,
-            model_calls: progress.model_calls,
-            serial_depth: progress.serial_depth,
+            model_calls: progress.map(|progress| progress.model_calls),
+            serial_depth: progress.map(|progress| progress.serial_depth),
             elapsed_seconds: crate::runtime::current_unix_seconds().saturating_sub(
                 self.agent_compaction_operation_started_at(task)
                     .unwrap_or_else(crate::runtime::current_unix_seconds),
             ),
         })
+    }
+
+    /// Reports exact bounded terminal observations independently of surviving
+    /// expense producers. The caller owns logical settlement. All terminal,
+    /// presentation and eligible steering obligations are attempted, with the
+    /// first error retained; diagnostics grant no work or publication authority.
+    fn report_compaction_failure(
+        &mut self,
+        task: &RuntimeAgentCompactionTask,
+        status: &'static str,
+        cause: &MezError,
+    ) -> Result<()> {
+        let error = self.compaction_failure_with_progress(task, cause.clone());
+        // Routed recovery may remove the child pane. Paint its bounded status
+        // while that original presentation target still exists; recovery and
+        // steering must still run independently if presentation fails.
+        let presentation = self.append_compaction_failure_status(&task.pane_id, status, &error);
+        let terminal = if let Some(turn) = task.resume_turn_id.as_deref() {
+            self.fail_running_turn_after_compaction_error(turn, &task.source, &error)
+        } else {
+            Ok(())
+        };
+        let steering = self.resume_agent_compaction_steering(&task.pane_id);
+        presentation.and(terminal).and(steering)?;
+        Ok(())
+    }
+
+    /// Renders bounded auxiliary facts for task and pre-provider preparation
+    /// failures alike, without promoting diagnostic counters into authority.
+    fn append_compaction_failure_status(
+        &mut self,
+        pane: &str,
+        status: &'static str,
+        error: &MezError,
+    ) -> Result<()> {
+        let facts = error
+            .compaction_failure()
+            .map(|facts| format!("\n{}", facts.diagnostic_line()))
+            .unwrap_or_default();
+        self.append_agent_status_text_to_terminal_buffer(
+            pane,
+            &format!("agent: {status}: {}{facts}", error.message()),
+        )?;
+        Ok(())
     }
 
     /// Applies a failed model-backed compaction worker result.
@@ -878,9 +898,12 @@ impl RuntimeSessionService {
         {
             return Ok(false);
         }
-        if !self.agent_compaction_task_is_claimed(pane_id, task_generation) {
+        let Some(mut task) = self
+            .claimed_agent_compaction_task(pane_id, task_generation)
+            .cloned()
+        else {
             return Ok(false);
-        }
+        };
         if !self.agent_compaction_task_is_current(pane_id, task_generation) {
             let _ = self.finish_agent_compaction_task(pane_id, task_generation);
             return Ok(false);
@@ -890,107 +913,63 @@ impl RuntimeSessionService {
                 "provider event kind unknown: `{}`: {message}",
                 bounded_provider_event_kind(kind)
             );
-            let mut failed = self.fail_agent_compaction_task(pane_id, task_generation);
-            if failed.had_task() {
-                self.append_agent_status_text_to_terminal_buffer(
-                    pane_id,
-                    &format!("agent: compact failed during provider request: {diagnostic}"),
-                )?;
-            }
-            if let Some((resume_turn_id, source)) = failed.take_resume_turn_and_source() {
-                self.fail_running_turn_after_compaction_failure(
-                    &resume_turn_id,
-                    &source,
-                    &diagnostic,
-                )?;
-            }
-            return Ok(failed.had_task());
+            self.fail_agent_compaction_task(pane_id, task_generation);
+            self.report_compaction_failure(
+                &task,
+                "compact failed during provider request",
+                &MezError::invalid_state(diagnostic),
+            )?;
+            return Ok(true);
         };
-        // Canonical source validation requires the original current claim.
-        // Retire it only after correction admission; a replacement generation
-        // queued by that admission must retain its independent ownership.
-        if let Some(task) = self
-            .claimed_agent_compaction_task(pane_id, task_generation)
-            .cloned()
-            && let Err(error) = self.validate_replay_compaction_task(&task)
-        {
-            let error = self.compaction_failure_with_progress(&task, error);
+        // Validate against the exact current claim before retiring it. A
+        // transport retry retains this graph and receives its own generation.
+        if let Err(error) = self.validate_replay_compaction_task(&task) {
             self.finish_agent_compaction_task(pane_id, task_generation);
-            if let Some(turn) = task.resume_turn_id.as_deref() {
-                self.fail_running_turn_after_compaction_error(turn, &task.source, &error)?;
-            }
+            self.report_compaction_failure(
+                &task,
+                "compact failed while validating source",
+                &error,
+            )?;
             return Ok(true);
         }
-        if let Some(mut task) = self.finish_agent_compaction_task(pane_id, task_generation) {
-            let retry_class =
-                provider_error_retry_class_from_parts(parsed_kind, message, provider_failure_json);
-            let policy = self.provider_retry_policy();
-            if retry_class == ProviderErrorRetryClass::RetryableTransport
-                && policy.should_retry(task.transport_retry_attempts, retry_class)
-                && task
-                    .replay_source
-                    .as_ref()
-                    .is_some_and(|source| source.model_work_can_retry(task_generation))
-            {
-                task.transport_retry_attempts = task.transport_retry_attempts.saturating_add(1);
-                task.transport_retry_delay_ms = Some(
-                    policy
-                        .delay_ms(
-                            task.transport_retry_attempts,
-                            mez_agent::provider_retry_after_delay_ms(
-                                provider_failure_json,
-                                crate::runtime::current_unix_millis(),
-                            ),
-                            Some(rand::random()),
-                        )
-                        .max(1),
-                );
-                // Preserve the entire frozen selection and staged position. Only
-                // the dispatch generation changes; failed text is never applied.
-                self.queue_agent_compaction_task(task);
-                return Ok(true);
-            }
-            self.append_agent_status_text_to_terminal_buffer(
-                pane_id,
-                &format!("agent: compact failed during provider request: {message}"),
-            )?;
-            if let Some(resume_turn_id) = task.resume_turn_id.as_deref() {
-                self.fail_running_turn_after_compaction_error(
-                    resume_turn_id,
-                    &task.source,
-                    &self.compaction_failure_with_progress(
-                        &task,
-                        MezError::new(parsed_kind, message),
-                    ),
-                )?;
-            }
+        // The exact claim was cloned above, and no mutation/await can replace
+        // it before this retirement. Keep its immutable source for reporting or
+        // the existing private-graph transport retry, never a new selection.
+        self.finish_agent_compaction_task(pane_id, task_generation);
+        let retry_class =
+            provider_error_retry_class_from_parts(parsed_kind, message, provider_failure_json);
+        let policy = self.provider_retry_policy();
+        if retry_class == ProviderErrorRetryClass::RetryableTransport
+            && policy.should_retry(task.transport_retry_attempts, retry_class)
+            && task
+                .replay_source
+                .as_ref()
+                .is_some_and(|source| source.model_work_can_retry(task_generation))
+        {
+            task.transport_retry_attempts = task.transport_retry_attempts.saturating_add(1);
+            task.transport_retry_delay_ms = Some(
+                policy
+                    .delay_ms(
+                        task.transport_retry_attempts,
+                        mez_agent::provider_retry_after_delay_ms(
+                            provider_failure_json,
+                            crate::runtime::current_unix_millis(),
+                        ),
+                        Some(rand::random()),
+                    )
+                    .max(1),
+            );
+            // Preserve the entire frozen selection and staged position. Only
+            // the dispatch generation changes; failed text is never applied.
+            self.queue_agent_compaction_task(task);
             return Ok(true);
         }
-        let mut failed = self.fail_agent_compaction_task(pane_id, task_generation);
-        if failed.had_task() {
-            self.append_agent_status_text_to_terminal_buffer(
-                pane_id,
-                &format!("agent: compact failed during provider request: {message}"),
-            )?;
-        }
-        if let Some((resume_turn_id, source)) = failed.take_resume_turn_and_source() {
-            self.fail_running_turn_after_compaction_failure(&resume_turn_id, &source, message)?;
-        }
-        Ok(failed.had_task())
-    }
-
-    /// Fails a turn whose automatic recovery compaction could not finish.
-    fn fail_running_turn_after_compaction_failure(
-        &mut self,
-        turn_id: &str,
-        source: &str,
-        message: &str,
-    ) -> Result<()> {
-        self.fail_running_turn_after_compaction_error(
-            turn_id,
-            source,
-            &MezError::invalid_state(message),
-        )
+        self.report_compaction_failure(
+            &task,
+            "compact failed during provider request",
+            &MezError::new(parsed_kind, message),
+        )?;
+        Ok(true)
     }
 
     /// Preserves typed auxiliary provenance while adding automatic-recovery

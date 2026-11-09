@@ -14558,6 +14558,9 @@ and bounded content-free operation diagnostics MUST remain available. Deadline
 expiry and cancellation with a potentially live producer MUST retain original
 expense ownership until physical retirement and settle known reported usage once.
 Stale settlement MUST NOT clear a replacement generation or conversation.
+Terminal manual, worker, expiry and retry-admission failures MUST preserve the
+original bounded operation diagnostics. Missing source/progress MUST report
+unavailable model-call/dependency counts rather than inventing observed zeroes.
 
 Provider input-context classification MUST preserve missing-code messages
 about oversized input even when they advise reducing `max_tokens` or

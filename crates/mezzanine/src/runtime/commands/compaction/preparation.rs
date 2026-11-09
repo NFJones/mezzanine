@@ -169,17 +169,24 @@ impl RuntimeSessionService {
         if !self.agent_compaction_task_is_current(&work.pane_id, work.task_generation) {
             return Ok(false);
         }
+        let started = self
+            .agent_compaction_started_at(&work.pane_id)
+            .unwrap_or_else(crate::runtime::current_unix_seconds);
         let freshness = self.validate_manual_compaction_owner(work);
-        let outcome = freshness.and(result).and_then(|snapshot| {
-            self.queue_manual_compaction(&work.pane_id, Some((snapshot, work.clone())))
-        });
+        let outcome = freshness
+            .and(result)
+            .and_then(|snapshot| {
+                self.queue_manual_compaction(&work.pane_id, Some((snapshot, work.clone())))
+            })
+            .map_err(|error| manual_preparation_failure(work, started, error));
         if outcome.is_err() || matches!(outcome, Ok(AgentShellCommandOutcome::Display { .. })) {
             self.fail_agent_compaction_task(&work.pane_id, work.task_generation);
         }
         if let Err(error) = &outcome {
-            let _ = self.append_agent_error_text_to_terminal_buffer(
+            let _ = self.append_compaction_failure_status(
                 &work.pane_id,
-                &format!("agent: compact preparation failed: {}", error.message()),
+                "compact preparation failed",
+                error,
             );
         }
         if !self.agent_is_compacting(&work.pane_id) {
@@ -238,6 +245,9 @@ impl RuntimeSessionService {
         if !self.agent_compaction_task_is_current(&owner.pane_id, owner.task_generation) {
             return Ok(false);
         }
+        let started = self
+            .agent_compaction_started_at(&owner.pane_id)
+            .unwrap_or_else(crate::runtime::current_unix_seconds);
         let result = self.validate_manual_compaction_owner(owner).and(result);
         self.fail_agent_compaction_task(&owner.pane_id, owner.task_generation);
         let outcome = result.and_then(|task| {
@@ -252,13 +262,12 @@ impl RuntimeSessionService {
             let _ = self.append_agent_status_text_to_terminal_buffer(&owner.pane_id,&status);
             Ok(())
         });
+        let outcome = outcome.map_err(|error| manual_preparation_failure(owner, started, error));
         if let Err(error) = &outcome {
-            let _ = self.append_agent_error_text_to_terminal_buffer(
+            let _ = self.append_compaction_failure_status(
                 &owner.pane_id,
-                &format!(
-                    "agent: compact request preparation failed: {}",
-                    error.message()
-                ),
+                "compact request preparation failed",
+                error,
             );
         }
         if !self.agent_is_compacting(&owner.pane_id) {
@@ -266,4 +275,22 @@ impl RuntimeSessionService {
         }
         outcome.map(|()| true)
     }
+}
+
+/// Neither source decoding nor immutable request rendering can invoke a model.
+/// Capture the original clock before logical retirement; these inert facts do
+/// not certify physical retirement of the worker holding its finite permit.
+fn manual_preparation_failure(
+    owner: &RuntimeManualCompactionPreparation,
+    started: u64,
+    error: MezError,
+) -> MezError {
+    error.with_compaction_failure(crate::error::CompactionFailureEvidence {
+        phase: "preparing",
+        operation_epoch: owner.compaction_epoch,
+        dispatch_generation: owner.task_generation,
+        model_calls: Some(0),
+        serial_depth: Some(0),
+        elapsed_seconds: crate::runtime::current_unix_seconds().saturating_sub(started),
+    })
 }

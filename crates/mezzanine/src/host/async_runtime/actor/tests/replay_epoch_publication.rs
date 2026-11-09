@@ -316,6 +316,17 @@ async fn async_replay_epoch_publication_exhausts_recovery_without_daemon_failure
         .store
         .inject_replay_epoch_fault(Phase::BeforeManifestSwap, 3, false);
     let mut attempt = complete(&mut case).await;
+    let original_calls = case
+        .actor
+        .service
+        .claimed_agent_compaction_task("%1", case.generation)
+        .unwrap()
+        .replay_source
+        .as_ref()
+        .unwrap()
+        .model_progress()
+        .model_calls;
+    assert!(original_calls > 0);
     for number in 1..=3 {
         assert_eq!(attempt.number(), number);
         let completion = tokio::task::spawn_blocking(move || attempt.execute())
@@ -330,6 +341,19 @@ async fn async_replay_epoch_publication_exhausts_recovery_without_daemon_failure
         attempt = retry(&mut case).await;
     }
     assert!(!case.actor.service.agent_is_compacting("%1"));
+    let diagnostic: String = case
+        .actor
+        .service
+        .pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("")
+        .split_whitespace()
+        .collect();
+    assert!(diagnostic.contains("Auxiliarycompaction:"));
+    assert!(diagnostic.contains("phase=publishing"));
+    assert!(diagnostic.contains(&format!("dispatch={};", case.generation)));
+    assert!(diagnostic.contains(&format!("model_calls={original_calls};")));
     assert_eq!(
         case.actor
             .service

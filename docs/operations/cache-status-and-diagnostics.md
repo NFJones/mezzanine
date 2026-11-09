@@ -111,6 +111,13 @@ eligible source or changed relevant input configuration; a new pressure sample
 alone is insufficient. An explicit new `/compact` remains available for eligible
 history. This fence does not alter cumulative expense or grant MCP/tool rights.
 
+Terminal compaction errors keep the original operation, dispatch, phase, model
+invocation count, serial dependency depth and elapsed-time observations for
+preparation, manual/worker errors, publication recovery exhaustion, claim expiry
+and retry-admission refusal. Missing
+source reports unavailable progress and `unknown` counters. Physical retirement
+and reported expense settle independently of these diagnostic snapshots.
+
 ## Distinguish a cold request from a continuity failure
 
 Compaction, a provider/model switch, or an exceptional recovery can change the
