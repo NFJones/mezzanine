@@ -21,6 +21,12 @@ pub fn assemble_model_request(
     turn: &AgentTurnRecord,
     context: &AgentContext,
 ) -> AgentRequestAssemblyResult<ModelRequest> {
+    #[cfg(test)]
+    REQUEST_CONTEXT_SIZES.with_borrow_mut(|sizes| {
+        if let Some(sizes) = sizes {
+            sizes.push(context.blocks().len());
+        }
+    });
     assemble_model_request_from_context_with_api(
         profile,
         api,
@@ -32,6 +38,34 @@ pub fn assemble_model_request(
         context,
         &EmbeddedPromptAssets,
     )
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Records only this thread's production assembly calls inside one test scope.
+    static REQUEST_CONTEXT_SIZES: std::cell::RefCell<Option<Vec<usize>>> = const {
+        std::cell::RefCell::new(None)
+    };
+}
+
+/// Measures whether real admission projected source blocks, without timing or
+/// allocator assumptions. The scoped guard also clears recording after panic.
+#[cfg(test)]
+pub(crate) fn with_request_context_sizes_for_tests<T>(work: impl FnOnce() -> T) -> (T, Vec<usize>) {
+    struct Clear;
+    impl Drop for Clear {
+        fn drop(&mut self) {
+            REQUEST_CONTEXT_SIZES.with_borrow_mut(|sizes| *sizes = None);
+        }
+    }
+    REQUEST_CONTEXT_SIZES.with_borrow_mut(|sizes| {
+        assert!(sizes.is_none(), "request projection probe cannot nest");
+        *sizes = Some(Vec::new());
+    });
+    let _clear = Clear;
+    let result = work();
+    let sizes = REQUEST_CONTEXT_SIZES.with_borrow_mut(|sizes| sizes.take().unwrap());
+    (result, sizes)
 }
 
 /// Assembles a request without claiming an unproven provider API.

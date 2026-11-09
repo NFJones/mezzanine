@@ -21,6 +21,158 @@ pub(super) fn enable_raw(service: &mut RuntimeSessionService) {
     assert!(service.auth_store().is_none());
 }
 
+/// Tool framing alone fits this allowance, but the immutable built-in prompt
+/// and exact protected input do not. Raw admission must preserve old authority.
+#[test]
+fn runtime_raw_tail_reserves_builtin_prompt_before_optional_source() {
+    // Calibrate above the entire old source plus tool framing, so the test
+    // isolates omitted base-prompt cost rather than an independently tiny cap.
+    let limit = {
+        let (mut service, _store, turn) = observed_history::prepared_with_cap(40_000, false);
+        enable_raw(&mut service);
+        let record = service.agent_turn_ledger().turn(&turn).unwrap().clone();
+        let profile = service.agent_turn_model_profile(&turn).unwrap().clone();
+        let context = service.agent_turn_contexts()[&turn].clone();
+        let api = mez_agent::ProviderApiCompatibility::OpenAiResponses;
+        let mut request = crate::integrations::agent::context::assemble_model_request(
+            &profile, api, &record, &context,
+        )
+        .unwrap();
+        let allowed = service
+            .capture_agent_session_allowed_actions_for_pane("%1")
+            .unwrap();
+        mez_agent::apply_model_request_control(
+            &mut request,
+            Some(allowed),
+            Some(mez_agent::ModelInteractionKind::ActionExecution),
+        );
+        mez_agent::apply_default_action_gates(
+            &mut request,
+            &[],
+            service.runtime_persistent_memory_enabled(),
+            crate::runtime::commands::runtime_issues_enabled(&service),
+        );
+        request.messages = request
+            .messages
+            .iter()
+            .cloned()
+            .enumerate()
+            .map(|(i, mut message)| {
+                if i == 0 {
+                    message.content.clear();
+                }
+                message
+            })
+            .collect::<Vec<_>>()
+            .into();
+        let without_base = mez_agent::provider_request_fixed_input_estimate(
+            &request,
+            api,
+            &std::collections::BTreeMap::new(),
+            true,
+        )
+        .unwrap()
+        .input_tokens;
+        let mut owner = mez_agent::ReplayEpochContext::from_owned_context(
+            mez_agent::ReplayConversationId::new(&record.conversation_id).unwrap(),
+            context,
+        )
+        .unwrap();
+        owner
+            .select_provider_projection(
+                mez_agent::ReplayProviderProjection::new(api, &profile.provider, &profile.model)
+                    .unwrap(),
+            )
+            .unwrap();
+        without_base + owner.input_estimates().total_input_tokens().unwrap() + 64
+    };
+    let (mut service, store, turn) = observed_history::prepared_with_cap(limit, false);
+    enable_raw(&mut service);
+    let record = service.agent_turn_ledger().turn(&turn).unwrap().clone();
+    let profile = service.agent_turn_model_profile(&turn).unwrap().clone();
+    let before = service.agent_turn_contexts()[&turn].clone();
+    let archive = store.inspect(&record.conversation_id).unwrap();
+    let queued = service
+        .queue_agent_active_turn_compaction(
+            &turn,
+            record.model_profile,
+            profile,
+            crate::runtime::RuntimeActiveTurnCompactionTrigger::ObservedInputLimit {
+                observed_input_tokens: limit as u64,
+                max_input_tokens: limit,
+            },
+        )
+        .unwrap();
+    assert!(
+        !queued,
+        "mandatory base prompt did not consume input capacity"
+    );
+    assert_eq!(service.agent_turn_contexts()[&turn], before);
+    assert_eq!(store.inspect(&record.conversation_id).unwrap(), archive);
+    assert!(!service.agent_is_compacting("%1"));
+    assert!(service.take_replay_epoch_attempt_for_tests().is_none());
+}
+
+/// The production admission boundary may inspect indexed source costs, but
+/// must not render large source into a throwaway ordinary provider request.
+/// The positive control proves the probe observes ordinary source projection;
+/// each pressure trigger must instead assemble only a source-free frame.
+#[test]
+fn runtime_raw_tail_admission_never_projects_large_source_for_fixed_accounting() {
+    use crate::integrations::agent::context::with_request_context_sizes_for_tests;
+    for rejected in [false, true] {
+        let (mut service, _store, turn) = observed_history::prepared_with_cap(40_000, false);
+        enable_raw(&mut service);
+        service
+            .agent_turn_contexts_mut()
+            .get_mut(&turn)
+            .unwrap()
+            .append_user_event("large exact input", "dense\\\"code\n你好 ".repeat(65_536))
+            .unwrap();
+        let record = service.agent_turn_ledger().turn(&turn).unwrap().clone();
+        let profile = service.agent_turn_model_profile(&turn).unwrap().clone();
+        let (ordinary, sizes) = with_request_context_sizes_for_tests(|| {
+            crate::integrations::agent::context::assemble_model_request(
+                &profile,
+                mez_agent::ProviderApiCompatibility::OpenAiResponses,
+                &record,
+                &service.agent_turn_contexts()[&turn],
+            )
+        });
+        assert!(ordinary.is_ok());
+        assert!(
+            sizes.iter().any(|size| *size > 0),
+            "probe missed ordinary source"
+        );
+        let trigger = if rejected {
+            crate::runtime::RuntimeActiveTurnCompactionTrigger::ProviderContextLimit { attempt: 1 }
+        } else {
+            crate::runtime::RuntimeActiveTurnCompactionTrigger::ObservedInputLimit {
+                observed_input_tokens: 40_000,
+                max_input_tokens: 40_000,
+            }
+        };
+        let (result, sizes) = with_request_context_sizes_for_tests(|| {
+            service.queue_agent_active_turn_compaction(
+                &turn,
+                record.model_profile,
+                profile,
+                trigger,
+            )
+        });
+        assert!(result.is_ok());
+        assert_eq!(
+            sizes,
+            vec![0],
+            "raw admission rendered the frozen conversation"
+        );
+        assert!(
+            !result.unwrap(),
+            "oversized protected input should refuse locally"
+        );
+    }
+}
+
 /// Even an accidental call into the model worker must stop before inference.
 /// The fake port panics on ANY request; it supplies no dummy model response.
 fn assert_no_raw_inference(

@@ -8346,7 +8346,10 @@ request, looking up auxiliary credentials, or charging auxiliary model usage.
 It MUST publish explicit intentional omission through the shared epoch lifecycle,
 with no summary, blank Memory or elision block. The optional tail MUST be one
 newest complete suffix under the configured percentage and remaining ordinary
-input capacity after fixed framing and stable/protected source. A non-fitting
+input capacity after the built-in system prompt, fixed schemas/controls and
+stable/protected source. Fixed accounting MUST preserve that prompt separately
+from canonical source costs and MUST NOT render the conversation synchronously
+on the actor merely to discard its messages. A non-fitting
 newer optional group MUST stop selection; smaller older groups MUST NOT backfill.
 Exact active instructions and open native, MCP and peer dependencies MUST remain
 whole even beyond the optional allowance. Post-frontier arrivals MUST survive.

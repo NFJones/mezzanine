@@ -225,7 +225,8 @@ input on resume, restore, fork, or a later switch back to summary mode.
 
 Raw retention keeps one newest complete optional suffix under
 `agents.compaction_raw_retention_percent` and the remaining ordinary input
-capacity after fixed schemas/controls and stable/protected input. It stops at a
+capacity after the built-in system prompt, fixed schemas/controls and
+stable/protected input. It stops at a
 newer group that does not fit rather than backfilling smaller older groups.
 Exact active instructions, open native/MCP/peer dependencies and post-freeze
 arrivals survive. Protected source may exceed the optional allowance; if it and

@@ -137,38 +137,75 @@ pub fn provider_request_input_estimate(
     Ok(provider_request_input_estimate_from_body(&wire_body))
 }
 
-/// Estimates fixed schemas and controls using the actual ordinary request's
-/// canonical body. Context payloads are accounted separately by epoch planning;
-/// removing them here avoids treating escaped source text as immutable overhead.
-/// No request is dispatched or changed, and no compaction request is needed.
+/// Estimates the immutable base prompt, schemas and controls of an ordinary
+/// request. Its first message must be the synthetic system/stable-prefix prompt
+/// produced by canonical request assembly, independently of context blocks.
+/// All later messages are accounted by canonical stable/raw costs instead.
+///
+/// Project to the base prompt before serialization: even an already assembled
+/// request must not cause its conversation text to be rendered or JSON-parsed
+/// again for fixed accounting. Callers should assemble a source-free frame to
+/// avoid first projecting conversation text merely to discard it here.
+/// No credentials, transport, compactor request or live mutation is involved.
 pub fn provider_request_fixed_input_estimate(
     request: &ModelRequest,
     api: ProviderApiCompatibility,
     provider_options: &BTreeMap<String, String>,
     stream: bool,
 ) -> ProviderRequestAssemblyResult<ProviderRequestInputEstimate> {
-    let wire_body = canonical_request_body(request, api, provider_options, stream)?;
+    let base = request
+        .messages
+        .iter()
+        .next()
+        .filter(|message| {
+            message.role == crate::ModelMessageRole::System
+                && message.source == crate::ContextSourceKind::System
+                && message.placement == crate::ContextPlacement::StablePrefix
+        })
+        .ok_or_else(|| {
+            crate::ProviderRequestAssemblyError::invalid_state(
+                "fixed accounting requires the canonical built-in system prompt first",
+            )
+        })?;
+    let mut framing = request.clone();
+    // Anthropic validates that ordinary requests have a nonempty user message.
+    // This accounting-only whitespace sentinel is removed from the wire value
+    // below; it never contributes source, becomes a task, or reaches transport.
+    framing.messages = vec![
+        base.clone(),
+        crate::ModelMessage {
+            role: crate::ModelMessageRole::User,
+            source: crate::ContextSourceKind::UserInstruction,
+            placement: crate::ContextPlacement::ConversationAppend,
+            content: " ".into(),
+        },
+    ]
+    .into();
+    let wire_body = canonical_request_body(&framing, api, provider_options, stream)?;
     let mut body: serde_json::Value = serde_json::from_str(&wire_body).map_err(|error| {
         crate::ProviderRequestAssemblyError::invalid_state(format!(
             "invalid canonical request JSON: {error}"
         ))
     })?;
-    // These are the context-bearing fields of the canonical serializers above.
-    // Keep their empty wrappers and all tool schemas/provider controls.
+    // Remove only the validation sentinel. Preserve the actual serialized base
+    // prompt, including its provider role, cache controls and JSON escaping.
     match api {
         ProviderApiCompatibility::OpenAiResponses => {
             body["input"] = serde_json::json!([]);
-            body["instructions"] = serde_json::json!("");
         }
         ProviderApiCompatibility::OpenAiChatCompletions
         | ProviderApiCompatibility::DeepSeekChatCompletions => {
-            body["messages"] = serde_json::json!([]);
+            body["messages"]
+                .as_array_mut()
+                .ok_or_else(|| {
+                    crate::ProviderRequestAssemblyError::invalid_state(
+                        "canonical chat framing has no message array",
+                    )
+                })?
+                .truncate(1);
         }
         ProviderApiCompatibility::AnthropicMessages => {
             body["messages"] = serde_json::json!([]);
-            if body.get("system").is_some() {
-                body["system"] = serde_json::json!("");
-            }
         }
     }
     let framing = serde_json::to_string(&body).map_err(|error| {
@@ -258,8 +295,8 @@ mod tests {
         }
     }
 
-    /// Large escaped source changes complete input but not fixed framing. Each
-    /// adapter keeps its real tools and controls, so schema cost remains counted.
+    /// Large context payloads must not inflate fixed input, whereas the actual
+    /// built-in prompt must. Exercise all wire adapters, not a byte-only helper.
     #[test]
     fn fixed_request_estimate_excludes_context_payload_for_all_adapters() {
         for (api, provider) in [
@@ -284,8 +321,11 @@ mod tests {
                 .messages
                 .iter()
                 .cloned()
-                .map(|mut message| {
-                    message.content = " dense\\\"code\n你好 ".repeat(5_000);
+                .enumerate()
+                .map(|(index, mut message)| {
+                    if index != 0 {
+                        message.content = " dense\\\"code\n你好 ".repeat(5_000);
+                    }
                     message
                 })
                 .collect::<Vec<_>>()
@@ -293,6 +333,19 @@ mod tests {
             assert_eq!(
                 provider_request_fixed_input_estimate(&dense, api, &options, true).unwrap(),
                 fixed
+            );
+            let mut larger_prompt = request.clone();
+            let mut messages = larger_prompt.messages.iter().cloned().collect::<Vec<_>>();
+            messages[0]
+                .content
+                .push_str(&"immutable runtime policy ".repeat(1_000));
+            larger_prompt.messages = messages.into();
+            assert!(
+                provider_request_fixed_input_estimate(&larger_prompt, api, &options, true)
+                    .unwrap()
+                    .input_tokens
+                    > fixed.input_tokens + 1_000,
+                "{api:?}: built-in prompt must remain mandatory input"
             );
             assert!(
                 provider_request_input_estimate(&dense, api, &options, true)
@@ -314,6 +367,39 @@ mod tests {
                 "accounting changed outgoing input"
             );
         }
+    }
+
+    /// A missing synthetic prompt is an assembly error, not permission to
+    /// undercount input or mistake the first historical user for fixed policy.
+    #[test]
+    fn fixed_request_estimate_refuses_missing_canonical_prompt() {
+        let mut request = complete_test_request("openai");
+        request.messages = request
+            .messages
+            .iter()
+            .skip(1)
+            .cloned()
+            .collect::<Vec<_>>()
+            .into();
+        assert!(
+            provider_request_fixed_input_estimate(
+                &request,
+                ProviderApiCompatibility::OpenAiResponses,
+                &BTreeMap::new(),
+                true,
+            )
+            .is_err()
+        );
+        request.messages = Vec::new().into();
+        assert!(
+            provider_request_fixed_input_estimate(
+                &request,
+                ProviderApiCompatibility::OpenAiResponses,
+                &BTreeMap::new(),
+                true,
+            )
+            .is_err()
+        );
     }
 
     /// Verifies whole-request provider usage is not falsely apportioned to

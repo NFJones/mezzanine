@@ -91,14 +91,18 @@ impl RuntimeSessionService {
                 let api = mez_agent::resolve_provider_api(&provider.kind, provider.api.as_deref())?;
                 let options =
                     crate::runtime::config::runtime_effective_provider_options(provider, profile);
-                // This is the ordinary continuation's schema/control framing,
-                // not a compactor request. Neither credentials nor transport
-                // are consulted during this read-only sizing operation.
+                // Only assemble the ordinary base prompt and request metadata.
+                // Canonical source already has indexed stable/raw costs; never
+                // project or serialize its messages here on the actor merely
+                // to remove them afterward. MCP tool contracts below remain
+                // selected from the actual accepted retrieval authority.
+                let mut framing_context = mez_agent::AgentContext::empty();
+                framing_context.set_metadata(owner.context().metadata().clone());
                 let mut request = crate::integrations::agent::context::assemble_model_request(
                     profile,
                     api,
                     turn,
-                    owner.context(),
+                    &framing_context,
                 )?;
                 mez_agent::apply_model_request_control(
                     &mut request,

@@ -9,3 +9,6 @@ use mez_agent::AgentContext;
 mod assembly;
 
 pub use assembly::{assemble_model_request, assemble_model_request_fail_closed};
+
+#[cfg(test)]
+pub(crate) use assembly::with_request_context_sizes_for_tests;
