@@ -260,6 +260,7 @@ pub(crate) use compaction_delivery::{
 };
 mod provider_context;
 mod provider_execution;
+mod provider_failure;
 pub(crate) use provider_execution::execute_agent_provider_persistence_work;
 pub(crate) use provider_execution::{
     ProviderFailureRecoveryDecision, decide_provider_failure_recovery,
@@ -592,6 +593,9 @@ pub(crate) struct RuntimeAgentComponent {
         BTreeMap<(String, u64), crate::runtime::commands::RuntimeStatusReportWork>,
     /// Provider turns claimed by workers but not yet settled.
     claimed_agent_provider_tasks: BTreeMap<String, RuntimeAgentProviderClaim>,
+    /// One immutable refusal per affected admitted turn. Originals remain
+    /// diagnostic custody only; these values cannot authorize replay or ACKs.
+    provider_failure_refusals: BTreeMap<String, provider_failure::ProviderFailureRefusal>,
     /// Exact issued requests retained independently of active content claims.
     provider_accounting_owners:
         BTreeMap<(String, u64), project_accounting::ProviderAccountingOwner>,

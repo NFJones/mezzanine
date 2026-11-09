@@ -1836,6 +1836,20 @@ impl AsyncRuntimeSessionActor {
         &mut self,
         provider_event: AgentProviderEvent,
     ) -> Result<RuntimeTransition> {
+        let (provider_event, local_request_failure) = match provider_event {
+            AgentProviderEvent::LocalRequestFailure { failure } => {
+                if !matches!(
+                    *failure,
+                    AgentProviderEvent::Failed { .. } | AgentProviderEvent::CanonicalFailure { .. }
+                ) {
+                    return Err(crate::MezError::invalid_args(
+                        "local request wrapper requires one provider failure",
+                    ));
+                }
+                (*failure, true)
+            }
+            event => (event, false),
+        };
         let (provider_event, recovery, incurred_usage) = match provider_event {
             AgentProviderEvent::CanonicalFailure {
                 failure,
@@ -1852,7 +1866,8 @@ impl AsyncRuntimeSessionActor {
             event => (event, None, None),
         };
         match provider_event {
-            AgentProviderEvent::CanonicalFailure { .. } => {
+            AgentProviderEvent::CanonicalFailure { .. }
+            | AgentProviderEvent::LocalRequestFailure { .. } => {
                 unreachable!("the validated wrapper is unwrapped once above")
             }
             AgentProviderEvent::WireRequestObserved { observation } => self
@@ -1948,6 +1963,9 @@ impl AsyncRuntimeSessionActor {
                     provider_failure_json.as_deref(),
                     provider_raw_text.as_deref(),
                 );
+                if local_request_failure {
+                    error = error.with_agent_request_assembly_failure();
+                }
                 if let Some(state) = provider_output_limit_state {
                     error = error.with_provider_output_limit_state(*state);
                 }

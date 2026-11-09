@@ -230,7 +230,8 @@ impl RuntimeSessionService {
         let Some(work) = self.agent.native_filesystem_actions.queued(attempt) else {
             return Ok(None);
         };
-        if self.agent_turn_is_human_paused(&work.owner.turn.turn_id)
+        if self.agent_provider_failure_is_refused(&work.owner.turn.turn_id)
+            || self.agent_turn_is_human_paused(&work.owner.turn.turn_id)
             || self
                 .agent
                 .pending_agent_provider_persistence

@@ -695,6 +695,9 @@ impl RuntimeSessionService {
             ));
         }
         self.request_agent_worker_cancellation_for_turn(&turn_id);
+        // Safe cancellation remains available during refusal. Its original
+        // result must still be retained; cancellation cannot authorize cleanup.
+        self.ensure_provider_failure_pane_open(pane_id)?;
         self.revoke_completion_paint(&turn_id);
         let scope = self.begin_completion_scope(&turn_id, CompletionScope::Stop);
         let result = self.stop_agent_turn_after_completion_guard(pane_id, &turn, turn_id.clone());
@@ -2087,6 +2090,7 @@ impl RuntimeSessionService {
             Vec<crate::runtime::agent::RuntimeSteeringReceipt>,
         ),
     ) -> Result<RuntimeAgentPromptTurnStart> {
+        self.ensure_provider_failure_pane_open(pane_id)?;
         if self.message_restore_pending() {
             return Err(MezError::conflict(
                 "new agent turn paused for layout restore",

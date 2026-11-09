@@ -380,6 +380,13 @@ pub enum ProcessEvent {
 /// Event emitted by an async agent provider worker.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AgentProviderEvent {
+    /// Local checked context/request refusal, independent of display text.
+    /// Only one ordinary failure or its canonical recovery wrapper is allowed;
+    /// the actor still checks the exact original claim before applying it.
+    LocalRequestFailure {
+        /// Original failure, preserving identity, reported expense and facts.
+        failure: Box<AgentProviderEvent>,
+    },
     /// Worker-owned canonical recovery facts around one ordinary failure event.
     /// A wrapper never changes failure classification or claim ownership.
     CanonicalFailure {

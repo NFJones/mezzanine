@@ -5126,6 +5126,18 @@ provider request is already in flight, Mezzanine MUST retain the steering input
 and deliver it in the next provider request for the same turn instead of
 starting an unrelated turn or silently discarding the input.
 
+A local request-context or request-assembly refusal MUST NOT be reported by
+assembling another request from the rejected source. If provider failure
+reporting or required persistence cannot settle safely, Mezzanine MUST retain
+the original turn source, causal error and settlement error, refuse new work
+and destructive cleanup for the affected pane, and disable automatic retry of
+that work. Refusal MUST release inference capacity without claiming issued
+effects or persistence obligations complete. Control connections and unaffected
+panes MUST remain available unless a concrete shared integrity invariant
+requires a broader refusal. Stop MUST still request cancellation of exact owned
+workers before refusing destructive cleanup; cancellation MUST NOT be treated
+as proof that effects or persistence settled.
+
 Agent prompt submissions MUST be appended only to the conversation-bound agent
 log as user-visible, copyable text before the resulting turn is queued or
 started. Non-command assistant responses, final responses, concise

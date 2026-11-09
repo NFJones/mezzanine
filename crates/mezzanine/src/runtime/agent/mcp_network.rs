@@ -512,6 +512,9 @@ impl RuntimeSessionService {
         turn_id: &str,
         action_id: &str,
     ) -> Result<Option<RuntimeApprovedExternalActionDispatch>> {
+        if self.agent_provider_failure_is_refused(turn_id) {
+            return Ok(None);
+        }
         self.ensure_completion_admission_open()?;
         if self.agent_turn_is_human_paused(turn_id) {
             return Ok(None);

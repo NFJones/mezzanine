@@ -2163,6 +2163,13 @@ fn provider_worker_event(
                 },
                 None => failure,
             };
+            let event = if error.is_agent_request_assembly_failure() {
+                AgentProviderEvent::LocalRequestFailure {
+                    failure: Box::new(event),
+                }
+            } else {
+                event
+            };
             (RuntimeEvent::AgentProvider(event), false)
         }
         Err(error) => (
@@ -2819,6 +2826,7 @@ mod tests {
     mod compaction_waves;
     mod incomplete;
     mod network_progress;
+    mod request_validation;
 
     /// The observed title worker preserves normalized incurred usage even when
     /// sanitization rejects the response. Neither branch exposes rejected text,

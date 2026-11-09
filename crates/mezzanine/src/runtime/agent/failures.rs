@@ -22,9 +22,9 @@ impl RuntimeSessionService {
     ///
     /// Provider workers submit deterministic completions back to the runtime
     /// actor after the claim lease has been cleared. Any error while applying
-    /// those completions must therefore become a pane-local failed turn rather
-    /// than an actor-boundary error that can strand a running turn or terminate
-    /// the daemon request path.
+    /// those completions must therefore become a pane-local failed turn or an
+    /// explicit retained refusal. Failed retirement never authorizes deleting
+    /// source or terminating unrelated daemon request paths.
     ///
     /// # Parameters
     /// - `turn`: The active turn being settled.
@@ -38,6 +38,9 @@ impl RuntimeSessionService {
         model_profile: Option<&ModelProfile>,
         error: &MezError,
     ) {
+        if self.agent_provider_failure_is_refused(&turn.turn_id) {
+            return;
+        }
         let _ = self.append_agent_trace_turn_event(
         &turn.pane_id,
         &turn.turn_id,
@@ -59,92 +62,22 @@ impl RuntimeSessionService {
         ) {
             return;
         }
-        if let Some(model_profile) = model_profile
-            && self
-                .fail_agent_turn_for_provider_error(turn, provider_id, model_profile, error)
-                .is_ok()
-        {
+        let Some(source) = self.capture_provider_failure_source(&turn.turn_id) else {
             return;
+        };
+        let result = match model_profile {
+            Some(profile) => {
+                self.fail_agent_turn_for_provider_error(turn, provider_id, profile, error)
+            }
+            None => Err(MezError::invalid_state(
+                "provider completion failure has no retained model profile",
+            )),
+        };
+        if let Err(settlement) = result {
+            // Required retirement failure cannot authorize deletion of the
+            // original context, effects, profile or pending append obligations.
+            self.retain_provider_failure_refusal(source, error, settlement);
         }
-
-        let _ = self.append_agent_error_text_to_terminal_buffer(
-            &turn.pane_id,
-            &format!(
-                "agent: provider completion failed while applying runtime state: {}",
-                error.message()
-            ),
-        );
-        if self.agent_shell_store().get(&turn.pane_id).is_none() {
-            let _ = self.emit_subagent_task_result_for_state(turn, AgentTurnState::Failed);
-        }
-        if self
-            .complete_running_agent_turn_and_start_ready(
-                turn,
-                AgentTurnState::Failed,
-                "completion_application_error_fallback",
-            )
-            .is_ok()
-        {
-            return;
-        }
-        let _ = self.agent.agent_scheduler.complete(&turn.turn_id);
-        let _ = self
-            .agent_turn_ledger_mut()
-            .finish_turn(&turn.turn_id, AgentTurnState::Failed);
-        self.reconcile_active_turn_sleep_inhibition();
-        let _ = self.append_agent_trace_turn_transition(
-            turn,
-            current_state.unwrap_or(turn.state),
-            AgentTurnState::Failed,
-            "completion_application_error_fallback",
-        );
-        if self
-            .agent_shell_store()
-            .get(&turn.pane_id)
-            .and_then(|session| session.running_turn_id.as_deref())
-            == Some(turn.turn_id.as_str())
-        {
-            let _ = self
-                .agent_shell_store_mut()
-                .finish_turn(&turn.pane_id, &turn.turn_id);
-        }
-        self.retain_routed_context_before_cleanup(&turn.turn_id);
-        if let Err(retention_error) = self.retain_ephemeral_replay_before_cleanup(&turn.turn_id) {
-            let _ = self.append_agent_error_text_to_terminal_buffer(
-                &turn.pane_id,
-                &format!(
-                    "agent: NoStore continuation could not be retained: {}",
-                    retention_error.message()
-                ),
-            );
-        }
-        self.agent_turn_contexts_mut().remove(&turn.turn_id);
-        self.agent_turn_executions_mut().remove(&turn.turn_id);
-        self.agent
-            .agent_turn_chatgpt_routing_states
-            .remove(&turn.turn_id);
-        self.clear_agent_failure_feedback_attempts_for_turn(&turn.turn_id);
-        self.agent
-            .agent_turn_shell_dispatch_history
-            .remove(&turn.turn_id);
-        self.agent
-            .agent_turn_network_action_history
-            .remove(&turn.turn_id);
-        self.agent
-            .agent_turn_config_change_successes
-            .remove(&turn.turn_id);
-        self.clear_joined_subagent_dependencies_for_turn(&turn.turn_id);
-        self.clear_agent_pre_shell_hook_completions_for_turn(&turn.turn_id);
-        self.remove_agent_turn_model_profile(&turn.turn_id);
-        self.agent
-            .pending_agent_provider_tasks
-            .remove(&turn.turn_id);
-        self.agent
-            .claimed_agent_provider_tasks
-            .remove(&turn.turn_id);
-        self.clear_agent_provider_retry_attempt(&turn.turn_id);
-        self.clear_blocked_agent_approvals_for_turn(&turn.turn_id);
-        let _ = self.start_ready_agent_turns();
     }
 
     /// Runs the fail agent turn for provider error operation for this subsystem.
@@ -159,6 +92,12 @@ impl RuntimeSessionService {
         model_profile: &ModelProfile,
         error: &MezError,
     ) -> Result<()> {
+        if error.is_agent_request_assembly_failure() {
+            // The actor failure boundary retains a bounded refusal. Rebuilding
+            // the rejected request here could repeat the same validation error
+            // and fabricate execution/persistence evidence for an unissued call.
+            return Err(error.clone());
+        }
         self.refresh_agent_turn_mcp_catalog_context(turn)?;
         self.refresh_agent_turn_project_guidance_context(turn)?;
         let context = self

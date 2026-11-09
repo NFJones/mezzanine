@@ -67,7 +67,9 @@ impl From<mez_agent::SchedulerError> for MezError {
 
 impl From<mez_agent::AgentContextError> for MezError {
     fn from(error: mez_agent::AgentContextError) -> Self {
-        Self::invalid_args(error.message())
+        let mut converted = Self::invalid_args(error.message());
+        converted.agent_request_assembly_failure = true;
+        converted
     }
 }
 
@@ -103,14 +105,16 @@ impl From<mez_agent::SubagentContractError> for MezError {
 
 impl From<mez_agent::AgentRequestAssemblyError> for MezError {
     fn from(error: mez_agent::AgentRequestAssemblyError) -> Self {
-        match error.kind() {
+        let mut converted = match error.kind() {
             mez_agent::AgentRequestAssemblyErrorKind::InvalidArgs => {
                 Self::invalid_args(error.message())
             }
             mez_agent::AgentRequestAssemblyErrorKind::InvalidState => {
                 Self::invalid_state(error.message())
             }
-        }
+        };
+        converted.agent_request_assembly_failure = true;
+        converted
     }
 }
 
@@ -567,6 +571,9 @@ pub struct MezError {
     /// This local transcript failure happened before any append, so only the
     /// persistence operation may be retried without ambiguous partial writes.
     local_transcript_precommit_retryable: bool,
+    /// A local context/request contract refused assembly. Failure reporting
+    /// must not try to manufacture another request from that rejected source.
+    agent_request_assembly_failure: bool,
     /// This failure originated in the I/O backend owned by one pane worker.
     pane_backend_failure: bool,
     /// Bounded native sandbox lifecycle diagnostics, separate from provider errors.
@@ -603,6 +610,7 @@ impl MezError {
             provider_output_limit_state: None,
             provider_evidence: None,
             local_transcript_precommit_retryable: false,
+            agent_request_assembly_failure: false,
             pane_backend_failure: false,
             sandbox_lifecycle_failure: None,
         }
@@ -697,6 +705,19 @@ impl MezError {
     /// on duplicated control-flow logic.
     pub fn message(&self) -> &str {
         &self.message
+    }
+
+    /// Identifies a local checked context/request failure by its typed origin,
+    /// independently of provider-authored text or the general error category.
+    pub(crate) fn is_agent_request_assembly_failure(&self) -> bool {
+        self.agent_request_assembly_failure
+    }
+
+    /// Restores local provenance from the actor's typed worker-event wrapper.
+    /// Callers must never select this path from provider-authored text.
+    pub(crate) fn with_agent_request_assembly_failure(mut self) -> Self {
+        self.agent_request_assembly_failure = true;
+        self
     }
 
     /// Adds caller context while preserving the original classification and all
@@ -871,6 +892,7 @@ impl From<io::Error> for MezError {
             provider_output_limit_state: None,
             provider_evidence: None,
             local_transcript_precommit_retryable: false,
+            agent_request_assembly_failure: false,
             pane_backend_failure: false,
             sandbox_lifecycle_failure: None,
         }
@@ -891,6 +913,24 @@ impl From<rusqlite::Error> for MezError {
 #[cfg(test)]
 mod tests {
     use super::{MezError, MezErrorKind};
+
+    /// Error text cannot select the no-request settlement path. Only the typed
+    /// local boundary survives cloning and contextual diagnostic additions.
+    #[test]
+    fn local_request_refusal_keeps_typed_origin_independent_of_text() {
+        let source = mez_agent::AgentContextError::new("context semantic violation");
+        let direct = MezError::from(source.clone());
+        let assembly = MezError::from(mez_agent::AgentRequestAssemblyError::from(source));
+        for error in [direct, assembly] {
+            assert!(
+                error
+                    .clone()
+                    .with_context("failure")
+                    .is_agent_request_assembly_failure()
+            );
+            assert!(!MezError::invalid_args(error.message()).is_agent_request_assembly_failure());
+        }
+    }
 
     /// Verifies the product conversion sanitizes a provider response error even
     /// when a caller hands over an unsanitized primary message.

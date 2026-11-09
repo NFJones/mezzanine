@@ -464,6 +464,16 @@ impl RuntimeSessionService {
             Some(pane_id) => pane_id.to_string(),
             None => self.active_pane_id()?,
         };
+        if !input.trim().starts_with('/')
+            || parse_slash_command(input)
+                .ok()
+                .flatten()
+                .is_some_and(|command| {
+                    matches!(command.name.as_str(), "new" | "clear" | "resume" | "fork")
+                })
+        {
+            self.ensure_provider_failure_pane_open(&pane_id)?;
+        }
         if self.agent_shell_store().get(&pane_id).is_none()
             && let Some(slash) = parse_slash_command(input).ok().flatten()
             && matches!(slash.name.as_str(), "status" | "reset-status")

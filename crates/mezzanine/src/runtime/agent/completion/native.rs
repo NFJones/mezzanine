@@ -128,6 +128,15 @@ impl fmt::Debug for NativeCompletionReceipt {
 }
 
 impl RuntimeSessionService {
+    /// Observes exact original retained output without adopting or retrying it.
+    #[cfg(test)]
+    pub(crate) fn retained_native_outcome_for_tests(
+        &self,
+        key: &NativeCompletionKey,
+    ) -> Option<&RuntimeNativeShellOutcome> {
+        self.retained_native_outcome(key).ok()
+    }
+
     /// Reports fixed identity-only facts for one retained native receipt and its
     /// worker outcome. Test-only and read-only: no command text, digest,
     /// timestamp or payload is exposed and nothing is acknowledged or cleared.

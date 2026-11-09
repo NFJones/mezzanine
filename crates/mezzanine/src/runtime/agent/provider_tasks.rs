@@ -745,6 +745,9 @@ impl RuntimeSessionService {
         agent_id: &AgentId,
         turn_id: &str,
     ) -> Result<Option<AgentTurnRecord>> {
+        if self.agent_provider_failure_is_refused(turn_id) {
+            return Ok(None);
+        }
         if self.message_restore_pending() {
             return Ok(None);
         }
@@ -1336,14 +1339,27 @@ impl RuntimeSessionService {
         turn_id: &str,
         error: &MezError,
     ) -> Result<()> {
-        let refusal = self.begin_completion_provider_refusal(turn_id)?;
-        if let Some(refusal) = refusal {
-            let result = self
-                .freeze_completion_provider_refusal_source(&refusal)
-                .and_then(|()| self.fail_configured_agent_provider_task_inner(turn_id, error));
-            return self.finish_completion_provider_refusal(refusal, result);
+        if self.agent_provider_failure_is_refused(turn_id) {
+            return Ok(());
         }
-        self.fail_configured_agent_provider_task_inner(turn_id, error)
+        let source = self.capture_provider_failure_source(turn_id);
+        let result = (|| {
+            let refusal = self.begin_completion_provider_refusal(turn_id)?;
+            if let Some(refusal) = refusal {
+                let result = self
+                    .freeze_completion_provider_refusal_source(&refusal)
+                    .and_then(|()| self.fail_configured_agent_provider_task_inner(turn_id, error));
+                return self.finish_completion_provider_refusal(refusal, result);
+            }
+            self.fail_configured_agent_provider_task_inner(turn_id, error)
+        })();
+        match (result, source) {
+            (Err(settlement), Some(source)) => {
+                self.retain_provider_failure_refusal(source, error, settlement);
+                Ok(())
+            }
+            (result, _) => result,
+        }
     }
 
     /// Existing provider-failure policy, also used inside the explicitly armed
@@ -1412,7 +1428,8 @@ impl RuntimeSessionService {
             &model_profile,
             &model_profile.provider,
             error,
-        )?;
+        )
+        .map_err(|error| error.with_context("provider failure audit publication"))?;
         self.append_agent_trace_turn_event(
             &turn.pane_id,
             turn_id,
@@ -1865,7 +1882,9 @@ impl RuntimeSessionService {
             .find(|turn| turn.turn_id == turn_id)
             .map(|turn| turn.pane_id.clone());
         let applied = self.apply_agent_provider_error_event(agent_id, turn_id, error)?;
-        if let Some(ref pane_id) = pane_id {
+        if let Some(ref pane_id) = pane_id
+            && !self.agent_provider_failure_is_refused(turn_id)
+        {
             self.ingest_provider_log(
                 pane_id,
                 turn_id,

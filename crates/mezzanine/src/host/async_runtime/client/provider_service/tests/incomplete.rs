@@ -92,7 +92,7 @@ impl AsyncModelProvider for IncompleteProvider {
 /// Prepares a real auth-free native turn without claiming it. Production actor
 /// admission may assign its own generation; older component controls can still
 /// install their explicit claim through `issued_fixture` below.
-async fn prepared_fixture(prompt: &str) -> (RuntimeSessionService, AgentId, String) {
+pub(super) async fn prepared_fixture(prompt: &str) -> (RuntimeSessionService, AgentId, String) {
     use crate::config::{ConfigFormat, ConfigLayer, ConfigScope};
     let mut service = crate::test_support::runtime::RuntimeServiceFixture::new().build();
     let root = std::env::temp_dir().join(format!(
@@ -161,7 +161,7 @@ async fn issued_fixture() -> (RuntimeSessionService, RuntimeAgentProviderDispatc
 
 /// Runs the exact production observation/runner adapter with caller-controlled
 /// backoff. The fixture changes clocks only, not provider result acceptance.
-async fn run_incomplete_fixture<P: AsyncModelProvider>(
+pub(super) async fn run_incomplete_fixture<P: AsyncModelProvider>(
     provider: &P,
     observer: &ProviderWireRequestObserver,
     dispatch: &RuntimeAgentProviderDispatch,

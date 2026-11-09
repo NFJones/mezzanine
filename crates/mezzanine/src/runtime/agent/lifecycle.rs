@@ -309,6 +309,11 @@ impl RuntimeSessionService {
         &mut self,
         turn_id: &str,
     ) -> Result<()> {
+        if self.agent_provider_failure_is_refused(turn_id) {
+            return Err(MezError::conflict(
+                "provider failure settlement refused; original source must remain retained",
+            ));
+        }
         self.retain_routed_context_before_cleanup(turn_id);
         self.retain_ephemeral_replay_before_cleanup(turn_id)?;
         if self.provider_refusal_is_armed(turn_id) {

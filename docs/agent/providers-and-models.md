@@ -81,6 +81,16 @@ safety, privacy, residency, or approval characteristics. If a model is
 unavailable, inspect the error and configured fallback profiles instead of
 assuming an equivalent replacement was selected.
 
+If local request validation fails and failure reporting cannot safely settle,
+the affected pane reports a provider failure settlement refusal. Mez retains
+the original source and causal error, blocks further prompts and destructive
+cleanup in that pane, and disables automatic retry. Other panes and control
+connections remain available; the refusal does not establish that outstanding
+effects or transcript writes completed. Preserve the diagnostics and retained
+session while investigating the underlying validation or storage error. `/stop`
+still requests cancellation of owned workers, then reports the refusal while
+retaining their required results and cleanup obligations.
+
 ## Maintain the catalog
 
 Configured model records under `providers.<name>.models` hold reusable IDs,

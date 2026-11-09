@@ -56,6 +56,9 @@ pub(crate) fn decide_provider_failure_recovery(
     if !eligibility.current_owner {
         return Decision::Ignore;
     }
+    if error.is_agent_request_assembly_failure() {
+        return Decision::Terminal;
+    }
     if error.recovery_facts().is_some_and(|facts| {
         use mez_agent::recovery_attribution::RecoveryDisposition;
         matches!(

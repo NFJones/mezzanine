@@ -171,6 +171,91 @@ async fn native_action_fixture(command: String) -> (RuntimeSessionService, Strin
     (service, turn_id, action.id)
 }
 
+/// A real child may finish before failure reporting refuses the turn. Its
+/// effects and raw output must stay under the original receipt after Blocked,
+/// without retrying the command or claiming successful canonical settlement.
+#[tokio::test]
+async fn native_result_after_provider_failure_refusal_keeps_original_effect_once() {
+    let root = std::env::temp_dir().join(format!(
+        "mez-refused-native-{:032x}",
+        rand::random::<u128>()
+    ));
+    std::fs::create_dir(&root).unwrap();
+    let counter = root.join("counter");
+    let command = format!(
+        "printf x >> '{}'; printf retained-native-output",
+        counter.display()
+    );
+    let (mut service, turn, action) = native_action_fixture(command).await;
+    let dispatch = service
+        .claim_native_shell_action(&turn, &action)
+        .unwrap()
+        .unwrap();
+    let cancellation = dispatch.cancellation.flag();
+    let (progress, _receiver) = tokio::sync::watch::channel(None);
+    let outcome = tokio::task::spawn_blocking(move || {
+        crate::runtime::execute_native_shell_dispatch_with_progress(dispatch, progress)
+    })
+    .await
+    .unwrap();
+    assert!(outcome.result.is_ok());
+    assert_eq!(std::fs::read(&counter).unwrap(), b"x");
+    let original = service.agent_turn_contexts()[&turn].clone();
+    let cause = MezError::from(mez_agent::AgentContextError::new(
+        "injected local context refusal after issued effect",
+    ));
+    service
+        .fail_configured_agent_provider_task(&turn, &cause)
+        .unwrap();
+    assert!(service.provider_failure_source_for_tests(&turn).is_some());
+    let primary = service
+        .session()
+        .clients()
+        .iter()
+        .find(|client| service.session().is_attached_primary(&client.id))
+        .unwrap()
+        .id
+        .clone();
+    let stopped = service
+        .execute_agent_shell_command(&primary, "/stop")
+        .unwrap();
+    assert!(
+        stopped.contains("provider failure settlement refused"),
+        "{stopped}"
+    );
+    assert!(
+        cancellation.load(std::sync::atomic::Ordering::SeqCst),
+        "Stop must cancel owned work before refusing destructive cleanup"
+    );
+    let key = (turn.clone(), action.clone(), outcome.marker.clone());
+    assert!(
+        service
+            .complete_native_shell_action(outcome.clone())
+            .unwrap()
+    );
+    let retained = service.retained_native_outcome_for_tests(&key).unwrap();
+    assert_eq!(
+        retained, &outcome,
+        "retain the exact original output and effect evidence"
+    );
+    assert_eq!(service.agent_turn_contexts()[&turn], original);
+    assert!(!service.complete_native_shell_action(outcome).unwrap());
+    assert!(
+        service
+            .claim_native_shell_action(&turn, &action)
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(std::fs::read(&counter).unwrap(), b"x");
+    assert_eq!(
+        service.agent_turn_ledger().turn(&turn).unwrap().state,
+        mez_agent::AgentTurnState::Blocked
+    );
+    service.terminate_all_pane_processes().unwrap();
+    drop(service);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
 /// Cancellation of an outer monitor must await the real blocking producer and
 /// adopt its original result, not strand the genuine native claim or reserved
 /// completion slot. A result gate distinguishes producer retirement from async

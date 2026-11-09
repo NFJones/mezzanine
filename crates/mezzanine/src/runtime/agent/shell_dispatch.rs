@@ -238,6 +238,9 @@ impl RuntimeSessionService {
         turn_id: &str,
         action_id: &str,
     ) -> Result<Option<crate::runtime::RuntimeNativeShellDispatch>> {
+        if self.agent_provider_failure_is_refused(turn_id) {
+            return Ok(None);
+        }
         self.ensure_completion_admission_open()?;
         if self.agent_turn_is_human_paused(turn_id) {
             return Ok(None);
@@ -283,7 +286,15 @@ impl RuntimeSessionService {
             outcome.action_id.clone(),
             outcome.marker.clone(),
         );
-        if let Some(changed) = self.native_completion_duplicate(&key)? {
+        let refused = self.agent_provider_failure_is_refused(&outcome.turn_id);
+        let duplicate = self.native_completion_duplicate(&key);
+        if refused && duplicate.is_err() {
+            // The exact receipt already retains its required error and raw
+            // result. The pane refusal forbids retry; duplicate delivery must
+            // not turn that retained local failure into a service failure.
+            return Ok(false);
+        }
+        if let Some(changed) = duplicate? {
             return Ok(changed);
         }
         let identity = (outcome.turn_id.clone(), outcome.action_id.clone());
@@ -304,6 +315,15 @@ impl RuntimeSessionService {
                 self.agent.claimed_native_shell_dispatches.remove(&identity);
             }
             return Ok(false);
+        }
+        if refused {
+            // A producer may have applied effects before reporting was refused.
+            // Keep its exact issued raw result without projection or replay;
+            // Blocked ledger state is not proof that the worker never ran.
+            self.retain_native_completion(outcome)?;
+            self.agent.pending_native_shell_dispatches.remove(&identity);
+            self.agent.claimed_native_shell_dispatches.remove(&identity);
+            return Ok(true);
         }
         if !self.native_shell_action_turn_is_current(&outcome.turn_id, &outcome.action_id)
             || !self.issued_native_completion_is_current(&key)

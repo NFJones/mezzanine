@@ -2,6 +2,8 @@
 
 use super::*;
 
+mod containment;
+
 /// Builds a running turn identity for provider-failure audit tests.
 fn provider_failure_turn() -> AgentTurnRecord {
     AgentTurnRecord {
