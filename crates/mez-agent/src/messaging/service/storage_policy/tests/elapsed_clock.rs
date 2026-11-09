@@ -145,8 +145,7 @@ fn elapsed_admission_reserves_combined_source_metadata_before_sequence() {
                             4096,
                             None,
                         )
-                        .err()
-                        .expect("combined metadata must refuse before reserving an occurrence");
+                        .expect_err("combined metadata must refuse before reserving an occurrence");
                     assert_eq!(error.kind(), MessageErrorKind::Capacity);
                     assert_eq!(service.last_sequence(), sequence);
                     assert!(service.admission.is_none());

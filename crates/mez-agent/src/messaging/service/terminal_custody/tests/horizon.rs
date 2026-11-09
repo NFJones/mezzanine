@@ -128,12 +128,22 @@ fn horizon_requires_exact_positive_before_releasing_source_and_last_proof() {
             .unwrap()
             .checkpoint_bytes
             .load(Ordering::Acquire),
-        source_end_charge + charge
+        source_end_charge
+            + charge.saturating_sub(super::super::super::storage_policy::WORKER_METADATA_QUANTUM)
     );
+    let loan = scene
+        .service
+        .storage_custody
+        .as_ref()
+        .unwrap()
+        .worker_metadata_loan
+        .clone();
+    assert!(loan.load(Ordering::Acquire));
     drop(ticket);
     assert!(weak.upgrade().is_some());
     drop(commit);
     assert!(weak.upgrade().is_none());
+    assert!(!loan.load(Ordering::Acquire));
     assert_eq!(
         scene
             .service

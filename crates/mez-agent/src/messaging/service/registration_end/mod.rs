@@ -388,11 +388,8 @@ impl MessageService {
         let Some(intent) = entries.values().find(|entry| entry.ended.get().is_some()) else {
             return Ok(None);
         };
-        let lease = checkpoint::reserve_checkpoint(
-            policy.checkpoint_bytes.clone(),
+        let lease = self.reserve_storage_worker_metadata(
             MESSAGE_STORAGE_RECOVERY_SCRATCH_METADATA + 16 * 1024,
-            self.storage_metadata_base_usage()?,
-            policy.limits.metadata_bytes,
         )?;
         let snapshot = MessageRegistrationEndSnapshot {
             format_version: 1,

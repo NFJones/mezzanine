@@ -325,6 +325,15 @@ reader descriptors wait on the existing root lane; cancellation before issuance
 allocates no payload. Each reader retains its exact registration, and receives
 its batch immediately after qualified publication, before another reader can
 evict it. A batch waiting in a response channel still pins charged bytes.
+One retained source-validation worker can use a reserved metadata allowance:
+2 MiB scratch, 512 KiB source metadata and 16 KiB framing. Optional snapshots
+and persistent native/source pins cannot spend it. The final actual worker or
+attempt owner returns that allowance, not observer cancellation, a released root
+lane or a published result. Concurrent workers and any excess must fit ordinary
+metadata space. Separate ACK and reader allowances remain reserved; inventory,
+recovery indexes and registration-end intents remain independently charged.
+This reduces admission space within the same 8 MiB ceiling rather than enlarging
+it, and does not grant I/O authority or enable durable mode by default.
 Stored cumulative ACKs use the original adoption-bound source digest, so an ACK
 can settle cold sources without loading an entire prefix.
 

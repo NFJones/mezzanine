@@ -229,12 +229,8 @@ impl MessageService {
             recipient_count: 4096,
             recipient_bytes: 1024 * 1024,
         };
-        let metadata = checkpoint::reserve_checkpoint(
-            policy.checkpoint_bytes.clone(),
-            MESSAGE_STORAGE_RECOVERY_SCRATCH_METADATA,
-            self.storage_metadata_base_usage()?,
-            policy.limits.metadata_bytes,
-        )?;
+        let metadata =
+            self.reserve_storage_worker_metadata(MESSAGE_STORAGE_RECOVERY_SCRATCH_METADATA)?;
         Ok(MessageTerminalHandoffIo {
             source: source.clone(),
             _metadata: Arc::new(metadata),

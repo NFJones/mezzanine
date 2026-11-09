@@ -714,7 +714,7 @@ fn cold_reconstruction_metadata_preflight_honors_narrowed_destination() {
     let checkpoint = scene.capture(&mut store, &fence);
     drop(scene);
     let limits = mez_agent::messaging::MessageStorageLimits {
-        metadata_bytes: 3 * 1024 * 1024,
+        metadata_bytes: 4 * 1024 * 1024,
         ..Default::default()
     };
     let (service, _input_lease) = fence

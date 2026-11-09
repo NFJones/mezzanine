@@ -187,7 +187,7 @@ fn native_restore_respects_destination_metadata_budget() {
     let mut port = native(&"n".repeat(64 * 1024));
     let original = port.snapshot.clone();
     let limits = MessageStorageLimits {
-        metadata_bytes: 3 * 1024 * 1024,
+        metadata_bytes: super::super::storage_policy::WORKER_HEADROOM + 512 * 1024,
         ..Default::default()
     };
     assert!(

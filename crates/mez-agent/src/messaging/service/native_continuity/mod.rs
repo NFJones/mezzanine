@@ -158,19 +158,14 @@ impl MessageService {
             .filter(|b| self.sender_registration_is_current(b.registration()))
             .ok_or_else(changed)?;
         let identity = self.registered.get(id).ok_or_else(changed)?;
-        let policy = self.storage_custody.as_ref().ok_or_else(changed)?;
         let charge = checkpoint::identity_charge(identity)
             // Previous n1 decode, fixed lifetime images, current encoding and
             // exact batch reconciliation remain charged through actual join.
             .saturating_add(super::recovery::MESSAGE_STORAGE_RECOVERY_SCRATCH_METADATA)
             .saturating_add(16 * 1024)
             .saturating_add(id.as_str().len().saturating_mul(8));
-        let lease = checkpoint::reserve_checkpoint(
-            policy.checkpoint_bytes.clone(),
-            charge,
-            self.storage_metadata_base_usage()?,
-            policy.limits.metadata_bytes,
-        )?;
+        let lease = self.reserve_storage_worker_metadata(charge)?;
+        let policy = self.storage_custody.as_ref().ok_or_else(changed)?;
         let native = binding.continuity_checkpoint();
         let mut identity = identity_snapshot(identity);
         identity.objective = None;

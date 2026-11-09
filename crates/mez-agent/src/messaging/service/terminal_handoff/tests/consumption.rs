@@ -174,7 +174,16 @@ fn canonical_sender_consumption_unknown_keeps_original_proof_and_decoder() {
         .service
         .prepare_storage_sender_consumption(&scene.scope, &proof, usize::MAX)
         .unwrap();
-    let charge = ticket.metadata_bytes();
+    let charge = ticket
+        .metadata_bytes()
+        .saturating_sub(super::super::super::storage_policy::WORKER_METADATA_QUANTUM);
+    let loan = scene
+        .service
+        .storage_custody
+        .as_ref()
+        .unwrap()
+        .worker_metadata_loan
+        .clone();
     let write = scene
         .service
         .begin_storage_terminal_write(&ticket, &scene.scope)
@@ -189,9 +198,11 @@ fn canonical_sender_consumption_unknown_keeps_original_proof_and_decoder() {
     let observer = scene.service.payload_observer().unwrap();
     assert_eq!(observer.snapshot().unwrap().reserved_payload_bytes, 0);
     assert!(metadata.load(Ordering::Acquire) >= before + charge);
+    assert!(loan.load(Ordering::Acquire));
     let retry = scene.service.retry_terminal_write(uncertain).unwrap();
     assert!(retry.canonical_handoff().is_some());
     assert!(metadata.load(Ordering::Acquire) >= before + charge);
+    assert!(loan.load(Ordering::Acquire));
     let mut repeated = Vec::new();
     retry.write_record(&mut repeated).unwrap();
     assert_eq!(first, repeated);

@@ -188,10 +188,23 @@ fn native_capture_lease_survives_an_unjoined_worker_copy() {
     let verified = request.write().persist(&mut Store).unwrap();
     assert!(request.finish(&mut service, verified).is_err());
     assert!(
-        service.storage_usage().unwrap().unwrap().metadata_bytes
-            >= before + super::super::recovery::MESSAGE_STORAGE_RECOVERY_SCRATCH_METADATA
+        service
+            .storage_custody
+            .as_ref()
+            .unwrap()
+            .worker_metadata_loan
+            .load(std::sync::atomic::Ordering::Acquire)
     );
+    assert!(service.storage_usage().unwrap().unwrap().metadata_bytes >= before);
     drop(extra);
+    assert!(
+        !service
+            .storage_custody
+            .as_ref()
+            .unwrap()
+            .worker_metadata_loan
+            .load(std::sync::atomic::Ordering::Acquire)
+    );
     assert_eq!(
         service.storage_usage().unwrap().unwrap().metadata_bytes,
         before

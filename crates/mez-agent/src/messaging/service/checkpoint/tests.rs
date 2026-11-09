@@ -298,6 +298,45 @@ fn checkpoint_metadata_reservation_survives_worker_and_publication_ownership() {
     assert!(reserve_checkpoint(budget, 100, 50, 150).is_ok());
 }
 
+/// The reserved quantum is allocation custody, not free space for competitors.
+/// Excess must fit atomically, failed acquisition must return the loan, and the
+/// final actual lease owner alone releases both excess and reserved custody.
+#[test]
+fn worker_metadata_loan_bounds_excess_and_last_owner() {
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+    let quantum = super::super::storage_policy::WORKER_METADATA_QUANTUM;
+    let budget = Arc::new(AtomicUsize::new(0));
+    let loan = Arc::new(AtomicBool::new(false));
+    let base = quantum + 100;
+    let limit = base + 20;
+    assert!(
+        reserve_worker_metadata(budget.clone(), loan.clone(), quantum + 21, base, limit).is_err()
+    );
+    assert!(!loan.load(Ordering::Acquire));
+    assert_eq!(budget.load(Ordering::Acquire), 0);
+    let lease = Arc::new(
+        reserve_worker_metadata(budget.clone(), loan.clone(), quantum + 20, base, limit).unwrap(),
+    );
+    assert!(loan.load(Ordering::Acquire));
+    assert_eq!(budget.load(Ordering::Acquire), 20);
+    assert!(reserve_checkpoint(budget.clone(), 1, base, limit).is_err());
+    assert!(reserve_worker_metadata(budget.clone(), loan.clone(), 1, base, limit).is_err());
+    let last = lease.clone();
+    drop(lease);
+    assert!(loan.load(Ordering::Acquire));
+    drop(last);
+    assert!(!loan.load(Ordering::Acquire));
+    assert_eq!(budget.load(Ordering::Acquire), 0);
+
+    let lease = reserve_worker_metadata(budget.clone(), loan.clone(), quantum, base, base).unwrap();
+    assert_eq!(budget.load(Ordering::Acquire), 0);
+    assert!(reserve_worker_metadata(budget.clone(), loan.clone(), 1, base, base).is_err());
+    drop(lease);
+    assert!(!loan.load(Ordering::Acquire));
+    assert!(reserve_worker_metadata(budget, loan, quantum, base, base).is_ok());
+}
+
 /// A genuine post-TTL duplicate lookup updates the retained acceptance receipt,
 /// not the immutable original. Capture must preserve that legitimate expired
 /// status even after its payload becomes cold; it must not reject historical mail

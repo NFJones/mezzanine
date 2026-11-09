@@ -184,10 +184,26 @@ fn registration_end_metadata_survives_last_live_owner_and_unjoined_worker() {
     let verified = request.write().persist(&mut Store).unwrap();
     assert!(request.finish(&mut service, verified).is_err());
     assert!(
-        service.storage_usage().unwrap().unwrap().metadata_bytes
-            >= baseline + MESSAGE_STORAGE_RECOVERY_SCRATCH_METADATA
+        service
+            .storage_custody
+            .as_ref()
+            .unwrap()
+            .worker_metadata_loan
+            .load(Ordering::Acquire)
+    );
+    assert_eq!(
+        service.storage_usage().unwrap().unwrap().metadata_bytes,
+        baseline
     );
     drop(extra);
+    assert!(
+        !service
+            .storage_custody
+            .as_ref()
+            .unwrap()
+            .worker_metadata_loan
+            .load(Ordering::Acquire)
+    );
     assert_eq!(
         service.storage_usage().unwrap().unwrap().metadata_bytes,
         baseline

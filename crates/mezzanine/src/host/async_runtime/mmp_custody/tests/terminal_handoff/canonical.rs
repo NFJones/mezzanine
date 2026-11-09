@@ -20,14 +20,15 @@ async fn terminal_handoff_root_journals_original_fact_without_consuming_outcome(
         .metadata_bytes;
     scene.start();
     assert_eq!(observer.snapshot().unwrap().reserved_payload_bytes, 0);
-    assert!(
+    assert_eq!(
         scene
             .service
             .storage_usage()
             .unwrap()
             .unwrap()
-            .metadata_bytes
-            >= before_metadata + mez_agent::messaging::MESSAGE_STORAGE_RECOVERY_SCRATCH_METADATA
+            .metadata_bytes,
+        before_metadata,
+        "the first worker uses the already charged scratch reserve"
     );
     assert_eq!(
         scene.root.observe().await.unwrap(),
@@ -186,7 +187,8 @@ async fn terminal_handoff_root_absence_is_not_fresh_projection_authority() {
 }
 
 /// An unrelated accepted delivery pins the entire one-MiB cache while the old
-/// original is cold. Actual canonical handoff and its
+/// original is cold and optional snapshots exhaust ordinary metadata space.
+/// Actual canonical handoff and its
 /// separate consumed transaction must still settle that old terminal source,
 /// retaining the pin and publishing exactly one neutral sender fact.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -229,6 +231,14 @@ async fn canonical_handoff_and_consumption_progress_with_entire_cache_pinned() {
     assert_eq!(pinned.live_payload_bytes, 1024 * 1024);
     assert_eq!(pinned.reserved_payload_bytes, 0);
     let before = Scene::phases(&fixture);
+    let captures =
+        actor::hold_snapshot_metadata_until_capacity(&scene.service, scene.root.storage_scope());
+    let pressured = scene
+        .service
+        .storage_usage()
+        .unwrap()
+        .unwrap()
+        .metadata_bytes;
     scene.start();
     assert_eq!(
         scene.root.observe().await.unwrap(),
@@ -242,6 +252,15 @@ async fn canonical_handoff_and_consumption_progress_with_entire_cache_pinned() {
     assert!(proof.record().archive_observed);
     assert_eq!(Scene::phases(&fixture), (0, 1, before.2 + 2));
     assert_eq!(observer.snapshot().unwrap(), pinned);
+    assert_eq!(
+        scene
+            .service
+            .storage_usage()
+            .unwrap()
+            .unwrap()
+            .metadata_bytes,
+        pressured
+    );
     let ticket = scene
         .service
         .prepare_storage_sender_consumption(scene.root.storage_scope(), &proof, usize::MAX)
@@ -274,4 +293,14 @@ async fn canonical_handoff_and_consumption_progress_with_entire_cache_pinned() {
     assert_eq!(observer.snapshot().unwrap(), pinned);
     assert_eq!(delivery.messages[0].envelope.payload.len(), 1024 * 1024);
     assert_eq!(scene.transcript.inspect("native-sender").unwrap().len(), 2);
+    assert!(
+        scene
+            .service
+            .storage_usage()
+            .unwrap()
+            .unwrap()
+            .metadata_bytes
+            <= 8 * 1024 * 1024
+    );
+    drop(captures);
 }

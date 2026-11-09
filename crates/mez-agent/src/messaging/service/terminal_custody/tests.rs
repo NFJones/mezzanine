@@ -157,6 +157,124 @@ impl Scene {
     }
 }
 
+/// Optional snapshots cannot consume the settlement worker's reserved quantum.
+/// Actual expiry must still issue at the capture cap, with its original loan
+/// retained through cancellation, ambiguous I/O and the final attempt owner.
+#[test]
+fn expiry_uses_reserved_metadata_at_optional_capture_capacity() {
+    let mut scene = Scene::new(true, false);
+    scene.direct();
+    let mut captures = Vec::new();
+    loop {
+        match scene.service.prepare_storage_snapshot(&scene.scope) {
+            Ok(capture) => captures.push(capture),
+            Err(error) => {
+                assert_eq!(error.kind(), MessageErrorKind::Capacity);
+                break;
+            }
+        }
+        assert!(
+            captures.len() < 256,
+            "optional capture work must be bounded"
+        );
+    }
+    assert!(!captures.is_empty());
+    let before = scene
+        .service
+        .storage_usage()
+        .unwrap()
+        .unwrap()
+        .metadata_bytes;
+    assert!(before <= 8 * 1024 * 1024);
+    // Retain the final fractional capture allowance as well: this tests exact
+    // ceiling progress, not merely a gap smaller than the next snapshot.
+    let policy = scene.service.storage_custody.as_ref().unwrap();
+    let tail = checkpoint::reserve_checkpoint(
+        policy.checkpoint_bytes.clone(),
+        policy.limits.metadata_bytes - before,
+        scene.service.storage_metadata_base_usage().unwrap(),
+        policy.limits.metadata_bytes,
+    )
+    .unwrap();
+    assert_eq!(
+        scene
+            .service
+            .storage_usage()
+            .unwrap()
+            .unwrap()
+            .metadata_bytes,
+        8 * 1024 * 1024
+    );
+    let ticket = scene.reserve();
+    scene.service.cancel_storage_terminal(&ticket).unwrap();
+    assert!(
+        scene
+            .service
+            .prepare_storage_expiry(&scene.scope, 16, usize::MAX)
+            .is_err()
+    );
+    drop(ticket);
+    let ticket = scene.reserve();
+    let write = scene.write(&ticket);
+    let escrow = write.attempt();
+    let mut store = Store {
+        fail: true,
+        ..Default::default()
+    };
+    let MessageTerminalWriteOutcome::Unknown(unknown) = write.persist(&mut store) else {
+        panic!("original uncertainty must retain its metadata loan");
+    };
+    assert!(scene.service.cancel_storage_terminal(&ticket).is_err());
+    // A failed original store does not consume another root's worker quantum.
+    let mut sibling = Scene::new(true, false);
+    sibling.direct();
+    let sibling_ticket = sibling.reserve();
+    let MessageTerminalWriteOutcome::Committed(sibling_commit) = sibling
+        .write(&sibling_ticket)
+        .persist(&mut Store::default())
+    else {
+        panic!("unaffected root must continue settling");
+    };
+    sibling.service.publish_terminal(&sibling_commit).unwrap();
+    let write = scene.service.retry_terminal_write(unknown).unwrap();
+    store.fail = false;
+    let MessageTerminalWriteOutcome::Committed(commit) = write.persist(&mut store) else {
+        panic!("original expiry must commit at optional capture capacity");
+    };
+    scene.service.publish_terminal(&commit).unwrap();
+    drop(ticket);
+    drop(commit);
+    let loan = scene
+        .service
+        .storage_custody
+        .as_ref()
+        .unwrap()
+        .worker_metadata_loan
+        .clone();
+    assert!(loan.load(Ordering::Acquire));
+    assert!(
+        scene
+            .service
+            .storage_usage()
+            .unwrap()
+            .unwrap()
+            .metadata_bytes
+            <= 8 * 1024 * 1024
+    );
+    drop(escrow);
+    drop(captures);
+    drop(tail);
+    assert!(!loan.load(Ordering::Acquire));
+    assert_eq!(
+        scene
+            .service
+            .delivery_outcomes_for(&scene.sender.agent_id, 10)
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
 /// Selection and trusted store success remain distinct from actor adoption.
 /// Rollback cannot reoffer a reserved slot, and only adoption exposes the first
 /// outcome. Guarded volatile consumption/aging cannot erase the durable owner.
@@ -180,14 +298,23 @@ fn expiry_original_requires_store_positive_and_exact_adoption() {
         .metadata_bytes;
     let ticket = scene.reserve();
     assert!(ticket.metadata_bytes() > 4096);
-    assert!(
+    assert_eq!(
         scene
             .service
             .storage_usage()
             .unwrap()
             .unwrap()
-            .metadata_bytes
-            > before
+            .metadata_bytes,
+        before
+    );
+    assert!(
+        scene
+            .service
+            .storage_custody
+            .as_ref()
+            .unwrap()
+            .worker_metadata_loan
+            .load(Ordering::Acquire)
     );
     assert!(scene.service.has_unpublished_terminal());
     assert!(scene.service.snapshot_state().is_err());
@@ -707,6 +834,13 @@ fn expiry_streaming_validation_preserves_external_pin_and_metadata_escrow() {
     let write = scene.write(&ticket);
     let escrow = write.attempt();
     assert_eq!(observer.snapshot().unwrap(), pinned);
+    let loan = scene
+        .service
+        .storage_custody
+        .as_ref()
+        .unwrap()
+        .worker_metadata_loan
+        .clone();
     assert!(scene.service.cancel_storage_terminal(&ticket).is_err());
     let MessageTerminalWriteOutcome::Committed(commit) = write.persist(&mut Store::default())
     else {
@@ -723,9 +857,11 @@ fn expiry_streaming_validation_preserves_external_pin_and_metadata_escrow() {
             .unwrap()
             .unwrap()
             .metadata_bytes
-            >= baseline + charge
+            >= baseline
+                + charge.saturating_sub(super::super::storage_policy::WORKER_METADATA_QUANTUM)
     );
     drop(escrow);
+    assert!(!loan.load(Ordering::Acquire));
     assert_eq!(
         scene
             .service

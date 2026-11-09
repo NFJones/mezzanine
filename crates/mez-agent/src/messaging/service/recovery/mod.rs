@@ -78,12 +78,8 @@ impl MessageService {
         let mut service = Self::with_limits(retention_messages, retention_bytes);
         service.enable_storage_custody(scope, limits)?;
         let policy = service.storage_custody.as_ref().ok_or_else(unavailable)?;
-        let scratch = checkpoint::reserve_checkpoint(
-            policy.checkpoint_bytes.clone(),
-            MESSAGE_STORAGE_RECOVERY_SCRATCH_METADATA,
-            service.storage_metadata_base_usage()?,
-            policy.limits.metadata_bytes,
-        )?;
+        let scratch =
+            service.reserve_storage_worker_metadata(MESSAGE_STORAGE_RECOVERY_SCRATCH_METADATA)?;
         let payload = policy
             .cache
             .reserve(0, policy.limits.cache_payload_bytes, 0)?;

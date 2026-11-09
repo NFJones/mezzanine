@@ -466,7 +466,18 @@ fn terminal_handoff_io_keeps_decoder_and_scratch_through_last_worker_owner() {
         .unwrap()
         .checkpoint_bytes
         .load(Ordering::Acquire);
-    assert!(charged >= before + MESSAGE_STORAGE_RECOVERY_SCRATCH_METADATA);
+    let loan = scene
+        .service
+        .storage_custody
+        .as_ref()
+        .unwrap()
+        .worker_metadata_loan
+        .clone();
+    assert!(loan.load(Ordering::Acquire));
+    assert_eq!(
+        charged, before,
+        "the first scratch owner borrows the charged reserve"
+    );
     assert_eq!(observer.snapshot().unwrap().reserved_payload_bytes, 0);
     let mut competitors = Vec::new();
     let mut refused = false;
@@ -503,6 +514,7 @@ fn terminal_handoff_io_keeps_decoder_and_scratch_through_last_worker_owner() {
     );
     let retained = io.clone();
     drop(io);
+    assert!(loan.load(Ordering::Acquire));
     assert_eq!(observer.snapshot().unwrap().reserved_payload_bytes, 0);
     let mut foreign = Scene::new(true, true);
     assert!(
@@ -512,6 +524,7 @@ fn terminal_handoff_io_keeps_decoder_and_scratch_through_last_worker_owner() {
             .is_err()
     );
     drop(retained);
+    assert!(!loan.load(Ordering::Acquire));
     assert_eq!(observer.snapshot().unwrap().reserved_payload_bytes, 0);
     assert_eq!(
         scene

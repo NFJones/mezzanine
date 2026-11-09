@@ -77,12 +77,8 @@ impl MessageService {
         self.native_recovery_available = false;
         self.require_native_continuity(scope)?;
         let policy = self.storage_custody.as_ref().ok_or_else(unavailable)?;
-        let scratch = checkpoint::reserve_checkpoint(
-            policy.checkpoint_bytes.clone(),
-            MESSAGE_STORAGE_RECOVERY_SCRATCH_METADATA,
-            self.storage_metadata_base_usage()?,
-            policy.limits.metadata_bytes,
-        )?;
+        let scratch =
+            self.reserve_storage_worker_metadata(MESSAGE_STORAGE_RECOVERY_SCRATCH_METADATA)?;
         let payload = policy
             .cache
             .reserve(0, policy.limits.cache_payload_bytes, 0)?;

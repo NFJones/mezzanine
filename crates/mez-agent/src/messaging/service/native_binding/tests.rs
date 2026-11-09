@@ -887,7 +887,7 @@ fn native_audience_metadata_refuses_before_sequence_or_cache_allocation() {
         .enable_storage_custody(
             &scope,
             MessageStorageLimits {
-                metadata_bytes: 1024 * 1024,
+                metadata_bytes: super::super::storage_policy::WORKER_HEADROOM + 448 * 1024,
                 ..Default::default()
             },
         )
@@ -936,7 +936,10 @@ fn native_audience_metadata_refuses_before_sequence_or_cache_allocation() {
         service.payload_observer().unwrap().snapshot().unwrap(),
         MessagePayloadUsage::default()
     );
-    assert!(service.storage_usage().unwrap().unwrap().metadata_bytes <= 1024 * 1024);
+    assert!(
+        service.storage_usage().unwrap().unwrap().metadata_bytes
+            <= super::super::storage_policy::WORKER_HEADROOM + 448 * 1024
+    );
 }
 
 /// Stored idempotency belongs to the original native application incarnation,

@@ -46,15 +46,31 @@ async fn terminal_handoff_root_observer_cancellation_retains_actual_worker_and_s
             .reserved_payload_bytes,
         0
     );
-    assert!(
+    assert_eq!(
         scene
             .service
             .storage_usage()
             .unwrap()
             .unwrap()
-            .metadata_bytes
-            >= before_metadata + mez_agent::messaging::MESSAGE_STORAGE_RECOVERY_SCRATCH_METADATA
+            .metadata_bytes,
+        before_metadata
     );
+    // A competing actual capture must pay its full scratch charge: cancelling
+    // the observer did not return the first worker's reserved quantum.
+    let competitor = scene
+        .service
+        .reserve_terminal_handoff_io(&scene.source)
+        .unwrap();
+    assert_eq!(
+        scene
+            .service
+            .storage_usage()
+            .unwrap()
+            .unwrap()
+            .metadata_bytes,
+        before_metadata + mez_agent::messaging::MESSAGE_STORAGE_RECOVERY_SCRATCH_METADATA
+    );
+    drop(competitor);
     assert!(
         scene
             .service
@@ -157,16 +173,29 @@ async fn terminal_handoff_root_stage_failure_keeps_first_plan_and_decoder_owner(
         };
         assert_eq!(Scene::phases(&fixture), before);
         assert_eq!(observer.snapshot().unwrap().reserved_payload_bytes, 0);
-        assert!(
+        assert_eq!(
             scene
                 .service
                 .storage_usage()
                 .unwrap()
                 .unwrap()
-                .metadata_bytes
-                >= before_metadata
-                    + mez_agent::messaging::MESSAGE_STORAGE_RECOVERY_SCRATCH_METADATA
+                .metadata_bytes,
+            before_metadata
         );
+        let competitor = scene
+            .service
+            .reserve_terminal_handoff_io(&scene.source)
+            .unwrap();
+        assert_eq!(
+            scene
+                .service
+                .storage_usage()
+                .unwrap()
+                .unwrap()
+                .metadata_bytes,
+            before_metadata + mez_agent::messaging::MESSAGE_STORAGE_RECOVERY_SCRATCH_METADATA
+        );
+        drop(competitor);
         assert!(scene.root.retry_terminal_handoff(due).unwrap());
         assert_eq!(
             scene.root.observe().await.unwrap(),

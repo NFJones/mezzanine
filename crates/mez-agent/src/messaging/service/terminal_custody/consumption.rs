@@ -47,12 +47,7 @@ impl MessageService {
         if bytes > metadata_budget.min(MAX_METADATA) {
             return Err(capacity());
         }
-        let lease = super::super::checkpoint::reserve_checkpoint(
-            policy.checkpoint_bytes.clone(),
-            bytes,
-            self.storage_metadata_base_usage()?,
-            policy.limits.metadata_bytes,
-        )?;
+        let lease = self.reserve_storage_worker_metadata(bytes)?;
         let identity = Arc::new(Identity {
             owner: self.acceptance_runtime.clone(),
             scope: scope.clone(),

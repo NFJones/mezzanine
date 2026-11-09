@@ -13,8 +13,14 @@ mod clock;
 pub(in crate::messaging) use clock::CLOCK_METADATA_BYTES;
 pub use clock::MessageStorageClock;
 
-/// Always reserve the existing maximum ACK metadata/encoding quantum.
-const WORKER_HEADROOM: usize = 512 * 1024 + MESSAGE_PAYLOAD_DEMAND_BYTES;
+/// One source-validation worker: bounded scratch, a guarded original's maximum
+/// metadata, and framing. Extra worker captures must fund their own full charge.
+pub(super) const WORKER_METADATA_QUANTUM: usize =
+    MESSAGE_STORAGE_RECOVERY_SCRATCH_METADATA + 512 * 1024 + 16 * 1024;
+/// Keep ACK encoding and queued reader continuations independently reserved;
+/// borrowing the worker quantum never consumes either of these allowances.
+pub(super) const WORKER_HEADROOM: usize =
+    WORKER_METADATA_QUANTUM + 512 * 1024 + MESSAGE_PAYLOAD_DEMAND_BYTES;
 /// Bounded actor-owned cold-read continuation metadata, including IDs/overhead.
 pub const MESSAGE_PAYLOAD_DEMAND_BYTES: usize = 64 * 1024;
 /// Maximum deferred reader continuations on one serialized root.
@@ -113,6 +119,9 @@ pub(in crate::messaging) struct StorageCustody {
     /// Captured checkpoint metadata and its serialization copies stay charged
     /// through actual snapshot publication, even after the root lane is released.
     pub(super) checkpoint_bytes: Arc<std::sync::atomic::AtomicUsize>,
+    /// Exactly one retained worker may borrow the already charged quantum.
+    /// This is allocation custody only, never permission to issue physical I/O.
+    pub(super) worker_metadata_loan: Arc<std::sync::atomic::AtomicBool>,
     /// Trusted product admission barrier; never selected by saved/wire data.
     pub(super) native_continuity_required: bool,
     /// Actual original-root elapsed clock, never installed by saved bytes.
@@ -219,6 +228,7 @@ impl MessageService {
         }
         self.storage_custody = Some(StorageCustody {
             checkpoint_bytes: Arc::default(),
+            worker_metadata_loan: Arc::default(),
             native_continuity_required: false,
             elapsed_clock: None,
             decoded_clock: None,
@@ -294,6 +304,25 @@ impl MessageService {
                 .load(std::sync::atomic::Ordering::Acquire)
         });
         Ok(self.storage_metadata_base_usage()?.saturating_add(captured))
+    }
+
+    /// Loans already-reserved worker bytes to one actual retained capture. Its
+    /// lease owns the loan through cancellation, lost results and final escrow
+    /// drop; additional captures reserve their full charge from ordinary space.
+    pub(super) fn reserve_storage_worker_metadata(
+        &self,
+        bytes: usize,
+    ) -> Result<MessageStorageSnapshotLease> {
+        let policy = self.storage_custody.as_ref().ok_or_else(|| {
+            MessageError::invalid_state("MMP worker metadata requires storage custody")
+        })?;
+        checkpoint::reserve_worker_metadata(
+            policy.checkpoint_bytes.clone(),
+            policy.worker_metadata_loan.clone(),
+            bytes,
+            self.storage_metadata_base_usage()?,
+            policy.limits.metadata_bytes,
+        )
     }
 
     /// Reserves a canonical allocation, evicting only original-root backed

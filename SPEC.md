@@ -17167,6 +17167,19 @@ Canonical payload allocations and decoder reservations MUST still share at most
 results MUST remain charged even after cache release or canonical row removal;
 only actual joined recovery may retire an uncertain read reservation. Metadata
 MUST reserve worker, allocation-index and bounded reader-continuation headroom.
+One source-validation worker MUST be able to borrow an already charged metadata
+quantum of 2 MiB decoder scratch, 512 KiB original-source metadata and 16 KiB
+framing. This quantum MUST remain unavailable to optional checkpoint captures
+and persistent source/native-proof pins. A second retained worker MUST fund its
+full charge from ordinary metadata space; any excess above the borrowed quantum
+MUST also fit that space before capture. The actual last capture/attempt owner
+MUST return the loan, including after cancellation, uncertain writes or lost
+results. Returning a root lane or publishing a result alone MUST NOT release it.
+The quantum, separate 512 KiB ACK allowance, 64 KiB reader allowance, cache index,
+live sources and all other retained allocations MUST still fit the same 8 MiB
+ceiling; reserving usable worker headroom reduces ordinary admission capacity,
+not raises the ceiling. Recovery inventory/fold indexes and registration-end
+intents remain independently charged; a scratch loan grants no I/O authority.
 Admission MUST check the combined native attribution, registration namespaces,
 elapsed-clock metadata and any newly required source-only end intents against
 that same metadata ceiling before copying source bindings or reserving its

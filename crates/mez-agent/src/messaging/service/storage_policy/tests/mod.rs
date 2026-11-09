@@ -366,7 +366,7 @@ fn cold_offered_source_ack_requires_original_root_fingerprint() {
 #[test]
 fn external_header_after_row_retirement_remains_in_metadata_budget() {
     let mut policy = limits();
-    policy.metadata_bytes = 1024 * 1024;
+    policy.metadata_bytes = WORKER_HEADROOM + 448 * 1024;
     let (mut service, scope, sender, target, mut store) = fixture(policy);
     let mut original = mail(&sender, &target, "first", 0);
     original.time = "t".repeat(70_000);
@@ -494,7 +494,7 @@ fn storage_mode_rejects_invalid_policy_and_memory_or_foreign_issuance() {
 #[test]
 fn unfinished_read_keeps_orphan_recipient_metadata_charged() {
     let mut policy = limits();
-    policy.metadata_bytes = 768 * 1024;
+    policy.metadata_bytes = WORKER_HEADROOM + 192 * 1024;
     policy.recipient_obligations = 2000;
     let (mut service, scope, sender, target, mut store) = fixture(policy);
     for _ in 0..600 {

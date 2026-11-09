@@ -546,6 +546,8 @@ mod tests;
 pub struct MessageStorageSnapshotLease {
     budget: Arc<std::sync::atomic::AtomicUsize>,
     bytes: usize,
+    /// Released only after this lease's charged excess has been returned.
+    _worker_loan: Option<WorkerMetadataLoan>,
 }
 impl Drop for MessageStorageSnapshotLease {
     /// Releases only this capture's reservation after its last actual owner exits.
@@ -571,10 +573,53 @@ pub(super) fn reserve_checkpoint(
             .filter(|n| base.saturating_add(*n) <= limit)
             .ok_or_else(capacity)?;
         match budget.compare_exchange_weak(held, next, Ordering::AcqRel, Ordering::Acquire) {
-            Ok(_) => return Ok(MessageStorageSnapshotLease { budget, bytes }),
+            Ok(_) => {
+                return Ok(MessageStorageSnapshotLease {
+                    budget,
+                    bytes,
+                    _worker_loan: None,
+                });
+            }
             Err(current) => held = current,
         }
     }
+}
+
+/// The actual last lease owner, not a root handle or a completed observer,
+/// returns the fixed worker quantum. No payload, source or I/O authority lives
+/// here; ordinary capture reservations cannot obtain this token.
+struct WorkerMetadataLoan(Arc<std::sync::atomic::AtomicBool>);
+
+impl Drop for WorkerMetadataLoan {
+    fn drop(&mut self) {
+        self.0.store(false, std::sync::atomic::Ordering::Release);
+    }
+}
+
+/// Transfers at most one already charged worker quantum without double counting
+/// it. The shared atomic counter still serializes all ordinary/excess admission.
+/// If another real capture owns the loan, this capture must fund its full cost.
+/// Failure drops a newly acquired loan; a successful lease retains it exactly
+/// as long as its source/attempt/capture owner, including unknown completion.
+pub(super) fn reserve_worker_metadata(
+    budget: Arc<std::sync::atomic::AtomicUsize>,
+    loan: Arc<std::sync::atomic::AtomicBool>,
+    bytes: usize,
+    base: usize,
+    limit: usize,
+) -> Result<MessageStorageSnapshotLease> {
+    use std::sync::atomic::Ordering;
+    if loan
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        return reserve_checkpoint(budget, bytes, base, limit);
+    }
+    let loan = WorkerMetadataLoan(loan);
+    let excess = bytes.saturating_sub(super::storage_policy::WORKER_METADATA_QUANTUM);
+    let mut lease = reserve_checkpoint(budget, excess, base, limit)?;
+    lease._worker_loan = Some(loan);
+    Ok(lease)
 }
 
 /// Duplicate lookup may retain an expired receipt without retiring its original.

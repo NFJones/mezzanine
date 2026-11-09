@@ -14,9 +14,9 @@ use crate::runtime::{PersistenceEvent, RuntimeSideEffect};
 use mez_agent::{ActionStatus, AgentTurnRecord};
 
 /// Retains actual immutable captures to force pre-issuance metadata pressure.
-/// The two scheduling controls release these genuine owners at their retry
-/// boundary; no counter is manufactured and the shared ceiling is unchanged.
-fn hold_snapshot_metadata_until_capacity(
+/// Scheduling and settlement controls retain these genuine owners without
+/// manufacturing a counter or changing the shared ceiling.
+pub(super) fn hold_snapshot_metadata_until_capacity(
     service: &MessageService,
     scope: &mez_agent::messaging::MessageStorageScope,
 ) -> Vec<mez_agent::messaging::MessageStorageSnapshotRequest> {
@@ -1097,6 +1097,14 @@ async fn actor_sender_handoff_own_preissue_backoff_keeps_its_deadline_wakeable()
         .message_service()
         .capture_terminal_handoff_lookup(outcome.sequence, 0)
         .unwrap();
+    // Optional snapshots cannot steal the reserved worker. Retain one actual
+    // decoder owner too so this regression still exercises genuine preissue
+    // refusal and its own deadline rather than requiring the old double charge.
+    let io = actor
+        .service
+        .message_service_mut()
+        .reserve_terminal_handoff_io(&held_source)
+        .unwrap();
     let captures = hold_snapshot_metadata_until_capacity(
         actor.service.message_service(),
         root.storage_scope(),
@@ -1111,6 +1119,7 @@ async fn actor_sender_handoff_own_preissue_backoff_keeps_its_deadline_wakeable()
         "the current work's own due preissue retry must remain wakeable"
     );
     drop(captures);
+    drop(io);
     drop(held_source);
     actor.poll_message_custody_for_tests();
     assert_eq!(
