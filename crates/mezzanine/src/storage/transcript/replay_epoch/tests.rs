@@ -1263,6 +1263,8 @@ fn original_checkpoint_format(mut envelope: Envelope) -> Envelope {
             .as_object_mut()
             .unwrap()
             .remove("retired_mcp_retrievals");
+        // Original v1 cannot claim the handled-source facts introduced in v4.
+        value.as_object_mut().unwrap().remove("compaction_reentry");
         *checkpoint = serde_json::from_value(value.clone()).unwrap();
         assert_eq!(serde_json::to_value(&*checkpoint).unwrap(), value);
     }

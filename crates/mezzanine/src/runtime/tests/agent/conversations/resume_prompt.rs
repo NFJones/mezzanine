@@ -627,7 +627,8 @@ fn runtime_resumed_compacted_archive_fork_keeps_actual_high_water() {
 /// A fitting retention budget must force only uncovered closed work into the
 /// model task. The old archive count incorrectly starts again at row one,
 /// behind the already committed row-two epoch. No provider call is needed to
-/// inspect the frozen selected boundary and raw source handed to the task.
+/// inspect the frozen canonical model source. The queued request is only a
+/// template until the common off-actor operation packs its selected source.
 #[test]
 fn runtime_resumed_compacted_archive_manual_selection_stays_after_prefix() {
     let root = temp_root("runtime-resumed-compacted-manual-count");
@@ -685,7 +686,7 @@ fn runtime_resumed_compacted_archive_manual_selection_stays_after_prefix() {
         .pending_agent_compaction_task_for_tests("%1")
         .unwrap_or_else(|| panic!("manual compaction must queue uncovered work: {settled}"));
     assert!(task.replay_source.is_some());
-    let source = &task.request.messages.last().unwrap().content;
+    let source = crate::test_support::compaction_source::rendered_source(task).unwrap();
     assert!(source.contains("PRIOR_PREFIX") && source.contains("row-3"));
     assert!(
         !source.contains("row-1") && !source.contains("row-2"),
