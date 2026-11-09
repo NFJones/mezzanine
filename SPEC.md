@@ -11114,6 +11114,13 @@ reservations; migration MUST reject conflicting anchors rather than silently
 renumber original typed source. A retained task root MUST keep its original
 task-start dependency and producer provenance. Covered dependencies MUST remain
 immutable audit backing, never additional model membership or execution rights.
+Initial raw-history bootstrap MUST likewise assign unnumbered historical slots
+around the complete checked anchor set before establishing replay ownership,
+including across recorded task boundaries. Synthetic default spacing MUST NOT
+create a false rewind. Conflicting anchors, insufficient ordered slots and
+sequence exhaustion MUST refuse without changing original source. This import
+MUST NOT relax an existing replay owner's reserved arrival frontier or infer
+task supersession, execution closure or append acknowledgment.
 MCP retirement MUST NOT discard still-required task-start audit backing or
 reintroduce that backing as current tool context.
 The migration MUST bind the original sidecar as immutable provenance, compare

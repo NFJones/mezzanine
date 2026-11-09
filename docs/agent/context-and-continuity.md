@@ -820,7 +820,12 @@ explicit recorded admission above can supersede them. Replay does not acknowledg
 the append or execute native work. Duplicates, broken native order/providers, unowned pending
 rows and rewound sequence reservations refuse the read. Unaccounted legacy
 semantic arrivals and unsupported controls still require their own custody
-integration. An immutable indexed archive cut now lets typed history reads skip
+integration. Initial raw-history loading assigns unnumbered historical rows
+around the full set of original sequence anchors before creating replay
+ownership, including across recorded task boundaries. Default synthetic spacing
+cannot manufacture a rewind; conflicting anchors or insufficient sequence
+space still refuse without renumbering original source. Existing owners retain
+their strict reserved frontier for later arrivals. An immutable indexed archive cut now lets typed history reads skip
 the covered physical prefix while preserving every current model member,
 including exact raw tail members inside that cut. Preparation and publication
 verify original append row images and the complete frozen prefix; reads check a

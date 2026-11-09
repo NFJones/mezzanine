@@ -7,6 +7,7 @@ mod checkpoint;
 mod continuation;
 mod edits;
 mod execution_state;
+mod history_import;
 mod mcp_grants;
 mod observations;
 mod prefix_import;

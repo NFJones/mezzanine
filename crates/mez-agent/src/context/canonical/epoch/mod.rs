@@ -35,6 +35,7 @@ pub(super) use continuation::ReplayEpochContinuation;
 mod execution_state;
 pub(super) use execution_state::ExecutionInterval;
 pub use execution_state::ReplayExecutionState;
+mod history_import;
 mod lifecycle;
 mod mcp_grants;
 mod task_admission;
@@ -114,7 +115,13 @@ impl ReplayEpochContext {
             .filter_map(|event| event.execution_group_id().cloned())
             .collect::<BTreeSet<_>>();
         for group in groups {
-            context.retain_pending_execution_group(&group)?;
+            // Observations have no execution obligation. Preserve any existing
+            // protection, but do not mint a new interval for passive evidence.
+            if context.execution_group_is_pending(&group)
+                || !context.execution_group_is_observational(&group)
+            {
+                context.retain_pending_execution_group(&group)?;
+            }
         }
         let peers = context
             .chronology()

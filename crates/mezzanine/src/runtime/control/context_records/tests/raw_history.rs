@@ -9,6 +9,8 @@ use mez_agent::{ReplayConversationId, ReplayEpochContext};
 
 const CID: &str = "raw-task-history";
 
+mod reservations;
+
 /// Real canonical admissions create both task boundaries around one pending
 /// assistant group. Encoding only projects those original occurrence records.
 fn raw_tasks() -> (

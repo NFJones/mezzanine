@@ -92,9 +92,7 @@ impl RuntimeContextRecords {
                 .task_admissions
                 .retain(|_, first| ids.contains(first));
             let conversation = mez_agent::ReplayConversationId::new(conversation)?;
-            let source =
-                mez_agent::ReplayEpochContext::new(conversation.clone(), AgentContext::empty())?;
-            let source = replay_arrivals::append(source, conversation, blocks, &suffix, execution)?;
+            let source = replay_arrivals::bootstrap(conversation, blocks, &suffix, execution)?;
             return Ok(source.import_legacy_prefix_head(first, head, execution)?);
         }
         let mut context = self.import_composed_context(blocks, &[], execution, false, None)?;
@@ -134,10 +132,7 @@ impl RuntimeContextRecords {
         let updates = history.records.committed_row_records(snapshot)?;
         if !history.records.task_admissions.is_empty() {
             let conversation = mez_agent::ReplayConversationId::new(&first.conversation_id)?;
-            let source =
-                mez_agent::ReplayEpochContext::new(conversation.clone(), AgentContext::empty())?;
-            let source = replay_arrivals::append(
-                source,
+            let source = replay_arrivals::bootstrap(
                 conversation,
                 history.blocks,
                 &history.records,

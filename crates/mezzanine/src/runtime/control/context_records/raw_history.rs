@@ -68,10 +68,7 @@ impl RuntimeContextRecords {
             None
         };
         let conversation = mez_agent::ReplayConversationId::new(conversation)?;
-        let owner =
-            mez_agent::ReplayEpochContext::new(conversation.clone(), AgentContext::empty())?;
-        let owner = replay_arrivals::append(
-            owner,
+        let owner = replay_arrivals::bootstrap(
             conversation.clone(),
             blocks,
             self,
@@ -112,10 +109,7 @@ impl RuntimeContextRecords {
         // The final owner is built with the checked whole-source framing below;
         // no provisional owner, source seal or execution handle escapes here.
         let conversation = mez_agent::ReplayConversationId::new(conversation)?;
-        let initial =
-            mez_agent::ReplayEpochContext::new(conversation.clone(), AgentContext::empty())?;
-        let imported =
-            replay_arrivals::append(initial, conversation, blocks.to_vec(), self, execution)?;
+        let imported = replay_arrivals::bootstrap(conversation, blocks.to_vec(), self, execution)?;
         let context = imported.context();
         let explicit = execution
             .iter()

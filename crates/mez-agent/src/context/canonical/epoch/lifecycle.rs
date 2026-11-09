@@ -103,31 +103,14 @@ impl ReplayEpochContext {
     ) -> AgentContextResult<()> {
         let sequences = self.check_instruction_owner(owner)?.clone();
         let mut candidate = self.clone();
-        for sequence in &sequences {
-            let event = candidate
-                .context
-                .chronology
-                .iter_mut()
-                .find(|event| event.sequence == *sequence)
-                .ok_or_else(|| AgentContextError::new("active instruction source disappeared"))?;
-            if !instruction_event_can_complete(event) || event.retention != ContextRetention::Exact
-            {
-                return Err(AgentContextError::new(
-                    "active instruction source changed before completion",
-                ));
-            }
-            event.retention = ContextRetention::Summarizable;
-            candidate
-                .source_lifecycle
-                .completed_instructions
-                .insert(event.record.occurrence_id());
-            candidate
-                .context
-                .historical_instruction_events
-                .insert(*sequence);
-        }
+        let completed = candidate
+            .context
+            .retire_instruction_occurrences(&sequences)?;
+        candidate
+            .source_lifecycle
+            .completed_instructions
+            .extend(completed);
         candidate.instruction_owners.remove(&owner.generation);
-        candidate.context.rebuild_projections();
         candidate.refresh_accounting_sequences(sequences)?;
         candidate.validate_membership()?;
         *self = candidate;
@@ -206,5 +189,35 @@ impl ReplayEpochContext {
         self.instruction_owners
             .get(&owner.generation)
             .ok_or_else(|| AgentContextError::new("instruction owner is no longer active"))
+    }
+}
+
+impl AgentContext {
+    /// Shared retention transition for explicit live completion and qualified
+    /// historical task boundaries. The caller owns candidate atomicity and any
+    /// lifecycle witness; this changes neither execution nor peer protection.
+    pub(super) fn retire_instruction_occurrences(
+        &mut self,
+        sequences: &BTreeSet<ContextEventSequence>,
+    ) -> AgentContextResult<BTreeSet<ContextBlockOccurrenceId>> {
+        let mut completed = BTreeSet::new();
+        for sequence in sequences {
+            let event = self
+                .chronology
+                .iter_mut()
+                .find(|event| event.sequence == *sequence)
+                .ok_or_else(|| AgentContextError::new("active instruction source disappeared"))?;
+            if !instruction_event_can_complete(event) || event.retention != ContextRetention::Exact
+            {
+                return Err(AgentContextError::new(
+                    "active instruction source changed before completion",
+                ));
+            }
+            event.retention = ContextRetention::Summarizable;
+            completed.insert(event.record.occurrence_id());
+            self.historical_instruction_events.insert(*sequence);
+        }
+        self.rebuild_projections();
+        Ok(completed)
     }
 }

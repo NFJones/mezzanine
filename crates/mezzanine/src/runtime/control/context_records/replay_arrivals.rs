@@ -8,6 +8,65 @@
 use super::*;
 use std::collections::BTreeMap;
 
+/// Initial source has no reserved live frontier. Assign synthetic slots around
+/// checked anchors before canonical membership or lifecycle handles exist.
+pub(super) fn bootstrap(
+    conversation: mez_agent::ReplayConversationId,
+    blocks: Vec<ContextBlock>,
+    arrivals: &RuntimeContextRecords,
+    execution: &[mez_agent::ImportedExecutionEvent],
+) -> Result<mez_agent::ReplayEpochContext> {
+    let mut reservations = arrivals
+        .records
+        .iter()
+        .filter_map(|(_, record)| {
+            arrivals
+                .source_sequences
+                .get(&record.occurrence_id())
+                .map(|sequence| (record.occurrence_id(), *sequence))
+        })
+        .collect::<BTreeMap<_, _>>();
+    let current = arrivals
+        .records
+        .iter()
+        .map(|(_, record)| record.occurrence_id())
+        .collect::<std::collections::BTreeSet<_>>();
+    // Qualified controls carry original sequences for otherwise unnumbered
+    // execution rows. Interpolation must not move those independently backed
+    // members, and a contradictory carrier must not overwrite another anchor.
+    for state in &arrivals.execution_controls {
+        for (id, sequence) in state
+            .members()
+            .iter()
+            .filter(|(id, _)| current.contains(id))
+        {
+            let sequence = mez_agent::ContextEventSequence::new(*sequence)?;
+            if reservations
+                .insert(*id, sequence)
+                .is_some_and(|prior| prior != sequence)
+            {
+                return Err(invalid());
+            }
+        }
+    }
+    let reservations = reservations.into_iter().collect::<Vec<_>>();
+    let tasks = arrivals
+        .task_admissions
+        .iter()
+        .map(|(root, first)| (*root, *first))
+        .collect::<Vec<_>>();
+    let mut owner = mez_agent::ReplayEpochContext::from_imported_history(
+        conversation,
+        blocks,
+        &arrivals.records,
+        execution,
+        &reservations,
+        &tasks,
+    )?;
+    restore_controls(&mut owner, arrivals)?;
+    Ok(owner)
+}
+
 pub(super) fn append(
     mut owner: mez_agent::ReplayEpochContext,
     conversation: mez_agent::ReplayConversationId,
@@ -100,6 +159,16 @@ pub(super) fn append(
             owner = mez_agent::ReplayEpochContext::from_owned_context(conversation.clone(), body)?;
         }
     }
+    restore_controls(&mut owner, arrivals)?;
+    Ok(owner)
+}
+
+/// Controls still need their independently qualified original source. Neither
+/// bootstrap allocation nor ordinary arrival import creates closure authority.
+fn restore_controls(
+    owner: &mut mez_agent::ReplayEpochContext,
+    arrivals: &RuntimeContextRecords,
+) -> Result<()> {
     let current = owner
         .context()
         .chronology()
@@ -114,5 +183,5 @@ pub(super) fn append(
         }
         owner.restore_execution_state(state)?;
     }
-    Ok(owner)
+    Ok(())
 }
