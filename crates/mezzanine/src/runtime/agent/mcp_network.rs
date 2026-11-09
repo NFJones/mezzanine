@@ -823,11 +823,18 @@ impl RuntimeSessionService {
         &mut self,
         mut outcome: RuntimeApprovedExternalActionOutcome,
     ) -> Result<bool> {
-        if let Some(applied) = self.external_completion_duplicate(
+        let refused = self.agent_provider_failure_is_refused(&outcome.turn_id);
+        let duplicate = self.external_completion_duplicate(
             &outcome.turn_id,
             &outcome.action_id,
             &outcome.attempt,
-        )? {
+        );
+        if refused && duplicate.is_err() {
+            // Required error/raw custody already belongs to this exact receipt.
+            // Refusal forbids retry; repeated delivery cannot re-enter it.
+            return Ok(false);
+        }
+        if let Some(applied) = duplicate? {
             return Ok(applied);
         }
         let identity = (outcome.turn_id.clone(), outcome.action_id.clone());
@@ -840,12 +847,14 @@ impl RuntimeSessionService {
         {
             return Ok(false);
         }
-        if !self.approved_external_action_turn_is_current(&outcome.turn_id, &outcome.action_id)
-            || !self.issued_external_completion_is_current(
-                &outcome.turn_id,
-                &outcome.action_id,
-                &outcome.attempt,
-            )
+        if !refused
+            && (!self
+                .approved_external_action_turn_is_current(&outcome.turn_id, &outcome.action_id)
+                || !self.issued_external_completion_is_current(
+                    &outcome.turn_id,
+                    &outcome.action_id,
+                    &outcome.attempt,
+                ))
         {
             let same_pending_group = self.external_completion_pending_group_is_current(
                 &outcome.turn_id,
@@ -883,6 +892,12 @@ impl RuntimeSessionService {
         let transport = self.take_retained_mcp_transport(&key);
         self.return_completed_mcp_transport(&identity, transport);
         self.agent.approved_mcp_transport_leases.remove(&identity);
+        if refused {
+            // The remote call may already have applied effects. Raw evidence
+            // and its original lease survive, without projection, ACKs, hooks
+            // or another provider/action dispatch from the refused turn.
+            return Ok(true);
+        }
         let scope = self.begin_completion_scope(&key.0, CompletionScope::Callback);
         let applied = self.apply_retained_external_completion(&key);
         if let Err(error) = &applied {

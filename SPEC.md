@@ -5137,6 +5137,9 @@ panes MUST remain available unless a concrete shared integrity invariant
 requires a broader refusal. Stop MUST still request cancellation of exact owned
 workers before refusing destructive cleanup; cancellation MUST NOT be treated
 as proof that effects or persistence settled.
+Results returned by workers issued before refusal MUST remain under their
+original receipts even after the turn becomes blocked. Retaining such a result
+MUST NOT authorize projection, publication, a new worker, or continuation.
 
 Agent prompt submissions MUST be appended only to the conversation-bound agent
 log as user-visible, copyable text before the resulting turn is queued or

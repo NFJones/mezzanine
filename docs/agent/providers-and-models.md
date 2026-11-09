@@ -90,6 +90,8 @@ effects or transcript writes completed. Preserve the diagnostics and retained
 session while investigating the underlying validation or storage error. `/stop`
 still requests cancellation of owned workers, then reports the refusal while
 retaining their required results and cleanup obligations.
+Results arriving later from MCP or network calls stay retained; Mez does not
+retry those calls.
 
 ## Maintain the catalog
 

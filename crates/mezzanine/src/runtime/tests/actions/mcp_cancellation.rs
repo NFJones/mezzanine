@@ -9,6 +9,8 @@ use crate::host::async_runtime::{
     AsyncRuntimeActorConfig, AsyncRuntimeSessionActor, execute_approved_external_action,
 };
 
+mod provider_refusal;
+
 /// Queues a single fixture MCP action through production actor settlement.
 async fn claim_fixture_call(
     service: &mut RuntimeSessionService,

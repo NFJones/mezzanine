@@ -75,6 +75,17 @@ impl RuntimeSessionService {
         self.agent.provider_failure_refusals.contains_key(turn_id)
     }
 
+    /// Borrows the immutable pre-refusal execution solely to retain an already
+    /// issued result. This does not restore live delivery, paint, publication,
+    /// worker admission or continuation authority to the blocked turn.
+    pub(in crate::runtime::agent) fn provider_failure_original_execution(
+        &self,
+        turn_id: &str,
+    ) -> Option<(&AgentTurnRecord, &AgentTurnExecution)> {
+        let source = &self.agent.provider_failure_refusals.get(turn_id)?.source;
+        Some((&source.turn, source.execution.as_ref()?))
+    }
+
     /// Observes retained custody without granting a restore/retry capability.
     #[cfg(test)]
     pub(crate) fn provider_failure_source_for_tests(

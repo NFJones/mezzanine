@@ -15,6 +15,7 @@ mod native_pause;
 mod pane_retention;
 mod progress_retirement;
 mod progress_transactions;
+mod provider_refusal;
 mod replay_retirement;
 mod scope_retention;
 mod shutdown_retention;

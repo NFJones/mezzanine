@@ -458,6 +458,36 @@ impl RuntimeSessionService {
         Ok(Some(false))
     }
 
+    /// Checks the original source captured before ordinary provider failure
+    /// blocked the turn. Only an existing issued receipt may use this evidence;
+    /// it cannot qualify live execution, projection or completion publication.
+    fn provider_failure_source_matches_external_owner(
+        &self,
+        owner: &ExternalCompletionOwner,
+    ) -> bool {
+        let Some((turn, execution)) = self.provider_failure_original_execution(&owner.turn_id)
+        else {
+            return false;
+        };
+        turn.turn_id == owner.turn_id
+            && turn.agent_id == owner.agent_id
+            && turn.pane_id == owner.pane_id
+            && turn.conversation_id == owner.conversation_id
+            && execution.request.turn_id == owner.turn_id
+            && execution.request.agent_id == owner.agent_id
+            && execution
+                .response
+                .action_batch
+                .as_ref()
+                .and_then(|batch| batch.actions.get(owner.ordinal))
+                .is_some_and(|action| {
+                    action.id == owner.action_id
+                        && action.action_type() == owner.action_type.as_str()
+                })
+            && super::provider_execution::provider_log_execution_group_id(execution)
+                .is_ok_and(|group| group == owner.group)
+    }
+
     /// Moves a validated original outcome into its reserved slot. Once inserted,
     /// no fallible operation precedes caller retirement of matching claims.
     pub(super) fn retain_external_completion(
@@ -469,7 +499,24 @@ impl RuntimeSessionService {
             outcome.action_id.clone(),
             outcome.attempt.clone(),
         );
-        let current = self.external_completion_owner(&key.0, &key.1, &key.2);
+        let current = self
+            .external_completion_owner(&key.0, &key.1, &key.2)
+            .or_else(|error| {
+                // The original issued owner remains valid for raw custody after
+                // refusal. Its immutable source cannot authorize a new execution.
+                self.agent
+                    .completion_settlements
+                    .external
+                    .get(&key)
+                    .filter(|receipt| {
+                        receipt.owner.turn_id == key.0
+                            && receipt.owner.action_id == key.1
+                            && receipt.owner.attempt == key.2
+                            && self.provider_failure_source_matches_external_owner(&receipt.owner)
+                    })
+                    .map(|receipt| receipt.owner.clone())
+                    .ok_or(error)
+            });
         let receipt = self
             .agent
             .completion_settlements
@@ -511,6 +558,26 @@ impl RuntimeSessionService {
     }
 
     /// Returns raw result by borrow; failed projection cannot consume its owner.
+    #[cfg(test)]
+    pub(crate) fn retained_external_outcome_for_tests(
+        &self,
+        turn_id: &str,
+        action_id: &str,
+        attempt: &str,
+    ) -> Option<Result<ActionResult>> {
+        self.agent
+            .completion_settlements
+            .external
+            .get(&(
+                turn_id.to_string(),
+                action_id.to_string(),
+                attempt.to_string(),
+            ))
+            .and_then(|receipt| receipt.raw.as_ref())
+            .map(|outcome| outcome.result.clone())
+    }
+
+    /// Reads an original successful raw result without acknowledging settlement.
     #[cfg(test)]
     pub(crate) fn retained_external_result_for_tests(
         &self,
