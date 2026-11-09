@@ -105,6 +105,12 @@ issuing another provider request; cleared in-memory display remains unknown.
 With deferred persistence, a later write error retries only the generation-owned
 metadata snapshot and does not queue another provider continuation.
 
+Another context rejection of an unchanged accepted head does not generate a
+replacement summary or reset lineage again. The reentry fence requires fresh
+eligible source or changed relevant input configuration; a new pressure sample
+alone is insufficient. An explicit new `/compact` remains available for eligible
+history. This fence does not alter cumulative expense or grant MCP/tool rights.
+
 ## Distinguish a cold request from a continuity failure
 
 Compaction, a provider/model switch, or an exceptional recovery can change the

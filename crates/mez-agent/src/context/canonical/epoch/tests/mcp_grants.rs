@@ -324,7 +324,7 @@ fn mcp_grants_checkpoint_v1_import_and_v2_required_denials_are_checked() {
         .publish_compaction(frozen, ReplayHeadPublication::Summary("head".into()))
         .unwrap();
     let value = serde_json::to_value(source.checkpoint().unwrap()).unwrap();
-    assert_eq!(value["version"], 3);
+    assert_eq!(value["version"], 4);
     assert_eq!(value["retired_mcp_retrievals"].as_array().unwrap().len(), 1);
     let restore = |value| {
         ReplayEpochContext::from_checkpoint(
@@ -335,6 +335,7 @@ fn mcp_grants_checkpoint_v1_import_and_v2_required_denials_are_checked() {
     };
     let mut old = value.clone();
     old["version"] = serde_json::json!(1);
+    old.as_object_mut().unwrap().remove("compaction_reentry");
     old.as_object_mut().unwrap().remove("execution_intervals");
     old.as_object_mut()
         .unwrap()
@@ -346,6 +347,10 @@ fn mcp_grants_checkpoint_v1_import_and_v2_required_denials_are_checked() {
     assert_eq!(cold.context().chronology().last(), Some(&evidence));
     let mut version_two = value.clone();
     version_two["version"] = serde_json::json!(2);
+    version_two
+        .as_object_mut()
+        .unwrap()
+        .remove("compaction_reentry");
     version_two
         .as_object_mut()
         .unwrap()

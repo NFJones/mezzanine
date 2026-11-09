@@ -174,7 +174,7 @@ fn execution_state_checkpoint_format_is_explicit_and_legacy_intervals_stay_unkno
     source.finish_execution_group(&receipt).unwrap();
     let closed = source.execution_states().unwrap().pop().unwrap();
     let encoded = serde_json::to_value(source.checkpoint().unwrap()).unwrap();
-    assert_eq!(encoded["version"], json!(3));
+    assert_eq!(encoded["version"], json!(4));
     for (pointer, value) in [
         ("/execution_intervals", Value::Null),
         ("/execution_intervals/0/1/generation", json!(0)),
@@ -197,6 +197,7 @@ fn execution_state_checkpoint_format_is_explicit_and_legacy_intervals_stay_unkno
     for version in [1, 2] {
         let mut legacy = encoded.clone();
         legacy["version"] = json!(version);
+        legacy.as_object_mut().unwrap().remove("compaction_reentry");
         legacy
             .as_object_mut()
             .unwrap()

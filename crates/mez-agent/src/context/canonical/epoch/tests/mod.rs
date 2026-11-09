@@ -11,6 +11,7 @@ mod mcp_grants;
 mod observations;
 mod prefix_import;
 mod publication;
+mod reentry;
 mod source;
 mod task_admission;
 
@@ -683,6 +684,7 @@ fn resource_and_owner_failures_are_atomic_without_authority_downgrade() {
             .is_err()
     );
     assert_eq!(owner, before);
+    let reentry_input = *frozen.reentry.clone();
     owner
         .publish_compaction(
             frozen,
@@ -691,6 +693,12 @@ fn resource_and_owner_failures_are_atomic_without_authority_downgrade() {
         .unwrap();
     owner.revision = ReplayEpochRevision(u64::MAX);
     owner.head.as_mut().unwrap().revision = owner.revision;
+    // Keep the original handled source bound to this synthetic extreme head,
+    // so the test reaches counter overflow rather than stale-metadata rejection.
+    owner.compaction_reentry = Some(ReplayCompactionReentry::new(
+        owner.head().unwrap(),
+        reentry_input,
+    ));
     // This synthetic counter-limit owner must retain a coherent scope before
     // exercising checked overflow, rather than fail the earlier drift check.
     owner.bind_mcp_retrieval_scope();

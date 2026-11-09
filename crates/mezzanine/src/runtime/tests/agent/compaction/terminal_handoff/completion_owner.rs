@@ -12,7 +12,7 @@ use super::*;
 #[test]
 fn terminal_compaction_publication_retains_original_turn_store() {
     for accounted in [false, true] {
-        let (mut service, original, turn_id) = typed_source::saved(accounted);
+        let (mut service, original, mut turn_id) = typed_source::saved(accounted);
         let conversation = service
             .agent_turn_ledger()
             .turn(&turn_id)
@@ -21,6 +21,13 @@ fn terminal_compaction_publication_retains_original_turn_store() {
             .clone();
         let before = original.inspect(&conversation).unwrap();
         for summary in ["ORIGINAL_IMPORTED_SUMMARY", "ORIGINAL_LIVE_SUMMARY"] {
+            if summary == "ORIGINAL_LIVE_SUMMARY" {
+                turn_id = crate::test_support::compaction_source::advance_task(
+                    &mut service,
+                    &turn_id,
+                    "next original-store task",
+                );
+            }
             typed_source::queue(&mut service, &turn_id, true);
             typed_source::complete(&mut service, &turn_id, summary);
         }
@@ -96,7 +103,7 @@ fn terminal_compaction_publication_retains_original_turn_store() {
 /// completion still finishes, without manufacturing an archive in the new store.
 #[test]
 fn terminal_compaction_preserves_original_no_store_policy() {
-    let (mut service, unused, turn_id) = typed_source::memory();
+    let (mut service, unused, mut turn_id) = typed_source::memory();
     let conversation = service
         .agent_turn_ledger()
         .turn(&turn_id)
@@ -104,6 +111,13 @@ fn terminal_compaction_preserves_original_no_store_policy() {
         .conversation_id
         .clone();
     for summary in ["MEMORY_ONLY_FIRST", "MEMORY_ONLY_SECOND"] {
+        if summary == "MEMORY_ONLY_SECOND" {
+            turn_id = crate::test_support::compaction_source::advance_task(
+                &mut service,
+                &turn_id,
+                "next memory-only task",
+            );
+        }
         typed_source::queue(&mut service, &turn_id, true);
         typed_source::complete(&mut service, &turn_id, summary);
     }

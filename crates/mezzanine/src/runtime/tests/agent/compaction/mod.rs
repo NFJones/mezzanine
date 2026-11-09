@@ -19,6 +19,7 @@ mod provider_backoff;
 mod provider_continuity;
 mod provider_limit_replay;
 mod provider_recovery;
+mod reentry;
 mod replay_compatibility;
 mod replay_copies;
 mod replay_observed;

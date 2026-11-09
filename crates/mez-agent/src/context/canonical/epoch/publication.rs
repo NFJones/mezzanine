@@ -84,6 +84,7 @@ impl ReplayEpochContext {
         candidate.publish_accounting(plan)?;
         candidate.members.drain(..plan.prefix_members);
         candidate.revision = prepared.candidate.revision;
+        candidate.compaction_reentry = prepared.candidate.compaction_reentry.clone();
         candidate.bind_mcp_retrieval_scope();
         candidate.revoke_retrieved_mcp_grants();
         candidate.prune_source_lifecycle();
@@ -204,6 +205,10 @@ impl ReplayEpochContext {
         candidate.publish_accounting(&plan)?;
         candidate.members.drain(..plan.prefix_members);
         candidate.revision = revision;
+        candidate.compaction_reentry = candidate
+            .head
+            .as_ref()
+            .map(|head| ReplayCompactionReentry::new(head, *plan.reentry.clone()));
         candidate.bind_mcp_retrieval_scope();
         candidate.revoke_retrieved_mcp_grants();
         candidate.prune_source_lifecycle();

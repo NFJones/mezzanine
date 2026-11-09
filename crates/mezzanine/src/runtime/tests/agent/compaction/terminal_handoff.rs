@@ -304,12 +304,19 @@ fn queue_live_compaction(service: &mut RuntimeSessionService, turn_id: &str, obs
 #[test]
 fn terminal_handoff_preserves_exact_imported_and_live_accounted_sources() {
     for accounted in [false, true] {
-        let (mut service, store, turn_id) = typed_source::saved(accounted);
+        let (mut service, store, mut turn_id) = typed_source::saved(accounted);
         let turn = service.agent_turn_ledger().turn(&turn_id).unwrap().clone();
         let original = store.inspect(&turn.conversation_id).unwrap();
         let profile = service.agent_turn_model_profile(&turn_id).unwrap().clone();
         let mut records = Vec::new();
         for summary in ["IMPORTED_SUMMARY", "LIVE_SUMMARY"] {
+            if summary == "LIVE_SUMMARY" {
+                turn_id = crate::test_support::compaction_source::advance_task(
+                    &mut service,
+                    &turn_id,
+                    "next imported-source task",
+                );
+            }
             typed_source::queue(&mut service, &turn_id, true);
             typed_source::complete(&mut service, &turn_id, summary);
             records.push(service.agent_turn_contexts()[&turn_id].chronology()[0].record());
@@ -378,18 +385,25 @@ fn terminal_handoff_preserves_exact_imported_and_live_accounted_sources() {
 #[test]
 fn terminal_handoff_rejects_imported_source_edit_after_summary_acceptance() {
     for accounted in [false, true] {
-        let (mut service, store, turn_id) = typed_source::saved(accounted);
+        let (mut service, store, mut turn_id) = typed_source::saved(accounted);
         let conversation = service
             .agent_turn_ledger()
             .turn(&turn_id)
             .unwrap()
             .conversation_id
             .clone();
-        let original = store.inspect(&conversation).unwrap();
         for summary in ["IMPORTED_SUMMARY", "LIVE_SUMMARY"] {
+            if summary == "LIVE_SUMMARY" {
+                turn_id = crate::test_support::compaction_source::advance_task(
+                    &mut service,
+                    &turn_id,
+                    "next integrity-checked source task",
+                );
+            }
             typed_source::queue(&mut service, &turn_id, true);
             typed_source::complete(&mut service, &turn_id, summary);
         }
+        let original = store.inspect(&conversation).unwrap();
         let manifest = store
             .root()
             .join(&conversation)
@@ -441,13 +455,14 @@ fn terminal_handoff_rejects_imported_source_edit_after_summary_acceptance() {
     }
 }
 
-/// Two real rewrites publish while the original ordinary archive is still
-/// empty. Latest head and exact active input/steering survive turns B/C and a
+/// The first rewrite precedes its ordinary append. Actual task completion and
+/// append then admit fresh work for the second epoch. Latest head and original
+/// input/steering survive turns B/C and a
 /// reopened store. Unknown/below-threshold usage cannot itself queue compaction.
 #[test]
 fn completed_live_summaries_survive_turns_b_c_and_reopen() {
     for observed in [false, true] {
-        let (mut service, store, turn_id) = typed_source::pending();
+        let (mut service, store, mut turn_id) = typed_source::pending();
         let conversation = service
             .agent_turn_ledger()
             .turn(&turn_id)
@@ -469,15 +484,42 @@ fn completed_live_summaries_survive_turns_b_c_and_reopen() {
             .unwrap()
             .clone();
         for (index, summary) in ["LIVE_SUMMARY_0", "LIVE_SUMMARY_1"].into_iter().enumerate() {
-            typed_source::queue_at_attempt(&mut service, &turn_id, observed, index as u32 + 1);
+            if index > 0 {
+                crate::test_support::compaction_source::complete_task(
+                    &mut service,
+                    &turn_id,
+                    "first compacted task completed",
+                    mez_agent::ProviderApiCompatibility::OpenAiResponses,
+                );
+                // A real appended head cannot authorize the next task while
+                // the prior task still owns an unsettled terminal append.
+                typed_source::settle(&mut service);
+                let primary = service.session.layout_owner_client_id().unwrap().clone();
+                let started = service
+                    .execute_agent_shell_command(&primary, "next appended source task")
+                    .unwrap();
+                assert!(started.contains(r#""state":"running""#), "{started}");
+                turn_id = service
+                    .agent_shell_store()
+                    .get("%1")
+                    .unwrap()
+                    .running_turn_id
+                    .clone()
+                    .unwrap();
+            }
+            typed_source::queue_at_attempt(&mut service, &turn_id, observed, 1);
             typed_source::complete(&mut service, &turn_id, summary);
-            assert!(store.inspect(&conversation).unwrap().is_empty());
-            assert_eq!(
-                service
-                    .persistence
-                    .pending_transcript_entries(&conversation),
-                original
-            );
+            if index == 0 {
+                assert!(store.inspect(&conversation).unwrap().is_empty());
+                assert_eq!(
+                    service
+                        .persistence
+                        .pending_transcript_entries(&conversation),
+                    original
+                );
+            } else {
+                assert!(store.inspect(&conversation).unwrap().starts_with(&original));
+            }
         }
         let (_, accepted) = store
             .load_replay_epoch(&conversation, mez_agent::AgentContext::empty())

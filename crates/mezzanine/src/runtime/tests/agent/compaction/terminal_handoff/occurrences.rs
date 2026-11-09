@@ -1,7 +1,7 @@
 //! Original execution occurrences survive rewrites and terminal append retries.
 //!
 //! A current group stays raw behind its exact task root. A later result keeps
-//! that group's full chronology ordinal across another typed head publication;
+//! that group's full chronology ordinal through an in-flight head publication;
 //! no selective summary/certificate is accepted as a second live authority.
 //! The historical certificate corruption guard is qualified separately as an
 //! explicit private descriptor test, not fabricated runtime summary acceptance.
@@ -75,7 +75,6 @@ fn check_late_same_group_result(adapter: bool) {
         .collect::<Vec<_>>();
     assert_eq!(original_group.len(), 2);
     typed_source::queue(&mut service, &turn_id, true);
-    typed_source::complete(&mut service, &turn_id, "FIRST_OCCURRENCE_SUMMARY");
     assert!(original_group.iter().all(|event| {
         service.agent_turn_contexts()[&turn_id]
             .chronology()
@@ -110,7 +109,8 @@ fn check_late_same_group_result(adapter: bool) {
         0
     );
     assert_eq!(service.agent_turn_contexts()[&turn_id], before_replay);
-    typed_source::queue(&mut service, &turn_id, true);
+    // The late protected result arrives after capture but before publication.
+    // Its admission cannot authorize another automatic summary of old source.
     typed_source::complete(&mut service, &turn_id, "LATE_OCCURRENCE_SUMMARY");
     let live = service.agent_turn_contexts()[&turn_id].clone();
     let occurrences =
@@ -137,7 +137,7 @@ fn check_late_same_group_result(adapter: bool) {
         .load_replay_epoch(&turn.conversation_id, mez_agent::AgentContext::empty())
         .unwrap()
         .unwrap();
-    assert_eq!(accepted.revision().get(), 2);
+    assert_eq!(accepted.revision().get(), 1);
     service.stop_agent_turn_for_pane("%1").unwrap();
     if adapter {
         typed_source::admit_bookkeeping(&mut service);

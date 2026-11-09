@@ -163,6 +163,12 @@ impl ContextBlockRecord {
         self.occurrence_id
     }
 
+    /// Cached rendered revision of this actual occurrence. Canonical admission
+    /// or restoration validates its source; reading it never rehashes payloads.
+    pub(super) fn rendered_fingerprint(self) -> [u8; 32] {
+        self.rendered_sha256
+    }
+
     /// Returns the UTF-8-quarter estimate including the ordinary block header.
     /// Provider wire/schema overhead and reported billing remain separate.
     pub fn estimated_input_tokens(self) -> usize {

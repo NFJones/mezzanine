@@ -228,6 +228,8 @@ pub struct ReplayCompactionPlan {
     pub(super) input_estimates: ReplayCompactionInputEstimates,
     /// Keeps the preparation enum compact while freezing an owned descriptor.
     pub(super) provider_projection: Option<Box<ReplayProviderProjection>>,
+    /// Original unselected closed tail, excluding later arrivals/protection changes.
+    pub(super) reentry: Box<ReplayCompactionReentryInput>,
 }
 
 impl ReplayCompactionPlan {

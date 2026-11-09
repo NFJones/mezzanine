@@ -25,14 +25,7 @@ impl ReplayEpochContext {
         let offset = usize::from(self.head.is_some());
         let raw = &self.context.chronology()[offset..];
         let units = execution_units(raw);
-        let protected = units
-            .iter()
-            .position(|unit| {
-                raw[unit.clone()]
-                    .iter()
-                    .any(|event| !self.event_is_replaceable(event))
-            })
-            .unwrap_or(units.len());
+        let protected = self.closed_prefix_unit_count(raw, &units);
         let mut unit_totals = Vec::with_capacity(units.len() + 1);
         unit_totals.push(0usize);
         for unit in &units {
@@ -110,6 +103,11 @@ impl ReplayEpochContext {
             prefix_events: offset + cut,
             input_estimates,
             provider_projection: self.provider_projection().cloned().map(Box::new),
+            reentry: Box::new(ReplayCompactionReentryInput::capture(
+                policy,
+                self.provider_projection(),
+                &raw[cut..units.get(protected).map_or(raw.len(), |unit| unit.start)],
+            )),
         }))
     }
 
@@ -181,6 +179,9 @@ impl ReplayEpochContext {
                 "replay head or raw membership drifted from canonical context",
             ));
         }
+        if let Some(reentry) = &self.compaction_reentry {
+            reentry.validate(self)?;
+        }
         self.validate_mcp_retrievals()?;
         self.validate_accounting()
     }
@@ -193,6 +194,24 @@ impl ReplayEpochContext {
             && !event
                 .execution_group_id()
                 .is_some_and(|group| self.context.execution_group_is_pending(group))
+    }
+
+    /// One common closed-prefix boundary for tail selection and reentry. Whole
+    /// ownership spans stop at the first protected event; later units cannot
+    /// bypass that barrier in either path.
+    pub(super) fn closed_prefix_unit_count(
+        &self,
+        raw: &[ConversationEvent],
+        units: &[std::ops::Range<usize>],
+    ) -> usize {
+        units
+            .iter()
+            .position(|unit| {
+                raw[unit.clone()]
+                    .iter()
+                    .any(|event| !self.event_is_replaceable(event))
+            })
+            .unwrap_or(units.len())
     }
 }
 

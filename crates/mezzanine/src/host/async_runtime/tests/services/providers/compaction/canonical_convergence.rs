@@ -8,7 +8,7 @@ use tokio::io::AsyncWriteExt;
 /// Actual provider boundary interrupted before completed-output validation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RetryPath {
-    /// Completed output alone requires correction.
+    /// A usable completed summary needs no extra model work.
     Direct,
     /// Incomplete HTTP body, followed by the exact frozen request.
     Transport,
@@ -27,7 +27,7 @@ enum RetryPath {
 async fn async_openai_compaction_accepts_usable_long_final_once() {
     for stream in [false, true] {
         for allocation in [false, true] {
-            Box::pin(qualify(false, stream, allocation, RetryPath::Direct)).await;
+            Box::pin(qualify(false, stream, allocation, RetryPath::Direct, false)).await;
         }
     }
 }
@@ -39,7 +39,7 @@ async fn async_openai_compaction_accepts_usable_long_final_once() {
 async fn async_openai_manual_compaction_accepts_usable_long_final_once() {
     for stream in [false, true] {
         for allocation in [false, true] {
-            Box::pin(qualify(true, stream, allocation, RetryPath::Direct)).await;
+            Box::pin(qualify(true, stream, allocation, RetryPath::Direct, false)).await;
         }
     }
 }
@@ -56,16 +56,32 @@ async fn async_openai_compaction_retry_wires_omit_max_output_tokens() {
             RetryPath::ContextSplit,
         ] {
             for allocation in [false, true] {
-                Box::pin(qualify(false, streaming, allocation, retry)).await;
-                Box::pin(qualify(true, streaming, allocation, retry)).await;
+                Box::pin(qualify(false, streaming, allocation, retry, false)).await;
+                Box::pin(qualify(true, streaming, allocation, retry, false)).await;
             }
         }
     }
 }
 
+/// A second authoritative rejection of the accepted head must terminalize as
+/// context unavailable, with one auxiliary call and no source/retention walkdown.
+#[tokio::test(flavor = "current_thread")]
+async fn async_openai_compaction_unchanged_head_rejection_never_reenters_model_work() {
+    for streaming in [false, true] {
+        Box::pin(qualify(false, streaming, true, RetryPath::Direct, true)).await;
+    }
+}
+
 /// Owns the actor, worker, HTTP endpoint and response gate under one deadline.
 /// Publication and archived source are observed independently of worker output.
-async fn qualify(manual: bool, streaming: bool, allocation: bool, retry: RetryPath) {
+async fn qualify(
+    manual: bool,
+    streaming: bool,
+    allocation: bool,
+    retry: RetryPath,
+    reject_continuation: bool,
+) {
+    assert!(!reject_continuation || !manual);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let root = std::env::temp_dir().join(format!(
@@ -107,16 +123,16 @@ async fn qualify(manual: bool, streaming: bool, allocation: bool, retry: RetryPa
     } else {
         ""
     };
-    // Automatic rejection must reach the wire before compaction, and the
-    // repaired word summary must also be smaller in BYTES than selected source.
-    // This fixture models a large, sparse-word source under a real larger
-    // configured input window; it never changes limits during recovery.
+    // Ordinary input reaches the wire before compaction. The repeated-rejection
+    // case leaves genuine closed source in the raw tail, so only the new fence
+    // can prevent another compactor; no limit changes during recovery.
     let input = if manual { 20000 } else { 100000 };
     let window = if manual { 40000 } else { 200000 };
+    let retention = if reject_continuation { 100 } else { 10 };
     service.replace_config_layers(vec![ConfigLayer {
         name: "canonical-convergence".into(), path: None, format: ConfigFormat::Toml,
         scope: ConfigScope::Primary, trusted: true,
-        text: format!("[agents]\ndefault_provider=\"openai\"\ndefault_model_profile=\"default\"\nsession_title_policy=\"objective\"\n[providers.openai]\nkind=\"openai\"\nbase_url=\"http://{address}/v1/responses\"\nmodels=[\"gpt-test\"]\ndefault_model=\"gpt-test\"\n[model_profiles.default]\nprovider=\"openai\"\nmodel=\"gpt-test\"\ncontext_window_tokens={window}\nmax_input_tokens={input}\n{cap}"),
+        text: format!("[agents]\ndefault_provider=\"openai\"\ndefault_model_profile=\"default\"\nsession_title_policy=\"objective\"\ncompaction_raw_retention_percent={retention}\n[providers.openai]\nkind=\"openai\"\nbase_url=\"http://{address}/v1/responses\"\nmodels=[\"gpt-test\"]\ndefault_model=\"gpt-test\"\n[model_profiles.default]\nprovider=\"openai\"\nmodel=\"gpt-test\"\ncontext_window_tokens={window}\nmax_input_tokens={input}\n{cap}"),
     }]).unwrap();
     let primary = service
         .attach_primary("primary", true, Size::new(100, 30).unwrap(), 120)
@@ -211,7 +227,10 @@ async fn qualify(manual: bool, streaming: bool, allocation: bool, retry: RetryPa
         }
         let (mut socket, _) = listener.accept().await.unwrap();
         let mut body = read_body(&mut socket, streaming).await;
-        assert!(body.to_string().contains("CANONICAL_FROZEN_SOURCE_1"));
+        if !reject_continuation {
+            assert!(body.to_string().contains("CANONICAL_FROZEN_SOURCE_1"));
+        }
+        assert!(!body.to_string().contains("continue with frozen evidence"));
         phase.store(2, Ordering::SeqCst);
         if retry != RetryPath::Direct {
             requests.push(body.clone());
@@ -271,12 +290,40 @@ async fn qualify(manual: bool, streaming: bool, allocation: bool, retry: RetryPa
                 );
                 phase.store(4, Ordering::SeqCst);
                 requests.push(body);
-                respond(
-                    &mut socket,
-                    "ordinary canonical continuation completed",
-                    streaming,
-                )
-                .await;
+                if reject_continuation {
+                    let (_, mut current) = store
+                        .load_replay_epoch(&conversation, mez_agent::AgentContext::empty())
+                        .unwrap()
+                        .unwrap();
+                    current
+                        .select_provider_projection(
+                            mez_agent::ReplayProviderProjection::new(
+                                mez_agent::ProviderApiCompatibility::OpenAiResponses,
+                                "openai",
+                                "gpt-test",
+                            )
+                            .unwrap(),
+                        )
+                        .unwrap();
+                    let policy = mez_agent::ReplayTailPolicy::new(input, retention).unwrap();
+                    assert!(
+                        matches!(
+                            current.prepare_compaction(policy).unwrap(),
+                            mez_agent::ReplayCompactionPreparation::Ready(_)
+                        ),
+                        "old retained source is selectable; reentry must be blocked by identity"
+                    );
+                    assert!(!current.automatic_compaction_is_fresh(policy).unwrap());
+                    async_provider_concurrency_write_chat_error_response(&mut socket, 400,
+                        r#"{"error":{"message":"context length exceeded","code":"context_length_exceeded"}}"#).await;
+                } else {
+                    respond(
+                        &mut socket,
+                        "ordinary canonical continuation completed",
+                        streaming,
+                    )
+                    .await;
+                }
                 break;
             }
         }
@@ -378,11 +425,20 @@ async fn qualify(manual: bool, streaming: bool, allocation: bool, retry: RetryPa
             if view.lines.iter().any(|line| {
                 line.contains(if manual {
                     "canonical compaction head accepted"
+                } else if reject_continuation {
+                    "context unavailable"
                 } else {
                     "ordinary canonical continuation completed"
                 })
             }) {
-                break;
+                if !reject_continuation
+                    || !handle
+                        .agent_turn_is_running(turn.as_deref().unwrap())
+                        .await
+                        .unwrap()
+                {
+                    break;
+                }
             }
             tokio::task::yield_now().await;
         }
@@ -411,7 +467,7 @@ async fn qualify(manual: bool, streaming: bool, allocation: bool, retry: RetryPa
     );
     assert_eq!(
         report.executions,
-        (if manual { 1 } else { 2 })
+        (if manual || reject_continuation { 1 } else { 2 })
             + extra_summaries as u64
             + u64::from(matches!(
                 retry,
@@ -433,7 +489,8 @@ async fn qualify(manual: bool, streaming: bool, allocation: bool, retry: RetryPa
     let input: u64 = usage.values().map(|value| value.input_tokens).sum();
     let output: u64 = usage.values().map(|value| value.output_tokens).sum();
     let cutoff = u64::from(retry == RetryPath::OutputLimit);
-    let complete_responses = (if manual { 1 } else { 2 }) + extra_summaries as u64;
+    let complete_responses =
+        (if manual || reject_continuation { 1 } else { 2 }) + extra_summaries as u64;
     assert_eq!(input, complete_responses * 100 + cutoff * 10);
     assert_eq!(output, complete_responses * 10 + cutoff);
     let (_, cold) = AgentTranscriptStore::new(store.root())
@@ -441,6 +498,9 @@ async fn qualify(manual: bool, streaming: bool, allocation: bool, retry: RetryPa
         .unwrap()
         .unwrap();
     assert_eq!(cold.context().chronology()[0].block().content, corrected);
+    if reject_continuation {
+        assert_eq!(cold.revision().get(), 1);
+    }
     if let Some(exact) = exact_manual_root {
         assert_eq!(
             cold.context()
@@ -461,7 +521,11 @@ async fn qualify(manual: bool, streaming: bool, allocation: bool, retry: RetryPa
                 .turn(turn.as_deref().unwrap())
                 .unwrap()
                 .state,
-            mez_agent::AgentTurnState::Completed
+            if reject_continuation {
+                mez_agent::AgentTurnState::Failed
+            } else {
+                mez_agent::AgentTurnState::Completed
+            }
         );
     }
     exit.service.terminate_all_pane_processes().unwrap();

@@ -1,4 +1,4 @@
-//! Content-free manual diagnostics; canonical planning owns source selection.
+//! Content-free source/admission diagnostics; canonical planning owns selection.
 
 /// Stable, content-free manual no-work explanation, never completed compaction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -11,6 +11,9 @@ pub(super) enum NoWorkReason {
     NoEligibleClosedPrefix,
     /// Exact/open retained source cannot meet the requested retention allowance.
     IrreducibleExactTail,
+    /// Automatic pressure cannot recompact the same published source. Explicit
+    /// manual selection does not use this gate.
+    UnchangedPublishedSource { head_revision: u64 },
 }
 
 impl NoWorkReason {
@@ -22,6 +25,7 @@ impl NoWorkReason {
             Self::NoDurableTranscript => "no-durable-transcript",
             Self::NoEligibleClosedPrefix => "no-eligible-closed-prefix",
             Self::IrreducibleExactTail => "irreducible-exact-retained-tail",
+            Self::UnchangedPublishedSource { .. } => "unchanged-published-source",
         }
     }
 
@@ -40,6 +44,9 @@ impl NoWorkReason {
             }
             Self::IrreducibleExactTail => {
                 "agent: compaction skipped; exact unfinished transcript tail exceeds retention budget"
+            }
+            Self::UnchangedPublishedSource { .. } => {
+                "agent: automatic compaction skipped; published source has no fresh eligible closed history"
             }
         }
     }

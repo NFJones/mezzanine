@@ -279,11 +279,31 @@ impl RuntimeSessionService {
                 MezError::invalid_state("active-turn compaction pane session is unavailable")
             })?;
         let allowed_actions = self.capture_agent_session_allowed_actions_for_pane(&turn.pane_id)?;
-        let replay_source =
-            match self.prepare_active_replay_compaction(&turn, &model_profile, trigger)? {
-                replay_epoch::Preparation::NoWork(_) => return Ok(false),
-                replay_epoch::Preparation::Ready(source) => source,
-            };
+        let replay_source = match self.prepare_active_replay_compaction(
+            &turn,
+            &model_profile,
+            trigger,
+        )? {
+            replay_epoch::Preparation::NoWork(reason) => {
+                if let NoWorkReason::UnchangedPublishedSource { head_revision } = reason {
+                    let unavailable = matches!(
+                        trigger,
+                        RuntimeActiveTurnCompactionTrigger::ProviderContextLimit { .. }
+                    );
+                    let status = if unavailable {
+                        "agent: context unavailable; unchanged published source cannot be compacted again automatically"
+                    } else {
+                        reason.status()
+                    };
+                    self.append_agent_status_text_to_terminal_buffer(&turn.pane_id, status)?;
+                    self.append_agent_trace_turn_event(&turn.pane_id, turn_id, &format!(
+                            "compaction_reentry suppressed head_revision={head_revision} reason=unchanged_published_source context_unavailable={unavailable}"
+                        ))?;
+                }
+                return Ok(false);
+            }
+            replay_epoch::Preparation::Ready(source) => source,
+        };
         let summarized_entries = replay_source.input_entry_count();
         let request = runtime_model_compaction_request_from_source(
             &model_profile,

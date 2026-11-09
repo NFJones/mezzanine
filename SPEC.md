@@ -10982,9 +10982,9 @@ and frontier are unchanged. Retired handles and completed-source proofs MUST NOT
 close or verify the renewed interval. Repeated retention of a still-pending
 interval MUST remain idempotent. Cold checkpoints MUST mint fresh pending
 allocations rather than serializing or reconstructing these live tokens.
-Nested replay checkpoints MUST write version three descriptive execution
-intervals for retained groups. Each actual new interval has a fresh UUID and a
-checked, increasing per-group generation, independent of event, epoch and
+Nested replay checkpoints MUST write version four, retaining version-three
+descriptive execution intervals for retained groups. Each actual new interval
+has a fresh UUID and a checked, increasing per-group generation, independent of event, epoch and
 dispatch numbers. This metadata MUST remain distinct from the live allocation:
 restoring matching bytes MUST still invalidate original live handles. Pending
 and closed retained groups MUST preserve their latest descriptive interval;
@@ -10996,6 +10996,16 @@ MUST require explicit original-source qualification rather than guessing a new
 generation. Exhausted generations MUST refuse renewal without changing source.
 A pending descriptor MUST NOT reopen closed unknown ancestry before its original
 closed interval has been qualified.
+Version-four checkpoints MUST retain optional inert `compaction_reentry`
+metadata with the actual head occurrence/revision, input/context reservation,
+retention percentage, provider-projection fingerprint and handled-source
+fingerprint. It MUST NOT grant execution, source membership, MCP or publication
+authority. A mismatched head/revision, invalid policy or malformed metadata MUST
+refuse restoration. Version-one through version-three imports MUST preserve
+history and existing restrictive lifecycle state without inventing handled-source
+facts; a new publication records them through the same canonical owner.
+Payload externalization, NoStore continuation, restore, resume and fork MUST
+preserve this metadata independently of live allocation handles.
 Passive imported source extending a closed group MUST retain the last known
 interval only as a provisional lower bound and allocate fresh live protection.
 It MUST NOT invent the original producer's renewal UUID. This provisional state
@@ -14561,6 +14571,22 @@ continuation. Lost acknowledgment MUST recover that same proposal/receipt
 without provider redispatch, action replay or inferred rollback. Storage,
 source or configuration failure MUST preserve old-or-new complete authority;
 partial replacements MUST NOT publish.
+
+After a head is accepted, unchanged automatic pressure MUST NOT immediately
+compact that same head and originally handled closed source again. The canonical
+owner MUST compare its actual head, selected input/tail policy, provider model
+projection and cached original occurrence/rendered-revision fingerprints.
+The handled tail MUST come from the frozen plan's originally closed eligible
+source, excluding the selected prefix. It MUST NOT consume post-freeze arrivals
+or originally protected instructions merely because they coexist in the published
+candidate. Fresh eligible source, genuine later task completion or changed
+relevant input configuration MAY rearm automatic admission. A fresh usage sample
+or newly protected instruction alone MUST NOT rearm unchanged source. The same
+provider rejection MUST then report context unavailable, without another
+compactor, retention walk-down, lost history or repeated actions. An explicit
+new `/compact` bypasses automatic reentry while retaining the same planner,
+eligibility, frozen source and publisher; it grants no right to summarize exact
+or unfinished source.
 
 Agents MUST support optional routing model sizing. When routing
 is enabled for a pane, agent, or subagent, the first provider step for each new

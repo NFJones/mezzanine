@@ -445,6 +445,14 @@ data. Their receipt settlement does not select another replay history. Current
 bookkeeping projects the actual canonical chronology and emits no new terminal
 compaction certificate or private replacement witness.
 
+An unchanged published head and closed source cannot start another automatic
+compactor merely because its continuation is rejected again or a new response
+reports high input. Repeated rejection reports context unavailable. Fresh
+eligible history, genuine task completion or changed relevant model/input
+configuration can rearm recovery; new protected steering alone cannot. An
+explicit new `/compact` still uses any eligible old tail through the same
+planner. It cannot summarize protected or unfinished work.
+
 Unowned or ambiguous source fails before model work is queued. Interleaved
 display rows do not grant ownership or require a separate selective compactor;
 publication uses the original canonical members and qualified source backing.
@@ -597,7 +605,7 @@ checkpoints retain their receipt framing and derive older-epoch restrictions
 from their checked member births. These restrictions never grant action or
 permission rights; fresh retrieval still needs current registry validation.
 
-Nested checkpoint version three also preserves the original execution interval
+Nested checkpoints retain the version-three original execution interval
 UUID and generation for retained groups. Cold restore allocates fresh live
 handles; matching descriptive identity cannot revive an old completion handle.
 An old closure cannot release a renewed interval, even when its source frontier
@@ -605,6 +613,13 @@ is unchanged. Older checkpoints retain explicit unknown ancestry until original
 source qualification; they cannot guess a renewal or export a producer closure.
 Imported source extending a closed group keeps provisional protection until the
 original producer's renewed interval is qualified, including across restart.
+Version four also carries inert handled-source metadata bound to the actual
+head, input/tail policy and provider projection. It fingerprints the originally
+closed unselected tail, keeping post-freeze arrivals and later genuine closure
+fresh. NoStore, restore and fork preserve it without granting work or durability
+rights. Versions one through three remain readable without inventing a fence;
+their next actual publication records it. Current model projection is selected
+before automatic admission, including when a restored view has no cached model.
 Ordinary saved rows carry original lifecycle controls separately from model
 blocks. Replay checks their complete original group membership, producer and
 interval before applying closure; a displayed response or matching group name

@@ -152,6 +152,42 @@ pub(crate) fn complete_task(
     );
 }
 
+/// Completes an admitted task and starts genuinely fresh work. Multi-epoch
+/// fixtures use this boundary rather than repeatedly compacting unchanged
+/// retained history or fabricating eligibility in the canonical owner.
+pub(crate) fn advance_task(
+    service: &mut RuntimeSessionService,
+    turn: &str,
+    next_prompt: &str,
+) -> String {
+    complete_task(
+        service,
+        turn,
+        "actual intervening task completed",
+        mez_agent::ProviderApiCompatibility::OpenAiResponses,
+    );
+    for work in service.claim_bookkeeping_candidates() {
+        let history = work.execute();
+        assert!(
+            service
+                .complete_bookkeeping_candidate(work, history)
+                .unwrap()
+        );
+    }
+    let primary = service.session().layout_owner_client_id().unwrap().clone();
+    let started = service
+        .execute_agent_shell_command(&primary, next_prompt)
+        .unwrap();
+    assert!(started.contains(r#""state":"running""#), "{started}");
+    service
+        .agent_shell_store()
+        .get("%1")
+        .unwrap()
+        .running_turn_id
+        .clone()
+        .unwrap()
+}
+
 /// A normal final `say` response exercises the real provider execution owner.
 /// It requests no executable capability and performs no external model call.
 struct FinalAnswer<'a> {

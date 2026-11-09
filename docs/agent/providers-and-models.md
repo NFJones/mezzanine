@@ -17,6 +17,12 @@ the failed request exactly. A usable final publishes without checking an
 ordinary follow-up estimate. OpenAI requests omit `max_output_tokens` for
 compaction and ordinary execution. See [context and continuity](context-and-continuity.md).
 
+Capture selects that actual compactor projection on an owned copy, including
+after a model switch; preparation leaves live history unchanged. An unexpected
+live projection or frozen task-profile change refuses before credentials/model
+dispatch. Automatic retries of an unchanged published source stop as context
+unavailable; explicit manual compaction and fresh eligible history remain valid.
+
 ## Choose a provider
 
 Mez has adapters for OpenAI Responses, Anthropic Messages, DeepSeek Chat

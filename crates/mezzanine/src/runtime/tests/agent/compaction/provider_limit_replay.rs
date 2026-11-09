@@ -4,12 +4,12 @@
 
 use super::*;
 
-/// Three provider rejections use actual task source. Successive publications
+/// Three tasks' provider rejections use actual task source. Successive publications
 /// consume the prior typed head and whole inherited units in order, while
 /// inference and physical publication alone cannot resume the provider turn.
 #[test]
 fn runtime_provider_context_limit_error_compacts_context_multiple_times() {
-    let (mut service, store, turn_id) = recovery_source(
+    let (mut service, store, mut turn_id) = recovery_source(
         &format!("ORIGINAL_FIRST_EPOCH_SOURCE {}", "source ".repeat(5_000)),
         &format!("ORIGINAL_INHERITED_TAIL {}", "tail ".repeat(200)),
         10,
@@ -27,7 +27,14 @@ fn runtime_provider_context_limit_error_compacts_context_multiple_times() {
     let mut inherited = Vec::new();
     let mut previous_head = None;
     let mut previous_summary = None;
-    for attempt in 1..=3 {
+    for attempt in 1u32..=3 {
+        if attempt > 1 {
+            turn_id = crate::test_support::compaction_source::advance_task(
+                &mut service,
+                &turn_id,
+                "continue with genuinely fresh closed source",
+            );
+        }
         let before = service.agent_turn_contexts()[&turn_id].clone();
         let original = mez_agent::ReplayEpochContext::from_owned_context(
             mez_agent::ReplayConversationId::new(&conversation).unwrap(),
@@ -79,7 +86,7 @@ fn runtime_provider_context_limit_error_compacts_context_multiple_times() {
                     &AgentId::opaque("agent-%1").unwrap(),
                     &turn_id,
                     &error,
-                    attempt,
+                    1,
                 )
                 .unwrap()
         );

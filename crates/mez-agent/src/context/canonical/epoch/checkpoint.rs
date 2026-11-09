@@ -13,6 +13,8 @@
 //! pending flags preserve source protection, without reissuing effects or ACKs.
 //! Version three also retains descriptive execution intervals. Live allocation
 //! identities and controller-minted closure witnesses still never deserialize.
+//! Version four retains inert automatic-compaction reentry metadata bound to
+//! its actual head; older checkpoints do not manufacture handled-source facts.
 
 use super::super::{
     ContextBlockRecord, ContextSemanticKind, ProviderContinuityOwner, StableContextBlockRecord,
@@ -46,6 +48,9 @@ pub struct ReplayEpochCheckpoint<P = String> {
     /// derived from actual member births when importing that original format.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     retired_mcp_retrievals: Option<Vec<ContextBlockOccurrenceId>>,
+    /// Version four, bound to this head but never a publication/execution receipt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    compaction_reentry: Option<ReplayCompactionReentry>,
 }
 
 /// Ordered raw membership, including the birth revision of inherited tail.
@@ -152,6 +157,7 @@ impl<P> ReplayEpochCheckpoint<P> {
             pending_peer_messages: self.pending_peer_messages,
             historical_instruction_events: self.historical_instruction_events,
             retired_mcp_retrievals: self.retired_mcp_retrievals,
+            compaction_reentry: self.compaction_reentry,
         })
     }
 }
@@ -173,7 +179,7 @@ impl ReplayEpochContext {
     pub fn checkpoint(&self) -> AgentContextResult<ReplayEpochCheckpoint> {
         self.validate_membership()?;
         Ok(ReplayEpochCheckpoint {
-            version: 3,
+            version: 4,
             conversation: self.conversation.as_str().to_owned(),
             revision: self.revision.get(),
             policy: self.policy,
@@ -222,6 +228,7 @@ impl ReplayEpochContext {
                     .copied()
                     .collect(),
             ),
+            compaction_reentry: self.compaction_reentry.clone(),
         })
     }
 
@@ -251,8 +258,9 @@ impl ReplayEpochContext {
                 checkpoint.retired_mcp_retrievals.is_some(),
                 checkpoint.execution_intervals.is_some()
             ),
-            (1, false, false) | (2, true, false) | (3, true, true)
-        ) || checkpoint.conversation != conversation.as_str()
+            (1, false, false) | (2, true, false) | (3 | 4, true, true)
+        ) || checkpoint.version < 4 && checkpoint.compaction_reentry.is_some()
+            || checkpoint.conversation != conversation.as_str()
         {
             return Err(invalid("unsupported format or foreign conversation"));
         }
@@ -370,6 +378,7 @@ impl ReplayEpochContext {
             instruction_owners: BTreeMap::new(),
             next_instruction_owner: 1,
             source_lifecycle: ReplaySourceLifecycle::default(),
+            compaction_reentry: checkpoint.compaction_reentry,
         };
         if owner.revision.get() == 0 && owner.head.is_some()
             || owner.revision.get() > 0

@@ -19,6 +19,11 @@ pub(crate) struct RuntimeCompactionReplaySource {
     config_layers: Vec<crate::config::ConfigLayer>,
     process: Option<crate::runtime::processes::RuntimePaneProcessIdentity>,
     model_profile: Option<mez_agent::ModelProfile>,
+    /// Exact inference profile, distinct from a routing parent turn's profile.
+    compactor_profile: mez_agent::ModelProfile,
+    /// The live actor's original cached view. Preparing a selected compactor
+    /// view changes only owned copies, and cannot hide an unexpected live switch.
+    original_projection: Option<mez_agent::ReplayProviderProjection>,
     /// One private graph, retained across physical wave and retry generations.
     operation: operation::Operation,
 }
@@ -50,6 +55,44 @@ pub(in crate::runtime::commands::compaction) enum Preparation {
 }
 
 impl RuntimeSessionService {
+    /// All triggers derive the identical raw reservation from the selected
+    /// model's actual input/context allowance and configured retention.
+    fn compaction_tail_policy(
+        &self,
+        profile: &mez_agent::ModelProfile,
+    ) -> Result<ReplayTailPolicy> {
+        let budget = profile
+            .max_input_tokens()
+            .or_else(|| profile.context_window_tokens())
+            .map(|limit| limit.min(profile.context_window_tokens().unwrap_or(limit)))
+            .ok_or_else(|| {
+                MezError::invalid_state("canonical compaction requires a model context limit")
+            })?;
+        let retained = u8::try_from(self.agent_compaction_raw_retention_percent())
+            .map_err(|_| MezError::invalid_state("invalid canonical raw retention percentage"))?;
+        ReplayTailPolicy::new(budget, retained).map_err(Into::into)
+    }
+
+    /// Selects the actual configured compactor view on an isolated canonical
+    /// owner, without credential access or changing the live history body.
+    fn bind_compaction_provider_projection(
+        &self,
+        owner: &mut ReplayEpochContext,
+        profile: &mez_agent::ModelProfile,
+    ) -> Result<()> {
+        let provider = self
+            .provider_registry()
+            .provider(&profile.provider)
+            .ok_or_else(|| MezError::config("compaction provider is unavailable"))?;
+        let api = mez_agent::resolve_provider_api(&provider.kind, provider.api.as_deref())?;
+        owner.select_provider_projection(mez_agent::ReplayProviderProjection::new(
+            api,
+            profile.provider.clone(),
+            profile.model.clone(),
+        )?)?;
+        Ok(())
+    }
+
     /// Freezes the actual prefix before rendering provider input. A descriptive
     /// legacy body cannot authorize another model producer: the original history
     /// importer or task admission must establish its canonical owner first.
@@ -78,20 +121,21 @@ impl RuntimeSessionService {
                 "canonical compaction turn no longer owns its conversation",
             ));
         }
-        let owner = ReplayEpochContext::from_owned_context(
+        let mut owner = ReplayEpochContext::from_owned_context(
             ReplayConversationId::new(turn.conversation_id.clone())?,
             context.clone(),
         )?;
-        let budget = profile
-            .max_input_tokens()
-            .or_else(|| profile.context_window_tokens())
-            .map(|limit| limit.min(profile.context_window_tokens().unwrap_or(limit)))
-            .ok_or_else(|| {
-                MezError::invalid_state("canonical compaction requires a model context limit")
-            })?;
-        let retained = u8::try_from(self.agent_compaction_raw_retention_percent())
-            .map_err(|_| MezError::invalid_state("invalid canonical raw retention percentage"))?;
-        let plan = match owner.prepare_compaction(ReplayTailPolicy::new(budget, retained)?)? {
+        let original_projection = owner.provider_projection().cloned();
+        self.bind_compaction_provider_projection(&mut owner, profile)?;
+        let policy = self.compaction_tail_policy(profile)?;
+        if !owner.automatic_compaction_is_fresh(policy)? {
+            return Ok(Preparation::NoWork(
+                super::super::NoWorkReason::UnchangedPublishedSource {
+                    head_revision: owner.revision().get(),
+                },
+            ));
+        }
+        let plan = match owner.prepare_compaction(policy)? {
             ReplayCompactionPreparation::Ready(plan) => plan,
             ReplayCompactionPreparation::NoWork(_) => {
                 return Ok(Preparation::NoWork(
@@ -124,6 +168,8 @@ impl RuntimeSessionService {
                 config_layers: self.integration.config_layers().to_vec(),
                 process: self.steering_process_binding(&turn.pane_id)?,
                 model_profile: self.agent_turn_model_profile(&turn.turn_id).cloned(),
+                compactor_profile: profile.clone(),
+                original_projection,
                 operation,
             },
         )))
@@ -134,7 +180,7 @@ impl RuntimeSessionService {
     pub(in crate::runtime::commands::compaction) fn prepare_manual_replay_compaction(
         &self,
         pane: &str,
-        owner: ReplayEpochContext,
+        mut owner: ReplayEpochContext,
         profile_name: &str,
         profile: &mez_agent::ModelProfile,
         history: Option<Arc<crate::runtime::control::RuntimeAgentHistorySource>>,
@@ -151,16 +197,9 @@ impl RuntimeSessionService {
                 "manual replay source does not match its idle conversation",
             ));
         }
-        let budget = profile
-            .max_input_tokens()
-            .or_else(|| profile.context_window_tokens())
-            .map(|limit| limit.min(profile.context_window_tokens().unwrap_or(limit)))
-            .ok_or_else(|| {
-                MezError::invalid_state("canonical compaction requires a model context limit")
-            })?;
-        let retained = u8::try_from(self.agent_compaction_raw_retention_percent())
-            .map_err(|_| MezError::invalid_state("invalid canonical raw retention percentage"))?;
-        let policy = ReplayTailPolicy::new(budget, retained)?;
+        let original_projection = owner.provider_projection().cloned();
+        self.bind_compaction_provider_projection(&mut owner, profile)?;
+        let policy = self.compaction_tail_policy(profile)?;
         let plan = match owner.prepare_compaction(policy)? {
             ReplayCompactionPreparation::Ready(plan) => plan,
             ReplayCompactionPreparation::NoWork(_) => {
@@ -210,6 +249,8 @@ impl RuntimeSessionService {
                 config_layers: self.integration.config_layers().to_vec(),
                 process: self.steering_process_binding(pane)?,
                 model_profile: Some(profile.clone()),
+                compactor_profile: profile.clone(),
+                original_projection,
                 operation: model_work,
             },
         )))
@@ -311,11 +352,26 @@ impl RuntimeCompactionReplaySource {
     /// latter carries its original continuation seal, not a cold reconstruction.
     pub(super) fn current_body(&self, service: &RuntimeSessionService) -> Result<AgentContext> {
         match self.turn_id() {
-            Some(turn) => service
-                .agent_turn_contexts()
-                .get(turn)
-                .cloned()
-                .ok_or_else(|| MezError::conflict("canonical live context disappeared")),
+            Some(turn) => {
+                let body = service
+                    .agent_turn_contexts()
+                    .get(turn)
+                    .cloned()
+                    .ok_or_else(|| MezError::conflict("canonical live context disappeared"))?;
+                let mut owner = ReplayEpochContext::from_owned_context(
+                    self.owner.conversation_id().clone(),
+                    body,
+                )?;
+                if owner.provider_projection() != self.original_projection.as_ref() {
+                    return Err(MezError::conflict(
+                        "canonical live provider projection changed",
+                    ));
+                }
+                if let Some(projection) = self.plan.provider_projection() {
+                    owner.select_provider_projection(projection.clone())?;
+                }
+                Ok(owner.into_owned_context())
+            }
             None => Ok(self.owner.clone().into_owned_context()),
         }
     }
@@ -375,6 +431,11 @@ impl RuntimeCompactionReplaySource {
         {
             return Err(MezError::conflict(
                 "canonical compaction source is not the accepted task source",
+            ));
+        }
+        if accepted.model_profile != self.compactor_profile {
+            return Err(MezError::conflict(
+                "canonical compactor model profile changed",
             ));
         }
         match &self.target {

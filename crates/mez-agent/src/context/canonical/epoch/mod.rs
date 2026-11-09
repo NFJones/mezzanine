@@ -42,6 +42,8 @@ pub use checkpoint::ReplayEpochCheckpoint;
 pub(crate) use mcp_grants::ReplayMcpRetrievalScope;
 mod native_groups;
 mod planning;
+mod reentry;
+use reentry::{ReplayCompactionReentry, ReplayCompactionReentryInput};
 mod publication;
 pub use publication::ReplayPreparedCompaction;
 mod prefix_import;
@@ -66,6 +68,8 @@ pub struct ReplayEpochContext {
     next_instruction_owner: u64,
     /// Controller-minted source transitions; never restored from checkpoints.
     source_lifecycle: ReplaySourceLifecycle,
+    /// Last handled closed-source/configuration signature, never replay authority.
+    compaction_reentry: Option<ReplayCompactionReentry>,
 }
 
 impl ReplayEpochContext {
@@ -143,6 +147,7 @@ impl ReplayEpochContext {
             instruction_owners: BTreeMap::new(),
             next_instruction_owner: 1,
             source_lifecycle: ReplaySourceLifecycle::default(),
+            compaction_reentry: None,
         };
         owner.bind_mcp_retrieval_scope();
         owner.initialize_accounting()?;

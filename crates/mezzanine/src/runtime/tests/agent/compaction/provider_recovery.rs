@@ -518,7 +518,9 @@ async fn action_result_prefix_recovery() {
             other => panic!("retained result must still have real eligible source: {other:?}"),
         };
         let consumes_result = selected.summary_input().contains(&result);
-        fixture.reject(attempt);
+        // Later epochs require actual completed task source; successive context
+        // rejections cannot walk the same retained history down automatically.
+        fixture.reject(1);
         if attempt == 1 {
             assert!(fixture.input().contains("OLDER_PREFIX_SOURCE"));
             assert!(!fixture.input().contains("provider-context-limit-tail-one-"));
@@ -555,12 +557,16 @@ async fn action_result_prefix_recovery() {
         if consumes_result {
             break;
         }
+        assert!(attempt < 8, "fresh-source recovery must terminate");
+        fixture.finish("intervening native-source task completed");
+        fixture.next("continue with newly eligible native evidence");
         attempt += 1;
     }
-    assert_eq!(
-        fixture.store.inspect(&fixture.conversation()).unwrap(),
-        audit
-    );
+    let archive = fixture.store.inspect(&fixture.conversation()).unwrap();
+    assert!(archive.starts_with(&audit));
+    for original in &audit {
+        assert_eq!(archive.iter().filter(|row| *row == original).count(), 1);
+    }
 }
 
 /// Runs a real lease/provider continuation after native completion and then

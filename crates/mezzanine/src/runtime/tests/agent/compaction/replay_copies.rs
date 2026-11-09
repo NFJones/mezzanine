@@ -142,7 +142,7 @@ fn admit_and_bootstrap_child(service: &mut RuntimeSessionService, pane: &str, co
 }
 
 pub(super) fn published_source() -> (RuntimeSessionService, AgentTranscriptStore, String, String) {
-    let (mut service, store, turn) = provider_limit_replay::recovery_source(
+    let (mut service, store, mut turn) = provider_limit_replay::recovery_source(
         &format!("COVERED_PARENT_SOURCE {}", "source ".repeat(5_000)),
         "ORIGINAL_PARENT_RAW_TAIL",
         10,
@@ -157,16 +157,23 @@ pub(super) fn published_source() -> (RuntimeSessionService, AgentTranscriptStore
         .with_provider_failure_json(
             r#"{"status_code":400,"error":{"code":"context_length_exceeded"}}"#,
         );
-    // The diagnostic unit precedes the retained provider group. Two genuine
-    // rewrites keep that group's raw bytes while advancing the canonical epoch.
+    // The diagnostic unit precedes the retained provider group. A genuine task
+    // completion rearms the second epoch; a new rejection alone cannot do so.
     for attempt in 1..=2 {
+        if attempt > 1 {
+            turn = crate::test_support::compaction_source::advance_task(
+                &mut service,
+                &turn,
+                "continue with the large observation",
+            );
+        }
         assert!(
             service
                 .recover_agent_provider_context_limit_failure(
                     &AgentId::opaque("agent-%1").unwrap(),
                     &turn,
                     &error,
-                    attempt,
+                    1,
                 )
                 .unwrap()
         );

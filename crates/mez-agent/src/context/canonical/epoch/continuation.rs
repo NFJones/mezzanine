@@ -23,6 +23,7 @@ pub(in super::super) struct ReplayEpochContinuation {
     instruction_owners: BTreeMap<u64, BTreeSet<ContextEventSequence>>,
     next_instruction_owner: u64,
     source_lifecycle: ReplaySourceLifecycle,
+    compaction_reentry: Option<ReplayCompactionReentry>,
     provider_projection: Option<ReplayProviderProjection>,
     seals: Vec<EventSeal>,
     prelude_seals: BTreeMap<ContextEventSequence, EventSeal>,
@@ -138,6 +139,7 @@ impl ReplayEpochContext {
             instruction_owners,
             next_instruction_owner,
             source_lifecycle,
+            compaction_reentry,
             accounting: _,
         } = self;
         let continuation = ReplayEpochContinuation {
@@ -167,6 +169,7 @@ impl ReplayEpochContext {
             instruction_owners,
             next_instruction_owner,
             source_lifecycle,
+            compaction_reentry,
             provider_projection,
             seals: context.chronology.iter().map(EventSeal::capture).collect(),
             prelude_seals: BTreeMap::new(),
@@ -301,6 +304,7 @@ impl ReplayEpochContext {
             instruction_owners: state.instruction_owners,
             next_instruction_owner: state.next_instruction_owner,
             source_lifecycle: state.source_lifecycle,
+            compaction_reentry: state.compaction_reentry,
         };
         owner
             .source_lifecycle
