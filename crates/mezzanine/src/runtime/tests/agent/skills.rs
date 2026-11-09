@@ -2,6 +2,7 @@
 
 use super::*;
 
+mod lifecycle;
 mod shared;
 
 /// Actor-style manual preparation must discover current project overlays before
