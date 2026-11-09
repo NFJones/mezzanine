@@ -278,10 +278,13 @@ fn valid_and_missing_primary_diagnostics() {
             .contains("\"valid\":true")
     );
     assert_eq!(fs::read_to_string(path).unwrap(), default);
+    let version = toml::from_str::<toml::Value>(&default).unwrap()["version"]
+        .as_integer()
+        .unwrap();
     for (name, text) in [
-        ("valid.json", "{\"version\":103}"),
-        ("valid.yaml", "version: 103\n"),
-        ("valid.yml", "version: 103\n"),
+        ("valid.json", format!("{{\"version\":{version}}}")),
+        ("valid.yaml", format!("version: {version}\n")),
+        ("valid.yml", format!("version: {version}\n")),
     ] {
         let path = fixture.0.join(name);
         fs::write(&path, text).unwrap();

@@ -1418,10 +1418,10 @@ fn runtime_saved_fork_epoch_first_encoded_request_survives_reopen() {
     // Fork must preserve that accepted parent, not the superseded sidecar.
     let normalized_epoch_bytes = fs::read(&epoch_path).unwrap();
     assert_ne!(normalized_epoch_bytes, epoch_bytes);
-    assert_eq!(
-        serde_json::from_slice::<serde_json::Value>(&normalized_epoch_bytes).unwrap()["manifest"]["version"],
-        10
-    );
+    let normalized_epoch: serde_json::Value =
+        serde_json::from_slice(&normalized_epoch_bytes).unwrap();
+    assert_eq!(normalized_epoch["manifest"]["version"], 12);
+    assert_eq!(normalized_epoch["manifest"]["head_policy"], "summary");
     assert_eq!(fs::read(&source_path).unwrap(), source_bytes);
     let forked = service
         .execute_agent_shell_command(&primary, "/fork fork-target")
