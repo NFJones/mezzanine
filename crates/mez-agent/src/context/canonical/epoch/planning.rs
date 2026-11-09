@@ -4,19 +4,30 @@
 use super::*;
 
 impl ReplayEpochContext {
-    /// Freezes one eligible closed prefix and the configured raw tail. Exact
-    /// instructions, pending peer/native groups and unrecoverable evidence push
-    /// the boundary earlier; complete groups are never split or skipped around.
+    /// Freezes one source selection under the captured head policy, or the
+    /// committed policy when no explicit target was supplied. Summary selection
+    /// uses a closed prefix and raw tail; exact instructions, pending peer/native
+    /// groups and unrecoverable evidence push that prefix boundary earlier.
+    /// Intentional omission retains mandatory whole units independently of one
+    /// optional suffix, after reserving stable/protected input and fixed framing.
     /// A selected provider view supplies cached visibility-aware costs and is
     /// frozen with the plan; ordinary framing is used when no view is selected.
     /// Empty/irreducible source returns NoWork without creating model activity.
-    /// A tail reservation that covers all closed source still permits one oldest
-    /// complete prefix unit, so requested progress needs no trigger-specific bypass.
+    /// Only summary policy forces an oldest closed prefix unit when the tail
+    /// reservation fits everything. Unchanged raw retention is explicit NoWork.
     pub fn prepare_compaction(
         &self,
         policy: ReplayTailPolicy,
     ) -> AgentContextResult<ReplayCompactionPreparation> {
         self.validate_membership()?;
+        if policy.head_policy.unwrap_or(self.policy) == ReplayHeadPolicy::IntentionalOmission {
+            return self.prepare_raw_tail(policy);
+        }
+        if policy.fixed_input_tokens != 0 || policy.optional_unit_limit.is_some() {
+            return Err(AgentContextError::new(
+                "raw limits require intentional omission",
+            ));
+        }
         if self.members.is_empty() {
             return Ok(ReplayCompactionPreparation::NoWork(
                 ReplayCompactionNoWork::NoRawMembers,
@@ -95,18 +106,144 @@ impl ReplayEpochContext {
             owner_identity: self.owner_identity.clone(),
             conversation: self.conversation.clone(),
             parent: self.revision,
-            policy: self.policy,
+            source_policy: self.policy,
+            policy: ReplayHeadPolicy::Summary,
             head: self.head.clone(),
             frozen: self.context.chronology().to_vec(),
             members: self.members.clone(),
-            prefix_members: cut,
-            prefix_events: offset + cut,
+            selection: Box::new(ReplayCompactionSelection::Prefix {
+                members: cut,
+                events: offset + cut,
+            }),
             input_estimates,
             provider_projection: self.provider_projection().cloned().map(Box::new),
             reentry: Box::new(ReplayCompactionReentryInput::capture(
                 policy,
                 self.provider_projection(),
                 &raw[cut..units.get(protected).map_or(raw.len(), |unit| unit.start)],
+            )),
+        }))
+    }
+
+    /// Selects one optional suffix independently of mandatory whole units.
+    /// Fixed framing and stable/protected input reserve context capacity first;
+    /// the optional percentage is a global upper bound, never a per-gap budget.
+    /// This pure plan never constructs a model request or retires an obligation.
+    fn prepare_raw_tail(
+        &self,
+        policy: ReplayTailPolicy,
+    ) -> AgentContextResult<ReplayCompactionPreparation> {
+        if self.members.is_empty() && self.head.is_none() {
+            return Ok(ReplayCompactionPreparation::NoWork(
+                ReplayCompactionNoWork::NoRawMembers,
+            ));
+        }
+        let offset = usize::from(self.head.is_some());
+        let raw = &self.context.chronology()[offset..];
+        let estimates = self
+            .provider_input_estimates()
+            .unwrap_or(self.input_estimates());
+        let mut units = Vec::new();
+        let mut raw_total = 0usize;
+        let mut protected_raw = 0usize;
+        let mut omitted = BTreeSet::new();
+        for range in execution_units(raw) {
+            let events = &raw[range.clone()];
+            let cost = events.iter().try_fold(0usize, |sum, event| {
+                sum.checked_add(self.planning_input_tokens(event)?)
+                    .ok_or_else(|| AgentContextError::new("raw-tail unit estimate exhausted"))
+            })?;
+            raw_total = raw_total
+                .checked_add(cost)
+                .ok_or_else(|| AgentContextError::new("raw-tail source estimate exhausted"))?;
+            let protected = events.iter().any(|event| !self.event_is_replaceable(event));
+            if protected {
+                protected_raw = protected_raw.checked_add(cost).ok_or_else(|| {
+                    AgentContextError::new("raw-tail protected estimate exhausted")
+                })?;
+            } else {
+                omitted.extend(events.iter().map(|event| event.record().occurrence_id()));
+            }
+            units.push((range, cost, protected));
+        }
+        if raw_total != estimates.raw_input_tokens() {
+            return Err(AgentContextError::new("raw-tail source aggregate drifted"));
+        }
+        let mandatory = estimates
+            .stable_input_tokens()
+            .checked_add(policy.fixed_input_tokens)
+            .and_then(|cost| cost.checked_add(protected_raw))
+            .ok_or_else(|| AgentContextError::new("raw-tail mandatory estimate exhausted"))?;
+        let Some(available) = policy.context_tokens.checked_sub(mandatory) else {
+            return Ok(ReplayCompactionPreparation::NoWork(
+                ReplayCompactionNoWork::ProtectedInputExceedsBudget,
+            ));
+        };
+        let allowance = policy.retained_raw_tokens().min(available);
+        let mut retained_optional = 0usize;
+        let mut retained_optional_units = 0usize;
+        for (range, cost, protected) in units.iter().rev() {
+            if *protected {
+                continue;
+            }
+            let next = retained_optional
+                .checked_add(*cost)
+                .ok_or_else(|| AgentContextError::new("raw-tail retained estimate exhausted"))?;
+            if next > allowance
+                || retained_optional_units >= policy.optional_unit_limit.unwrap_or(usize::MAX)
+            {
+                // Stop at the first non-fitting optional unit. In particular,
+                // never backfill an older small unit past a newer large one.
+                break;
+            }
+            retained_optional = next;
+            retained_optional_units += 1;
+            for event in &raw[range.clone()] {
+                omitted.remove(&event.record().occurrence_id());
+            }
+        }
+        if omitted.is_empty() && self.head.is_none() {
+            return Ok(ReplayCompactionPreparation::NoWork(
+                ReplayCompactionNoWork::RetainedSourceUnchanged,
+            ));
+        }
+        let retained_raw = protected_raw
+            .checked_add(retained_optional)
+            .ok_or_else(|| AgentContextError::new("raw-tail retained estimate exhausted"))?;
+        let selected_raw = raw_total
+            .checked_sub(retained_raw)
+            .ok_or_else(|| AgentContextError::new("raw-tail selection estimate drifted"))?;
+        let tail_start = raw
+            .iter()
+            .rposition(|event| omitted.contains(&event.record().occurrence_id()))
+            .map_or(offset, |index| offset + index + 1);
+        Ok(ReplayCompactionPreparation::Ready(ReplayCompactionPlan {
+            owner_identity: self.owner_identity.clone(),
+            conversation: self.conversation.clone(),
+            parent: self.revision,
+            source_policy: self.policy,
+            policy: ReplayHeadPolicy::IntentionalOmission,
+            head: self.head.clone(),
+            frozen: self.context.chronology().to_vec(),
+            members: self.members.clone(),
+            selection: Box::new(ReplayCompactionSelection::RawTail {
+                omitted,
+                tail_start,
+                retained_optional_units,
+            }),
+            input_estimates: ReplayCompactionInputEstimates {
+                selected_raw,
+                prior_summary: estimates.summary_input_tokens(),
+                retained_raw,
+            },
+            provider_projection: self.provider_projection().cloned().map(Box::new),
+            // Raw selection naturally becomes NoWork on unchanged retained
+            // membership. Only an explicitly smaller real-rejection frontier
+            // or fresh optional source can make another omission progress.
+            reentry: Box::new(ReplayCompactionReentryInput::capture(
+                policy,
+                self.provider_projection(),
+                &[],
             )),
         }))
     }

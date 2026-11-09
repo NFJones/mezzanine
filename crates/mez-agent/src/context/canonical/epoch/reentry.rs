@@ -77,6 +77,12 @@ impl ReplayEpochContext {
         policy: ReplayTailPolicy,
     ) -> AgentContextResult<bool> {
         self.validate_membership()?;
+        if policy
+            .head_policy
+            .is_some_and(|target| target != self.policy)
+        {
+            return Ok(true);
+        }
         let Some(recorded) = &self.compaction_reentry else {
             return Ok(true);
         };

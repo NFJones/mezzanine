@@ -73,16 +73,28 @@ impl ReplayEpochContext {
                 .carried_arrivals
                 .insert(member.occurrence_id, member.clone());
         }
-        candidate.context.chronology.splice(
-            ..plan.prefix_events,
-            prepared.candidate.context.chronology()[..head_events]
-                .iter()
-                .cloned(),
-        );
+        match plan.selection.as_ref() {
+            ReplayCompactionSelection::Prefix { events, .. } => {
+                candidate.context.chronology.splice(
+                    ..*events,
+                    prepared.candidate.context.chronology()[..head_events]
+                        .iter()
+                        .cloned(),
+                );
+            }
+            ReplayCompactionSelection::RawTail { omitted, .. } => {
+                let previous_head = plan.head.as_ref().map(ReplaySummaryIdentity::occurrence_id);
+                candidate.context.chronology.retain(|event| {
+                    let id = event.record().occurrence_id();
+                    Some(id) != previous_head && !omitted.contains(&id)
+                });
+            }
+        }
         candidate.context.rebuild_projections();
         candidate.head = prepared.candidate.head.clone();
+        candidate.policy = prepared.candidate.policy;
         candidate.publish_accounting(plan)?;
-        candidate.members.drain(..plan.prefix_members);
+        candidate.retire_compaction_members(plan);
         candidate.revision = prepared.candidate.revision;
         candidate.compaction_reentry = prepared.candidate.compaction_reentry.clone();
         candidate.bind_mcp_retrieval_scope();
@@ -118,13 +130,12 @@ impl ReplayEpochContext {
             || plan.conversation != self.conversation
             || plan.parent != self.revision
             || plan.head != self.head
-            || plan.policy != self.policy
+            || plan.source_policy != self.policy
             || plan.provider_projection.as_deref() != self.provider_projection()
             || !self.context.chronology().starts_with(&plan.frozen)
             || !self.members.starts_with(&plan.members)
-            || plan.prefix_members == 0
-            || plan.prefix_members > plan.members.len()
-            || plan.prefix_events > plan.frozen.len()
+            || plan.frozen.len() != plan.members.len() + usize::from(plan.head.is_some())
+            || !plan.selection_is_valid()
         {
             return Err(AgentContextError::new(
                 "replay publication has a stale parent or frozen source",
@@ -139,7 +150,7 @@ impl ReplayEpochContext {
         plan: ReplayCompactionPlan,
         publication: ReplayHeadPublication,
     ) -> AgentContextResult<ReplayEpochRevision> {
-        let summary = match (self.policy, publication) {
+        let summary = match (plan.policy, publication) {
             (ReplayHeadPolicy::Summary, ReplayHeadPublication::Summary(text)) => {
                 crate::context_compaction::validate_model_compaction_summary(
                     &text,
@@ -170,10 +181,15 @@ impl ReplayEpochContext {
         );
         let mut candidate = self.clone();
         if let Some(text) = summary {
+            let ReplayCompactionSelection::Prefix { events, .. } = plan.selection.as_ref() else {
+                return Err(AgentContextError::new(
+                    "model summary requires a prefix selection",
+                ));
+            };
             candidate
                 .context
                 .compact_execution_ranges_into_summary(
-                    std::iter::once(0..plan.prefix_events).collect(),
+                    std::iter::once(0..*events).collect(),
                     ContextBlock::reference_event(
                         ContextSourceKind::CompactionPrefix,
                         "conversation epoch summary",
@@ -195,15 +211,25 @@ impl ReplayEpochContext {
                     .occurrence_id(),
             });
         } else {
-            candidate.context.chronology.drain(..plan.prefix_events);
+            let previous_head = plan.head.as_ref().map(ReplaySummaryIdentity::occurrence_id);
+            let ReplayCompactionSelection::RawTail { omitted, .. } = plan.selection.as_ref() else {
+                return Err(AgentContextError::new(
+                    "intentional omission requires a raw selection",
+                ));
+            };
+            candidate.context.chronology.retain(|event| {
+                let id = event.record().occurrence_id();
+                Some(id) != previous_head && !omitted.contains(&id)
+            });
             candidate.context.rebuild_projections();
             candidate.context.validate_durable().map_err(|_| {
                 AgentContextError::new("replay omission adoption failed canonical validation")
             })?;
             candidate.head = None;
         }
+        candidate.policy = plan.policy;
         candidate.publish_accounting(&plan)?;
-        candidate.members.drain(..plan.prefix_members);
+        candidate.retire_compaction_members(&plan);
         candidate.revision = revision;
         candidate.compaction_reentry = candidate
             .head
@@ -224,21 +250,77 @@ impl ReplayEpochContext {
         plan: &ReplayCompactionPlan,
     ) -> AgentContextResult<()> {
         let offset = usize::from(self.head.is_some());
-        let selected = &self.context.chronology()[offset..plan.prefix_events];
-        let retained_groups = self.context.chronology()[plan.prefix_events..]
+        let retained_groups = self
+            .context
+            .chronology()
             .iter()
-            .filter_map(ConversationEvent::execution_group_id)
+            .enumerate()
+            .filter(|(index, _)| !plan.removes_event(*index))
+            .filter_map(|(_, event)| event.execution_group_id())
             .collect::<BTreeSet<_>>();
-        if selected.iter().any(|event| {
-            !self.event_is_replaceable(event)
-                || event
-                    .execution_group_id()
-                    .is_some_and(|group| retained_groups.contains(group))
-        }) {
+        if self
+            .context
+            .chronology()
+            .iter()
+            .enumerate()
+            .skip(offset)
+            .filter(|(index, _)| plan.removes_event(*index))
+            .any(|(_, event)| {
+                !self.event_is_replaceable(event)
+                    || event
+                        .execution_group_id()
+                        .is_some_and(|group| retained_groups.contains(group))
+            })
+        {
             return Err(AgentContextError::new(
                 "replay publication source became protected or its execution group changed",
             ));
         }
         Ok(())
+    }
+
+    /// Retires only the plan's selected original membership after accounting
+    /// has removed those exact entries. Append-only arrivals remain untouched.
+    fn retire_compaction_members(&mut self, plan: &ReplayCompactionPlan) {
+        match plan.selection.as_ref() {
+            ReplayCompactionSelection::Prefix { members, .. } => {
+                self.members.drain(..*members);
+            }
+            ReplayCompactionSelection::RawTail { omitted, .. } => {
+                self.members
+                    .retain(|member| !omitted.contains(&member.occurrence_id));
+            }
+        }
+    }
+}
+
+impl ReplayCompactionPlan {
+    /// Checks the selection's policy, source bounds and actual original IDs.
+    /// Plans are minted locally, never reconstructed from descriptive metadata.
+    fn selection_is_valid(&self) -> bool {
+        match self.selection.as_ref() {
+            ReplayCompactionSelection::Prefix { members, events } => {
+                self.policy == ReplayHeadPolicy::Summary
+                    && *members > 0
+                    && *members <= self.members.len()
+                    && *events == members + usize::from(self.head.is_some())
+                    && *events <= self.frozen.len()
+            }
+            ReplayCompactionSelection::RawTail {
+                omitted,
+                tail_start,
+                ..
+            } => {
+                let members = self
+                    .members
+                    .iter()
+                    .map(ReplayEpochMember::occurrence_id)
+                    .collect::<BTreeSet<_>>();
+                self.policy == ReplayHeadPolicy::IntentionalOmission
+                    && (!omitted.is_empty() || self.head.is_some())
+                    && *tail_start <= self.frozen.len()
+                    && omitted.is_subset(&members)
+            }
+        }
     }
 }

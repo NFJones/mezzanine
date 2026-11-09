@@ -11,6 +11,7 @@ mod mcp_grants;
 mod observations;
 mod prefix_import;
 mod publication;
+mod raw_tail;
 mod reentry;
 mod source;
 mod task_admission;

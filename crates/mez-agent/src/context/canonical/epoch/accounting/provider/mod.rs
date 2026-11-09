@@ -399,7 +399,7 @@ impl ReplayEpochContext {
         old_head: Option<ContextBlockOccurrenceId>,
     ) -> AgentContextResult<()> {
         self.update_provider_view(|owner, view| {
-            for member in &plan.members[..plan.prefix_members] {
+            for member in plan.removed_raw_members() {
                 view.remove(member.occurrence_id(), Kind::Raw)?;
             }
             if let Some(id) = old_head {
@@ -410,7 +410,7 @@ impl ReplayEpochContext {
                     owner.projected_entry(owner.context.stable_slots().len(), view)?;
                 view.put(id, entry)?;
             }
-            for event in plan.summary_input() {
+            for event in plan.removed_events() {
                 if let Some(group) = event.execution_group_id()
                     && !owner.accounting.groups.contains_key(group)
                 {

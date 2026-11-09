@@ -11908,6 +11908,24 @@ missing an advisory word count or shrink target. Blank model output MUST NOT
 be interpreted as intentional head absence: absence requires a separately
 selected publication policy. Summary is the default policy.
 
+A pure intentional-omission plan MUST use the same frozen canonical source,
+occurrence identities, group boundaries and expected-parent publication. Its
+single optional allowance MUST be bounded by both the configured raw reservation
+and the remaining context capacity after exact stable/protected input and fixed
+request framing. Mandatory whole groups MAY exceed the optional reservation and
+MUST NOT be dropped. Optional groups MUST form the newest adjacent optional
+suffix: the first non-fitting newer optional group MUST stop selection, without
+backfilling older smaller groups around it. Exact obligations outside that suffix
+MUST remain in their original order. Unchanged retained membership with no prior
+head MUST report no work; an explicitly lower whole-optional-group frontier MAY
+make further progress after authoritative input rejection. Protected input beyond
+context capacity MUST return an explicit irreducible result without changing
+source. A prior summary MAY be deliberately removed without raw omission, but
+blank model output MUST remain invalid. The model-source renderer MUST refuse
+intentional-omission plans before rendering or dispatch. A captured target head
+policy MUST take effect only at accepted publication; preparing it MUST NOT
+change the committed source policy or permit an unrelated owner to adopt it.
+
 The canonical auxiliary model-work API MUST freeze the prior head and the entire
 selected eligible prefix once. Its cached source cost divided by actual auxiliary
 input capacity minus instructions/framing is an initial source-batch lower-bound

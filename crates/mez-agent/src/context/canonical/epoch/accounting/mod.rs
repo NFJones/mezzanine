@@ -49,8 +49,9 @@ impl ReplayEpochInputEstimates {
     }
 }
 
-/// Frozen selected/head and retained-tail estimates for one actual source plan.
-/// Stable authority and fixed compactor request overhead stay outside source.
+/// Frozen selected/head and retained-raw estimates for one actual source plan.
+/// Stable authority and fixed request overhead stay outside source. These costs
+/// are descriptive, never incurred usage or evidence that a model was called.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ReplayCompactionInputEstimates {
     pub(super) selected_raw: usize,
@@ -62,11 +63,12 @@ impl ReplayCompactionInputEstimates {
     pub fn selected_raw_input_tokens(self) -> usize {
         self.selected_raw
     }
-    /// Returns the previous head supplied once to the compactor.
+    /// Returns the prior head removed by publication. Summary mode supplies it
+    /// once to the compactor; intentional omission makes no model request.
     pub fn prior_summary_input_tokens(self) -> usize {
         self.prior_summary
     }
-    /// Returns exact frozen raw tail excluded from summary input.
+    /// Returns exact retained frozen raw input, including protected obligations.
     pub fn retained_raw_input_tokens(self) -> usize {
         self.retained_raw
     }
@@ -316,7 +318,7 @@ impl ReplayEpochContext {
         plan: &ReplayCompactionPlan,
     ) -> AgentContextResult<()> {
         let old_head = self.accounting.summary.map(|(id, _)| id);
-        for member in &plan.members[..plan.prefix_members] {
+        for member in plan.removed_raw_members() {
             self.accounting.remove_raw(member)?;
         }
         self.accounting.replace_summary(

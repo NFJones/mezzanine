@@ -401,7 +401,7 @@ fn three_provider_epochs_freeze_projected_costs_and_preserve_native_tail() {
         if round == 0 {
             assert_eq!(plan.retained_tail().len(), 4);
         }
-        let retained = owner.members[plan.prefix_members..].to_vec();
+        let retained = owner.members[plan.removed_raw_members().count()..].to_vec();
         owner
             .append_fact("arrival", "post-frontier actual source")
             .unwrap();
@@ -640,4 +640,63 @@ fn retained_group_completion_after_frontier_keeps_current_costs_on_publication()
             .eligible_raw_input_tokens(),
         current_raw
     );
+}
+
+/// Non-prefix omission must update the existing provider visibility index, not
+/// rebuild neutral-only costs or retain a complete-native duplicate charge.
+#[test]
+fn raw_tail_omission_preserves_provider_native_accounting() {
+    for api in [
+        Api::OpenAiResponses,
+        Api::OpenAiChatCompletions,
+        Api::DeepSeekChatCompletions,
+    ] {
+        for pending in [false, true] {
+            let mut live = owner();
+            live.append_pending_peer("peer", "exact pending peer source")
+                .unwrap();
+            let group = ContextExecutionGroupId::new("raw-native-group").unwrap();
+            live.append_execution_events(pair(api, "provider", &group, "raw"))
+                .unwrap();
+            let required = live.context().chronology().to_vec();
+            if !pending {
+                close(&mut live, &group);
+            }
+            live.append_fact("optional", "discard after the native group")
+                .unwrap();
+            live.select_provider_projection(projection(api, "provider", "model"))
+                .unwrap();
+            assert_projection(&live);
+            let policy = ReplayTailPolicy::new(10_000, 0)
+                .unwrap()
+                .with_raw_tail_limits(19, Some(0));
+            let plan = match live.prepare_compaction(policy).unwrap() {
+                ReplayCompactionPreparation::Ready(plan) => plan,
+                other => panic!("expected optional raw work: {other:?}"),
+            };
+            let expected = if pending {
+                required.as_slice()
+            } else {
+                &required[..1]
+            };
+            assert_eq!(
+                plan.retained_raw_events().cloned().collect::<Vec<_>>(),
+                expected
+            );
+            live.publish_compaction(plan, ReplayHeadPublication::IntentionalOmission)
+                .unwrap();
+            assert_eq!(live.context().chronology(), expected);
+            assert_projection(&live);
+            assert_eq!(
+                live.provider_input_estimates()
+                    .unwrap()
+                    .summary_input_tokens(),
+                0
+            );
+            if pending {
+                close(&mut live, &group);
+                assert_projection(&live);
+            }
+        }
+    }
 }

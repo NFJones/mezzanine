@@ -188,7 +188,7 @@ fn three_accounted_epochs_preserve_tail_birth_and_frozen_cost_partition() {
                 .map(|event| event.record().estimated_input_tokens())
                 .sum::<usize>()
         );
-        let retained = owner.members()[plan.prefix_members..].to_vec();
+        let retained = owner.members()[plan.removed_raw_members().count()..].to_vec();
         owner.append_fact("raw", "same equal source").unwrap();
         let arrival = owner.members().last().unwrap().clone();
         assert_eq!(arrival.born_in().get(), round);

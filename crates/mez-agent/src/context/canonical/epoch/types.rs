@@ -170,11 +170,17 @@ pub enum ReplayHeadPublication {
 pub struct ReplayTailPolicy {
     pub(super) context_tokens: usize,
     pub(super) retained_percent: u8,
+    /// None uses the committed owner's policy. Product admission captures an
+    /// explicit choice so later configuration changes cannot switch the plan.
+    pub(super) head_policy: Option<ReplayHeadPolicy>,
+    pub(super) fixed_input_tokens: usize,
+    pub(super) optional_unit_limit: Option<usize>,
 }
 
 impl ReplayTailPolicy {
     /// Creates a positive context allowance and a raw retention percentage in
     /// 0..=100. Invalid input does not prepare model work.
+    /// Without an explicit choice the committed owner's head policy applies.
     pub fn new(context_tokens: usize, retained_percent: u8) -> AgentContextResult<Self> {
         if context_tokens == 0 || retained_percent > 100 {
             return Err(AgentContextError::new("invalid replay raw-tail policy"));
@@ -182,7 +188,32 @@ impl ReplayTailPolicy {
         Ok(Self {
             context_tokens,
             retained_percent,
+            head_policy: None,
+            fixed_input_tokens: 0,
+            optional_unit_limit: None,
         })
+    }
+
+    /// Captures an explicit next-publication policy without rewriting history.
+    /// The committed policy changes only after this plan is actually published.
+    pub fn with_head_policy(mut self, policy: ReplayHeadPolicy) -> Self {
+        self.head_policy = Some(policy);
+        self
+    }
+
+    /// Captures summary-free request overhead and an optional upper bound on
+    /// retained whole optional units. The controller may lower that bound after
+    /// an actual input rejection; this method initiates no request or retry.
+    /// Protected units are independent of the optional limit and never dropped.
+    pub fn with_raw_tail_limits(
+        mut self,
+        fixed_input_tokens: usize,
+        optional_unit_limit: Option<usize>,
+    ) -> Self {
+        self.head_policy = Some(ReplayHeadPolicy::IntentionalOmission);
+        self.fixed_input_tokens = fixed_input_tokens;
+        self.optional_unit_limit = optional_unit_limit;
+        self
     }
 
     /// Returns the optional raw reservation, rounding fractional tokens upward
@@ -201,6 +232,11 @@ pub enum ReplayCompactionNoWork {
     NoRawMembers,
     /// Exact instructions, unresolved work or unrecoverable source blocks prefix selection.
     ProtectedPrefix,
+    /// Exact stable/protected input and fixed framing exceed model capacity.
+    ProtectedInputExceedsBudget,
+    /// Every optional member already fits the captured raw allowance/frontier
+    /// and there is no prior summary to remove. Publishing would change nothing.
+    RetainedSourceUnchanged,
 }
 
 /// Planning either freezes genuine work or reports an explicit no-work result.
@@ -219,17 +255,34 @@ pub struct ReplayCompactionPlan {
     pub(super) owner_identity: ReplayOwnerIdentity,
     pub(super) conversation: ReplayConversationId,
     pub(super) parent: ReplayEpochRevision,
+    pub(super) source_policy: ReplayHeadPolicy,
     pub(super) policy: ReplayHeadPolicy,
     pub(super) head: Option<ReplaySummaryIdentity>,
     pub(super) frozen: Vec<ConversationEvent>,
     pub(super) members: Vec<ReplayEpochMember>,
-    pub(super) prefix_members: usize,
-    pub(super) prefix_events: usize,
+    /// Keeps no-work preparation compact without changing the frozen selection.
+    pub(super) selection: Box<ReplayCompactionSelection>,
     pub(super) input_estimates: ReplayCompactionInputEstimates,
     /// Keeps the preparation enum compact while freezing an owned descriptor.
     pub(super) provider_projection: Option<Box<ReplayProviderProjection>>,
     /// Original unselected closed tail, excluding later arrivals/protection changes.
     pub(super) reentry: Box<ReplayCompactionReentryInput>,
+}
+
+/// Policy-specific source selection inside the same frozen owner/publication
+/// contract. Raw omission may surround exact obligations; it never publishes a
+/// second history or infers lifecycle completion for those retained obligations.
+#[derive(Clone, PartialEq, Eq)]
+pub(super) enum ReplayCompactionSelection {
+    Prefix {
+        members: usize,
+        events: usize,
+    },
+    RawTail {
+        omitted: BTreeSet<ContextBlockOccurrenceId>,
+        tail_start: usize,
+        retained_optional_units: usize,
+    },
 }
 
 impl ReplayCompactionPlan {
@@ -250,15 +303,23 @@ impl ReplayCompactionPlan {
     pub fn arrival_frontier(&self) -> Option<ContextEventSequence> {
         self.frozen.last().map(ConversationEvent::sequence)
     }
-    /// Returns the sole prior head plus selected raw prefix, never covered ancestors.
+    /// Returns the sole prior head plus selected summary prefix, never covered
+    /// ancestors. Intentional omission returns no model input.
     pub fn summary_input(&self) -> &[ConversationEvent] {
-        &self.frozen[..self.prefix_events]
+        match self.selection.as_ref() {
+            ReplayCompactionSelection::Prefix { events, .. } => &self.frozen[..*events],
+            ReplayCompactionSelection::RawTail { .. } => &[],
+        }
     }
     /// Returns whole source units in chronological order, with the prior head
     /// first when present. Noncontiguous/overlapping execution groups use the
     /// same ownership spans as source selection. These slices are auxiliary
     /// input boundaries, never permission to publish a partial replacement.
+    /// Intentional omission returns no model units.
     pub fn summary_units(&self) -> Vec<&[ConversationEvent]> {
+        if !self.requires_model_summary() {
+            return Vec::new();
+        }
         let offset = usize::from(self.head.is_some());
         let mut units = Vec::new();
         if offset != 0 {
@@ -272,13 +333,81 @@ impl ReplayCompactionPlan {
         );
         units
     }
-    /// Returns exact raw tail retained outside this model summary input.
+    /// Returns the newest contiguous retained suffix. Summary-free selection may
+    /// also retain earlier protected units; `retained_raw_events` includes those.
     pub fn retained_tail(&self) -> &[ConversationEvent] {
-        &self.frozen[self.prefix_events..]
+        let start = match self.selection.as_ref() {
+            ReplayCompactionSelection::Prefix { events, .. } => *events,
+            ReplayCompactionSelection::RawTail { tail_start, .. } => *tail_start,
+        };
+        &self.frozen[start..]
     }
     /// Reports whether the configured publication needs a model summary.
     pub fn requires_model_summary(&self) -> bool {
         self.policy == ReplayHeadPolicy::Summary
+    }
+
+    /// Returns the captured policy for the next committed epoch.
+    pub fn head_policy(&self) -> ReplayHeadPolicy {
+        self.policy
+    }
+
+    /// Visits exact frozen raw members removed by this publication, excluding
+    /// the previous summary head. Descriptive membership grants no execution.
+    pub fn removed_raw_members(&self) -> impl Iterator<Item = &ReplayEpochMember> {
+        let offset = usize::from(self.head.is_some());
+        self.members
+            .iter()
+            .enumerate()
+            .filter(move |(index, _)| self.removes_event(index + offset))
+            .map(|(_, member)| member)
+    }
+
+    /// Visits removed original events, including a prior head when present.
+    /// Raw omission has no model source; its receipt still records exact loss.
+    pub fn removed_events(&self) -> impl Iterator<Item = &ConversationEvent> {
+        self.frozen
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| self.removes_event(*index))
+            .map(|(_, event)| event)
+    }
+
+    /// Visits all retained frozen raw events in original order, including exact
+    /// obligations outside the optional suffix. Later arrivals are not frozen.
+    pub fn retained_raw_events(&self) -> impl Iterator<Item = &ConversationEvent> {
+        self.frozen
+            .iter()
+            .enumerate()
+            .skip(usize::from(self.head.is_some()))
+            .filter(|(index, _)| !self.removes_event(*index))
+            .map(|(_, event)| event)
+    }
+
+    /// Returns the retained optional-unit frontier for a summary-free plan.
+    /// None identifies summary work, not an unknown number of provider calls.
+    pub fn retained_optional_units(&self) -> Option<usize> {
+        match self.selection.as_ref() {
+            ReplayCompactionSelection::Prefix { .. } => None,
+            ReplayCompactionSelection::RawTail {
+                retained_optional_units,
+                ..
+            } => Some(*retained_optional_units),
+        }
+    }
+
+    /// Checks a frozen event position; post-frontier arrivals are never selected.
+    pub(super) fn removes_event(&self, index: usize) -> bool {
+        match self.selection.as_ref() {
+            ReplayCompactionSelection::Prefix { events, .. } => index < *events,
+            ReplayCompactionSelection::RawTail { omitted, .. } => {
+                self.head.is_some() && index == 0
+                    || self
+                        .frozen
+                        .get(index)
+                        .is_some_and(|event| omitted.contains(&event.record().occurrence_id()))
+            }
+        }
     }
 }
 
@@ -291,7 +420,7 @@ impl std::fmt::Debug for ReplayCompactionPlan {
             .field("parent", &self.parent)
             .field("policy", &self.policy)
             .field("frozen_events", &self.frozen.len())
-            .field("prefix_members", &self.prefix_members)
+            .field("removed_members", &self.removed_raw_members().count())
             .finish_non_exhaustive()
     }
 }
