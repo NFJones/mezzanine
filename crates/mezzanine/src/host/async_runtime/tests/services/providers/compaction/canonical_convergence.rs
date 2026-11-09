@@ -430,15 +430,13 @@ async fn qualify(
                 } else {
                     "ordinary canonical continuation completed"
                 })
-            }) {
-                if !reject_continuation
-                    || !handle
-                        .agent_turn_is_running(turn.as_deref().unwrap())
-                        .await
-                        .unwrap()
-                {
-                    break;
-                }
+            }) && (!reject_continuation
+                || !handle
+                    .agent_turn_is_running(turn.as_deref().unwrap())
+                    .await
+                    .unwrap())
+            {
+                break;
             }
             tokio::task::yield_now().await;
         }

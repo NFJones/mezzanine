@@ -216,8 +216,7 @@ fn runtime_compaction_failure_diagnostics_mark_lost_source_counters_unknown() {
         .unwrap();
     let error = service
         .claim_agent_compaction_task("%1", generation)
-        .err()
-        .expect("missing source cannot construct a worker");
+        .expect_err("missing source cannot construct a worker");
     assert!(error.message().contains("source"));
     assert!(!service.agent_is_compacting("%1"));
     assert_facts(&service, generation, "unknown", "unknown");

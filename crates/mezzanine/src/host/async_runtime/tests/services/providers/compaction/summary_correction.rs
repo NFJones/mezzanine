@@ -355,9 +355,7 @@ async fn qualify_completed_output(kind: &str) {
         report.executions,
         if resource {
             0
-        } else if advisory {
-            2
-        } else if exhausted {
+        } else if advisory || exhausted {
             2
         } else {
             3

@@ -82,7 +82,7 @@ impl RuntimeSessionService {
         let stream = task
             .compaction_request_shape
             .as_ref()
-            .map_or(true, |shape| shape.2);
+            .is_none_or(|shape| shape.2);
         let estimate = mez_agent::provider_request_input_estimate(&request, api, &options, stream)?;
         Ok(estimate.input_tokens)
     }

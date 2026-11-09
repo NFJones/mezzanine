@@ -10,7 +10,7 @@ use std::{future::Future, pin::Pin, sync::mpsc};
 
 enum Inference<R> {
     Request(R, tokio::sync::oneshot::Sender<Result<ModelResponse>>),
-    Finished(Result<ModelResponse>),
+    Finished(Box<Result<ModelResponse>>),
 }
 
 struct Provider {
@@ -92,7 +92,7 @@ pub(crate) fn execute_with_inference(
                 .build()
                 .unwrap()
                 .block_on(source.execute_model_wave(&provider, &task, shape));
-            sender.send(Inference::Finished(result)).unwrap();
+            sender.send(Inference::Finished(Box::new(result))).unwrap();
         });
         let (result, panic) = pump_inference(&receiver, &mut infer, &mut requests);
         worker.join().unwrap();
@@ -133,7 +133,7 @@ fn pump_inference<R>(
                 requests.push(request);
                 reply.send(result).expect("common wave inference receiver");
             }
-            Inference::Finished(result) => return (result, panic),
+            Inference::Finished(result) => return (*result, panic),
         }
     }
 }
@@ -156,9 +156,9 @@ fn compaction_fixture_inference_panic_drains_already_admitted_siblings() {
                 );
             }
             sender
-                .send(Inference::Finished(Err(MezError::invalid_state(
+                .send(Inference::Finished(Box::new(Err(MezError::invalid_state(
                     "wave retired",
-                ))))
+                )))))
                 .unwrap();
         });
         let mut requests = Vec::new();

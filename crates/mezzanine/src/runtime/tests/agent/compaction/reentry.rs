@@ -152,8 +152,7 @@ fn runtime_compaction_freezes_actual_model_projection_without_mutating_live_sour
             .unwrap();
         let error = service
             .claim_agent_compaction_task("%1", generation)
-            .err()
-            .expect("changed source/profile must refuse before provider construction");
+            .expect_err("changed source/profile must refuse before provider construction");
         assert_eq!(error.kind(), crate::MezErrorKind::Conflict);
         assert!(
             error.message().contains(if alter_profile {
