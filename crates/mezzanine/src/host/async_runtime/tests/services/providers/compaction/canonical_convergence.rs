@@ -463,15 +463,25 @@ async fn qualify(
         requests.len(),
         (if manual { 1 } else { 3 }) + usize::from(retry != RetryPath::Direct) + extra_summaries
     );
-    assert_eq!(
-        report.executions,
-        (if manual || reject_continuation { 1 } else { 2 })
-            + extra_summaries as u64
-            + u64::from(matches!(
-                retry,
-                RetryPath::OutputLimit | RetryPath::ContextSplit
-            ))
-    );
+    if retry == RetryPath::ContextSplit {
+        // The rejected original is one completed recovery wave. Smaller input
+        // may then use parallel waves of up to four actual auxiliary requests;
+        // report.executions counts those worker outcomes, not HTTP requests.
+        // Exact response expense and complete wire capture are checked below.
+        let ordinary = u64::from(!manual && !reject_continuation);
+        let successful_auxiliary = 1 + extra_summaries as u64;
+        assert!(
+            (ordinary + 1 + successful_auxiliary.div_ceil(4)..=ordinary + 1 + successful_auxiliary)
+                .contains(&report.executions)
+        );
+    } else {
+        assert_eq!(
+            report.executions,
+            (if manual || reject_continuation { 1 } else { 2 })
+                + extra_summaries as u64
+                + u64::from(retry == RetryPath::OutputLimit)
+        );
+    }
     if retry == RetryPath::ContextSplit {
         assert!(
             extra_summaries >= 1,

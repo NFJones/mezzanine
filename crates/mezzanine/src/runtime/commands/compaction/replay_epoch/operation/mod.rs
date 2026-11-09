@@ -315,10 +315,12 @@ fn finish_wave(
                         *stream,
                     )?
                     .input_tokens;
-                    // The provider actually rejected this auxiliary input. Pack
-                    // below its complete measured size; never shorten a summary
-                    // or change the selected source to chase an estimate.
-                    let next = measured.min(state.input_tokens).saturating_sub(1);
+                    // Fresh rejected work halves actual admission instead of
+                    // retrying nearly identical prefixes one token at a time.
+                    // Older in-flight siblings use their own measured size;
+                    // keep the stricter ceiling with the minimum decrement
+                    // required to replan, without halving that ceiling again.
+                    let next = (measured / 2).min(state.input_tokens.saturating_sub(1));
                     let rejected = state
                         .session
                         .as_mut()

@@ -14545,7 +14545,10 @@ two repairs per logical work item, without resetting on transport retries.
 Genuine decoded-summary resource overflow MUST fail without another model call
 to shorten it. New engine summaries MUST fit the canonical 128-KiB resource
 bound. Genuine auxiliary input rejection MAY lower actual packed input capacity
-and split private work, preserving the complete selection and raw tail. Advisory
+and split private work, preserving the complete selection and raw tail. Repeated
+rejection of newly packed requests MUST make geometric admission progress or
+terminate when no usable input fits. Already in-flight failures MUST use their
+own rejected request size when refining a stricter ceiling. Advisory
 word/token targets, valid long output and nonreducing output MUST NOT cause
 regeneration. Raw text or one valid final-say frame MAY supply the summary;
 decoding MUST NOT execute actions.

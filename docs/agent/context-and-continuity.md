@@ -413,7 +413,10 @@ memory overflow fails without a shortening loop. New summaries have a 128-KiB
 decoded resource bound. Advisory word/token targets, equal-size output and a
 large next ordinary-request estimate cannot reject a usable final or generate
 another summary. Actual input rejection repacks private work without changing
-the selected source or raw tail.
+the selected source or raw tail. Each newly packed rejection halves its measured
+input target, reaching a usable capacity or a truthful terminal refusal instead
+of retrying nearly identical prefixes. Older in-flight failures retain their
+own measured input sizes when refining an already lower admission ceiling.
 
 Raw text remains supported. A valid final-say JSON or
 `mezzanine-action-json` frame contributes its single final payload without
