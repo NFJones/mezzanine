@@ -6626,7 +6626,7 @@ The top-level configuration object MUST support the following keys:
 - `extensions`
 
 The `version` key MUST identify the configuration schema version. Mezzanine
-schema version 103 is the current implemented configuration schema version for this
+schema version 104 is the current implemented configuration schema version for this
 specification revision. Implementations MUST reject a configuration file whose
 declared schema version is greater than the newest schema version understood by
 the binary.
@@ -6639,6 +6639,10 @@ The `102 -> 103` migration MUST preserve every authored
 `terminal.agent_log_timestamp_format`, enablement choice and neighboring setting
 in TOML (including inline tables), YAML and JSON. Absent format values inherit
 `%H:%M:%S`; migration MUST NOT materialize an opt-in or normalize authored formats.
+
+The `103 -> 104` migration MUST preserve authored `agents.compaction_mode` and
+neighboring settings in TOML, JSON and YAML. Absence MUST inherit `summary`;
+migration MUST NOT materialize a choice or normalize invalid authored values.
 
 The `91 -> 92` migration MUST remove every authored
 `frames.window.pills.<name>.style` leaf while preserving all other window-pill
@@ -8305,7 +8309,7 @@ The `memory` table MUST support `enabled`, `max_records`, `max_bytes`,
 The `issues` table MUST support `enabled` and `database_path`.
 
 The `agents` table MUST support `default_provider`, `default_model_profile`,
-`active_turn_sleep_inhibition`, `shell_only`, `compaction_raw_retention_percent`, `routing`,
+`active_turn_sleep_inhibition`, `shell_only`, `compaction_mode`, `compaction_raw_retention_percent`, `routing`,
 `shell_mode`, `action_failure_retry_limit`, `provider_error_retry_limit`,
 `provider_error_retry_unlimited`, `turn_timeout_ms`, `native_shell_timeout_ms`, `loop_limit`, `peer_message_loop_limit`, `custom_system_prompt`,
 `default_personality`, `subagent_placement`,
@@ -8327,8 +8331,32 @@ or suffix invention; shared case-insensitive reservations remain authoritative.
 `4194304`. The scheduler MUST reject new queue admission when either budget
 would be exceeded, without dropping work that was already admitted.
 `agents.compaction_raw_retention_percent` MUST be an integer from `1` to `100`,
-MUST default to `10`, and MUST apply to manual compaction and provider
-context-limit recovery rather than proactive threshold compaction.
+MUST default to `10`, and MUST apply to manual, observed-input and provider
+context-limit compaction. `agents.compaction_mode` MUST accept only `summary`
+and `raw_tail`, defaulting to `summary`. Each admission MUST capture the mode
+and configuration generation; configuration changes MUST NOT rewrite history
+or retarget admitted work. Existing source and permission freshness fences apply.
+
+`raw_tail` MUST omit eligible source without constructing a compactor model
+request, looking up auxiliary credentials, or charging auxiliary model usage.
+It MUST publish explicit intentional omission through the shared epoch lifecycle,
+with no summary, blank Memory or elision block. The optional tail MUST be one
+newest complete suffix under the configured percentage and remaining ordinary
+input capacity after fixed framing and stable/protected source. A non-fitting
+newer optional group MUST stop selection; smaller older groups MUST NOT backfill.
+Exact active instructions and open native, MCP and peer dependencies MUST remain
+whole even beyond the optional allowance. Post-frontier arrivals MUST survive.
+No-work and protected-input irreducibility MUST preserve existing authority.
+Only an actual provider input rejection MAY force a strictly smaller optional
+whole-unit frontier when normal retention would otherwise be unchanged; retry
+MUST terminate when no optional source remains, without summary fallback,
+truncation, identical repeated publication, or replaying settled actions.
+
+Accepted raw publication MUST remove any previous summary head without changing
+the archive. Reopen, restore, forks and later mode transitions MUST consume only
+persisted current membership, never resurrect omitted or covered history.
+Ordinary cache/provider-chain/MCP retrieval and execution-usage display MUST be
+invalidated only after accepted publication; cumulative expense MUST remain.
 `agents.routing` MUST be a boolean and MUST default to `false`.
 `agents.active_turn_sleep_inhibition` MUST default to `disabled` and accept
 only `disabled`, `system`, or `system-and-display`. `system` requests

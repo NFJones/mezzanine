@@ -214,6 +214,8 @@ max_input_tokens=40000
             !self
                 .task()
                 .request
+                .as_ref()
+                .unwrap()
                 .messages
                 .iter()
                 .any(|message| message.content.contains("within 0 ")),
@@ -528,6 +530,8 @@ pub(super) fn pending_live_source_survives_publication() {
         !fixture
             .task()
             .request
+            .as_ref()
+            .unwrap()
             .messages
             .iter()
             .any(|message| message.content.contains("LIVE_RANGE_SOURCE"))

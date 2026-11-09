@@ -9,7 +9,7 @@ use std::sync::{
     atomic::{AtomicBool, AtomicU8, Ordering},
 };
 
-/// Three finite storage attempts; retries never regenerate a prepared head.
+/// Three finite storage attempts; retries reuse the exact prepared publication.
 pub(super) const MAX_ATTEMPTS: u8 = 3;
 
 #[derive(Clone)]
@@ -22,7 +22,7 @@ struct Publication {
     /// Same live incarnation at response acceptance, qualified against the
     /// original frozen plan; newer source is retained, never summarized anew.
     publication_source: ReplayEpochContext,
-    summary: String,
+    output: ReplayHeadPublication,
     busy: AtomicBool,
     cancelled: AtomicBool,
     attempts: AtomicU8,
@@ -80,14 +80,14 @@ impl RuntimeReplayEpochPublication {
         generation: u64,
         source: Arc<RuntimeCompactionReplaySource>,
         publication_source: ReplayEpochContext,
-        summary: String,
+        output: ReplayHeadPublication,
     ) -> Self {
         Self(Arc::new(Publication {
             pane,
             generation,
             source,
             publication_source,
-            summary,
+            output,
             busy: AtomicBool::new(false),
             cancelled: AtomicBool::new(false),
             attempts: AtomicU8::new(0),
@@ -203,7 +203,7 @@ impl RuntimeReplayEpochAttempt {
                 }
                 let source = &work.0.source;
                 if state.prepared.is_none() {
-                    let output = ReplayHeadPublication::Summary(work.0.summary.clone());
+                    let output = work.0.output.clone();
                     state.prepared = Some(
                         if !source.ephemeral
                             && let Some(store) = source.original.store.as_ref()

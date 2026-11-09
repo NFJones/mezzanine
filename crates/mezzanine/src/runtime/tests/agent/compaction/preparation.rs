@@ -526,27 +526,17 @@ fn runtime_manual_compaction_request_matches_synchronous_task() {
     assert_eq!(actual.summarized_entries, expected.summarized_entries);
     assert_eq!(actual.transcript_entries, expected.transcript_entries);
     assert_eq!(actual.model_profile_name, expected.model_profile_name);
-    assert_eq!(actual.request.provider, expected.request.provider);
-    assert_eq!(actual.request.model, expected.request.model);
+    let actual = actual.request.as_ref().expect("summary request");
+    let expected = expected.request.as_ref().expect("summary request");
+    assert_eq!(actual.provider, expected.provider);
+    assert_eq!(actual.model, expected.model);
+    assert_eq!(actual.reasoning_effort, expected.reasoning_effort);
+    assert_eq!(actual.max_output_tokens, expected.max_output_tokens);
+    assert_eq!(actual.messages[0].content, expected.messages[0].content);
+    assert_eq!(actual.messages[1].content, expected.messages[1].content);
     assert_eq!(
-        actual.request.reasoning_effort,
-        expected.request.reasoning_effort
-    );
-    assert_eq!(
-        actual.request.max_output_tokens,
-        expected.request.max_output_tokens
-    );
-    assert_eq!(
-        actual.request.messages[0].content,
-        expected.request.messages[0].content
-    );
-    assert_eq!(
-        actual.request.messages[1].content,
-        expected.request.messages[1].content
-    );
-    assert_eq!(
-        actual.request.messages.last().unwrap().content,
-        expected.request.messages.last().unwrap().content
+        actual.messages.last().unwrap().content,
+        expected.messages.last().unwrap().content
     );
 }
 

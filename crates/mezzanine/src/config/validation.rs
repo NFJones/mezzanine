@@ -546,6 +546,13 @@ pub(crate) fn validate_config_text_with_document(
                         .to_string(),
                 }),
             }
+        } else if path == "agents.compaction_mode" {
+            if !matches!(value.as_str(), "summary" | "raw_tail") {
+                diagnostics.push(ConfigDiagnostic {
+                    path,
+                    message: "agents.compaction_mode must be summary or raw_tail".to_string(),
+                });
+            }
         } else if path == "agents.compaction_raw_retention_percent" {
             match value.parse::<usize>() {
                 Ok(percent) if (1..=100).contains(&percent) => {}

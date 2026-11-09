@@ -1173,7 +1173,9 @@ fn agent_shell_command_description(name: &str) -> &'static str {
         "copy-trace-log" => "copy the retained pane agent trace log.",
         "copy-patches" => "copy retained apply_patch payloads and statuses.",
         "clear" => "clear the visible conversation and terminal view.",
-        "compact" => "summarize older transcript context and keep a raw tail.",
+        "compact" => {
+            "compact older context using configured summary or raw_tail mode; keep protected instructions and a complete raw tail."
+        }
         "copy" => "copy the latest model say text.",
         "exit" => "hide the agent shell after stopping active work.",
         "init" => "generate a project instruction scaffold.",

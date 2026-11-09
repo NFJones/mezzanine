@@ -69,6 +69,8 @@ fn complete_with_later_row(deferred: bool, cached_cursor: bool, prepared: bool) 
     assert!(
         !task
             .request
+            .as_ref()
+            .unwrap()
             .messages
             .last()
             .unwrap()

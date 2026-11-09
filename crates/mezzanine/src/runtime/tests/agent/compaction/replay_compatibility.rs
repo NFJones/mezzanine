@@ -283,7 +283,8 @@ fn legacy_prefix_history_normalizes_without_model_or_source_expansion() {
             &std::fs::read(fixture.root.join(LEGACY).join("compaction-epoch.json")).unwrap(),
         )
         .unwrap();
-        assert_eq!(header["manifest"]["version"], 10);
+        assert_eq!(header["manifest"]["version"], 12);
+        assert_eq!(header["manifest"]["head_policy"], "summary");
         assert!(header["manifest"]["prefix_origin"].is_object());
         let images =
             rusqlite::Connection::open(fixture.root.join(LEGACY).join("row-origins.sqlite3"))

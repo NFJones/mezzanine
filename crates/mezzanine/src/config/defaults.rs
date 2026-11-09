@@ -173,7 +173,7 @@ pub const DEFAULT_CONFIG_TOML: &str = r##"# Mezzanine default configuration.
 # Provider connections, model profiles, and provider presets are intentionally
 # absent from first-launch output; `mez auth login` adds those after login.
 # Schema version used for migrations. Change only through a supported migration.
-version = 103
+version = 104
 
 # Model-selected skills remain default-off when policy is absent. Explicit false
 # is a global veto; omission permits individual document/operator opt-ins.
@@ -627,7 +627,9 @@ active_turn_sleep_inhibition = "disabled"
 shell_only = true
 # Static MAAP actions permitted on every ordinary provider request.
 enabled_actions = ["say", "shell_command", "apply_patch", "web_search", "fetch_url", "send_message", "wait", "spawn_agent", "close_agent", "config_change", "mcp_server_search", "mcp_server_get", "mcp_call", "memory_search", "memory_store", "list_agents", "issue_add", "issue_update", "issue_query", "issue_delete"]
-# Percentage of the raw conversation tail retained after compaction.
+# Choose model-generated summary or summary-free raw_tail retention.
+compaction_mode = "summary"
+# Percentage of the optional raw conversation tail retained after compaction.
 compaction_raw_retention_percent = 10
 # Disable automatic model sizing until explicitly enabled.
 routing = false

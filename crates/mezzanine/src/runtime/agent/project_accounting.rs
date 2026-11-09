@@ -235,6 +235,9 @@ impl RuntimeSessionService {
         task: &crate::runtime::RuntimeAgentCompactionTask,
         delivery: super::RuntimeCompactionDeliveryObserver,
     ) -> crate::Result<()> {
+        let request = task.request.as_ref().ok_or_else(|| {
+            super::MezError::invalid_state("raw omission has no provider delivery")
+        })?;
         let owner = self
             .agent
             .compaction_accounting_owners
@@ -243,8 +246,8 @@ impl RuntimeSessionService {
                 super::MezError::invalid_state("compaction delivery lost its issued expense owner")
             })?;
         if owner.provenance.conversation != task.conversation_id
-            || owner.request_agent_id != task.request.agent_id
-            || owner.request_turn_id != task.request.turn_id
+            || owner.request_agent_id != request.agent_id
+            || owner.request_turn_id != request.turn_id
             || owner.delivery.is_some()
         {
             return Err(super::MezError::conflict(

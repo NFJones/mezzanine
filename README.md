@@ -60,6 +60,8 @@ fixed-width clock formats, without changing copied or model-facing content.
 Timestamps default off; see [terminal appearance](docs/configuration/appearance-and-terminal.md).
 
 Manual and automatic compaction share one frozen-source engine and publisher.
+Choose `agents.compaction_mode = "raw_tail"` for intentional summary-free
+retention with zero compactor calls; the default remains `summary`.
 Usable summaries publish without length-reduction or next-request-fit loops. OpenAI requests
 always omit `max_output_tokens`; see [context and continuity](docs/agent/context-and-continuity.md).
 Forked subagents retain compacted summaries, including conversations with no

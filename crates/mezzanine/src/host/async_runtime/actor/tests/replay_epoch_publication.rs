@@ -26,20 +26,41 @@ pub(super) fn setup() -> (
     crate::runtime::RuntimeSessionService,
     mez_core::ids::ClientId,
 ) {
+    setup_with_mode(false)
+}
+
+fn setup_with_mode(
+    raw: bool,
+) -> (
+    Fixture,
+    crate::runtime::RuntimeSessionService,
+    mez_core::ids::ClientId,
+) {
     let fixture = Fixture::with_instruction(&format!(
         "original long task {}",
         "synthetic historical source ".repeat(4000)
     ));
     let mut service = crate::test_support::runtime::RuntimeServiceFixture::new().build();
     service.set_agent_transcript_store(fixture.store.clone());
-    service.set_auth_store(crate::security::auth::AuthStore::new(
-        crate::security::auth::AuthPaths::under_config_root(&fixture.root),
-    ));
+    if !raw {
+        service.set_auth_store(crate::security::auth::AuthStore::new(
+            crate::security::auth::AuthPaths::under_config_root(&fixture.root),
+        ));
+    }
     service.replace_config_layers(vec![crate::config::ConfigLayer {
         name:"canonical-publication".into(),path:None,format:crate::config::ConfigFormat::Toml,
         scope:crate::config::ConfigScope::Primary,trusted:true,
         text:"[agents]\ndefault_provider=\"runtime-batch\"\ndefault_model_profile=\"default\"\nshell_mode=\"pane\"\ncompaction_raw_retention_percent=1\n[providers.runtime-batch]\nkind=\"openai-compatible\"\nbase_url=\"http://127.0.0.1:9/v1\"\nmodels=[\"test\"]\ndefault_model=\"test\"\n[model_profiles.default]\nprovider=\"runtime-batch\"\nmodel=\"test\"\ncontext_window_tokens=128000\n[permissions]\nsandbox=\"policy-only\"\n".into(),
     }]).unwrap();
+    if raw {
+        let mut layers = service.config_layers().to_vec();
+        layers[0].text =
+            layers[0]
+                .text
+                .replacen("[agents]", "[agents]\ncompaction_mode=\"raw_tail\"", 1);
+        service.replace_config_layers(layers).unwrap();
+        assert!(service.auth_store().is_none());
+    }
     let primary = service
         .attach_primary("canonical-primary", true, Size::new(80, 24).unwrap(), 120)
         .unwrap();
@@ -55,7 +76,11 @@ pub(super) fn setup() -> (
 }
 
 async fn case(ephemeral: bool) -> Case {
-    let (fixture, mut service, primary) = setup();
+    case_with_mode(ephemeral, false).await
+}
+
+async fn case_with_mode(ephemeral: bool, raw: bool) -> Case {
+    let (fixture, mut service, primary) = setup_with_mode(raw);
     if ephemeral {
         let frozen = service.freeze_agent_replay_history("%1").unwrap().unwrap();
         let target = String::from(mez_agent::ContextBlockOccurrenceId::allocate());
@@ -128,13 +153,29 @@ async fn case(ephemeral: bool) -> Case {
             reply,
         })
         .await;
-    let dispatch = response.await.unwrap().unwrap().unwrap();
-    assert!(dispatch.task.replay_source.is_some());
-    let input = crate::test_support::compaction_source::rendered_source(&dispatch.task).unwrap();
-    assert!(input.contains("model head 3"));
-    assert!(input.contains("synthetic historical source"));
-    assert!(!input.contains("COVERED_SOURCE_SENTINEL"));
-    assert!(!input.contains("original native declaration"));
+    let dispatch = response.await.unwrap().unwrap();
+    if raw {
+        assert!(dispatch.is_none(), "raw claim dispatched model work");
+        assert!(
+            !actor
+                .service
+                .retains_compaction_expense_for_tests("%1", generation)
+        );
+        // The real timer worker drains its new lease. This is the existing
+        // capacity-progress boundary that routes service-owned persistence.
+        let timers = actor.drain_timer_side_effects(128).unwrap();
+        assert!(timers.iter().any(|effect| matches!(effect,
+            RuntimeSideEffect::ScheduleTimer { key, .. } if key.kind == RuntimeTimerKind::CompactionClaim)));
+    } else {
+        let dispatch = dispatch.unwrap();
+        assert!(dispatch.task.replay_source.is_some());
+        let input =
+            crate::test_support::compaction_source::rendered_source(&dispatch.task).unwrap();
+        assert!(input.contains("model head 3"));
+        assert!(input.contains("synthetic historical source"));
+        assert!(!input.contains("COVERED_SOURCE_SENTINEL"));
+        assert!(!input.contains("original native declaration"));
+    }
     Case {
         fixture,
         actor,
@@ -239,6 +280,135 @@ async fn deliver(case: &mut Case, completion: crate::runtime::RuntimeReplayEpoch
         ))
         .await
         .unwrap();
+}
+
+/// Both durable and NoStore raw claims use the real actor timer/persistence
+/// routes with no provider dispatch. Losing the storage callback still adopts
+/// that exact receipt once, without a fake model completion or another request.
+#[tokio::test(flavor = "current_thread")]
+async fn async_raw_tail_publication_routes_and_recovers_lost_callback() {
+    for ephemeral in [false, true] {
+        let mut case = case_with_mode(ephemeral, true).await;
+        assert_eq!(
+            case.actor.service.agent_turn_contexts()[&case.turn],
+            case.before
+        );
+        let attempt = take_attempt(&mut case);
+        let completion = tokio::task::spawn_blocking(move || attempt.execute())
+            .await
+            .unwrap();
+        assert!(completion.error().is_none(), "{:?}", completion.error());
+        assert_eq!(
+            case.actor.service.agent_turn_contexts()[&case.turn],
+            case.before
+        );
+        drop(completion);
+        timer(&mut case).unwrap();
+        let after = case.actor.service.agent_turn_contexts()[&case.turn].clone();
+        let owner = ReplayEpochContext::from_owned_context(
+            ReplayConversationId::new(&case.conversation).unwrap(),
+            after.clone(),
+        )
+        .unwrap();
+        assert!(owner.head().is_none());
+        assert_eq!(
+            owner.head_policy(),
+            mez_agent::ReplayHeadPolicy::IntentionalOmission
+        );
+        assert!(!case.actor.service.agent_is_compacting("%1"));
+        assert!(
+            case.actor
+                .service
+                .agent_provider_task_is_pending(&case.turn)
+        );
+        assert_ne!(
+            after.metadata().prompt_cache_lineage_id,
+            case.before.metadata().prompt_cache_lineage_id
+        );
+        assert!(
+            !after
+                .blocks()
+                .iter()
+                .any(|block| block.content.contains("COVERED_SOURCE_SENTINEL"))
+        );
+        timer(&mut case).unwrap();
+        assert_eq!(case.actor.service.agent_turn_contexts()[&case.turn], after);
+        if !ephemeral {
+            let (_, reopened) = case
+                .fixture
+                .store
+                .load_replay_epoch(&case.conversation, AgentContext::empty())
+                .unwrap()
+                .unwrap();
+            assert!(reopened.head().is_none());
+            assert_eq!(reopened.context().chronology(), after.chronology());
+        }
+    }
+}
+
+/// Raw publication retries the original omission proposal after uncertain
+/// writes. No model result, credential or second logical compaction is created.
+#[tokio::test(flavor = "current_thread")]
+async fn async_raw_tail_publication_recovers_real_storage_phase_failures() {
+    use crate::storage::transcript::replay_epoch::Phase;
+    for phase in [
+        Phase::BeforePayloadSync,
+        Phase::BeforeSourceReceiptSync,
+        Phase::BeforeManifestSwap,
+        Phase::AfterManifestSwap,
+        Phase::BeforeRequiredMarker,
+        Phase::BeforeAcknowledgment,
+    ] {
+        let mut case = case_with_mode(false, true).await;
+        case.fixture
+            .store
+            .inject_replay_epoch_fault(phase, 1, false);
+        let attempt = take_attempt(&mut case);
+        let failed = tokio::task::spawn_blocking(move || attempt.execute())
+            .await
+            .unwrap();
+        assert!(failed.error().is_some(), "{phase:?}");
+        deliver(&mut case, failed).await;
+        assert!(case.actor.service.agent_is_compacting("%1"));
+        assert_eq!(
+            case.actor.service.agent_turn_contexts()[&case.turn],
+            case.before
+        );
+        let attempt = retry(&mut case).await;
+        let completed = tokio::task::spawn_blocking(move || attempt.execute())
+            .await
+            .unwrap();
+        assert!(
+            completed.error().is_none(),
+            "{phase:?}: {:?}",
+            completed.error()
+        );
+        deliver(&mut case, completed.clone()).await;
+        assert!(!case.actor.service.agent_is_compacting("%1"));
+        assert!(
+            case.actor
+                .service
+                .agent_provider_task_is_pending(&case.turn)
+        );
+        let after = case.actor.service.agent_turn_contexts()[&case.turn].clone();
+        let owner = ReplayEpochContext::from_owned_context(
+            ReplayConversationId::new(&case.conversation).unwrap(),
+            after.clone(),
+        )
+        .unwrap();
+        assert!(owner.head().is_none());
+        assert_eq!(
+            owner.head_policy(),
+            mez_agent::ReplayHeadPolicy::IntentionalOmission
+        );
+        assert_eq!(
+            owner.revision().get(),
+            4,
+            "retry republished a second epoch"
+        );
+        deliver(&mut case, completed).await;
+        assert_eq!(case.actor.service.agent_turn_contexts()[&case.turn], after);
+    }
 }
 
 /// Every fault is injected inside the real writer. Retry uses the originally

@@ -560,7 +560,7 @@ fn runtime_manual_compaction_candidate_retains_native_execution_ownership() {
             .unwrap();
         assert_eq!(after.blocks(), candidate.blocks());
         let auxiliary = fixture.queue(worker);
-        let mut request = auxiliary.request.clone();
+        let mut request = auxiliary.request.clone().unwrap();
         let mut messages = request.messages.iter().cloned().collect::<Vec<_>>();
         messages.last_mut().unwrap().content =
             crate::test_support::compaction_source::rendered_source(&auxiliary).unwrap();

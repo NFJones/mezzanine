@@ -724,6 +724,7 @@ pub(super) const AGENT_KEYS: &[&str] = &[
     "shell_only",
     "enabled_actions",
     "shell_mode",
+    "compaction_mode",
     "compaction_raw_retention_percent",
     "routing",
     "action_failure_retry_limit",

@@ -232,6 +232,8 @@ fn runtime_observed_input_limit_compacts_before_deferred_action_continuation_cla
     assert!(
         !task
             .request
+            .as_ref()
+            .unwrap()
             .messages
             .last()
             .unwrap()

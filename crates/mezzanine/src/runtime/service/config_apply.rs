@@ -676,6 +676,9 @@ impl RuntimeSessionService {
             self.set_active_turn_sleep_inhibition(
                 runtime_active_turn_sleep_inhibition_from_config(&structured)?,
             );
+            self.set_agent_compaction_mode(
+                crate::runtime::config::runtime_agent_compaction_mode_from_config(&structured)?,
+            );
             self.set_agent_compaction_raw_retention_percent(
                 runtime_agent_compaction_raw_retention_percent_from_config(&structured)?,
             );

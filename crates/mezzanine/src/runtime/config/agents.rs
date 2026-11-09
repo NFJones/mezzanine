@@ -154,6 +154,42 @@ pub(crate) fn runtime_max_queued_agent_bytes_from_config(root: &Value) -> Result
     runtime_positive_agents_usize_from_config(root, "max_queued_bytes", DEFAULT_MAX_QUEUED_BYTES)
 }
 
+/// Captured policy for the shared canonical compaction lifecycle.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum CompactionMode {
+    /// Replace eligible source with a provider-produced summary.
+    #[default]
+    Summary,
+    /// Omit eligible source without invoking a compactor model.
+    RawTail,
+}
+
+impl CompactionMode {
+    /// Stable configuration spelling, independent of persisted epoch policy.
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Self::Summary => "summary",
+            Self::RawTail => "raw_tail",
+        }
+    }
+}
+
+/// Parses the mode selected for newly admitted compaction operations.
+pub(crate) fn runtime_agent_compaction_mode_from_config(root: &Value) -> Result<CompactionMode> {
+    let Some(value) =
+        runtime_json_object(root, "agents").and_then(|agents| agents.get("compaction_mode"))
+    else {
+        return Ok(CompactionMode::Summary);
+    };
+    match runtime_json_string(Some(value)) {
+        Some("summary") => Ok(CompactionMode::Summary),
+        Some("raw_tail") => Ok(CompactionMode::RawTail),
+        _ => Err(MezError::config(
+            "agents.compaction_mode must be summary or raw_tail",
+        )),
+    }
+}
+
 /// Parses the retained raw-tail percentage used during context compaction.
 pub(crate) fn runtime_agent_compaction_raw_retention_percent_from_config(
     root: &Value,

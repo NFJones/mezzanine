@@ -518,8 +518,9 @@ pub use readiness::{
 };
 pub use request_accounting::{
     ProviderContextInputAttribution, ProviderRequestInputEstimate,
-    provider_context_input_attribution, provider_request_input_estimate,
-    provider_request_input_estimate_from_body, provider_text_input_token_estimate,
+    provider_context_input_attribution, provider_request_fixed_input_estimate,
+    provider_request_input_estimate, provider_request_input_estimate_from_body,
+    provider_text_input_token_estimate,
 };
 pub use response_progress::ProviderResponseProgress;
 pub use routing::{

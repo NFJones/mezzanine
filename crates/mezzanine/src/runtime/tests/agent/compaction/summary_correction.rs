@@ -385,8 +385,8 @@ fn runtime_compaction_output_repair_input_rejection_preserves_frozen_source() {
         .pending_agent_compaction_task_for_tests("%1")
         .unwrap();
     assert_eq!(
-        retry.request.max_output_tokens,
-        original.request.max_output_tokens
+        retry.request.as_ref().unwrap().max_output_tokens,
+        original.request.as_ref().unwrap().max_output_tokens
     );
     assert_eq!(retry.compaction_epoch, original.compaction_epoch);
     assert!(std::sync::Arc::ptr_eq(

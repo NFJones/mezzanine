@@ -1,7 +1,7 @@
 //! Agent-shell conversation compaction commands and provider request helpers.
 //!
-//! This module owns `/compact`, queued model-backed compaction tasks,
-//! compaction provider request construction, private summary staging,
+//! This module owns `/compact`, queued canonical compaction tasks,
+//! summary-only provider request construction, private summary staging,
 //! and canonical replay publication. Keeping compaction isolated
 //! avoids mixing long-running summarization workflow with ordinary shell
 //! command dispatch. Manual model input keeps physical source proofs distinct
@@ -283,6 +283,7 @@ impl RuntimeSessionService {
             &turn,
             &model_profile,
             trigger,
+            &allowed_actions,
         )? {
             replay_epoch::Preparation::NoWork(reason) => {
                 if let NoWorkReason::UnchangedPublishedSource { head_revision } = reason {
@@ -305,13 +306,15 @@ impl RuntimeSessionService {
             replay_epoch::Preparation::Ready(source) => source,
         };
         let summarized_entries = replay_source.input_entry_count();
-        let request = runtime_model_compaction_request_from_source(
-            &model_profile,
-            &turn.pane_id,
-            &conversation_id,
-            String::new(),
-            allowed_actions,
-        );
+        let request = replay_source.requires_model_summary().then(|| {
+            runtime_model_compaction_request_from_source(
+                &model_profile,
+                &turn.pane_id,
+                &conversation_id,
+                String::new(),
+                allowed_actions,
+            )
+        });
         self.refresh_project_trust_store_from_disk_if_changed()?;
         self.queue_agent_compaction_task(RuntimeAgentCompactionTask {
             source_owner: Some(replay_source.original.clone()),
@@ -343,7 +346,15 @@ impl RuntimeSessionService {
             compaction_request_shape: None,
         });
         self.remove_pending_agent_provider_task(turn_id);
-        let status = match trigger {
+        let status = if self.agent_compaction_mode()
+            == crate::runtime::config::CompactionMode::RawTail
+        {
+            format!(
+                "agent: publishing raw-tail context compaction mode={}",
+                self.agent_compaction_mode().name()
+            )
+        } else {
+            match trigger {
             RuntimeActiveTurnCompactionTrigger::ProviderContextLimit { .. } => {
                 "agent: provider rejected context as too large; requesting model-backed context compaction"
                     .to_string()
@@ -354,12 +365,13 @@ impl RuntimeSessionService {
             } => format!(
                 "agent: observed execution input reached configured limit; requesting model-backed context compaction observed_input_tokens={observed_input_tokens} max_input_tokens={max_input_tokens}"
             ),
+        }
         };
         self.append_agent_status_text_to_terminal_buffer(&turn.pane_id, &status)?;
         Ok(true)
     }
 
-    /// Returns pane ids with queued model-backed compaction tasks.
+    /// Returns pane ids with queued summary or raw-tail compaction tasks.
     pub fn pending_agent_compaction_tasks(&self) -> Vec<String> {
         self.pending_agent_compaction_task_ids()
     }
@@ -392,7 +404,12 @@ impl RuntimeSessionService {
         {
             return Ok(None);
         }
-        self.require_auxiliary_accounting_capacity()?;
+        if self
+            .retained_agent_compaction_task(pane_id, task_generation)
+            .is_some_and(|task| task.request.is_some())
+        {
+            self.require_auxiliary_accounting_capacity()?;
+        }
         let Some(task) = self.take_pending_agent_compaction_task(pane_id) else {
             return Ok(None);
         };
@@ -402,8 +419,18 @@ impl RuntimeSessionService {
             return Ok(None);
         }
         self.claim_agent_compaction_task_state(pane_id, task.clone());
-        match self.prepare_claimed_agent_compaction_dispatch(pane_id, task) {
-            Ok(dispatch) => Ok(Some(dispatch)),
+        let dispatch = if task.request.is_none() {
+            self.queue_replay_epoch_publication(
+                &task,
+                mez_agent::ReplayHeadPublication::IntentionalOmission,
+            )
+            .map(|()| None)
+        } else {
+            self.prepare_claimed_agent_compaction_dispatch(pane_id, task)
+                .map(Some)
+        };
+        match dispatch {
+            Ok(dispatch) => Ok(dispatch),
             Err(error) => {
                 // Construction has not handed out a producer. Settle here,
                 // before a host can lose the refusal reply or attempt a lease.
@@ -527,8 +554,11 @@ impl RuntimeSessionService {
             "provider_compact",
             "granted",
         )?;
-        task.request.max_input_tokens = task.model_profile.max_input_tokens();
-        let stream = provider.request_stream(&task.request);
+        let request = task.request.as_mut().ok_or_else(|| {
+            MezError::invalid_state("raw omission cannot construct a provider dispatch")
+        })?;
+        request.max_input_tokens = task.model_profile.max_input_tokens();
+        let stream = provider.request_stream(request);
         task.compaction_request_shape = Some((provider_api, provider_options.clone(), stream));
         self.claim_agent_compaction_task_state(pane_id, task.clone());
         let delivery = crate::runtime::RuntimeCompactionDispatchDelivery::new();

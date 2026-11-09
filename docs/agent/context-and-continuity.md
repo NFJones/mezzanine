@@ -204,7 +204,7 @@ for coexistence, backup privacy and downgrade limitations.
 | Goal | Command | Effect |
 | --- | --- | --- |
 | Continue the same task | Enter another prompt | Keeps the current conversation as context. |
-| Reduce older context | `/compact` | Summarizes eligible completed work while retaining protected instructions and recent exact history. The summary is lossy. |
+| Reduce older context | `/compact` | Applies the configured summary or raw-tail mode while retaining protected instructions and recent exact history. Both modes lose optional old detail from model input. |
 | Start an unrelated task | `/new` | Starts a fresh conversation without clearing the terminal view. |
 | Start fresh and clear the view | `/clear` | Starts a fresh conversation and clears the visible conversation and terminal view. |
 | Try a different approach | `/fork` | Copies the conversation into a new agent pane, leaving the source intact. |
@@ -215,6 +215,31 @@ actions. Global or project guidance can still apply to a fresh conversation;
 starting fresh is not the same as disabling that guidance or persistent memory.
 
 ### Compact a long task
+
+`agents.compaction_mode = "summary"` is the default. Choose `"raw_tail"` to
+discard optional older model input without generating a summary. `/compact`
+takes no arguments in either mode. Raw mode makes zero compactor model calls,
+does not look up compactor credentials, and incurs no auxiliary model usage.
+The original archive stays intact, but omitted history does not return to model
+input on resume, restore, fork, or a later switch back to summary mode.
+
+Raw retention keeps one newest complete optional suffix under
+`agents.compaction_raw_retention_percent` and the remaining ordinary input
+capacity after fixed schemas/controls and stable/protected input. It stops at a
+newer group that does not fit rather than backfilling smaller older groups.
+Exact active instructions, open native/MCP/peer dependencies and post-freeze
+arrivals survive. Protected source may exceed the optional allowance; if it and
+fixed overhead exceed input capacity, compaction reports irreducibility.
+An unchanged raw tail is no-work. Only an actual provider input rejection can
+force further whole optional groups out through a finite descending frontier;
+there is no automatic summary fallback or replay of settled actions.
+
+Raw publication uses the same source, claim, worker, receipt and adoption
+lifecycle as summary mode. Its explicit intentional-omission epoch has no head,
+Memory or elision block. Accepted publication clears ordinary request/cache and
+retrieval state and execution-usage display while preserving cumulative expense.
+Configuration changes affect future admissions, never rewrite saved history or
+retarget an admitted operation; existing freshness and permission fences apply.
 
 Use `/compact` when older completed work crowds out the current task. Mez can
 also attempt context-length recovery after a provider rejects an oversized

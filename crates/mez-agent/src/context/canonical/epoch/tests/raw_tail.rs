@@ -33,6 +33,47 @@ fn raw_ids(live: &ReplayEpochContext) -> Vec<ContextBlockOccurrenceId> {
         .collect()
 }
 
+/// A real rejection can make finite progress even when the optional tail fits
+/// the local estimate. Manual/observed planning must remain unchanged no-work.
+#[test]
+fn raw_tail_real_rejection_descends_current_complete_unit_frontier() {
+    let mut live = omission_owner();
+    for index in 0..4 {
+        live.append_fact("optional", format!("small fact {index}"))
+            .unwrap();
+    }
+    let policy = raw_policy(100_000, 17, None);
+    for remaining in (1..=4).rev() {
+        assert!(matches!(
+            live.prepare_compaction(policy).unwrap(),
+            ReplayCompactionPreparation::NoWork(ReplayCompactionNoWork::RetainedSourceUnchanged)
+        ));
+        let before = raw_ids(&live);
+        let plan = match live
+            .prepare_raw_compaction_after_input_rejection(policy)
+            .unwrap()
+        {
+            ReplayCompactionPreparation::Ready(plan) => plan,
+            other => panic!("real rejection failed to progress: {other:?}"),
+        };
+        assert_eq!(plan.retained_optional_units(), Some(remaining - 1));
+        live.publish_compaction(plan, ReplayHeadPublication::IntentionalOmission)
+            .unwrap();
+        assert_eq!(raw_ids(&live), before[1..]);
+    }
+    assert!(matches!(
+        live.prepare_raw_compaction_after_input_rejection(policy)
+            .unwrap(),
+        ReplayCompactionPreparation::NoWork(ReplayCompactionNoWork::NoRawMembers)
+    ));
+    assert!(
+        live.prepare_raw_compaction_after_input_rejection(
+            ReplayTailPolicy::new(100_000, 100).unwrap()
+        )
+        .is_err()
+    );
+}
+
 /// A pending peer at the front cannot force all later optional history to
 /// remain. Zero optional allowance removes only optional original occurrences,
 /// retaining the actual peer and any post-frontier arrival without a head.

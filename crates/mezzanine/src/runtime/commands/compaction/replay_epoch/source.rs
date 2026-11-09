@@ -60,6 +60,9 @@ impl RuntimeSessionService {
     fn compaction_tail_policy(
         &self,
         profile: &mez_agent::ModelProfile,
+        owner: &ReplayEpochContext,
+        turn: &mez_agent::AgentTurnRecord,
+        allowed: &mez_agent::AllowedActionSet,
     ) -> Result<ReplayTailPolicy> {
         let budget = profile
             .max_input_tokens()
@@ -70,7 +73,50 @@ impl RuntimeSessionService {
             })?;
         let retained = u8::try_from(self.agent_compaction_raw_retention_percent())
             .map_err(|_| MezError::invalid_state("invalid canonical raw retention percentage"))?;
-        ReplayTailPolicy::new(budget, retained).map_err(Into::into)
+        let policy = ReplayTailPolicy::new(budget, retained)?;
+        match self.agent_compaction_mode() {
+            crate::runtime::config::CompactionMode::Summary => {
+                Ok(policy.with_head_policy(mez_agent::ReplayHeadPolicy::Summary))
+            }
+            crate::runtime::config::CompactionMode::RawTail => {
+                let provider = self
+                    .provider_registry()
+                    .provider(&profile.provider)
+                    .ok_or_else(|| MezError::config("compaction provider is unavailable"))?;
+                let api = mez_agent::resolve_provider_api(&provider.kind, provider.api.as_deref())?;
+                let options =
+                    crate::runtime::config::runtime_effective_provider_options(provider, profile);
+                // This is the ordinary continuation's schema/control framing,
+                // not a compactor request. Neither credentials nor transport
+                // are consulted during this read-only sizing operation.
+                let mut request = crate::integrations::agent::context::assemble_model_request(
+                    profile,
+                    api,
+                    turn,
+                    owner.context(),
+                )?;
+                mez_agent::apply_model_request_control(
+                    &mut request,
+                    Some(allowed.clone()),
+                    Some(mez_agent::ModelInteractionKind::ActionExecution),
+                );
+                let tools = mez_agent::invoked_mcp_tools_for_context_with_configured(
+                    owner.context(),
+                    &self.mcp_registry().prompt_summary(),
+                    self.integration.always_exposed_mcp_servers(),
+                );
+                mez_agent::apply_default_action_gates(
+                    &mut request,
+                    &tools,
+                    self.runtime_persistent_memory_enabled(),
+                    crate::runtime::commands::runtime_issues_enabled(self),
+                );
+                let fixed = mez_agent::provider_request_fixed_input_estimate(
+                    &request, api, &options, true,
+                )?;
+                Ok(policy.with_raw_tail_limits(fixed.input_tokens, None))
+            }
+        }
     }
 
     /// Selects the actual configured compactor view on an isolated canonical
@@ -101,6 +147,7 @@ impl RuntimeSessionService {
         turn: &mez_agent::AgentTurnRecord,
         profile: &mez_agent::ModelProfile,
         trigger: RuntimeActiveTurnCompactionTrigger,
+        allowed: &mez_agent::AllowedActionSet,
     ) -> Result<Preparation> {
         let Some(context) = self.agent_turn_contexts().get(&turn.turn_id) else {
             return Err(MezError::invalid_state(
@@ -127,7 +174,7 @@ impl RuntimeSessionService {
         )?;
         let original_projection = owner.provider_projection().cloned();
         self.bind_compaction_provider_projection(&mut owner, profile)?;
-        let policy = self.compaction_tail_policy(profile)?;
+        let policy = self.compaction_tail_policy(profile, &owner, turn, allowed)?;
         if !owner.automatic_compaction_is_fresh(policy)? {
             return Ok(Preparation::NoWork(
                 super::super::NoWorkReason::UnchangedPublishedSource {
@@ -135,8 +182,32 @@ impl RuntimeSessionService {
                 },
             ));
         }
-        let plan = match owner.prepare_compaction(policy)? {
+        let preparation = if self.agent_compaction_mode()
+            == crate::runtime::config::CompactionMode::RawTail
+            && matches!(
+                trigger,
+                RuntimeActiveTurnCompactionTrigger::ProviderContextLimit { .. }
+            ) {
+            owner.prepare_raw_compaction_after_input_rejection(policy)?
+        } else {
+            owner.prepare_compaction(policy)?
+        };
+        let plan = match preparation {
             ReplayCompactionPreparation::Ready(plan) => plan,
+            ReplayCompactionPreparation::NoWork(
+                mez_agent::ReplayCompactionNoWork::ProtectedInputExceedsBudget,
+            ) => {
+                return Ok(Preparation::NoWork(
+                    super::super::NoWorkReason::ProtectedInputExceedsBudget,
+                ));
+            }
+            ReplayCompactionPreparation::NoWork(
+                mez_agent::ReplayCompactionNoWork::RetainedSourceUnchanged,
+            ) => {
+                return Ok(Preparation::NoWork(
+                    super::super::NoWorkReason::RetainedRawTailUnchanged,
+                ));
+            }
             ReplayCompactionPreparation::NoWork(_) => {
                 return Ok(Preparation::NoWork(
                     super::super::NoWorkReason::NoEligibleClosedPrefix,
@@ -181,11 +252,12 @@ impl RuntimeSessionService {
         &self,
         pane: &str,
         mut owner: ReplayEpochContext,
-        profile_name: &str,
-        profile: &mez_agent::ModelProfile,
+        profile: (&str, &mez_agent::ModelProfile),
         history: Option<Arc<crate::runtime::control::RuntimeAgentHistorySource>>,
         permit: Option<Arc<tokio::sync::OwnedSemaphorePermit>>,
+        allowed: &mez_agent::AllowedActionSet,
     ) -> Result<Preparation> {
+        let (profile_name, profile) = profile;
         let session = self
             .agent_shell_store()
             .get(pane)
@@ -199,9 +271,39 @@ impl RuntimeSessionService {
         }
         let original_projection = owner.provider_projection().cloned();
         self.bind_compaction_provider_projection(&mut owner, profile)?;
-        let policy = self.compaction_tail_policy(profile)?;
+        // An idle sizing descriptor is never admitted as an ordinary turn.
+        let sizing_turn = mez_agent::AgentTurnRecord {
+            turn_id: "manual-compaction-sizing".into(),
+            conversation_id: session.session_id.clone(),
+            agent_id: format!("agent-{pane}"),
+            pane_id: pane.into(),
+            trigger: mez_agent::AgentTurnTrigger::UserPrompt,
+            started_at_unix_seconds: 0,
+            deadline_at_unix_millis: 0,
+            policy_profile: "runtime".into(),
+            model_profile: profile_name.into(),
+            parent_turn_id: None,
+            state: mez_agent::AgentTurnState::Queued,
+            cooperation_mode: None,
+            initial_capability: None,
+        };
+        let policy = self.compaction_tail_policy(profile, &owner, &sizing_turn, allowed)?;
         let plan = match owner.prepare_compaction(policy)? {
             ReplayCompactionPreparation::Ready(plan) => plan,
+            ReplayCompactionPreparation::NoWork(
+                mez_agent::ReplayCompactionNoWork::ProtectedInputExceedsBudget,
+            ) => {
+                return Ok(Preparation::NoWork(
+                    super::super::NoWorkReason::ProtectedInputExceedsBudget,
+                ));
+            }
+            ReplayCompactionPreparation::NoWork(
+                mez_agent::ReplayCompactionNoWork::RetainedSourceUnchanged,
+            ) => {
+                return Ok(Preparation::NoWork(
+                    super::super::NoWorkReason::RetainedRawTailUnchanged,
+                ));
+            }
             ReplayCompactionPreparation::NoWork(_) => {
                 // With no selectable prefix all raw source must remain. Use
                 // the same cached cost view and reservation as the planner;
@@ -258,9 +360,22 @@ impl RuntimeSessionService {
 }
 
 impl RuntimeCompactionReplaySource {
+    /// Captured source policy decides whether inference may be constructed.
+    pub(in crate::runtime::commands::compaction) fn requires_model_summary(&self) -> bool {
+        self.plan.requires_model_summary()
+    }
+
     /// Nonblocking, content-free display observation, never a wave receipt.
     pub(crate) fn model_progress(&self) -> operation::Snapshot {
-        self.operation.progress()
+        if self.requires_model_summary() {
+            self.operation.progress()
+        } else {
+            operation::Snapshot {
+                phase: "publishing",
+                model_calls: 0,
+                serial_depth: 0,
+            }
+        }
     }
 
     /// Uses the existing observed provider/expense owner for one bounded wave.
@@ -288,7 +403,9 @@ impl RuntimeCompactionReplaySource {
             .execute(
                 provider,
                 task.task_generation,
-                task.request.clone(),
+                task.request.clone().ok_or_else(|| {
+                    MezError::invalid_state("raw omission cannot execute a compactor model wave")
+                })?,
                 shape,
                 input,
             )
@@ -378,7 +495,7 @@ impl RuntimeCompactionReplaySource {
     /// Number of immutable source occurrences, without cloning source bodies
     /// on actor admission just to populate content-free status metadata.
     pub(in crate::runtime::commands::compaction) fn input_entry_count(&self) -> usize {
-        self.plan.summary_input().len()
+        self.plan.removed_events().count()
     }
 
     /// Borrows the original frozen selection for publication/inspection tests.

@@ -11,6 +11,10 @@ pub(super) enum NoWorkReason {
     NoEligibleClosedPrefix,
     /// Exact/open retained source cannot meet the requested retention allowance.
     IrreducibleExactTail,
+    /// Fixed framing plus stable/protected source exceeds ordinary capacity.
+    ProtectedInputExceedsBudget,
+    /// No prior head or optional source can be removed under the raw allowance.
+    RetainedRawTailUnchanged,
     /// Automatic pressure cannot recompact the same published source. Explicit
     /// manual selection does not use this gate.
     UnchangedPublishedSource { head_revision: u64 },
@@ -25,6 +29,8 @@ impl NoWorkReason {
             Self::NoDurableTranscript => "no-durable-transcript",
             Self::NoEligibleClosedPrefix => "no-eligible-closed-prefix",
             Self::IrreducibleExactTail => "irreducible-exact-retained-tail",
+            Self::ProtectedInputExceedsBudget => "protected-input-exceeds-budget",
+            Self::RetainedRawTailUnchanged => "retained-raw-tail-unchanged",
             Self::UnchangedPublishedSource { .. } => "unchanged-published-source",
         }
     }
@@ -44,6 +50,12 @@ impl NoWorkReason {
             }
             Self::IrreducibleExactTail => {
                 "agent: compaction skipped; exact unfinished transcript tail exceeds retention budget"
+            }
+            Self::ProtectedInputExceedsBudget => {
+                "agent: context unavailable; fixed request framing and protected source exceed model input capacity"
+            }
+            Self::RetainedRawTailUnchanged => {
+                "agent: compaction skipped; raw tail is unchanged under the selected retention allowance"
             }
             Self::UnchangedPublishedSource { .. } => {
                 "agent: automatic compaction skipped; published source has no fresh eligible closed history"

@@ -53,7 +53,7 @@ async fn auxiliary_compaction_duplicate_dispatch_cannot_replace_registered_produ
                     &ReportedMemoryProvider(worker_requests),
                     &observer,
                     ProviderRequestPurpose::Compaction,
-                    &dispatch.task.request,
+                    dispatch.task.request.as_ref().unwrap(),
                 )
                 .await?;
                 let _ = started.send(());
@@ -180,7 +180,7 @@ async fn auxiliary_compaction_wire_checkpoints_conserve_cancelled_and_final_usag
                 &provider,
                 &observer,
                 ProviderRequestPurpose::Compaction,
-                &dispatch.task.request,
+                dispatch.task.request.as_ref().unwrap(),
             )
             .await
             .unwrap();
@@ -335,7 +335,7 @@ async fn qualify_compaction_stop(stop_before_worker: bool) {
                         &provider,
                         &observer,
                         ProviderRequestPurpose::Compaction,
-                        &dispatch.task.request,
+                        dispatch.task.request.as_ref().unwrap(),
                     )
                     .await
                     .unwrap();

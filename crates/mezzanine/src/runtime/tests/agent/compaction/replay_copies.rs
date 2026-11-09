@@ -1466,7 +1466,8 @@ fn nostore_subagent_fork_uses_its_latest_frozen_head_without_saving_parent() {
             &fs::read(store.root().join(&cid).join("compaction-epoch.json")).unwrap(),
         )
         .unwrap();
-        assert_eq!(stored["manifest"]["version"], 10);
+        assert_eq!(stored["manifest"]["version"], 12);
+        assert_eq!(stored["manifest"]["head_policy"], "summary");
         assert!(stored["manifest"]["copy_origin"].is_null());
         assert_eq!(
             stored["manifest"]["memory_copy_origin"]["conversation"],

@@ -21,6 +21,7 @@ mod provider_backoff;
 mod provider_continuity;
 mod provider_limit_replay;
 mod provider_recovery;
+mod raw_tail;
 mod reentry;
 mod replay_compatibility;
 mod replay_copies;
@@ -79,6 +80,33 @@ fn runtime_config_reload_applies_compaction_raw_retention() {
         .unwrap();
 
     assert_eq!(service.agent_compaction_raw_retention_percent(), 25);
+}
+
+/// Reload changes future mode selection and removing the key restores summary.
+#[test]
+fn runtime_config_reload_applies_compaction_mode() {
+    let mut service = test_runtime_service();
+    assert_eq!(service.agent_compaction_mode().name(), "summary");
+    for text in ["[agents]\ncompaction_mode=\"raw_tail\"\n", "[agents]\n"] {
+        service
+            .replace_config_layers(vec![ConfigLayer {
+                name: "mode".into(),
+                path: None,
+                format: ConfigFormat::Toml,
+                scope: ConfigScope::Primary,
+                trusted: true,
+                text: text.into(),
+            }])
+            .unwrap();
+        assert_eq!(
+            service.agent_compaction_mode().name(),
+            if text.contains("raw_tail") {
+                "raw_tail"
+            } else {
+                "summary"
+            }
+        );
+    }
 }
 
 /// A byte-heavy direct-user instruction cannot become summary input merely

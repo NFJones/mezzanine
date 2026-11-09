@@ -90,9 +90,15 @@ impl RuntimeSessionService {
         let (name, profile) =
             self.active_model_profile_for_pane(pane, &format!("agent-{pane}"), None)?;
         let permit = preparation.as_ref().map(|work| work._permit.clone());
-        let source = match self
-            .prepare_manual_replay_compaction(pane, owner, &name, &profile, original, permit)?
-        {
+        let allowed = self.capture_agent_session_allowed_actions_for_pane(pane)?;
+        let source = match self.prepare_manual_replay_compaction(
+            pane,
+            owner,
+            (&name, &profile),
+            original,
+            permit,
+            &allowed,
+        )? {
             Preparation::Ready(source) => source,
             Preparation::NoWork(reason) => {
                 self.append_agent_status_text_to_terminal_buffer(pane, reason.status())?;
@@ -108,7 +114,16 @@ impl RuntimeSessionService {
                 });
             }
         };
-        let allowed = self.capture_agent_session_allowed_actions_for_pane(pane)?;
+        let mode = if source.requires_model_summary() {
+            "summary"
+        } else {
+            "raw_tail"
+        };
+        let source_name = if source.requires_model_summary() {
+            "model-compact"
+        } else {
+            "raw-tail"
+        };
         let origin = self.capture_agent_accounting_origin_for_pane(pane);
         if let Some(preparation) = preparation {
             let work = RuntimeManualCompactionRequestWork::capture(
@@ -126,7 +141,7 @@ impl RuntimeSessionService {
                 command: "compact".into(),
                 visibility: session.visibility,
                 body: format!(
-                    "pane={pane} conversation={} compacted=false state=preparing phase=request source=model-compact trigger=manual",
+                    "pane={pane} conversation={} compacted=false state=preparing phase=request source={source_name} mode={mode} trigger=manual",
                     session.session_id
                 ),
             });
@@ -150,7 +165,7 @@ impl RuntimeSessionService {
             command: "compact".into(),
             visibility: session.visibility,
             body: format!(
-                "pane={pane} conversation={} compacted=false state=queued source=model-compact trigger=manual",
+                "pane={pane} conversation={} compacted=false state=queued source={source_name} mode={mode} trigger=manual",
                 session.session_id
             ),
         })
@@ -173,13 +188,15 @@ pub(in crate::runtime::commands::compaction) fn manual_replay_task(
     accounting_origin: crate::storage::token_usage::AccountingOrigin,
     allowed: AllowedActionSet,
 ) -> Result<RuntimeAgentCompactionTask> {
-    let request = runtime_model_compaction_request_from_source(
-        profile,
-        pane,
-        source.owner.conversation_id().as_str(),
-        String::new(),
-        allowed,
-    );
+    let request = source.requires_model_summary().then(|| {
+        runtime_model_compaction_request_from_source(
+            profile,
+            pane,
+            source.owner.conversation_id().as_str(),
+            String::new(),
+            allowed,
+        )
+    });
     Ok(RuntimeAgentCompactionTask {
         source_owner: Some(source.original.clone()),
         replay_source: Some(source.clone()),
@@ -192,7 +209,7 @@ pub(in crate::runtime::commands::compaction) fn manual_replay_task(
         conversation_id: source.owner.conversation_id().as_str().to_owned(),
         source: "manual".into(),
         transcript_entries,
-        summarized_entries: source.plan.summary_input().len(),
+        summarized_entries: source.input_entry_count(),
         model_profile_name: name.to_owned(),
         model_profile: profile.clone(),
         request,

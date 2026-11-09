@@ -65,7 +65,7 @@ copy/replace examples such as command-rule arrays, or provider catalog fields
 that are materialized only after authentication; they are not activation
 markers.
 
-The current config schema version is `103`. On launch, Mezzanine migrates an
+The current config schema version is `104`. On launch, Mezzanine migrates an
 older supported primary user config to the current schema before validation,
 backfilling missing defaults, rewriting renamed settings, and removing settings
 that no longer exist. Config files declaring a schema version newer than the
@@ -78,6 +78,10 @@ inherits the default `false` in TOML, YAML and JSON, including inline TOML table
 The v102-to-v103 migration advances only schema authority, preserving every
 authored `terminal.agent_log_timestamp_format`, enablement choice and neighboring
 setting in all formats. Absent formats inherit `%H:%M:%S` without enabling display.
+
+The v103-to-v104 migration preserves authored `agents.compaction_mode` in all
+formats. Absence inherits `summary`; migration does not materialize a choice or
+normalize invalid authored values.
 
 The v94-to-v95 primary-config migration removes retired
 `agent_transcript_peer_receiver_fg` and `agent_transcript_peer_receiver_bg`
@@ -188,7 +192,7 @@ shown.
 
 | Field | Type | Default declaration | Description |
 | --- | --- | --- | --- |
-| `version` | integer | `103` | Config schema version. Do not change this. |
+| `version` | integer | `104` | Config schema version. Do not change this. |
 | `host` | table | see below | Disabled-by-default persistent host, recovery, and durable-lease policy. |
 | `runtime` | table | see below | Process runtime settings. |
 | `terminal` | table | see below | Terminal compatibility and presentation. |
@@ -944,7 +948,8 @@ description.
 | `agents.shell_only` | boolean | `true` | Accepted declaration, not a runtime execution switch. Changing it does not enable another local executor or prohibit explicit process integrations such as MCP and hooks. Use `agents.shell_mode` for shell transport and `agents.enabled_actions` for the action catalog. |
 | `agents.enabled_actions` | string array | ordinary executable MAAP actions | Authoritative action allowlist captured as a full schema-bearing snapshot when an agent session or child session is created. Ordinary provider requests, retries, repairs, continuations, and failure summaries retain that exact snapshot, including `spawn_agent` sizing metadata and the complete resolved execution profile for each size, even if configuration reloads while the session remains open. New sessions use the current configuration. Legacy snapshots without a resolved sizing profile remain readable but reject explicit sizing selections. Internal non-MAAP interaction kinds suppress tool emission without changing the stored catalog. Valid values are `say`, `shell_command`, `apply_patch`, `web_search`, `fetch_url`, `send_message`, `wait`, `spawn_agent`, `close_agent`, `config_change`, `mcp_server_search`, `mcp_server_get`, `mcp_call`, `memory_search`, `memory_store`, `list_agents`, `issue_add`, `issue_update`, `issue_query`, and `issue_delete`, plus optional paired `request_skills` and `call_skill`. Defaults omit the skill pair; eligible live discovery policy is additionally required at capture and loading. Controller-only capability negotiation is not configurable. Integration availability, permission, subagent depth and terminal-profile policy, and argument checks still run when an enabled action is selected and return explicit action results when it cannot run. |
 | `agents.shell_mode` | string | `"native"` | Default agent shell execution transport: `native` runs each action in a freshly spawned shell inferred from the pane root process without sending pane input; `pane` sends shell-backed actions through the pane shell. Use `/shell-mode status` to view the effective pane mode, configured global mode, and override provenance in the pager. Use `/shell-mode pane` or `/shell-mode native` for an active-pane override, or append `--global` to persist the default for panes without an override. |
-| `agents.compaction_raw_retention_percent` | integer | `10` | Initial percent of complete raw groups retained outside model-authored summary input; provider context-limit backoff may grow the exact tail one complete group at a time; 1 to 100. |
+| `agents.compaction_mode` | string | `"summary"` | `summary` generates a lossy head; `raw_tail` omits optional old context with no compactor calls or auxiliary usage. Captured per admission; changing it does not rewrite saved history. |
+| `agents.compaction_raw_retention_percent` | integer | `10` | Optional newest complete raw suffix for all three triggers; 1 to 100. Raw mode reserves fixed/protected input first, never backfills past a newer oversized group, and can prune further whole optional groups only after actual provider input rejection. |
 | `agents.routing` | boolean | `false` | Enable pane-local routing selection by default. |
 | `agents.action_failure_retry_limit` | integer | `5` | Self-correction attempts per repeated correctable action failure signature other than `apply_patch`. |
 | `agents.provider_error_retry_limit` | integer | `5` | Retries after eligible transient provider failures; accepts `0` to disable finite retries and values through `4294967295`. Delays begin at one second and use exponential backoff capped at 15 minutes. |

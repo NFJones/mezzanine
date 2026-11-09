@@ -133,7 +133,60 @@ pub fn provider_request_input_estimate(
     provider_options: &BTreeMap<String, String>,
     stream: bool,
 ) -> ProviderRequestAssemblyResult<ProviderRequestInputEstimate> {
-    let wire_body = match api {
+    let wire_body = canonical_request_body(request, api, provider_options, stream)?;
+    Ok(provider_request_input_estimate_from_body(&wire_body))
+}
+
+/// Estimates fixed schemas and controls using the actual ordinary request's
+/// canonical body. Context payloads are accounted separately by epoch planning;
+/// removing them here avoids treating escaped source text as immutable overhead.
+/// No request is dispatched or changed, and no compaction request is needed.
+pub fn provider_request_fixed_input_estimate(
+    request: &ModelRequest,
+    api: ProviderApiCompatibility,
+    provider_options: &BTreeMap<String, String>,
+    stream: bool,
+) -> ProviderRequestAssemblyResult<ProviderRequestInputEstimate> {
+    let wire_body = canonical_request_body(request, api, provider_options, stream)?;
+    let mut body: serde_json::Value = serde_json::from_str(&wire_body).map_err(|error| {
+        crate::ProviderRequestAssemblyError::invalid_state(format!(
+            "invalid canonical request JSON: {error}"
+        ))
+    })?;
+    // These are the context-bearing fields of the canonical serializers above.
+    // Keep their empty wrappers and all tool schemas/provider controls.
+    match api {
+        ProviderApiCompatibility::OpenAiResponses => {
+            body["input"] = serde_json::json!([]);
+            body["instructions"] = serde_json::json!("");
+        }
+        ProviderApiCompatibility::OpenAiChatCompletions
+        | ProviderApiCompatibility::DeepSeekChatCompletions => {
+            body["messages"] = serde_json::json!([]);
+        }
+        ProviderApiCompatibility::AnthropicMessages => {
+            body["messages"] = serde_json::json!([]);
+            if body.get("system").is_some() {
+                body["system"] = serde_json::json!("");
+            }
+        }
+    }
+    let framing = serde_json::to_string(&body).map_err(|error| {
+        crate::ProviderRequestAssemblyError::invalid_state(format!(
+            "failed to encode request framing: {error}"
+        ))
+    })?;
+    Ok(provider_request_input_estimate_from_body(&framing))
+}
+
+/// Shares the provider-owned serializers between complete and fixed accounting.
+fn canonical_request_body(
+    request: &ModelRequest,
+    api: ProviderApiCompatibility,
+    provider_options: &BTreeMap<String, String>,
+    stream: bool,
+) -> ProviderRequestAssemblyResult<String> {
+    Ok(match api {
         ProviderApiCompatibility::OpenAiResponses => {
             openai_responses_request_body_with_stream(request, stream)?
         }
@@ -152,8 +205,7 @@ pub fn provider_request_input_estimate(
             let options = AnthropicMessagesOptions::from_provider_options(provider_options)?;
             anthropic_messages_request_body(request, stream, &options)?
         }
-    };
-    Ok(provider_request_input_estimate_from_body(&wire_body))
+    })
 }
 
 #[cfg(test)]
@@ -203,6 +255,64 @@ mod tests {
                 },
             ]
             .into(),
+        }
+    }
+
+    /// Large escaped source changes complete input but not fixed framing. Each
+    /// adapter keeps its real tools and controls, so schema cost remains counted.
+    #[test]
+    fn fixed_request_estimate_excludes_context_payload_for_all_adapters() {
+        for (api, provider) in [
+            (ProviderApiCompatibility::OpenAiResponses, "openai"),
+            (
+                ProviderApiCompatibility::OpenAiChatCompletions,
+                "openai-compatible",
+            ),
+            (
+                ProviderApiCompatibility::DeepSeekChatCompletions,
+                "deepseek",
+            ),
+            (ProviderApiCompatibility::AnthropicMessages, "anthropic"),
+        ] {
+            let options = BTreeMap::new();
+            let request = complete_test_request(provider);
+            let fixed =
+                provider_request_fixed_input_estimate(&request, api, &options, true).unwrap();
+            assert!(fixed.input_tokens > 0);
+            let mut dense = request.clone();
+            dense.messages = request
+                .messages
+                .iter()
+                .cloned()
+                .map(|mut message| {
+                    message.content = " dense\\\"code\n你好 ".repeat(5_000);
+                    message
+                })
+                .collect::<Vec<_>>()
+                .into();
+            assert_eq!(
+                provider_request_fixed_input_estimate(&dense, api, &options, true).unwrap(),
+                fixed
+            );
+            assert!(
+                provider_request_input_estimate(&dense, api, &options, true)
+                    .unwrap()
+                    .input_tokens
+                    > fixed.input_tokens + 1_000
+            );
+            let mut schemas_disabled = request.clone();
+            schemas_disabled.allowed_actions = AllowedActionSet::from_actions([]);
+            assert!(
+                provider_request_fixed_input_estimate(&schemas_disabled, api, &options, true)
+                    .unwrap()
+                    .input_tokens
+                    <= fixed.input_tokens
+            );
+            assert_eq!(
+                request,
+                complete_test_request(provider),
+                "accounting changed outgoing input"
+            );
         }
     }
 

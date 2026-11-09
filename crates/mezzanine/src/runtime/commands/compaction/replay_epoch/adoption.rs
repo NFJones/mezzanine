@@ -23,7 +23,10 @@ impl RuntimeSessionService {
                 "accepted compaction belongs to another frozen epoch",
             ));
         }
-        self.queue_replay_epoch_publication(task, accepted.summary().to_owned())
+        self.queue_replay_epoch_publication(
+            task,
+            ReplayHeadPublication::Summary(accepted.summary().to_owned()),
+        )
     }
 
     pub(in crate::runtime::commands::compaction) fn validate_replay_compaction_task(
@@ -42,6 +45,7 @@ impl RuntimeSessionService {
             .source_owner
             .as_ref()
             .is_some_and(|owner| Arc::ptr_eq(owner, &source.original))
+            || task.request.is_some() != source.plan.requires_model_summary()
             || task.model_profile != accepted.model_profile
             || task.model_profile_name != accepted.model_profile_name
         {
@@ -57,9 +61,15 @@ impl RuntimeSessionService {
     pub(in crate::runtime::commands::compaction) fn queue_replay_epoch_publication(
         &mut self,
         task: &crate::runtime::RuntimeAgentCompactionTask,
-        summary: String,
+        output: ReplayHeadPublication,
     ) -> Result<()> {
         self.validate_replay_compaction_task(task)?;
+        let requires_summary = task.request.is_some();
+        if requires_summary != matches!(output, ReplayHeadPublication::Summary(_)) {
+            return Err(MezError::conflict(
+                "publication output does not match captured compaction mode",
+            ));
+        }
         if self
             .replay_epoch_publication(&task.pane_id, task.task_generation)
             .is_some()
@@ -82,7 +92,7 @@ impl RuntimeSessionService {
             task.task_generation,
             source,
             publication_source,
-            summary,
+            output,
         );
         let attempt = work
             .claim_attempt()
@@ -307,7 +317,11 @@ impl RuntimeSessionService {
             self.finish_agent_compaction_task(&pane, generation);
             let _ = self.append_agent_status_text_to_terminal_buffer(
                 &pane,
-                "agent: canonical compaction head accepted",
+                if work.source().requires_model_summary() {
+                    "agent: canonical compaction head accepted"
+                } else {
+                    "agent: canonical raw-tail compaction accepted"
+                },
             );
             self.resume_agent_compaction_steering(&pane)?;
             Ok(())

@@ -25,7 +25,7 @@ fn log_timestamp_format_migration_keeps_true_neighbors_and_invalid_authored_valu
                 };
                 let plan = migrate_config_text(format, &text).unwrap();
                 let mut expected = original;
-                expected["version"] = serde_json::json!(103);
+                expected["version"] = serde_json::json!(CURRENT_CONFIG_SCHEMA_VERSION);
                 assert_eq!(
                     parse_config_json_value(format, &plan.text).unwrap(),
                     expected
@@ -216,7 +216,6 @@ fn log_timestamp_format_invalid_values_fail_before_mutation() {
 /// Repeating migration must be inert even with an inline terminal table.
 #[test]
 fn log_timestamp_format_migration_preserves_all_authored_formats() {
-    assert_eq!(CURRENT_CONFIG_SCHEMA_VERSION, 103);
     for (format, source, expected) in [
         (
             ConfigFormat::Toml,
@@ -256,7 +255,7 @@ fn log_timestamp_format_migration_preserves_all_authored_formats() {
     ] {
         let plan = migrate_config_text(format, source).unwrap();
         assert_eq!(plan.from_version, 102);
-        assert_eq!(plan.to_version, 103);
+        assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
         let root = parse_config_json_value(format, &plan.text).unwrap();
         assert_eq!(
             root.pointer("/terminal/agent_log_timestamp_format")

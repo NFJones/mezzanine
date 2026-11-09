@@ -4,6 +4,51 @@
 use super::*;
 
 impl ReplayEpochContext {
+    /// Handles an authoritative ordinary input rejection in raw mode. Normal
+    /// retention gets the first opportunity to omit source. If it would keep
+    /// every optional unit, descend by one complete unit instead. The frontier
+    /// derives only from current membership, so rejected retries terminate and
+    /// never resurrect covered source or require another persistent ledger.
+    /// Callers must not use this stronger policy for estimates or manual work.
+    pub fn prepare_raw_compaction_after_input_rejection(
+        &self,
+        policy: ReplayTailPolicy,
+    ) -> AgentContextResult<ReplayCompactionPreparation> {
+        if policy.head_policy != Some(ReplayHeadPolicy::IntentionalOmission) {
+            return Err(AgentContextError::new(
+                "raw rejection requires an explicit omission policy",
+            ));
+        }
+        let prepared = self.prepare_compaction(policy)?;
+        if matches!(&prepared, ReplayCompactionPreparation::Ready(plan) if plan.removed_raw_members().next().is_some())
+        {
+            return Ok(prepared);
+        }
+        if matches!(
+            prepared,
+            ReplayCompactionPreparation::NoWork(
+                ReplayCompactionNoWork::ProtectedInputExceedsBudget
+            )
+        ) {
+            return Ok(prepared);
+        }
+        let raw = &self.context.chronology()[usize::from(self.head.is_some())..];
+        let optional = execution_units(raw)
+            .into_iter()
+            .filter(|range| {
+                raw[range.clone()]
+                    .iter()
+                    .all(|event| self.event_is_replaceable(event))
+            })
+            .count();
+        if optional == 0 {
+            return Ok(prepared);
+        }
+        self.prepare_compaction(
+            policy.with_raw_tail_limits(policy.fixed_input_tokens, Some(optional - 1)),
+        )
+    }
+
     /// Freezes one source selection under the captured head policy, or the
     /// committed policy when no explicit target was supplied. Summary selection
     /// uses a closed prefix and raw tail; exact instructions, pending peer/native

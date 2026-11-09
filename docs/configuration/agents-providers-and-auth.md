@@ -24,11 +24,25 @@ to remove or rename ids still referenced by `default_model` or a model profile.
 Use `/model`, `/routing`, and `/thinking` for pane-scoped runtime choices where
 supported.
 
+`agents.compaction_mode` accepts `summary` (the default) or `raw_tail`.
+Raw-tail compaction intentionally discards optional old input from the active
+model context without generating a summary or calling a compactor model. It
+preserves the archive, exact active instructions and open dependencies. It needs
+no compactor credentials and incurs no auxiliary model usage. Changing the
+setting affects new admissions; saved membership governs later replay and forks.
+
 `agents.compaction_raw_retention_percent` selects the same complete raw tail
 for manual, observed-input and provider-input-rejection compaction. Private
 input packing and transport retries preserve that reservation. Advisory summary
 length does not change it or create a provider generation cap. See
 [context and continuity](../agent/context-and-continuity.md).
+
+In raw mode, the percentage bounds one newest optional suffix after fixed
+request overhead and protected source reserve capacity. Whole groups stay
+together, and a newer oversized group prevents older backfill. A fitting,
+unchanged tail is no-work; protected input that exceeds capacity is irreducible.
+Actual provider input rejection can remove additional whole optional groups
+until none remain. It never switches automatically to summary mode.
 
 Provider outages use actor-owned exponential backoff. By default, Mez retries
 eligible transport failures, rate limits, retry hints, 5xx responses, and

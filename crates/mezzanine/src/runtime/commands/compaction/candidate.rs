@@ -79,7 +79,15 @@ impl RuntimeSessionService {
             assemble_model_request(&task.model_profile, api, &turn, &candidate_context)?;
         mez_agent::apply_model_request_control(
             &mut request,
-            Some(task.request.allowed_actions.clone()),
+            Some(
+                task.request
+                    .as_ref()
+                    .ok_or_else(|| {
+                        MezError::invalid_state("summary candidate requires a model request")
+                    })?
+                    .allowed_actions
+                    .clone(),
+            ),
             Some(ModelInteractionKind::ActionExecution),
         );
         mez_agent::apply_default_action_gates(

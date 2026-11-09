@@ -411,6 +411,7 @@ pub(crate) struct RuntimeAgentComponent {
     /// Nonblocking publisher for the session-owned host power worker.
     active_turn_power_inhibition: Option<PowerInhibitionHandle>,
     /// Percent of raw context retained after compaction.
+    agent_compaction_mode: crate::runtime::config::CompactionMode,
     agent_compaction_raw_retention_percent: usize,
     /// Default model and reasoning auto-sizing policy.
     agent_auto_sizing: RuntimeAutoSizingConfig,
@@ -3769,28 +3770,30 @@ impl RuntimeSessionService {
                 (task.task_generation, task.conversation_id.clone()),
             );
         }
-        let process = self.pane_process_identity(&task.pane_id).ok();
-        self.agent
-            .compaction_accounting_owners
-            .entry((task.pane_id.clone(), task.task_generation))
-            .or_insert_with(|| project_accounting::CompactionAccountingOwner {
-                provenance: project_accounting::AuxiliaryAccountingOwner {
-                    pane: task.pane_id.clone(),
-                    conversation: task.conversation_id.clone(),
-                    origin: task.accounting_origin.clone(),
-                    model: ModelTokenUsageKey::new(
-                        &task.model_profile.provider,
-                        &task.model_profile.model,
-                    ),
-                    process,
-                    observation: crate::storage::token_usage::new_token_usage_event_id(),
-                },
-                request_agent_id: task.request.agent_id.clone(),
-                request_turn_id: task.request.turn_id.clone(),
-                checkpoint_ids: Default::default(),
-                checkpoint_usage: Default::default(),
-                delivery: None,
-            });
+        if let Some(request) = task.request.as_ref() {
+            let process = self.pane_process_identity(&task.pane_id).ok();
+            self.agent
+                .compaction_accounting_owners
+                .entry((task.pane_id.clone(), task.task_generation))
+                .or_insert_with(|| project_accounting::CompactionAccountingOwner {
+                    provenance: project_accounting::AuxiliaryAccountingOwner {
+                        pane: task.pane_id.clone(),
+                        conversation: task.conversation_id.clone(),
+                        origin: task.accounting_origin.clone(),
+                        model: ModelTokenUsageKey::new(
+                            &task.model_profile.provider,
+                            &task.model_profile.model,
+                        ),
+                        process,
+                        observation: crate::storage::token_usage::new_token_usage_event_id(),
+                    },
+                    request_agent_id: request.agent_id.clone(),
+                    request_turn_id: request.turn_id.clone(),
+                    checkpoint_ids: Default::default(),
+                    checkpoint_usage: Default::default(),
+                    delivery: None,
+                });
+        }
         self.agent
             .claimed_agent_compaction_tasks
             .insert((task.pane_id.clone(), task.task_generation), task);
@@ -4878,6 +4881,19 @@ impl RuntimeSessionService {
         previous_turn_id: &str,
     ) -> Option<RuntimeAgentLoopContinuation> {
         self.agent.agent_loop_continuations.remove(previous_turn_id)
+    }
+
+    /// Mode captured by the next compaction admission; reload does not edit history.
+    pub(crate) fn agent_compaction_mode(&self) -> crate::runtime::config::CompactionMode {
+        self.agent.agent_compaction_mode
+    }
+
+    /// Replaces policy for future admissions only.
+    pub(crate) fn set_agent_compaction_mode(
+        &mut self,
+        mode: crate::runtime::config::CompactionMode,
+    ) {
+        self.agent.agent_compaction_mode = mode;
     }
 
     /// Returns the raw-context percentage retained after compaction.

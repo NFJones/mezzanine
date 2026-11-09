@@ -364,12 +364,20 @@ fn runtime_context_limit_recovery_replans_retained_tail_noop() {
             .unwrap();
         assert!(task.replay_source.is_some());
         let input = crate::test_support::compaction_source::rendered_source(task).unwrap();
-        assert!(!task.request.messages.iter().any(|message| {
-            message
-                .content
-                .contains("within 0 whitespace-delimited words")
-                || message.content.contains("within 0 estimated input tokens")
-        }));
+        assert!(
+            !task
+                .request
+                .as_ref()
+                .unwrap()
+                .messages
+                .iter()
+                .any(|message| {
+                    message
+                        .content
+                        .contains("within 0 whitespace-delimited words")
+                        || message.content.contains("within 0 estimated input tokens")
+                })
+        );
         for event in configured.summary_input() {
             assert!(input.contains(&event.block().content));
         }

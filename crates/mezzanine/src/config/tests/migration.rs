@@ -3,6 +3,49 @@
 use super::*;
 use crate::config::parse_config_json_value;
 
+/// The new choice defaults to summary without rewriting authored values in any
+/// supported encoding. Invalid values survive migration for strict validation.
+#[test]
+fn compaction_mode_schema_104_preserves_absence_and_authored_policy() {
+    for format in [ConfigFormat::Toml, ConfigFormat::Json, ConfigFormat::Yaml] {
+        for mode in [None, Some("summary"), Some("raw_tail"), Some("invalid")] {
+            let text = match format {
+                ConfigFormat::Toml => format!(
+                    "version = 103\n{}",
+                    mode.map(|mode| format!("[agents]\ncompaction_mode = {mode:?}\n"))
+                        .unwrap_or_default()
+                ),
+                ConfigFormat::Json => serde_json::to_string(&match mode {
+                    Some(mode) => {
+                        serde_json::json!({"version":103,"agents":{"compaction_mode":mode}})
+                    }
+                    None => serde_json::json!({"version":103}),
+                })
+                .unwrap(),
+                ConfigFormat::Yaml => format!(
+                    "version: 103\n{}",
+                    mode.map(|mode| format!("agents:\n  compaction_mode: {mode}\n"))
+                        .unwrap_or_default()
+                ),
+            };
+            let plan = migrate_config_text(format, &text).unwrap();
+            assert_eq!(plan.to_version, CURRENT_CONFIG_SCHEMA_VERSION);
+            let root = parse_config_json_value(format, &plan.text).unwrap();
+            assert_eq!(
+                root.pointer("/agents/compaction_mode")
+                    .and_then(serde_json::Value::as_str),
+                mode
+            );
+            if mode == Some("invalid") {
+                assert!(!validate_config_text(format, &plan.text, ConfigScope::Primary).valid);
+            } else {
+                assert!(validate_config_text(format, &plan.text, ConfigScope::Primary).valid);
+            }
+            assert!(!migrate_config_text(format, &plan.text).unwrap().changed);
+        }
+    }
+}
+
 /// Naming migration preserves authored policy and canonical-key precedence in
 /// all formats, including inline TOML, and removes the obsolete spelling.
 #[test]

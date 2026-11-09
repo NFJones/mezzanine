@@ -2224,10 +2224,10 @@ fn runtime_routed_child_malformed_compaction_completion_recovers_parent() {
             summarized_entries: 1,
             model_profile_name: worker_turn.model_profile.clone(),
             model_profile,
-            request: runtime_model_request_fixture_for_agent(
+            request: Some(runtime_model_request_fixture_for_agent(
                 &worker_turn.turn_id,
                 &worker_turn.agent_id,
-            ),
+            )),
             resume_turn_id: Some(worker_turn.turn_id.clone()),
             compaction_request_shape: None,
             accounting_origin: crate::storage::token_usage::AccountingOrigin::Unattributed,
@@ -2303,10 +2303,10 @@ fn runtime_routed_child_post_summary_compaction_failure_recovers_parent() {
             summarized_entries: 1,
             model_profile_name: worker_turn.model_profile.clone(),
             model_profile,
-            request: runtime_model_request_fixture_for_agent(
+            request: Some(runtime_model_request_fixture_for_agent(
                 &worker_turn.turn_id,
                 &worker_turn.agent_id,
-            ),
+            )),
             resume_turn_id: Some(worker_turn.turn_id.clone()),
             compaction_request_shape: None,
             accounting_origin: crate::storage::token_usage::AccountingOrigin::Unattributed,

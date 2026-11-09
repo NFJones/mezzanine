@@ -700,8 +700,8 @@ pub struct RuntimeAgentCompactionTask {
     pub model_profile_name: String,
     /// Active model profile copied for completion metadata.
     pub model_profile: ModelProfile,
-    /// Provider request submitted by the async compaction worker.
-    pub request: ModelRequest,
+    /// Summary inference only. Intentional raw omission constructs no model request.
+    pub request: Option<ModelRequest>,
     /// Running turn to requeue after this compaction completes.
     pub resume_turn_id: Option<String>,
     /// Resolved wire shape captured at claim for context-limit retry sizing.
