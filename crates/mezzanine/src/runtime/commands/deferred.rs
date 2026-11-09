@@ -1228,6 +1228,10 @@ impl RuntimeSessionService {
     /// match the dispatched one, so an earlier attempt cannot overwrite a display
     /// the user asked for again. A failure is reported through the same
     /// invalid-command response path the inline lane used.
+    /// Pre-adoption resume freshness refusal becomes a typed `Failed` outcome:
+    /// `Ok(true)` means its diagnostic and terminal phase were recorded, not
+    /// that resume succeeded. Transaction, persistence and rollback errors
+    /// remain `Err`; the worker must not hide actor/channel loss either.
     ///
     /// A pane that was hidden or closed while the worker ran also drops its
     /// display: the prompt that asked for it no longer exists, and the claim
@@ -1331,6 +1335,22 @@ impl RuntimeSessionService {
             self.native_directory_command_response(work, &read)
         } else {
             outcome
+        };
+        // Only pre-adoption freshness refusal becomes a local terminal outcome.
+        // No resume effects have run, and the original claim was checked above.
+        // Transaction, rollback, persistence and actor/channel errors still
+        // propagate; never replay a potentially partially applied command.
+        let outcome = match outcome {
+            RuntimeAgentCommandAsyncOutcome::DirectResume { store, read } => {
+                match self.validate_direct_resume_projection(&work.pane_id, &read) {
+                    Ok(()) => RuntimeAgentCommandAsyncOutcome::DirectResume { store, read },
+                    Err(error) => RuntimeAgentCommandAsyncOutcome::Failed {
+                        message: error.message().to_owned(),
+                        kind: error.kind(),
+                    },
+                }
+            }
+            outcome => outcome,
         };
         let is_failure = matches!(outcome, RuntimeAgentCommandAsyncOutcome::Failed { .. });
         let parent_browser_stack = self

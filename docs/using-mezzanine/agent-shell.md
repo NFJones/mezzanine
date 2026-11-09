@@ -62,6 +62,14 @@ and `pane` modes. It does not alter the pane's shell history or command draft.
 | `/new` | Start a separate conversation. |
 | `/resume` | Open the saved-conversation picker. |
 
+Direct `/resume <uuid>` prepares saved history outside the session actor. If the
+pane is resized, display settings or history limits change, or the source
+presentation changes before adoption, that command fails with a retry diagnostic
+and leaves the original conversation intact. Other panes and commands remain
+available. Retry explicitly when ready; Mezzanine does not replay resume or
+cleanup effects automatically. The pane's Stop action cancels a pending resume;
+its late result cannot replace the current conversation.
+
 Hiding the shell asks an in-progress task to stop and blocks ordinary pane
 input until the task reaches a terminal state. Non-slash text submitted while
 a task runs steers that task rather than starting another turn. Prose is not

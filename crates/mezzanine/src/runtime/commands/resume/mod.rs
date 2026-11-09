@@ -560,6 +560,42 @@ impl RuntimeSessionService {
         self.execute_agent_shell_resume_command_with_read(pane_id, store, prepared_read, false)
     }
 
+    /// Checks only reversible projection inputs before any resume mutation.
+    /// A refusal here is command-local; transaction/rollback errors are not.
+    pub(crate) fn validate_direct_resume_projection(
+        &mut self,
+        pane_id: &str,
+        read: &RuntimeDirectResumeRead,
+    ) -> Result<()> {
+        if let Some(projection) = read.projection.as_ref() {
+            if self
+                .agent_pane_screen(pane_id)
+                .or_else(|| self.process_pane_screen(pane_id))
+                .map(|screen| screen.size())
+                .or_else(|| self.find_pane_descriptor(pane_id).map(|pane| pane.size))
+                != Some(projection.size)
+                || self.presentation.settings != projection.presentation_settings
+                || self.terminal_history_limit() != projection.history_limit
+                || self.terminal_history_rotate_lines() != projection.history_rotate_lines
+            {
+                return Err(MezError::invalid_state(
+                    "direct resume projection is stale; retry the resume command",
+                ));
+            }
+            if let Some(revision) = projection.presentation_source_revision
+                && self
+                    .presentation
+                    .agent_presentation_source_revision(&read.conversation_id)
+                    != revision
+            {
+                return Err(MezError::invalid_state(
+                    "direct resume presentation changed; retry the resume command",
+                ));
+            }
+        }
+        Ok(())
+    }
+
     /// Applies one worker-prepared direct resume while retaining every live
     /// binding, authority, and rollback mutation on the serialized actor.
     ///
@@ -575,6 +611,7 @@ impl RuntimeSessionService {
         prepared_read: RuntimeDirectResumeRead,
         preserve_deferred_command: bool,
     ) -> Result<AgentShellCommandOutcome> {
+        self.validate_direct_resume_projection(pane_id, &prepared_read)?;
         let RuntimeDirectResumeRead {
             transcript_position,
             conversation_id,
@@ -686,32 +723,6 @@ impl RuntimeSessionService {
                 })
         };
 
-        if let Some(projection) = projection.as_ref()
-            && (self
-                .agent_pane_screen(pane_id)
-                .or_else(|| self.process_pane_screen(pane_id))
-                .map(|screen| screen.size())
-                .or_else(|| self.find_pane_descriptor(pane_id).map(|pane| pane.size))
-                != Some(projection.size)
-                || self.presentation.settings != projection.presentation_settings
-                || self.terminal_history_limit() != projection.history_limit
-                || self.terminal_history_rotate_lines() != projection.history_rotate_lines)
-        {
-            return Err(MezError::invalid_state(
-                "direct resume projection is stale; retry the resume command",
-            ));
-        }
-        if let Some(projection) = projection.as_ref()
-            && let Some(presentation_source_revision) = projection.presentation_source_revision
-            && self
-                .presentation
-                .agent_presentation_source_revision(&conversation_id)
-                != presentation_source_revision
-        {
-            return Err(MezError::invalid_state(
-                "direct resume presentation changed; retry the resume command",
-            ));
-        }
         let resume_result = (|| -> Result<(String, u64, mez_agent::AgentShellVisibility)> {
             let (session_id, transcript_entries, visibility) = {
                 let session = if conversation_kind == mez_agent::AgentConversationKind::Subagent {

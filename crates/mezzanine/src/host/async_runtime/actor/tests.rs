@@ -28,6 +28,7 @@ mod raw_replay_bootstrap;
 mod remember_source_handoff;
 mod replay_epoch_publication;
 mod request_custody;
+mod resume_containment;
 mod side_effect_capacity_overshoot;
 mod steering_display_retry;
 mod synchronized_output_handoff;

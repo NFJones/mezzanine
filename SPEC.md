@@ -21310,6 +21310,18 @@ independently, bind and hydrate the correct agent conversation, and only then
 append interrupted-turn or recovery diagnostics. Exact agent viewport state is
 required for in-memory same-conversation reentry but not after restart.
 
+Deferred direct resume MUST validate its prepared geometry, presentation
+settings, history limits and source presentation revision before changing any
+binding or authority. A stale projection MUST fail only its matching command,
+preserving the original conversation and context and showing the causal retry
+diagnostic. It MUST NOT stop the shared command service, detach clients or stop
+unrelated panes. Cancelled, replaced and duplicate completions MUST NOT adopt or
+settle newer work. Stop MUST cancel the current deferred command claim while
+retaining its worker's resource/cleanup ownership until completion. This refusal
+MUST NOT replay resume, fork, provider or native
+cleanup effects; actor/channel loss and transaction or rollback failures remain
+errors of their existing owner, not successfully recorded local refusals.
+
 The `/fork` command MUST clone the current conversation into a new thread with
 a fresh identity while preserving the original transcript and any presentation
 log associated with that transcript. The fork MUST capture a validated complete

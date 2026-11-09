@@ -790,6 +790,20 @@ async fn execute_deferred_agent_command(
     };
     #[cfg(test)]
     let completion = work.deferred_agent_command_completion.clone();
+    // Reuse the explicit command probe for a second, post-preparation resume
+    // gate. Resize/cancel tests must invalidate an actual completed projection,
+    // not race a blocking read or infer readiness from elapsed time.
+    #[cfg(test)]
+    if work.command == "resume"
+        && completion.is_some()
+        && let (Some(started), Some(release)) = (
+            work.deferred_agent_command_started.as_ref(),
+            work.deferred_agent_command_release.as_ref(),
+        )
+    {
+        started.notify_one();
+        release.notified().await;
+    }
     let settlement = handle.complete_agent_command_work(work, outcome);
     if is_fork {
         tokio::time::timeout(DEFERRED_AGENT_COMMAND_DEADLINE, settlement)

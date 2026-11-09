@@ -810,6 +810,9 @@ impl RuntimeSessionService {
                     // ordinary turn. Issued accounting owners remain available
                     // for late expense; cancellation does not prove remote I/O
                     // has stopped and never replays the auxiliary request.
+                    // A prepared resume must not adopt after Stop. Its worker
+                    // retains read/cleanup custody until actual completion.
+                    let command_cancelled = self.agent.cancel_agent_command(&pane_id);
                     let remember_cancelled = self.fail_agent_remember_task(&pane_id);
                     if self.agent_is_compacting(&pane_id) {
                         let cancelled = self.cancel_current_agent_compaction_task(&pane_id);
@@ -833,10 +836,15 @@ impl RuntimeSessionService {
                                 Some(&stop_outcome),
                             )
                         }
-                    } else if remember_cancelled && !self.agent_shell_pane_has_live_turn(&pane_id) {
+                    } else if (remember_cancelled || command_cancelled)
+                        && !self.agent_shell_pane_has_live_turn(&pane_id)
+                    {
                         let stop_outcome = AgentShellCommandOutcome::Mutated {
                             command: "stop".to_string(),
-                            body: format!("pane={} remember_cancelled=true", pane_id),
+                            body: format!(
+                                "pane={} remember_cancelled={} command_cancelled={}",
+                                pane_id, remember_cancelled, command_cancelled
+                            ),
                             visibility: self.agent_shell_visibility_for_pane(&pane_id)?,
                         };
                         runtime_agent_shell_command_response_json(
