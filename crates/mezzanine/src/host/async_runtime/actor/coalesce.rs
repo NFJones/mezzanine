@@ -422,6 +422,7 @@ pub(super) fn runtime_side_effect_is_durable_persistence(effect: &RuntimeSideEff
     matches!(
         effect,
         RuntimeSideEffect::Persist { .. }
+            | RuntimeSideEffect::PersistConfig { .. }
             | RuntimeSideEffect::PersistAuditLog { .. }
             | RuntimeSideEffect::PersistTrackedAuditLog { .. }
             | RuntimeSideEffect::PersistTranscriptEntries { .. }
@@ -476,6 +477,7 @@ pub(super) fn runtime_side_effect_kind(effect: &RuntimeSideEffect) -> &'static s
         }
         RuntimeSideEffect::RunProgramHook { .. } => "run-program-hook",
         RuntimeSideEffect::Persist { .. } => "persist",
+        RuntimeSideEffect::PersistConfig { .. } => "persist-config",
         RuntimeSideEffect::PersistAuditLog { .. } => "persist-audit-log",
         RuntimeSideEffect::PersistTrackedAuditLog { .. } => "persist-tracked-audit-log",
         RuntimeSideEffect::PersistTranscriptEntries { .. } => "persist-transcript",

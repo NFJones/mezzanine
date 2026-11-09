@@ -114,6 +114,74 @@ fn fixture_with_cursor(
     (service, primary, store)
 }
 
+/// Captured selection remains visible while both source and request workers
+/// hold the original operation, before any model or publication work exists.
+#[test]
+fn runtime_compaction_mode_preparation_captures_selection_and_guards_mutation() {
+    let (mut service, primary, store) = fixture("mode-preparation");
+    store
+        .append(&TranscriptEntry {
+            conversation_id: "prepare-owned".into(),
+            sequence: 4,
+            created_at_unix_seconds: 4,
+            role: TranscriptRole::User,
+            turn_id: "old-large".into(),
+            agent_id: "agent-%1".into(),
+            pane_id: "%1".into(),
+            content: "large eligible historical source ".repeat(8_000),
+        })
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .bind_conversation("%1", "prepare-owned", 4)
+        .unwrap();
+    service
+        .execute_agent_shell_command(&primary, "/compaction-mode raw_tail")
+        .unwrap();
+    assert!(
+        service
+            .execute_agent_shell_command(&primary, "/compact")
+            .unwrap()
+            .contains("state=preparing")
+    );
+    let work = service.take_manual_compaction_preparations().pop().unwrap();
+    assert_eq!(work.mode.name(), "raw_tail");
+    let status = service
+        .execute_agent_shell_command(&primary, "/compaction-mode status")
+        .unwrap();
+    assert!(
+        status.contains("Active captured mode | raw_tail"),
+        "{status}"
+    );
+    let blocked = service
+        .execute_agent_shell_command(&primary, "/compaction-mode summary --global")
+        .unwrap();
+    assert!(blocked.contains("cannot mutate pane state"), "{blocked}");
+    let result = work.execute_source();
+    service
+        .complete_manual_compaction_preparation(&work, result)
+        .unwrap();
+    let request = service.take_manual_compaction_requests().pop().unwrap();
+    let task = request.execute_request();
+    service
+        .complete_manual_compaction_request(&request, task)
+        .unwrap();
+    assert_eq!(
+        service
+            .runtime_compaction_status("%1")
+            .unwrap()
+            .captured_mode
+            .unwrap()
+            .name(),
+        "raw_tail"
+    );
+    let task = service
+        .pending_agent_compaction_task_for_tests("%1")
+        .unwrap();
+    assert!(task.request.is_none());
+    assert_eq!(task.replay_source.as_ref().unwrap().mode.name(), "raw_tail");
+}
+
 /// Uses real command/source adoption to obtain frozen request construction.
 /// The logical owner remains compacting, but no provider task exists yet.
 fn request_work(

@@ -340,7 +340,18 @@ fn runtime_raw_tail_real_rejection_exhausts_optional_source() {
 fn runtime_raw_tail_pressure_claims_publish_without_model_dispatch() {
     for provider_rejection in [false, true] {
         let (mut service, store, turn) = observed_history::prepared_with_cap(20_000, false);
-        enable_raw(&mut service);
+        let primary = service
+            .attach_primary("mode-primary", true, Size::new(80, 24).unwrap(), 120)
+            .unwrap();
+        let reply = service
+            .execute_agent_shell_command(&primary, "/compaction-mode raw_tail")
+            .unwrap();
+        assert!(reply.contains("changed=true"), "{reply}");
+        assert_eq!(service.agent_compaction_mode().name(), "summary");
+        assert_eq!(
+            service.effective_agent_compaction_mode("%other").name(),
+            "summary"
+        );
         let peer = service
             .agent_turn_contexts_mut()
             .get_mut(&turn)
@@ -466,10 +477,14 @@ fn runtime_raw_tail_manual_command_publishes_without_credentials() {
     let (mut service, store) =
         manual_model::queued("raw-manual", "eligible old history ".repeat(2_000));
     service.cancel_current_agent_compaction_task("%1");
-    enable_raw(&mut service);
     let primary = service
         .attach_primary("raw-command", true, Size::new(80, 24).unwrap(), 120)
         .unwrap();
+    let selection = service
+        .execute_agent_shell_command(&primary, "/compaction-mode raw_tail")
+        .unwrap();
+    assert!(selection.contains("changed=true"), "{selection}");
+    assert_eq!(service.agent_compaction_mode().name(), "summary");
     let reply = service
         .execute_agent_shell_command(&primary, "/compact")
         .unwrap();

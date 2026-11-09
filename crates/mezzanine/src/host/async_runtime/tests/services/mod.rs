@@ -1,6 +1,7 @@
 //! Services-owned async-runtime behavior tests.
 
 mod clipboard;
+mod compaction_mode;
 mod hooks;
 mod native_navigation;
 mod optional_failures;

@@ -132,7 +132,15 @@ pub(crate) fn coalesce_config_persistence_effects(
     effects: Vec<RuntimeSideEffect>,
 ) -> Vec<RuntimeSideEffect> {
     let mut coalesced = Vec::<RuntimeSideEffect>::new();
+    let mut revision_barrier = 0;
     for effect in effects {
+        if matches!(effect, RuntimeSideEffect::PersistConfig { .. }) {
+            coalesced.push(effect);
+            // Never move a later untracked replacement ahead of an exact
+            // revision: doing so could restore old config after the new write.
+            revision_barrier = coalesced.len();
+            continue;
+        }
         let RuntimeSideEffect::Persist {
             target,
             path,
@@ -143,7 +151,7 @@ pub(crate) fn coalesce_config_persistence_effects(
             coalesced.push(effect);
             continue;
         };
-        if let Some(existing) = coalesced.iter_mut().find(|existing| {
+        if let Some(existing) = coalesced[revision_barrier..].iter_mut().find(|existing| {
             matches!(
                 existing,
                 RuntimeSideEffect::Persist {

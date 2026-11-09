@@ -8333,7 +8333,9 @@ would be exceeded, without dropping work that was already admitted.
 `agents.compaction_raw_retention_percent` MUST be an integer from `1` to `100`,
 MUST default to `10`, and MUST apply to manual, observed-input and provider
 context-limit compaction. `agents.compaction_mode` MUST accept only `summary`
-and `raw_tail`, defaulting to `summary`. Each admission MUST capture the mode
+and `raw_tail`, defaulting to `summary`. The mode MUST resolve from the invoking
+live pane override before the effective configured default. Overrides MUST NOT
+be copied into new/child panes or conversation state. Each admission MUST capture the resolved mode
 and configuration generation; configuration changes MUST NOT rewrite history
 or retarget admitted work. Existing source and permission freshness fences apply.
 Admission MUST also capture the effective pane permission policy and conversation
@@ -15690,6 +15692,31 @@ The baseline command capabilities are:
   Mutations MUST require authenticated primary-client input, while unsupported
   modes, duplicate or unknown flags, and extra positional arguments MUST fail
   without changing state.
+- `/compaction-mode [status]`: Inspect pane, effective mode, selection source,
+  explicit override (or none), configured default, primary-file value/provenance,
+  persistence acknowledgement and active captured mode. Only `summary`,
+  `raw_tail`, and `reset` mutate selection; they MAY take one trailing `--global`.
+  Local selection MUST require authenticated primary input and create an explicit
+  live-pane override even when equal to the default. Reset MUST remove it.
+  Identical set/reset MUST be a no-op. Overrides MUST survive new/clear/resume
+  and agent-mode exit/reentry in that live pane, but not teardown/restart; new
+  and child panes MUST inherit only their own configured default, not a parent
+  override. Global set/reset MUST use the existing primary-config mutation and
+  layer precedence; reset removes the primary key, not other layers. Global
+  changes MUST preserve every explicit override, including the issuer's.
+  Local mutation MUST reject while the target pane has admitted compaction;
+  global mutation MUST reject while ANY pane has admitted compaction. Status
+  MUST remain read-only during work/pause/compaction under existing caller rules.
+  Ordinary running turns MAY select their NEXT compaction policy. No form runs
+  compaction, changes retention, replays effects or rewrites an accepted epoch.
+  Grammar, caller, target and busy checks MUST precede config-file creation.
+  Persistence MUST remain pending until the exact original revision's physical
+  writer returns successfully, never merely queued acceptance or a pathname ACK.
+  Stale/duplicate receipts MUST NOT confirm or overwrite newer revisions. Failed
+  writes MUST expose live-applied versus unconfirmed disk state, retain finite
+  recovery information, and remain local; they MUST NOT blindly replay writes,
+  roll back a newer selection or terminate unrelated operation. Missing writable
+  targets MUST fail explicitly. Existing compaction freshness fences remain.
 - `/cd [directory]`: Change only the visible native agent conversation's
   effective working directory. The command MUST be provider-free, nonqueueable
   and unavailable in pane shell mode. It MUST NOT change process-global cwd,
@@ -15862,7 +15889,7 @@ The baseline command capabilities are:
   structured runtime patch records rather than rendered pane text or compacted
   transcript summaries.
 - `/clear`: Clear the terminal view and start a fresh visible conversation.
-- `/compact`: Apply `agents.compaction_mode` to the current epoch's eligible
+- `/compact`: Apply the pane-effective compaction mode to the current epoch's eligible
   source, without arguments. In `summary` mode, ask the active model for a
   summary outside the retained raw tail and commit its replay boundary. In
   `raw_tail` mode, intentionally omit optional old model input without a

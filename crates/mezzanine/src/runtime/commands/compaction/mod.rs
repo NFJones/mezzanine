@@ -346,12 +346,12 @@ impl RuntimeSessionService {
             compaction_request_shape: None,
         });
         self.remove_pending_agent_provider_task(turn_id);
-        let status = if self.agent_compaction_mode()
+        let status = if self.effective_agent_compaction_mode(&turn.pane_id)
             == crate::runtime::config::CompactionMode::RawTail
         {
             format!(
                 "agent: publishing raw-tail context compaction mode={}",
-                self.agent_compaction_mode().name()
+                self.effective_agent_compaction_mode(&turn.pane_id).name()
             )
         } else {
             match trigger {

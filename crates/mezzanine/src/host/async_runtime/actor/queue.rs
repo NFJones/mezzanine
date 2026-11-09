@@ -734,6 +734,7 @@ impl AsyncRuntimeSessionActor {
         if matches!(
             effect,
             RuntimeSideEffect::Persist { .. }
+                | RuntimeSideEffect::PersistConfig { .. }
                 | RuntimeSideEffect::PersistAuditLog { .. }
                 | RuntimeSideEffect::PersistTrackedAuditLog { .. }
                 | RuntimeSideEffect::PersistTranscriptEntries { .. }

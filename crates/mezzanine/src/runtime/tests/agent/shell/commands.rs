@@ -1007,6 +1007,65 @@ fn runtime_agent_shell_sandbox_global_mutation_preserves_pane_override() {
     let _ = fs::remove_dir_all(path.parent().unwrap());
 }
 
+/// Exercises the public command, including an explicit override equal to the
+/// default. Local selection must not touch authored config or its generation.
+#[test]
+fn runtime_compaction_mode_command_local_selection_and_reset() {
+    let (mut service, primary, path) = sandbox_command_service(
+        "compaction-mode-local",
+        "[agents]\ncompaction_mode = \"summary\"\n",
+    );
+    let before = fs::read(&path).unwrap();
+    let generation = service.session.config_generation;
+    for (command, changed, mode, source) in [
+        ("/compaction-mode summary", true, "summary", "pane override"),
+        (
+            "/compaction-mode summary",
+            false,
+            "summary",
+            "pane override",
+        ),
+        (
+            "/compaction-mode raw_tail",
+            true,
+            "raw_tail",
+            "pane override",
+        ),
+        (
+            "/compaction-mode reset",
+            true,
+            "summary",
+            "configured default",
+        ),
+        (
+            "/compaction-mode reset",
+            false,
+            "summary",
+            "configured default",
+        ),
+    ] {
+        let response = service
+            .execute_agent_shell_command(&primary, command)
+            .unwrap();
+        assert!(
+            response.contains(&format!("changed={changed}")),
+            "{response}"
+        );
+        let status = service
+            .execute_agent_shell_command(&primary, "/compaction-mode")
+            .unwrap();
+        assert!(
+            status.contains(&format!("Effective mode | `{mode}`")),
+            "{status}"
+        );
+        assert!(status.contains(&format!("Source | {source}")), "{status}");
+        assert!(status.contains(r#""presentation":"pager""#), "{status}");
+        assert_eq!(fs::read(&path).unwrap(), before);
+        assert_eq!(service.session.config_generation, generation);
+    }
+    fs::remove_dir_all(path.parent().unwrap()).unwrap();
+}
+
 /// Verifies `/shell-mode status` opens a pager-backed table with the invoking
 /// pane's effective mode and override provenance. This protects the read-only
 /// status path from being treated as a mutation or rendered as a transient

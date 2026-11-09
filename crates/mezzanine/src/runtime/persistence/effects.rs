@@ -670,6 +670,17 @@ impl RuntimePersistenceComponent {
 
     /// Queues one configuration persistence effect.
     pub(crate) fn queue_config(&mut self, effect: RuntimeSideEffect) {
+        if matches!(
+            &effect,
+            RuntimeSideEffect::Persist {
+                target: crate::runtime::PersistenceTarget::Config,
+                ..
+            }
+        ) {
+            // An independently admitted primary write is not this receipt's
+            // revision, even when its path and full text return to the old A.
+            self.latest_primary_config_write = None;
+        }
         self.queued_config_effects.push(effect);
     }
 

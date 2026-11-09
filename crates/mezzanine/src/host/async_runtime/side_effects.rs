@@ -1117,6 +1117,41 @@ where
         while let Some((effect, claim_id)) = effects.next() {
             let persistence_operation_started = std::time::Instant::now();
             match effect {
+                RuntimeSideEffect::PersistConfig { receipt } => {
+                    if receipt.claim() {
+                        let byte_count = receipt.bytes().len();
+                        let result = persist_side_effect_bytes(
+                            PersistenceTarget::Config,
+                            receipt.path(),
+                            receipt.bytes(),
+                            PersistenceWriteMode::Replace,
+                        )
+                        .await;
+                        receipt.settle(&result);
+                        match result {
+                            Ok(()) => {
+                                report.completed = report.completed.saturating_add(1);
+                                report.bytes_written =
+                                    report.bytes_written.saturating_add(byte_count);
+                                batch.push(RuntimeEvent::Persistence(
+                                    PersistenceEvent::Completed {
+                                        target: PersistenceTarget::Config,
+                                        path: receipt.path().to_path_buf(),
+                                        bytes: byte_count,
+                                    },
+                                ));
+                            }
+                            Err(error) => {
+                                report.failed = report.failed.saturating_add(1);
+                                batch.push(RuntimeEvent::Persistence(PersistenceEvent::Failed {
+                                    target: PersistenceTarget::Config,
+                                    path: receipt.path().to_path_buf(),
+                                    error: error.message().to_string(),
+                                }));
+                            }
+                        }
+                    }
+                }
                 RuntimeSideEffect::Persist {
                     target,
                     path,

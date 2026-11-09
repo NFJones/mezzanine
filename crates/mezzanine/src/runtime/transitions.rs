@@ -1232,6 +1232,11 @@ pub enum RuntimeSideEffect {
         continuation: Option<crate::runtime::service_state::PendingProgramHookContinuation>,
     },
     /// Write data through a persistence worker.
+    PersistConfig {
+        /// Exact one-shot physical acknowledgement and immutable config bytes.
+        receipt: crate::runtime::persistence::ConfigWriteReceipt,
+    },
+    /// Write data through a persistence worker without a revision receipt.
     Persist {
         /// Persistence family that should own the write.
         target: PersistenceTarget,

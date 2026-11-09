@@ -9,10 +9,10 @@
 use super::super::{
     CommandInvocation, ConfigFormat, ConfigLayer, ConfigMutation, ConfigMutationOperation,
     ConfigMutationValue, ConfigPaths, ConfigScope, EventKind, MezError, PathBuf, Result,
-    RuntimeConfigAffectedSubsystems, RuntimeSessionService, RuntimeSideEffect, UiThemeDefinition,
-    Value, builtin_ui_theme_definition, compose_effective_config, fs, json_escape,
-    persist_config_text, plan_config_mutation, resolve_ui_theme,
-    runtime_config_apply_event_payload, runtime_effective_config_value, validate_config_text,
+    RuntimeConfigAffectedSubsystems, RuntimeSessionService, UiThemeDefinition, Value,
+    builtin_ui_theme_definition, compose_effective_config, fs, json_escape, persist_config_text,
+    plan_config_mutation, resolve_ui_theme, runtime_config_apply_event_payload,
+    runtime_effective_config_value, validate_config_text,
 };
 use super::{
     TERMINAL_COMMAND_LIVE_OVERRIDE_LAYER, binding_config_key, key_chord_notation,
@@ -830,17 +830,22 @@ pub(crate) fn runtime_apply_persisted_config_mutation_batch(
                     EventKind::ConfigChanged,
                     runtime_config_apply_event_payload(event_source, &report),
                 )?;
-                if uses_adapter {
-                    service
-                        .persistence
-                        .queue_config(RuntimeSideEffect::Persist {
-                            target: crate::runtime::PersistenceTarget::Config,
-                            path: path.clone(),
-                            bytes: batch.text.clone().into_bytes(),
-                            mode: crate::runtime::PersistenceWriteMode::Replace,
-                        });
-                }
                 service.session.advance_config_generation();
+                if uses_adapter {
+                    service.persistence.queue_tracked_config(
+                        path.clone(),
+                        current_text.clone(),
+                        batch.text.clone(),
+                        service.session.config_generation,
+                    );
+                } else {
+                    service.persistence.record_durable_config(
+                        path.clone(),
+                        current_text.clone(),
+                        batch.text.clone(),
+                        service.session.config_generation,
+                    );
+                }
             }
             Err(error) => {
                 service.integration.replace_config_layers(previous_layers);

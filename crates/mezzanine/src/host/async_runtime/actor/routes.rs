@@ -356,6 +356,7 @@ impl RuntimeSideEffectRouter {
         debug_assert!(matches!(
             effect,
             RuntimeSideEffect::Persist { .. }
+                | RuntimeSideEffect::PersistConfig { .. }
                 | RuntimeSideEffect::PersistAuditLog { .. }
                 | RuntimeSideEffect::PersistTrackedAuditLog { .. }
                 | RuntimeSideEffect::PersistTranscriptEntries { .. }

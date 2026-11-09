@@ -3,6 +3,7 @@
 use super::*;
 
 mod commands;
+mod compaction_mode;
 mod foreign_dependency_free;
 mod foreign_entry_resume;
 mod native_filesystem;

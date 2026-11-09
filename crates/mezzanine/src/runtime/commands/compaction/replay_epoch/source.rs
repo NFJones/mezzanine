@@ -10,6 +10,8 @@ use mez_agent::{ReplayCompactionPlan, ReplayCompactionPreparation, ReplayTailPol
 pub(crate) struct RuntimeCompactionReplaySource {
     pub(super) owner: ReplayEpochContext,
     pub(super) plan: ReplayCompactionPlan,
+    /// Immutable pane-effective selection shared by retries and publication.
+    pub(crate) mode: crate::runtime::config::CompactionMode,
     pub(in crate::runtime::commands::compaction) original:
         Arc<crate::runtime::agent_state::RuntimeCompactionSourceOwner>,
     pub(super) origin: ReplaySourceOrigin,
@@ -68,6 +70,7 @@ impl RuntimeSessionService {
         owner: &ReplayEpochContext,
         turn: &mez_agent::AgentTurnRecord,
         allowed: &mez_agent::AllowedActionSet,
+        mode: crate::runtime::config::CompactionMode,
     ) -> Result<ReplayTailPolicy> {
         let budget = profile
             .max_input_tokens()
@@ -79,7 +82,7 @@ impl RuntimeSessionService {
         let retained = u8::try_from(self.agent_compaction_raw_retention_percent())
             .map_err(|_| MezError::invalid_state("invalid canonical raw retention percentage"))?;
         let policy = ReplayTailPolicy::new(budget, retained)?;
-        match self.agent_compaction_mode() {
+        match mode {
             crate::runtime::config::CompactionMode::Summary => {
                 Ok(policy.with_head_policy(mez_agent::ReplayHeadPolicy::Summary))
             }
@@ -183,7 +186,8 @@ impl RuntimeSessionService {
         )?;
         let original_projection = owner.provider_projection().cloned();
         self.bind_compaction_provider_projection(&mut owner, profile)?;
-        let policy = self.compaction_tail_policy(profile, &owner, turn, allowed)?;
+        let mode = self.effective_agent_compaction_mode(&turn.pane_id);
+        let policy = self.compaction_tail_policy(profile, &owner, turn, allowed, mode)?;
         if !owner.automatic_compaction_is_fresh(policy)? {
             return Ok(Preparation::NoWork(
                 super::super::NoWorkReason::UnchangedPublishedSource {
@@ -191,8 +195,7 @@ impl RuntimeSessionService {
                 },
             ));
         }
-        let preparation = if self.agent_compaction_mode()
-            == crate::runtime::config::CompactionMode::RawTail
+        let preparation = if mode == crate::runtime::config::CompactionMode::RawTail
             && matches!(
                 trigger,
                 RuntimeActiveTurnCompactionTrigger::ProviderContextLimit { .. }
@@ -239,6 +242,7 @@ impl RuntimeSessionService {
                 plan,
                 original,
                 origin: ReplaySourceOrigin::new(&turn.turn_id, &turn.agent_id, &turn.pane_id)?,
+                mode,
                 ephemeral: self.agent_turn_transcript_is_ephemeral(turn),
                 target: SourceTarget::Turn {
                     turn: turn.turn_id.clone(),
@@ -298,7 +302,8 @@ impl RuntimeSessionService {
             cooperation_mode: None,
             initial_capability: None,
         };
-        let policy = self.compaction_tail_policy(profile, &owner, &sizing_turn, allowed)?;
+        let mode = self.admitted_agent_compaction_mode(pane);
+        let policy = self.compaction_tail_policy(profile, &owner, &sizing_turn, allowed, mode)?;
         let plan = match owner.prepare_compaction(policy)? {
             ReplayCompactionPreparation::Ready(plan) => plan,
             ReplayCompactionPreparation::NoWork(
@@ -347,6 +352,7 @@ impl RuntimeSessionService {
                 plan,
                 original,
                 origin: ReplaySourceOrigin::new(&operation, &format!("agent-{pane}"), pane)?,
+                mode,
                 ephemeral: session.ephemeral,
                 target: SourceTarget::Manual(Box::new(ManualSource {
                     transcript_entries: session.transcript_entries,

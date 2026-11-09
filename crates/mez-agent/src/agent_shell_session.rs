@@ -1120,6 +1120,7 @@ fn agent_shell_command_category(name: &str) -> &'static str {
         | "context-doc"
         | "directive"
         | "model"
+        | "compaction-mode"
         | "permissions"
         | "personality"
         | "list-personalities"
@@ -1155,6 +1156,9 @@ fn agent_shell_command_description(name: &str) -> &'static str {
         }
         "shell-mode" => {
             "set pane or native shell execution mode; use --global to persist the selected mode."
+        }
+        "compaction-mode" => {
+            "inspect or select summary/raw_tail for this pane; reset inherits the default; append --global to persist or reset the default. /compact runs compaction."
         }
         "cd" => {
             "change only the native agent directory: /cd [directory], ~, ~/ or -- for literal operands; no shell evaluation. Requires an idle agent and authorized directory/instruction reads. --sync-pane is unavailable; fresh shell replacement would lose variables, functions, aliases, jobs and unsaved shell state."

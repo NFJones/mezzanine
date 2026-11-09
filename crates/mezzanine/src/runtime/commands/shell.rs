@@ -578,6 +578,8 @@ impl RuntimeSessionService {
             }
             if slash_invocation.as_ref().is_none_or(|invocation| {
                 invocation.effect != mez_agent::slash::SlashCommandEffect::ReadOnly
+                    && !(invocation.name == "compaction-mode"
+                        && super::compaction_mode::is_status(input))
             }) {
                 return Ok(agent_shell_invalid_command_response_json(
                     &pane_id,
@@ -590,6 +592,10 @@ impl RuntimeSessionService {
         }
         if self.agent_is_compacting(&pane_id)
             && slash_invocation.as_ref().is_some_and(|invocation| {
+                if invocation.name == "compaction-mode" && super::compaction_mode::is_status(input)
+                {
+                    return false;
+                }
                 !matches!(
                     invocation.name.as_str(),
                     "help"
@@ -1132,6 +1138,18 @@ impl RuntimeSessionService {
                         input,
                         Some(&sandbox_outcome),
                     )
+                } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
+                    outcome.as_ref()
+                    && command == "compaction-mode"
+                {
+                    let mode_outcome = self
+                        .execute_compaction_mode_command(primary_client_id, &pane_id, input, origin)
+                        .unwrap_or_else(|error| AgentShellCommandOutcome::Presented {
+                            command: "compaction-mode".to_string(),
+                            body: format!("Compaction mode error: {}", error.message()),
+                            presentation: AgentShellPresentation::ErrorNotice,
+                        });
+                    runtime_agent_shell_command_response_json(&pane_id, input, Some(&mode_outcome))
                 } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
                     outcome.as_ref()
                     && command == "shell-mode"

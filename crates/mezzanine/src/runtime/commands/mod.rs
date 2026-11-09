@@ -89,6 +89,7 @@ mod resume;
 #[cfg(test)]
 pub(crate) use resume::read_direct_resume;
 pub(crate) use resume::{SavedForkRead, SavedForkWork};
+mod compaction_mode;
 mod sandbox;
 mod shell;
 mod shell_mode;

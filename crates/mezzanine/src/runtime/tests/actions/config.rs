@@ -1553,19 +1553,11 @@ fn runtime_agent_config_change_batches_broad_theme_palette() {
     assert_eq!(after_config_events - before_config_events, 1);
     let persistence = service.drain_config_persistence_transition();
     assert_eq!(persistence.side_effects.len(), 1, "{persistence:?}");
-    let RuntimeSideEffect::Persist {
-        target,
-        path,
-        bytes,
-        mode,
-    } = &persistence.side_effects[0]
-    else {
+    let RuntimeSideEffect::PersistConfig { receipt } = &persistence.side_effects[0] else {
         panic!("theme batch should queue one config replacement");
     };
-    assert_eq!(*target, crate::runtime::PersistenceTarget::Config);
-    assert_eq!(path, &config_path);
-    assert_eq!(*mode, crate::runtime::PersistenceWriteMode::Replace);
-    let config_text = String::from_utf8(bytes.clone()).unwrap();
+    assert_eq!(receipt.path(), config_path.as_path());
+    let config_text = String::from_utf8(receipt.bytes().to_vec()).unwrap();
     assert!(
         config_text.contains(r##"primary = "#ffc72c""##),
         "{config_text}"

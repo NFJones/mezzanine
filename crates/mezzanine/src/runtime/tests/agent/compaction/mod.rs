@@ -10,6 +10,7 @@ mod legacy_raw;
 mod manual_commands;
 mod manual_history;
 mod manual_model;
+mod mode_selection;
 mod observed_continuation;
 mod observed_fit;
 mod observed_history;

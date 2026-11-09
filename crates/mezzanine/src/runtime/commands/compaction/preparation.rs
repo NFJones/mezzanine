@@ -30,6 +30,8 @@ pub(crate) struct RuntimeManualCompactionPreparation {
     pub(crate) compaction_epoch: u64,
     /// Configuration freshness at admission.
     pub(crate) config_generation: u64,
+    /// Pane-effective policy captured before any source worker is admitted.
+    pub(crate) mode: crate::runtime::config::CompactionMode,
     /// Loaded layer bytes/trust, including disk-discovered overlays that need not
     /// advance the terminal session generation on every reconciliation.
     pub(crate) config_layers: Vec<crate::config::ConfigLayer>,
@@ -126,6 +128,7 @@ impl RuntimeSessionService {
             compaction_epoch: 0,
             config_generation: self.session.config_generation,
             config_layers: self.integration.config_layers().to_vec(),
+            mode: self.effective_agent_compaction_mode(pane_id),
             transcript_entries,
             transcript_high_water,
             ephemeral,

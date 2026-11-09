@@ -223,6 +223,28 @@ does not look up compactor credentials, and incurs no auxiliary model usage.
 The original archive stays intact, but omitted history does not return to model
 input on resume, restore, fork, or a later switch back to summary mode.
 
+Use `/compaction-mode` or `/compaction-mode status` to inspect the effective
+selection, source, primary-file value, persistence state and active captured mode.
+`/compaction-mode summary` and `/compaction-mode raw_tail` set an explicit override
+for this live pane; `/compaction-mode reset` resumes inheritance. Even an override
+equal to the current default stays explicit across later default changes.
+Overrides survive new/clear/resume and leaving/reentering agent mode, but not
+pane teardown or runtime restart. New and child panes do not copy them.
+
+Append `--global` to either selection to persist the default, or use
+`/compaction-mode reset --global` to remove the primary-file setting and return
+to existing layer precedence. Explicit pane overrides still win, including the
+issuing pane's. Feedback reports **pending** until the actual ordered write
+finishes, **durable** after success, or **failed** with live/disk diagnostics.
+A failed write does not undo live selection or silently retry; repair the target
+then make a new explicit selection. A repeated identical failed selection is a
+no-op and remains failed, not a persistence confirmation.
+
+Selections require direct primary-client input. Local changes are rejected while
+that pane is compacting; global changes are rejected while any pane is compacting.
+Status remains available. An ordinary running turn may select its next admission.
+The command never runs compaction: use `/compact` for that.
+
 Raw retention keeps one newest complete optional suffix under
 `agents.compaction_raw_retention_percent` and the remaining ordinary input
 capacity after the built-in system prompt, fixed schemas/controls and

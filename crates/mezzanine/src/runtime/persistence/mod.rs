@@ -22,6 +22,8 @@ mod adapters;
 mod audit;
 pub(crate) use audit::RuntimeAuditWriterIdentity;
 mod bookkeeping;
+mod config_writes;
+pub use config_writes::ConfigWriteReceipt;
 mod pending_history;
 #[cfg(test)]
 mod test_support;
@@ -104,6 +106,8 @@ pub(crate) struct RuntimePersistenceComponent {
     queued_token_usage_effects: Vec<RuntimeSideEffect>,
     queued_provider_settlement_effects: Vec<RuntimeSideEffect>,
     queued_config_effects: Vec<RuntimeSideEffect>,
+    /// One exact newest primary write, bounded independently of command count.
+    latest_primary_config_write: Option<ConfigWriteReceipt>,
     queued_program_hook_effects: Vec<RuntimeSideEffect>,
     deferred_transcript_next_sequences:
         BTreeMap<(std::path::PathBuf, String), transcript_admission::TranscriptAdmission>,

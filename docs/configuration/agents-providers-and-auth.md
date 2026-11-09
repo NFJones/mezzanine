@@ -31,6 +31,14 @@ preserves the archive, exact active instructions and open dependencies. It needs
 no compactor credentials and incurs no auxiliary model usage. Changing the
 setting affects new admissions; saved membership governs later replay and forks.
 
+`/compaction-mode summary|raw_tail` overrides only the live invoking pane;
+`/compaction-mode reset` resumes configured inheritance. Append `--global` to
+persist a default or remove its primary-file key, preserving other config layers
+and all explicit pane overrides. `/compaction-mode status` distinguishes the
+effective choice from the primary value and reports pending/durable/failed writes.
+Pane overrides are not saved or copied into new/child panes. Use `/compact` to
+execute the selected policy, not to change it.
+
 `agents.compaction_raw_retention_percent` selects the same complete raw tail
 for manual, observed-input and provider-input-rejection compaction. Private
 input packing and transport retries preserve that reservation. Advisory summary

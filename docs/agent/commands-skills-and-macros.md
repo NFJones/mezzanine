@@ -38,7 +38,7 @@ other panes and global multiplexer controls remain available.
 | Control the current task | `/plan`, `/directive`, `/objective`, `/loop`, `/stop` |
 | Manage conversations | `/new`, `/clear`, `/fork`, `/resume`, `/name-session` |
 | Change the native agent workspace | `/cd [directory]` |
-| Inspect or preserve context | `/compact`, `/context-doc`, `/show-context`, `/copy`, `/copy-context`, `/copy-patches`, `/copy-trace-log`, `/list-modified-files` |
+| Inspect or preserve context | `/compact`, `/compaction-mode`, `/context-doc`, `/show-context`, `/copy`, `/copy-context`, `/copy-patches`, `/copy-trace-log`, `/list-modified-files` |
 | Select model behavior | `/model`, `/routing`, `/latency`, `/thinking`, `/personality`, `/list-personalities` |
 | Work with local stores | `/memory`, `/remember`, `/show-memories`, `/issue`, `/show-issues` |
 
@@ -55,6 +55,7 @@ off actor. It is read-only and has no reset, task-control, or provider authority
 /permissions
 /approval
 /shell-mode status
+/compaction-mode status
 /routing status
 ```
 
@@ -69,6 +70,13 @@ profiles, and managed-home cache operations remain CLI-only under `mez sandbox`.
 `/shell-mode native` or `/shell-mode pane` changes the pane's shell transport;
 add `--global` to persist the fallback for panes without an override. Transport
 does not change approval or [sandbox authority](../safety-and-trust/sandboxing.md).
+
+`/compaction-mode summary` or `/compaction-mode raw_tail` selects this live pane's
+next compaction policy. `/compaction-mode reset` removes its override. Append
+`--global` to set/reset the persistent default without clearing pane overrides.
+Only direct primary-client input may mutate it. Local/global changes wait for
+target/all-pane compaction to settle; status stays available. Selection itself
+does no model work. See [context and continuity](context-and-continuity.md).
 
 ### Change the native workspace
 

@@ -329,6 +329,23 @@ fn native_navigation_stop_and_mode_aba_discard_prepared_results() {
             .execute_agent_shell_command(&fixture.primary, "new work while navigating")
             .unwrap();
         assert!(refused.contains("native navigation is active"), "{refused}");
+        for input in ["/compaction-mode", "/compaction-mode status"] {
+            let status = fixture
+                .service
+                .execute_agent_shell_command(&fixture.primary, input)
+                .unwrap();
+            assert!(status.contains("# Compaction Mode Status"), "{status}");
+        }
+        for input in [
+            "/compaction-mode raw_tail",
+            "/compaction-mode status --global",
+        ] {
+            let refused = fixture
+                .service
+                .execute_agent_shell_command(&fixture.primary, input)
+                .unwrap();
+            assert!(refused.contains("native navigation is active"), "{refused}");
+        }
         if stop {
             let result = fixture
                 .service

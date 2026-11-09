@@ -4904,6 +4904,7 @@ impl RuntimeSessionService {
             .remove(pane_id);
         self.clear_agent_routing_override(pane_id);
         self.clear_agent_shell_mode_override(pane_id);
+        self.set_agent_compaction_mode_override(pane_id, None);
         self.clear_runtime_agent_surface_startup(pane_id);
         self.clear_agent_pane_artifacts(pane_id);
         self.clear_client_interaction_state_for_removed_pane(pane_id);

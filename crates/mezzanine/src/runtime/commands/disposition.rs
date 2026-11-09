@@ -101,6 +101,7 @@ pub(super) const COMMAND_EXECUTION_METADATA: &[CommandExecutionMetadata] = &[
     Entry::inline("approve", None),
     Entry::inline("sandbox", None),
     Entry::inline("shell-mode", None),
+    Entry::inline("compaction-mode", None),
     Entry::deferred("cd", true, None),
     Entry::inline("objective", None),
     Entry::inline("compact", Some(Awaited::Compact)),

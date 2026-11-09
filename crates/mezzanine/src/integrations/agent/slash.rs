@@ -438,6 +438,10 @@ fn execute_agent_shell_command_with_context_inner(
             command,
             reason: "pane sandbox inspection and mutation require the live runtime".to_string(),
         },
+        "compaction-mode" => AgentShellCommandOutcome::RequiresRuntime {
+            command,
+            reason: "compaction selection requires authenticated live pane state".to_string(),
+        },
         "issue" => AgentShellCommandOutcome::RequiresRuntime {
             command,
             reason: "local issue tracking requires the live runtime".to_string(),

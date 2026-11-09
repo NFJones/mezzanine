@@ -328,6 +328,8 @@ pub(crate) struct RuntimeCompactionStatus {
     pub(crate) started_at: u64,
     /// Actual preparation/model/publication phase; no phase proves wire delivery.
     pub(crate) phase: &'static str,
+    /// Selection captured at source admission, absent only before source exists.
+    pub(crate) captured_mode: Option<crate::runtime::config::CompactionMode>,
     /// Current logical operation epoch, retained across chunk/retry generations.
     pub(crate) epoch: u64,
     /// Exact current worker generation, distinct from the logical epoch.
@@ -412,6 +414,10 @@ pub(crate) struct RuntimeAgentComponent {
     active_turn_power_inhibition: Option<PowerInhibitionHandle>,
     /// Percent of raw context retained after compaction.
     agent_compaction_mode: crate::runtime::config::CompactionMode,
+    /// Ephemeral live-pane authority; never copied into conversation snapshots.
+    agent_compaction_mode_overrides: BTreeMap<String, crate::runtime::config::CompactionMode>,
+    /// Exact admitted selection, retained through source I/O and publication.
+    compaction_admitted_modes: BTreeMap<String, crate::runtime::config::CompactionMode>,
     agent_compaction_raw_retention_percent: usize,
     /// Default model and reasoning auto-sizing policy.
     agent_auto_sizing: RuntimeAutoSizingConfig,
@@ -3315,6 +3321,7 @@ impl RuntimeSessionService {
         Some(RuntimeCompactionStatus {
             started_at,
             phase,
+            captured_mode: self.agent.compaction_admitted_modes.get(pane).copied(),
             epoch: self.agent_compaction_epoch(pane),
             dispatch_generation: *generation,
             model_calls: progress.map_or(0, |progress| progress.model_calls),
@@ -3417,6 +3424,11 @@ impl RuntimeSessionService {
         self.agent
             .agent_compacting_panes
             .insert(pane_id.clone(), started);
+        if let Some(source) = &task.replay_source {
+            self.agent
+                .compaction_admitted_modes
+                .insert(pane_id.clone(), source.mode);
+        }
         self.agent
             .pending_agent_compaction_tasks
             .insert(pane_id, task);
@@ -3537,6 +3549,9 @@ impl RuntimeSessionService {
         self.agent
             .agent_compacting_panes
             .insert(work.pane_id.clone(), started);
+        self.agent
+            .compaction_admitted_modes
+            .insert(work.pane_id.clone(), work.mode);
         self.agent
             .pending_manual_compaction_preparations
             .insert((work.pane_id.clone(), generation), work);
@@ -3825,6 +3840,7 @@ impl RuntimeSessionService {
         {
             self.agent.agent_compaction_task_owners.remove(pane_id);
             self.agent.agent_compacting_panes.remove(pane_id);
+            self.agent.compaction_admitted_modes.remove(pane_id);
         }
         task
     }
@@ -3908,6 +3924,7 @@ impl RuntimeSessionService {
         if marker_matches {
             self.agent.agent_compaction_task_owners.remove(pane_id);
             self.agent.agent_compacting_panes.remove(pane_id);
+            self.agent.compaction_admitted_modes.remove(pane_id);
         }
         let had_task = pending.is_some()
             || claimed.is_some()
@@ -4886,6 +4903,60 @@ impl RuntimeSessionService {
     /// Mode captured by the next compaction admission; reload does not edit history.
     pub(crate) fn agent_compaction_mode(&self) -> crate::runtime::config::CompactionMode {
         self.agent.agent_compaction_mode
+    }
+
+    /// Explicit selection survives conversation replacement, not pane teardown.
+    pub(crate) fn agent_compaction_mode_override(
+        &self,
+        pane: &str,
+    ) -> Option<crate::runtime::config::CompactionMode> {
+        self.agent
+            .agent_compaction_mode_overrides
+            .get(pane)
+            .copied()
+    }
+
+    /// Resolves selection for the next admission, never an existing operation.
+    pub(crate) fn effective_agent_compaction_mode(
+        &self,
+        pane: &str,
+    ) -> crate::runtime::config::CompactionMode {
+        self.agent_compaction_mode_override(pane)
+            .unwrap_or_else(|| self.agent_compaction_mode())
+    }
+
+    /// Returns whether the explicit selection/source changed, including reset.
+    pub(crate) fn set_agent_compaction_mode_override(
+        &mut self,
+        pane: &str,
+        mode: Option<crate::runtime::config::CompactionMode>,
+    ) -> bool {
+        let previous = self.agent_compaction_mode_override(pane);
+        if let Some(mode) = mode {
+            self.agent
+                .agent_compaction_mode_overrides
+                .insert(pane.to_string(), mode);
+        } else {
+            self.agent.agent_compaction_mode_overrides.remove(pane);
+        }
+        previous != mode
+    }
+
+    /// Global generation changes must not invalidate any admitted compactor.
+    pub(crate) fn any_agent_is_compacting(&self) -> bool {
+        !self.agent.agent_compacting_panes.is_empty()
+    }
+
+    /// Manual source decoding already admitted policy before its worker I/O.
+    pub(crate) fn admitted_agent_compaction_mode(
+        &self,
+        pane: &str,
+    ) -> crate::runtime::config::CompactionMode {
+        self.agent
+            .compaction_admitted_modes
+            .get(pane)
+            .copied()
+            .unwrap_or_else(|| self.effective_agent_compaction_mode(pane))
     }
 
     /// Replaces policy for future admissions only.
