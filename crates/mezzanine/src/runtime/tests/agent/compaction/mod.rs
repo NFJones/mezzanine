@@ -21,6 +21,7 @@ mod provider_backoff;
 mod provider_continuity;
 mod provider_limit_replay;
 mod provider_recovery;
+mod raw_continuity;
 mod raw_tail;
 mod reentry;
 mod replay_compatibility;

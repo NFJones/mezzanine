@@ -11,6 +11,13 @@ use crate::runtime::AgentCompactionEvent;
 fn local_usage_compaction(
     consumed_sample: bool,
 ) -> (RuntimeSessionService, AgentTranscriptStore, String) {
+    local_usage_compaction_with_mode(consumed_sample, false)
+}
+
+fn local_usage_compaction_with_mode(
+    consumed_sample: bool,
+    raw: bool,
+) -> (RuntimeSessionService, AgentTranscriptStore, String) {
     let mut service = test_runtime_service();
     let store = AgentTranscriptStore::new(temp_root("local-compaction-usage"));
     service.set_agent_transcript_store(store.clone());
@@ -22,6 +29,9 @@ fn local_usage_compaction(
         trusted: true,
         text: "[agents]\ndefault_provider = \"runtime-batch\"\ndefault_model_profile = \"local-usage\"\nshell_mode = \"pane\"\ncompaction_raw_retention_percent = 1\n[providers.runtime-batch]\nkind = \"openai\"\nmodels = [\"test\"]\ndefault_model = \"test\"\n[model_profiles.local-usage]\nprovider = \"runtime-batch\"\nmodel = \"test\"\ncontext_window_tokens = 40000\nmax_input_tokens = 20000\n".into(),
     }]).unwrap();
+    if raw {
+        raw_tail::enable_raw(&mut service);
+    }
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
         .unwrap();
@@ -146,7 +156,18 @@ fn publish_usage_compaction(service: &mut RuntimeSessionService) {
 /// Repeated delivery cannot revoke fresh retrieval or clear a newer baseline.
 #[test]
 fn local_compaction_acceptance_resets_request_cache_and_grants_once() {
-    let (mut service, store, turn_id) = local_usage_compaction(true);
+    acceptance_resets_request_cache_and_grants_once(false);
+}
+
+/// Raw mode must invalidate the same request/MCP/usage owners only after an
+/// accepted receipt, with no auxiliary expense and no model completion event.
+#[test]
+fn local_raw_tail_compaction_acceptance_resets_request_cache_and_grants_once() {
+    acceptance_resets_request_cache_and_grants_once(true);
+}
+
+fn acceptance_resets_request_cache_and_grants_once(raw: bool) {
+    let (mut service, store, turn_id) = local_usage_compaction_with_mode(true, raw);
     let turn = service.agent_turn_ledger().turn(&turn_id).unwrap().clone();
     let conversation = turn.conversation_id.clone();
     assert!(service.agent_turn_has_consumed_observed_input_for_tests(&turn_id));
@@ -210,7 +231,18 @@ fn local_compaction_acceptance_resets_request_cache_and_grants_once() {
         .unwrap()
         .clone();
     let generation = task.task_generation;
-    complete_runtime_test_compaction(&mut service, "%1", "accepted replacement");
+    if raw {
+        assert!(task.request.is_none());
+        assert!(
+            service
+                .claim_agent_compaction_task("%1", generation)
+                .unwrap()
+                .is_none()
+        );
+        assert!(!service.retains_compaction_expense_for_tests("%1", generation));
+    } else {
+        complete_runtime_test_compaction(&mut service, "%1", "accepted replacement");
+    }
     let expense = service.agent_token_usage_for_conversation(&conversation);
     assert_eq!(service.agent_turn_contexts()[&turn_id], before);
     assert_eq!(available(&service).len(), 1);

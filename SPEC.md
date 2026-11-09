@@ -8336,6 +8336,10 @@ context-limit compaction. `agents.compaction_mode` MUST accept only `summary`
 and `raw_tail`, defaulting to `summary`. Each admission MUST capture the mode
 and configuration generation; configuration changes MUST NOT rewrite history
 or retarget admitted work. Existing source and permission freshness fences apply.
+Admission MUST also capture the effective pane permission policy and conversation
+action surface independently of any model request. A changed scope MUST refuse
+claim or adoption even when a pane-only override leaves configuration generation
+unchanged; refusal MUST retire the original waiting work without replaying actions.
 
 `raw_tail` MUST omit eligible source without constructing a compactor model
 request, looking up auxiliary credentials, or charging auxiliary model usage.

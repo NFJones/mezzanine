@@ -210,6 +210,11 @@ async fn complete(case: &mut Case) -> crate::runtime::RuntimeReplayEpochAttempt 
         .claimed_agent_compaction_task("%1", case.generation)
         .unwrap()
         .clone();
+    if task.request.is_none() {
+        // Raw admission already queued the original publication; there is no
+        // model event or dummy response to synthesize at this boundary.
+        return take_attempt(case);
+    }
     let (result, _) = crate::test_support::compaction_source::execute_wave(
         &case.actor.service,
         &task,
@@ -480,8 +485,19 @@ async fn async_replay_epoch_publication_recovers_real_storage_phase_failures() {
 /// the prior complete head and ordinary pane/client admission usable.
 #[tokio::test(flavor = "current_thread")]
 async fn async_replay_epoch_publication_exhausts_recovery_without_daemon_failure() {
+    exhausts_recovery_without_daemon_failure(false).await;
+}
+
+/// Zero-model work retains the same finite write bound and confines exhausted
+/// recovery to its original waiting turn, while other panes remain usable.
+#[tokio::test(flavor = "current_thread")]
+async fn async_raw_tail_publication_exhausts_recovery_without_daemon_failure() {
+    exhausts_recovery_without_daemon_failure(true).await;
+}
+
+async fn exhausts_recovery_without_daemon_failure(raw: bool) {
     use crate::storage::transcript::replay_epoch::Phase;
-    let mut case = case(false).await;
+    let mut case = case_with_mode(false, raw).await;
     case.fixture
         .store
         .inject_replay_epoch_fault(Phase::BeforeManifestSwap, 3, false);
@@ -496,7 +512,11 @@ async fn async_replay_epoch_publication_exhausts_recovery_without_daemon_failure
         .unwrap()
         .model_progress()
         .model_calls;
-    assert!(original_calls > 0);
+    if raw {
+        assert_eq!(original_calls, 0);
+    } else {
+        assert!(original_calls > 0);
+    }
     for number in 1..=3 {
         assert_eq!(attempt.number(), number);
         let completion = tokio::task::spawn_blocking(move || attempt.execute())
@@ -577,7 +597,18 @@ async fn async_replay_epoch_publication_exhausts_recovery_without_daemon_failure
 /// behind the real conversation lease cannot publish after it is cancelled.
 #[tokio::test(flavor = "current_thread")]
 async fn async_replay_epoch_publication_cancelled_physical_write_cannot_publish() {
-    let mut case = case(false).await;
+    cancelled_physical_write_cannot_publish(false).await;
+}
+
+/// Raw cancellation must retain the physical attempt guard and prevent a
+/// pending real write, without relying on a provider worker to settle it.
+#[tokio::test(flavor = "current_thread")]
+async fn async_raw_tail_publication_cancelled_physical_write_cannot_publish() {
+    cancelled_physical_write_cannot_publish(true).await;
+}
+
+async fn cancelled_physical_write_cannot_publish(raw: bool) {
+    let mut case = case_with_mode(false, raw).await;
     let lock = std::fs::OpenOptions::new()
         .read(true)
         .write(true)

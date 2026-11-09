@@ -5,7 +5,10 @@
 use super::*;
 use crate::runtime::control::execute_runtime_agent_prompt_history_work;
 
-fn history(store: &AgentTranscriptStore, conversation: &str) -> mez_agent::ReplayEpochContext {
+pub(super) fn history(
+    store: &AgentTranscriptStore,
+    conversation: &str,
+) -> mez_agent::ReplayEpochContext {
     history_with_count(store, conversation, 0)
 }
 
@@ -57,7 +60,11 @@ pub(super) fn native_scenario(
 /// Drives the real initial publication and authenticated managed-shell startup
 /// gates. Captured first-task context exists while queued; provider recovery
 /// must not bypass either owner merely because that context can be inspected.
-fn admit_and_bootstrap_child(service: &mut RuntimeSessionService, pane: &str, conversation: &str) {
+pub(super) fn admit_and_bootstrap_child(
+    service: &mut RuntimeSessionService,
+    pane: &str,
+    conversation: &str,
+) {
     use crate::runtime::{PersistenceEvent, RuntimeSideEffect};
     let effects = service.persistence.take_transcript_effects();
     let mut initial = None;

@@ -17,6 +17,11 @@ pub(crate) struct RuntimeCompactionReplaySource {
     target: SourceTarget,
     config_generation: u64,
     config_layers: Vec<crate::config::ConfigLayer>,
+    /// Pane-local authority may change without a configuration generation.
+    /// Both modes keep the exact accepted policy/action surface, independently
+    /// of whether a model request exists. A changed scope requires new admission.
+    permissions: mez_agent::permissions::PermissionPolicy,
+    allowed_actions: mez_agent::AllowedActionSet,
     process: Option<crate::runtime::processes::RuntimePaneProcessIdentity>,
     model_profile: Option<mez_agent::ModelProfile>,
     /// Exact inference profile, distinct from a routing parent turn's profile.
@@ -237,6 +242,8 @@ impl RuntimeSessionService {
                 },
                 config_generation: self.session.config_generation,
                 config_layers: self.integration.config_layers().to_vec(),
+                permissions: self.permission_policy_for_pane(&turn.pane_id),
+                allowed_actions: allowed.clone(),
                 process: self.steering_process_binding(&turn.pane_id)?,
                 model_profile: self.agent_turn_model_profile(&turn.turn_id).cloned(),
                 compactor_profile: profile.clone(),
@@ -349,6 +356,8 @@ impl RuntimeSessionService {
                 })),
                 config_generation: self.session.config_generation,
                 config_layers: self.integration.config_layers().to_vec(),
+                permissions: self.permission_policy_for_pane(pane),
+                allowed_actions: allowed.clone(),
                 process: self.steering_process_binding(pane)?,
                 model_profile: Some(profile.clone()),
                 compactor_profile: profile.clone(),
@@ -526,12 +535,24 @@ impl RuntimeCompactionReplaySource {
                 session.session_id != self.owner.conversation_id().as_str()
                     || session.running_turn_id.as_deref() != self.turn_id()
                     || session.ephemeral != self.ephemeral
+                    || session.allowed_actions.as_ref() != Some(&self.allowed_actions)
             })
             || service.session.config_generation != self.config_generation
             || service.integration.config_layers() != self.config_layers.as_slice()
         {
             return Err(MezError::conflict(
                 "canonical compaction actor owner became stale",
+            ));
+        }
+        let current_policy = service.permission_policy_for_pane(pane);
+        if self.permissions.preset != current_policy.preset
+            || self.permissions.approval_policy != current_policy.approval_policy
+            || self.permissions.approval_bypass() != current_policy.approval_bypass()
+            || self.permissions.rules() != current_policy.rules()
+            || self.permissions.trusted_directories != current_policy.trusted_directories
+        {
+            return Err(MezError::conflict(
+                "canonical compaction permission scope changed from accepted source",
             ));
         }
         let accepted = service

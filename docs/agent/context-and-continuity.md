@@ -240,6 +240,9 @@ Memory or elision block. Accepted publication clears ordinary request/cache and
 retrieval state and execution-usage display while preserving cumulative expense.
 Configuration changes affect future admissions, never rewrite saved history or
 retarget an admitted operation; existing freshness and permission fences apply.
+Pane-only permission or action-scope edits also invalidate captured work even
+without a configuration reload. New claims and live adoption recheck that scope;
+refusal retires the waiting work without replaying actions.
 
 Use `/compact` when older completed work crowds out the current task. Mez can
 also attempt context-length recovery after a provider rejects an oversized

@@ -4,7 +4,7 @@
 
 use super::*;
 
-fn enable_raw(service: &mut RuntimeSessionService) {
+pub(super) fn enable_raw(service: &mut RuntimeSessionService) {
     let mut layers = service.config_layers().to_vec();
     let primary = layers
         .iter_mut()
@@ -19,6 +19,69 @@ fn enable_raw(service: &mut RuntimeSessionService) {
         crate::runtime::config::CompactionMode::RawTail
     );
     assert!(service.auth_store().is_none());
+}
+
+/// Live pane overrides do not change config generation. Narrowing authority
+/// after source capture must nevertheless refuse the stale raw claim before
+/// persistence, with no model dispatch or orphan compaction marker.
+#[test]
+fn runtime_raw_tail_policy_narrowing_refuses_unclaimed_publication() {
+    let (mut service, store, turn) = observed_history::prepared_with_cap(40_000, false);
+    enable_raw(&mut service);
+    service.set_pane_permission_preset_override("%1", Some(mez_agent::PermissionPreset::Auto));
+    let record = service.agent_turn_ledger().turn(&turn).unwrap().clone();
+    let profile = service.agent_turn_model_profile(&turn).unwrap().clone();
+    assert!(
+        service
+            .queue_agent_active_turn_compaction(
+                &turn,
+                record.model_profile,
+                profile,
+                crate::runtime::RuntimeActiveTurnCompactionTrigger::ObservedInputLimit {
+                    observed_input_tokens: 40_000,
+                    max_input_tokens: 40_000,
+                }
+            )
+            .unwrap()
+    );
+    let task = service
+        .pending_agent_compaction_task_for_tests("%1")
+        .unwrap()
+        .clone();
+    let archive = store.inspect(&task.conversation_id).unwrap();
+    service.set_pane_permission_preset_override("%1", Some(mez_agent::PermissionPreset::ReadOnly));
+    let result = service.claim_agent_compaction_task("%1", task.task_generation);
+    assert!(
+        !matches!(result, Ok(Some(_))),
+        "stale policy dispatched model work"
+    );
+    assert!(
+        service.take_replay_epoch_attempt_for_tests().is_none(),
+        "narrowed policy admitted stale publication"
+    );
+    assert!(!service.agent_is_compacting("%1"));
+    assert_eq!(
+        service.agent_turn_ledger().turn(&turn).unwrap().state,
+        AgentTurnState::Failed
+    );
+    assert!(!service.agent_provider_task_is_pending(&turn));
+    assert!(!service.retains_compaction_expense_for_tests("%1", task.task_generation));
+    let after = store.inspect(&task.conversation_id).unwrap();
+    // Terminal failure settles this turn's already accepted pending input;
+    // those ordinary appends are separate from a compaction publication.
+    assert!(after.starts_with(&archive));
+    assert!(after[archive.len()..].iter().all(|row| row.turn_id == turn));
+    assert!(
+        after
+            .iter()
+            .any(|row| row.content.contains("CURRENT_USER_PROMPT"))
+    );
+    assert!(
+        store
+            .load_replay_epoch(&task.conversation_id, mez_agent::AgentContext::empty())
+            .unwrap()
+            .is_none()
+    );
 }
 
 /// With a locally fitting 100% tail, authoritative rejection still removes
