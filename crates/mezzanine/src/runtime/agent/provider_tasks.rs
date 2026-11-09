@@ -1342,17 +1342,18 @@ impl RuntimeSessionService {
         if self.agent_provider_failure_is_refused(turn_id) {
             return Ok(());
         }
+        // An actual rejected completion handoff already has an exact source,
+        // entered-consumer and acknowledgment owner. Preserve its required
+        // refusal and duplicate semantics; generic quarantine cannot replace it.
+        let refusal = self.begin_completion_provider_refusal(turn_id)?;
+        if let Some(refusal) = refusal {
+            let result = self
+                .freeze_completion_provider_refusal_source(&refusal)
+                .and_then(|()| self.fail_configured_agent_provider_task_inner(turn_id, error));
+            return self.finish_completion_provider_refusal(refusal, result);
+        }
         let source = self.capture_provider_failure_source(turn_id);
-        let result = (|| {
-            let refusal = self.begin_completion_provider_refusal(turn_id)?;
-            if let Some(refusal) = refusal {
-                let result = self
-                    .freeze_completion_provider_refusal_source(&refusal)
-                    .and_then(|()| self.fail_configured_agent_provider_task_inner(turn_id, error));
-                return self.finish_completion_provider_refusal(refusal, result);
-            }
-            self.fail_configured_agent_provider_task_inner(turn_id, error)
-        })();
+        let result = self.fail_configured_agent_provider_task_inner(turn_id, error);
         match (result, source) {
             (Err(settlement), Some(source)) => {
                 self.retain_provider_failure_refusal(source, error, settlement);

@@ -109,6 +109,70 @@ fn runtime_provider_failure_retains_typed_context_refusal_and_audit_failure() {
     }
 }
 
+/// Completion-error recovery must not use checked terminal cleanup to discard
+/// a typed unsafe request source. It must preserve the same bounded refusal as
+/// ordinary provider-failure ingress, even with a usable current profile.
+#[test]
+fn runtime_provider_completion_failure_retains_unsafe_request_source() {
+    let (root, mut service, _) = fixture();
+    let started = service
+        .start_agent_prompt_turn("%1", "retained completion source")
+        .unwrap();
+    let turn = service
+        .agent_turn_ledger()
+        .turn(&started.turn_id)
+        .unwrap()
+        .clone();
+    let original = service.agent_turn_contexts()[&turn.turn_id].clone();
+    let profile = service
+        .agent_turn_model_profile(&turn.turn_id)
+        .unwrap()
+        .clone();
+    let cause = MezError::from(
+        mez_agent::AgentContext::new(vec![
+            ContextBlock::user_event("user prompt", "active source"),
+            ContextBlock::task_prelude(
+                ContextSourceKind::SkillInstruction,
+                "unowned skill",
+                "late prelude",
+            ),
+        ])
+        .unwrap_err(),
+    );
+    service.fail_agent_turn_after_provider_completion_application_error(
+        &turn,
+        &profile.provider,
+        Some(&profile),
+        &cause,
+    );
+    assert_eq!(
+        service
+            .agent_turn_ledger()
+            .turn(&turn.turn_id)
+            .unwrap()
+            .state,
+        AgentTurnState::Blocked
+    );
+    assert_eq!(service.agent_turn_contexts()[&turn.turn_id], original);
+    assert_eq!(
+        service
+            .provider_failure_source_for_tests(&turn.turn_id)
+            .unwrap()
+            .0,
+        &original
+    );
+    assert!(!service.agent_turn_executions().contains_key(&turn.turn_id));
+    assert!(
+        service
+            .ensure_provider_failure_pane_open("%1")
+            .unwrap_err()
+            .message()
+            .contains(cause.message())
+    );
+    drop(service);
+    fs::remove_dir_all(root).unwrap();
+}
+
 /// A causal request error remains visible even when its reporting path cannot
 /// assemble a request. The original source stays intact, no inference is
 /// retried, and the refusal releases capacity for another pane.

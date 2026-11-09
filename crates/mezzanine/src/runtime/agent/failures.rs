@@ -73,7 +73,27 @@ impl RuntimeSessionService {
                 "provider completion failure has no retained model profile",
             )),
         };
-        if let Err(settlement) = result {
+        if let Err(mut settlement) = result {
+            if !error.is_agent_request_assembly_failure()
+                && !settlement.is_agent_request_assembly_failure()
+            {
+                // A detached worker can still retire through the original
+                // checked path without assembling a replacement request. Try
+                // that valid fallback before retaining a refusal. Its gates
+                // still own persistence, source retention and parent recovery.
+                match self.complete_running_agent_turn_and_start_ready(
+                    turn,
+                    AgentTurnState::Failed,
+                    "completion_application_error_checked_cleanup",
+                ) {
+                    Ok(()) => return,
+                    Err(cleanup) => {
+                        settlement = cleanup.with_context(format!(
+                            "provider failure reporting also failed: {settlement}; checked terminal cleanup"
+                        ));
+                    }
+                }
+            }
             // Required retirement failure cannot authorize deletion of the
             // original context, effects, profile or pending append obligations.
             self.retain_provider_failure_refusal(source, error, settlement);
