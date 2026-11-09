@@ -174,7 +174,7 @@ fn execution_state_checkpoint_format_is_explicit_and_legacy_intervals_stay_unkno
     source.finish_execution_group(&receipt).unwrap();
     let closed = source.execution_states().unwrap().pop().unwrap();
     let encoded = serde_json::to_value(source.checkpoint().unwrap()).unwrap();
-    assert_eq!(encoded["version"], json!(4));
+    assert_eq!(encoded["version"], json!(5));
     for (pointer, value) in [
         ("/execution_intervals", Value::Null),
         ("/execution_intervals/0/1/generation", json!(0)),

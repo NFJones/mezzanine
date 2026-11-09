@@ -73,23 +73,13 @@ impl ReplayEpochContext {
                 .carried_arrivals
                 .insert(member.occurrence_id, member.clone());
         }
-        match plan.selection.as_ref() {
-            ReplayCompactionSelection::Prefix { events, .. } => {
-                candidate.context.chronology.splice(
-                    ..*events,
-                    prepared.candidate.context.chronology()[..head_events]
-                        .iter()
-                        .cloned(),
-                );
-            }
-            ReplayCompactionSelection::RawTail { omitted, .. } => {
-                let previous_head = plan.head.as_ref().map(ReplaySummaryIdentity::occurrence_id);
-                candidate.context.chronology.retain(|event| {
-                    let id = event.record().occurrence_id();
-                    Some(id) != previous_head && !omitted.contains(&id)
-                });
-            }
-        }
+        candidate.retain_unselected_events(plan);
+        candidate.context.chronology.splice(
+            ..0,
+            prepared.candidate.context.chronology()[..head_events]
+                .iter()
+                .cloned(),
+        );
         candidate.context.rebuild_projections();
         candidate.head = prepared.candidate.head.clone();
         candidate.policy = prepared.candidate.policy;
@@ -181,15 +171,31 @@ impl ReplayEpochContext {
         );
         let mut candidate = self.clone();
         if let Some(text) = summary {
-            let ReplayCompactionSelection::Prefix { events, .. } = plan.selection.as_ref() else {
+            let ReplayCompactionSelection::Summary { .. } = plan.selection.as_ref() else {
                 return Err(AgentContextError::new(
-                    "model summary requires a prefix selection",
+                    "model summary requires a summary selection",
                 ));
             };
+            let mut ranges: Vec<std::ops::Range<usize>> = Vec::new();
+            for index in 0..plan.frozen.len() {
+                if plan.removes_event(index) {
+                    if let Some(range) = ranges.last_mut()
+                        && range.end == index
+                    {
+                        range.end += 1;
+                    } else {
+                        ranges.push(index..index + 1);
+                    }
+                }
+            }
+            let insertion = ranges
+                .first()
+                .ok_or_else(|| AgentContextError::new("replay summary has no selected source"))?
+                .start;
             candidate
                 .context
                 .compact_execution_ranges_into_summary(
-                    std::iter::once(0..*events).collect(),
+                    ranges,
                     ContextBlock::reference_event(
                         ContextSourceKind::CompactionPrefix,
                         "conversation epoch summary",
@@ -199,6 +205,22 @@ impl ReplayEpochContext {
                 .map_err(|_| {
                     AgentContextError::new("replay summary adoption failed canonical validation")
                 })?;
+            // A rolling head is a reference snapshot, not a chronological claim
+            // that every earlier raw event was consumed. Reserve an ordering
+            // slot before the unchanged exact islands, never resequence them.
+            if insertion != 0 {
+                let mut head = candidate.context.chronology.remove(insertion);
+                let first =
+                    candidate.context.chronology.first().ok_or_else(|| {
+                        AgentContextError::new("replay summary lost retained source")
+                    })?;
+                head.sequence =
+                    ContextEventSequence::new(first.sequence().get().checked_sub(1).ok_or_else(
+                        || AgentContextError::new("replay summary has no ordering slot"),
+                    )?)?;
+                candidate.context.chronology.insert(0, head);
+                candidate.context.rebuild_projections();
+            }
             candidate.head = Some(ReplaySummaryIdentity {
                 conversation: self.conversation.clone(),
                 revision,
@@ -211,16 +233,12 @@ impl ReplayEpochContext {
                     .occurrence_id(),
             });
         } else {
-            let previous_head = plan.head.as_ref().map(ReplaySummaryIdentity::occurrence_id);
-            let ReplayCompactionSelection::RawTail { omitted, .. } = plan.selection.as_ref() else {
+            let ReplayCompactionSelection::RawTail { .. } = plan.selection.as_ref() else {
                 return Err(AgentContextError::new(
                     "intentional omission requires a raw selection",
                 ));
             };
-            candidate.context.chronology.retain(|event| {
-                let id = event.record().occurrence_id();
-                Some(id) != previous_head && !omitted.contains(&id)
-            });
+            candidate.retain_unselected_events(&plan);
             candidate.context.rebuild_projections();
             candidate.context.validate_durable().map_err(|_| {
                 AgentContextError::new("replay omission adoption failed canonical validation")
@@ -243,38 +261,72 @@ impl ReplayEpochContext {
         Ok(revision)
     }
 
-    /// Rechecks the selected prefix against protection and group membership
-    /// at acceptance/adoption. The source check must establish prefix bounds.
+    /// Removes exactly the selected original occurrences and any previous head.
+    /// Unknown post-frontier arrivals are never selected by an old plan.
+    fn retain_unselected_events(&mut self, plan: &ReplayCompactionPlan) {
+        let selected = plan
+            .removed_events()
+            .map(|event| event.record().occurrence_id())
+            .collect::<BTreeSet<_>>();
+        self.context
+            .chronology
+            .retain(|event| !selected.contains(&event.record().occurrence_id()));
+    }
+
+    /// Rechecks selected source against protection and whole group membership
+    /// at acceptance/adoption. Retained exact islands are not summary input.
     fn validate_publication_selection(
         &self,
         plan: &ReplayCompactionPlan,
     ) -> AgentContextResult<()> {
-        let offset = usize::from(self.head.is_some());
-        let retained_groups = self
-            .context
-            .chronology()
-            .iter()
-            .enumerate()
-            .filter(|(index, _)| !plan.removes_event(*index))
-            .filter_map(|(_, event)| event.execution_group_id())
-            .collect::<BTreeSet<_>>();
-        if self
-            .context
-            .chronology()
-            .iter()
-            .enumerate()
-            .skip(offset)
-            .filter(|(index, _)| plan.removes_event(*index))
-            .any(|(_, event)| {
-                !self.event_is_replaceable(event)
-                    || event
-                        .execution_group_id()
-                        .is_some_and(|group| retained_groups.contains(group))
-            })
+        self.validate_compaction_selection(
+            &plan
+                .removed_raw_members()
+                .map(ReplayEpochMember::occurrence_id)
+                .collect::<Vec<_>>(),
+        )
+    }
+
+    /// Qualifies exact raw coverage against the current whole ownership spans.
+    /// Storage uses this same rule for immutable receipts. Unknown/duplicate
+    /// IDs, partial spans or protected source reject without changing state.
+    /// A retained group's later append may merge spans across selected work;
+    /// checking only the selected group IDs would miss that invalidation.
+    pub fn validate_compaction_selection(
+        &self,
+        selected: &[ContextBlockOccurrenceId],
+    ) -> AgentContextResult<()> {
+        self.validate_membership()?;
+        let ids = selected.iter().copied().collect::<BTreeSet<_>>();
+        if ids.len() != selected.len()
+            || !ids.is_subset(
+                &self
+                    .members
+                    .iter()
+                    .map(ReplayEpochMember::occurrence_id)
+                    .collect(),
+            )
         {
             return Err(AgentContextError::new(
-                "replay publication source became protected or its execution group changed",
+                "replay selection has invalid raw membership",
             ));
+        }
+        let offset = usize::from(self.head.is_some());
+        let raw = &self.context.chronology()[offset..];
+        for unit in planning::execution_units(raw) {
+            let events = &raw[unit];
+            let count = events
+                .iter()
+                .filter(|event| ids.contains(&event.record().occurrence_id()))
+                .count();
+            if count != 0
+                && (count != events.len()
+                    || events.iter().any(|event| !self.event_is_replaceable(event)))
+            {
+                return Err(AgentContextError::new(
+                    "replay publication source became protected or its execution group changed",
+                ));
+            }
         }
         Ok(())
     }
@@ -282,15 +334,12 @@ impl ReplayEpochContext {
     /// Retires only the plan's selected original membership after accounting
     /// has removed those exact entries. Append-only arrivals remain untouched.
     fn retire_compaction_members(&mut self, plan: &ReplayCompactionPlan) {
-        match plan.selection.as_ref() {
-            ReplayCompactionSelection::Prefix { members, .. } => {
-                self.members.drain(..*members);
-            }
-            ReplayCompactionSelection::RawTail { omitted, .. } => {
-                self.members
-                    .retain(|member| !omitted.contains(&member.occurrence_id));
-            }
-        }
+        let selected = plan
+            .removed_raw_members()
+            .map(ReplayEpochMember::occurrence_id)
+            .collect::<BTreeSet<_>>();
+        self.members
+            .retain(|member| !selected.contains(&member.occurrence_id));
     }
 }
 
@@ -299,12 +348,21 @@ impl ReplayCompactionPlan {
     /// Plans are minted locally, never reconstructed from descriptive metadata.
     fn selection_is_valid(&self) -> bool {
         match self.selection.as_ref() {
-            ReplayCompactionSelection::Prefix { members, events } => {
+            ReplayCompactionSelection::Summary {
+                selected,
+                input,
+                tail_start,
+            } => {
+                let members = self
+                    .members
+                    .iter()
+                    .map(ReplayEpochMember::occurrence_id)
+                    .collect::<BTreeSet<_>>();
                 self.policy == ReplayHeadPolicy::Summary
-                    && *members > 0
-                    && *members <= self.members.len()
-                    && *events == members + usize::from(self.head.is_some())
-                    && *events <= self.frozen.len()
+                    && !selected.is_empty()
+                    && selected.is_subset(&members)
+                    && *tail_start <= self.frozen.len()
+                    && input.iter().eq(self.removed_events())
             }
             ReplayCompactionSelection::RawTail {
                 omitted,

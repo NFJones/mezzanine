@@ -1,4 +1,4 @@
-//! Manual candidate admission preserves original custody and exact barriers.
+//! Manual candidate admission preserves original custody and exact source.
 //! These controls exercise real command/source workers and storage receipts;
 //! matching pane counters or preview success cannot authorize a foreign write.
 
@@ -66,16 +66,12 @@ fn runtime_manual_compaction_candidate_rejects_foreign_source() {
     }
 }
 
-/// A protected leading reference cannot be skipped to collect later facts.
-/// Actual NoStore capture supplies custody without claiming a durable head.
+/// A protected leading reference survives while later closed facts compact.
+/// Exercise inline and prepared commands through real NoStore publication;
+/// neither candidate preview nor acceptance may alter the retained reference.
 #[test]
 fn runtime_manual_compaction_candidate_preserves_leading_exact_reference() {
-    for (worker, repeats, reason) in [
-        (false, 1, "no-eligible-closed-prefix"),
-        (true, 1, "no-eligible-closed-prefix"),
-        (false, 500, "irreducible-exact-retained-tail"),
-        (true, 500, "irreducible-exact-retained-tail"),
-    ] {
+    for (worker, repeats) in [(false, 1), (true, 1), (false, 500), (true, 500)] {
         let mut fixture = CanonicalManualFixture::headless(false);
         let conversation = "leading-exact-reference";
         let id = mez_agent::ReplayConversationId::new(conversation).unwrap();
@@ -117,38 +113,33 @@ fn runtime_manual_compaction_candidate_preserves_leading_exact_reference() {
                 None,
             )
             .unwrap();
-        if worker {
-            fixture.service.use_agent_source_preparation_adapter();
-        }
-        let primary = fixture
+        let task = fixture.queue(worker);
+        let candidate = fixture
             .service
-            .session
-            .layout_owner_client_id()
-            .unwrap()
-            .clone();
-        let result = fixture
-            .service
-            .execute_agent_shell_command(&primary, "/compact")
+            .manual_compaction_candidate_context(&task, "closed fact summary")
             .unwrap();
-        if worker {
-            assert!(result.contains("state=preparing"), "{result}");
-            let source = fixture
-                .service
-                .take_manual_compaction_preparations()
-                .pop()
-                .unwrap();
-            let captured = source.execute_source();
-            fixture
-                .service
-                .complete_manual_compaction_preparation(&source, captured)
-                .unwrap();
-            assert!(fixture.service.take_manual_compaction_requests().is_empty());
-        } else {
-            // The leading exact member makes all later raw source mandatory;
-            // its size determines the diagnostic, never prefix eligibility.
-            assert!(result.contains(reason), "{result}");
-        }
-        assert!(!fixture.service.agent_is_compacting("%1"));
+        // Candidate sizing includes the next request prompt, not just history.
+        assert_eq!(candidate.chronology().len(), 3);
+        assert_eq!(candidate.chronology()[1], original[0]);
+        assert!(!candidate.chronology().contains(&original[1]));
+        assert_eq!(
+            candidate.chronology()[2].block().content,
+            "Continue after conversation compaction."
+        );
+        assert_eq!(
+            candidate.chronology()[0].block().content,
+            "closed fact summary"
+        );
+        let unchanged = fixture
+            .service
+            .runtime_agent_history_epoch_context("%1")
+            .unwrap()
+            .replay_owner()
+            .unwrap()
+            .unwrap();
+        assert_eq!(unchanged.context().chronology(), original);
+        assert!(fixture.service.pending_agent_provider_tasks().is_empty());
+        fixture.publish("closed fact summary");
         assert!(fixture.service.pending_agent_compaction_tasks().is_empty());
         assert!(fixture.service.pending_agent_provider_tasks().is_empty());
         assert!(
@@ -160,9 +151,10 @@ fn runtime_manual_compaction_candidate_preserves_leading_exact_reference() {
         assert!(fixture.service.agent_turn_ledger().turns().is_empty());
         let context = fixture
             .service
-            .agent_context_for_pane_prompt("%1", "next task", 100)
+            .agent_context_for_pane_prompt("%1", "Continue after conversation compaction.", 100)
             .unwrap();
-        assert_eq!(&context.chronology()[..original.len()], original);
+        assert_eq!(context.chronology()[1], original[0]);
+        assert_eq!(context.blocks(), candidate.blocks());
         assert!(
             fixture
                 .store

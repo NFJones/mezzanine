@@ -324,7 +324,7 @@ fn mcp_grants_checkpoint_v1_import_and_v2_required_denials_are_checked() {
         .publish_compaction(frozen, ReplayHeadPublication::Summary("head".into()))
         .unwrap();
     let value = serde_json::to_value(source.checkpoint().unwrap()).unwrap();
-    assert_eq!(value["version"], 4);
+    assert_eq!(value["version"], 5);
     assert_eq!(value["retired_mcp_retrievals"].as_array().unwrap().len(), 1);
     let restore = |value| {
         ReplayEpochContext::from_checkpoint(

@@ -10938,23 +10938,27 @@ one optional typed summary head and explicit current raw membership. A raw
 occurrence's birth revision MUST NOT determine membership in a later epoch.
 Summary identity, committed replay revision, provider-cache identity, logical
 compaction operation and worker dispatch generation MUST remain distinct.
-The foundation MUST freeze the current head, eligible closed prefix and arrival
-frontier, and publish one new head plus exact retained raw tail and post-frontier
-arrivals. It MUST NOT expand a parent summary back into covered raw source or
-skip protected prefix events to gather later ranges. Equal text MUST retain
-separate original occurrence identities. A summary's chronological anchor is an
-ordering slot, not a claim to the original identity of covered source.
+The foundation MUST freeze the current head, explicitly selected whole closed
+execution units and arrival frontier, and publish one new reference head plus
+the exact ordered complement of selected raw occurrences and post-frontier
+arrivals. Protected instructions, pending peer/native groups and unrecoverable
+source MUST remain exact, but MUST NOT block independent completed units before
+or after them. Selection MUST NOT split an overlapping ownership span. Equal
+text MUST retain separate original occurrence identities. The summary head is
+a reference snapshot of selected history, not a claim that every earlier raw
+occurrence was consumed. Its ordering slot MUST precede retained raw source
+without changing retained sequences, records, authorship or lifecycle.
 
-On a first task with no eligible prefix before its protected instruction, closed
-execution groups after that instruction MUST remain exact raw source. Observed
-input pressure MUST NOT skip the instruction, manufacture a turn-local summary
-or acknowledge an ordinary append or replay publication. Eligibility MUST be
-checked before local summary-sizing estimates: an exhausted estimated allowance
-MUST NOT fail an accepted execution when there is no eligible prefix. An ordinary
-continuation MAY proceed with the unchanged source. If the provider rejects the
-complete request and no eligible prefix exists, recovery MUST settle the failure
-without retrying the same request as compactor work or replaying actions. Absence
-of an ordinary archive does not relax these protection or acknowledgment rules.
+A first task MUST be able to compact completed execution groups after its exact
+active instruction without retiring that instruction or manufacturing another
+replay authority. Observed input pressure MUST NOT acknowledge an ordinary
+append or replay publication. An empty eligible selection MUST report no work
+before local summary-sizing estimates can fail an already accepted execution.
+An ordinary continuation MAY proceed with unchanged source. If the provider
+rejects the complete request and no eligible source exists, recovery MUST settle
+the affected request without retrying identical compactor work or replaying
+actions. Absence of an ordinary archive does not relax source backing,
+protection or publication acknowledgment requirements.
 
 The pure replay owner exposes a versioned, explicitly validated checkpoint of
 the current head, raw membership, original accounting, lifecycle witnesses and
@@ -11032,7 +11036,7 @@ and frontier are unchanged. Retired handles and completed-source proofs MUST NOT
 close or verify the renewed interval. Repeated retention of a still-pending
 interval MUST remain idempotent. Cold checkpoints MUST mint fresh pending
 allocations rather than serializing or reconstructing these live tokens.
-Nested replay checkpoints MUST write version four, retaining version-three
+Nested replay checkpoints MUST write version five, retaining version-three
 descriptive execution intervals for retained groups. Each actual new interval
 has a fresh UUID and a checked, increasing per-group generation, independent of event, epoch and
 dispatch numbers. This metadata MUST remain distinct from the live allocation:
@@ -11056,6 +11060,15 @@ history and existing restrictive lifecycle state without inventing handled-sourc
 facts; a new publication records them through the same canonical owner.
 Payload externalization, NoStore continuation, restore, resume and fork MUST
 preserve this metadata independently of live allocation handles.
+Version five additionally records original retained handled occurrence IDs and
+their cached rendered fingerprints, bounded by the publication's retained raw
+source. Automatic admission MUST require a currently eligible occurrence that
+is new or revised, not merely an aggregate change caused by losing eligibility.
+Protected group extension alone MUST NOT rearm already handled source. Genuine
+version-four metadata remains decodable and re-encodes without this new field;
+its equal aggregate signature still suppresses repeated work, while uncertain
+changed source MAY rearm once before an actual publication records the stronger
+evidence. Older checkpoints MUST NOT claim version-five member evidence.
 Passive imported source extending a closed group MUST retain the last known
 interval only as a provisional lower bound and allocate fresh live protection.
 It MUST NOT invent the original producer's renewal UUID. This provisional state
@@ -11400,8 +11413,23 @@ optional heads.
 
 An omission receipt MUST preserve the exact ordered complement of its covered
 current raw occurrences, including mandatory groups outside the optional suffix
-and post-frontier arrivals. Summary receipts MUST retain their closed-prefix and
-ordering-anchor checks. A head-only transition MAY intentionally remove the
+and post-frontier arrivals. Summary receipts through version twelve MUST retain
+their original closed-prefix and ordering-anchor checks. Version thirteen MUST
+qualify sparse whole-unit summary coverage around retained exact islands using
+the same source receipts, escrow, mutation lease and expected-parent CAS. It
+MUST bind a nonempty summary policy/head, ordered unique covered occurrences,
+the exact retained raw complement and unchanged arrival reservation. A new head
+MUST retain the first removed source slot when that slot is first in chronology;
+otherwise it MUST use the positive slot immediately before the first retained
+raw event. It MUST NOT resequence retained source. Existing prefix receipts and
+source-preserving roots MUST keep their original encodings/digests; no eager
+rewrite or config migration is required. Explicit raw membership remains on the
+same checkpoint; version five adds only inert handled occurrence evidence. Automatic admission
+MUST fingerprint all eligible whole units, including those after exact islands;
+new completed work or genuine retirement MAY rearm it, while unchanged handled
+source or protected arrivals alone MUST NOT. Post-freeze arrivals MUST NOT be
+recorded as handled by the earlier publication.
+A head-only transition MAY intentionally remove the
 previous summary without covering raw members; otherwise a publication MUST
 make actual source progress. A headless parent MUST still match its exact
 committed CAS identity; absence MUST NOT be confused with an unpublished source.
@@ -11949,12 +11977,12 @@ Manual, observed-input and provider-limit adapters MUST use the same configured
 raw-tail selection contract. Token retention rounds upward and complete
 execution groups remain indivisible. Once compaction is requested, fitting the
 optional tail reservation alone MUST NOT suppress an otherwise eligible oldest
-closed prefix unit; this progress rule MUST be shared by every trigger. Optional
+closed unit; this progress rule MUST be shared by every trigger. Optional
 closed units MUST fit whole within the raw reservation; an oversized newest
-closed unit belongs in the selected prefix. Exact/protected source MUST remain
+closed unit belongs in the selected source. Exact/protected source MUST remain
 raw even when its mandatory tail exceeds that reservation. Explicitly pending native groups and peer
 handoffs, active task instructions and unrecoverable evidence MUST retain their
-exact source; an empty or irreducible prefix MUST report no work without a fake
+exact source; an empty or irreducible selection MUST report no work without a fake
 model dispatch. Task instructions become historical only through explicit
 completion or supersession of their exact owner. Current system, developer,
 project and policy slots remain outside lossy history. Completion MUST preserve
@@ -15877,9 +15905,10 @@ The baseline command capabilities are:
   `no-durable-transcript`, `no-eligible-closed-prefix` and
   `irreducible-exact-retained-tail`. Forced empty-prefix selection MUST NOT cite
   retained-budget fit as its eligibility cause in summary mode. For summary
-  selection, leading exact/open groups MUST
-  remain barriers; later completed groups MUST NOT be selectively skipped into
-  a summary prefix. Raw omission instead protects whole mandatory groups around
+  selection, exact/open groups MUST remain intact retained islands; independent
+  later completed units MAY enter the same canonical reference summary. The
+  `no-eligible-closed-prefix` code remains a compatibility spelling for no
+  eligible whole closed source, not a leading-barrier rule. Raw omission protects whole mandatory groups around
   its one optional suffix, without backfill or inferring task completion.
   Forced and final summary selection MUST share the narrow eligibility of
   canonical closed source. An MCP epoch marker alone has no model-visible

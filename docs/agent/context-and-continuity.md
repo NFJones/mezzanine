@@ -376,9 +376,11 @@ chunks/retries. Completed or cancelled work no longer appears active.
 When `/compact` has no model work, feedback names the eligibility reason: no
 logical entries, no durable source, no eligible closed prefix, or an irreducible
 exact/open retained tail. A fitting budget alone is not why explicit compaction
-skips. An early exact/open group blocks later completed work from entering a
-contiguous prefix; Mez does not silently skip that barrier. Dedicated intact MCP
-epoch metadata uses the same narrow eligibility in forced and final selection.
+skips. Exact/open groups remain intact, but independent completed units on
+either side can enter the same canonical reference summary. Retained source
+keeps its original bytes, identities and relative order. The historical
+`no-eligible-closed-prefix` reason code now means there is no eligible whole
+closed source. Dedicated intact MCP epoch metadata cannot create model work.
 Content-free `manual_compaction_no_work` events and feedback reason codes identify
 these outcomes without copying source text or claiming a summary completed.
 Preparing may discover a skip, but it then clears active work without queuing a
@@ -463,14 +465,22 @@ count as calls without increasing logical dependency depth. Known expense counts
 once without becoming an ordinary execution sample. Changed source, stale
 epochs and corrupt required history remain integrity failures; missing history
 is reported rather than silently omitted.
-For a canonical first task, its active user instruction protects the prefix even
-when later execution groups have completed. Input pressure does not permit
-selective summaries after that instruction. Eligibility is checked before local
-summary-sizing estimates; an exhausted estimate does not fail an already
-accepted execution with no eligible prefix. An ordinary continuation keeps the
-exact source; a provider rejection with no eligible prefix settles as
-a failure without another model request or action replay. Having no ordinary
-archive yet grants no permission to drop the instruction or acknowledge pending
+For a canonical first task, its active user instruction remains exact while
+completed execution groups after it can be compacted. Exact steering, pending
+peer handoffs and unfinished native groups remain retained islands, never
+summary input or implicitly completed work. The rolling head is a reference
+snapshot with explicit selected occurrence coverage, not an assertion that a
+contiguous prefix disappeared. Sparse summaries use version-thirteen receipts;
+existing prefix receipts retain their original validation and digests. Nested
+checkpoint version five retains exact membership and records retained handled
+occurrence revisions. This distinguishes new eligible work from eligibility
+lost when an unfinished group's span grows. Original version-four checkpoints
+remain readable without inventing per-occurrence handling evidence.
+An empty eligible selection is checked before summary sizing; no-work does not
+fail already accepted execution. An ordinary continuation keeps exact source;
+a provider rejection with no eligible source settles the affected request
+without another identical compactor request or action replay. Having no ordinary
+archive yet grants no permission to drop instructions or acknowledge pending
 transcript writes. Unclaimed auxiliary results cannot install a summary.
 Provider-rejection recovery, observed-input recovery and manual compaction use
 the same canonical source and one-head publisher. Valid uncommitted source is
@@ -493,7 +503,8 @@ compaction certificate or private replacement witness.
 An unchanged published head and closed source cannot start another automatic
 compactor merely because its continuation is rejected again or a new response
 reports high input. Repeated rejection reports context unavailable. Fresh
-eligible history, genuine task completion or changed relevant model/input
+eligible history (including completed groups after an active instruction),
+genuine task completion or changed relevant model/input
 configuration can rearm recovery; new protected steering alone cannot. An
 explicit new `/compact` still uses any eligible old tail through the same
 planner. It cannot summarize protected or unfinished work.

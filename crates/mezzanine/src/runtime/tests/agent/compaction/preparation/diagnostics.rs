@@ -1,9 +1,9 @@
-//! Manual compaction no-work explanation and narrow closed-prefix eligibility.
+//! Manual compaction no-work explanation and whole closed-unit eligibility.
 //!
 //! Disposable durable rows exercise the real command selector without a model
 //! call. No-work must preserve archive/epoch and queue no provider; fitting
 //! eligible groups still queue the established model compactor. Exact/open
-//! leading groups remain barriers, not selectively skipped summarization input.
+//! groups remain intact islands outside selected summarization input.
 
 use super::*;
 
@@ -127,10 +127,8 @@ fn setup(
     (service, primary, store)
 }
 
-/// Forced manual selection already tries to expose a prefix even under budget.
-/// Fitting exact/open history is therefore not a budget no-op: feedback must
-/// explain that no eligible contiguous closed prefix exists. A leading barrier
-/// also prevents later completed groups from being skipped into summary input.
+/// Manual no-work requires genuinely protected-only source. A leading exact
+/// instruction does not veto independent later completed execution groups.
 #[test]
 fn runtime_manual_compaction_no_work_reports_prefix_eligibility() {
     for later_complete in [false, true] {
@@ -143,6 +141,17 @@ fn runtime_manual_compaction_no_work_reports_prefix_eligibility() {
         let response = service
             .execute_agent_shell_command(&primary, "/compact")
             .unwrap();
+        if later_complete {
+            assert!(response.contains("state=queued"), "{response}");
+            let task = service
+                .pending_agent_compaction_task_for_tests("%1")
+                .unwrap();
+            let source = crate::test_support::compaction_source::rendered_source(task).unwrap();
+            assert!(source.contains("completed later work"));
+            assert!(!source.contains("retain exact unfinished instruction"));
+            assert_eq!(store.inspect("diagnostic-compact").unwrap(), rows);
+            continue;
+        }
         assert!(
             response.contains("reason=no-eligible-closed-prefix"),
             "{response}"

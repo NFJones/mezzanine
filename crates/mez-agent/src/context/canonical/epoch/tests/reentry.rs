@@ -4,6 +4,48 @@
 
 use super::*;
 
+/// Extending pending A around old handled D removes D's eligibility; it does
+/// not make independently retained C fresh. Real closure still rearms work.
+#[test]
+fn automatic_reentry_eligibility_loss_from_protected_arrivals_is_not_fresh() {
+    let mut source = owner();
+    source.append_fact("selected", "source S").unwrap();
+    source.append_fact("retained", "handled source C").unwrap();
+    let pending = ContextExecutionGroupId::new("pending spanning A").unwrap();
+    source
+        .append_execution_events([ContextConversationAppend::assistant(
+            "pending",
+            "unfinished A",
+            pending.clone(),
+        )])
+        .unwrap();
+    source.append_fact("retained", "handled source D").unwrap();
+    source
+        .publish_compaction(
+            selected(&source),
+            ReplayHeadPublication::Summary("head".into()),
+        )
+        .unwrap();
+    assert!(!source.automatic_compaction_is_fresh(policy()).unwrap());
+    source
+        .append_execution_events([ContextConversationAppend::assistant(
+            "pending",
+            "later unfinished A",
+            pending.clone(),
+        )])
+        .unwrap();
+    assert!(!source.automatic_compaction_is_fresh(policy()).unwrap());
+    let cold = ReplayEpochContext::from_checkpoint(
+        source.conversation_id().clone(),
+        source.checkpoint().unwrap(),
+        AgentContext::empty(),
+    )
+    .unwrap();
+    assert!(!cold.automatic_compaction_is_fresh(policy()).unwrap());
+    finish_group(&mut source, &pending).unwrap();
+    assert!(source.automatic_compaction_is_fresh(policy()).unwrap());
+}
+
 fn policy() -> ReplayTailPolicy {
     ReplayTailPolicy::new(1_000, 100).unwrap()
 }
@@ -134,7 +176,7 @@ fn automatic_reentry_checkpoint_version_four_preserves_head_binding_and_legacy_u
     let source = retained();
     let checkpoint = source.checkpoint().unwrap();
     let value = serde_json::to_value(&checkpoint).unwrap();
-    assert_eq!(value["version"], 4);
+    assert_eq!(value["version"], 5);
     assert!(value["compaction_reentry"].is_object());
     let mapped = checkpoint
         .try_map_payloads(|_, body| Ok::<_, ()>(body))
@@ -178,6 +220,22 @@ fn automatic_reentry_checkpoint_version_four_preserves_head_binding_and_legacy_u
             "legacy data cannot manufacture handled-source facts"
         );
     }
+    // Genuine v4 data omits per-occurrence evidence and re-encodes exactly.
+    let mut legacy = value.clone();
+    legacy["version"] = 4.into();
+    legacy["compaction_reentry"]["input"]
+        .as_object_mut()
+        .unwrap()
+        .remove("handled_members");
+    let decoded: ReplayEpochCheckpoint = serde_json::from_value(legacy.clone()).unwrap();
+    assert_eq!(serde_json::to_value(&decoded).unwrap(), legacy);
+    let restored = ReplayEpochContext::from_checkpoint(
+        source.conversation_id().clone(),
+        decoded,
+        AgentContext::empty(),
+    )
+    .unwrap();
+    assert!(!restored.automatic_compaction_is_fresh(policy()).unwrap());
     for (field, replacement) in [
         (
             "head",
@@ -197,7 +255,7 @@ fn automatic_reentry_checkpoint_version_four_preserves_head_binding_and_legacy_u
         );
     }
     let mut wrong_version = value;
-    wrong_version["version"] = 3.into();
+    wrong_version["version"] = 4.into();
     assert!(
         ReplayEpochContext::from_checkpoint(
             source.conversation_id().clone(),

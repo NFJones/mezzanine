@@ -10,6 +10,7 @@ mod execution_state;
 mod mcp_grants;
 mod observations;
 mod prefix_import;
+mod protected_selection;
 mod publication;
 mod raw_tail;
 mod reentry;
@@ -426,10 +427,11 @@ fn native_groups_are_atomic_and_late_results_reject_frozen_publication() {
         .append_fact("later source", "not proof of native closure")
         .unwrap();
     let blocked = plan(&owner);
-    assert_eq!(blocked.summary_input().len(), 1);
-    assert_eq!(blocked.retained_tail()[0].sequence(), ids[0]);
-    assert_eq!(blocked.retained_tail()[1].sequence(), ids[1]);
-    assert_eq!(blocked.retained_tail()[1].provider_owner(), Some(&provider));
+    assert_eq!(blocked.summary_input().len(), 2);
+    let retained = blocked.retained_raw_events().collect::<Vec<_>>();
+    assert_eq!(retained[0].sequence(), ids[0]);
+    assert_eq!(retained[1].sequence(), ids[1]);
+    assert_eq!(retained[1].provider_owner(), Some(&provider));
     finish_group(&mut owner, &group).unwrap();
     let frozen = plan(&owner);
     let late_call = ProviderTranscriptEvent::validated_openai_chat_completions_assistant_tool_call(
@@ -496,9 +498,8 @@ fn native_groups_are_atomic_and_late_results_reject_frozen_publication() {
     assert_eq!(owner.context().chronology().len(), 1);
 }
 
-/// Pending peer and current instruction protections cannot be skipped to select
-/// a later eligible range. Explicit release changes retention eligibility only,
-/// not peer trust, delivery acknowledgment or native/provider action state.
+/// Pending peer source remains exact while independent later work is selected.
+/// Explicit release changes eligibility only, not peer trust or acknowledgment.
 #[test]
 fn pending_peer_prefix_blocks_later_source_until_exact_handoff_release() {
     let mut owner = owner();
@@ -508,12 +509,13 @@ fn pending_peer_prefix_blocks_later_source_until_exact_handoff_release() {
     owner
         .append_fact("later", "eligible source after pending peer")
         .unwrap();
+    let selected = plan(&owner);
+    assert_eq!(selected.summary_input().len(), 1);
     assert_eq!(
-        owner
-            .prepare_compaction(ReplayTailPolicy::new(1000, 0).unwrap())
-            .unwrap(),
-        ReplayCompactionPreparation::NoWork(ReplayCompactionNoWork::ProtectedPrefix)
+        selected.retained_raw_events().next().unwrap().sequence(),
+        peer
     );
+    assert!(owner.context().peer_message_is_pending(peer));
     assert!(owner.release_peer(peer).unwrap());
     assert!(!owner.release_peer(peer).unwrap());
     let frozen = plan(&owner);
@@ -606,16 +608,17 @@ fn latest_slots_and_arrivals_preserve_source_and_cache_identity() {
     assert_eq!(owner.context().stable_slots(), slots.stable_slots());
     assert_eq!(owner.context().metadata(), &metadata);
     assert_eq!(owner.members().last().unwrap().origin(), arrival);
-    let frozen = match owner
-        .prepare_compaction(ReplayTailPolicy::new(1000, 0).unwrap())
-        .unwrap()
-    {
-        ReplayCompactionPreparation::NoWork(ReplayCompactionNoWork::ProtectedPrefix) => {
-            owner.complete_instruction_task(&task).unwrap();
-            plan(&owner)
-        }
-        other => panic!("active task should be first raw barrier: {other:?}"),
-    };
+    let frozen = plan(&owner);
+    assert_eq!(frozen.removed_raw_members().count(), 1);
+    assert!(
+        frozen
+            .retained_raw_events()
+            .any(|event| event.retention() == ContextRetention::Exact)
+    );
+    // A successor task still requires real retirement of the original task.
+    // Freeze after retirement so this test isolates post-frontier arrivals.
+    owner.complete_instruction_task(&task).unwrap();
+    let frozen = plan(&owner);
     // Explicitly adding a new active task is an allowed arrival, not a rewrite.
     let next = owner.begin_instruction_task().unwrap();
     owner
@@ -1265,7 +1268,7 @@ fn oversized_newest_closed_unit_is_selected_instead_of_overretained() {
 
 /// Task completion does not manufacture archive/recovery evidence for imported
 /// source. Unrecoverable original instructions stay raw even after their owner
-/// completes, and later eligible facts cannot be selected around that barrier.
+/// completes; independent later facts remain eligible without replacing them.
 #[test]
 fn explicit_completion_does_not_grant_missing_source_recoverability() {
     let context = AgentContext::new(vec![ContextBlock::user_event(
@@ -1290,10 +1293,10 @@ fn explicit_completion_does_not_grant_missing_source_recoverability() {
         ContextRetention::Summarizable
     );
     assert!(!owner.context().chronology()[0].recoverable_for_compaction());
+    let selected = plan(&owner);
+    assert_eq!(selected.removed_raw_members().count(), 1);
     assert_eq!(
-        owner
-            .prepare_compaction(ReplayTailPolicy::new(1000, 0).unwrap())
-            .unwrap(),
-        ReplayCompactionPreparation::NoWork(ReplayCompactionNoWork::ProtectedPrefix)
+        selected.retained_raw_events().next().unwrap().sequence(),
+        original
     );
 }

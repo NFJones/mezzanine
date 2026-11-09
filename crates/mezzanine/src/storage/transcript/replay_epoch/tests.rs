@@ -14,6 +14,7 @@ mod initial;
 mod interrupted;
 mod memory;
 mod native_edits;
+mod protected_selection;
 mod raw_edits;
 mod raw_revision;
 mod raw_tail;
@@ -1196,7 +1197,7 @@ fn version_five_source_upgrades_through_qualified_publication() {
     assert!(mez_agent::invoked_mcp_tools_for_context(current.context(), &summary).is_empty());
     current.append_fact("new", "new exact source").unwrap();
     let next = proposal(&fixture, &current, Some(parent), "current version head");
-    assert_eq!(next.envelope.manifest.version, MODE_MANIFEST_VERSION);
+    assert_eq!(next.envelope.manifest.version, ISLAND_MANIFEST_VERSION);
     assert!(next.envelope.manifest.archive_cut.is_some());
     fixture.store.publish_replay_epoch(&next).unwrap();
     assert_eq!(fixture.load().0, next.identity());

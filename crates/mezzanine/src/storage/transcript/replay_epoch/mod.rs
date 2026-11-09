@@ -1,9 +1,9 @@
 //! Immutable single-head source backing and expected-parent publication.
 //!
 //! The existing conversation mutation lease serializes this writer with archive,
-//! editing and persistence owners. New publications and raw revisions use
-//! version twelve of the same sidecar, binding an explicit head policy and
-//! optional summary. Headed versions four through eleven retain their original
+//! editing and persistence owners. Prefix publications and raw revisions use
+//! version twelve; sparse summaries use version thirteen of the same sidecar.
+//! Both bind an explicit head policy. Headed versions four through eleven retain their original
 //! encodings and validation; absence cannot reinterpret a damaged old summary.
 //! No format is a parallel selectable history. Payloads are private,
 //! content-addressed immutable files; retained bytes are reused across epochs.
@@ -86,6 +86,9 @@ const MANIFEST_LIMIT: u64 = 16 * 1024 * 1024;
 const SOURCE_LIMIT: usize = 64 * 1024 * 1024;
 /// Explicit policy-qualified head absence on the same authority and receipts.
 const MODE_MANIFEST_VERSION: u32 = 12;
+/// Summary receipts may cover completed units around exact retained islands.
+/// Older versions keep their original contiguous-prefix validation and digests.
+const ISLAND_MANIFEST_VERSION: u32 = 13;
 
 /// Exact committed parent, distinct from attempt generations and cache lineage.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -453,7 +456,14 @@ impl ReplayEpochPublication {
             .removed_events()
             .filter(|event| !mez_agent::context_block_is_compaction_summary(event.block()))
             .map(|event| event.record().occurrence_id())
-            .collect();
+            .collect::<Vec<_>>();
+        let island_summary = plan.requires_model_summary()
+            && !source
+                .members()
+                .iter()
+                .take(covered.len())
+                .map(|member| member.occurrence_id())
+                .eq(covered.iter().copied());
         let frontier = plan.arrival_frontier().map(|sequence| sequence.get());
         let prepared = source
             .prepare_compaction_publication(plan, summary)
@@ -468,7 +478,11 @@ impl ReplayEpochPublication {
             &mut payloads,
         )?;
         let manifest = Manifest {
-            version: MODE_MANIFEST_VERSION,
+            version: if island_summary {
+                ISLAND_MANIFEST_VERSION
+            } else {
+                MODE_MANIFEST_VERSION
+            },
             conversation_id: conversation_id.to_owned(),
             epoch_revision: candidate.revision().get(),
             revision: expected_parent
@@ -575,6 +589,22 @@ impl ReplayEpochPublication {
             .collect::<Vec<_>>();
         let summary = envelope.manifest.committed_head_policy() == ReplayHeadPolicy::Summary;
         let candidate_offset = usize::from(candidate.head().is_some());
+        // Legacy heads inherit the first source ordering slot. Sparse summary
+        // snapshots preserve that slot when it is removed, otherwise reserve
+        // one immediately before the first unchanged raw occurrence.
+        let expected_anchor = source.context().chronology().first().and_then(|event| {
+            if source.head().is_some() || covered_ids.contains(&event.record().occurrence_id()) {
+                Some(event.sequence().get())
+            } else if envelope.manifest.version == ISLAND_MANIFEST_VERSION {
+                event
+                    .sequence()
+                    .get()
+                    .checked_sub(1)
+                    .filter(|value| *value > 0)
+            } else {
+                None
+            }
+        });
         if source.revision().get().checked_add(1) != Some(candidate.revision().get())
             || source.head().map(|head| head.occurrence_id()) != envelope.manifest.parent_head
             || count > source.members().len()
@@ -593,46 +623,30 @@ impl ReplayEpochPublication {
                 && source.head().map(|head| head.occurrence_id()) == envelope.manifest.head
             || summary
                 && (count == 0
-                    || !source
-                        .members()
-                        .iter()
-                        .take(count)
-                        .map(|member| member.occurrence_id())
-                        .eq(covered.iter().copied()))
+                    || envelope.manifest.version < ISLAND_MANIFEST_VERSION
+                        && !source
+                            .members()
+                            .iter()
+                            .take(count)
+                            .map(|member| member.occurrence_id())
+                            .eq(covered.iter().copied()))
             || !summary && count == 0 && source.head().is_none()
             || envelope.manifest.source_checkpoint.next_event_sequence()
                 != envelope.manifest.checkpoint.next_event_sequence()
             || summary
-                && source
-                    .context()
-                    .chronology()
-                    .first()
-                    .map(|event| event.sequence())
-                    != candidate
-                        .context()
-                        .chronology()
-                        .first()
-                        .map(|event| event.sequence())
+                && (expected_anchor.is_none()
+                    || expected_anchor
+                        != candidate
+                            .context()
+                            .chronology()
+                            .first()
+                            .map(|event| event.sequence().get()))
         {
             return Err(invalid(
                 "immutable source receipt does not qualify the proposed rewrite",
             ));
         }
-        let selected_groups = selected
-            .iter()
-            .filter_map(|event| event.execution_group_id())
-            .collect::<BTreeSet<_>>();
-        if selected.iter().any(|event| {
-            event.retention() == mez_agent::ContextRetention::Exact
-                || !event.recoverable_for_compaction()
-                || source.context().peer_message_is_pending(event.sequence())
-                || event
-                    .execution_group_id()
-                    .is_some_and(|group| source.context().execution_group_is_pending(group))
-        }) || retained
-            .iter()
-            .filter_map(|event| event.execution_group_id())
-            .any(|group| selected_groups.contains(group))
+        if source.validate_compaction_selection(covered).is_err()
             || !source.context().chronology().iter().any(|event| {
                 Some(event.sequence().get()) == envelope.manifest.frozen_arrival_frontier
             })
@@ -1405,7 +1419,7 @@ impl Envelope {
             (manifest.version, manifest.head_policy, manifest.head),
             (4..=11, None, Some(_))
                 | (
-                    MODE_MANIFEST_VERSION,
+                    MODE_MANIFEST_VERSION | ISLAND_MANIFEST_VERSION,
                     Some(ReplayHeadPolicy::Summary),
                     Some(_)
                 )
@@ -1424,7 +1438,7 @@ impl Envelope {
                 manifest.source_escrow.is_some(),
                 manifest.archive_cut.is_some()
             ),
-            (4, false, false) | (5, true, false) | (6..=12, true, true)
+            (4, false, false) | (5, true, false) | (6..=13, true, true)
         ) || manifest.conversation_id != conversation_id
             || !valid_head_policy
             || manifest.version < 11 && manifest.raw_revision_origin.is_some()

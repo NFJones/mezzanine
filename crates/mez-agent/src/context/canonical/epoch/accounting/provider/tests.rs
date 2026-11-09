@@ -9,6 +9,89 @@ use crate::{
 
 type Api = ProviderApiCompatibility;
 
+/// Completed native pairs on either side of a pending native island use the
+/// same sparse selection and incremental accounting as ordinary source. Cold
+/// restoration preserves pending protection and exact wire records, not rights.
+#[test]
+fn protected_selection_native_islands_keep_projection_and_cold_source() {
+    for api in [
+        Api::OpenAiResponses,
+        Api::OpenAiChatCompletions,
+        Api::DeepSeekChatCompletions,
+    ] {
+        let mut source = owner();
+        let task = source.begin_instruction_task().unwrap();
+        source
+            .append_instruction(&task, ContextBlock::user_event("task", "exact native root"))
+            .unwrap();
+        let first = ContextExecutionGroupId::new("first native closed").unwrap();
+        source
+            .append_execution_events(pair(api, "provider", &first, "first"))
+            .unwrap();
+        close(&mut source, &first);
+        let pending = ContextExecutionGroupId::new("pending native island").unwrap();
+        let mut incomplete = pair(api, "provider", &pending, "pending");
+        incomplete.pop();
+        source.append_execution_events(incomplete).unwrap();
+        let second = ContextExecutionGroupId::new("second native closed").unwrap();
+        source
+            .append_execution_events(pair(api, "provider", &second, "second"))
+            .unwrap();
+        close(&mut source, &second);
+        source
+            .select_provider_projection(projection(api, "provider", "model"))
+            .unwrap();
+        assert_projection(&source);
+        let ReplayCompactionPreparation::Ready(plan) = source
+            .prepare_compaction(ReplayTailPolicy::new(1000, 0).unwrap())
+            .unwrap()
+        else {
+            panic!("completed native pairs must be selectable");
+        };
+        assert_eq!(plan.removed_raw_members().count(), 8);
+        let retained = plan.retained_raw_events().cloned().collect::<Vec<_>>();
+        let expected = plan.input_estimates().retained_raw_input_tokens();
+        source
+            .publish_compaction(
+                plan,
+                ReplayHeadPublication::Summary("closed native reference".into()),
+            )
+            .unwrap();
+        assert_eq!(&source.context().chronology()[1..], retained);
+        assert_eq!(
+            source
+                .provider_input_estimates()
+                .unwrap()
+                .raw_input_tokens(),
+            expected
+        );
+        assert_projection(&source);
+        let mut cold = ReplayEpochContext::from_checkpoint(
+            source.conversation_id().clone(),
+            source.checkpoint().unwrap(),
+            owner().context().clone(),
+        )
+        .unwrap();
+        cold.select_provider_projection(projection(api, "provider", "model"))
+            .unwrap();
+        assert_projection(&cold);
+        assert_eq!(
+            cold.provider_input_estimates(),
+            source.provider_input_estimates()
+        );
+        assert_eq!(cold.context().chronology(), source.context().chronology());
+        assert!(cold.context().execution_group_is_pending(&pending));
+        let before = cold.clone();
+        let frontier = cold.context().chronology().last().unwrap().sequence();
+        let fence = cold.capture_execution_owner(&pending, frontier).unwrap();
+        assert!(
+            cold.finish_execution_group(&fence).is_err(),
+            "unanswered native call cannot close"
+        );
+        assert_eq!(cold, before);
+    }
+}
+
 /// Creates only canonical fixture source with one exact stable policy slot.
 fn owner() -> ReplayEpochContext {
     ReplayEpochContext::new(

@@ -61,12 +61,10 @@ fn replay_observation_keeps_existing_execution_protection_and_cached_record() {
             .record(),
         record
     );
-    assert_eq!(
-        source
-            .prepare_compaction(ReplayTailPolicy::new(1000, 0).unwrap())
-            .unwrap(),
-        ReplayCompactionPreparation::NoWork(ReplayCompactionNoWork::ProtectedPrefix)
-    );
+    let selected = plan(&source);
+    assert_eq!(selected.summary_input()[0].record(), record);
+    assert_eq!(selected.retained_raw_events().count(), 1);
+    assert!(source.context().execution_group_is_pending(&native));
     source.finish_execution_group(&receipt).unwrap();
     let plan = plan(&source);
     assert!(

@@ -230,7 +230,8 @@ impl ReplayTailPolicy {
 pub enum ReplayCompactionNoWork {
     /// There are no raw members; a prior head alone is not new source work.
     NoRawMembers,
-    /// Exact instructions, unresolved work or unrecoverable source blocks prefix selection.
+    /// Every whole unit is protected, unresolved or unrecoverable. The variant
+    /// retains its historical spelling; a leading exact unit alone is no veto.
     ProtectedPrefix,
     /// Exact stable/protected input and fixed framing exceed model capacity.
     ProtectedInputExceedsBudget,
@@ -270,13 +271,16 @@ pub struct ReplayCompactionPlan {
 }
 
 /// Policy-specific source selection inside the same frozen owner/publication
-/// contract. Raw omission may surround exact obligations; it never publishes a
+/// contract. Either policy may surround exact obligations; it never publishes a
 /// second history or infers lifecycle completion for those retained obligations.
 #[derive(Clone, PartialEq, Eq)]
 pub(super) enum ReplayCompactionSelection {
-    Prefix {
-        members: usize,
-        events: usize,
+    Summary {
+        selected: BTreeSet<ContextBlockOccurrenceId>,
+        /// Materialized once to expose contiguous model input without including
+        /// retained exact islands. The frozen chronology remains the CAS source.
+        input: Vec<ConversationEvent>,
+        tail_start: usize,
     },
     RawTail {
         omitted: BTreeSet<ContextBlockOccurrenceId>,
@@ -303,11 +307,11 @@ impl ReplayCompactionPlan {
     pub fn arrival_frontier(&self) -> Option<ContextEventSequence> {
         self.frozen.last().map(ConversationEvent::sequence)
     }
-    /// Returns the sole prior head plus selected summary prefix, never covered
+    /// Returns the sole prior head plus selected closed source, never covered
     /// ancestors. Intentional omission returns no model input.
     pub fn summary_input(&self) -> &[ConversationEvent] {
         match self.selection.as_ref() {
-            ReplayCompactionSelection::Prefix { events, .. } => &self.frozen[..*events],
+            ReplayCompactionSelection::Summary { input, .. } => input,
             ReplayCompactionSelection::RawTail { .. } => &[],
         }
     }
@@ -333,11 +337,11 @@ impl ReplayCompactionPlan {
         );
         units
     }
-    /// Returns the newest contiguous retained suffix. Summary-free selection may
+    /// Returns the newest contiguous retained suffix. Either selection may
     /// also retain earlier protected units; `retained_raw_events` includes those.
     pub fn retained_tail(&self) -> &[ConversationEvent] {
         let start = match self.selection.as_ref() {
-            ReplayCompactionSelection::Prefix { events, .. } => *events,
+            ReplayCompactionSelection::Summary { tail_start, .. } => *tail_start,
             ReplayCompactionSelection::RawTail { tail_start, .. } => *tail_start,
         };
         &self.frozen[start..]
@@ -388,7 +392,7 @@ impl ReplayCompactionPlan {
     /// None identifies summary work, not an unknown number of provider calls.
     pub fn retained_optional_units(&self) -> Option<usize> {
         match self.selection.as_ref() {
-            ReplayCompactionSelection::Prefix { .. } => None,
+            ReplayCompactionSelection::Summary { .. } => None,
             ReplayCompactionSelection::RawTail {
                 retained_optional_units,
                 ..
@@ -399,7 +403,13 @@ impl ReplayCompactionPlan {
     /// Checks a frozen event position; post-frontier arrivals are never selected.
     pub(super) fn removes_event(&self, index: usize) -> bool {
         match self.selection.as_ref() {
-            ReplayCompactionSelection::Prefix { events, .. } => index < *events,
+            ReplayCompactionSelection::Summary { selected, .. } => {
+                self.head.is_some() && index == 0
+                    || self
+                        .frozen
+                        .get(index)
+                        .is_some_and(|event| selected.contains(&event.record().occurrence_id()))
+            }
             ReplayCompactionSelection::RawTail { omitted, .. } => {
                 self.head.is_some() && index == 0
                     || self

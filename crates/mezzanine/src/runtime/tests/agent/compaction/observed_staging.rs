@@ -166,11 +166,21 @@ max_input_tokens=40000
             .clone();
         assert!(original.replay_source.is_some());
         let conversation = &original.conversation_id;
-        let owner = mez_agent::ReplayEpochContext::from_owned_context(
+        let mut owner = mez_agent::ReplayEpochContext::from_owned_context(
             mez_agent::ReplayConversationId::new(conversation).unwrap(),
             service.agent_turn_contexts()[&turn].clone(),
         )
         .unwrap();
+        owner
+            .select_provider_projection(
+                mez_agent::ReplayProviderProjection::new(
+                    mez_agent::ProviderApiCompatibility::OpenAiResponses,
+                    "runtime-batch",
+                    "test",
+                )
+                .unwrap(),
+            )
+            .unwrap();
         let plan = match owner
             .prepare_compaction(mez_agent::ReplayTailPolicy::new(40_000, retention).unwrap())
             .unwrap()
@@ -179,7 +189,7 @@ max_input_tokens=40000
             other => panic!("actual completed source must be eligible: {other:?}"),
         };
         let selected = plan.summary_input().to_vec();
-        let tail = plan.retained_tail().to_vec();
+        let tail = plan.retained_raw_events().cloned().collect::<Vec<_>>();
         assert!(!selected.is_empty());
         assert!(!selected.iter().any(
             |event| event.block().content.contains("CURRENT_USER_PROMPT")
@@ -676,7 +686,9 @@ fn runtime_compaction_accepts_nonreducing_active_final_once() {
 /// may deduplicate them by source kind, label or content.
 #[test]
 fn runtime_observed_compaction_stages_repeated_content_by_group_identity() {
-    let mut fixture = StagedFixture::new(&vec!["REPEATED_RANGE_SOURCE ".repeat(80); 2], 1);
+    // The newest optional native group may fit retention. Three completed
+    // groups leave two equal but distinct originals in selected model input.
+    let mut fixture = StagedFixture::new(&vec!["REPEATED_RANGE_SOURCE ".repeat(80); 3], 1);
     let assistants = fixture
         .selected
         .iter()

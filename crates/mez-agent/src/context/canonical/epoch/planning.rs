@@ -1,4 +1,4 @@
-//! Shared frozen-prefix/raw-tail policy. No trigger-specific retry ladder or
+//! Shared frozen-selection/raw-tail policy. No trigger-specific retry ladder or
 //! advisory summary-size target participates in source eligibility.
 
 use super::*;
@@ -51,14 +51,15 @@ impl ReplayEpochContext {
 
     /// Freezes one source selection under the captured head policy, or the
     /// committed policy when no explicit target was supplied. Summary selection
-    /// uses a closed prefix and raw tail; exact instructions, pending peer/native
-    /// groups and unrecoverable evidence push that prefix boundary earlier.
+    /// selects whole closed units around retained exact instructions, pending
+    /// peer/native groups and unrecoverable evidence. Protection never implies
+    /// completion and never prevents unrelated completed units being selected.
     /// Intentional omission retains mandatory whole units independently of one
     /// optional suffix, after reserving stable/protected input and fixed framing.
     /// A selected provider view supplies cached visibility-aware costs and is
     /// frozen with the plan; ordinary framing is used when no view is selected.
     /// Empty/irreducible source returns NoWork without creating model activity.
-    /// Only summary policy forces an oldest closed prefix unit when the tail
+    /// Only summary policy forces an oldest closed unit when the tail
     /// reservation fits everything. Unchanged raw retention is explicit NoWork.
     pub fn prepare_compaction(
         &self,
@@ -80,63 +81,71 @@ impl ReplayEpochContext {
         }
         let offset = usize::from(self.head.is_some());
         let raw = &self.context.chronology()[offset..];
-        let units = execution_units(raw);
-        let protected = self.closed_prefix_unit_count(raw, &units);
-        let mut unit_totals = Vec::with_capacity(units.len() + 1);
-        unit_totals.push(0usize);
-        for unit in &units {
+        let mut units = Vec::new();
+        let mut raw_total = 0usize;
+        let mut selected = BTreeSet::new();
+        for unit in execution_units(raw) {
             let cost = raw[unit.clone()].iter().try_fold(0usize, |sum, event| {
                 sum.checked_add(self.planning_input_tokens(event)?)
                     .ok_or_else(|| AgentContextError::new("replay unit estimate exhausted"))
             })?;
-            let total = unit_totals
-                .last()
-                .copied()
-                .unwrap_or(0)
+            raw_total = raw_total
                 .checked_add(cost)
                 .ok_or_else(|| AgentContextError::new("replay source estimate exhausted"))?;
-            unit_totals.push(total);
+            let eligible = raw[unit.clone()]
+                .iter()
+                .all(|event| self.event_is_replaceable(event));
+            if eligible {
+                selected.extend(
+                    raw[unit.clone()]
+                        .iter()
+                        .map(|event| event.record().occurrence_id()),
+                );
+            }
+            units.push((unit, cost, eligible));
         }
         let estimates = self
             .provider_input_estimates()
             .unwrap_or(self.input_estimates());
-        if unit_totals.last().copied() != Some(estimates.raw_input_tokens()) {
+        if raw_total != estimates.raw_input_tokens() {
             return Err(AgentContextError::new("replay source aggregate drifted"));
         }
+        let Some(oldest) = units.iter().position(|(_, _, eligible)| *eligible) else {
+            return Ok(ReplayCompactionPreparation::NoWork(
+                ReplayCompactionNoWork::ProtectedPrefix,
+            ));
+        };
         let target = policy.retained_raw_tokens();
-        let mut selected = units.len();
         let mut retained = 0usize;
-        for index in (0..units.len()).rev() {
-            let cost = unit_totals[index + 1]
-                .checked_sub(unit_totals[index])
-                .ok_or_else(|| AgentContextError::new("replay unit estimate drifted"))?;
+        for (unit, cost, eligible) in units.iter().rev() {
+            if !eligible {
+                continue;
+            }
             let total = retained
-                .checked_add(cost)
+                .checked_add(*cost)
                 .ok_or_else(|| AgentContextError::new("replay retained estimate exhausted"))?;
             if total > target {
                 break;
             }
             retained = total;
-            selected = index;
-        }
-        // Protected source is mandatory raw tail, even if it exceeds optional
-        // retention. Never skip its unit to gather later otherwise eligible rows.
-        selected = selected.min(protected);
-        if selected == 0 {
-            if protected == 0 {
-                return Ok(ReplayCompactionPreparation::NoWork(
-                    ReplayCompactionNoWork::ProtectedPrefix,
-                ));
+            for event in &raw[unit.clone()] {
+                selected.remove(&event.record().occurrence_id());
             }
-            // A reservation that fits all source is not an eligibility cause
-            // for no-work. Every trigger selects the oldest whole closed unit.
-            selected = 1;
         }
-        let cut = units
-            .get(selected - 1)
-            .ok_or_else(|| AgentContextError::new("replay unit selection is inconsistent"))?
-            .end;
-        let selected_raw = unit_totals[selected];
+        // Explicit requested progress is shared by every trigger. Retention is
+        // optional; even a fitting reservation must select one whole closed unit.
+        if selected.is_empty() {
+            selected.extend(
+                raw[units[oldest].0.clone()]
+                    .iter()
+                    .map(|event| event.record().occurrence_id()),
+            );
+        }
+        let selected_raw = units
+            .iter()
+            .filter(|(unit, _, _)| selected.contains(&raw[unit.start].record().occurrence_id()))
+            .try_fold(0usize, |sum, (_, cost, _)| sum.checked_add(*cost))
+            .ok_or_else(|| AgentContextError::new("replay selected estimate exhausted"))?;
         let retained_raw = estimates
             .raw_input_tokens()
             .checked_sub(selected_raw)
@@ -147,6 +156,27 @@ impl ReplayEpochContext {
             retained_raw,
         };
         input_estimates.source_input_tokens()?;
+        let input = self
+            .context
+            .chronology()
+            .iter()
+            .enumerate()
+            .filter(|(index, event)| {
+                *index < offset || selected.contains(&event.record().occurrence_id())
+            })
+            .map(|(_, event)| event.clone())
+            .collect();
+        let tail_start = raw
+            .iter()
+            .rposition(|event| selected.contains(&event.record().occurrence_id()))
+            .map_or(offset, |index| offset + index + 1);
+        let handled = units
+            .iter()
+            .filter(|(_, _, eligible)| *eligible)
+            .flat_map(|(unit, _, _)| raw[unit.clone()].iter())
+            .filter(|event| !selected.contains(&event.record().occurrence_id()));
+        let reentry =
+            ReplayCompactionReentryInput::capture(policy, self.provider_projection(), handled);
         Ok(ReplayCompactionPreparation::Ready(ReplayCompactionPlan {
             owner_identity: self.owner_identity.clone(),
             conversation: self.conversation.clone(),
@@ -156,17 +186,14 @@ impl ReplayEpochContext {
             head: self.head.clone(),
             frozen: self.context.chronology().to_vec(),
             members: self.members.clone(),
-            selection: Box::new(ReplayCompactionSelection::Prefix {
-                members: cut,
-                events: offset + cut,
+            selection: Box::new(ReplayCompactionSelection::Summary {
+                selected,
+                input,
+                tail_start,
             }),
             input_estimates,
             provider_projection: self.provider_projection().cloned().map(Box::new),
-            reentry: Box::new(ReplayCompactionReentryInput::capture(
-                policy,
-                self.provider_projection(),
-                &raw[cut..units.get(protected).map_or(raw.len(), |unit| unit.start)],
-            )),
+            reentry: Box::new(reentry),
         }))
     }
 
@@ -288,7 +315,7 @@ impl ReplayEpochContext {
             reentry: Box::new(ReplayCompactionReentryInput::capture(
                 policy,
                 self.provider_projection(),
-                &[],
+                std::iter::empty(),
             )),
         }))
     }
@@ -376,24 +403,6 @@ impl ReplayEpochContext {
             && !event
                 .execution_group_id()
                 .is_some_and(|group| self.context.execution_group_is_pending(group))
-    }
-
-    /// One common closed-prefix boundary for tail selection and reentry. Whole
-    /// ownership spans stop at the first protected event; later units cannot
-    /// bypass that barrier in either path.
-    pub(super) fn closed_prefix_unit_count(
-        &self,
-        raw: &[ConversationEvent],
-        units: &[std::ops::Range<usize>],
-    ) -> usize {
-        units
-            .iter()
-            .position(|unit| {
-                raw[unit.clone()]
-                    .iter()
-                    .any(|event| !self.event_is_replaceable(event))
-            })
-            .unwrap_or(units.len())
     }
 }
 

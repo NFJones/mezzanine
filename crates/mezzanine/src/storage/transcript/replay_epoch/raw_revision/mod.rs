@@ -51,7 +51,7 @@ impl RawRevisionOrigin {
             .map_err(|_| invalid("invalid original raw revision receipt"))?;
         base.validate(&manifest.conversation_id)?;
         if base.manifest.raw_revision_origin.is_some()
-            || base.manifest.version > MODE_MANIFEST_VERSION
+            || base.manifest.version > ISLAND_MANIFEST_VERSION
             || manifest.version == 11 && base.manifest.version > 10
             || base.manifest.epoch_revision != manifest.epoch_revision
             || base.manifest.head != manifest.head

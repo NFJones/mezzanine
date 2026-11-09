@@ -15,6 +15,8 @@
 //! identities and controller-minted closure witnesses still never deserialize.
 //! Version four retains inert automatic-compaction reentry metadata bound to
 //! its actual head; older checkpoints do not manufacture handled-source facts.
+//! Version five adds retained handled occurrence revisions, distinguishing new
+//! eligible work from eligibility loss without serializing source authority.
 
 use super::super::{
     ContextBlockRecord, ContextSemanticKind, ProviderContinuityOwner, StableContextBlockRecord,
@@ -179,7 +181,7 @@ impl ReplayEpochContext {
     pub fn checkpoint(&self) -> AgentContextResult<ReplayEpochCheckpoint> {
         self.validate_membership()?;
         Ok(ReplayEpochCheckpoint {
-            version: 4,
+            version: 5,
             conversation: self.conversation.as_str().to_owned(),
             revision: self.revision.get(),
             policy: self.policy,
@@ -258,8 +260,13 @@ impl ReplayEpochContext {
                 checkpoint.retired_mcp_retrievals.is_some(),
                 checkpoint.execution_intervals.is_some()
             ),
-            (1, false, false) | (2, true, false) | (3 | 4, true, true)
+            (1, false, false) | (2, true, false) | (3..=5, true, true)
         ) || checkpoint.version < 4 && checkpoint.compaction_reentry.is_some()
+            || checkpoint.version < 5
+                && checkpoint
+                    .compaction_reentry
+                    .as_ref()
+                    .is_some_and(ReplayCompactionReentry::has_member_evidence)
             || checkpoint.conversation != conversation.as_str()
         {
             return Err(invalid("unsupported format or foreign conversation"));
