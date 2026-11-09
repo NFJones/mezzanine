@@ -5,15 +5,12 @@
 //! retains its ordinal and move endpoint dependency, including intermediate
 //! states when several operations touch one file. Errors do not erase earlier
 //! plans. Exact raw preimages remain distinct from normalized matching text.
-//! Previews are bounded linear full-file unified hunks, not minimal edit scripts.
-//! They require no quadratic display trace or additional dependency. Display
-//! truncation never changes authoritative plans or final bytes. Authoritative
-//! changed-line statistics are computed separately under the original work
-//! budget; full-file preview sizes are never used as edit statistics.
+//! Focused previews and exact changed-line statistics share one bounded raw-line
+//! edit script. Display truncation never changes plans, counts or final bytes.
 
 use std::collections::BTreeMap;
 
-use super::work::{PATCH_WORK_QUANTUM, PatchWorkControl};
+use super::work::PatchWorkControl;
 use super::{
     ApplyPatchFileChange, ApplyPatchOriginalState, ApplyPatchSnapshot, ApplyPatchSnapshotState,
     apply_mez_patch_to_snapshots_with_work,
@@ -264,21 +261,7 @@ pub struct NativeUnifiedDiff {
     pub removed_lines: usize,
 }
 
-/// Writes one fragment into the bounded UTF-8 source buffer.
-fn append(diff: &mut NativeUnifiedDiff, fragment: &str, budget: usize) {
-    if diff.truncated {
-        return;
-    }
-    let available = budget.saturating_sub(diff.source.len());
-    let mut end = fragment.len().min(available);
-    while !fragment.is_char_boundary(end) {
-        end -= 1;
-    }
-    diff.source.push_str(&fragment[..end]);
-    diff.truncated = end < fragment.len();
-}
-
-/// Generates a linear full-file unified hunk without external diff utilities.
+/// Generates exact three-line-context unified hunks without external utilities.
 /// Labels are rendered inertly; oversized/invalid text returns a diagnostic.
 /// The caller caps aggregate diff retention and publishes only after commit.
 pub fn native_unified_diff(
@@ -300,98 +283,5 @@ pub fn native_unified_diff(
             "apply_patch: native diff input budget exceeded",
         ));
     }
-    let old_count = line_count(old, work)?;
-    let new_count = line_count(new, work)?;
-    let old = work.decode_text(old)?;
-    let new = work.decode_text(new)?;
-    let (added_lines, removed_lines) = line_delta::count(&old, &new, work)?;
-    let mut diff = NativeUnifiedDiff {
-        source: String::new(),
-        truncated: false,
-        old_lines: old_count,
-        new_lines: new_count,
-        added_lines,
-        removed_lines,
-    };
-    if work.equal(&old, &new)
-        && matches!(change.original, ApplyPatchOriginalState::Regular(_))
-        && change.final_bytes.is_some()
-    {
-        work.check()?;
-        return Ok(diff);
-    }
-    work.check()?;
-    let budget = requested_budget.min(NATIVE_PATCH_DIFF_BYTES);
-    let label = change.path.escape_default().to_string();
-    let old_label = if matches!(change.original, ApplyPatchOriginalState::Missing) {
-        "/dev/null".to_string()
-    } else {
-        format!("a/{label}")
-    };
-    let new_label = if change.final_bytes.is_none() {
-        "/dev/null".to_string()
-    } else {
-        format!("b/{label}")
-    };
-    append(
-        &mut diff,
-        &format!("diff -- {label}\n--- {old_label}\n+++ {new_label}\n"),
-        budget,
-    );
-    append(
-        &mut diff,
-        &format!(
-            "@@ -{},{} +{},{} @@\n",
-            usize::from(old_count > 0),
-            old_count,
-            usize::from(new_count > 0),
-            new_count
-        ),
-        budget,
-    );
-    for (prefix, text) in [("-", old.as_str()), ("+", new.as_str())] {
-        let mut line_start = true;
-        let mut last_newline = true;
-        // Split at UTF-8 boundaries in <=64KiB pieces, including long lines.
-        let mut offset = 0;
-        while offset < text.len() && !diff.truncated {
-            let mut end = text.len().min(offset + PATCH_WORK_QUANTUM);
-            while !text.is_char_boundary(end) {
-                end -= 1;
-            }
-            if !work.spend(end - offset) {
-                work.check()?;
-            }
-            for fragment in text[offset..end].split_inclusive('\n') {
-                if line_start {
-                    append(&mut diff, prefix, budget);
-                }
-                append(&mut diff, fragment, budget);
-                last_newline = fragment.ends_with('\n');
-                line_start = last_newline;
-                if diff.truncated {
-                    break;
-                }
-            }
-            offset = end;
-        }
-        if !last_newline && !diff.truncated {
-            append(&mut diff, "\n\\ No newline at end of file\n", budget);
-        }
-    }
-    work.check()?;
-    Ok(diff)
-}
-
-/// Counts raw newline-delimited lines through bounded actual byte scans.
-fn line_count(bytes: &[u8], work: &PatchWorkControl<'_>) -> SemanticPatchPlanningResult<usize> {
-    let mut count = 0;
-    for chunk in bytes.chunks(PATCH_WORK_QUANTUM) {
-        if !work.spend(chunk.len()) {
-            work.check()?;
-        }
-        count += chunk.iter().filter(|byte| **byte == b'\n').count();
-    }
-    work.check()?;
-    Ok(count + usize::from(!bytes.is_empty() && !bytes.ends_with(b"\n")))
+    line_delta::diff(change, old, new, requested_budget, work)
 }

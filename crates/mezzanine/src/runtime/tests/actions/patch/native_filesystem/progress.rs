@@ -12,6 +12,102 @@ use crate::host::async_runtime::native_filesystem::{
 use crate::runtime::agent::native_filesystem::NativeFilesystemAttempt;
 use crate::runtime::processes::native_filesystem_producer::NativeFilesystemProducer;
 
+/// The actual async producer, live promotion and final held-install recovery
+/// retain the same two focused hunks in normal and verbose presentation. Mux
+/// parsing consumes the generated ranges; no renderer-side diff is invented.
+#[tokio::test(flavor = "current_thread")]
+async fn native_focused_diff_live_and_recovered_publication_keep_numbered_hunks_once() {
+    for level in [
+        mez_agent::AgentLogLevel::Normal,
+        mez_agent::AgentLogLevel::Verbose,
+    ] {
+        for held in [false, true] {
+            let mut fixture = Fixture::with_patch(false, |root| {
+                format!(
+                    "*** Begin Patch\n*** Update File: {}\n@@\n-line-5000\n+replacement\n@@\n-line-5020\n+second-change\n*** End Patch",
+                    root.join("file").display()
+                )
+            });
+            let old = (0..10_000)
+                .map(|i| format!("line-{i}\n"))
+                .collect::<String>();
+            fs::write(fixture.root.join("file"), &old).unwrap();
+            fixture
+                .service
+                .agent_shell_store_mut()
+                .set_log_level("%1", level)
+                .unwrap();
+            fixture
+                .service
+                .hold_agent_presentation_installs_for_tests(held);
+            let (mut fixture, attempt, producer) = run(fixture).await;
+            let raw = fixture
+                .service
+                .retained_native_filesystem_outcome(&attempt)
+                .unwrap();
+            let receipt = &raw.receipts[0];
+            assert_eq!((receipt.added_lines, receipt.removed_lines), (2, 2));
+            assert!(receipt.diff.contains("@@ -4998,7 +4998,7 @@"));
+            assert!(receipt.diff.contains("@@ -5018,7 +5018,7 @@"));
+            assert!(!receipt.diff.contains("line-7000\n"));
+            let parsed = mez_mux::render::parse_unified_diff_sections(
+                &receipt.diff.lines().map(str::to_owned).collect::<Vec<_>>(),
+            );
+            assert_eq!(parsed.len(), 1);
+            assert_eq!(parsed[0].hunk_headers.len(), 2);
+            let removed = parsed[0]
+                .lines
+                .iter()
+                .filter(|line| line.marker == '-')
+                .map(|line| line.old_line)
+                .collect::<Vec<_>>();
+            assert_eq!(removed, [Some(5001), Some(5021)]);
+            let delivery = producer.progress_snapshot().unwrap();
+            let confirmed = delivery.confirmed().unwrap();
+            assert_eq!(confirmed.len(), 1);
+            assert!(confirmed[0].source.contains(&receipt.diff));
+            assert_eq!(
+                fixture
+                    .service
+                    .confirmed_progress_source_is_promoted(&confirmed[0]),
+                !held
+            );
+            fixture
+                .service
+                .project_native_filesystem_completion(&attempt)
+                .unwrap();
+            if held {
+                fixture
+                    .service
+                    .hold_agent_presentation_installs_for_tests(false);
+                assert!(fixture.service.retry_completion_publications() > 0);
+                let installed = final_results(&fixture);
+                assert_eq!(installed.len(), 1);
+                assert!(installed[0].contains(&receipt.diff));
+            } else {
+                assert!(final_results(&fixture).is_empty());
+            }
+            assert!(
+                !fixture
+                    .service
+                    .apply_native_filesystem_progress(&delivery)
+                    .unwrap()
+            );
+            assert_eq!(fixture.service.retry_completion_publications(), 0);
+            assert_eq!(result_events(&fixture), 1);
+            let path = fixture.root.join("file");
+            let modified = &fixture.service.retained_agent_modified_files("%1").unwrap()
+                [path.to_str().unwrap()];
+            assert_eq!((modified.added, modified.removed), (2, 2));
+            assert_eq!(
+                fs::read_to_string(path).unwrap(),
+                old.replace("line-5000\n", "replacement\n")
+                    .replace("line-5020\n", "second-change\n")
+            );
+        }
+    }
+}
+
 /// Runs and joins the actual registered producer; final canonical projection is
 /// deliberately left pending so each test controls the display boundary.
 async fn run(fixture: Fixture) -> (Fixture, NativeFilesystemAttempt, NativeFilesystemProducer) {

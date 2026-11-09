@@ -13804,9 +13804,17 @@ preimages, independently of normalized matching text. Semantic no-ops MUST NOT
 rewrite line endings. Native planning MUST keep authored operation identity and
 intermediate preimages for repeated paths; move destination publication precedes
 source deletion. Native diff generation MUST use bounded in-process work, never
-an external utility. The current native diff adapter uses linear full-file
-unified hunks rather than minimal edit scripts, capped at 256 KiB of UTF-8 display
-source. Its source, snapshot, per-file and retained-plan budgets are respectively
+an external utility. Native previews MUST use standard unified hunks with three
+unchanged context lines on each side, merging touching windows (gaps of at most
+six equal lines). One deterministic shortest raw-line insertion/deletion script
+MUST drive both hunks and exact receipt deltas. The reference implementation uses
+iterative linear-space Myers bisection, exact prefix/suffix peeling and stable
+deletion-predecessor tie choices, without a quadratic matrix or retained frontier
+history. Ambiguous placements need not match an external diff utility.
+Raw LF/CRLF terminators and missing final newlines MUST remain significant;
+no-newline markers follow their emitted lines. Labels remain inert and empty
+create/delete endpoints retain their /dev/null headers and zero-length hunk.
+Preview source is capped at 256 KiB of UTF-8. Its source, snapshot, per-file and retained-plan budgets are respectively
 1 MiB, 32 MiB, 16 MiB and 64 MiB, with at most 1,024 operations. Display truncation
 MUST NOT remove typed changes or confirmations. Native endpoint receipts MUST
 count actual inserted and deleted raw lines, not full-file preview sizes. An
@@ -13814,6 +13822,19 @@ exact shortest insertion/deletion distance is computed independently of preview
 retention, including zero/exhausted display budgets, under the original bounded
 cooperative work control before mutation. Exhaustion MUST refuse preparation,
 not publish approximate statistics. Raw line terminators participate in equality.
+Diff scratch MUST be bounded at 32 MiB live per endpoint, including line indexes,
+frontiers, runs and pending tasks, with fallible checked reservations. The
+reference implementation additionally bounds iterative pending tasks at 4,096
+and raw lines at 262,144 per side. Indexing, comparisons (including long lines),
+search, run construction and rendering share the original sticky 1 GiB work
+allowance and 64 KiB checkpoint quantum, without renewing the action deadline.
+Calculation failure MUST refuse the complete precommit preparation before any
+directory/file mutation, never fall back to whole-file output or approximation.
+Display exhaustion alone MUST retain a deterministic UTF-8 prefix and truthful
+truncation flag without removing later receipts or exact deltas; clipped output
+is not promised to be a complete applicable patch. These limits can refuse an
+adversarial patch; a caller may explicitly submit a narrower authorized patch,
+but no effect or calculation is automatically replayed to reconstruct display.
 Conversation modified-file statistics MUST accumulate these per-operation deltas
 exactly once, including repeated edits, rather than a net working-tree diff.
 Semantic no-ops contribute no counts; directory effects contribute zero.

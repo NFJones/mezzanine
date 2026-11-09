@@ -221,6 +221,8 @@ fn execute(
         ));
     }
     let checkpoint = || {
+        #[cfg(test)]
+        tests::focused::diff_checkpoint(&request.fence);
         request
             .fence
             .check()

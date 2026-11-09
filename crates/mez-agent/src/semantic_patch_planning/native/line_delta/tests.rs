@@ -1,5 +1,45 @@
 //! Exact-count oracle and display-independent raw-line regressions.
 
+/// Sparse updates must not spend the preview on remote unchanged lines.
+#[test]
+fn native_focused_diff_sparse_ten_thousand_lines() {
+    let old = (0..10_000)
+        .map(|i| format!("line-{i}\n"))
+        .collect::<String>();
+    for index in [1, 5000, 9998] {
+        let new = old.replace(&format!("line-{index}\n"), "replacement\n");
+        let change = ApplyPatchFileChange {
+            path: "file".into(),
+            resolved_path: "/fixture/file".into(),
+            original: ApplyPatchOriginalState::Regular(old.as_bytes().to_vec()),
+            final_bytes: Some(new.into_bytes()),
+        };
+        let diff =
+            native_unified_diff(&change, 1024, &PatchWorkControl::native(&|| Ok(()))).unwrap();
+        assert!(!diff.truncated, "sparse diff unexpectedly truncated");
+        assert_eq!((diff.added_lines, diff.removed_lines), (1, 1));
+        assert!(
+            diff.source
+                .contains(&format!("-line-{index}\n+replacement\n"))
+        );
+        assert!(
+            diff.source
+                .lines()
+                .filter(|line| line.starts_with(' '))
+                .count()
+                <= 6
+        );
+        assert!(!diff.source.contains("line-7000\n"));
+        assert_eq!(
+            diff.source
+                .lines()
+                .filter(|line| line.starts_with("@@"))
+                .count(),
+            1
+        );
+    }
+}
+
 use super::*;
 use crate::semantic_patch::SemanticPatchPlanningError;
 use crate::semantic_patch_planning::{
@@ -65,6 +105,35 @@ fn native_line_delta_matches_exhaustive_lcs_oracle() {
                 (b.len() - common, a.len() - common),
                 "old={old:?}, new={new:?}"
             );
+            let script = Script::new(
+                old.as_bytes(),
+                new.as_bytes(),
+                &PatchWorkControl::native(&|| Ok(())),
+            )
+            .unwrap();
+            let (mut x, mut y) = (0, 0);
+            let mut replay = Vec::new();
+            for run in &script.runs {
+                for _ in 0..run.len {
+                    match run.kind {
+                        Kind::Equal => {
+                            assert_eq!(script.old.get(x), script.new.get(y));
+                            replay.extend_from_slice(script.old.get(x));
+                            x += 1;
+                            y += 1;
+                        }
+                        Kind::Delete => x += 1,
+                        Kind::Insert => {
+                            replay.extend_from_slice(script.new.get(y));
+                            y += 1;
+                        }
+                    }
+                }
+            }
+            assert_eq!((x, y), (a.len(), b.len()));
+            assert_eq!(replay, new.as_bytes());
+            let diff = super::focused_tests::generate(old, new, usize::MAX);
+            assert_eq!(super::focused_tests::replay(old, &diff.source), *new);
         }
     }
 }

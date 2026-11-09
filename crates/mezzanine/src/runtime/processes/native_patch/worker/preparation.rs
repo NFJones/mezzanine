@@ -94,7 +94,11 @@ pub(super) fn prepare(
                     confirmation += 1;
                 }
             }
+            #[cfg(test)]
+            let diff_scope = super::tests::focused::enter_diff(operation.ordinal(), endpoint);
             let diff = native_unified_diff(change, diff_budget, work)?;
+            #[cfg(test)]
+            drop(diff_scope);
             diff_budget = diff_budget.saturating_sub(diff.source.len());
             let file = NativePatchEndpointReceipt {
                 operation_ordinal: operation.ordinal(),

@@ -7,6 +7,52 @@
 use super::canonical::{execute_and_retain, result_events};
 use super::*;
 
+/// Actual worker receipt and installed pane source must preserve the same local
+/// hunk, not reconstruct a full-file replacement at final publication.
+#[test]
+fn native_focused_diff_receipt_to_pane_publication() {
+    let mut fixture = Fixture::with_patch(false, |root| {
+        format!(
+            "*** Begin Patch\n*** Update File: {}\n@@\n-line-5000\n+replacement\n*** End Patch",
+            root.join("file").display()
+        )
+    });
+    let old = (0..10_000)
+        .map(|i| format!("line-{i}\n"))
+        .collect::<String>();
+    fs::write(fixture.root.join("file"), &old).unwrap();
+    let (attempt, raw) = execute_and_retain(&mut fixture, false);
+    let receipt = &raw.receipts[0];
+    assert_eq!((receipt.added_lines, receipt.removed_lines), (1, 1));
+    assert!(!receipt.diff_truncated);
+    assert!(receipt.diff.contains("@@ -4998,7 +4998,7 @@\n"));
+    assert!(
+        receipt
+            .diff
+            .contains(" line-4999\n-line-5000\n+replacement\n line-5001\n")
+    );
+    assert!(!receipt.diff.contains("line-7000\n"));
+    fixture
+        .service
+        .project_native_filesystem_completion(&attempt)
+        .unwrap();
+    let installed = results(&fixture);
+    assert_eq!(installed.len(), 1);
+    assert!(installed[0].contains(&receipt.diff));
+    let screen = fixture
+        .service
+        .agent_pane_screen("%1")
+        .unwrap()
+        .visible_lines()
+        .join("\n");
+    assert!(screen.contains("replacement"), "{screen}");
+    assert!(!screen.contains("line-7000"));
+    assert_eq!(
+        fs::read_to_string(fixture.root.join("file")).unwrap(),
+        old.replace("line-5000\n", "replacement\n")
+    );
+}
+
 /// Returns only this action's exact installed RESULT source acknowledgements.
 fn results(fixture: &Fixture) -> Vec<String> {
     let expected = fixture

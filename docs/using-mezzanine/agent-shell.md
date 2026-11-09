@@ -37,6 +37,14 @@ unchanged context and semantic no-ops add nothing. Repeated edits count each
 operation once, even if a later edit reverses an earlier one. Preview truncation
 does not reduce these counts.
 
+Native patch previews show changed lines with three unchanged context lines on
+each side. Distant changes use separate numbered hunks; nearby context windows
+merge. Line endings remain significant. Oversized previews can be clipped, so a
+truncated preview is not a complete patch to apply elsewhere. Exact preparation
+can refuse an adversarial edit within its work/memory limits before any mutation;
+inspect the diagnostic and submit a narrower patch explicitly rather than retrying
+uncertain effects automatically.
+
 Type a request and press Enter. Use `Ctrl+J` for a newline without submitting.
 In native shell mode, `Ctrl+V` pastes host clipboard text into the prompt,
 preserving multiline text. Completion supports slash commands, `$` skills,
