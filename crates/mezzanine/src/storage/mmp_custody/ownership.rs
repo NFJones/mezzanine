@@ -6,6 +6,9 @@
 //! workers retire. It does not grant delivery authority, validate recovery, or
 //! prevent direct use of the lower-level multi-connection store API. The store
 //! directory remains trusted against replacement by the same user.
+//! Final-owner destruction explicitly unlocks the original file description:
+//! incidental fork/dup aliases must not retain an ended ownership scope. Real
+//! workers retain this owner, not independently cloned lock descriptors.
 
 use std::fs::{self, File};
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
@@ -24,7 +27,8 @@ use crate::error::{MezError, Result};
 
 /// A cooperating runtime root's exclusive, kernel-owned lifetime fence.
 pub(crate) struct RootOwnership {
-    /// Closing the final owner releases the lock, including on process exit.
+    /// Explicitly unlocked at final-owner destruction, then closed. Process exit
+    /// also closes descriptors without depending on Rust cleanup.
     _lock: File,
     /// Original private directory held open to prevent directory-inode reuse.
     directory: File,
@@ -35,6 +39,17 @@ pub(crate) struct RootOwnership {
     /// Actual clock capability survives worker/store loss under this same root.
     clock: OnceLock<Result<std::sync::Arc<super::elapsed_clock::CustodyElapsedClock>>>,
     clock_source: super::elapsed_clock::ClockSource,
+}
+
+impl Drop for RootOwnership {
+    /// All actual worker owners and borrowed stores have retired before this
+    /// runs. Unlock the held description, never a reopened pathname; otherwise
+    /// an incidental pre-exec fork/dup can extend a completed root's exclusion.
+    /// Failure remains fail-closed: closing still releases this descriptor, and
+    /// a new root must independently acquire the kernel lock before any work.
+    fn drop(&mut self) {
+        let _ = flock(&self._lock, FlockOperation::Unlock);
+    }
 }
 
 /// Original database allocation captured once under this actual lock.
@@ -361,6 +376,31 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
         }
+    }
+
+    /// An incidental fork/dup alias is not a worker owner. It must not retain an
+    /// ended root's exclusion, whereas a worker's actual Arc must retain it.
+    #[test]
+    fn final_root_owner_releases_lock_despite_incidental_descriptor_alias() {
+        let fixture = Directory::new();
+        let owner = std::sync::Arc::new(RootOwnership::acquire(&fixture.0).unwrap());
+        let worker_owner = owner.clone();
+        // try_clone shares the same open-file description as a pre-exec fork,
+        // removing timing and unrelated child scheduling from this regression.
+        let incidental_alias = owner._lock.try_clone().unwrap();
+        drop(owner);
+        assert!(RootOwnership::acquire_existing(&fixture.0).is_err());
+        worker_owner.validate_root().unwrap();
+        drop(worker_owner);
+
+        let replacement = RootOwnership::acquire_existing(&fixture.0)
+            .expect("an incidental descriptor must not retain a completed root's lock");
+        // Closing an old alias cannot unlock the independently opened successor.
+        drop(incidental_alias);
+        assert!(RootOwnership::acquire_existing(&fixture.0).is_err());
+        replacement.validate_root().unwrap();
+        drop(replacement);
+        assert!(RootOwnership::acquire_existing(&fixture.0).is_ok());
     }
 
     /// An absent original qualifies only at its exact bound store position.
