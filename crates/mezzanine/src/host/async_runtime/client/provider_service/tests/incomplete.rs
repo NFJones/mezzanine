@@ -1196,7 +1196,8 @@ async fn service_retirement_adopts_completed_inference_and_counts_execution() {
                 )))
             },
         ),
-    );
+    )
+    .expect("original provider worker registration");
     tokio::time::timeout(Duration::from_secs(10), async {
         while !monitor.is_finished() {
             tokio::task::yield_now().await;

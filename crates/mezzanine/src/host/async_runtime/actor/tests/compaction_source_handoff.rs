@@ -896,6 +896,118 @@ async fn compaction_lost_claim_reply_retires_undispatched_owner() {
     assert!(actor.offered_dispatch_sources.is_empty());
 }
 
+/// A successful one-shot send can still lose its value before the receiver
+/// consumes it. Expiry must release proven undispatched expense custody without
+/// treating the vanished reply as a potentially live provider.
+#[tokio::test(flavor = "current_thread")]
+async fn compaction_delivered_reply_dropped_before_receive_retires_zero_expense() {
+    let (_root, mut actor, _primary, generation) = pending_compaction_at_capacity();
+    refuse_and_offer(&mut actor, generation);
+    actor.drain_timer_side_effects(64).unwrap();
+    let (reply, response) = tokio::sync::oneshot::channel();
+    actor
+        .handle_request(AsyncRuntimeRequest::ClaimAgentCompactionTask {
+            pane_id: "%1".into(),
+            task_generation: generation,
+            reply,
+        })
+        .await;
+    // Sending succeeded; the real dispatch is destroyed inside the channel.
+    drop(response);
+    let key = actor
+        .drain_timer_side_effects(64)
+        .unwrap()
+        .into_iter()
+        .find_map(|effect| match effect {
+            RuntimeSideEffect::ScheduleTimer { key, .. }
+                if key.kind == RuntimeTimerKind::CompactionClaim
+                    && key.generation == generation =>
+            {
+                Some(key)
+            }
+            _ => None,
+        })
+        .expect("original admitted claim lease");
+    actor
+        .apply_runtime_event(RuntimeEvent::Timer(crate::runtime::TimerEvent {
+            key,
+            now_ms: 1,
+        }))
+        .await
+        .unwrap();
+    assert!(!actor.service.agent_is_compacting("%1"));
+    assert!(
+        !actor
+            .service
+            .retains_compaction_expense_for_tests("%1", generation)
+    );
+}
+
+/// Stop can remove the logical task before the unread successful reply drops.
+/// The original expense owner must retain enough delivery custody to retire on
+/// ordinary worker progress, without depending on that removed logical task.
+#[tokio::test(flavor = "current_thread")]
+async fn compaction_delivered_reply_dropped_after_stop_retires_zero_expense() {
+    let (_root, mut actor, primary, generation) = pending_compaction_at_capacity();
+    refuse_and_offer(&mut actor, generation);
+    actor.drain_timer_side_effects(64).unwrap();
+    let (reply, response) = tokio::sync::oneshot::channel();
+    actor
+        .handle_request(AsyncRuntimeRequest::ClaimAgentCompactionTask {
+            pane_id: "%1".into(),
+            task_generation: generation,
+            reply,
+        })
+        .await;
+    let stopped = actor
+        .service
+        .execute_agent_shell_command(&primary, "/stop")
+        .unwrap();
+    assert!(stopped.contains("compaction_cancelled=true"), "{stopped}");
+    drop(response);
+    actor
+        .drain_agent_provider_dispatch_side_effects(64)
+        .unwrap();
+    assert!(!actor.service.agent_is_compacting("%1"));
+    assert!(
+        !actor
+            .service
+            .retains_compaction_expense_for_tests("%1", generation)
+    );
+}
+
+/// Copying a real dispatch keeps its unregistered delivery alive. Dropping one
+/// copy cannot revoke another; after the last value disappears, normal worker
+/// progress retires the original logical and numeric owner together.
+#[tokio::test(flavor = "current_thread")]
+async fn compaction_delivered_reply_dropped_only_after_last_value_retires_owner() {
+    let (_root, mut actor, _primary, generation) = pending_compaction_at_capacity();
+    refuse_and_offer(&mut actor, generation);
+    actor.drain_timer_side_effects(64).unwrap();
+    let dispatch = claim(&mut actor, generation).await.unwrap().unwrap();
+    let retained = dispatch.clone();
+    drop(dispatch);
+    actor
+        .drain_agent_provider_dispatch_side_effects(64)
+        .unwrap();
+    assert!(actor.service.agent_is_compacting("%1"));
+    assert!(
+        actor
+            .service
+            .retains_compaction_expense_for_tests("%1", generation)
+    );
+    drop(retained);
+    actor
+        .drain_agent_provider_dispatch_side_effects(64)
+        .unwrap();
+    assert!(!actor.service.agent_is_compacting("%1"));
+    assert!(
+        !actor
+            .service
+            .retains_compaction_expense_for_tests("%1", generation)
+    );
+}
+
 /// A real retryable failure replaces a claimed compactor with a new generation
 /// under transport backoff. Old refusal metadata cannot accelerate it before
 /// its exact retry owner is released, nor enroll ordinary work afterward.

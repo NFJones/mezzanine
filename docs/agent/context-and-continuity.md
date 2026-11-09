@@ -369,6 +369,11 @@ claim and its zero-expense accounting identity are released together, with
 operation diagnostics and accepted steering preserved. They need no later worker
 callback. Deadline expiry or Stop with a potentially live worker keeps the
 original expense owner until physical retirement and final usage settlement.
+Successful reply enqueue still leaves a handoff in progress. If every unread
+dispatch copy disappears before producer registration, normal worker progress or
+claim expiry settles the original zero-expense owner, including after Stop.
+Registered workers keep their original cost custody through physical retirement;
+cloning or dropping another dispatch copy cannot replace that owner.
 
 When the provider service retires a claimed request, it observes request
 termination and settles the original claim. A completed result still follows

@@ -253,7 +253,11 @@ pub(crate) use completion::RuntimeMessageActionAdmission;
 pub(crate) use completion::RuntimeMessageActionSource;
 pub(crate) use presentation::RuntimeProviderLogInput;
 pub(crate) use request_waits::RuntimePreparedTrackedMessage;
+mod compaction_delivery;
 mod project_accounting;
+pub(crate) use compaction_delivery::{
+    RuntimeCompactionDeliveryObserver, RuntimeCompactionDispatchDelivery,
+};
 mod provider_context;
 mod provider_execution;
 pub(crate) use provider_execution::execute_agent_provider_persistence_work;
@@ -3781,6 +3785,7 @@ impl RuntimeSessionService {
                 request_turn_id: task.request.turn_id.clone(),
                 checkpoint_ids: Default::default(),
                 checkpoint_usage: Default::default(),
+                delivery: None,
             });
         self.agent
             .claimed_agent_compaction_tasks

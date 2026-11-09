@@ -18,6 +18,21 @@ use super::{
 };
 
 impl AsyncRuntimeSessionActor {
+    /// Observes only actual dropped dispatch values. Queue refusal keeps newly
+    /// ready work in existing source recovery until this drain frees capacity.
+    fn settle_abandoned_compaction_deliveries(&mut self) -> Result<()> {
+        if self.service.settle_abandoned_compaction_dispatches()? {
+            self.notify_event_delivery();
+            let effects = self.pending_provider_dispatch_side_effects()?;
+            if let Err(error) = self.admit_committed_side_effects(effects)
+                && !super::queue::is_side_effect_queue_full_error(&error)
+            {
+                return Err(error);
+            }
+        }
+        Ok(())
+    }
+
     /// Runs the drain runtime side effects operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in
@@ -32,6 +47,7 @@ impl AsyncRuntimeSessionActor {
                 "async runtime side-effect drain limit must be greater than zero",
             ));
         }
+        self.settle_abandoned_compaction_deliveries()?;
         // Provider dispatches previously shared this queue and therefore
         // remained observable before later repaint work to generic test
         // adapters. Claim that dedicated route first so moving the provider
@@ -138,6 +154,7 @@ impl AsyncRuntimeSessionActor {
                 "async runtime provider dispatch drain limit must be greater than zero",
             ));
         }
+        self.settle_abandoned_compaction_deliveries()?;
         let drained = self.side_effect_routes.drain_provider(limit);
         self.record_provider_offers(&drained);
         self.record_side_effect_drain(drained.len())?;

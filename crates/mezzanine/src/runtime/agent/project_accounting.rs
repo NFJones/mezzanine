@@ -49,6 +49,9 @@ pub(super) struct AuxiliaryAccountingOwner {
 /// compaction work graph bounds the number of concrete requests in a dispatch.
 #[derive(Debug, Clone)]
 pub(super) struct CompactionAccountingOwner {
+    /// A successful unread reply may disappear after logical cancellation.
+    /// Only an unregistered dispatch's actual drop proves zero future expense.
+    pub(super) delivery: Option<super::RuntimeCompactionDeliveryObserver>,
     /// Immutable project/conversation/model and durable receipt namespace.
     pub(super) provenance: AuxiliaryAccountingOwner,
     /// Original request identity, independent of visible task state.
@@ -224,6 +227,89 @@ impl RuntimeSessionService {
         self.agent
             .compaction_accounting_owners
             .contains_key(&(pane.to_owned(), generation))
+    }
+
+    /// Binds original issued scope to its actual dispatch-value drop witness.
+    pub(in crate::runtime) fn track_compaction_dispatch_delivery(
+        &mut self,
+        task: &crate::runtime::RuntimeAgentCompactionTask,
+        delivery: super::RuntimeCompactionDeliveryObserver,
+    ) -> crate::Result<()> {
+        let owner = self
+            .agent
+            .compaction_accounting_owners
+            .get_mut(&(task.pane_id.clone(), task.task_generation))
+            .ok_or_else(|| {
+                super::MezError::invalid_state("compaction delivery lost its issued expense owner")
+            })?;
+        if owner.provenance.conversation != task.conversation_id
+            || owner.request_agent_id != task.request.agent_id
+            || owner.request_turn_id != task.request.turn_id
+            || owner.delivery.is_some()
+        {
+            return Err(super::MezError::conflict(
+                "compaction delivery scope changed before handoff",
+            ));
+        }
+        owner.delivery = Some(delivery);
+        Ok(())
+    }
+
+    /// Settles only a dropped, never-registered delivery. Retained producer
+    /// receipts remain untouched even when their current invocation count is zero.
+    pub(crate) fn settle_abandoned_compaction_dispatch(
+        &mut self,
+        pane: &str,
+        generation: u64,
+    ) -> crate::Result<bool> {
+        let abandoned = self
+            .agent
+            .compaction_accounting_owners
+            .get(&(pane.to_owned(), generation))
+            .and_then(|owner| owner.delivery.as_ref())
+            .is_some_and(super::RuntimeCompactionDeliveryObserver::abandoned);
+        if !abandoned {
+            return Ok(false);
+        }
+        let logical = self.reject_undispatched_agent_compaction_task(
+            pane,
+            generation,
+            &super::MezError::invalid_state(
+                "compaction reply was dropped before producer registration",
+            ),
+        );
+        // The logical task may already have stopped; its original numeric
+        // owner still holds this exact delivery witness until retirement.
+        self.record_compaction_failure_usage(pane, generation, Default::default());
+        logical.map(|_| true)
+    }
+
+    /// Polls the existing bounded accounting owners during worker progress;
+    /// no extra task, queue, source owner or model request is introduced.
+    pub(crate) fn settle_abandoned_compaction_dispatches(&mut self) -> crate::Result<bool> {
+        let abandoned: Vec<_> = self
+            .agent
+            .compaction_accounting_owners
+            .iter()
+            .filter(|(_, owner)| {
+                owner
+                    .delivery
+                    .as_ref()
+                    .is_some_and(super::RuntimeCompactionDeliveryObserver::abandoned)
+            })
+            .map(|(key, _)| key.clone())
+            .collect();
+        let mut changed = false;
+        let mut first_error = None;
+        for (pane, generation) in abandoned {
+            match self.settle_abandoned_compaction_dispatch(&pane, generation) {
+                Ok(applied) => changed |= applied,
+                Err(error) => {
+                    first_error.get_or_insert(error);
+                }
+            }
+        }
+        first_error.map_or(Ok(changed), Err)
     }
 
     /// Records reported compactor failure expense before exact generation retirement.

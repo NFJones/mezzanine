@@ -8,6 +8,143 @@
 
 use super::*;
 
+/// The actual retained producer gates first poll. A cloned dispatch cannot
+/// create another root or retire its original while reported cost is pending.
+/// Release/join every admitted root before final assertions, including a RED
+/// duplicate that wrongly ran, so the control leaves no actor/request behind.
+#[tokio::test]
+async fn auxiliary_compaction_duplicate_dispatch_cannot_replace_registered_producer() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+    };
+    let (_root, service, _, conversation) = queued_fixture(Family::Compaction);
+    let generation = service
+        .pending_agent_compaction_task_generation("%1")
+        .unwrap();
+    let (handle, actor) = AsyncRuntimeSessionActor::new(service, Default::default()).unwrap();
+    let actor = tokio::spawn(actor.run());
+    let dispatch = handle
+        .claim_agent_compaction_task("%1".into(), generation)
+        .await
+        .unwrap()
+        .unwrap();
+    let duplicate = dispatch.clone();
+    let mut workers = JoinSet::new();
+    let mut owners = Default::default();
+    let drains: ProviderObservationDrains = Default::default();
+    let requests = Arc::new(AtomicUsize::new(0));
+    let worker_requests = requests.clone();
+    let (started, ready) = tokio::sync::oneshot::channel();
+    let (release, waiting) = tokio::sync::oneshot::channel();
+    let owner = ProviderWorkerOwner::compaction(&dispatch);
+    let original = spawn_owned_agent_provider_worker(
+        &mut workers,
+        &mut owners,
+        Some(owner),
+        monitor_runtime_agent_compaction_dispatch(
+            handle.clone(),
+            "%1".into(),
+            dispatch,
+            drains.clone(),
+            move |dispatch, observer| async move {
+                assert!(dispatch.delivery.producer_registered());
+                let response = observed_provider_request(
+                    &ReportedMemoryProvider(worker_requests),
+                    &observer,
+                    ProviderRequestPurpose::Compaction,
+                    &dispatch.task.request,
+                )
+                .await?;
+                let _ = started.send(());
+                let _ = waiting.await;
+                Err(MezError::new(
+                    crate::MezErrorKind::Forbidden,
+                    "registered producer fixture stopped",
+                )
+                .with_provider_incurred_usage(response.usage))
+            },
+        ),
+    )
+    .expect("original retained producer admission");
+    tokio::time::timeout(Duration::from_secs(10), ready)
+        .await
+        .unwrap()
+        .unwrap();
+
+    let duplicate_polled = Arc::new(AtomicBool::new(false));
+    let polled = duplicate_polled.clone();
+    let (release_duplicate, duplicate_waiting) = tokio::sync::oneshot::channel();
+    let duplicate_owner = ProviderWorkerOwner::compaction(&duplicate);
+    let skipped = spawn_owned_agent_provider_worker(
+        &mut workers,
+        &mut owners,
+        Some(duplicate_owner),
+        async move {
+            polled.store(true, Ordering::SeqCst);
+            let _ = duplicate_waiting.await;
+            drop(duplicate);
+            Ok(None)
+        },
+    )
+    .is_none();
+    let root_count = workers.len();
+    handle
+        .drain_agent_provider_dispatch_side_effects(64)
+        .await
+        .unwrap();
+    let still_current = handle
+        .agent_compaction_claim_is_current("%1", generation)
+        .await
+        .unwrap();
+    let _ = release.send(());
+    let mut report = AsyncAgentProviderPollReport {
+        polls: 0,
+        executions: 0,
+        idle_polls: 0,
+        terminal_state: *handle.lifecycle_state_watcher().borrow(),
+    };
+    let joined = tokio::time::timeout(Duration::from_secs(10), workers.join_next_with_id())
+        .await
+        .unwrap()
+        .unwrap();
+    let first =
+        record_owned_agent_provider_worker(joined, &handle, &mut report, &mut owners, &drains)
+            .await;
+    // An incorrectly admitted duplicate has stayed behind its own barrier, so
+    // it cannot steal the first producer's observation drain during cleanup.
+    let _ = release_duplicate.send(());
+    while let Some(joined) = workers.join_next_with_id().await {
+        record_owned_agent_provider_worker(joined, &handle, &mut report, &mut owners, &drains)
+            .await
+            .unwrap();
+    }
+    handle.shutdown().await.unwrap();
+    let mut exit = actor.await.unwrap();
+    exit.service.terminate_all_pane_processes().unwrap();
+    first.unwrap();
+    assert!(skipped);
+    assert_eq!(root_count, 1);
+    assert!(original.is_finished());
+    assert!(still_current);
+    assert!(!duplicate_polled.load(Ordering::SeqCst));
+    assert_eq!(requests.load(Ordering::SeqCst), 1);
+    assert!(owners.is_empty());
+    assert!(drains.lock().unwrap().is_empty());
+    assert!(
+        !exit
+            .service
+            .retains_compaction_expense_for_tests("%1", generation)
+    );
+    let usage = exit
+        .service
+        .agent_token_usage_for_conversation(&conversation);
+    let usage = usage
+        .get(&mez_agent::ModelTokenUsageKey::new("local-chat", "test"))
+        .unwrap();
+    assert_eq!((usage.input_tokens, usage.output_tokens), (17, 3));
+}
+
 /// Concrete compactor wire receipts charge their original issued owner before
 /// a terminal outcome. Repeated receipts and late cancellation cannot double
 /// charge, and mismatched metadata cannot poison a later genuine receipt.

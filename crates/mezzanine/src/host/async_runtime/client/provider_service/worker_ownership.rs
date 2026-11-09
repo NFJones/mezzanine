@@ -21,7 +21,8 @@ use crate::integrations::agent::provider::ProviderReportedUsage;
 use crate::runtime::{
     AgentCompactionEvent, AgentProviderEvent, AgentRememberEvent, AgentSessionTitleEvent,
     AgentSessionTitleOutcome, RuntimeAgentCompactionDispatch, RuntimeAgentProviderDispatch,
-    RuntimeAgentRememberDispatch, RuntimeAgentSessionTitleDispatch, RuntimeEvent,
+    RuntimeAgentRememberDispatch, RuntimeAgentSessionTitleDispatch,
+    RuntimeCompactionDeliveryObserver, RuntimeEvent,
 };
 use mez_core::ids::AgentId;
 use std::collections::{BTreeMap, HashMap};
@@ -46,8 +47,8 @@ pub(super) enum ProviderObservationOwner {
 pub(super) enum ProviderWorkerOwner {
     /// Inference retains its validated agent and actual issued claim.
     Inference(AgentId, String, u64),
-    /// Exact compaction completion destination.
-    Compaction(String, u64),
+    /// Exact completion and optional actual dispatch delivery witness.
+    Compaction(String, u64, Option<RuntimeCompactionDeliveryObserver>),
     /// Exact memory completion destination.
     Remember(String, String),
     /// Exact optional title completion destination.
@@ -67,7 +68,11 @@ impl ProviderWorkerOwner {
 
     /// Captures a genuinely admitted compaction dispatch without mutable state.
     pub(super) fn compaction(dispatch: &RuntimeAgentCompactionDispatch) -> Self {
-        Self::Compaction(dispatch.task.pane_id.clone(), dispatch.task.task_generation)
+        Self::Compaction(
+            dispatch.task.pane_id.clone(),
+            dispatch.task.task_generation,
+            Some(dispatch.delivery.observer()),
+        )
     }
 
     /// Captures a genuinely admitted memory dispatch.
@@ -92,7 +97,7 @@ impl ProviderWorkerOwner {
             Self::Inference(_, turn, generation) => {
                 ProviderObservationOwner::Inference(turn.clone(), *generation)
             }
-            Self::Compaction(pane, generation) => {
+            Self::Compaction(pane, generation, _) => {
                 ProviderObservationOwner::Compaction(pane.clone(), *generation)
             }
             Self::Remember(_, observation) => {
@@ -117,7 +122,7 @@ impl ProviderWorkerOwner {
                     provider_output_limit_state: None,
                 })
             }
-            Self::Compaction(pane, generation) => {
+            Self::Compaction(pane, generation, _) => {
                 RuntimeEvent::AgentCompaction(AgentCompactionEvent::Failed {
                     pane_id: pane.clone(),
                     task_generation: *generation,
@@ -288,22 +293,41 @@ pub(super) type AgentProviderJoined = std::result::Result<
     tokio::task::JoinError,
 >;
 
-/// Registers identity synchronously after spawn and before another service await.
+/// Registers identity before a compaction monitor's first poll. A delivery
+/// reservation prevents duplicate roots from retiring a live original owner.
 pub(super) fn spawn_owned_agent_provider_worker<F>(
     workers: &mut JoinSet<Result<AsyncAgentProviderWorkerResult>>,
     owners: &mut AgentProviderWorkerOwners,
     request: Option<ProviderWorkerOwner>,
     future: F,
-) -> tokio::task::AbortHandle
+) -> Option<tokio::task::AbortHandle>
 where
     F: Future<Output = Result<AsyncAgentProviderWorkerResult>> + Send + 'static,
 {
-    spawn_owned_worker(
+    if let Some(ProviderWorkerOwner::Compaction(_, _, Some(delivery))) = request.as_ref() {
+        let registration = delivery.reserve_producer()?;
+        let (release, registered) = tokio::sync::oneshot::channel();
+        let task = spawn_owned_worker(
+            workers,
+            owners,
+            request.map(OwnedAgentWork::Provider),
+            async move {
+                if registered.await.is_err() {
+                    return Ok(None);
+                }
+                future.await
+            },
+        );
+        registration.commit();
+        let _ = release.send(());
+        return Some(task);
+    }
+    Some(spawn_owned_worker(
         workers,
         owners,
         request.map(OwnedAgentWork::Provider),
         future,
-    )
+    ))
 }
 
 /// Registers actual native custody before its monitor can be polled.

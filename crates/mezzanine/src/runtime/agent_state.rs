@@ -733,6 +733,8 @@ pub enum RuntimeActiveTurnCompactionTrigger {
 /// Claimed model compaction dispatch owned by an async provider worker.
 #[derive(Debug, Clone)]
 pub struct RuntimeAgentCompactionDispatch {
+    /// Actual reply-value custody, independent of the original expense owner.
+    pub(crate) delivery: super::RuntimeCompactionDispatchDelivery,
     /// Compaction task metadata and provider request.
     pub task: RuntimeAgentCompactionTask,
     /// Provider used to execute the compaction request.

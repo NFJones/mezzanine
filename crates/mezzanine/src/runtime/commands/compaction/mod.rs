@@ -531,7 +531,10 @@ impl RuntimeSessionService {
         let stream = provider.request_stream(&task.request);
         task.compaction_request_shape = Some((provider_api, provider_options.clone(), stream));
         self.claim_agent_compaction_task_state(pane_id, task.clone());
+        let delivery = crate::runtime::RuntimeCompactionDispatchDelivery::new();
+        self.track_compaction_dispatch_delivery(&task, delivery.observer())?;
         Ok(RuntimeAgentCompactionDispatch {
+            delivery,
             task,
             provider,
             provider_options,
@@ -573,6 +576,9 @@ impl RuntimeSessionService {
         pane_id: &str,
         task_generation: u64,
     ) -> Result<bool> {
+        if self.settle_abandoned_compaction_dispatch(pane_id, task_generation)? {
+            return Ok(true);
+        }
         let Some(task) = self
             .claimed_agent_compaction_task(pane_id, task_generation)
             .cloned()

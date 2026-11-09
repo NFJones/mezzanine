@@ -2508,7 +2508,13 @@ async fn execute_runtime_agent_compaction_dispatch(
     dispatch: RuntimeAgentCompactionDispatch,
     observer: ProviderWireRequestObserver,
 ) -> Result<mez_agent::ModelResponse> {
+    if !dispatch.delivery.producer_registered() {
+        return Err(MezError::invalid_state(
+            "compaction dispatch has no retained producer registration",
+        ));
+    }
     let RuntimeAgentCompactionDispatch {
+        delivery: _delivery,
         task,
         provider,
         provider_options,

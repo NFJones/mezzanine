@@ -14561,6 +14561,13 @@ Stale settlement MUST NOT clear a replacement generation or conversation.
 Terminal manual, worker, expiry and retry-admission failures MUST preserve the
 original bounded operation diagnostics. Missing source/progress MUST report
 unavailable model-call/dependency counts rather than inventing observed zeroes.
+Successful claim-reply enqueue MUST NOT count as producer admission. Dropping
+the last unread/unregistered dispatch value MUST retain an exact delivery
+witness with its original expense owner, including after logical Stop. Existing
+worker progress or claim expiry MUST settle that abandoned zero-expense owner.
+Producer registration MUST enter retained ownership before its monitor can run;
+registered producers retain expense custody until physical retirement. Duplicate
+dispatch copies MUST NOT admit a second producer or retire a live original.
 
 Provider input-context classification MUST preserve missing-code messages
 about oversized input even when they advise reducing `max_tokens` or
