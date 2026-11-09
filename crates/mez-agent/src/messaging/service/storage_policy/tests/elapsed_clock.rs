@@ -30,6 +30,139 @@ impl MessageTerminalStore for Store {
     }
 }
 
+impl MessageNativeContinuityStore for Store {
+    fn commit(&mut self, write: &MessageNativeContinuityWrite) -> Result<()> {
+        write.snapshot().validate()
+    }
+}
+
+/// Clock, native and registration source metadata share one admission ceiling.
+/// Separate partial preflights must not admit a source whose combined charge
+/// exceeds that ceiling, even by one byte. The positive boundary uses the same
+/// actual lower storage issuance rather than constructing a receipt.
+#[test]
+fn elapsed_admission_reserves_combined_source_metadata_before_sequence() {
+    fn scene(
+        policy: MessageStorageLimits,
+        native: bool,
+        fanout: bool,
+    ) -> (
+        MessageService,
+        MessageStorageScope,
+        SenderIdentity,
+        SenderIdentity,
+        Store,
+    ) {
+        let (mut service, scope, sender, target, mut store) = fixture(policy);
+        let mut identities = vec![sender.clone(), target.clone()];
+        if fanout {
+            identities.push(service.register_agent(None, None, "target", vec![]));
+        }
+        if native {
+            for identity in &identities {
+                let registration = service
+                    .capture_sender_registration(&identity.agent_id)
+                    .unwrap();
+                service
+                    .bind_native_conversation(
+                        &registration,
+                        "native-conversation",
+                        &MessageNativeIncarnation::default(),
+                    )
+                    .unwrap();
+            }
+        }
+        service.require_native_continuity(&scope).unwrap();
+        if native {
+            for identity in &identities {
+                let request = service
+                    .prepare_native_continuity(&scope, &identity.agent_id)
+                    .unwrap();
+                let verified = request.write().persist(&mut store).unwrap();
+                assert!(request.finish(&mut service, verified).unwrap());
+            }
+        }
+        service
+            .install_storage_clock(&scope, [9; 16], Clock::at(100))
+            .unwrap();
+        if native {
+            // Genuine pending originals fill metadata after the startup journal
+            // scratch retires. The narrowed admission cap still permits those
+            // actual earlier continuity writes; no policy is changed mid-run.
+            for index in 0..5 {
+                let mut envelope = mail(&sender, &target, &format!("seed-{index}"), 0);
+                envelope.time = "t".repeat(110_000);
+                accept(&mut service, &scope, &mut store, envelope);
+            }
+        }
+        (service, scope, sender, target, store)
+    }
+
+    fn candidate(sender: &SenderIdentity, target: &SenderIdentity, fanout: bool) -> Envelope {
+        let mut envelope = mail(sender, target, "combined", 8);
+        if fanout {
+            envelope.recipient = Recipient::Role("target".into());
+        }
+        envelope
+    }
+
+    for (native, fanout) in [(false, false), (false, true), (true, true)] {
+        let (mut reference, scope, sender, target, mut store) = scene(limits(), native, fanout);
+        accept(
+            &mut reference,
+            &scope,
+            &mut store,
+            candidate(&sender, &target, fanout),
+        );
+        let exact = reference.storage_usage().unwrap().unwrap().metadata_bytes;
+        for (budget, accepted) in [(exact - 1, false), (exact, true)] {
+            let mut policy = limits();
+            policy.metadata_bytes = budget;
+            let (mut service, scope, sender, target, mut store) = scene(policy, native, fanout);
+            let envelope = candidate(&sender, &target, fanout);
+            let before = service.storage_usage().unwrap().unwrap();
+            let sequence = service.last_sequence();
+            let pending = service.pending.len();
+            let receipts = service.accepted_messages.len();
+            let originals = store.originals.clone();
+            if accepted {
+                let delivery = accept(&mut service, &scope, &mut store, envelope);
+                assert_eq!(service.last_sequence(), sequence + 1);
+                assert_eq!(delivery.queued_recipients, if fanout { 2 } else { 1 });
+                assert_eq!(
+                    service.storage_usage().unwrap().unwrap().metadata_bytes,
+                    exact
+                );
+                assert_eq!(store.originals.len(), originals.len() + 1);
+            } else {
+                for _ in 0..2 {
+                    let error = service
+                        .prepare_acceptance(
+                            &sender.agent_id,
+                            envelope.clone(),
+                            MessageScope::Session,
+                            10,
+                            4096,
+                            None,
+                        )
+                        .err()
+                        .expect("combined metadata must refuse before reserving an occurrence");
+                    assert_eq!(error.kind(), MessageErrorKind::Capacity);
+                    assert_eq!(service.last_sequence(), sequence);
+                    assert!(service.admission.is_none());
+                    assert_eq!(service.pending.len(), pending);
+                    assert_eq!(service.accepted_messages.len(), receipts);
+                    let usage = service.storage_usage().unwrap().unwrap();
+                    assert_eq!(usage.metadata_bytes, before.metadata_bytes);
+                    assert!(usage.metadata_bytes <= budget);
+                    assert_eq!(usage.cache, before.cache);
+                    assert_eq!(store.originals, originals);
+                }
+            }
+        }
+    }
+}
+
 /// A changed wall sample cannot expire or revive custody. Source4 carries the
 /// original domain and acceptance time; receive/duplicate/expiry all use the
 /// installed reader and preserve the original strict TTL boundary.

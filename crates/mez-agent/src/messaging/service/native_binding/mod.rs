@@ -359,6 +359,25 @@ impl MessageService {
                     )
                 })
             });
+        // These components coexist in one immutable source. Independent checks
+        // of each component would admit their sum beyond the shared ceiling.
+        let bytes = bytes
+            .saturating_add(if self.custody_clock_domain().is_some() {
+                super::storage_policy::CLOCK_METADATA_BYTES
+            } else {
+                0
+            })
+            .saturating_add(
+                self.storage_custody
+                    .as_ref()
+                    .filter(|policy| policy.native_continuity_required)
+                    .map_or(0, |_| {
+                        super::registration_binding::RegistrationBindings::metadata_for(
+                            bindings.len(),
+                        )
+                    }),
+            )
+            .saturating_add(self.source_registration_intent_metadata(bindings)?);
         self.reserve_storage_metadata(envelope, bindings, bytes)?;
         Ok(Some(NativeBindings {
             sender: self

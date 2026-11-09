@@ -17131,6 +17131,12 @@ Canonical payload allocations and decoder reservations MUST still share at most
 results MUST remain charged even after cache release or canonical row removal;
 only actual joined recovery may retire an uncertain read reservation. Metadata
 MUST reserve worker, allocation-index and bounded reader-continuation headroom.
+Admission MUST check the combined native attribution, registration namespaces,
+elapsed-clock metadata and any newly required source-only end intents against
+that same metadata ceiling before copying source bindings or reserving its
+sequence. Separate per-component checks MUST NOT substitute for this combined
+preflight. Existing exact end intents remain charged once; a refused source
+MUST NOT consume an occurrence or leave a new source-only end intent retained.
 
 Cold actor reads MUST retain their actual original registration and reply in a
 bounded queue of at most 64 continuations and 64 KiB logical metadata. Reload

@@ -501,26 +501,32 @@ impl MessageService {
         self.reserve_pending_recipient_bindings(&bindings)?;
         let native_bindings = self.capture_native_bindings(&envelope, &bindings)?;
         let registration_bindings = self.capture_registration_bindings(&envelope, &bindings)?;
+        let attribution_bytes = if self.custody_clock_domain().is_some() {
+            super::storage_policy::CLOCK_METADATA_BYTES
+        } else {
+            0usize
+        }
+        .saturating_add(
+            native_bindings
+                .as_ref()
+                .map_or(0, |owners| owners.metadata_bytes()),
+        )
+        .saturating_add(
+            registration_bindings
+                .as_ref()
+                .map_or(0, |owners| owners.metadata_bytes()),
+        );
+        // Recheck the actual combined attribution after source-only end intents
+        // have been retained. The earlier borrowed preflight protects copying;
+        // this check prevents a future capture change from bypassing admission.
+        self.reserve_storage_metadata(&envelope, &bindings, attribution_bytes)?;
         if registration_bindings.is_some()
             && super::storage_policy::message_metadata_bytes(
                 super::auxiliary::envelope_bytes(&envelope),
                 &bindings,
             )
-            .saturating_add(if self.custody_clock_domain().is_some() {
-                super::storage_policy::CLOCK_METADATA_BYTES
-            } else {
-                0
-            })
-            .saturating_add(
-                native_bindings
-                    .as_ref()
-                    .map_or(0, |owners| owners.metadata_bytes()),
-            )
-            .saturating_add(
-                registration_bindings
-                    .as_ref()
-                    .map_or(0, |owners| owners.metadata_bytes()),
-            ) > 512 * 1024
+            .saturating_add(attribution_bytes)
+                > 512 * 1024
         {
             return Err(admission_capacity());
         }
@@ -582,21 +588,7 @@ impl MessageService {
                 super::auxiliary::envelope_bytes(&envelope),
                 &bindings,
             )
-            .saturating_add(if self.custody_clock_domain().is_some() {
-                super::storage_policy::CLOCK_METADATA_BYTES
-            } else {
-                0
-            })
-            .saturating_add(
-                native_bindings
-                    .as_ref()
-                    .map_or(0, |owners| owners.metadata_bytes()),
-            )
-            .saturating_add(
-                registration_bindings
-                    .as_ref()
-                    .map_or(0, |bindings| bindings.metadata_bytes()),
-            ),
+            .saturating_add(attribution_bytes),
             None,
         )?;
         let envelope = Arc::new(envelope);

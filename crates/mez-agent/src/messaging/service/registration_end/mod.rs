@@ -252,6 +252,47 @@ impl MessageService {
             .map(|_| ())
     }
 
+    /// Measures only not-yet-retained source intents while registrations remain
+    /// borrowed. Admission includes this charge with all source attribution
+    /// before cloning bindings; existing exact intents are already charged.
+    pub(super) fn source_registration_intent_metadata(
+        &self,
+        bindings: &[(AgentId, MessageSequence)],
+    ) -> Result<usize> {
+        let Some(policy) = self
+            .storage_custody
+            .as_ref()
+            .filter(|p| p.native_continuity_required)
+        else {
+            return Ok(0);
+        };
+        let entries = policy.registration_ends.0.lock().map_err(|_| changed())?;
+        let mut bytes = 0usize;
+        for (agent, floor) in bindings {
+            let registration = self
+                .capture_sender_registration(agent)
+                .ok_or_else(changed)?;
+            if self.registration_floors.get(agent) != Some(floor) {
+                return Err(changed());
+            }
+            let key = *registration.identity.native_namespace.as_bytes();
+            if let Some(entry) = entries.get(&key) {
+                if entry
+                    .registration
+                    .as_ref()
+                    .is_none_or(|actual| !Arc::ptr_eq(&actual.identity, &registration.identity))
+                {
+                    return Err(changed());
+                }
+            } else {
+                bytes = bytes.saturating_add(
+                    INTENT_METADATA.saturating_add(agent.as_str().len().saturating_mul(4)),
+                );
+            }
+        }
+        Ok(bytes)
+    }
+
     /// Reserves source-only raw/native intent retention before copying a source.
     /// Dropping a failed unpublished source releases newly held raw metadata.
     pub(super) fn track_source_registration(
