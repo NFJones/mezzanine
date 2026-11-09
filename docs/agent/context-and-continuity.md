@@ -363,6 +363,13 @@ separately. Structured failures contain bounded categories, while the ordinary
 process panic diagnostics remain available. Shared actor failures still stop
 the compromised owner.
 
+Compactor construction, required timer admission and lost claim replies settle
+immediately when the owner can prove no worker received the dispatch. The exact
+claim and its zero-expense accounting identity are released together, with
+operation diagnostics and accepted steering preserved. They need no later worker
+callback. Deadline expiry or Stop with a potentially live worker keeps the
+original expense owner until physical retirement and final usage settlement.
+
 When the provider service retires a claimed request, it observes request
 termination and settles the original claim. A completed result still follows
 normal actor validation; cleanup does not substitute a cancellation for it.

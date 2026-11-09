@@ -3619,11 +3619,28 @@ impl AsyncRuntimeSessionActor {
                         }
                     }
                 }
-                let should_notify = result.is_ok();
-                let _ = reply.send(result);
-                if should_notify {
-                    self.notify_event_delivery();
+                if let Err(Ok(Some(_dispatch))) = reply.send(result) {
+                    // This exact dispatch is still ours: no receiver obtained
+                    // it, and no worker can produce a future usage callback.
+                    let cause = MezError::invalid_state(
+                        "compaction claim reply was lost before worker dispatch",
+                    );
+                    if let Err(error) = self.service.reject_undispatched_agent_compaction_task(
+                        &pane_id,
+                        task_generation,
+                        &cause,
+                    ) {
+                        // No reply recipient remains. Logical/expense state
+                        // was already retired; report secondary failure without
+                        // serializing its potentially private error message.
+                        eprintln!(
+                            "mezzanine: undispatched compaction settlement failed: dispatch={task_generation}; error_kind={:?}",
+                            error.kind()
+                        );
+                    }
                 }
+                // Constructor refusals also changed logical state and status.
+                self.notify_event_delivery();
                 false
             }
             AsyncRuntimeRequest::ClaimAgentRememberTask {

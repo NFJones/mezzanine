@@ -822,6 +822,12 @@ async fn recovered_compaction_lease_refusal_retires_offer() {
             .is_none()
     );
     assert!(!actor.service.agent_is_compacting("%1"));
+    assert!(
+        !actor
+            .service
+            .retains_compaction_expense_for_tests("%1", generation),
+        "no worker received this claim, so no future usage producer owns it"
+    );
     assert!(actor.refused_dispatch_sources.is_empty());
     assert!(actor.offered_dispatch_sources.is_empty());
     actor.drain_timer_side_effects(64).unwrap();
@@ -831,6 +837,63 @@ async fn recovered_compaction_lease_refusal_retires_offer() {
             .unwrap()
             .is_empty()
     );
+}
+
+/// A constructor refusal has no producer and needs no future worker event or
+/// deadline to retire its exact claim and zero-expense accounting identity.
+#[tokio::test(flavor = "current_thread")]
+async fn compaction_constructor_refusal_settles_before_reply_without_a_lease() {
+    let (_root, mut actor, _primary, generation) = pending_compaction_at_capacity();
+    refuse_and_offer(&mut actor, generation);
+    actor.drain_timer_side_effects(64).unwrap();
+    actor.service.replace_config_layers(Vec::new()).unwrap();
+    assert!(claim(&mut actor, generation).await.is_err());
+    assert!(!actor.service.agent_is_compacting("%1"));
+    assert!(
+        !actor
+            .service
+            .agent_compaction_task_is_claimed("%1", generation)
+    );
+    assert!(
+        !actor
+            .service
+            .retains_compaction_expense_for_tests("%1", generation)
+    );
+    assert!(actor.drain_timer_side_effects(64).unwrap().iter().all(
+        |effect| !matches!(effect, RuntimeSideEffect::ScheduleTimer { key, .. }
+            if key.kind == RuntimeTimerKind::CompactionClaim && key.generation == generation)
+    ));
+}
+
+/// The actor still owns a dispatch rejected by its one-shot reply channel.
+/// There is no monitor/producer that could later deliver usage or completion.
+#[tokio::test(flavor = "current_thread")]
+async fn compaction_lost_claim_reply_retires_undispatched_owner() {
+    let (_root, mut actor, _primary, generation) = pending_compaction_at_capacity();
+    refuse_and_offer(&mut actor, generation);
+    actor.drain_timer_side_effects(64).unwrap();
+    let (reply, response) = tokio::sync::oneshot::channel();
+    drop(response);
+    actor
+        .handle_request(AsyncRuntimeRequest::ClaimAgentCompactionTask {
+            pane_id: "%1".into(),
+            task_generation: generation,
+            reply,
+        })
+        .await;
+    assert!(!actor.service.agent_is_compacting("%1"));
+    assert!(
+        !actor
+            .service
+            .agent_compaction_task_is_claimed("%1", generation)
+    );
+    assert!(
+        !actor
+            .service
+            .retains_compaction_expense_for_tests("%1", generation)
+    );
+    assert!(actor.refused_dispatch_sources.is_empty());
+    assert!(actor.offered_dispatch_sources.is_empty());
 }
 
 /// A real retryable failure replaces a claimed compactor with a new generation

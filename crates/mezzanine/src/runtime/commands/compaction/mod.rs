@@ -393,7 +393,7 @@ impl RuntimeSessionService {
             return Ok(None);
         }
         self.require_auxiliary_accounting_capacity()?;
-        let Some(mut task) = self.take_pending_agent_compaction_task(pane_id) else {
+        let Some(task) = self.take_pending_agent_compaction_task(pane_id) else {
             return Ok(None);
         };
         let task_generation = task.task_generation;
@@ -402,6 +402,31 @@ impl RuntimeSessionService {
             return Ok(None);
         }
         self.claim_agent_compaction_task_state(pane_id, task.clone());
+        match self.prepare_claimed_agent_compaction_dispatch(pane_id, task) {
+            Ok(dispatch) => Ok(Some(dispatch)),
+            Err(error) => {
+                // Construction has not handed out a producer. Settle here,
+                // before a host can lose the refusal reply or attempt a lease.
+                self.reject_undispatched_agent_compaction_task(pane_id, task_generation, &error)
+                    .map_err(|settlement| {
+                        MezError::invalid_state(format!(
+                            "compaction claim failed: {}; settlement failed: {}",
+                            error.message(),
+                            settlement.message()
+                        ))
+                    })?;
+                Err(error)
+            }
+        }
+    }
+
+    /// Constructs request-local adapters while the service still owns the whole
+    /// undispatched claim. An error cannot leave a future expense producer.
+    fn prepare_claimed_agent_compaction_dispatch(
+        &mut self,
+        pane_id: &str,
+        mut task: RuntimeAgentCompactionTask,
+    ) -> Result<RuntimeAgentCompactionDispatch> {
         // Source/configuration/process authority must still hold before a new
         // credential lookup or model producer, including successor wave claims.
         self.validate_replay_compaction_task(&task)?;
@@ -506,12 +531,58 @@ impl RuntimeSessionService {
         let stream = provider.request_stream(&task.request);
         task.compaction_request_shape = Some((provider_api, provider_options.clone(), stream));
         self.claim_agent_compaction_task_state(pane_id, task.clone());
-        Ok(Some(RuntimeAgentCompactionDispatch {
+        Ok(RuntimeAgentCompactionDispatch {
             task,
             provider,
             provider_options,
             stream,
-        }))
+        })
+    }
+
+    /// Settles an exact claim proven not to have left its admission boundary.
+    /// Callers must own the dispatch or synchronously know it was never handed
+    /// off. Expiry, Stop and live-worker cancellation must retain expense until
+    /// physical retirement instead. No provider retry or publication is granted.
+    pub(crate) fn reject_undispatched_agent_compaction_task(
+        &mut self,
+        pane_id: &str,
+        task_generation: u64,
+        cause: &MezError,
+    ) -> Result<bool> {
+        let Some(task) = self
+            .claimed_agent_compaction_task(pane_id, task_generation)
+            .cloned()
+        else {
+            return Ok(false);
+        };
+        let current = self.agent_compaction_task_is_current(pane_id, task_generation);
+        let error = self.compaction_failure_with_progress(&task, cause.clone());
+        // Clear exact logical and zero-expense ownership before fallible
+        // terminal presentation or recovery of separately accepted steering.
+        self.record_compaction_failure_usage(pane_id, task_generation, Default::default());
+        let mut failed = self.fail_agent_compaction_task(pane_id, task_generation);
+        if current {
+            let terminal = if let Some((turn, source)) = failed.take_resume_turn_and_source() {
+                self.fail_running_turn_after_compaction_error(&turn, &source, &error)
+            } else {
+                Ok(())
+            };
+            let facts = error
+                .compaction_failure()
+                .map(|facts| format!("\n{}", facts.diagnostic_line()))
+                .unwrap_or_default();
+            let presentation = self.append_agent_status_text_to_terminal_buffer(
+                pane_id,
+                &format!(
+                    "agent: compact was not dispatched: {}{facts}",
+                    error.message()
+                ),
+            );
+            let steering = self.resume_agent_compaction_steering(pane_id);
+            // Attempt all independent obligations and preserve the first error.
+            terminal.and(presentation).and(steering)?;
+        }
+        Ok(true)
     }
 
     /// Retires an exact claimed compaction whose worker result was not delivered.

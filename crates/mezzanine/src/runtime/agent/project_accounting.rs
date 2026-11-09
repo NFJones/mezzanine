@@ -218,6 +218,14 @@ impl RuntimeSessionService {
         Ok(())
     }
 
+    /// Observes actual issued expense custody without installing a test owner.
+    #[cfg(test)]
+    pub(crate) fn retains_compaction_expense_for_tests(&self, pane: &str, generation: u64) -> bool {
+        self.agent
+            .compaction_accounting_owners
+            .contains_key(&(pane.to_owned(), generation))
+    }
+
     /// Records reported compactor failure expense before exact generation retirement.
     pub(in crate::runtime) fn record_compaction_failure_usage(
         &mut self,

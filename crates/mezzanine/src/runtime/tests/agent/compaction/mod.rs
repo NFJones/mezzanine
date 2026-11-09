@@ -1036,6 +1036,7 @@ fn runtime_compaction_claim_expiry_is_generation_and_conversation_fenced() {
             .unwrap()
     );
     assert!(!service.agent_compaction_task_is_claimed("%1", old_generation));
+    assert!(service.retains_compaction_expense_for_tests("%1", old_generation));
     assert!(service.agent_is_compacting("%1"));
     assert_eq!(
         service.pending_agent_compaction_task_generation("%1"),
@@ -1060,6 +1061,7 @@ fn runtime_compaction_claim_expiry_is_generation_and_conversation_fenced() {
         })
         .unwrap();
     assert!(!late.applied);
+    assert!(!service.retains_compaction_expense_for_tests("%1", old_generation));
     assert!(service.agent_is_compacting("%1"));
 }
 

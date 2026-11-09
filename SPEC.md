@@ -14550,6 +14550,15 @@ word/token targets, valid long output and nonreducing output MUST NOT cause
 regeneration. Raw text or one valid final-say frame MAY supply the summary;
 decoding MUST NOT execute actions.
 
+Compaction claim construction, mandatory lease admission or reply delivery
+failure proven to precede worker handoff MUST promptly retire the exact claim
+and its zero-expense accounting owner. These refusals MUST NOT depend on a future
+worker callback or be reported as an unknown provider execution. Terminal state
+and bounded content-free operation diagnostics MUST remain available. Deadline
+expiry and cancellation with a potentially live producer MUST retain original
+expense ownership until physical retirement and settle known reported usage once.
+Stale settlement MUST NOT clear a replacement generation or conversation.
+
 Provider input-context classification MUST preserve missing-code messages
 about oversized input even when they advise reducing `max_tokens` or
 `max_output_tokens`. Such advice alone MUST NOT select output-limit recovery;

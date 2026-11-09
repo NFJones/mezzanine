@@ -131,7 +131,7 @@ impl AsyncRuntimeSessionActor {
                     pane_id,
                     generation,
                 } => {
-                    self.service.expire_claimed_agent_compaction_task(pane_id, generation)
+                    self.service.reject_undispatched_agent_compaction_task(pane_id, generation, &error)
                         .map_err(|settlement_error| MezError::invalid_state(format!(
                             "compaction claim timer admission failed: {}; settlement failed: {}", error.message(), settlement_error.message()
                         )))?;

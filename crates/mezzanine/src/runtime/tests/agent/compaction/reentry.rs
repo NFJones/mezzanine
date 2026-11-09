@@ -163,17 +163,22 @@ fn runtime_compaction_freezes_actual_model_projection_without_mutating_live_sour
             }),
             "{error}"
         );
-        // The real actor reports constructor refusal through exact failed-task
-        // ingress. No synthetic completion or model-work proof is supplied.
-        service
-            .apply_agent_compaction_transition(
-                crate::test_support::compaction_source::model_result_event(
-                    "%1",
-                    generation,
-                    Err(error),
-                ),
-            )
-            .unwrap();
+        assert!(!service.agent_is_compacting("%1"));
+        assert!(!service.retains_compaction_expense_for_tests("%1", generation));
+        // A host's fallback failure event is a duplicate after synchronous
+        // undispatched settlement, with no new completion or model-work proof.
+        assert!(
+            !service
+                .apply_agent_compaction_transition(
+                    crate::test_support::compaction_source::model_result_event(
+                        "%1",
+                        generation,
+                        Err(error),
+                    ),
+                )
+                .unwrap()
+                .applied
+        );
         assert!(!service.agent_is_compacting("%1"));
         assert!(service.pending_agent_compaction_tasks().is_empty());
         assert!(service.pending_agent_provider_tasks().is_empty());

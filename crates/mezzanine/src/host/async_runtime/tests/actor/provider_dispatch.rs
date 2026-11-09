@@ -700,8 +700,8 @@ async fn async_actor_optional_provider_progress_pressure_preserves_failure() {
     let _ = std::fs::remove_dir_all(registry_root);
 }
 
-/// A compaction preparation error with no delivered failure event retains a
-/// bounded claim, whose exact timer releases the marker and fails the turn.
+/// A successfully delivered compaction dispatch with no worker result retains
+/// a bounded claim, whose exact timer releases the marker and fails the turn.
 #[tokio::test(flavor = "current_thread")]
 async fn async_actor_lost_compaction_failure_expires_claim() {
     run_compaction_claim_admission(false).await;
@@ -726,7 +726,7 @@ fn compaction_claim_source() -> (
         "mez-compaction-claim-source-{}",
         crate::storage::token_usage::new_token_usage_event_id(),
     ));
-    crate::test_support::compaction_source::recovery_source(
+    let (mut service, store, turn) = crate::test_support::compaction_source::recovery_source(
         test_service(),
         root,
         &format!(
@@ -735,7 +735,13 @@ fn compaction_claim_source() -> (
         ),
         "original task completed",
         10,
-    )
+    );
+    // Construct a real dispatch without invoking inference. Missing auth-store
+    // admission is a synchronous refusal and cannot stand in for worker loss.
+    service.set_auth_store(crate::security::auth::AuthStore::new(
+        crate::security::auth::AuthPaths::under_config_root(&store.root().join("claim-auth")),
+    ));
+    (service, store, turn)
 }
 
 async fn run_compaction_claim_admission(saturate: bool) {
@@ -794,12 +800,11 @@ async fn run_compaction_claim_admission(saturate: bool) {
             handle.shutdown().await.unwrap();
             return;
         }
-        assert!(
-            handle
-                .claim_agent_compaction_task("%1".to_string(), generation)
-                .await
-                .is_err()
-        );
+        let dispatch = handle
+            .claim_agent_compaction_task("%1".to_string(), generation)
+            .await
+            .unwrap()
+            .expect("genuinely admitted worker dispatch");
         let timers = handle.drain_timer_side_effects(16).await.unwrap();
         let key = timers
             .into_iter()
@@ -825,10 +830,30 @@ async fn run_compaction_claim_admission(saturate: bool) {
         let mut late = RuntimeEventBatch::new();
         late.push(RuntimeEvent::Timer(TimerEvent { key, now_ms: 2 }));
         assert_eq!(handle.submit_runtime_events(late).await.unwrap().applied, 0);
+        // Only after this actual dispatch is dropped can its known zero cost
+        // settle. Logical deadline expiry alone cannot retire a live producer.
+        drop(dispatch);
+        let mut retired = RuntimeEventBatch::new();
+        retired.push(RuntimeEvent::AgentCompaction(
+            crate::test_support::compaction_source::model_result_event(
+                "%1",
+                generation,
+                Err(MezError::invalid_state("lost dispatch retired")),
+            ),
+        ));
+        assert_eq!(
+            handle.submit_runtime_events(retired).await.unwrap().applied,
+            0
+        );
         handle.shutdown().await.unwrap();
     };
     let ((), mut exit) = tokio::join!(client, actor.run());
     assert!(!exit.service.agent_is_compacting("%1"));
+    assert!(
+        !exit
+            .service
+            .retains_compaction_expense_for_tests("%1", generation)
+    );
     assert_eq!(
         exit.service.agent_turn_ledger().turn(&turn).unwrap().state,
         mez_agent::AgentTurnState::Failed
@@ -988,12 +1013,11 @@ async fn async_actor_compaction_failure_cancels_claim_lease() {
         .build()
         .unwrap();
     let client = async {
-        assert!(
-            handle
-                .claim_agent_compaction_task("%1".to_string(), generation)
-                .await
-                .is_err()
-        );
+        let dispatch = handle
+            .claim_agent_compaction_task("%1".to_string(), generation)
+            .await
+            .unwrap()
+            .expect("genuinely admitted worker dispatch");
         let key = handle
             .drain_timer_side_effects(16)
             .await
@@ -1008,6 +1032,7 @@ async fn async_actor_compaction_failure_cancels_claim_lease() {
                 _ => None,
             })
             .expect("compaction lease");
+        drop(dispatch);
         let mut failed = RuntimeEventBatch::new();
         failed.push(RuntimeEvent::AgentCompaction(
             crate::runtime::AgentCompactionEvent::Failed {
