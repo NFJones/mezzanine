@@ -13,6 +13,7 @@ use mez_agent::messaging::{Delivery, MessageAcceptanceTicket, MessageError, Mess
 use std::sync::Arc;
 
 mod admission;
+pub(super) mod bridge;
 mod continuation;
 mod projection;
 
@@ -267,9 +268,7 @@ impl RuntimeSessionService {
         .into_iter()
         .try_fold(0usize, usize::checked_add)
         .ok_or_else(|| MezError::conflict("message source text budget overflow"))?;
-        let receipts = &self.agent.completion_settlements.messages;
-        let used = receipts.values().map(|r| r.text_bytes).sum::<usize>();
-        if receipts.len() >= MAX_SOURCES || text_bytes > MAX_SOURCE_TEXT.saturating_sub(used) {
+        if !self.message_source_capacity_available(text_bytes) {
             let code = if *expect_reply {
                 "request_tracking_capacity"
             } else {
@@ -404,11 +403,12 @@ impl RuntimeSessionService {
 
     /// Refuses snapshot replacement while original semantic/result custody remains.
     pub(crate) fn has_pending_stored_message_actions(&self) -> bool {
-        !self
-            .agent
-            .completion_settlements
-            .message_continuations
-            .is_empty()
+        self.has_pending_stored_bridge_message()
+            || !self
+                .agent
+                .completion_settlements
+                .message_continuations
+                .is_empty()
             || self
                 .agent
                 .completion_settlements
@@ -464,7 +464,32 @@ impl RuntimeSessionService {
     /// Stops new source admission and settles only never-issued originals.
     pub(crate) fn stop_stored_message_actions(&mut self) -> Result<()> {
         self.agent.completion_settlements.message_storage_stopping = true;
+        // A bridge here owns semantics only, never a lower write or acceptance.
+        if self
+            .agent
+            .completion_settlements
+            .bridge_source
+            .take()
+            .is_some()
+        {
+            eprintln!("mez: runtime bridge cancelled before acceptance during shutdown");
+        }
         self.cancel_queued_stored_message_actions(None)
+    }
+
+    /// Native actions and the one optional bridge share a finite source pool.
+    pub(in crate::runtime::agent) fn message_source_capacity_available(
+        &self,
+        bytes: usize,
+    ) -> bool {
+        let state = &self.agent.completion_settlements;
+        let bridge = state.bridge_source.as_ref();
+        let used = state.messages.values().map(|r| r.text_bytes).fold(
+            bridge.map_or(0, |source| source.text_bytes),
+            usize::saturating_add,
+        );
+        state.messages.len() + usize::from(bridge.is_some()) < MAX_SOURCES
+            && bytes <= MAX_SOURCE_TEXT.saturating_sub(used)
     }
 
     /// Keeps original group backing while an action still owns storage/result work.

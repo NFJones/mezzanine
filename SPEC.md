@@ -17124,6 +17124,26 @@ identity/discovery/presence/receive requests keep their existing audited adapter
 These internal raw paths do not enable durable native/bridge ingress, native
 context/dedup/restore, supervisory abort retention or complete quotas/control.
 
+With an explicitly registered internal actor root, runtime-authored initial
+spawn status, later task status and terminal-result references MUST use that
+same lower acceptance lane, never successful memory-only fallback. One optional
+UNACCEPTED bridge source MAY await native-continuity registration and root
+capacity. It MUST share the native semantic-source limit of 64 sources/8 MiB,
+additionally charge at most 512 KiB per bridge source including retained string
+and vector capacities/identity overhead, and refuse a later or oversized report
+without replacing the original. The existing FIFO source allocator MUST order
+bridge and eligible native actions. Original registration allocations and private
+conversation/incarnation bindings MUST fence selection; equal public IDs do not
+restore authority. Selected preparation freezes the lower audience and refreshed
+sender telemetry. No sequence, receipt or accepted success follows from staging.
+Before issuance, retirement, shutdown or qualified admission refusal MAY cancel
+the unaccepted report observably. After issuance, actual worker custody, exact
+commit/noncommit reconciliation, backoff, guarded ACK progress and shutdown MUST
+remain with the original root. Best-effort bridge refusal MUST NOT erase genuine
+terminal/join/request evidence or manufacture inference, approval or wake rights.
+This internal integration does not enable normal durable product activation or
+qualify restart recovery, complete quotas or durable reclamation.
+
 The lower service's explicit actor-owned terminal maintenance MUST reserve one
 fixed-size disposition slot per accepted recipient before success. It records
 `expired` only after the original strict TTL boundary, or `recipient_retired`

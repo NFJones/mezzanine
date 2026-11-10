@@ -2014,13 +2014,14 @@ impl RuntimeSessionService {
             payload: task_status.to_json(),
             extension_fields,
         };
-        self.control.message_service_mut().accept_at_with_scope(
-            &child_identity.agent_id,
-            envelope,
-            mez_agent::messaging::MessageScope::Session,
-            now_ms,
-        )?;
-        self.deliver_pending_runtime_agent_messages(now_ms)?;
+        let child_turn = self
+            .agent_turn_ledger()
+            .turn(initial_status.turn_id)
+            .cloned()
+            .ok_or_else(|| MezError::invalid_state("initial bridge child turn unavailable"))?;
+        if self.accept_runtime_bridge_message(&child_turn, envelope, now_ms)? {
+            self.deliver_pending_runtime_agent_messages(now_ms)?;
+        }
         self.append_subagent_parent_status_line(
             initial_status.parent_agent_id,
             &format!(

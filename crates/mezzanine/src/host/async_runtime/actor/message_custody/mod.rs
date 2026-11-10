@@ -19,6 +19,7 @@ use futures_util::FutureExt;
 use mez_agent::messaging::{DeliveryCursor, FanoutBatch, MessageError};
 
 mod actions;
+mod bridge;
 mod checkpoint;
 mod native;
 mod native_continuity;
@@ -99,6 +100,8 @@ enum Pending {
     NativePayload(mez_agent::messaging::MessageNativeInputAnchor),
     /// Original native action permission/group and exact lower admission.
     Action(RuntimeMessageActionAdmission),
+    /// Original untracked bridge acceptance; payload remains lower-owned.
+    Bridge,
     /// Full raw body is already in the charged lower reservation, not this owner.
     Acceptance(RawMessageContinuation),
     /// Original tracked native metadata remains in the runtime request owner.
@@ -227,7 +230,12 @@ impl ActorMessageCustody {
         matches!(self.wake, Some(Wake::Retry(_)))
             && matches!(
                 &self.pending,
-                Some(Pending::Action(_) | Pending::Acceptance(_) | Pending::Native { .. })
+                Some(
+                    Pending::Action(_)
+                        | Pending::Bridge
+                        | Pending::Acceptance(_)
+                        | Pending::Native { .. }
+                )
             )
             && self.parked_ack.is_none()
             && self.failure.is_none()
@@ -469,7 +477,8 @@ impl AsyncRuntimeSessionActor {
                 && owner.wake.is_none()
                 && owner.failure.is_none()
                 && owner.shutdown.is_none()
-        }) && !self.service.pending_stored_message_actions().is_empty();
+        }) && (self.service.has_pending_stored_bridge_message()
+            || !self.service.pending_stored_message_actions().is_empty());
         let native_input_ready = self.service.native_input_storage_required()
             && !handoff_owned
             && self.message_custody.as_ref().is_some_and(|o| {
@@ -665,6 +674,7 @@ impl AsyncRuntimeSessionActor {
         self.pump_native_message_input();
         self.pump_message_terminal();
         self.pump_message_payload_reads();
+        self.pump_stored_bridge_message();
         self.pump_stored_message_actions();
         let ready = self.message_custody.as_ref().is_some_and(|owner| {
             owner.shutdown.is_some()
@@ -764,7 +774,7 @@ impl AsyncRuntimeSessionActor {
                     ))
                 } else if matches!(
                     owner.pending,
-                    Some(Pending::NativeContinuity | Pending::RegistrationEnd)
+                    Some(Pending::NativeContinuity | Pending::RegistrationEnd | Pending::Bridge)
                 ) {
                     Err(MezError::invalid_state(
                         "MMP native journal lost its original worker state",
@@ -889,7 +899,17 @@ impl AsyncRuntimeSessionActor {
                 Ok(())
             }
             CustodyEvent::Observed(Ok(CustodyWorkerStatus::AwaitingAdoption)) => {
-                if let Some(Pending::Action(admission)) = &owner.pending {
+                if matches!(&owner.pending, Some(Pending::Bridge)) {
+                    owner
+                        .root
+                        .adopt(self.service.message_service_mut(), None)
+                        .map(|_| {
+                            owner.pending.take();
+                            owner.failure = None;
+                            owner.wake = Some(Wake::Observe);
+                            native_adopted = true;
+                        })
+                } else if let Some(Pending::Action(admission)) = &owner.pending {
                     let source = admission.source().clone();
                     self.service
                         .adopt_stored_message_action(admission, |messages, requests| {
@@ -934,7 +954,19 @@ impl AsyncRuntimeSessionActor {
                 }
             }
             CustodyEvent::Observed(Ok(CustodyWorkerStatus::AwaitingRefusal)) => {
-                if let Some(Pending::Action(admission)) = &owner.pending {
+                if matches!(&owner.pending, Some(Pending::Bridge)) {
+                    owner
+                        .root
+                        .release_rejected(self.service.message_service_mut(), None)
+                        .map(|()| {
+                            owner.pending.take();
+                            owner.failure = None;
+                            owner.wake = Some(Wake::Observe);
+                            eprintln!(
+                                "mez: runtime bridge original storage admission did not commit"
+                            );
+                        })
+                } else if let Some(Pending::Action(admission)) = &owner.pending {
                     let source = admission.source().clone();
                     self.service
                         .refuse_stored_message_action(admission, |messages, requests| {
@@ -1044,7 +1076,12 @@ impl AsyncRuntimeSessionActor {
             CustodyEvent::Observed(Ok(CustodyWorkerStatus::RetryAt(at)))
                 if matches!(
                     &owner.pending,
-                    Some(Pending::Acceptance(_) | Pending::Native { .. } | Pending::Action(_))
+                    Some(
+                        Pending::Acceptance(_)
+                            | Pending::Native { .. }
+                            | Pending::Action(_)
+                            | Pending::Bridge
+                    )
                 ) =>
             {
                 owner.wake = Some(Wake::Retry(at));
@@ -1117,7 +1154,7 @@ impl AsyncRuntimeSessionActor {
                         }
                     })
                     .map(|_| owner.wake = Some(Wake::Observe)),
-                Some(Pending::Acceptance(_)) => {
+                Some(Pending::Acceptance(_) | Pending::Bridge) => {
                     let service = self.service.message_service_mut();
                     let retried = if owner.shutdown.is_some() {
                         owner.root.recover_failed_stage(service, Instant::now())

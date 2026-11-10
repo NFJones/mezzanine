@@ -99,7 +99,8 @@ use mez_mux::command::CommandInvocation;
 /// Exactly-once ownership outcome for one execution-aware terminal settlement.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TerminalResultDisposition {
-    /// An ordinary child result was delivered directly to its parent.
+    /// Ordinary local terminal settlement completed. Its optional bridge may
+    /// still be unaccepted or refused; this is not a message delivery receipt.
     Delivered,
     /// A continued loop retained ownership of the logical result.
     RetainedByLoop,

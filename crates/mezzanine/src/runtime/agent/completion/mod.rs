@@ -151,6 +151,8 @@ pub(super) struct RuntimeCompletionSettlements {
     message_continuations: BTreeMap<String, std::sync::Arc<()>>,
     /// Exact original message sources share group lifetime and failed backing.
     messages: BTreeMap<(String, String), Box<messages::MessageCompletionReceipt>>,
+    /// One optional unaccepted bridge source shares the semantic-source budget.
+    bridge_source: Option<Box<messages::bridge::BridgeSource>>,
     external: BTreeMap<ExternalCompletionKey, Box<ExternalCompletionReceipt>>,
     native: BTreeMap<NativeCompletionKey, Box<NativeCompletionReceipt>>,
     /// Filesystem-native receipts share original group gates without shell facts.

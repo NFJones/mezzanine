@@ -1266,6 +1266,23 @@ receive still use their ordinary audited adapter. Normal product construction
 continues without this internal root; native/bridge acceptance, native context/
 dedup/restore, supervisor retention and complete quota/control integration remain.
 
+When that internal actor root is explicitly registered, initial spawn status,
+later task status and terminal-result references now use its existing lower
+acceptance lane. A new child's native registration may not yet be durable, so
+one optional unaccepted bridge source can wait without holding a provider slot.
+It shares the native 64-source/8 MiB semantic budget and has a conservative
+512 KiB charge ceiling including string/vector capacities and attribution.
+Later or oversized reports refuse without evicting the original. Bridge and
+eligible native action sources use the same FIFO allocator; selection checks
+original registration and private conversation/incarnation, then freezes lower
+audience and current sender telemetry. Staging is not accepted or delivered mail.
+Never-issued sources may cancel on retirement/refusal/shutdown; issued originals
+retain the root's normal join/reconciliation/backoff/ACK/shutdown ownership.
+Terminal and joined-result authority is retained independently before this
+best-effort reference, including when capacity refuses it. Bridge delivery still
+cannot authorize inference, a plain wait or approval. Ordinary product activation
+remains off; this is not full restart, quota or reclamation qualification.
+
 Tracked native storage preparation now retains original recipient-task slots,
 parent-process evidence and semantic fingerprint beside the lower reservation.
 These slots cannot authorize a wait before acceptance, but they observe captured

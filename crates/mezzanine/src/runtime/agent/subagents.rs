@@ -1702,13 +1702,8 @@ impl RuntimeSessionService {
             payload: payload.to_json(),
             extension_fields,
         };
-        let delivery = self.control.message_service_mut().accept_at_with_scope(
-            &child_identity.agent_id,
-            envelope,
-            mez_agent::messaging::MessageScope::Session,
-            now_ms,
-        );
-        if delivery.is_ok() {
+        let delivery = self.accept_runtime_bridge_message(turn, envelope, now_ms);
+        if matches!(delivery, Ok(true)) {
             self.deliver_pending_runtime_agent_messages(now_ms)?;
         }
         let child_label =
@@ -1723,7 +1718,6 @@ impl RuntimeSessionService {
             ),
         )?;
         if let Err(error) = delivery {
-            let error = MezError::from(error);
             self.append_lifecycle_event(
                 EventKind::AgentStatus,
                 format!(
@@ -1833,7 +1827,7 @@ impl RuntimeSessionService {
                         runtime_agent_turn_state_name(turn.state),
                     ),
                 )?;
-                Ok(())
+                Ok(false)
             }
         };
         let is_persistent_agent = self.persistent_subagent(&turn.agent_id).is_some();
@@ -1873,7 +1867,11 @@ impl RuntimeSessionService {
             let handoff = if parent_result_attached {
                 "result committed"
             } else {
-                "result delivered"
+                match &delivery {
+                    Ok(true) => "result delivered",
+                    Ok(false) => "result queued (not accepted)",
+                    Err(_) => "result undelivered",
+                }
             };
             self.append_subagent_parent_status_line(
                 parent_agent_id,
@@ -2008,7 +2006,7 @@ impl RuntimeSessionService {
         summary: &str,
         output: &str,
         now_ms: u64,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         let parent_identity =
             self.ensure_runtime_message_identity(parent_agent_id, None, "agent", &[], now_ms)?;
         if self
@@ -2060,14 +2058,11 @@ impl RuntimeSessionService {
                 "injected terminal bridge acceptance failure",
             ));
         }
-        self.control.message_service_mut().accept_at_with_scope(
-            &child_identity.agent_id,
-            envelope,
-            mez_agent::messaging::MessageScope::Session,
-            now_ms,
-        )?;
-        self.deliver_pending_runtime_agent_messages(now_ms)?;
-        Ok(())
+        let accepted = self.accept_runtime_bridge_message(turn, envelope, now_ms)?;
+        if accepted {
+            self.deliver_pending_runtime_agent_messages(now_ms)?;
+        }
+        Ok(accepted)
     }
 
     /// Injects one offline bridge-accept failure after local receipt retention.
