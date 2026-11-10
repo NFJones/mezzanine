@@ -801,12 +801,12 @@ impl RuntimeSessionService {
             return Ok(None);
         }
         // A scheduler wake may leave a provider offer queued while a native
-        // filesystem sibling still owns execution or settlement. This is a
+        // sibling still owns execution or settlement. This is a
         // temporary hold, not an invalid continuation that should fail the turn.
         // Only the original producer's exact transfer releases this ownership.
         // Retire the stale offer so it cannot masquerade as an already owned
         // provider task and suppress the original completion's later handoff.
-        if self.native_filesystem_turn_has_owner(turn_id) {
+        if self.provider_offer_has_completion_progress_owner(turn_id) {
             self.agent.pending_agent_provider_tasks.remove(turn_id);
             return Ok(None);
         }
@@ -850,6 +850,20 @@ impl RuntimeSessionService {
             }
         }
         Ok(Some(turn))
+    }
+
+    /// An existing native worker or healthy publication pump, not an inferred
+    /// error category, owns progress. A queued provider intent cannot transfer
+    /// that custody or replace the original execution with a failure report.
+    pub(super) fn provider_offer_has_completion_progress_owner(&self, turn_id: &str) -> bool {
+        self.native_filesystem_turn_has_owner(turn_id)
+            || self.completion_publication_retry_needed_for_turn(turn_id)
+            || self
+                .agent
+                .pending_native_shell_dispatches
+                .keys()
+                .chain(self.agent.claimed_native_shell_dispatches.keys())
+                .any(|(owner, _)| owner == turn_id)
     }
 
     /// Revalidates dispatch admission after external preparation, then builds
@@ -1351,6 +1365,18 @@ impl RuntimeSessionService {
                 .freeze_completion_provider_refusal_source(&refusal)
                 .and_then(|()| self.fail_configured_agent_provider_task_inner(turn_id, error));
             return self.finish_completion_provider_refusal(refusal, result);
+        }
+        if self.provider_offer_has_completion_progress_owner(turn_id)
+            && let Some(source) = self.capture_provider_failure_source(turn_id)
+        {
+            self.retain_provider_failure_refusal(
+                source,
+                error,
+                MezError::invalid_state(
+                    "provider failure reporting retained behind original completion ownership",
+                ),
+            );
+            return Ok(());
         }
         let source = self.capture_provider_failure_source(turn_id);
         let result = self.fail_configured_agent_provider_task_inner(turn_id, error);

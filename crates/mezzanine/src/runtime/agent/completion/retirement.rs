@@ -475,6 +475,13 @@ impl RuntimeSessionService {
     /// result ingress, cancellation and reap must never call this admission gate.
     /// Keeping existing admitted slots while refusing new ones bounds failed
     /// completion ownership without creating a historical receipt store.
+    pub(crate) fn completion_admission_is_inhibited(&self) -> bool {
+        self.agent.completion_settlements.critical_failure.is_some()
+    }
+
+    /// Explicit admission returns the original required failure. Settlement
+    /// pumps use the typed inhibition predicate instead: no new work is started,
+    /// but an already-issued acknowledgment is not itself a failed operation.
     pub(crate) fn ensure_completion_admission_open(&self) -> Result<()> {
         match self
             .agent
@@ -1445,9 +1452,12 @@ impl RuntimeSessionService {
         }
         if let Some(group) = group {
             if group.continuation == CompletionMilestone::NotEntered {
-                if pending.contains(&turn_id) {
-                    return false;
-                }
+                // A pending bit without this group's accepted continuation is
+                // an obsolete unclaimed intent, not a competing provider owner.
+                // All publication/archive/required gates above qualified THIS
+                // transition. Replace that intent atomically so either ordering
+                // of completion versus stale-offer retirement has one handoff.
+                pending.remove(&turn_id);
                 group.continuation = CompletionMilestone::Entered;
             }
             let changed = pending.insert(turn_id);

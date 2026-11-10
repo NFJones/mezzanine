@@ -7,6 +7,8 @@
 
 use super::*;
 
+mod provider_admission;
+
 /// Position of an immediate discovery action relative to the two native shells.
 #[derive(Clone, Copy, Debug)]
 enum Discovery {
@@ -436,7 +438,10 @@ fn runtime_native_siblings_actor_advances_without_external_event() {
                 .enable_all()
                 .build()
                 .unwrap()
-                .block_on(run_native_siblings_actor());
+                .block_on(async {
+                    run_native_siblings_actor(false).await;
+                    run_native_siblings_actor(true).await;
+                });
         })
         .unwrap()
         .join()
@@ -445,7 +450,7 @@ fn runtime_native_siblings_actor_advances_without_external_event() {
 
 /// Runs the real actor, native/provider lane and timer recovery lane together.
 /// See the owning test for automatic-handoff and stack-size invariants.
-async fn run_native_siblings_actor() {
+async fn run_native_siblings_actor(obsolete_offer: bool) {
     use crate::host::async_runtime::{
         AsyncAgentProviderServiceConfig, AsyncRuntimeActorConfig, AsyncRuntimeSessionActor,
         AsyncRuntimeSideEffectServiceConfig, run_async_agent_provider_service,
@@ -463,6 +468,22 @@ async fn run_native_siblings_actor() {
     let endpoint = format!("http://{}/v1", listener.local_addr().unwrap());
     let (mut service, _) =
         admit_siblings(Discovery::Trailing, AgentLogLevel::Verbose, Some(&marker));
+    if obsolete_offer {
+        let first = service
+            .claim_native_shell_action("turn-1", "shell-a")
+            .unwrap()
+            .unwrap();
+        assert!(
+            service
+                .complete_native_shell_action(crate::runtime::execute_native_shell_dispatch(first))
+                .unwrap()
+        );
+        assert!(
+            service
+                .queue_agent_provider_retry_task("turn-1", 1, Some("obsolete_offer_fixture"))
+                .unwrap()
+        );
+    }
     service
         .replace_config_layers(vec![ConfigLayer {
             name: "offline-native-continuation".into(),

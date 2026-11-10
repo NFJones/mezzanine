@@ -65,6 +65,16 @@ impl RuntimeSessionService {
         let Some(source) = self.capture_provider_failure_source(&turn.turn_id) else {
             return;
         };
+        if self.provider_offer_has_completion_progress_owner(&turn.turn_id) {
+            self.retain_provider_failure_refusal(
+                source,
+                error,
+                MezError::invalid_state(
+                    "provider completion failure retained behind original completion ownership",
+                ),
+            );
+            return;
+        }
         let result = match model_profile {
             Some(profile) => {
                 self.fail_agent_turn_for_provider_error(turn, provider_id, profile, error)

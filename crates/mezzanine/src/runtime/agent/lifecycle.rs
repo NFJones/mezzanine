@@ -783,7 +783,12 @@ impl RuntimeSessionService {
         ) {
             return Ok(0);
         }
-        self.ensure_completion_admission_open()?;
+        // This pump is also called after successful exact persistence ACKs.
+        // The retained admission fence inhibits starts; it is not a failure of
+        // the acknowledged write or grounds to terminate its shared service.
+        if self.completion_admission_is_inhibited() {
+            return Ok(0);
+        }
         if self.completion_finalization_holds_new_work() {
             return Ok(0);
         }

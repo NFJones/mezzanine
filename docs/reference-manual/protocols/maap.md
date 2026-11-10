@@ -87,6 +87,16 @@ evidence, not merely a turn or persistence key. Repeating the same owned snapsho
 does not enqueue another candidate; changed evidence requires distinct acceptance.
 Queued candidate ownership does not certify checked history or durable disk append.
 
+An obsolete provider offer yields to the original native execution or healthy
+publication-recovery owner; it is not a reason to fail an unfinished action for
+missing archive handoff. If provider failure reporting encounters that ownership,
+the original execution and context remain in a bounded turn-local refusal. Late
+issued results stay retained, but cannot restart work. A required shared
+completion-admission failure still prevents new dispatch; it does not make a
+successful exact transcript acknowledgment fail merely because its scheduler
+pump cannot start more work. Actual writer or shared-integrity failures remain
+distinct, and none of these paths replays actions or provider requests.
+
 ## Action catalog
 
 Native `apply_patch` selects the in-process filesystem adapter before shell

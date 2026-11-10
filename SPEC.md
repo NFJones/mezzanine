@@ -11039,6 +11039,18 @@ resample the latest body to refresh a stale fence. Moved failed backing MUST kee
 its original source; missing, plain or cold-recreated replacements MUST refuse
 that retirement. An exact already-completed private fence MAY verify a local retry
 without reissuing effects or acknowledging ordinary transcript durability.
+An obsolete unclaimed provider offer MUST yield to the exact native shell or
+filesystem execution owner and healthy publication-only recovery owner. Retiring
+that offer MUST NOT retire the original action, fabricate archive handoff, or
+prevent its eventual legitimate continuation. Provider failure reporting while
+such work remains owned MUST retain the original execution/context and a bounded
+turn-local refusal before any synthetic replacement report. Late issued outcomes
+remain attributable without restoring dispatch authority or replaying effects.
+A retained shared completion-admission fence MUST continue to refuse new work,
+but scheduler pumping after an exact successful persistence acknowledgment MUST
+report inhibited admission without converting that acknowledged write into a
+shared persistence-service failure. This does not clear the required error or
+normalize an actual writer, actor, ownership or integrity failure.
 Each protection interval MUST also own an opaque in-memory allocation identity.
 Re-protection after release MUST allocate a new identity even when source bytes
 and frontier are unchanged. Retired handles and completed-source proofs MUST NOT
