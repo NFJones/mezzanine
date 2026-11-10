@@ -99,7 +99,10 @@ pub use payload_load::{
 mod source;
 pub(super) use source::RetainedEnvelope;
 mod source_lifetimes;
-pub use source_lifetimes::{MessageSourceRetirementFence, MessageSourceRetirementInspection};
+pub use source_lifetimes::{
+    MessageSourcePreservationReservation, MessageSourceRetirementFence,
+    MessageSourceRetirementInspection,
+};
 mod checkpoint;
 pub use checkpoint::{
     MessageNativeCheckpoint, MessageStorageBinding, MessageStorageSnapshot,

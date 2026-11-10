@@ -398,6 +398,16 @@ omitted bytes; metadata and extensions can still be private. This codec neither
 persists a cleanup intent nor replaces original chunks or verifies canonical
 archive rows. Native journals remain blockers until actual dependency-preserving
 reclamation is implemented and qualified.
+An explicit preservation-preparation entrypoint can retain the actual bodyless
+records under a separately funded finite encoded allowance plus framing space.
+The allowance binds one exact inspection allocation, not just the same service
+or root labels. All records remain quarantined until the whole candidate and
+transaction validate and the original lower service adopts the joined result.
+Observer cancellation and Stop do not release the root's escrow early; returned
+records retain their charge until their last owner drops. Insufficient encoded
+space returns no partial result and does not declare a healthy store corrupt.
+This is in-memory preparation only, not disk staging, physical rewrite capacity,
+a durable cleanup intent or normal actor activation.
 Optional analysis now has an owned blocking-worker entrypoint on the existing
 serialized root lane. It retains capture/handle ownership across observer
 cancellation, checks the actual lower service at adoption, and permits settlement

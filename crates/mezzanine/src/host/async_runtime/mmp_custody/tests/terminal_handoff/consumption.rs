@@ -80,7 +80,7 @@ async fn sender_consumption_retirement_commits_to_handoff_and_registration_histo
     } = scene;
     drop(source);
     let before = fixture.disk();
-    root.start_retirement_inspection(&service, sequence)
+    root.start_retirement_preservation(&service, sequence, 64 * 1024)
         .unwrap();
     assert_eq!(
         root.observe().await.unwrap(),
@@ -90,6 +90,7 @@ async fn sender_consumption_retirement_commits_to_handoff_and_registration_histo
         .finish_retirement_inspection(&service)
         .unwrap()
         .unwrap();
+    super::super::retirement_inspection::assert_prepared(&candidate);
     let source = &candidate.sources()[0];
     super::super::retirement_inspection::assert_source_evidence(&fixture, source);
     assert_eq!(source.sequence, sequence);

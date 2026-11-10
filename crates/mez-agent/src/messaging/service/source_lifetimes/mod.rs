@@ -12,6 +12,9 @@ use std::sync::{Mutex, Weak};
 
 use super::*;
 
+mod staging;
+pub use staging::MessageSourcePreservationReservation;
+
 /// Includes weak control-block, map bucket and conservative index overhead.
 pub(super) const SOURCE_LIFETIME_METADATA: usize = 256;
 /// Independent finite allocation index; the combined metadata ceiling can bind
@@ -110,6 +113,7 @@ pub struct MessageSourceRetirementFence {
 /// slot accumulator must fit ordinary space before this input can be issued.
 pub struct MessageSourceRetirementInspection {
     fence: MessageSourceRetirementFence,
+    identity: Arc<()>,
     _scratch: MessageStorageSnapshotLease,
 }
 
@@ -174,6 +178,7 @@ impl MessageService {
         let scratch = self.reserve_storage_worker_metadata(INSPECTION_METADATA_BYTES)?;
         Ok(MessageSourceRetirementInspection {
             fence,
+            identity: Arc::new(()),
             _scratch: scratch,
         })
     }

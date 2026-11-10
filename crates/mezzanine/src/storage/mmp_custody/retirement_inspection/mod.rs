@@ -22,6 +22,10 @@ pub(crate) use commitment::JournalCommitment;
 use commitment::JournalHasher;
 pub(crate) use commitment::SourceEvidenceCommitment;
 
+mod preservation;
+use preservation::PreservationBuffer;
+pub(crate) use preservation::PreservedSourceEvidence;
+
 /// Fits the separately charged 256 KiB accumulator, including vector overhead.
 const MAX_SLOTS: usize = 4096;
 const SLOT_METADATA_BYTES: usize = 256 * 1024;
@@ -70,12 +74,19 @@ pub(crate) struct SourceRetirementCandidate {
     sources: Vec<SourceRetirementInspection>,
     /// Output storage remains charged through its actual last owner.
     _input: Arc<MessageSourceRetirementInspection>,
+    preservation: Option<PreservationBuffer>,
 }
 
 impl SourceRetirementCandidate {
     /// Borrows descriptive results without detaching them from their lease.
     pub(crate) fn sources(&self) -> &[SourceRetirementInspection] {
         &self.sources
+    }
+
+    /// Bodyless encodings exist only after separately charged preparation and
+    /// complete validation. Native blockers remain; these are not live sources.
+    pub(crate) fn preserved_sources(&self) -> Option<&[PreservedSourceEvidence]> {
+        self.preservation.as_ref().map(PreservationBuffer::records)
     }
 
     /// Deterministic version-two commitment to the sorted closure and its exact
@@ -158,6 +169,18 @@ impl OwnedCustodyStore<'_> {
         scope: &MessageStorageScope,
         sequence: u64,
     ) -> std::result::Result<Option<SourceRetirementCandidate>, SourceRetirementFailure> {
+        self.inspect_source_retirement_with_preservation(input, scope, sequence, None)
+    }
+
+    /// Optional in-memory staging must already be funded by the actual lower
+    /// service. It changes no store rows and grants no disk/rewrite authority.
+    pub(crate) fn inspect_source_retirement_with_preservation(
+        &mut self,
+        input: &mut Arc<MessageSourceRetirementInspection>,
+        scope: &MessageStorageScope,
+        sequence: u64,
+        staging: Option<Arc<mez_agent::messaging::MessageSourcePreservationReservation>>,
+    ) -> std::result::Result<Option<SourceRetirementCandidate>, SourceRetirementFailure> {
         let mut failed_sequence = sequence;
         let result = (|| -> Result<Option<SourceRetirementCandidate>> {
             // One lower input funds one retained result. While a prior result or
@@ -166,6 +189,10 @@ impl OwnedCustodyStore<'_> {
             if Arc::get_mut(input).is_none() || !input.belongs_to(scope) {
                 return Err(unavailable());
             }
+            if staging.as_ref().is_some_and(|s| !s.belongs_to(input)) {
+                return Err(unavailable());
+            }
+            let mut preservation = staging.map(PreservationBuffer::new).transpose()?;
             self.revalidate()?;
             let store = self.store_mut();
             let transaction = store
@@ -192,18 +219,23 @@ impl OwnedCustodyStore<'_> {
                     input,
                     sequence,
                     &mut |dependency| queue.insert(input, dependency),
+                    preservation.as_mut(),
                 )?);
                 index += 1;
             }
             sources.sort_unstable_by_key(|source| source.sequence);
             store.finish_transaction(transaction)?;
             self.revalidate()?;
-            if queue.refused {
+            if queue.refused || preservation.as_ref().is_some_and(|p| p.refused) {
                 return Ok(None);
+            }
+            if let Some(preservation) = &mut preservation {
+                preservation.sort();
             }
             Ok(Some(SourceRetirementCandidate {
                 sources,
                 _input: input.clone(),
+                preservation,
             }))
         })();
         result.map_err(|error| SourceRetirementFailure {
@@ -240,7 +272,7 @@ fn inspect(
         .connection
         .unchecked_transaction()
         .map_err(database_error)?;
-    let result = inspect_in_snapshot(store, &transaction, input, sequence, &mut |_| Ok(()))?;
+    let result = inspect_in_snapshot(store, &transaction, input, sequence, &mut |_| Ok(()), None)?;
     store.finish_transaction(transaction)?;
     Ok(result)
 }
@@ -251,12 +283,16 @@ fn inspect_in_snapshot(
     input: &MessageSourceRetirementInspection,
     sequence: u64,
     dependency: &mut dyn FnMut(u64) -> Result<()>,
+    preservation: Option<&mut PreservationBuffer>,
 ) -> Result<SourceRetirementInspection> {
     let limits = input.decode_limits();
     let (source, source_sha256, encoded_bytes) =
         store.read_accepted_metadata_in_snapshot(transaction, sequence, limits)?;
     let recipient_count = source.recipient_bindings().len();
     let source_evidence = commitment::source_evidence(&source, &source_sha256, encoded_bytes)?;
+    if let Some(preservation) = preservation {
+        preservation.capture(&source, &source_sha256, encoded_bytes, &source_evidence)?;
+    }
     drop(source);
     if recipient_count == 0
         || recipient_count > MAX_SLOTS

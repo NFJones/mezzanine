@@ -82,6 +82,234 @@ async fn cleanup(fixture: &Fixture, root: MmpCustodyRoot) {
     assert!(!fixture.path.exists());
 }
 
+pub(super) fn assert_prepared(
+    candidate: &crate::storage::mmp_custody::retirement_inspection::SourceRetirementCandidate,
+) {
+    use sha2::{Digest, Sha256};
+    let records = candidate
+        .preserved_sources()
+        .expect("charged preparation must retain actual bytes");
+    assert_eq!(records.len(), candidate.sources().len());
+    for (record, source) in records.iter().zip(candidate.sources()) {
+        assert_eq!(record.sequence, source.sequence);
+        assert_eq!(
+            record.encoded().len() as u64,
+            source.source_evidence.encoded_bytes
+        );
+        assert_eq!(
+            <[u8; 32]>::from(Sha256::digest(record.encoded())),
+            source.source_evidence.sha256
+        );
+        let limits = mez_agent::messaging::MessageAcceptanceDecodeLimits {
+            payload_bytes: 1024 * 1024,
+            auxiliary_bytes: 512 * 1024,
+            recipient_count: 4096,
+            recipient_bytes: 512 * 1024,
+        };
+        let evidence = mez_agent::messaging::decode_message_acceptance_metadata_evidence(
+            record.encoded(),
+            limits,
+            64 * 1024 * 1024,
+        )
+        .unwrap();
+        assert_eq!(evidence.source_sha256(), &source.source_sha256);
+        assert_eq!(evidence.metadata().sequence(), source.sequence);
+    }
+}
+
+/// Reservation refusal precedes I/O. Insufficient encoded space returns no
+/// partial record but leaves a healthy root usable; an exact ceiling succeeds.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn retirement_preservation_worker_reserves_before_io_and_refuses_partial_output() {
+    let fixture = Fixture::new(true);
+    let (root, service, sequence) = retired(&fixture).await;
+    let before = service.storage_usage().unwrap();
+    let disk = fixture.disk();
+    let attempts = fixture.probe.attempts.load(Ordering::SeqCst);
+    for limit in [0, 8 * 1024 * 1024, usize::MAX] {
+        assert!(
+            root.start_retirement_preservation(&service, sequence, limit)
+                .is_err()
+        );
+        assert_eq!(fixture.probe.attempts.load(Ordering::SeqCst), attempts);
+        assert_eq!(service.storage_usage().unwrap(), before);
+    }
+    root.start_retirement_preservation(&service, sequence, 1)
+        .unwrap();
+    root.observe().await.unwrap();
+    assert!(
+        root.finish_retirement_inspection(&service)
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(service.storage_usage().unwrap(), before);
+    assert_eq!(root.observe().await.unwrap(), CustodyWorkerStatus::Idle);
+    root.start_retirement_preservation(&service, sequence, 64 * 1024)
+        .unwrap();
+    root.observe().await.unwrap();
+    let prepared = root
+        .finish_retirement_inspection(&service)
+        .unwrap()
+        .unwrap();
+    assert_prepared(&prepared);
+    let exact = prepared.preserved_sources().unwrap()[0].encoded().len();
+    let commitment = prepared.commitment();
+    drop(prepared);
+    assert_eq!(service.storage_usage().unwrap(), before);
+    root.start_retirement_preservation(&service, sequence, exact)
+        .unwrap();
+    root.observe().await.unwrap();
+    let prepared = root
+        .finish_retirement_inspection(&service)
+        .unwrap()
+        .unwrap();
+    assert_prepared(&prepared);
+    assert_eq!(prepared.commitment(), commitment);
+    drop(prepared);
+    assert_eq!(service.storage_usage().unwrap(), before);
+    assert_eq!(fixture.disk(), disk);
+    cleanup(&fixture, root).await;
+}
+
+/// Cancelling the observer and Stop cannot discard staged bytes or their actual
+/// reservation. The returned result owns both until its last drop.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn retirement_preservation_worker_keeps_reservation_across_cancel_and_stop() {
+    let fixture = Fixture::new(true);
+    let (root, service, sequence) = retired(&fixture).await;
+    let before = service.storage_usage().unwrap();
+    *fixture.probe.gate.0.lock().unwrap() = false;
+    root.start_retirement_preservation(&service, sequence, 64 * 1024)
+        .unwrap();
+    fixture.probe.started.notified().await;
+    let captured = service.storage_usage().unwrap();
+    assert_ne!(captured, before);
+    let observing = root.clone();
+    let observer = tokio::spawn(async move { observing.observe().await });
+    observer.abort();
+    assert!(observer.await.unwrap_err().is_cancelled());
+    assert_eq!(service.storage_usage().unwrap(), captured);
+    assert!(root.start_checkpoint(&service).is_err());
+    root.request_stop();
+    fixture.probe.release();
+    root.observe().await.unwrap();
+    let prepared = root
+        .finish_retirement_inspection(&service)
+        .unwrap()
+        .unwrap();
+    assert_prepared(&prepared);
+    assert_eq!(service.storage_usage().unwrap(), captured);
+    assert!(
+        root.start_retirement_preservation(&service, sequence, 1024)
+            .is_err()
+    );
+    drop(prepared);
+    assert_eq!(service.storage_usage().unwrap(), before);
+    cleanup(&fixture, root).await;
+}
+
+/// Corrupt ACK evidence is encountered after the source has been encoded. Even
+/// an insufficient output budget must not downgrade that failure to None, nor
+/// can a later budget refusal clear the retained original repair gate.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn retirement_preservation_worker_quarantines_encoded_bytes_on_corruption() {
+    for limit in [1, 64 * 1024] {
+        let fixture = Fixture::new(true);
+        let (root, service, sequence) = retired(&fixture).await;
+        let before = service.storage_usage().unwrap();
+        let disk = fixture.disk();
+        let connection = fixture.connection();
+        let (key, value): (String, Vec<u8>) = connection
+            .query_row(
+                "SELECT key,value FROM records WHERE key LIKE 'k1:%' LIMIT 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        connection
+            .execute("UPDATE records SET value=x'00' WHERE key=?1", [&key])
+            .unwrap();
+        root.start_retirement_preservation(&service, sequence, limit)
+            .unwrap();
+        root.observe().await.unwrap();
+        assert!(root.finish_retirement_inspection(&service).is_err());
+        assert_eq!(service.storage_usage().unwrap(), before);
+        assert_eq!(
+            root.observe().await.unwrap(),
+            CustodyWorkerStatus::Unavailable
+        );
+        assert!(root.start_checkpoint(&service).is_err());
+        connection
+            .execute(
+                "UPDATE records SET value=?1 WHERE key=?2",
+                rusqlite::params![value, key],
+            )
+            .unwrap();
+        root.start_retirement_preservation(&service, sequence, 1)
+            .unwrap();
+        root.observe().await.unwrap();
+        assert!(root.finish_retirement_inspection(&service).is_err());
+        assert_eq!(
+            root.observe().await.unwrap(),
+            CustodyWorkerStatus::Unavailable
+        );
+        root.start_retirement_preservation(&service, sequence, 64 * 1024)
+            .unwrap();
+        root.observe().await.unwrap();
+        let prepared = root
+            .finish_retirement_inspection(&service)
+            .unwrap()
+            .unwrap();
+        assert_prepared(&prepared);
+        drop(prepared);
+        assert_eq!(service.storage_usage().unwrap(), before);
+        assert_eq!(fixture.disk(), disk);
+        drop(connection);
+        cleanup(&fixture, root).await;
+    }
+}
+
+/// The real read thread loses its completed encoded result. Root escrow keeps
+/// the reservation until actual join/disposition; reopen alone grants no output
+/// and performs no replay. Only a fresh explicit read repairs the same source.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn retirement_preservation_worker_loss_retains_budget_until_disposition() {
+    let fixture = Fixture::new(true);
+    let (root, service, sequence) = retired(&fixture).await;
+    let before = service.storage_usage().unwrap();
+    let disk = fixture.disk();
+    let attempts = fixture.probe.attempts.load(Ordering::SeqCst);
+    fixture
+        .probe
+        .panic_after_commit
+        .store(true, Ordering::SeqCst);
+    root.start_retirement_preservation(&service, sequence, 64 * 1024)
+        .unwrap();
+    root.observe().await.unwrap();
+    assert!(root.failure().unwrap().is_some());
+    assert_ne!(service.storage_usage().unwrap(), before);
+    assert!(root.finish_retirement_inspection(&service).is_err());
+    assert_eq!(
+        root.observe().await.unwrap(),
+        CustodyWorkerStatus::Unavailable
+    );
+    assert_eq!(service.storage_usage().unwrap(), before);
+    assert_eq!(fixture.probe.attempts.load(Ordering::SeqCst), attempts + 1);
+    assert!(root.start_checkpoint(&service).is_err());
+    root.start_retirement_preservation(&service, sequence, 64 * 1024)
+        .unwrap();
+    root.observe().await.unwrap();
+    let prepared = root
+        .finish_retirement_inspection(&service)
+        .unwrap()
+        .unwrap();
+    assert_prepared(&prepared);
+    drop(prepared);
+    assert_eq!(service.storage_usage().unwrap(), before);
+    assert_eq!(fixture.disk(), disk);
+    cleanup(&fixture, root).await;
+}
+
 async fn retired(fixture: &Fixture) -> (MmpCustodyRoot, MessageService, u64) {
     let root = fixture.root();
     assert_eq!(root.observe().await.unwrap(), CustodyWorkerStatus::Idle);
@@ -380,7 +608,35 @@ async fn retirement_inspection_worker_valid_dependency_refusal_keeps_lane_usable
             .iter()
             .all(|s| s.unsettled_recipients == 0)
     );
+    let encoded_bytes = candidate
+        .sources()
+        .iter()
+        .map(|source| source.source_evidence.encoded_bytes as usize)
+        .sum::<usize>();
+    let commitment = candidate.commitment();
     drop(candidate);
+    let before = service.storage_usage().unwrap();
+    // The first record fits; the second exceeds the shared allowance by one.
+    root.start_retirement_preservation(&service, 1, encoded_bytes - 1)
+        .unwrap();
+    root.observe().await.unwrap();
+    assert!(
+        root.finish_retirement_inspection(&service)
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(service.storage_usage().unwrap(), before);
+    root.start_retirement_preservation(&service, 1, encoded_bytes)
+        .unwrap();
+    root.observe().await.unwrap();
+    let prepared = root
+        .finish_retirement_inspection(&service)
+        .unwrap()
+        .unwrap();
+    assert_prepared(&prepared);
+    assert_eq!(prepared.commitment(), commitment);
+    drop(prepared);
+    assert_eq!(service.storage_usage().unwrap(), before);
     assert_eq!(fixture.disk(), disk);
     cleanup(&fixture, root).await;
 }
@@ -656,11 +912,12 @@ async fn retirement_inspection_worker_root_drop_keeps_actual_worker_owned() {
     let (root, service, sequence) = retired(&fixture).await;
     let before = service.storage_usage().unwrap();
     *fixture.probe.gate.0.lock().unwrap() = false;
-    root.start_retirement_inspection(&service, sequence)
+    root.start_retirement_preservation(&service, sequence, 64 * 1024)
         .unwrap();
     fixture.probe.started.notified().await;
     drop(root);
     assert!(RootOwnership::acquire_existing(&fixture.path).is_err());
+    assert_ne!(service.storage_usage().unwrap(), before);
     fixture.probe.release();
     wait_until_unlocked(&fixture.path).await;
     assert_eq!(service.storage_usage().unwrap(), before);

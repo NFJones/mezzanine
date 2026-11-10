@@ -3,6 +3,76 @@
 
 use super::*;
 
+/// Encoding escrow is ordinary finite metadata, not a reusable worker loan.
+/// Even a fresh inspection of the same service cannot spend the old allowance.
+#[test]
+fn source_preservation_staging_binds_exact_capture_and_charges_last_owner() {
+    let (service, scope, _, _) = scene();
+    let before = service.storage_usage().unwrap();
+    let input = service
+        .prepare_source_retirement_inspection(&scope)
+        .unwrap();
+    let captured = service.storage_usage().unwrap();
+    for limit in [0, 8 * 1024 * 1024 + 1, usize::MAX] {
+        assert!(
+            service
+                .reserve_source_preservation_staging(&input, limit)
+                .is_err()
+        );
+        assert_eq!(service.storage_usage().unwrap(), captured);
+    }
+    assert!(
+        MessageService::default()
+            .reserve_source_preservation_staging(&input, 1024)
+            .is_err()
+    );
+    let reservation = Arc::new(
+        service
+            .reserve_source_preservation_staging(&input, 1024)
+            .unwrap(),
+    );
+    assert!(reservation.belongs_to(&input));
+    assert_eq!(reservation.encoded_bytes_limit(), 1024);
+    assert_eq!(
+        service.storage_usage().unwrap().unwrap().metadata_bytes,
+        captured.unwrap().metadata_bytes + 1024 + 64 * 1024
+    );
+    let last = reservation.clone();
+    drop(reservation);
+    assert_ne!(service.storage_usage().unwrap(), captured);
+    drop(input);
+    let replacement = service
+        .prepare_source_retirement_inspection(&scope)
+        .unwrap();
+    assert!(!last.belongs_to(&replacement));
+    drop((replacement, last));
+    assert_eq!(service.storage_usage().unwrap(), before);
+}
+
+#[test]
+fn source_preservation_staging_capacity_refusal_keeps_original_inspection() {
+    let (service, scope, _, _) = scene();
+    let input = service
+        .prepare_source_retirement_inspection(&scope)
+        .unwrap();
+    let before = service.storage_usage().unwrap();
+    let mut held = Vec::new();
+    while let Ok(reservation) = service.reserve_source_preservation_staging(&input, 64 * 1024) {
+        held.push(reservation);
+        assert!(held.len() < 128);
+        assert!(service.storage_usage().unwrap().unwrap().metadata_bytes <= 8 * 1024 * 1024);
+    }
+    assert!(!held.is_empty());
+    assert!(service.source_retirement_inspection_is_original(&input));
+    drop(held);
+    assert_eq!(service.storage_usage().unwrap(), before);
+    assert!(
+        service
+            .reserve_source_preservation_staging(&input, 64 * 1024)
+            .is_ok()
+    );
+}
+
 struct Store;
 impl MessageAcceptanceStore for Store {
     fn commit(

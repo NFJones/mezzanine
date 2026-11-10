@@ -17314,6 +17314,18 @@ it to a fixed-size counting checksum sink under the existing decoder reservation
 not retain another metadata/source buffer. Attribution and extensions can retain
 private data; this is not a redaction or wire format. No cleanup storage namespace
 or replacement of original payload chunks is activated by this codec.
+Optional preservation preparation MAY retain the actual bodyless encodings only
+after reserving their complete finite encoded allowance and container/framing
+overhead from the same combined metadata budget, independently of inspection
+scratch. The reservation MUST bind the exact inspection allocation and remain
+owned by the root through actual join and by the returned records through their
+last owner. A same-service replacement inspection MUST NOT reuse that allowance.
+The complete candidate MUST pass the same source, journal, slot, transaction and
+original-service adoption checks before any encoding is exposed. Insufficient
+reserved encoded space MUST discard all prefixes and return typed refusal, not
+mark a valid store corrupt or clear an existing repair gate. This preparation
+reserves RAM only; it is not a physical staging/rewrite reserve, durable cleanup
+intent, dependency-closed native plan or permission to replace original chunks.
 Optional analysis MAY use the existing serialized root blocking-worker lane.
 Its charged capture and actual handle MUST survive observer cancellation; only
 an actual join permits adoption, and adoption MUST check the issuing lower

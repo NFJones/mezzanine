@@ -17,6 +17,8 @@ pub(super) struct Admission {
     plan: AcceptancePlan,
     sequence: u64,
     repair: Option<RepairGate>,
+    /// Root escrow keeps the reservation through actual join and adoption/loss.
+    _staging: Option<Arc<mez_agent::messaging::MessageSourcePreservationReservation>>,
 }
 
 pub(super) struct RepairGate {
@@ -39,6 +41,27 @@ impl MmpCustodyRoot {
         service: &MessageService,
         sequence: u64,
     ) -> Result<()> {
+        self.start_retirement_analysis(service, sequence, None)
+    }
+
+    /// Funds bounded bodyless evidence before starting I/O on the same owned
+    /// lane. A small limit may produce typed refusal, never a partial result.
+    /// This reserves RAM only, not physical staging/rewrite space or deletion.
+    pub(crate) fn start_retirement_preservation(
+        &self,
+        service: &MessageService,
+        sequence: u64,
+        encoded_bytes_limit: usize,
+    ) -> Result<()> {
+        self.start_retirement_analysis(service, sequence, Some(encoded_bytes_limit))
+    }
+
+    fn start_retirement_analysis(
+        &self,
+        service: &MessageService,
+        sequence: u64,
+        staging_limit: Option<usize>,
+    ) -> Result<()> {
         let mut state = self.0.state.lock().map_err(|_| ownership_error())?;
         let opened = match &*state {
             State::Idle(opened) => opened,
@@ -58,6 +81,14 @@ impl MmpCustodyRoot {
         {
             return Err(ownership_error());
         }
+        let staging = staging_limit
+            .map(|limit| {
+                service
+                    .reserve_source_preservation_staging(&input, limit)
+                    .map(Arc::new)
+                    .map_err(lower_error)
+            })
+            .transpose()?;
         let plan = opened.anchor.clone();
         let previous = std::mem::replace(&mut *state, State::Unavailable(ownership_error()));
         let (mut opened, repair) = match previous {
@@ -69,6 +100,7 @@ impl MmpCustodyRoot {
             plan,
             sequence,
             repair,
+            _staging: staging.clone(),
         };
         let ownership = self.0.ownership.clone();
         let scope = self.0.storage_scope.clone();
@@ -95,8 +127,13 @@ impl MmpCustodyRoot {
                 {
                     return Err(ownership_error());
                 }
-                let candidate =
-                    owned.inspect_source_retirement_candidate(&mut input, &scope, sequence);
+                let candidate = if staging.is_some() {
+                    owned.inspect_source_retirement_with_preservation(
+                        &mut input, &scope, sequence, staging,
+                    )
+                } else {
+                    owned.inspect_source_retirement_candidate(&mut input, &scope, sequence)
+                };
                 owned.revalidate()?;
                 if !owned
                     .store_mut()
