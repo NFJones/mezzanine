@@ -457,6 +457,14 @@ ordinary chunks remain corruption, not permission to invent retired history.
 The original trusted allocator watermark is preserved. Metadata/journal capacity
 and SQLite file size remain bounded costs, not reclaimed space guarantees; this
 does not supply general/native resumable cleanup or enable normal durable mode.
+An additional `MMPRET02` form permits fully ACKed native-attributed payloads only
+when each native recipient also has its exact committed canonical-input `c1`
+journal and no pending `p1` or terminal handoff. All journals remain unchanged.
+Each native ACK must match its original canonical commit's offer clock.
+Cold recovery checks those commits independently before accepting bodyless
+history; a missing proof refuses rather than recreating native mail/endpoints.
+Version one remains non-native. This does not reclaim native journals, resume
+destructive multi-batch cleanup or turn metadata into live native authority.
 Optional analysis now has an owned blocking-worker entrypoint on the existing
 serialized root lane. It retains capture/handle ownership across observer
 cancellation, checks the actual lower service at adoption, and permits settlement

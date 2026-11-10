@@ -17421,6 +17421,18 @@ obligations for a retired original. The trusted stored watermark, not surviving
 source maxima, remains allocator authority. Original metadata/journals still consume
 finite storage; this fast path does not guarantee progress at SQL capacity, shrink
 the SQLite file, implement general/native reclamation or activate durable mode.
+An additional version-two `MMPRET02` form MAY retire a fully positively ACKed
+native-attributed original in that same bounded atomic path. Every native
+recipient MUST have its exact source/slot-qualified committed `c1` journal and
+no unfinished `p1`; native ACK clocks MUST equal that canonical selection clock.
+Extra native or terminal handoffs MUST refuse. Preserve all
+canonical, registration and other journals byte-exactly. Cold reconstruction
+MUST independently requalify the native commits and all ACK slots in its held
+original snapshot; missing or conflicting proof withholds the entire candidate.
+Neither retired format restores mail, a native endpoint or canonical capability.
+Version one remains explicitly non-native, and unknown versions/classification
+mismatches refuse. This extension does not reclaim journals or terminal sources,
+provide resumable cleanup, relax trusted native restoration or activate storage.
 Optional analysis MAY use the existing serialized root blocking-worker lane.
 Its charged capture and actual handle MUST survive observer cancellation; only
 an actual join permits adoption, and adoption MUST check the issuing lower

@@ -275,6 +275,31 @@ impl MessageStorageRecovery {
         acknowledgements: impl IntoIterator<Item = (u32, u64)>,
         read: impl FnOnce(MessageAcceptanceDecodeLimits) -> Result<MessageAcceptanceMetadata>,
     ) -> Result<()> {
+        self.restore_retired_acknowledged_inner(sequence, acknowledgements, read, false)
+    }
+
+    /// Observes native-attributed retired history without restoring a native
+    /// binding or any mail. The trusted original-store port MUST independently
+    /// verify physical retirement AND every native recipient's exact committed
+    /// canonical-input journal, with no pending or terminal handoff. Metadata and
+    /// positive ACKs alone cannot establish that product-side proof. The ordinary
+    /// non-native port above deliberately continues refusing native attribution.
+    pub fn restore_retired_acknowledged_native(
+        &mut self,
+        sequence: MessageSequence,
+        acknowledgements: impl IntoIterator<Item = (u32, u64)>,
+        read: impl FnOnce(MessageAcceptanceDecodeLimits) -> Result<MessageAcceptanceMetadata>,
+    ) -> Result<()> {
+        self.restore_retired_acknowledged_inner(sequence, acknowledgements, read, true)
+    }
+
+    fn restore_retired_acknowledged_inner(
+        &mut self,
+        sequence: MessageSequence,
+        acknowledgements: impl IntoIterator<Item = (u32, u64)>,
+        read: impl FnOnce(MessageAcceptanceDecodeLimits) -> Result<MessageAcceptanceMetadata>,
+        native: bool,
+    ) -> Result<()> {
         if self.failed {
             return Err(unavailable());
         }
@@ -290,8 +315,9 @@ impl MessageStorageRecovery {
                 || count > limits.recipient_count
                 || source.envelope().payload.bytes() > limits.payload_bytes
                 || !source.has_native_binding_record()
-                || source.native_sender().is_some()
-                || (0..count).any(|index| source.native_recipient(index).is_some())
+                || (native
+                    != (source.native_sender().is_some()
+                        || (0..count).any(|index| source.native_recipient(index).is_some())))
                 || self
                     .service
                     .accepted_messages

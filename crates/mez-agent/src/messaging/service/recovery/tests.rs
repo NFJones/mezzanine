@@ -145,15 +145,21 @@ struct RetiredPort {
     source: Vec<u8>,
     acks: Vec<(u32, u64)>,
     swallow: bool,
+    native: bool,
     observer: Option<MessagePayloadObserver>,
 }
 
 impl MessageStorageRecoveryStore for RetiredPort {
     fn recover(&mut self, target: &mut MessageStorageRecovery) -> Result<u64> {
         self.observer = Some(target.payload_observer()?);
-        let result = target.restore_retired_acknowledged(1, self.acks.clone(), |limits| {
+        let read = |limits| {
             crate::messaging::decode_message_acceptance_metadata(self.source.as_slice(), limits)
-        });
+        };
+        let result = if self.native {
+            target.restore_retired_acknowledged_native(1, self.acks.clone(), read)
+        } else {
+            target.restore_retired_acknowledged(1, self.acks.clone(), read)
+        };
         if self.swallow {
             assert!(result.is_err());
             // A failed port cannot later publish even if it ignores the error;
@@ -213,7 +219,47 @@ fn retired_port() -> RetiredPort {
         source: store.sources.remove(0),
         acks: vec![(0, 10)],
         swallow: false,
+        native: false,
         observer: None,
+    }
+}
+
+/// The separate trusted native-history port never creates mail or restores an
+/// endpoint. Product tests, not this lower test port, qualify actual c1 proofs.
+#[test]
+fn recovery_retired_acknowledged_native_is_separate_and_creates_no_endpoint() {
+    for (native_source, acks, success) in [
+        (true, vec![(0, 100)], true),
+        (true, vec![], false),
+        (true, vec![(0, 100), (0, 100)], false),
+        (true, vec![(1, 100)], false),
+        (false, vec![(0, 10)], false),
+    ] {
+        let mut port = retired_port();
+        port.native = true;
+        port.acks = acks;
+        if native_source {
+            port.source = originals().0.sources.remove(0);
+        }
+        let result = MessageService::recover_storage_custody(
+            &MessageStorageScope::default(),
+            Default::default(),
+            16,
+            1024 * 1024,
+            &mut port,
+        );
+        assert_eq!(result.is_ok(), success);
+        if let Ok(service) = result {
+            assert_eq!(service.next_sequence, 2);
+            assert!(service.pending.is_empty());
+            assert!(service.queued_by_sequence.is_empty());
+            assert!(service.accepted_messages.is_empty());
+            assert!(service.discover_agents().is_empty());
+        }
+        assert_eq!(
+            port.observer.as_ref().unwrap().snapshot().unwrap(),
+            MessagePayloadUsage::default()
+        );
     }
 }
 

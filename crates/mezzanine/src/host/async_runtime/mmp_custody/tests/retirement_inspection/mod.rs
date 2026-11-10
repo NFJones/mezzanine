@@ -78,7 +78,7 @@ pub(super) fn assert_source_evidence(
     assert!(decode_message_acceptance_metadata(encoded.as_slice(), limits).is_err());
 }
 
-async fn cleanup(fixture: &Fixture, root: MmpCustodyRoot) {
+pub(super) async fn cleanup(fixture: &Fixture, root: MmpCustodyRoot) {
     drop(root);
     wait_until_unlocked(&fixture.path).await;
     std::fs::remove_dir_all(&fixture.path).unwrap();

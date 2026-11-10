@@ -34,6 +34,21 @@ impl Scene {
     }
     /// Builds either primitive canonical input or the complete guarded boundary.
     async fn build(fixture: &Fixture, guarded: bool) -> Self {
+        Self::build_with_transcript(
+            fixture,
+            guarded,
+            AgentTranscriptStore::new(fixture.path.join("canonical")),
+        )
+        .await
+    }
+
+    /// A dedicated flat custody root can retain its canonical archive under a
+    /// separately owned fixture, without exempting nested bytes from accounting.
+    async fn build_with_transcript(
+        fixture: &Fixture,
+        guarded: bool,
+        transcript: AgentTranscriptStore,
+    ) -> Self {
         let root = fixture.root();
         assert_eq!(root.observe().await.unwrap(), CustodyWorkerStatus::Idle);
         let (mut service, sender, target, _) = fixture_service();
@@ -108,7 +123,6 @@ impl Scene {
             content,
         )
         .unwrap();
-        let transcript = AgentTranscriptStore::new(fixture.path.join("canonical"));
         let row = TranscriptEntry {
             conversation_id: "native-receiver".into(),
             sequence: 1,
@@ -1106,4 +1120,5 @@ async fn native_input_first_plan_keeps_kernel_lease_across_publication_failures(
     }
 }
 
+mod acknowledged_retirement;
 mod retirement;

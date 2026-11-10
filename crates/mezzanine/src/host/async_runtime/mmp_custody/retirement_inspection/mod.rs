@@ -7,7 +7,7 @@
 //! installed, and no analysis or delivery effect is automatically replayed.
 //! Explicit durable preparation writes only q1 evidence and gates the live root;
 //! cold cancellation verifies intact originals before removing that evidence.
-//! A separate explicit ACK-only non-native operation can replace one original
+//! A separate explicit ACK-only operation can replace one original
 //! atomically; it never uses q1 cancellation as reclamation authority.
 
 use super::*;
@@ -115,8 +115,8 @@ impl MmpCustodyRoot {
         )
     }
 
-    /// Atomically retires one absent, fully acknowledged non-native payload.
-    /// Larger, native and terminal cases refuse without partial cleanup. Uses
+    /// Atomically retires one absent, fully acknowledged payload. Native input
+    /// requires exact committed journals; pending/terminal cases refuse. Uses
     /// the same source-absence capture, worker and actual root rewrite reserve.
     pub(crate) fn start_acknowledged_source_reclamation(
         &self,

@@ -233,29 +233,62 @@ impl<'a> Port<'a> {
                         "retired acknowledged source has terminal obligations",
                     ));
                 }
-                target
-                    .restore_retired_acknowledged(
+                let limits = target.decode_limits().map_err(lower_error)?;
+                let (source, digest, _) = self
+                    .store
+                    .read_retired_metadata_in_snapshot(&transaction, sequence, limits)?
+                    .ok_or_else(|| invalid("retired source is missing"))?;
+                if digest != occurrence.digest {
+                    return Err(invalid("retired source changed"));
+                }
+                let native = source.native_sender().is_some()
+                    || (0..source.recipient_bindings().len())
+                        .any(|index| source.native_recipient(index).is_some());
+                let acknowledgements = acks[start..end]
+                    .iter()
+                    .map(|ack| (ack.binding_index, ack.offered_at_ms));
+                if native {
+                    let Some(clocks) =
+                        self.store
+                            .native_retirement_clocks(&transaction, &source, digest)?
+                    else {
+                        return Err(invalid("retired native source lacks committed input"));
+                    };
+                    // Validate every original ACK, not only the maximum folded
+                    // clock. Drop this source before ACK readers decode theirs.
+                    drop(source);
+                    if !super::super::retirement_inspection::acknowledged::native_acks_match(
+                        self.store,
+                        &transaction,
                         sequence,
-                        acks[start..end]
-                            .iter()
-                            .map(|ack| (ack.binding_index, ack.offered_at_ms)),
+                        &clocks,
+                        limits,
+                    )? {
+                        return Err(invalid("retired native ACK differs from canonical commit"));
+                    }
+                    target.restore_retired_acknowledged_native(
+                        sequence,
+                        acknowledgements,
                         |limits| {
                             let (source, digest, _) = self
                                 .store
                                 .read_retired_metadata_in_snapshot(&transaction, sequence, limits)
                                 .map_err(lower_error)?
                                 .ok_or_else(|| {
-                                    MessageError::invalid_state("MMP retired source is missing")
+                                    MessageError::invalid_state("MMP retired native source missing")
                                 })?;
                             if digest != occurrence.digest {
                                 return Err(MessageError::invalid_state(
-                                    "MMP retired source changed",
+                                    "MMP retired native source changed",
                                 ));
                             }
                             Ok(source)
                         },
                     )
-                    .map_err(lower_error)?;
+                } else {
+                    target.restore_retired_acknowledged(sequence, acknowledgements, |_| Ok(source))
+                }
+                .map_err(lower_error)?;
                 continue;
             }
             target

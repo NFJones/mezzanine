@@ -1,9 +1,9 @@
-//! Atomic, non-native, positive-ACK-only payload retirement.
+//! Atomic positive-ACK-only payload retirement with preserved native proofs.
 //!
 //! The original lower absence loan and complete inspection remain live through
 //! one transaction. Every original chunk/marker preimage is deleted together
 //! with installation of a physically bound bodyless record. Journals are never
-//! deleted. Oversized/native/terminal cases refuse; no resumable intent or q1
+//! deleted. Unfinished native/terminal and oversized cases refuse; no intent or q1
 //! cancellation authority is reused. Readers cannot turn this record into mail.
 
 use super::*;
@@ -13,6 +13,7 @@ use mez_agent::messaging::{
 };
 
 const MAGIC: &[u8; 8] = b"MMPRET01";
+const NATIVE_MAGIC: &[u8; 8] = b"MMPRET02";
 const HEADER: usize = 80;
 const MAX_RETIRED_RECORD_BYTES: usize = 128 * 1024 + HEADER;
 // Includes <=64 bounded keys, digest vectors and CustodyWrite descriptors that
@@ -28,6 +29,44 @@ fn non_native(source: &MessageAcceptanceMetadata) -> bool {
     source.has_native_binding_record()
         && source.native_sender().is_none()
         && (0..source.recipient_bindings().len()).all(|i| source.native_recipient(i).is_none())
+}
+
+/// Matches native ACKs to the original canonical selection clock. The source
+/// metadata has been dropped before this scan, so source-qualified ACK readers
+/// do not allocate a second simultaneous source. The <=4096 fixed slot vector
+/// and seen bits use charged slot scratch (or cold recovery's decoder scratch)
+/// and die before postinspection. Inventory has already bounded the key set.
+pub(in crate::storage::mmp_custody) fn native_acks_match(
+    store: &MmpCustodyStore,
+    transaction: &rusqlite::Transaction<'_>,
+    sequence: u64,
+    clocks: &[Option<u64>],
+    limits: MessageAcceptanceDecodeLimits,
+) -> Result<bool> {
+    let mut seen = vec![false; clocks.len()];
+    let mut statement = transaction
+        .prepare("SELECT key FROM records WHERE key GLOB 'k1:*' ORDER BY key")
+        .map_err(database_error)?;
+    let mut rows = statement.query([]).map_err(database_error)?;
+    while let Some(row) = rows.next().map_err(database_error)? {
+        let key: String = row.get(0).map_err(database_error)?;
+        let ack = store.read_stored_acknowledgement_in_snapshot(transaction, &key, limits)?;
+        for decision in ack.decisions.iter().filter(|d| d.sequence == sequence) {
+            if !decision.acknowledged {
+                return Ok(false);
+            }
+            if let Some(Some(expected)) = clocks.get(decision.binding_index as usize) {
+                if decision.offered_at_ms != Some(*expected) {
+                    return Ok(false);
+                }
+                seen[decision.binding_index as usize] = true;
+            }
+        }
+    }
+    Ok(clocks
+        .iter()
+        .zip(seen)
+        .all(|(clock, seen)| clock.is_none() || seen))
 }
 
 /// Exact preservation commitment for every non-target row, not merely rows in
@@ -66,7 +105,7 @@ fn preserved_rows(
 
 impl OwnedCustodyStore<'_> {
     /// Reclaims exactly one absent original only if all its recipients have
-    /// positive ACKs, its classification is explicitly non-native, and every
+    /// positive ACKs, every native input has an exact committed journal, and every
     /// mutation fits the existing batch and reserved encoding/rewrite budgets.
     /// False changes no rows. Errors retain the original or atomic outcome for
     /// exact reconciliation; no source/action/provider work may be replayed.
@@ -94,7 +133,7 @@ impl OwnedCustodyStore<'_> {
             .find(|s| s.sequence == sequence)
             .ok_or_else(unavailable)?;
         if source.acknowledged_recipients != source.recipient_count
-            || source.native_journal_references != 0
+            || source.pending_native_journal_references != 0
             || source.unsettled_recipients != 0
         {
             return Ok(false);
@@ -139,10 +178,37 @@ impl OwnedCustodyStore<'_> {
             sequence,
             candidate._input.decode_limits(),
         )?;
-        if digest != source.source_sha256 || !non_native(&metadata) {
+        if digest != source.source_sha256 || !metadata.has_native_binding_record() {
             return Ok(false);
         }
+        let native = !non_native(&metadata);
+        let native_count = (0..metadata.recipient_bindings().len())
+            .filter(|index| metadata.native_recipient(*index).is_some())
+            .count();
+        if source.native_journal_references != native_count {
+            return Ok(false);
+        }
+        let clocks = if native {
+            let Some(clocks) = store.native_retirement_clocks(&transaction, &metadata, digest)?
+            else {
+                return Ok(false);
+            };
+            Some(clocks)
+        } else {
+            None
+        };
         drop(metadata);
+        if let Some(clocks) = clocks
+            && !native_acks_match(
+                store,
+                &transaction,
+                sequence,
+                &clocks,
+                candidate._input.decode_limits(),
+            )?
+        {
+            return Ok(false);
+        }
         let prefix = format!("a1:{sequence:016x}:*");
         // Only fixed-size keys and checked digests are retained, never another
         // original payload collection. A larger source is refused before writes.
@@ -173,7 +239,7 @@ impl OwnedCustodyStore<'_> {
         }
         let preserved = preserved_rows(store, &transaction, &prefix)?;
         let mut value = Vec::with_capacity(bytes);
-        value.extend_from_slice(MAGIC);
+        value.extend_from_slice(if native { NATIVE_MAGIC } else { MAGIC });
         value.extend_from_slice(&store.store_id);
         value.extend_from_slice(&(state.generation as u64 + 1).to_le_bytes());
         value.extend_from_slice(&state.watermark.to_le_bytes());
@@ -219,7 +285,8 @@ impl OwnedCustodyStore<'_> {
             || after.recipient_count != source.recipient_count
             || after.acknowledged_recipients != after.recipient_count
             || after.unsettled_recipients != 0
-            || after.native_journal_references != 0
+            || after.native_journal_references != source.native_journal_references
+            || after.pending_native_journal_references != 0
             || after.dependencies != source.dependencies
             || after.preserved_registrations != source.preserved_registrations
             || preserved_rows(store, &transaction, &prefix)? != preserved
@@ -235,7 +302,9 @@ impl OwnedCustodyStore<'_> {
 impl MmpCustodyStore {
     /// Reads only the sealed retired representation under one original snapshot.
     /// Coexisting source rows, changed physical allocation, future generation,
-    /// native/legacy classification or malformed evidence refuse in full.
+    /// mismatched native/legacy classification or malformed evidence refuse.
+    /// Version two still requires independent complete ACK/c1 qualification by
+    /// the recovery consumer; this metadata read alone grants no settlement.
     pub(in crate::storage::mmp_custody) fn read_retired_metadata_in_snapshot(
         &self,
         transaction: &rusqlite::Transaction<'_>,
@@ -247,7 +316,7 @@ impl MmpCustodyStore {
         };
         if value.len() < HEADER
             || value.len() > MAX_RETIRED_RECORD_BYTES
-            || &value[..8] != MAGIC
+            || (&value[..8] != MAGIC && &value[..8] != NATIVE_MAGIC)
             || value[8..24] != self.store_id
         {
             return Err(unavailable());
@@ -292,7 +361,9 @@ impl MmpCustodyStore {
         let original = evidence.original_encoded_bytes();
         let metadata = evidence.into_metadata();
         self.validate_decoded_source(transaction, sequence, &metadata)?;
-        if !non_native(&metadata) {
+        if !metadata.has_native_binding_record()
+            || (non_native(&metadata) != (&value[..8] == MAGIC))
+        {
             return Err(unavailable());
         }
         Ok(Some((metadata, digest, original)))

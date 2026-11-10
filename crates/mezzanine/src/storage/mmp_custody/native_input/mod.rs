@@ -47,6 +47,29 @@ impl NativeInputJournal {
     pub(super) fn original_sequence(&self) -> u64 {
         self.source.message_sequence
     }
+
+    /// Qualifies against an already decoded original without allocating another
+    /// source. Descriptive metadata cannot mint canonical retention authority.
+    fn qualify_source(
+        &self,
+        source: &mez_agent::messaging::MessageAcceptanceMetadata,
+        digest: [u8; 32],
+    ) -> Result<()> {
+        let index = self.source.binding_index as usize;
+        let binding = source.recipient_bindings().get(index).ok_or_else(invalid)?;
+        if source.sequence() != self.source.message_sequence
+            || digest != self.source.source_sha256
+            || binding.recipient != self.source.recipient
+            || binding.registered_after_sequence != self.source.registered_after_sequence
+            || source.native_recipient(index) != Some(&self.source.native_owner)
+            || source.envelope().ttl_ms.is_some_and(|ttl| {
+                source.accepted_at_ms().saturating_add(ttl) < self.source.offered_at_ms
+            })
+        {
+            return Err(invalid());
+        }
+        Ok(())
+    }
 }
 
 /// Immutable first preparation retained outside the actual worker through loss.
@@ -143,19 +166,54 @@ impl MmpCustodyStore {
             journal.source.message_sequence,
             limits,
         )?;
-        let index = journal.source.binding_index as usize;
-        let binding = source.recipient_bindings().get(index).ok_or_else(invalid)?;
-        if digest != journal.source.source_sha256
-            || binding.recipient != journal.source.recipient
-            || binding.registered_after_sequence != journal.source.registered_after_sequence
-            || source.native_recipient(index) != Some(&journal.source.native_owner)
-            || source.envelope().ttl_ms.is_some_and(|ttl| {
-                source.accepted_at_ms().saturating_add(ttl) < journal.source.offered_at_ms
-            })
-        {
+        journal.qualify_source(&source, digest)?;
+        Ok(Some(journal))
+    }
+
+    /// Returns exact historical c1 clocks only, never native capabilities. The
+    /// caller funds this <=4096-slot vector from its existing slot scratch; one
+    /// <=32-KiB journal coexists with the borrowed source, not a second decoder.
+    /// None means an original canonical commit is missing or still pending.
+    pub(super) fn native_retirement_clocks(
+        &self,
+        transaction: &rusqlite::Transaction<'_>,
+        source: &mez_agent::messaging::MessageAcceptanceMetadata,
+        digest: [u8; 32],
+    ) -> Result<Option<Vec<Option<u64>>>> {
+        let count = source.recipient_bindings().len();
+        if count > 4096 {
             return Err(invalid());
         }
-        Ok(Some(journal))
+        let store_id = self.store_id.as_slice().try_into().map_err(|_| invalid())?;
+        let mut clocks = Vec::new();
+        clocks.try_reserve_exact(count).map_err(|_| invalid())?;
+        for index in 0..count {
+            let clock = if source.native_recipient(index).is_some() {
+                let occurrence = source_occurrence(store_id, digest, index as u32);
+                if self
+                    .read_native_input_metadata_in_snapshot(
+                        transaction,
+                        &record_key("p1", &occurrence),
+                    )?
+                    .is_some()
+                {
+                    return Ok(None);
+                }
+                let Some(journal) = self.read_native_input_metadata_in_snapshot(
+                    transaction,
+                    &record_key("c1", &occurrence),
+                )?
+                else {
+                    return Ok(None);
+                };
+                journal.qualify_source(source, digest)?;
+                Some(journal.source.offered_at_ms)
+            } else {
+                None
+            };
+            clocks.push(clock);
+        }
+        Ok(Some(clocks))
     }
     /// Reads only bounded original journal metadata. Live root work separately
     /// compares it with an opaque, already-qualified source anchor and streams
