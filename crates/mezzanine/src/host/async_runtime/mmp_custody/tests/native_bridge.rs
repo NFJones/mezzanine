@@ -3,7 +3,7 @@
 use super::*;
 use crate::host::async_runtime::{AsyncRuntimeSessionActor, AsyncRuntimeSessionHandle};
 
-fn bridge(
+pub(super) fn bridge(
     actor: &AsyncRuntimeSessionActor,
     turn: &mez_agent::AgentTurnRecord,
     name: &str,
@@ -25,7 +25,7 @@ fn bridge(
     envelope
 }
 
-async fn cleanup(
+pub(super) async fn cleanup(
     fixture: &Fixture,
     handle: AsyncRuntimeSessionHandle,
     mut actor: AsyncRuntimeSessionActor,
@@ -37,7 +37,7 @@ async fn cleanup(
     assert!(!fixture.path.exists());
 }
 
-async fn shutdown(actor: &mut AsyncRuntimeSessionActor) {
+pub(super) async fn shutdown(actor: &mut AsyncRuntimeSessionActor) {
     let mut closing = actor.begin_message_custody_shutdown_for_tests();
     tokio::time::timeout(Duration::from_secs(10), async {
         loop {
