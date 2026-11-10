@@ -828,6 +828,11 @@ impl AsyncRuntimeSessionActor {
             )) => Err(MezError::invalid_state(
                 "MMP checkpoint has no matching actor capture",
             )),
+            CustodyEvent::Observed(Ok(
+                CustodyWorkerStatus::RetirementInspectionAwaitingAdoption,
+            )) => Err(MezError::invalid_state(
+                "MMP retirement inspection has no matching actor continuation",
+            )),
             CustodyEvent::Observed(Ok(CustodyWorkerStatus::PayloadLoadAwaitingAdoption))
                 if matches!(owner.pending, Some(Pending::NativePayload(_))) =>
             {

@@ -379,6 +379,20 @@ result retains the charged original input; candidate metadata shares the existin
 256 KiB accumulator. Unsettled slots and native journals remain blockers. This
 does not install a runtime cleanup lane, resolve native dependency closure or
 authorize an intent, deletion, rewrite or default durable activation.
+Optional analysis now has an owned blocking-worker entrypoint on the existing
+serialized root lane. It retains capture/handle ownership across observer
+cancellation, checks the actual lower service at adoption, and permits settlement
+after Stop without admitting new analysis. Expected live-dependency/quantum refusal
+is typed separately from validation errors, and completes the current member's
+slot/inventory checks before releasing the lane. A weaker fallback never downgrades
+an integrity failure. Corruption gates that root until an explicit fresh read
+completely covers the exact failed source and proves repair. Unrelated seeds and
+partial dependency refusals cannot clear that retained gate, including after
+worker loss. Corruption is never treated as an empty store or successful candidate.
+Actual worker loss allows one exact-position connection reopen after join, still
+gated until explicit fresh charged inspection. Reopening alone proves no source
+integrity and repeats no candidate analysis, sends, ACKs or native effects. No ordinary actor cleanup timer
+or deletion path calls this entrypoint yet.
 
 Storage-policy sources preserve immutable schema2 native attribution. Guarded sources retain schema3 recipient attribution; clock-qualified sources use schema4, additionally recording the original store allocation as a descriptive elapsed domain. Each source records one original registration namespace per recipient without a reconnect credential or live end marker. Legacy sources remain unknown for this added attribution. Each source records the
 original native sender/recipient conversation and opaque incarnation (or explicit

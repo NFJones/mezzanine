@@ -1053,6 +1053,7 @@ mod native_continuity;
 mod native_lifetime;
 mod recovery;
 mod registration_end;
+mod retirement_inspection;
 
 mod native_input;
 

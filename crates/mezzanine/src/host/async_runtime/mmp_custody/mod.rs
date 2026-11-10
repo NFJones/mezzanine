@@ -45,6 +45,7 @@ mod native_input;
 mod payload_load;
 mod recovery;
 mod registration_end;
+mod retirement_inspection;
 mod terminal_custody;
 mod terminal_handoff;
 pub(crate) use recovery::{CustodyRecoveryRequest, RecoveredMessageCustody};
@@ -86,6 +87,8 @@ pub(crate) enum CustodyWorkerStatus {
     SnapshotAwaitingAdoption,
     /// Original read-only capture can retry after this monotonic deadline.
     SnapshotRetryAt(Instant),
+    /// Joined read-only candidate or refusal awaits its original caller.
+    RetirementInspectionAwaitingAdoption,
     /// Original cold reconstruction joined and awaits exact startup adoption.
     RecoveryAwaitingAdoption,
     /// An actually joined recovery can retry the same input after this deadline.
@@ -267,6 +270,27 @@ enum State {
     },
     /// Bounded failed-open diagnostic; cannot imply any issued write was unsent.
     Unavailable(MezError),
+    /// Optional read-only analysis holds the exclusive original connection.
+    InspectingRetirement {
+        admission: retirement_inspection::Admission,
+        worker: JoinHandle<Result<retirement_inspection::Written>>,
+    },
+    /// Actual read join retained until checked adoption or refusal settlement.
+    InspectedRetirement {
+        admission: retirement_inspection::Admission,
+        result: Result<Box<retirement_inspection::Written>>,
+    },
+    /// One exact reopen after actual read-worker loss, still admission-gated.
+    ReopeningRetirement {
+        worker: JoinHandle<Result<Opened>>,
+        gate: retirement_inspection::RepairGate,
+    },
+    /// Known invalid evidence blocks admission; only an explicit fresh read may
+    /// prove repair. The original connection remains owned, never replaced.
+    RetirementInspectionRefused {
+        opened: Opened,
+        gate: retirement_inspection::RepairGate,
+    },
 }
 
 /// Root control and handle ownership shared with abortable observation tasks.
@@ -456,6 +480,13 @@ impl MmpCustodyRoot {
             {
                 return Poll::Pending;
             }
+            if matches!(
+                &*state,
+                State::InspectingRetirement { .. } | State::ReopeningRetirement { .. }
+            ) && retirement_inspection::poll_join(&mut state, cx).is_pending()
+            {
+                return Poll::Pending;
+            }
             if matches!(&*state, State::Recovering { .. })
                 && recovery::poll_join(&mut state, cx).is_pending()
             {
@@ -555,6 +586,16 @@ impl MmpCustodyRoot {
                 _ => None,
             },
             State::WrittenTerminal { .. } => terminal_custody::failure(&state),
+            State::RetirementInspectionRefused { gate, .. }
+            | State::ReopeningRetirement { gate, .. } => Some(gate.error.clone()),
+            State::InspectedRetirement { result, .. } => match result {
+                Ok(written) => written
+                    .candidate
+                    .as_ref()
+                    .err()
+                    .map(|failure| failure.error.clone()),
+                Err(error) => Some(error.clone()),
+            },
             State::Acknowledged { .. } => acknowledgement::failure(&state),
             State::Loaded { .. } => payload_load::failure(&state),
             State::Snapshotted {
@@ -922,6 +963,14 @@ impl Drop for Inner {
                     let result = worker.await;
                     let _ = runtime.spawn_blocking(move || drop(result)).await;
                 }
+                State::InspectingRetirement { worker, .. } => {
+                    let result = worker.await;
+                    let _ = runtime.spawn_blocking(move || drop(result)).await;
+                }
+                State::ReopeningRetirement { worker, .. } => {
+                    let result = worker.await;
+                    let _ = runtime.spawn_blocking(move || drop(result)).await;
+                }
                 State::Running { worker, .. } => {
                     let result = worker.await;
                     let _ = runtime.spawn_blocking(move || drop(result)).await;
@@ -1018,6 +1067,12 @@ fn status(state: &State) -> CustodyWorkerStatus {
     match state {
         State::Opening(_) | State::Running { .. } => CustodyWorkerStatus::Running,
         State::Idle(_) => CustodyWorkerStatus::Idle,
+        State::RetirementInspectionRefused { .. } => CustodyWorkerStatus::Unavailable,
+        State::ReopeningRetirement { .. } => CustodyWorkerStatus::Running,
+        State::InspectingRetirement { .. } => CustodyWorkerStatus::Running,
+        State::InspectedRetirement { .. } => {
+            CustodyWorkerStatus::RetirementInspectionAwaitingAdoption
+        }
         State::Joined {
             result, retry_at, ..
         } => match result.as_deref() {

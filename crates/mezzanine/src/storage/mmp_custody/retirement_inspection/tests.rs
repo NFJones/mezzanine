@@ -376,7 +376,8 @@ fn retired_source_candidate_follows_transitive_ack_dependencies() {
             .bind_store(&mut store)
             .unwrap()
             .inspect_source_retirement_candidate(&mut input, &scope, sequences[0])
-            .is_err()
+            .unwrap()
+            .is_none()
     );
     assert_eq!(image(&store), before);
     drop(input);
@@ -397,6 +398,7 @@ fn retired_source_candidate_follows_transitive_ack_dependencies() {
         .bind_store(&mut store)
         .unwrap()
         .inspect_source_retirement_candidate(&mut input, &scope, sequences[0])
+        .unwrap()
         .unwrap();
     assert_eq!(
         result
@@ -540,11 +542,11 @@ fn retired_source_candidate_has_a_finite_dependency_quantum() {
             .unwrap()
             .inspect_source_retirement_candidate(&mut input, &scope, sequences[0]);
         if count == MAX_CANDIDATE_SOURCES {
-            let result = result.unwrap();
+            let result = result.unwrap().unwrap();
             assert_eq!(result.sources.len(), count);
             assert!(result.sources.iter().all(|s| s.unsettled_recipients == 0));
         } else {
-            assert!(result.is_err());
+            assert!(result.unwrap().is_none());
         }
         assert_eq!(image(&store), before);
     }

@@ -17290,6 +17290,21 @@ scans MAY reuse the existing decoder and 256 KiB accumulator, including candidat
 metadata. Native journals and unsettled slots remain explicit blockers; this
 bounded analysis is not a dependency-closed native cleanup plan, runtime cleanup
 lane, durable intent or physical reclamation implementation.
+Optional analysis MAY use the existing serialized root blocking-worker lane.
+Its charged capture and actual handle MUST survive observer cancellation; only
+an actual join permits adoption, and adoption MUST check the issuing lower
+service. Expected live-dependency/quantum refusal MUST be typed separately from
+validation failure and finish the current member's slot/inventory checks before
+releasing the lane. No weaker fallback validator may erase a detected integrity
+failure. Invalid evidence MUST gate that root until an explicit fresh read proves
+repair of the exact failed source. The failed source and original read seed MUST
+survive refusal/worker loss; unrelated seeds and partial expected refusals MUST
+NOT clear an existing gate. Actual worker loss MAY issue one exact-allocation/position connection
+reopen after join, but MUST remain admission-gated until explicit fresh charged
+inspection; reopening alone proves no source integrity. There is no automatic
+candidate rescan or effect replay. Stop MUST deny new analysis while permitting
+issued read settlement. This lane supplies no normal actor cleanup scheduling,
+native dependency closure, durable cleanup intent or default activation.
 Admission MUST check the combined native attribution, registration namespaces,
 elapsed-clock metadata and any newly required source-only end intents against
 that same metadata ceiling before copying source bindings or reserving its

@@ -524,6 +524,7 @@ async fn native_input_source_retirement_waits_for_real_proof_after_replay_evicti
             .unwrap()
             .inspect_source_retirement_candidate(&mut input, root.storage_scope(), sequence)
             .unwrap()
+            .unwrap()
     };
     assert_eq!(candidate.sources().len(), 1);
     assert_eq!(candidate.sources()[0].native_journal_references, 1);

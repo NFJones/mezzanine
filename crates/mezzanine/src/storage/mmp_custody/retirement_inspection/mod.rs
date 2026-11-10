@@ -63,21 +63,37 @@ impl SourceRetirementCandidate {
     pub(crate) fn sources(&self) -> &[SourceRetirementInspection] {
         &self.sources
     }
+
+    /// Adoption checks the actual issuing lower service, not serialized labels.
+    pub(crate) fn is_original(&self, service: &mez_agent::messaging::MessageService) -> bool {
+        service.source_retirement_inspection_is_original(&self._input)
+    }
+}
+
+/// The exact source whose scalar settlement checks failed. A repair must cover
+/// this source, not merely another individually valid occurrence in the store.
+#[derive(Debug)]
+pub(crate) struct SourceRetirementFailure {
+    pub error: MezError,
+    pub sequence: u64,
 }
 
 struct CandidateQueue {
     sequences: [u64; MAX_CANDIDATE_SOURCES],
     len: usize,
+    refused: bool,
 }
 
 impl CandidateQueue {
     fn insert(&mut self, input: &MessageSourceRetirementInspection, sequence: u64) -> Result<()> {
         if !input.has_no_live_source(sequence) {
-            return Err(unavailable());
+            self.refused = true;
+            return Ok(());
         }
         if !self.sequences[..self.len].contains(&sequence) {
             if self.len == MAX_CANDIDATE_SOURCES {
-                return Err(unavailable());
+                self.refused = true;
+                return Ok(());
             }
             self.sequences[self.len] = sequence;
             self.len += 1;
@@ -92,51 +108,66 @@ impl OwnedCustodyStore<'_> {
     /// decoder and slot scratch. This synchronous method belongs in an owned
     /// blocking worker; no runtime scheduling/cleanup lane is installed here.
     /// Admission and adoption must separately revalidate the exact lower input.
+    /// `None` is a typed live-source/quantum refusal, never a validation error.
+    /// A refused member's scan still completes its slot/inventory checks before
+    /// returning None; no weaker fallback may erase an observed integrity error.
     pub(crate) fn inspect_source_retirement_candidate(
         &mut self,
         input: &mut Arc<MessageSourceRetirementInspection>,
         scope: &MessageStorageScope,
         sequence: u64,
-    ) -> Result<SourceRetirementCandidate> {
-        // One lower input funds one retained result. While a prior result or
-        // another worker/weak observer retains it, refuse instead of multiplying
-        // that loan. Exclusive access plus get_mut prevents a concurrent upgrade.
-        if Arc::get_mut(input).is_none() || !input.belongs_to(scope) {
-            return Err(unavailable());
-        }
-        self.revalidate()?;
-        let store = self.store_mut();
-        let transaction = store
-            .connection
-            .unchecked_transaction()
-            .map_err(database_error)?;
-        let mut queue = CandidateQueue {
-            sequences: [0; MAX_CANDIDATE_SOURCES],
-            len: 0,
-        };
-        queue.insert(input, sequence)?;
-        let mut sources = Vec::new();
-        sources
-            .try_reserve_exact(MAX_CANDIDATE_SOURCES)
-            .map_err(|_| unavailable())?;
-        let mut index = 0;
-        while index < queue.len {
-            let sequence = queue.sequences[index];
-            sources.push(inspect_in_snapshot(
-                store,
-                &transaction,
-                input,
-                sequence,
-                &mut |dependency| queue.insert(input, dependency),
-            )?);
-            index += 1;
-        }
-        sources.sort_unstable_by_key(|source| source.sequence);
-        store.finish_transaction(transaction)?;
-        self.revalidate()?;
-        Ok(SourceRetirementCandidate {
-            sources,
-            _input: input.clone(),
+    ) -> std::result::Result<Option<SourceRetirementCandidate>, SourceRetirementFailure> {
+        let mut failed_sequence = sequence;
+        let result = (|| -> Result<Option<SourceRetirementCandidate>> {
+            // One lower input funds one retained result. While a prior result or
+            // another worker/weak observer retains it, refuse instead of multiplying
+            // that loan. Exclusive access plus get_mut prevents a concurrent upgrade.
+            if Arc::get_mut(input).is_none() || !input.belongs_to(scope) {
+                return Err(unavailable());
+            }
+            self.revalidate()?;
+            let store = self.store_mut();
+            let transaction = store
+                .connection
+                .unchecked_transaction()
+                .map_err(database_error)?;
+            let mut queue = CandidateQueue {
+                sequences: [0; MAX_CANDIDATE_SOURCES],
+                len: 0,
+                refused: false,
+            };
+            queue.insert(input, sequence)?;
+            let mut sources = Vec::new();
+            sources
+                .try_reserve_exact(MAX_CANDIDATE_SOURCES)
+                .map_err(|_| unavailable())?;
+            let mut index = 0;
+            while index < queue.len && !queue.refused {
+                let sequence = queue.sequences[index];
+                failed_sequence = sequence;
+                sources.push(inspect_in_snapshot(
+                    store,
+                    &transaction,
+                    input,
+                    sequence,
+                    &mut |dependency| queue.insert(input, dependency),
+                )?);
+                index += 1;
+            }
+            sources.sort_unstable_by_key(|source| source.sequence);
+            store.finish_transaction(transaction)?;
+            self.revalidate()?;
+            if queue.refused {
+                return Ok(None);
+            }
+            Ok(Some(SourceRetirementCandidate {
+                sources,
+                _input: input.clone(),
+            }))
+        })();
+        result.map_err(|error| SourceRetirementFailure {
+            error,
+            sequence: failed_sequence,
         })
     }
 
