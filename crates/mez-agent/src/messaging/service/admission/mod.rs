@@ -612,6 +612,7 @@ impl MessageService {
             recipient_bindings: bindings,
             accepted_at_ms: now_ms,
         });
+        self.record_storage_source_lifetime(&row)?;
         self.discard_settled_admission_replay();
         self.next_sequence = next;
         self.admission = Some(PendingMessageAdmission {

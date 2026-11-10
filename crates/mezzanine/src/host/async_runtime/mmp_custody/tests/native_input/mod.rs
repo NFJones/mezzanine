@@ -390,6 +390,80 @@ async fn native_input_optional_metadata_pressure_preserves_canonical_and_ack_pro
     drop(captures);
 }
 
+/// Actual canonical and ACK commits plus ordinary replay eviction still leave
+/// the original source live while a proof owns it. Absence evidence changes
+/// only after its last real owner exits and never removes physical history.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn native_input_source_retirement_waits_for_real_proof_after_replay_eviction() {
+    let fixture = Fixture::new(true);
+    let mut scene = Scene::new(&fixture).await;
+    let sequence = scene.anchor.sequence();
+    let sender = scene.anchor.resident_envelope().unwrap().sender.clone();
+    scene.start();
+    let proof = scene.adopt().await;
+    scene.ack(&proof).await;
+    for index in 0..16 {
+        let ticket = scene
+            .service
+            .prepare_acceptance(
+                &sender.agent_id,
+                envelope(&sender, &scene.target, &format!("later-source-{index}")),
+                MessageScope::Session,
+                100,
+                4096,
+                None,
+            )
+            .unwrap();
+        scene.root.start(&mut scene.service, &ticket, None).unwrap();
+        assert_eq!(
+            scene.root.observe().await.unwrap(),
+            CustodyWorkerStatus::AwaitingAdoption
+        );
+        scene.root.adopt(&mut scene.service, None).unwrap();
+    }
+    assert_eq!(scene.canonical_count(), 1);
+    assert_eq!(
+        scene
+            .service
+            .storage_usage()
+            .unwrap()
+            .unwrap()
+            .pending_messages,
+        16
+    );
+    let Scene {
+        root,
+        service,
+        anchor,
+        transcript: _,
+        row: _,
+        target: _,
+    } = scene;
+    drop(anchor);
+    let before = service
+        .capture_source_retirement_fence(root.storage_scope())
+        .unwrap();
+    assert!(!before.has_no_live_source(sequence));
+    drop(proof);
+    assert!(!before.has_no_live_source(sequence));
+    let disk = fixture.disk();
+    let after = service
+        .capture_source_retirement_fence(root.storage_scope())
+        .unwrap();
+    assert!(service.source_retirement_fence_is_original(&after));
+    assert!(after.has_no_live_source(sequence));
+    for pending in sequence + 1..=sequence + 16 {
+        assert!(!after.has_no_live_source(pending));
+    }
+    assert!(!after.has_no_live_source(sequence + 17));
+    assert_eq!(
+        fixture.disk(),
+        disk,
+        "lifetime evidence never deletes stored rows"
+    );
+    assert_eq!(root.observe().await.unwrap(), CustodyWorkerStatus::Idle);
+}
+
 /// Actual worker panic after canonical+c1 commit loses the positive reply, not
 /// its immutable original preparation. Retry must not append or journal twice.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

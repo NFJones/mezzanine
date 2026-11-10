@@ -277,10 +277,16 @@ fn guarded_native_binding_cannot_authorize_unknown_legacy_source() {
         delivery,
     } = accepted;
     drop(source);
-    let mut row = s.service.queue.pop_front().unwrap();
+    let row = s.service.queue.pop_front().unwrap();
     s.service.pending.remove(&row.sequence);
     s.service.queued_by_sequence.remove(&row.sequence);
-    Arc::get_mut(&mut row).unwrap().native_bindings = None;
+    // The real weak lifetime registry intentionally prevents Arc::get_mut.
+    // Build the fixture's legacy allocation while exclusively owning the row,
+    // then record that allocation before restoring any canonical references.
+    let mut row = Arc::try_unwrap(row).unwrap();
+    row.native_bindings = None;
+    let row = Arc::new(row);
+    s.service.record_storage_source_lifetime(&row).unwrap();
     s.service.accepted_messages.insert(
         key,
         AcceptedMessage {

@@ -143,6 +143,23 @@ async fn owned_recovery_keeps_input_charged_through_staging_then_hydrates_origin
         service.storage_usage().unwrap().unwrap().metadata_bytes + input_charge,
         joined_usage.metadata_bytes
     );
+    let fence = service
+        .capture_source_retirement_fence(root.storage_scope())
+        .unwrap();
+    assert!(service.source_retirement_fence_is_original(&fence));
+    assert!(
+        !fence.has_no_live_source(1),
+        "actual cold reconstruction retains the original source"
+    );
+    assert!(
+        !fence.has_no_live_source(2),
+        "the captured allocator range excludes later sources"
+    );
+    assert_eq!(
+        service.storage_usage().unwrap().unwrap().cache,
+        mez_agent::messaging::MessagePayloadUsage::default()
+    );
+    drop(fence);
     assert_eq!(root.observe().await.unwrap(), CustodyWorkerStatus::Idle);
     assert_eq!(fixture.disk(), before);
     assert!(root.start_payload_load(&mut service, 1).unwrap());

@@ -17245,6 +17245,18 @@ live sources and all other retained allocations MUST still fit the same 8 MiB
 ceiling; reserving usable worker headroom reduces ordinary admission capacity,
 not raises the ceiling. Recovery inventory/fold indexes and registration-end
 intents remain independently charged; a scratch loan grants no I/O authority.
+Storage-backed sources MUST be tracked by their actual shared allocation before
+worker exposure and during trusted reconstruction. The weak lifetime index MUST
+contain at most 10,000 live source allocations and charge 256 logical metadata
+bytes per entry within that same ceiling; dead entries MUST be reclaimable
+without retaining an ever-growing sequence history. An immutable retirement
+fence MAY exclude then-live allocations over a frozen allocator range, but MUST
+remain bound to the exact runtime and storage scope. It MUST NOT treat replay
+eviction as capability retirement, or claim acceptance, durable settlement or
+deletion authority from source absence alone. Allocator gaps and envelope-only
+payload pins are distinct from original source rights; payload pins remain
+independently charged. Physical reclamation and shared-record dependency closure
+remain separate required storage qualification.
 Admission MUST check the combined native attribution, registration namespaces,
 elapsed-clock metadata and any newly required source-only end intents against
 that same metadata ceiling before copying source bindings or reserving its

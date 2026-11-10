@@ -132,6 +132,8 @@ pub(in crate::messaging) struct StorageCustody {
     pub(super) native_input_metadata_loan: Arc<std::sync::atomic::AtomicBool>,
     /// Retained ACK identities own the separate precharged encoding allowance.
     pub(super) acknowledgement_metadata_loan: Arc<std::sync::atomic::AtomicBool>,
+    /// Weak actual source allocations, including owners beyond canonical indexes.
+    pub(super) source_lifetimes: super::source_lifetimes::SourceLifetimes,
     /// Trusted product admission barrier; never selected by saved/wire data.
     pub(super) native_continuity_required: bool,
     /// Actual original-root elapsed clock, never installed by saved bytes.
@@ -241,6 +243,7 @@ impl MessageService {
             worker_metadata_loan: Arc::default(),
             native_input_metadata_loan: Arc::default(),
             acknowledgement_metadata_loan: Arc::default(),
+            source_lifetimes: Default::default(),
             native_continuity_required: false,
             elapsed_clock: None,
             decoded_clock: None,
@@ -285,12 +288,14 @@ impl MessageService {
         let Some(policy) = &self.storage_custody else {
             return Ok(0);
         };
-        let mut bytes = WORKER_HEADROOM.saturating_add(
-            policy
-                .limits
-                .cache_messages
-                .saturating_mul(CACHE_SLOT_METADATA),
-        );
+        let mut bytes = WORKER_HEADROOM
+            .saturating_add(
+                policy
+                    .limits
+                    .cache_messages
+                    .saturating_mul(CACHE_SLOT_METADATA),
+            )
+            .saturating_add(policy.source_lifetimes.metadata_bytes()?);
         for row in self
             .queued_by_sequence
             .values()
@@ -411,7 +416,8 @@ impl MessageService {
                     .cache_messages
                     .saturating_mul(CACHE_SLOT_METADATA),
             )
-            .saturating_add(auxiliary::envelope_bytes(envelope));
+            .saturating_add(auxiliary::envelope_bytes(envelope))
+            .saturating_add(policy.source_lifetimes.preflight()?);
         bytes = message_metadata_bytes(bytes, incoming).saturating_add(native_bytes);
         for row in self.pending.values() {
             bytes = bytes.saturating_add(source_metadata_bytes(row));

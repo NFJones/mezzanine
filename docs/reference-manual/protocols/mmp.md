@@ -343,6 +343,19 @@ it, and does not grant I/O authority or enable durable mode by default.
 Stored cumulative ACKs use the original adoption-bound source digest, so an ACK
 can settle cold sources without loading an entire prefix.
 
+The original-source lifetime index uses weak allocation references, not replay
+membership: native proofs and actual workers can retain a source after its
+indexes disappear. Admission and trusted cold reconstruction populate this
+index before exposing sources. It is bounded to 10,000 live allocations and
+charges 256 logical metadata bytes per entry within the existing ceiling; dead
+entries release their index nodes. A runtime/root-bound retirement fence records
+then-live exclusions within a frozen allocator range. It proves neither an
+accepted occurrence nor durable settlement (a cancelled sequence can be a gap),
+and grants no disk deletion authority. Envelope-only delivery pins still charge
+the payload cache independently. Physical reclamation, dependency closure and
+crash-recoverable cleanup remain unfinished; this evidence does not enable them
+or default durable activation.
+
 Storage-policy sources preserve immutable schema2 native attribution. Guarded sources retain schema3 recipient attribution; clock-qualified sources use schema4, additionally recording the original store allocation as a descriptive elapsed domain. Each source records one original registration namespace per recipient without a reconnect credential or live end marker. Legacy sources remain unknown for this added attribution. Each source records the
 original native sender/recipient conversation and opaque incarnation (or explicit
 raw/unbound absence) in the original recipient order. The actual native shell,

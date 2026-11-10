@@ -404,6 +404,7 @@ impl MessageStorageRecovery {
         row.horizon_observed_at_ms = std::sync::Mutex::new(record.horizon_observed_at_ms);
         let row = Arc::new(row);
         let additional = self.reserve_row(&row, pending)?;
+        self.service.record_storage_source_lifetime(&row)?;
         if pending {
             self.per_recipient
                 .try_reserve(row.recipient_bindings.len())
@@ -481,9 +482,13 @@ impl MessageStorageRecovery {
             }
         }
         let (used, ceiling) = self.metadata_budget()?;
+        // The base already counts current registry entries; reserve one new
+        // actual source node before publishing this reconstruction candidate.
+        policy.source_lifetimes.preflight()?;
         if used
             .saturating_add(additional)
             .saturating_add(storage_policy::source_metadata_bytes(row))
+            .saturating_add(super::source_lifetimes::SOURCE_LIFETIME_METADATA)
             > ceiling
             || self.service.accepted_messages.len() >= policy.limits.messages
         {
