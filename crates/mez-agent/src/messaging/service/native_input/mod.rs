@@ -413,8 +413,9 @@ impl MessageService {
                         .saturating_add(native.incarnation().len()),
                 ),
             );
-        let lease = checkpoint::reserve_checkpoint(
+        let lease = checkpoint::reserve_native_input_metadata(
             policy.checkpoint_bytes.clone(),
+            policy.native_input_metadata_loan.clone(),
             bytes,
             self.storage_metadata_base_usage()?,
             policy.limits.metadata_bytes,

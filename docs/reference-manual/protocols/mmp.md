@@ -330,7 +330,13 @@ One retained source-validation worker can use a reserved metadata allowance:
 and persistent native/source pins cannot spend it. The final actual worker or
 attempt owner returns that allowance, not observer cancellation, a released root
 lane or a published result. Concurrent workers and any excess must fit ordinary
-metadata space. Separate ACK and reader allowances remain reserved; inventory,
+metadata space. Native-input anchors have their own exclusive 1 MiB allowance,
+held through the last actual proof/observation reference. Larger or concurrent
+anchors fund their excess/full charge from ordinary space. ACK identities own
+the separate 512 KiB ACK allowance through their last ticket/attempt/result,
+even after publication; subsequent retained ACKs cannot reuse it prematurely.
+None of these loans grants receive or canonical-commit authority.
+Separate ACK and reader allowances remain reserved; inventory,
 recovery indexes and registration-end intents remain independently charged.
 This reduces admission space within the same 8 MiB ceiling rather than enlarging
 it, and does not grant I/O authority or enable durable mode by default.

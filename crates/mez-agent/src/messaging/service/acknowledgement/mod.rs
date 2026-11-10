@@ -57,6 +57,9 @@ struct Identity {
     entries: Vec<MessageAcknowledgementEntry>,
     /// Full logical metadata plus bounded future worker encoding charge.
     metadata_bytes: usize,
+    /// Storage-mode charge survives removal of pending state while tickets,
+    /// attempts or positive results still retain this exact identity.
+    _metadata_lease: Option<MessageStorageSnapshotLease>,
     /// Original actor publication fact, independent of later replay eviction.
     published: AtomicBool,
 }
@@ -362,6 +365,7 @@ impl MessageService {
         {
             return Err(changed());
         }
+        let metadata_lease = self.reserve_storage_acknowledgement_metadata(metadata_bytes)?;
         let identity = Arc::new(Identity {
             owner: self.acceptance_runtime.clone(),
             cursor: DeliveryCursor {
@@ -374,6 +378,7 @@ impl MessageService {
             observed_at_ms,
             entries,
             metadata_bytes,
+            _metadata_lease: metadata_lease,
             published: AtomicBool::new(false),
         });
         self.acknowledgement = Some(PendingAcknowledgement {
@@ -440,16 +445,7 @@ impl MessageService {
         if metadata_bytes > metadata_budget.min(MAX_METADATA) {
             return Err(capacity());
         }
-        let policy = self.storage_custody.as_ref().ok_or_else(changed)?;
-        if self
-            .storage_usage()?
-            .ok_or_else(changed)?
-            .metadata_bytes
-            .saturating_add(metadata_bytes)
-            > policy.limits.metadata_bytes
-        {
-            return Err(capacity());
-        }
+        let metadata_lease = self.reserve_storage_acknowledgement_metadata(metadata_bytes)?;
         let identity = Arc::new(Identity {
             owner: self.acceptance_runtime.clone(),
             cursor: DeliveryCursor {
@@ -467,6 +463,7 @@ impl MessageService {
                 offered_at_ms: Some(clock),
             }],
             metadata_bytes,
+            _metadata_lease: metadata_lease,
             published: AtomicBool::new(false),
         });
         // The actual canonical proof requalifies the original genuine offer on

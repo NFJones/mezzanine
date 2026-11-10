@@ -543,11 +543,12 @@ mod tests;
 /// Reservation for all copies of a checkpoint during verification/publication.
 /// The trusted product must retain this until its actual snapshot writer returns,
 /// including when the administrative observer leaves. This is no restore right.
+#[derive(Debug)]
 pub struct MessageStorageSnapshotLease {
     budget: Arc<std::sync::atomic::AtomicUsize>,
     bytes: usize,
     /// Released only after this lease's charged excess has been returned.
-    _worker_loan: Option<WorkerMetadataLoan>,
+    _metadata_loan: Option<MetadataLoan>,
 }
 impl Drop for MessageStorageSnapshotLease {
     /// Releases only this capture's reservation after its last actual owner exits.
@@ -577,7 +578,7 @@ pub(super) fn reserve_checkpoint(
                 return Ok(MessageStorageSnapshotLease {
                     budget,
                     bytes,
-                    _worker_loan: None,
+                    _metadata_loan: None,
                 });
             }
             Err(current) => held = current,
@@ -586,11 +587,12 @@ pub(super) fn reserve_checkpoint(
 }
 
 /// The actual last lease owner, not a root handle or a completed observer,
-/// returns the fixed worker quantum. No payload, source or I/O authority lives
-/// here; ordinary capture reservations cannot obtain this token.
-struct WorkerMetadataLoan(Arc<std::sync::atomic::AtomicBool>);
+/// returns its fixed worker/native/ACK quantum. No payload, source or I/O
+/// authority lives here; ordinary captures cannot obtain these tokens.
+#[derive(Debug)]
+struct MetadataLoan(Arc<std::sync::atomic::AtomicBool>);
 
-impl Drop for WorkerMetadataLoan {
+impl Drop for MetadataLoan {
     fn drop(&mut self) {
         self.0.store(false, std::sync::atomic::Ordering::Release);
     }
@@ -608,6 +610,57 @@ pub(super) fn reserve_worker_metadata(
     base: usize,
     limit: usize,
 ) -> Result<MessageStorageSnapshotLease> {
+    reserve_metadata_loan(
+        budget,
+        loan,
+        bytes,
+        base,
+        limit,
+        super::storage_policy::WORKER_METADATA_QUANTUM,
+    )
+}
+
+/// Native anchors retain a separate precharged allowance through their last
+/// proof/observation owner. This cannot borrow a worker's scratch allowance.
+pub(super) fn reserve_native_input_metadata(
+    budget: Arc<std::sync::atomic::AtomicUsize>,
+    loan: Arc<std::sync::atomic::AtomicBool>,
+    bytes: usize,
+    base: usize,
+    limit: usize,
+) -> Result<MessageStorageSnapshotLease> {
+    reserve_metadata_loan(
+        budget,
+        loan,
+        bytes,
+        base,
+        limit,
+        super::storage_policy::NATIVE_INPUT_METADATA_QUANTUM,
+    )
+}
+
+/// The ACK identity, including lost-result escrow and retained tickets, owns
+/// its independent allowance until its final actual reference retires.
+pub(super) fn reserve_acknowledgement_metadata(
+    budget: Arc<std::sync::atomic::AtomicUsize>,
+    loan: Arc<std::sync::atomic::AtomicBool>,
+    bytes: usize,
+    base: usize,
+    limit: usize,
+) -> Result<MessageStorageSnapshotLease> {
+    reserve_metadata_loan(budget, loan, bytes, base, limit, 512 * 1024)
+}
+
+/// Allocation-only transfer from one independently precharged finite pool.
+/// A failed excess reservation returns its newly acquired loan immediately.
+fn reserve_metadata_loan(
+    budget: Arc<std::sync::atomic::AtomicUsize>,
+    loan: Arc<std::sync::atomic::AtomicBool>,
+    bytes: usize,
+    base: usize,
+    limit: usize,
+    quantum: usize,
+) -> Result<MessageStorageSnapshotLease> {
     use std::sync::atomic::Ordering;
     if loan
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
@@ -615,10 +668,10 @@ pub(super) fn reserve_worker_metadata(
     {
         return reserve_checkpoint(budget, bytes, base, limit);
     }
-    let loan = WorkerMetadataLoan(loan);
-    let excess = bytes.saturating_sub(super::storage_policy::WORKER_METADATA_QUANTUM);
+    let loan = MetadataLoan(loan);
+    let excess = bytes.saturating_sub(quantum);
     let mut lease = reserve_checkpoint(budget, excess, base, limit)?;
-    lease._worker_loan = Some(loan);
+    lease._metadata_loan = Some(loan);
     Ok(lease)
 }
 

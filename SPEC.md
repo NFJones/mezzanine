@@ -17232,7 +17232,15 @@ full charge from ordinary metadata space; any excess above the borrowed quantum
 MUST also fit that space before capture. The actual last capture/attempt owner
 MUST return the loan, including after cancellation, uncertain writes or lost
 results. Returning a root lane or publishing a result alone MUST NOT release it.
-The quantum, separate 512 KiB ACK allowance, 64 KiB reader allowance, cache index,
+Native input anchors MUST have a separate exclusive 1 MiB precharged allowance;
+optional captures and source-validation workers MUST NOT consume it. Its actual
+last proof/observation owner MUST return it. Additional retained anchors and any
+excess MUST fit ordinary metadata space. This is allocation custody, not proof
+of canonical commit or permission to receive. Storage ACK identities MUST own
+the separate 512 KiB ACK allowance through their final ticket/attempt/result
+reference, including after publication; a concurrent or later retained identity
+MUST fund its full charge while the original still owns that allowance.
+The worker/native quanta, separate 512 KiB ACK allowance, 64 KiB reader allowance, cache index,
 live sources and all other retained allocations MUST still fit the same 8 MiB
 ceiling; reserving usable worker headroom reduces ordinary admission capacity,
 not raises the ceiling. Recovery inventory/fold indexes and registration-end

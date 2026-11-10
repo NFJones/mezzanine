@@ -252,7 +252,9 @@ async fn registration_end_actor_capacity_refusal_backs_off_without_losing_intent
     let fixture = Fixture::new(true);
     let (_, mut actor, root, turn, _) = scene(&fixture).await;
     let id = AgentId::opaque(turn.agent_id).unwrap();
-    let held = (0..3)
+    // The first capture owns worker headroom; a second fully charged capture
+    // exhausts room for the end worker while native-proof space stays reserved.
+    let held = (0..2)
         .map(|_| {
             actor
                 .service

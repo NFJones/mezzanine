@@ -17,10 +17,15 @@ pub use clock::MessageStorageClock;
 /// metadata, and framing. Extra worker captures must fund their own full charge.
 pub(super) const WORKER_METADATA_QUANTUM: usize =
     MESSAGE_STORAGE_RECOVERY_SCRATCH_METADATA + 512 * 1024 + 16 * 1024;
+/// One retained native-input anchor, independently of source-validation scratch.
+/// Larger anchors and concurrent pins must fund excess from ordinary space.
+pub(super) const NATIVE_INPUT_METADATA_QUANTUM: usize = 1024 * 1024;
 /// Keep ACK encoding and queued reader continuations independently reserved;
 /// borrowing the worker quantum never consumes either of these allowances.
-pub(super) const WORKER_HEADROOM: usize =
-    WORKER_METADATA_QUANTUM + 512 * 1024 + MESSAGE_PAYLOAD_DEMAND_BYTES;
+pub(super) const WORKER_HEADROOM: usize = WORKER_METADATA_QUANTUM
+    + NATIVE_INPUT_METADATA_QUANTUM
+    + 512 * 1024
+    + MESSAGE_PAYLOAD_DEMAND_BYTES;
 /// Bounded actor-owned cold-read continuation metadata, including IDs/overhead.
 pub const MESSAGE_PAYLOAD_DEMAND_BYTES: usize = 64 * 1024;
 /// Maximum deferred reader continuations on one serialized root.
@@ -122,6 +127,11 @@ pub(in crate::messaging) struct StorageCustody {
     /// Exactly one retained worker may borrow the already charged quantum.
     /// This is allocation custody only, never permission to issue physical I/O.
     pub(super) worker_metadata_loan: Arc<std::sync::atomic::AtomicBool>,
+    /// Independent native proof custody; a worker cannot consume this progress
+    /// allowance, nor can a persistent anchor consume worker scratch.
+    pub(super) native_input_metadata_loan: Arc<std::sync::atomic::AtomicBool>,
+    /// Retained ACK identities own the separate precharged encoding allowance.
+    pub(super) acknowledgement_metadata_loan: Arc<std::sync::atomic::AtomicBool>,
     /// Trusted product admission barrier; never selected by saved/wire data.
     pub(super) native_continuity_required: bool,
     /// Actual original-root elapsed clock, never installed by saved bytes.
@@ -229,6 +239,8 @@ impl MessageService {
         self.storage_custody = Some(StorageCustody {
             checkpoint_bytes: Arc::default(),
             worker_metadata_loan: Arc::default(),
+            native_input_metadata_loan: Arc::default(),
+            acknowledgement_metadata_loan: Arc::default(),
             native_continuity_required: false,
             elapsed_clock: None,
             decoded_clock: None,
@@ -323,6 +335,26 @@ impl MessageService {
             self.storage_metadata_base_usage()?,
             policy.limits.metadata_bytes,
         )
+    }
+
+    /// Loans ACK encoding space only to its actual retained identity. Old
+    /// tickets/results keep the loan after publication; a later ACK must then
+    /// pay its full charge, rather than silently reusing still-live space.
+    pub(super) fn reserve_storage_acknowledgement_metadata(
+        &self,
+        bytes: usize,
+    ) -> Result<Option<MessageStorageSnapshotLease>> {
+        let Some(policy) = &self.storage_custody else {
+            return Ok(None);
+        };
+        checkpoint::reserve_acknowledgement_metadata(
+            policy.checkpoint_bytes.clone(),
+            policy.acknowledgement_metadata_loan.clone(),
+            bytes,
+            self.storage_metadata_base_usage()?,
+            policy.limits.metadata_bytes,
+        )
+        .map(Some)
     }
 
     /// Reserves a canonical allocation, evicting only original-root backed

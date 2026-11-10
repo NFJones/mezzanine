@@ -190,6 +190,12 @@ fn native_input_proof_charges_source_metadata_after_ack_and_replay_eviction() {
         )],
     );
     scene.offer(11);
+    // One actual anchor owns the precharged allowance; this second proof must
+    // pay its full charge and retain that charge after canonical row eviction.
+    let loan_holder = scene
+        .service
+        .capture_native_input_anchor(&scene.native.agent_id, sequence)
+        .unwrap();
     let proof = scene.proof(sequence, 11);
     let source_bytes = super::super::storage_policy::source_metadata_bytes(&proof.anchor.0.row);
     assert!(source_bytes > 16 * 1024);
@@ -214,6 +220,190 @@ fn native_input_proof_charges_source_metadata_after_ack_and_replay_eviction() {
         .unwrap()
         .metadata_bytes;
     assert!(retained.saturating_sub(retired) >= source_bytes);
+    drop(loan_holder);
+}
+
+/// Optional captures cannot consume the admission-to-proof progress allowance.
+/// The original proof must remain charged through its last actual clone, while
+/// a separate worker capture and the original ACK can still settle this source.
+#[test]
+fn native_input_proof_progress_survives_full_optional_metadata() {
+    let mut scene = Scene::new();
+    scene.service.retention_messages = 0;
+    let sequence = scene.accept("proof-under-pressure", None);
+    scene.offer(11);
+    let policy = scene.service.storage_custody.as_ref().unwrap();
+    let budget = policy.checkpoint_bytes.clone();
+    let limit = policy.limits.metadata_bytes;
+    assert_eq!(limit, 8 * 1024 * 1024);
+    let base = scene.service.storage_metadata_base_usage().unwrap();
+    let optional =
+        checkpoint::reserve_checkpoint(budget.clone(), limit - base, base, limit).unwrap();
+    assert_eq!(
+        scene
+            .service
+            .storage_usage()
+            .unwrap()
+            .unwrap()
+            .metadata_bytes,
+        limit
+    );
+    let proof = scene.proof(sequence, 11);
+    let last = proof.clone();
+    let worker = scene
+        .service
+        .reserve_storage_worker_metadata(super::super::storage_policy::WORKER_METADATA_QUANTUM)
+        .unwrap();
+    assert!(matches!(
+        scene.service.capture_native_input_anchor(&scene.native.agent_id, sequence),
+        Err(error) if error.kind() == MessageErrorKind::Capacity
+    ));
+    scene
+        .service
+        .release_stored_payload(sequence, &scene.scope)
+        .unwrap();
+    scene.ack(&proof);
+    assert!(scene.service.pending.is_empty());
+    assert_eq!(
+        scene
+            .service
+            .subscription(&scene.native.agent_id)
+            .unwrap()
+            .last_sequence,
+        sequence
+    );
+    drop(proof);
+    assert!(
+        scene
+            .service
+            .storage_custody
+            .as_ref()
+            .unwrap()
+            .native_input_metadata_loan
+            .load(std::sync::atomic::Ordering::Acquire)
+    );
+    assert!(
+        scene
+            .service
+            .storage_usage()
+            .unwrap()
+            .unwrap()
+            .metadata_bytes
+            <= limit
+    );
+    drop(last);
+    assert!(
+        !scene
+            .service
+            .storage_custody
+            .as_ref()
+            .unwrap()
+            .native_input_metadata_loan
+            .load(std::sync::atomic::Ordering::Acquire)
+    );
+    drop(worker);
+    drop(optional);
+    let next = scene.accept("proof-after-pressure", None);
+    scene.offer(12);
+    let next_proof = scene.proof(next, 12);
+    scene.ack(&next_proof);
+    assert!(scene.service.pending.is_empty());
+}
+
+/// Cancellation and successful publication retire pending state, not retained
+/// ticket/result custody. An uncertain write retries the same original while
+/// another ACK cannot reuse its allowance until its final actual owner exits.
+#[test]
+fn native_ack_allowance_survives_cancel_uncertainty_and_publication() {
+    struct Refuse;
+    impl MessageAcknowledgementStore for Refuse {
+        fn commit(&mut self, _: &MessageAcknowledgementWrite) -> Result<()> {
+            Err(MessageError::invalid_state(
+                "injected original ACK uncertainty",
+            ))
+        }
+    }
+    let mut scene = Scene::new();
+    let first = scene.accept("first-ack", None);
+    let second = scene.accept("second-ack", None);
+    scene.offer(11);
+    let first_proof = scene.proof(first, 11);
+    let second_proof = scene.proof(second, 11);
+    let policy = scene.service.storage_custody.as_ref().unwrap();
+    let loan = policy.acknowledgement_metadata_loan.clone();
+    let limit = policy.limits.metadata_bytes;
+    let base = scene.service.storage_metadata_base_usage().unwrap();
+    let held = policy
+        .checkpoint_bytes
+        .load(std::sync::atomic::Ordering::Acquire);
+    let optional = checkpoint::reserve_checkpoint(
+        policy.checkpoint_bytes.clone(),
+        limit - base - held,
+        base,
+        limit,
+    )
+    .unwrap();
+    let ticket = scene
+        .service
+        .prepare_native_input_acknowledgement(&first_proof, 512 * 1024)
+        .unwrap()
+        .unwrap();
+    scene.service.cancel_acknowledgement(&ticket).unwrap();
+    assert!(loan.load(std::sync::atomic::Ordering::Acquire));
+    assert!(
+        matches!(scene.service.prepare_native_input_acknowledgement(&first_proof, 512 * 1024),
+        Err(error) if error.kind() == MessageErrorKind::Capacity)
+    );
+    drop(ticket);
+    assert!(!loan.load(std::sync::atomic::Ordering::Acquire));
+    let ticket = scene
+        .service
+        .prepare_native_input_acknowledgement(&first_proof, 512 * 1024)
+        .unwrap()
+        .unwrap();
+    let write = scene
+        .service
+        .begin_storage_acknowledgement_write(&ticket, &scene.scope)
+        .unwrap();
+    let MessageAcknowledgementWriteOutcome::Unknown(unknown) = write.persist(&mut Refuse) else {
+        panic!("injected refusal must retain original write");
+    };
+    assert!(scene.service.cancel_acknowledgement(&ticket).is_err());
+    drop(ticket);
+    assert!(loan.load(std::sync::atomic::Ordering::Acquire));
+    let write = scene.service.retry_acknowledgement_write(unknown).unwrap();
+    let MessageAcknowledgementWriteOutcome::Committed(commit) = write.persist(&mut Store) else {
+        panic!("same original ACK must reconcile");
+    };
+    scene.service.publish_acknowledgement(&commit).unwrap();
+    scene.service.publish_acknowledgement(&commit).unwrap();
+    assert!(loan.load(std::sync::atomic::Ordering::Acquire));
+    assert!(
+        matches!(scene.service.prepare_native_input_acknowledgement(&second_proof, 512 * 1024),
+        Err(error) if error.kind() == MessageErrorKind::Capacity)
+    );
+    assert_eq!(
+        scene
+            .service
+            .storage_usage()
+            .unwrap()
+            .unwrap()
+            .metadata_bytes,
+        limit
+    );
+    drop(commit);
+    assert!(!loan.load(std::sync::atomic::Ordering::Acquire));
+    scene.ack(&second_proof);
+    assert_eq!(
+        scene
+            .service
+            .subscription(&scene.native.agent_id)
+            .unwrap()
+            .last_sequence,
+        second
+    );
+    assert!(scene.service.pending.is_empty());
+    drop(optional);
 }
 
 /// Metadata scan describes frozen native slots without selecting their bodies

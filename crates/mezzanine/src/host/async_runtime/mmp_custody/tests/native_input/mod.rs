@@ -309,6 +309,87 @@ async fn native_input_commits_canonical_archive_before_actual_exact_ack() {
     assert_eq!(scene.canonical_count(), 1);
 }
 
+/// Optional checkpoint captures consume ordinary metadata, but cannot consume
+/// the first original native proof, its canonical worker scratch or exact ACK.
+/// Real SQLite/canonical I/O must settle that same occurrence without resending.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn native_input_optional_metadata_pressure_preserves_canonical_and_ack_progress() {
+    let fixture = Fixture::new(true);
+    let Scene {
+        root,
+        service,
+        target,
+        anchor,
+        transcript,
+        row,
+    } = Scene::new(&fixture).await;
+    let sequence = anchor.sequence();
+    drop(anchor);
+    let mut captures = Vec::new();
+    loop {
+        match service.prepare_storage_snapshot(root.storage_scope()) {
+            Ok(capture) => {
+                assert!(
+                    captures.len() < 256,
+                    "finite production metadata must refuse"
+                );
+                captures.push(capture);
+            }
+            Err(error) => {
+                assert_eq!(
+                    error.kind(),
+                    mez_agent::messaging::MessageErrorKind::Capacity
+                );
+                break;
+            }
+        }
+    }
+    assert!(!captures.is_empty());
+    let anchor = service
+        .capture_native_input_anchor(&target.agent_id, sequence)
+        .unwrap();
+    let mut scene = Scene {
+        root,
+        service,
+        target,
+        anchor,
+        transcript,
+        row,
+    };
+    scene.start();
+    let proof = scene.adopt().await;
+    assert_eq!(scene.canonical_count(), 1);
+    scene.ack(&proof).await;
+    assert_eq!(
+        scene
+            .service
+            .subscription(&scene.target.agent_id)
+            .unwrap()
+            .last_sequence,
+        sequence
+    );
+    assert_eq!(
+        scene
+            .service
+            .storage_usage()
+            .unwrap()
+            .unwrap()
+            .pending_messages,
+        0
+    );
+    assert!(
+        scene
+            .service
+            .storage_usage()
+            .unwrap()
+            .unwrap()
+            .metadata_bytes
+            <= 8 * 1024 * 1024
+    );
+    assert_eq!(scene.canonical_count(), 1);
+    drop(captures);
+}
+
 /// Actual worker panic after canonical+c1 commit loses the positive reply, not
 /// its immutable original preparation. Retry must not append or journal twice.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
