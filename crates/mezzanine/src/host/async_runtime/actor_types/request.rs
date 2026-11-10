@@ -127,6 +127,13 @@ pub(in crate::host::async_runtime) enum AsyncRuntimeRequest {
         /// Remains unanswered so the actual caller observes actor transport loss.
         reply: oneshot::Sender<()>,
     },
+    /// Read-only exact actor claim observation, never persistence acceptance.
+    #[cfg(test)]
+    OwnsTranscriptClaimForTests {
+        batch: crate::storage::transcript::TranscriptAppendBatch,
+        path: std::path::PathBuf,
+        reply: oneshot::Sender<bool>,
+    },
     /// Installs the shared diagnostics registry for one host-routed Iroh connection.
     SetHostRoutedIrohDiagnostics {
         /// Privacy-safe registry populated by the host-owned path sampler.
@@ -1786,6 +1793,8 @@ impl AsyncRuntimeRequest {
             | Self::ApplyAgentPresentationResize { .. } => Family::Provider,
             #[cfg(test)]
             Self::PanicForTests { .. } => Family::Control,
+            #[cfg(test)]
+            Self::OwnsTranscriptClaimForTests { .. } => Family::SideEffect,
             #[cfg(test)]
             Self::RecordClaimedAgentProviderTaskForTests { .. } => Family::Provider,
             Self::SubmitRuntimeEvents { .. } => Family::Event,

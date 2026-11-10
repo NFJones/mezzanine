@@ -24,8 +24,7 @@ use super::{
     ActionResult, ActionStatus, AgentAction, AgentActionPayload, AgentId, AgentTurnExecution,
     AgentTurnRecord, AgentTurnState, Envelope, EventKind, MezError, PaneId, Result,
     RuntimeSessionService, RuntimeSideEffect, ScheduledWork, SenderIdentity, current_unix_seconds,
-    json_escape, runtime_agent_turn_state_from_action_results,
-    runtime_execution_ready_for_provider_continuation, runtime_maap_message_content_type,
+    json_escape, runtime_agent_turn_state_from_action_results, runtime_maap_message_content_type,
     runtime_message_recipient, runtime_message_scope, runtime_mezzanine_error_code,
     validate_mmp_payload_metadata,
 };
@@ -236,11 +235,9 @@ impl RuntimeSessionService {
             }
 
             if turn.state == AgentTurnState::Running
+                && model_message_count > 0
                 && !self.agent_provider_task_is_owned(&turn.turn_id)
-                && self
-                    .agent_turn_executions()
-                    .get(&turn.turn_id)
-                    .is_none_or(runtime_execution_ready_for_provider_continuation)
+                && self.received_peer_input_can_offer_provider(&turn.turn_id)
             {
                 self.queue_agent_provider_task(turn.turn_id.clone());
                 self.append_agent_trace_turn_event(
@@ -253,6 +250,32 @@ impl RuntimeSessionService {
         self.recover_request_waits_at(now_ms)?;
         self.recover_joined_coordination_wakes()?;
         Ok(committed)
+    }
+
+    /// Receive/ACK is not response-application authority. The canonical assistant
+    /// event is installed before reentrant action families run, while stored
+    /// execution may still be absent or belong to an older response. Only a
+    /// matching settled source may offer continuation; an initial peer turn with
+    /// no current assistant response keeps its existing scheduler path.
+    fn received_peer_input_can_offer_provider(&self, turn_id: &str) -> bool {
+        if !self.completion_provider_continuation_ready(turn_id) {
+            return false;
+        }
+        let Some(context) = self.agent_turn_contexts().get(turn_id) else {
+            return false;
+        };
+        let imported = self.agent_turn_imported_history_sequence_high_water(turn_id);
+        let assistant = context.chronology().iter().rev().find(|event| {
+            event.sequence().get() > imported
+                && event.block().source == mez_agent::ContextSourceKind::TranscriptAssistant
+        });
+        let Some(execution) = self.agent_turn_executions().get(turn_id) else {
+            return assistant.is_none();
+        };
+        self.completion_stored_execution_continuation_ready(turn_id)
+            && super::provider_execution::provider_log_execution_group_id(execution).is_ok_and(
+                |group| assistant.is_some_and(|event| event.execution_group_id() == Some(&group)),
+            )
     }
 
     /// Fairly reacquires capacity and settles one parked peer wait after model

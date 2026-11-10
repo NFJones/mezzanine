@@ -1059,6 +1059,22 @@ impl AsyncRuntimeSessionHandle {
             .await
     }
 
+    /// Observes only exact actor-side claim ownership; disk append completion
+    /// alone cannot prove that its separately delivered ACK has retired it.
+    #[cfg(test)]
+    pub(crate) async fn owns_transcript_claim_for_tests(
+        &self,
+        batch: crate::storage::transcript::TranscriptAppendBatch,
+        path: std::path::PathBuf,
+    ) -> Result<bool> {
+        self.request(|reply| AsyncRuntimeRequest::OwnsTranscriptClaimForTests {
+            batch,
+            path,
+            reply,
+        })
+        .await
+    }
+
     /// Installs a deterministic provider claim for actor-level regression tests.
     #[cfg(test)]
     pub(crate) async fn record_claimed_agent_provider_task_for_tests(

@@ -7,6 +7,7 @@
 
 use super::*;
 
+mod bridge_receive;
 mod provider_admission;
 mod supervised_refusal;
 

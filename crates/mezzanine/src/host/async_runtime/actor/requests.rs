@@ -1055,6 +1055,14 @@ impl AsyncRuntimeSessionActor {
             AsyncRuntimeRequest::PanicForTests { reply: _reply } => {
                 panic!("PRIVATE_RUNTIME_PANIC_TEST_PAYLOAD");
             }
+            #[cfg(test)]
+            AsyncRuntimeRequest::OwnsTranscriptClaimForTests { batch, path, reply } => {
+                let _ = reply.send(
+                    self.side_effect_routes
+                        .owns_claimed_transcript(&batch, &path),
+                );
+                false
+            }
             AsyncRuntimeRequest::SetHostRoutedIrohDiagnostics { diagnostics, reply } => {
                 self.service.set_host_routed_iroh_diagnostics(diagnostics);
                 let _ = reply.send(());

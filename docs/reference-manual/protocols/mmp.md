@@ -176,6 +176,13 @@ Malformed payloads produce `invalid_envelope` without queueing the message.
 Acceptance acknowledges a report, not independent verification of the reported
 task outcome and not authority to execute work.
 
+Routine runtime bridge reports may commit recipient context without offering a
+new inference. Inline delivery and delayed native-storage acknowledgments both
+respect the current canonical response and its settled execution/publication
+owner; absent or older stored execution does not authorize continuation during
+response application. Request-bound lifecycle outcomes and joined children keep
+their separate exact-owner wake rules. This does not activate durable delivery.
+
 ## Delivery audience and recipient selection
 
 Raw `send`, `task_status`, and `task_result` envelopes accept optional top-level

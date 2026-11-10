@@ -219,6 +219,9 @@ context_window_tokens = 40000
                 if calls.load(Ordering::SeqCst) == 1
                     && !handle.agent_turn_is_running(&safe.turn_id).await?
                     && store.pending_append_receipts().unwrap().is_empty()
+                    && !handle
+                        .owns_transcript_claim_for_tests(batch.clone(), path.clone())
+                        .await?
                 {
                     return Ok(());
                 }

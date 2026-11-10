@@ -20336,7 +20336,14 @@ one or more model-originated MMP messages MUST settle the pending `wait` exactly
 once and fairly reacquire provider capacity for the same turn; runtime-authored
 task status and task result bridge traffic alone MUST NOT wake it. Multiple messages
 committed in one delivery pass MUST queue at most one continuation. A peer
-message committed before the wait response is accepted MUST invalidate the
+reference commit or exact native-storage ACK MUST NOT by itself offer another
+provider response while the current canonical response is applying or its
+completion/publication owner remains unsettled. Running-turn receive admission
+MUST match the stored settled execution to the current canonical assistant group;
+an absent or older execution is not continuation authority. Routine runtime bridge
+traffic MUST NOT create an inference offer, including after native settlement.
+Independently authorized request-bound lifecycle outcomes retain their own gates.
+A peer message committed before the wait response is accepted MUST invalidate the
 older provider generation through the normal context high-water rule, and mail
 already pending when the turn parks MUST be checked immediately so no wakeup is
 lost. Resuming an existing wait MUST NOT increment

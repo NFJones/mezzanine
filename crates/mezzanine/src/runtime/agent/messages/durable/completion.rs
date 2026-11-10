@@ -333,7 +333,9 @@ impl RuntimeSessionService {
                 let _ = self.resume_parked_peer_wait(&turn)?;
             }
             if turn.state == AgentTurnState::Running
+                && !crate::runtime::control::runtime_owned_bridge_message(&work.envelope)
                 && !self.agent_provider_task_is_owned(&turn.turn_id)
+                && self.received_peer_input_can_offer_provider(&turn.turn_id)
             {
                 self.queue_agent_provider_task(turn.turn_id);
             }

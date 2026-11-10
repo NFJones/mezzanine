@@ -220,6 +220,96 @@ async fn actor_native_receive_persists_before_ack_and_releases_original_provider
     assert_eq!(peer_blocks(&actor, &turn), 1);
 }
 
+/// A routine bridge reference is real canonical input, not inference authority.
+/// Exercise the actual delayed root absence/canonical/ACK lane with no prior
+/// assistant source, where the old unconditional ACK wake manufactured work.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn actor_native_receive_bridge_ack_commits_without_provider_offer() {
+    let fixture = Fixture::new(true);
+    let (handle, mut actor, recipient, turn) = scene(&fixture).await;
+    // The user prompt already owns initial admission. This test measures only
+    // a new offer from bridge receive, not that independent initial source.
+    actor
+        .service
+        .remove_pending_agent_provider_task(&turn.turn_id);
+    let target = actor
+        .service
+        .message_service()
+        .registered_identity(&recipient)
+        .unwrap()
+        .clone();
+    let mut envelope = super::native_actor::source(&actor, &turn, &target);
+    envelope.id = "delayed-bridge-reference".into();
+    envelope.message_type = "task_status".into();
+    envelope.content_type = "application/json".into();
+    envelope.payload = serde_json::json!({"task_id":turn.turn_id,"state":"running","summary":"delayed bridge status"}).to_string();
+    envelope.extension_fields = vec![("runtime_bridge".into(), "\"subagent\"".into())];
+    let (reply, response) = tokio::sync::oneshot::channel();
+    actor
+        .start_tracked_native_message(
+            &turn,
+            envelope,
+            MessageScope::Session,
+            crate::runtime::current_unix_millis(),
+            reply,
+        )
+        .unwrap();
+    assert_eq!(
+        actor.observe_message_custody_for_tests().await.unwrap(),
+        CustodyWorkerStatus::AwaitingAdoption
+    );
+    assert!(response.await.unwrap().unwrap().accepted);
+    for expected in [
+        CustodyWorkerStatus::NativeInputAwaitingAdoption,
+        CustodyWorkerStatus::NativeInputAwaitingAdoption,
+        CustodyWorkerStatus::AcknowledgementAwaitingAdoption,
+    ] {
+        actor.poll_message_custody_for_tests();
+        assert_eq!(
+            actor.observe_message_custody_for_tests().await.unwrap(),
+            expected
+        );
+        assert!(
+            actor.service.pending_agent_provider_tasks().is_empty(),
+            "bridge ACK must not offer inference"
+        );
+    }
+    assert!(
+        !actor
+            .service
+            .native_input_pending_for_conversation(&turn.conversation_id)
+    );
+    assert_eq!(
+        actor
+            .service
+            .message_service()
+            .subscription(&recipient)
+            .unwrap()
+            .last_sequence,
+        1
+    );
+    assert_eq!(
+        actor.service.agent_turn_contexts()[&turn.turn_id]
+            .chronology()
+            .iter()
+            .filter(
+                |event| event.block().source == mez_agent::ContextSourceKind::PeerMessage
+                    && event.block().content.contains("delayed bridge status")
+            )
+            .count(),
+        1
+    );
+    actor
+        .service
+        .deliver_pending_runtime_agent_messages(crate::runtime::current_unix_millis())
+        .unwrap();
+    assert!(actor.service.pending_agent_provider_tasks().is_empty());
+    drop((actor, handle));
+    wait_until_unlocked(&fixture.path).await;
+    std::fs::remove_dir_all(&fixture.path).unwrap();
+    assert!(!fixture.path.exists());
+}
+
 /// An actual post-canonical journal refusal retains the original application
 /// receipt and blocks provider/ACK publication. The actor retries its original
 /// worker plan after real join/backoff, rather than injecting the input again.

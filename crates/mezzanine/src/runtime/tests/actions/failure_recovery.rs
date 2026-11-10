@@ -1287,8 +1287,9 @@ fn runtime_mixed_spawn_batch_correction_retains_successful_sibling() {
     assert_eq!(service.session().windows().len(), window_count + 1);
 
     append_test_execution_assistant_context(&mut service, &turn, &execution);
-    assert!(service.agent_provider_task_is_pending(&turn.turn_id));
-    let queue_before = service.completion_provider_queue_flags_for_tests(&turn.turn_id);
+    // Started-status delivery cannot manufacture a correction destination.
+    // Only the actual settled failure policy may insert this continuation.
+    assert!(!service.agent_provider_task_is_pending(&turn.turn_id));
     assert_eq!(
         service
             .settle_agent_failure_feedback_for_correction(
@@ -1297,12 +1298,9 @@ fn runtime_mixed_spawn_batch_correction_retains_successful_sibling() {
                 "subagent_spawn_validation_failed",
             )
             .unwrap(),
-        crate::runtime::agent::CompletionSettlementDisposition::Retained
+        crate::runtime::agent::CompletionSettlementDisposition::Queued
     );
-    assert_eq!(
-        service.completion_provider_queue_flags_for_tests(&turn.turn_id),
-        queue_before
-    );
+    assert!(service.agent_provider_task_is_pending(&turn.turn_id));
     assert_eq!(execution.terminal_state, AgentTurnState::Running);
     let context = service.agent_turn_contexts().get(&turn.turn_id).unwrap();
     assert!(context.blocks().iter().any(|block| {
