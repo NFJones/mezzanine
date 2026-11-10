@@ -2,6 +2,8 @@
 
 use super::*;
 
+mod durable_preparation;
+
 /// Test-only independent materialization from actual original storage. Both the
 /// native-input and sender-handoff boundaries share this preservation oracle;
 /// production inspection retains only its fixed-size size/checksum pair.

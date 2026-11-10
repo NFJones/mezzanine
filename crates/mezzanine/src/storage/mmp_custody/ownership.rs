@@ -75,6 +75,16 @@ pub(crate) struct OwnedCustodyStore<'a> {
 }
 
 impl OwnedCustodyStore<'_> {
+    /// Requires the actual held root and original settled allocation/position;
+    /// persisted labels or a reservation from a different owner do not match.
+    pub(crate) fn matches_rewrite_reservation(
+        &self,
+        reservation: &super::physical_capacity::RewriteCapacityReservation,
+        position: &super::acceptance::AcceptancePlan,
+    ) -> bool {
+        reservation.matches(self._owner, position)
+    }
+
     /// Establishes the dedicated flat-root envelope before a rewrite result can
     /// be issued. False is expected initial layout/capacity refusal; errors are
     /// owner/path/pager/I/O failures. Success makes subsequent boundaries enforce

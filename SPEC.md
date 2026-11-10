@@ -17379,6 +17379,21 @@ behavior is required. This cooperating-owner envelope is not an OS disk quota,
 free-block guarantee or protection from hostile same-user filesystem mutation;
 direct lower-store access does not participate. A reservation is not a durable
 cleanup intent, closed native plan or deletion authority, and creates no file.
+An explicit non-destructive durable-preparation operation MAY publish version-one
+`q1` records atomically: one manifest plus at most 63 bodyless evidence records,
+at most 128 KiB of evidence, within the existing 64-record/256-KiB batch and
+reserved headroom. It MUST leave every original payload and journal unchanged
+and gate further work on that live root after publication. This is NOT an intent
+authorizing payload reclamation. Before strict cold inventory/checkpoint checks,
+the original root MAY cancel only this preparation in one exact transaction,
+after validating format, complete namespace, allocation/generation/watermark,
+actual original directory/database allocations and byte-exact evidence against
+the intact originals, including an exact match to the original publication batch
+digest. Missing/foreign/changed/partial evidence MUST refuse without
+cleanup; absent preparation after a lost cancellation reply is inert. No native
+identity, allocator or clock authority may be reconstructed. Insufficient SQL
+capacity may still refuse preparation; this increment does not guarantee rewrite
+progress at a full database or implement dependency-closed payload deletion.
 Optional analysis MAY use the existing serialized root blocking-worker lane.
 Its charged capture and actual handle MUST survive observer cancellation; only
 an actual join permits adoption, and adoption MUST check the issuing lower

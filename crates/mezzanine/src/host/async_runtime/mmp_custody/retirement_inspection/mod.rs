@@ -1,10 +1,12 @@
-//! Optional read-only candidate analysis on the original serialized store lane.
+//! Optional candidate analysis/preparation on the original serialized store lane.
 //!
 //! Capture and actual joins remain root-owned across observer cancellation.
 //! Typed dependency refusal is distinct from integrity failure. A lost worker
 //! permits one exact fenced connection reopen after join, but the store remains
 //! gated until an explicit fresh inspection succeeds. No timer or deletion path
 //! is installed, and no analysis or delivery effect is automatically replayed.
+//! Explicit durable preparation writes only q1 evidence and gates the live root;
+//! cold cancellation verifies intact originals before removing that evidence.
 
 use super::*;
 use crate::storage::mmp_custody::retirement_inspection::{
@@ -30,6 +32,7 @@ pub(super) struct RepairGate {
 
 pub(super) struct Written {
     opened: Opened,
+    durable: bool,
     pub(super) candidate:
         std::result::Result<Option<SourceRetirementCandidate>, SourceRetirementFailure>,
 }
@@ -43,7 +46,7 @@ impl MmpCustodyRoot {
         service: &MessageService,
         sequence: u64,
     ) -> Result<()> {
-        self.start_retirement_analysis(service, sequence, None, None)
+        self.start_retirement_analysis(service, sequence, None, None, false)
     }
 
     /// Funds bounded bodyless evidence before starting I/O on the same owned
@@ -55,7 +58,7 @@ impl MmpCustodyRoot {
         sequence: u64,
         encoded_bytes_limit: usize,
     ) -> Result<()> {
-        self.start_retirement_analysis(service, sequence, Some(encoded_bytes_limit), None)
+        self.start_retirement_analysis(service, sequence, Some(encoded_bytes_limit), None, false)
     }
 
     /// Reserves shared physical rewrite headroom before worker issuance; the
@@ -73,6 +76,26 @@ impl MmpCustodyRoot {
             sequence,
             Some(encoded_bytes_limit),
             Some(rewrite_bytes),
+            false,
+        )
+    }
+
+    /// Publishes only bounded non-destructive preparation. Success gates this
+    /// live root until cold cancellation validates the intact originals; it is
+    /// neither a native dependency-closed intent nor permission to delete mail.
+    pub(crate) fn start_durable_retirement_preparation(
+        &self,
+        service: &MessageService,
+        sequence: u64,
+        encoded_bytes_limit: usize,
+        rewrite_bytes: usize,
+    ) -> Result<()> {
+        self.start_retirement_analysis(
+            service,
+            sequence,
+            Some(encoded_bytes_limit),
+            Some(rewrite_bytes),
+            true,
         )
     }
 
@@ -82,6 +105,7 @@ impl MmpCustodyRoot {
         sequence: u64,
         staging_limit: Option<usize>,
         rewrite_bytes: Option<usize>,
+        publish: bool,
     ) -> Result<()> {
         let mut state = self.0.state.lock().map_err(|_| ownership_error())?;
         let opened = match &*state {
@@ -151,6 +175,7 @@ impl MmpCustodyRoot {
                 .cloned()
                 .ok_or_else(ownership_error)?;
             let mut input = Arc::new(input);
+            let mut durable = false;
             let candidate = {
                 let mut owned = fence.bind_store(&mut opened.store)?;
                 if !owned
@@ -172,6 +197,7 @@ impl MmpCustodyRoot {
                     owned.revalidate()?;
                     return Ok(Written {
                         opened,
+                        durable: false,
                         candidate: Ok(None),
                     });
                 }
@@ -193,6 +219,14 @@ impl MmpCustodyRoot {
                 {
                     return Err(ownership_error());
                 }
+                if publish && let Ok(Some(prepared)) = &candidate {
+                    durable = owned.persist_retirement_preparation(prepared)?;
+                    if durable {
+                        opened.anchor = owned.store_mut().acceptance_plan(0)?;
+                    } else {
+                        candidate = Ok(None);
+                    }
+                }
                 candidate
             };
             #[cfg(test)]
@@ -209,7 +243,11 @@ impl MmpCustodyRoot {
                     return Err(ownership_error());
                 }
             }
-            Ok(Written { opened, candidate })
+            Ok(Written {
+                opened,
+                candidate,
+                durable,
+            })
         });
         *state = State::InspectingRetirement { admission, worker };
         Ok(())
@@ -234,7 +272,11 @@ impl MmpCustodyRoot {
         };
         match result {
             Ok(written) => {
-                let Written { opened, candidate } = *written;
+                let Written {
+                    opened,
+                    candidate,
+                    durable,
+                } = *written;
                 match candidate {
                     Err(failure) => {
                         let error = failure.error;
@@ -261,7 +303,13 @@ impl MmpCustodyRoot {
                             *state = State::RetirementInspectionRefused { opened, gate };
                             return Err(error);
                         }
-                        *state = State::Idle(opened);
+                        *state = if durable {
+                            State::Unavailable(MezError::invalid_state(
+                                "MMP durable retirement preparation awaits cold cancellation",
+                            ))
+                        } else {
+                            State::Idle(opened)
+                        };
                         if candidate.as_ref().is_some_and(|c| !c.is_original(service)) {
                             return Err(ownership_error());
                         }

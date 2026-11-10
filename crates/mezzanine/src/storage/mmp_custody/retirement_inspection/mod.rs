@@ -22,6 +22,7 @@ pub(crate) use commitment::JournalCommitment;
 use commitment::JournalHasher;
 pub(crate) use commitment::SourceEvidenceCommitment;
 
+mod durable_preparation;
 mod preservation;
 use preservation::PreservationBuffer;
 pub(crate) use preservation::PreservedSourceEvidence;

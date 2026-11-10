@@ -1052,6 +1052,9 @@ fn open_destination(
     let mut store = MmpCustodyStore::open_with_limits(&source.root, &source.owner, source.limits)?;
     {
         let mut bound = fence.bind_store(&mut store)?;
+        // This disposition precedes strict source inventory/old-checkpoint
+        // validation and never removes accepted mail or journal evidence.
+        bound.cancel_cold_retirement_preparation()?;
         if publish_registration {
             bound.publish_registration()?;
             bound.initialize_elapsed_clock()?;

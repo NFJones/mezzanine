@@ -826,6 +826,8 @@ fn validate_private_path(path: &Path, directory: bool) -> Result<()> {
     Ok(())
 }
 
+const BATCH_DIGEST_DOMAIN: &[u8] = b"mezzanine-mmp-custody-batch-v1";
+
 /// Hashes a finite, unambiguously framed batch including every expected digest.
 fn batch_digest(writes: &[CustodyWrite<'_>]) -> Result<Vec<u8>> {
     if writes.is_empty() || writes.len() > MAX_BATCH_RECORDS {
@@ -834,7 +836,7 @@ fn batch_digest(writes: &[CustodyWrite<'_>]) -> Result<Vec<u8>> {
     let mut bytes = 0usize;
     let mut keys = HashSet::new();
     let mut hash = Sha256::new();
-    hash.update(b"mezzanine-mmp-custody-batch-v1");
+    hash.update(BATCH_DIGEST_DOMAIN);
     for write in writes {
         validate_identifier(write.key)?;
         if !keys.insert(write.key)
@@ -853,17 +855,24 @@ fn batch_digest(writes: &[CustodyWrite<'_>]) -> Result<Vec<u8>> {
         if bytes > MAX_BATCH_BYTES {
             return Err(MezError::invalid_args("MMP custody batch byte limit"));
         }
-        hash.update((write.key.len() as u64).to_le_bytes());
-        hash.update(write.key.as_bytes());
-        for field in [write.previous, write.value] {
-            hash.update([u8::from(field.is_some())]);
-            if let Some(value) = field {
-                hash.update((value.len() as u64).to_le_bytes());
-                hash.update(value);
-            }
-        }
+        hash_batch_write(&mut hash, write);
     }
     Ok(hash.finalize().to_vec())
+}
+
+/// Exact persisted v1 framing, shared by admission and bounded cold validation.
+/// Callers separately validate keys, ordering, preimages and resource limits.
+/// This permits streaming a known publication without buffering all its values.
+fn hash_batch_write(hash: &mut Sha256, write: &CustodyWrite<'_>) {
+    hash.update((write.key.len() as u64).to_le_bytes());
+    hash.update(write.key.as_bytes());
+    for field in [write.previous, write.value] {
+        hash.update([u8::from(field.is_some())]);
+        if let Some(value) = field {
+            hash.update((value.len() as u64).to_le_bytes());
+            hash.update(value);
+        }
+    }
 }
 
 /// Checks the whole canonical logical projection before publishing any batch.

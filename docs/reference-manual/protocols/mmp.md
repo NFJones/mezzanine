@@ -430,6 +430,17 @@ loss and returned-result lifetime. It creates no file or durable intent and is
 not free-space allocation, canonical verification or permission to delete mail.
 Direct lower-store connections and hostile same-user mutations are outside this
 cooperating-owner protocol; storage-full errors remain possible.
+An explicit non-destructive durable-preparation variant can atomically publish
+one versioned `q1` manifest plus up to 63 bodyless records (128 KiB evidence,
+within the existing batch and reserved limits). It gates the live root and leaves
+all original mail and journals intact. On cold open, before inventory/checkpoint
+validation, only these preparation records may be cancelled after exact format,
+namespace, store position, actual directory/database identity and original-byte
+comparison plus the original committed publication-batch digest. Unknown,
+changed, partial or foreign evidence remains untouched and
+the affected root refuses. Cancellation is inert if already committed. This is
+not payload reclamation, native recovery authority or guaranteed progress at the
+SQL capacity limit; normal durable activation remains disabled.
 Optional analysis now has an owned blocking-worker entrypoint on the existing
 serialized root lane. It retains capture/handle ownership across observer
 cancellation, checks the actual lower service at adoption, and permits settlement
