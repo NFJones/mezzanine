@@ -1058,6 +1058,7 @@ mod retirement_inspection;
 mod native_input;
 
 mod native_bridge;
+mod native_bridge_continuation;
 mod native_bridge_sources;
 mod native_ordering;
 mod native_receive;
