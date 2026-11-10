@@ -43,22 +43,38 @@ fn accept(
     id: &str,
     ttl_ms: Option<u64>,
 ) -> u64 {
+    persist_envelope(
+        store,
+        service,
+        scope,
+        sender,
+        Envelope {
+            protocol: "mmp/1",
+            id: id.into(),
+            message_type: "send".into(),
+            time: "original".into(),
+            sender: sender.clone(),
+            recipient: Recipient::Agent(target.agent_id.clone()),
+            correlation_id: None,
+            ttl_ms,
+            content_type: "text/plain".into(),
+            payload: "source\0\n".repeat(16_000),
+            extension_fields: vec![],
+        },
+    )
+}
+
+fn persist_envelope(
+    store: &mut MmpCustodyStore,
+    service: &mut MessageService,
+    scope: &MessageStorageScope,
+    sender: &SenderIdentity,
+    envelope: Envelope,
+) -> u64 {
     let ticket = service
         .prepare_acceptance(
             &sender.agent_id,
-            Envelope {
-                protocol: "mmp/1",
-                id: id.into(),
-                message_type: "send".into(),
-                time: "original".into(),
-                sender: sender.clone(),
-                recipient: Recipient::Agent(target.agent_id.clone()),
-                correlation_id: None,
-                ttl_ms,
-                content_type: "text/plain".into(),
-                payload: "source\0\n".repeat(16_000),
-                extension_fields: vec![],
-            },
+            envelope,
             MessageScope::Session,
             10,
             4096,
@@ -294,6 +310,244 @@ fn retired_source_inspection_requires_actual_terminal_release() {
         .inspect_source_retirement(&input, &scope, sequence)
         .unwrap();
     assert_eq!(result.unsettled_recipients, 1);
+}
+
+fn candidate_mail(sender: &SenderIdentity, recipient: Recipient, id: usize) -> Envelope {
+    Envelope {
+        protocol: "mmp/1",
+        id: format!("candidate-{id}"),
+        message_type: "send".into(),
+        time: "original".into(),
+        sender: sender.clone(),
+        recipient,
+        correlation_id: None,
+        ttl_ms: None,
+        content_type: "text/plain".into(),
+        payload: "candidate".into(),
+        extension_fields: vec![],
+    }
+}
+
+/// Two independently committed cumulative ACKs form A--B--C. Neither ACK
+/// directly joins A to C; the candidate must inspect B to discover that edge.
+/// The last replay-retained original is a blocker until actual eviction.
+#[test]
+fn retired_source_candidate_follows_transitive_ack_dependencies() {
+    let fixture = Fixture::new();
+    let owner = RootOwnership::acquire(&fixture.0).unwrap();
+    let mut store = MmpCustodyStore::open(&fixture.0, "original-session").unwrap();
+    let mut service = MessageService::with_limits(1, 1024 * 1024);
+    let sender = service.register_agent(None, None, "sender", vec![]);
+    let left = service.register_agent(None, None, "left", vec!["candidate-pair".into()]);
+    let right = service.register_agent(None, None, "right", vec!["candidate-pair".into()]);
+    let scope = MessageStorageScope::default();
+    service
+        .enable_storage_custody(&scope, Default::default())
+        .unwrap();
+    service.subscribe(&left.agent_id).unwrap();
+    service.subscribe(&right.agent_id).unwrap();
+    let mut sequences = Vec::new();
+    for (id, recipient) in [
+        Recipient::Agent(left.agent_id.clone()),
+        Recipient::Capability("candidate-pair".into()),
+        Recipient::Agent(right.agent_id.clone()),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        sequences.push(persist_envelope(
+            &mut store,
+            &mut service,
+            &scope,
+            &sender,
+            candidate_mail(&sender, recipient, id),
+        ));
+    }
+    ack(&mut store, &mut service, &scope, &left, sequences[1]);
+    ack(&mut store, &mut service, &scope, &right, sequences[2]);
+    let mut input = Arc::new(
+        service
+            .prepare_source_retirement_inspection(&scope)
+            .unwrap(),
+    );
+    let before = image(&store);
+    assert!(
+        owner
+            .bind_store(&mut store)
+            .unwrap()
+            .inspect_source_retirement_candidate(&mut input, &scope, sequences[0])
+            .is_err()
+    );
+    assert_eq!(image(&store), before);
+    drop(input);
+    persist_envelope(
+        &mut store,
+        &mut service,
+        &scope,
+        &sender,
+        candidate_mail(&sender, Recipient::Agent(left.agent_id.clone()), 3),
+    );
+    let mut input = Arc::new(
+        service
+            .prepare_source_retirement_inspection(&scope)
+            .unwrap(),
+    );
+    let before = image(&store);
+    let result = owner
+        .bind_store(&mut store)
+        .unwrap()
+        .inspect_source_retirement_candidate(&mut input, &scope, sequences[0])
+        .unwrap();
+    assert_eq!(
+        result
+            .sources
+            .iter()
+            .map(|s| s.sequence)
+            .collect::<Vec<_>>(),
+        sequences
+    );
+    assert_eq!(
+        result
+            .sources
+            .iter()
+            .map(|s| s.recipient_count)
+            .collect::<Vec<_>>(),
+        [1, 2, 1]
+    );
+    for source in result.sources() {
+        assert_eq!(source.unsettled_recipients, 0);
+        assert_eq!(source.native_journal_references, 0);
+        assert_eq!(
+            source.position.generation,
+            result.sources[0].position.generation
+        );
+        assert_eq!(source.position.store_id, store.store_id);
+    }
+    assert_eq!(image(&store), before);
+    // A retained result prevents reuse of the same accumulator reservation.
+    assert!(
+        owner
+            .bind_store(&mut store)
+            .unwrap()
+            .inspect_source_retirement_candidate(&mut input, &scope, sequences[0])
+            .is_err()
+    );
+    let weak = Arc::downgrade(&input);
+    drop(input);
+    assert!(weak.upgrade().is_some());
+    drop(result);
+    assert!(weak.upgrade().is_none());
+    let mut input = Arc::new(
+        service
+            .prepare_source_retirement_inspection(&scope)
+            .unwrap(),
+    );
+    let weak = Arc::downgrade(&input);
+    assert!(
+        owner
+            .bind_store(&mut store)
+            .unwrap()
+            .inspect_source_retirement_candidate(&mut input, &scope, sequences[0])
+            .is_err()
+    );
+    drop(weak);
+    assert!(
+        owner
+            .bind_store(&mut store)
+            .unwrap()
+            .inspect_source_retirement_candidate(
+                &mut input,
+                &MessageStorageScope::default(),
+                sequences[0]
+            )
+            .is_err()
+    );
+    // Corruption in a transitive source cannot publish a partial closure.
+    store
+        .connection
+        .execute(
+            "UPDATE records SET value=X'00' WHERE key=?1",
+            [format!("a1:{:016x}:chunk:00000000", sequences[2])],
+        )
+        .unwrap();
+    let before = image(&store);
+    assert!(
+        owner
+            .bind_store(&mut store)
+            .unwrap()
+            .inspect_source_retirement_candidate(&mut input, &scope, sequences[0])
+            .is_err()
+    );
+    assert_eq!(image(&store), before);
+}
+
+/// The 65th distinct dependency refuses without partial output or mutation.
+/// At the exact 64-source limit all ACK decisions and originals still validate.
+#[test]
+fn retired_source_candidate_has_a_finite_dependency_quantum() {
+    assert!(
+        MAX_SLOTS * std::mem::size_of::<Slot>() + CANDIDATE_METADATA_BYTES <= SLOT_METADATA_BYTES
+    );
+    assert!(std::mem::size_of::<SourceRetirementInspection>() + 32 < 256);
+    for count in [MAX_CANDIDATE_SOURCES, MAX_CANDIDATE_SOURCES + 1] {
+        let fixture = Fixture::new();
+        let owner = RootOwnership::acquire(&fixture.0).unwrap();
+        let mut store = MmpCustodyStore::open(&fixture.0, "original-session").unwrap();
+        let mut service = MessageService::with_limits(1, 1024 * 1024);
+        let sender = service.register_agent(None, None, "sender", vec![]);
+        let target = service.register_agent(None, None, "target", vec![]);
+        let scope = MessageStorageScope::default();
+        service
+            .enable_storage_custody(&scope, Default::default())
+            .unwrap();
+        service.subscribe(&target.agent_id).unwrap();
+        let mut sequences = Vec::new();
+        for id in 0..count {
+            sequences.push(persist_envelope(
+                &mut store,
+                &mut service,
+                &scope,
+                &sender,
+                candidate_mail(&sender, Recipient::Agent(target.agent_id.clone()), id),
+            ));
+        }
+        // The cumulative endpoint must have actually been offered.
+        service
+            .receive_subscribed(&target.agent_id, 11, count)
+            .unwrap();
+        ack(
+            &mut store,
+            &mut service,
+            &scope,
+            &target,
+            *sequences.last().unwrap(),
+        );
+        persist_envelope(
+            &mut store,
+            &mut service,
+            &scope,
+            &sender,
+            candidate_mail(&sender, Recipient::Agent(target.agent_id.clone()), count),
+        );
+        let mut input = Arc::new(
+            service
+                .prepare_source_retirement_inspection(&scope)
+                .unwrap(),
+        );
+        let before = image(&store);
+        let result = owner
+            .bind_store(&mut store)
+            .unwrap()
+            .inspect_source_retirement_candidate(&mut input, &scope, sequences[0]);
+        if count == MAX_CANDIDATE_SOURCES {
+            let result = result.unwrap();
+            assert_eq!(result.sources.len(), count);
+            assert!(result.sources.iter().all(|s| s.unsettled_recipients == 0));
+        } else {
+            assert!(result.is_err());
+        }
+        assert_eq!(image(&store), before);
+    }
 }
 
 /// Independent SQL oracle includes source/journal bytes and allocator/clock

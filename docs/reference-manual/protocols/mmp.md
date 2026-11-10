@@ -372,6 +372,13 @@ shared cumulative ACK dependencies and native input/handoff references. Expiry
 exclusions alone do not release terminal outcomes. These observations neither
 authorize deletion nor dispose of canonical evidence, and do not implement a
 closed resumable cleanup plan or a full at-cap reclamation guarantee.
+The read-only shared-ACK candidate analysis follows transitive ACK references in
+the same snapshot, bounded to 64 originals and 64 strict scans. It refuses live
+dependencies or larger closures without returning a partial candidate. Its
+result retains the charged original input; candidate metadata shares the existing
+256 KiB accumulator. Unsettled slots and native journals remain blockers. This
+does not install a runtime cleanup lane, resolve native dependency closure or
+authorize an intent, deletion, rewrite or default durable activation.
 
 Storage-policy sources preserve immutable schema2 native attribution. Guarded sources retain schema3 recipient attribution; clock-qualified sources use schema4, additionally recording the original store allocation as a descriptive elapsed domain. Each source records one original registration namespace per recipient without a reconnect credential or live end marker. Legacy sources remain unknown for this added attribution. Each source records the
 original native sender/recipient conversation and opaque incarnation (or explicit

@@ -17282,6 +17282,14 @@ expiry exclusions or unreleased outcomes. Shared cumulative ACK references and
 native input/handoff journals MUST remain explicit dependencies. Descriptive
 settlement counts MUST NOT grant physical deletion, canonical-evidence disposal,
 cleanup-intent publication or allocator/elapsed-history reconstruction rights.
+An optional descriptive shared-ACK candidate analysis MUST follow transitive
+ACK source references in that same snapshot, refuse live sources and closures
+larger than 64 originals without publishing partial output, and retain its
+charged inspection input through the result's last owner. At most 64 strict
+scans MAY reuse the existing decoder and 256 KiB accumulator, including candidate
+metadata. Native journals and unsettled slots remain explicit blockers; this
+bounded analysis is not a dependency-closed native cleanup plan, runtime cleanup
+lane, durable intent or physical reclamation implementation.
 Admission MUST check the combined native attribution, registration namespaces,
 elapsed-clock metadata and any newly required source-only end intents against
 that same metadata ceiling before copying source bindings or reserving its

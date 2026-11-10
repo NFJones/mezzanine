@@ -513,6 +513,21 @@ async fn native_input_source_retirement_waits_for_real_proof_after_replay_evicti
         inspected.native_journal_references, 1,
         "actual c1 must remain a dependency"
     );
+    let mut input = std::sync::Arc::new(input);
+    let candidate = {
+        let mut state = root.0.state.lock().unwrap();
+        let State::Idle(opened) = &mut *state else {
+            panic!("original idle store required");
+        };
+        owner
+            .bind_store(&mut opened.store)
+            .unwrap()
+            .inspect_source_retirement_candidate(&mut input, root.storage_scope(), sequence)
+            .unwrap()
+    };
+    assert_eq!(candidate.sources().len(), 1);
+    assert_eq!(candidate.sources()[0].native_journal_references, 1);
+    assert_eq!(candidate.sources()[0].unsettled_recipients, 0);
     assert_eq!(
         fixture.disk(),
         disk,
