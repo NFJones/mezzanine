@@ -160,6 +160,67 @@ fn system_prompt_keeps_critical_behavioral_invariants() {
     }
 }
 
+/// The default provider-facing assembly must carry the full cleanup lifecycle,
+/// not merely a fragment that is never included. These are instruction checks;
+/// they do not simulate an agent or prove filesystem cleanup actually occurred.
+#[test]
+fn system_prompt_requires_exact_owned_temporary_artifact_cleanup() {
+    let prompt = build_agent_system_prompt(&AgentPromptProfile::for_model("test-model")).unwrap();
+    let judgment = prompt
+        .split_once("5. Judgment\n")
+        .unwrap()
+        .1
+        .split_once("6. Actions\n")
+        .unwrap()
+        .0;
+    for anchor in [
+        "Temporary artifacts and cleanup:",
+        "Before creating temporary files or directories",
+        "isolated, uniquely created task-owned location and cleanup strategy",
+        "prefer one scoped temporary root",
+        "track the exact paths created",
+        "as soon as they are no longer needed",
+        "including failed and abandoned attempts",
+        "final cleanup pass before reporting completion",
+        "Use scoped cleanup handlers where practical",
+        "work spanning commands or turns",
+        "retain task-local ownership information",
+        "Delete only artifacts established to be task-created and disposable",
+        "Filename patterns, age, or placement in a temporary directory alone do not prove ownership",
+        "Do not use broad cleanup globs",
+        "pre-existing files, unrelated user changes, requested deliverables, or project-required artifacts",
+        "Do not delete resources still used by a process or another active task",
+        "permissions, approvals, and tool restrictions still apply",
+        "Verify removal before claiming cleanup succeeded",
+        "attempt bounded safe correction without widening deletion scope",
+        "report retained exact paths and reasons",
+        "diagnostic or handoff needs, active use, or blocked removal",
+        "Do not silently retain artifacts or fabricate cleanup success",
+        "Routine successful cleanup need not add handoff narration",
+        "cannot guarantee cleanup after crashes, forced termination, or loss of execution capacity",
+    ] {
+        assert!(
+            judgment.contains(anchor),
+            "missing assembled cleanup contract: {anchor}"
+        );
+    }
+}
+
+/// Cleanup is part of finishing the requested task, not an optional follow-up
+/// or permission to delete unrelated material. Check its early owning section.
+#[test]
+fn system_prompt_links_completion_to_cleanup_or_retention_disclosure() {
+    let prompt = build_agent_system_prompt(&AgentPromptProfile::for_model("test-model")).unwrap();
+    let autonomy = prompt
+        .split_once("2. Autonomy\n")
+        .unwrap()
+        .1
+        .split_once("3. Repository Instructions\n")
+        .unwrap()
+        .0;
+    assert!(autonomy.contains("Completion also requires verified removal of task-owned temporary artifacts or disclosure of retained paths and why they remain"));
+}
+
 #[test]
 /// Protects the requested outcome as the completion boundary while allowing
 /// necessary prerequisites and repairs caused by the agent's own changes.
@@ -257,7 +318,7 @@ fn system_prompt_limits_wait_to_explicit_mmp_exchanges() {
 /// Model identity is templated, but server configuration is not invented here.
 fn system_prompt_keeps_mcp_awareness_abstract() {
     let prompt = build_agent_system_prompt(&AgentPromptProfile::for_model("test-model")).unwrap();
-    assert!(prompt.contains("Mezzanine pane agent profile default v41, model test-model"));
+    assert!(prompt.contains("Mezzanine pane agent profile default v42, model test-model"));
     assert!(prompt.contains("Use `mcp_server_search` to discover configured MCP servers when no exact server reference is already present"));
     assert!(prompt.contains(
         "pass its canonical server id directly to `mcp_server_get` without searching first"

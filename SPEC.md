@@ -19457,6 +19457,26 @@ the active workflow, or treat follow-up issues as prerequisites without concrete
 evidence. Continuation MUST be limited to remaining in-scope work, related
 failures, or changed user input; once the requested outcome is implemented and
 proportionately validated, the agent MUST stop.
+Completion MUST also require verified removal of task-owned temporary artifacts
+or disclosure of retained exact paths and why they remain. The prompt MUST tell
+the agent to choose an isolated, uniquely created task-owned location and cleanup
+strategy before creation, prefer one scoped temporary root, and track exact
+created paths. It MUST require prompt disposal when no longer needed and a final
+cleanup pass, including failed or abandoned attempts. Scoped cleanup handlers
+SHOULD be used where practical; ownership information MUST remain available for
+work spanning commands or turns. Deletion MUST be limited to artifacts established
+to be task-created and disposable; filename patterns, age, and temporary-directory
+placement alone MUST NOT establish ownership. The prompt MUST prohibit broad
+cleanup globs, deleting pre-existing files, unrelated user changes, requested
+deliverables, project-required artifacts, or resources still in use by a process
+or another active task. Existing permissions, approvals and tool restrictions
+MUST remain enforced. Removal MUST be verified before claiming success; failures
+MUST receive bounded safe correction without widening deletion scope, or explicit
+retained-path and reason disclosure, including diagnostics/handoff, active use or
+blocked removal. Silent retention and fabricated cleanup success MUST be prohibited.
+Routine successful cleanup SHOULD NOT require noisy handoff narration. These are
+agent instructions, not a guarantee after crashes, forced termination or loss of
+execution capacity; runtime scavenging and historical cleanup are separate concerns.
 The autonomy section SHOULD make completion observable: identify the requested
 behavior, material constraints, and a check demonstrating completion. This
 SHOULD remain implicit for straightforward tasks; complex work SHOULD retain a
