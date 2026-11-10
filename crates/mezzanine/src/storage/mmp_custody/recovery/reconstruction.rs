@@ -220,6 +220,44 @@ impl<'a> Port<'a> {
             let acks = &evidence.history.acknowledgements;
             let start = acks.partition_point(|ack| ack.sequence < sequence);
             let end = acks.partition_point(|ack| ack.sequence <= sequence);
+            if occurrence.retired {
+                if expiry_observed_at_ms.is_some()
+                    || saved.is_some_and(|row| row.delivery.status == "expired")
+                    || evidence
+                        .history
+                        .terminal_observations
+                        .iter()
+                        .any(|value| value.sequence == sequence)
+                {
+                    return Err(invalid(
+                        "retired acknowledged source has terminal obligations",
+                    ));
+                }
+                target
+                    .restore_retired_acknowledged(
+                        sequence,
+                        acks[start..end]
+                            .iter()
+                            .map(|ack| (ack.binding_index, ack.offered_at_ms)),
+                        |limits| {
+                            let (source, digest, _) = self
+                                .store
+                                .read_retired_metadata_in_snapshot(&transaction, sequence, limits)
+                                .map_err(lower_error)?
+                                .ok_or_else(|| {
+                                    MessageError::invalid_state("MMP retired source is missing")
+                                })?;
+                            if digest != occurrence.digest {
+                                return Err(MessageError::invalid_state(
+                                    "MMP retired source changed",
+                                ));
+                            }
+                            Ok(source)
+                        },
+                    )
+                    .map_err(lower_error)?;
+                continue;
+            }
             target
                 .restore_original(
                     MessageStorageRecoveredRecord {

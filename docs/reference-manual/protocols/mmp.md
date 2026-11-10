@@ -441,6 +441,22 @@ changed, partial or foreign evidence remains untouched and
 the affected root refuses. Cancellation is inert if already committed. This is
 not payload reclamation, native recovery authority or guaranteed progress at the
 SQL capacity limit; normal durable activation remains disabled.
+A separate explicit ACK-only non-native fast path can atomically replace one
+absent original's payload chunks and markers with a physically bound version-one
+`a1:<sequence>:retired` bodyless record. Its actual lower absence loan, original
+store position, encoding/evidence charges and rewrite lease remain held. Every
+recipient must have an exact positive ACK; native/unknown provenance, native
+journals, terminal/expiry outcomes and sources exceeding one existing transaction
+refuse without partial cleanup. All journals remain unchanged. Strict inventory
+and a bounded before/after commitment over every non-target row prevent collateral
+trigger edits or deletion of unrelated mail/journals from committing; selected
+source metadata and settlement dependencies are checked separately. Inventory
+and cold checkpoint/history recovery recognize this record, verify all ACK slots
+again and recreate no payload, replay row, endpoint or obligation for it. Missing
+ordinary chunks remain corruption, not permission to invent retired history.
+The original trusted allocator watermark is preserved. Metadata/journal capacity
+and SQLite file size remain bounded costs, not reclaimed space guarantees; this
+does not supply general/native resumable cleanup or enable normal durable mode.
 Optional analysis now has an owned blocking-worker entrypoint on the existing
 serialized root lane. It retains capture/handle ownership across observer
 cancellation, checks the actual lower service at adoption, and permits settlement

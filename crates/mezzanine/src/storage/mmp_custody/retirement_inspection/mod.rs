@@ -17,6 +17,7 @@ use super::inventory::{CustodyInventoryEntry, CustodyJournalKind as Journal, Cus
 use super::ownership::OwnedCustodyStore;
 use super::*;
 
+pub(crate) mod acknowledged;
 mod commitment;
 pub(crate) use commitment::JournalCommitment;
 use commitment::JournalHasher;
@@ -52,6 +53,7 @@ pub(crate) struct SourceRetirementInspection {
     pub sequence: u64,
     pub source_sha256: [u8; 32],
     pub recipient_count: usize,
+    pub acknowledged_recipients: usize,
     pub unsettled_recipients: usize,
     pub shared_acknowledgements: usize,
     pub native_journal_references: usize,
@@ -478,6 +480,7 @@ fn inspect_in_snapshot(
         sequence,
         source_sha256,
         recipient_count,
+        acknowledged_recipients: slots.iter().filter(|slot| slot.acknowledged).count(),
         unsettled_recipients,
         shared_acknowledgements,
         native_journal_references,

@@ -27,6 +27,12 @@ impl MessageAcceptanceMetadataEvidence {
     pub fn metadata(&self) -> &MessageAcceptanceMetadata {
         &self.metadata
     }
+    /// Moves descriptive metadata only. This cannot produce payload bytes, a
+    /// live occurrence or a receipt; trusted retirement recovery still requires
+    /// original-store provenance and complete durable settlement evidence.
+    pub fn into_metadata(self) -> MessageAcceptanceMetadata {
+        self.metadata
+    }
     /// Claimed original full-source checksum, not verified by this decoder.
     pub fn source_sha256(&self) -> &[u8; 32] {
         &self.source_sha256

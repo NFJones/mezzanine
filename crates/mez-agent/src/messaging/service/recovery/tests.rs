@@ -139,6 +139,146 @@ fn recovery_sender_consumption_refuses_duplicate_or_missing_terminal_slots() {
     }
 }
 
+/// A test-only trusted port supplies actual lower-encoded original metadata;
+/// product tests separately prove physical retirement and original-store proof.
+struct RetiredPort {
+    source: Vec<u8>,
+    acks: Vec<(u32, u64)>,
+    swallow: bool,
+    observer: Option<MessagePayloadObserver>,
+}
+
+impl MessageStorageRecoveryStore for RetiredPort {
+    fn recover(&mut self, target: &mut MessageStorageRecovery) -> Result<u64> {
+        self.observer = Some(target.payload_observer()?);
+        let result = target.restore_retired_acknowledged(1, self.acks.clone(), |limits| {
+            crate::messaging::decode_message_acceptance_metadata(self.source.as_slice(), limits)
+        });
+        if self.swallow {
+            assert!(result.is_err());
+            // A failed port cannot later publish even if it ignores the error;
+            // the reader must not run again after sticky candidate refusal.
+            assert!(
+                target
+                    .restore_retired_acknowledged(2, [], |_| panic!("failed port read again"))
+                    .is_err()
+            );
+        } else {
+            result?;
+        }
+        Ok(2)
+    }
+}
+
+fn retired_port() -> RetiredPort {
+    let mut service = MessageService::default();
+    let sender = service.register_agent(None, None, "raw-sender", vec![]);
+    let target = service.register_agent(None, None, "raw-target", vec![]);
+    let scope = MessageStorageScope::default();
+    service
+        .enable_storage_custody(&scope, Default::default())
+        .unwrap();
+    let envelope = Envelope {
+        protocol: MMP_PROTOCOL,
+        id: "retired-original".into(),
+        message_type: "send".into(),
+        time: "original".into(),
+        sender: sender.clone(),
+        recipient: Recipient::Agent(target.agent_id),
+        correlation_id: None,
+        ttl_ms: Some(100),
+        content_type: "text/plain".into(),
+        payload: "actual original payload".into(),
+        extension_fields: vec![],
+    };
+    let ticket = service
+        .prepare_acceptance(
+            &sender.agent_id,
+            envelope,
+            MessageScope::Session,
+            10,
+            4096,
+            None,
+        )
+        .unwrap();
+    let write = service
+        .begin_storage_acceptance_write(&ticket, &scope)
+        .unwrap();
+    let mut store = Store::default();
+    assert!(matches!(
+        write.persist(&mut store),
+        MessageAcceptanceWriteOutcome::Committed(_)
+    ));
+    RetiredPort {
+        source: store.sources.remove(0),
+        acks: vec![(0, 10)],
+        swallow: false,
+        observer: None,
+    }
+}
+
+/// Positive retired metadata advances only checked history, recreating no body,
+/// identity/idempotency entry, offer or delivery obligation. Earlier offer clocks
+/// remain valid rather than being silently raised to the acceptance clock.
+#[test]
+fn recovery_retired_acknowledged_never_recreates_mail() {
+    for clock in [0, 10, 110] {
+        let mut port = retired_port();
+        port.acks = vec![(0, clock)];
+        let recovered = MessageService::recover_storage_custody(
+            &MessageStorageScope::default(),
+            Default::default(),
+            16,
+            1024 * 1024,
+            &mut port,
+        )
+        .unwrap();
+        assert_eq!(recovered.next_sequence, 2);
+        assert!(recovered.pending.is_empty());
+        assert!(recovered.queued_by_sequence.is_empty());
+        assert!(recovered.accepted_messages.is_empty());
+        assert_eq!(
+            port.observer.as_ref().unwrap().snapshot().unwrap(),
+            MessagePayloadUsage::default()
+        );
+    }
+}
+
+/// Every exact positive slot must be present exactly once and within original
+/// TTL. Native attribution and ignored local errors still refuse in full.
+#[test]
+fn recovery_retired_acknowledged_rejects_bad_slots_and_native_or_swallowed_error() {
+    for (acks, native, swallow) in [
+        (vec![], false, false),
+        (vec![(0, 10), (0, 10)], false, false),
+        (vec![(1, 10)], false, false),
+        (vec![(0, 111)], false, false),
+        (vec![(0, 10)], true, false),
+        (vec![], false, true),
+    ] {
+        let mut port = retired_port();
+        port.acks = acks;
+        port.swallow = swallow;
+        if native {
+            port.source = originals().0.sources.remove(0);
+        }
+        assert!(
+            MessageService::recover_storage_custody(
+                &MessageStorageScope::default(),
+                Default::default(),
+                16,
+                1024 * 1024,
+                &mut port,
+            )
+            .is_err()
+        );
+        assert_eq!(
+            port.observer.as_ref().unwrap().snapshot().unwrap(),
+            MessagePayloadUsage::default()
+        );
+    }
+}
+
 /// Makes two actual source2 acceptances with the same frozen native recipient.
 /// Their combined payload exceeds the single-payload cache budget.
 fn originals() -> (Store, MessageNativeOwner) {

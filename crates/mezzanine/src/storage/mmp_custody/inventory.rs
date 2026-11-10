@@ -28,6 +28,8 @@ pub(crate) struct StoredOccurrenceRef {
     pub encoded_bytes: usize,
     /// Original captured recipient count, without resolving current membership.
     pub recipient_count: usize,
+    /// A sealed non-native, fully acknowledged original has no retained body.
+    pub retired: bool,
 }
 
 /// Complete descriptive snapshot; its allocation identity is not authority.
@@ -152,6 +154,7 @@ struct Group {
     chunks: usize,
     stage: bool,
     commit: bool,
+    retired: bool,
 }
 
 /// Recognized private row keys; no text from a row chooses a live recipient.
@@ -160,6 +163,7 @@ enum Key<'a> {
     Chunk(u64, usize),
     Stage(u64),
     Commit(u64),
+    Retired(u64),
     Acknowledgement(&'a str),
     Expiry(&'a str),
     Retirement(&'a str),
@@ -580,7 +584,8 @@ impl MmpCustodyStore {
                         let sequence = match item {
                             Key::Chunk(sequence, _)
                             | Key::Stage(sequence)
-                            | Key::Commit(sequence) => sequence,
+                            | Key::Commit(sequence)
+                            | Key::Retired(sequence) => sequence,
                             Key::Acknowledgement(_)
                             | Key::Expiry(_)
                             | Key::Retirement(_)
@@ -615,20 +620,36 @@ impl MmpCustodyStore {
                             chunks: 0,
                             stage: false,
                             commit: false,
+                            retired: false,
                         });
                         match item {
                             Key::Chunk(_, index)
-                                if !current.stage && !current.commit && index == current.chunks =>
+                                if !current.retired
+                                    && !current.stage
+                                    && !current.commit
+                                    && index == current.chunks =>
                             {
                                 current.chunks = current
                                     .chunks
                                     .checked_add(1)
                                     .ok_or_else(|| invalid("chunk count overflow"))?
                             }
-                            Key::Commit(_) if !current.commit && !current.stage => {
+                            Key::Commit(_)
+                                if !current.retired && !current.commit && !current.stage =>
+                            {
                                 current.commit = true
                             }
-                            Key::Stage(_) if !current.stage => current.stage = true,
+                            Key::Stage(_) if !current.retired && !current.stage => {
+                                current.stage = true
+                            }
+                            Key::Retired(_)
+                                if !current.retired
+                                    && !current.stage
+                                    && !current.commit
+                                    && current.chunks == 0 =>
+                            {
+                                current.retired = true
+                            }
                             _ => return Err(invalid("occurrence row ordering is invalid")),
                         }
                     }
@@ -670,13 +691,15 @@ impl MmpCustodyStore {
         if group.sequence > inventory.sequence_watermark {
             return Err(invalid("occurrence exceeds sequence watermark"));
         }
-        if !group.stage {
+        if !group.stage && !group.retired {
             return Err(invalid("occurrence stage is missing"));
         }
-        if group.commit {
+        if group.commit || group.retired {
             let (source, digest, encoded_bytes) =
                 self.read_accepted_metadata_in_snapshot(transaction, group.sequence, limits)?;
-            if group.chunks != encoded_bytes.div_ceil(64 * 1024) {
+            if (!group.retired && group.chunks != encoded_bytes.div_ceil(64 * 1024))
+                || (group.retired && (group.chunks != 0 || group.stage || group.commit))
+            {
                 return Err(invalid("occurrence chunks are incomplete or extra"));
             }
             let occurrence = StoredOccurrenceRef {
@@ -684,6 +707,7 @@ impl MmpCustodyStore {
                 digest,
                 encoded_bytes,
                 recipient_count: source.recipient_bindings().len(),
+                retired: group.retired,
             };
             // No source decoder allocation overlaps a visitor's next read.
             drop(source);
@@ -776,7 +800,7 @@ fn journal_kind(key: Key<'_>) -> Option<CustodyJournalKind> {
         Key::RegistrationEnd(_) => J::RegistrationEnd,
         Key::NativeInput(_) => J::NativeInput,
         Key::TerminalHandoff(_) => J::TerminalHandoff,
-        Key::Chunk(_, _) | Key::Stage(_) | Key::Commit(_) => return None,
+        Key::Chunk(_, _) | Key::Stage(_) | Key::Commit(_) | Key::Retired(_) => return None,
     })
 }
 
@@ -793,6 +817,7 @@ fn parse_key(key: &str) -> Result<Key<'_>> {
         return match part {
             "stage" => Ok(Key::Stage(sequence)),
             "commit" => Ok(Key::Commit(sequence)),
+            "retired" => Ok(Key::Retired(sequence)),
             _ => {
                 let index = part
                     .strip_prefix("chunk:")

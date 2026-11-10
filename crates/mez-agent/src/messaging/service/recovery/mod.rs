@@ -247,6 +247,9 @@ impl MessageStorageRecovery {
     /// Positive decisions are exact original slot/offer-clock pairs, never a
     /// cumulative cursor. Duplicate slots, stale sequences or policy exhaustion
     /// withhold the whole recovery; the caller must not swallow these failures.
+    ///
+    /// Retired non-native originals use `restore_retired_acknowledged` instead;
+    /// their bodyless descriptors must never be converted into live mail.
     pub fn restore_original(
         &mut self,
         record: MessageStorageRecoveredRecord,
@@ -257,6 +260,75 @@ impl MessageStorageRecovery {
             return Err(unavailable());
         }
         let result = self.restore_original_inner(record, acknowledgements, read);
+        self.failed |= result.is_err();
+        result
+    }
+
+    /// Observes one physically retired, fully acknowledged non-native original
+    /// through the trusted store port. No payload, replay row, idempotency entry,
+    /// native endpoint or recipient obligation is recreated. Missing, duplicate,
+    /// expired or out-of-range ACKs permanently refuse the whole candidate.
+    /// The port must independently qualify physical retirement provenance.
+    pub fn restore_retired_acknowledged(
+        &mut self,
+        sequence: MessageSequence,
+        acknowledgements: impl IntoIterator<Item = (u32, u64)>,
+        read: impl FnOnce(MessageAcceptanceDecodeLimits) -> Result<MessageAcceptanceMetadata>,
+    ) -> Result<()> {
+        if self.failed {
+            return Err(unavailable());
+        }
+        let result = (|| {
+            if sequence <= self.last_sequence {
+                return Err(unavailable());
+            }
+            let limits = self.decode_limits()?;
+            let source = read(limits)?;
+            let count = source.recipient_bindings().len();
+            if source.sequence() != sequence
+                || count == 0
+                || count > limits.recipient_count
+                || source.envelope().payload.bytes() > limits.payload_bytes
+                || !source.has_native_binding_record()
+                || source.native_sender().is_some()
+                || (0..count).any(|index| source.native_recipient(index).is_some())
+                || self
+                    .service
+                    .accepted_messages
+                    .contains_key(&source.envelope().id)
+            {
+                return Err(unavailable());
+            }
+            let mut seen = vec![false; count];
+            for (index, clock) in acknowledgements {
+                let slot = seen.get_mut(index as usize).ok_or_else(unavailable)?;
+                if *slot
+                    || source
+                        .envelope()
+                        .ttl_ms
+                        .is_some_and(|ttl| source.accepted_at_ms().saturating_add(ttl) < clock)
+                {
+                    return Err(unavailable());
+                }
+                *slot = true;
+            }
+            if seen.iter().any(|slot| !slot) {
+                return Err(unavailable());
+            }
+            if let Some(domain) = source.custody_clock_domain() {
+                let policy = self
+                    .service
+                    .storage_custody
+                    .as_mut()
+                    .ok_or_else(unavailable)?;
+                if policy.decoded_clock.is_some_and(|old| old != domain) {
+                    return Err(unavailable());
+                }
+                policy.decoded_clock = Some(domain);
+            }
+            self.last_sequence = sequence;
+            Ok(())
+        })();
         self.failed |= result.is_err();
         result
     }

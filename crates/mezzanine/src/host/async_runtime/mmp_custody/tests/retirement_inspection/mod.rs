@@ -2,6 +2,7 @@
 
 use super::*;
 
+mod acknowledged;
 mod durable_preparation;
 
 /// Test-only independent materialization from actual original storage. Both the

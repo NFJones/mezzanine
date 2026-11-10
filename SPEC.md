@@ -17394,6 +17394,33 @@ cleanup; absent preparation after a lost cancellation reply is inert. No native
 identity, allocator or clock authority may be reconstructed. Insufficient SQL
 capacity may still refuse preparation; this increment does not guarantee rewrite
 progress at a full database or implement dependency-closed payload deletion.
+Separately, an explicit original-root operation MAY atomically retire ONE absent,
+fully positively acknowledged, explicitly non-native source within the existing
+64-record/256-KiB transaction. The original lower source-absence loan, exact store
+position, funded evidence/encoding buffers and physical rewrite lease MUST remain
+held through actual worker completion. Legacy unknown/native attribution, native
+journal dependencies, terminal/expiry settlement, insufficient budgets or a source
+requiring more than one batch MUST refuse without a partial rewrite. In one
+transaction, replace all original chunks/stage/commit rows with a version-one
+`a1:<sequence>:retired` (`MMPRET01`) bodyless record bound to the actual store,
+directory/database allocations, generation and allocator watermark. Preserve ALL
+ACK, terminal, registration and native journals. This is not a q1 preparation or
+resumable intent, and does not authorize later journal/native reclamation.
+Before COMMIT, a bounded checksum-verified commitment to EVERY non-target row
+MUST still match its transaction preimage; validating only the selected closure
+does not detect collateral removal of an unrelated original or journal. Any
+non-target insertion/removal/edit, including SQL-trigger effects, MUST roll back
+the entire rewrite. Preserve the selected source's exact metadata and settlement
+dependencies independently as well.
+Strict inventory, checkpoint validation and history folding MUST recognize this
+representation without treating accidentally missing chunks as retired mail.
+Cold reconstruction MUST independently verify every original recipient's unique,
+timely positive ACK and refuse terminal/expiry or changed/missing/foreign evidence.
+It MUST NOT fabricate payload, replay/idempotency rows, native endpoints or pending
+obligations for a retired original. The trusted stored watermark, not surviving
+source maxima, remains allocator authority. Original metadata/journals still consume
+finite storage; this fast path does not guarantee progress at SQL capacity, shrink
+the SQLite file, implement general/native reclamation or activate durable mode.
 Optional analysis MAY use the existing serialized root blocking-worker lane.
 Its charged capture and actual handle MUST survive observer cancellation; only
 an actual join permits adoption, and adoption MUST check the issuing lower

@@ -329,6 +329,11 @@ impl MmpCustodyStore {
         sequence: u64,
         limits: MessageAcceptanceDecodeLimits,
     ) -> Result<(MessageAcceptanceMetadata, [u8; 32], usize)> {
+        if let Some(retired) =
+            self.read_retired_metadata_in_snapshot(transaction, sequence, limits)?
+        {
+            return Ok(retired);
+        }
         #[cfg(test)]
         self.source_decode_probe.maximum_streamed_limit.set(
             self.source_decode_probe
@@ -353,7 +358,7 @@ impl MmpCustodyStore {
     }
 
     /// Applies exactly the same source/clock lineage checks to either body type.
-    fn validate_decoded_source<P>(
+    pub(super) fn validate_decoded_source<P>(
         &self,
         transaction: &rusqlite::Transaction<'_>,
         sequence: u64,
@@ -397,6 +402,18 @@ impl MmpCustodyStore {
         transaction: &rusqlite::Transaction<'_>,
         sequence: u64,
     ) -> Result<[u8; 32]> {
+        if let Some((_, digest, _)) = self.read_retired_metadata_in_snapshot(
+            transaction,
+            sequence,
+            MessageAcceptanceDecodeLimits {
+                payload_bytes: 1024 * 1024,
+                auxiliary_bytes: 512 * 1024,
+                recipient_count: 4096,
+                recipient_bytes: 1024 * 1024,
+            },
+        )? {
+            return Ok(digest);
+        }
         self.verified_accepted_in_snapshot(transaction, sequence, |reader| {
             io::copy(reader, &mut io::sink()).map_err(|error| {
                 MezError::invalid_state(format!("MMP acceptance stream failed: {error}"))

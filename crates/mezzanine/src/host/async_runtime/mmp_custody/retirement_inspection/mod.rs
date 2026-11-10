@@ -3,16 +3,25 @@
 //! Capture and actual joins remain root-owned across observer cancellation.
 //! Typed dependency refusal is distinct from integrity failure. A lost worker
 //! permits one exact fenced connection reopen after join, but the store remains
-//! gated until an explicit fresh inspection succeeds. No timer or deletion path
-//! is installed, and no analysis or delivery effect is automatically replayed.
+//! gated until an explicit fresh inspection succeeds. No cleanup timer is
+//! installed, and no analysis or delivery effect is automatically replayed.
 //! Explicit durable preparation writes only q1 evidence and gates the live root;
 //! cold cancellation verifies intact originals before removing that evidence.
+//! A separate explicit ACK-only non-native operation can replace one original
+//! atomically; it never uses q1 cancellation as reclamation authority.
 
 use super::*;
 use crate::storage::mmp_custody::retirement_inspection::{
     SourceRetirementCandidate, SourceRetirementFailure,
 };
 use std::task::Context;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Mode {
+    Inspect,
+    Stage,
+    ReclaimAcknowledged,
+}
 
 /// Exact read provenance survives observer/worker loss and repeated refusal.
 pub(super) struct Admission {
@@ -21,6 +30,7 @@ pub(super) struct Admission {
     repair: Option<RepairGate>,
     /// Root escrow keeps the reservation through actual join and adoption/loss.
     _staging: Option<Arc<mez_agent::messaging::MessageSourcePreservationReservation>>,
+    _encoding: Option<Arc<mez_agent::messaging::MessageSourcePreservationReservation>>,
     _rewrite:
         Option<Arc<crate::storage::mmp_custody::physical_capacity::RewriteCapacityReservation>>,
 }
@@ -46,7 +56,7 @@ impl MmpCustodyRoot {
         service: &MessageService,
         sequence: u64,
     ) -> Result<()> {
-        self.start_retirement_analysis(service, sequence, None, None, false)
+        self.start_retirement_analysis(service, sequence, None, None, Mode::Inspect)
     }
 
     /// Funds bounded bodyless evidence before starting I/O on the same owned
@@ -58,7 +68,13 @@ impl MmpCustodyRoot {
         sequence: u64,
         encoded_bytes_limit: usize,
     ) -> Result<()> {
-        self.start_retirement_analysis(service, sequence, Some(encoded_bytes_limit), None, false)
+        self.start_retirement_analysis(
+            service,
+            sequence,
+            Some(encoded_bytes_limit),
+            None,
+            Mode::Inspect,
+        )
     }
 
     /// Reserves shared physical rewrite headroom before worker issuance; the
@@ -76,7 +92,7 @@ impl MmpCustodyRoot {
             sequence,
             Some(encoded_bytes_limit),
             Some(rewrite_bytes),
-            false,
+            Mode::Inspect,
         )
     }
 
@@ -95,7 +111,26 @@ impl MmpCustodyRoot {
             sequence,
             Some(encoded_bytes_limit),
             Some(rewrite_bytes),
-            true,
+            Mode::Stage,
+        )
+    }
+
+    /// Atomically retires one absent, fully acknowledged non-native payload.
+    /// Larger, native and terminal cases refuse without partial cleanup. Uses
+    /// the same source-absence capture, worker and actual root rewrite reserve.
+    pub(crate) fn start_acknowledged_source_reclamation(
+        &self,
+        service: &MessageService,
+        sequence: u64,
+        encoded_bytes_limit: usize,
+        rewrite_bytes: usize,
+    ) -> Result<()> {
+        self.start_retirement_analysis(
+            service,
+            sequence,
+            Some(encoded_bytes_limit),
+            Some(rewrite_bytes),
+            Mode::ReclaimAcknowledged,
         )
     }
 
@@ -105,7 +140,7 @@ impl MmpCustodyRoot {
         sequence: u64,
         staging_limit: Option<usize>,
         rewrite_bytes: Option<usize>,
-        publish: bool,
+        mode: Mode,
     ) -> Result<()> {
         let mut state = self.0.state.lock().map_err(|_| ownership_error())?;
         let opened = match &*state {
@@ -134,6 +169,12 @@ impl MmpCustodyRoot {
                     .map_err(lower_error)
             })
             .transpose()?;
+        let encoding = (mode == Mode::ReclaimAcknowledged).then(|| {
+            service.reserve_source_preservation_staging(
+                &input,
+                crate::storage::mmp_custody::retirement_inspection::acknowledged::WRITE_BUFFER_BYTES,
+            ).map(Arc::new).map_err(lower_error)
+        }).transpose()?;
         let plan = opened.anchor.clone();
         let rewrite = rewrite_bytes
             .map(|bytes| {
@@ -157,6 +198,7 @@ impl MmpCustodyRoot {
             sequence,
             repair,
             _staging: staging.clone(),
+            _encoding: encoding.clone(),
             _rewrite: rewrite.clone(),
         };
         let ownership = self.0.ownership.clone();
@@ -219,9 +261,20 @@ impl MmpCustodyRoot {
                 {
                     return Err(ownership_error());
                 }
-                if publish && let Ok(Some(prepared)) = &candidate {
-                    durable = owned.persist_retirement_preparation(prepared)?;
-                    if durable {
+                if mode != Mode::Inspect
+                    && let Ok(Some(prepared)) = &candidate
+                {
+                    let changed = match mode {
+                        Mode::Stage => owned.persist_retirement_preparation(prepared)?,
+                        Mode::ReclaimAcknowledged => owned.reclaim_acknowledged_source(
+                            prepared,
+                            sequence,
+                            encoding.as_deref().ok_or_else(ownership_error)?,
+                        )?,
+                        Mode::Inspect => return Err(ownership_error()),
+                    };
+                    durable = changed && mode == Mode::Stage;
+                    if changed {
                         opened.anchor = owned.store_mut().acceptance_plan(0)?;
                     } else {
                         candidate = Ok(None);
