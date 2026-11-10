@@ -58,6 +58,11 @@ use mez_mux::process::{PaneExitStatus, PaneProcess};
 use mez_mux::session::ClientState;
 use mez_terminal::TerminalStyleSpan;
 
+// Production service assembly stays private; cross-boundary runtime tests use
+// the same builder to retain real provider/writer supervision dependencies.
+#[cfg(test)]
+pub(crate) use provider::build_async_agent_provider_service;
+
 /// Typed pane-certification state exposed only to async boundary tests.
 ///
 /// The snapshot lets tests wait on runtime-owned lifecycle and identity state

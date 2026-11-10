@@ -8,6 +8,7 @@
 use super::*;
 
 mod provider_admission;
+mod supervised_refusal;
 
 /// Position of an immediate discovery action relative to the two native shells.
 #[derive(Clone, Copy, Debug)]
