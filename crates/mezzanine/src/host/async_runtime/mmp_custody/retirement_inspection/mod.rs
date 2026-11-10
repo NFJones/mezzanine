@@ -19,6 +19,8 @@ pub(super) struct Admission {
     repair: Option<RepairGate>,
     /// Root escrow keeps the reservation through actual join and adoption/loss.
     _staging: Option<Arc<mez_agent::messaging::MessageSourcePreservationReservation>>,
+    _rewrite:
+        Option<Arc<crate::storage::mmp_custody::physical_capacity::RewriteCapacityReservation>>,
 }
 
 pub(super) struct RepairGate {
@@ -41,7 +43,7 @@ impl MmpCustodyRoot {
         service: &MessageService,
         sequence: u64,
     ) -> Result<()> {
-        self.start_retirement_analysis(service, sequence, None)
+        self.start_retirement_analysis(service, sequence, None, None)
     }
 
     /// Funds bounded bodyless evidence before starting I/O on the same owned
@@ -53,7 +55,25 @@ impl MmpCustodyRoot {
         sequence: u64,
         encoded_bytes_limit: usize,
     ) -> Result<()> {
-        self.start_retirement_analysis(service, sequence, Some(encoded_bytes_limit))
+        self.start_retirement_analysis(service, sequence, Some(encoded_bytes_limit), None)
+    }
+
+    /// Reserves shared physical rewrite headroom before worker issuance; the
+    /// actual filesystem envelope is then checked on the owned blocking lane.
+    /// This creates no file/intent and grants no native or deletion authority.
+    pub(crate) fn start_retirement_rewrite_preparation(
+        &self,
+        service: &MessageService,
+        sequence: u64,
+        encoded_bytes_limit: usize,
+        rewrite_bytes: usize,
+    ) -> Result<()> {
+        self.start_retirement_analysis(
+            service,
+            sequence,
+            Some(encoded_bytes_limit),
+            Some(rewrite_bytes),
+        )
     }
 
     fn start_retirement_analysis(
@@ -61,6 +81,7 @@ impl MmpCustodyRoot {
         service: &MessageService,
         sequence: u64,
         staging_limit: Option<usize>,
+        rewrite_bytes: Option<usize>,
     ) -> Result<()> {
         let mut state = self.0.state.lock().map_err(|_| ownership_error())?;
         let opened = match &*state {
@@ -90,6 +111,17 @@ impl MmpCustodyRoot {
             })
             .transpose()?;
         let plan = opened.anchor.clone();
+        let rewrite = rewrite_bytes
+            .map(|bytes| {
+                self.0
+                    .ownership
+                    .lock()
+                    .map_err(|_| ownership_error())?
+                    .as_ref()
+                    .ok_or_else(ownership_error)?
+                    .reserve_rewrite_capacity(&plan, bytes)
+            })
+            .transpose()?;
         let previous = std::mem::replace(&mut *state, State::Unavailable(ownership_error()));
         let (mut opened, repair) = match previous {
             State::Idle(opened) => (opened, None),
@@ -101,6 +133,7 @@ impl MmpCustodyRoot {
             sequence,
             repair,
             _staging: staging.clone(),
+            _rewrite: rewrite.clone(),
         };
         let ownership = self.0.ownership.clone();
         let scope = self.0.storage_scope.clone();
@@ -127,13 +160,31 @@ impl MmpCustodyRoot {
                 {
                     return Err(ownership_error());
                 }
-                let candidate = if staging.is_some() {
+                if rewrite
+                    .as_ref()
+                    .is_some_and(|r| !r.matches(&fence, &opened.anchor))
+                {
+                    return Err(ownership_error());
+                }
+                if rewrite.is_some() && !owned.qualify_physical_capacity()? {
+                    // No analysis or write occurred. Keep the actual opened
+                    // store; do not misclassify expected refusal as worker loss.
+                    owned.revalidate()?;
+                    return Ok(Written {
+                        opened,
+                        candidate: Ok(None),
+                    });
+                }
+                let mut candidate = if staging.is_some() {
                     owned.inspect_source_retirement_with_preservation(
                         &mut input, &scope, sequence, staging,
                     )
                 } else {
                     owned.inspect_source_retirement_candidate(&mut input, &scope, sequence)
                 };
+                if let (Ok(Some(candidate)), Some(reservation)) = (&mut candidate, &rewrite) {
+                    candidate.retain_rewrite_capacity(reservation.clone())?;
+                }
                 owned.revalidate()?;
                 if !owned
                     .store_mut()

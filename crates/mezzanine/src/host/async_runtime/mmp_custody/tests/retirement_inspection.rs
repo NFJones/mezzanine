@@ -117,6 +117,212 @@ pub(super) fn assert_prepared(
     }
 }
 
+/// Invalid or exhausted rewrite reservations precede I/O. Returned preparation
+/// retains the actual root lock and both charges until its last owner drops.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn retirement_rewrite_preparation_reserves_before_io_and_retains_root() {
+    let fixture = Fixture::new(true);
+    let (root, service, sequence) = retired(&fixture).await;
+    let before = service.storage_usage().unwrap();
+    let disk = fixture.disk();
+    let attempts = fixture.probe.attempts.load(Ordering::SeqCst);
+    for bytes in [0, 8 * 1024 * 1024 + 1, usize::MAX] {
+        assert!(
+            root.start_retirement_rewrite_preparation(&service, sequence, 64 * 1024, bytes)
+                .is_err()
+        );
+        assert_eq!(fixture.probe.attempts.load(Ordering::SeqCst), attempts);
+        assert_eq!(service.storage_usage().unwrap(), before);
+    }
+    root.start_retirement_rewrite_preparation(&service, sequence, 1, 8 * 1024 * 1024)
+        .unwrap();
+    root.observe().await.unwrap();
+    assert!(
+        root.finish_retirement_inspection(&service)
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(service.storage_usage().unwrap(), before);
+    root.start_retirement_rewrite_preparation(&service, sequence, 64 * 1024, 8 * 1024 * 1024)
+        .unwrap();
+    root.observe().await.unwrap();
+    let prepared = root
+        .finish_retirement_inspection(&service)
+        .unwrap()
+        .unwrap();
+    assert_prepared(&prepared);
+    assert_eq!(prepared.reserved_rewrite_bytes(), 8 * 1024 * 1024);
+    let held = service.storage_usage().unwrap();
+    let attempts = fixture.probe.attempts.load(Ordering::SeqCst);
+    assert!(
+        root.clone()
+            .start_retirement_rewrite_preparation(&service, sequence, 1024, 1)
+            .is_err()
+    );
+    assert_eq!(fixture.probe.attempts.load(Ordering::SeqCst), attempts);
+    assert_eq!(service.storage_usage().unwrap(), held);
+    assert_eq!(fixture.disk(), disk);
+    drop(root);
+    assert!(RootOwnership::acquire_existing(&fixture.path).is_err());
+    drop(prepared);
+    wait_until_unlocked(&fixture.path).await;
+    assert_eq!(service.storage_usage().unwrap(), before);
+    std::fs::remove_dir_all(&fixture.path).unwrap();
+    assert!(!fixture.path.exists());
+}
+
+/// An actual lost read result retains root escrow until disposition. A fresh
+/// explicit preparation after exact gated reopen can reserve the full pool.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn retirement_rewrite_preparation_worker_loss_releases_only_after_join() {
+    let fixture = Fixture::new(true);
+    let (root, service, sequence) = retired(&fixture).await;
+    let before = service.storage_usage().unwrap();
+    fixture
+        .probe
+        .panic_after_commit
+        .store(true, Ordering::SeqCst);
+    root.start_retirement_rewrite_preparation(&service, sequence, 64 * 1024, 8 * 1024 * 1024)
+        .unwrap();
+    root.observe().await.unwrap();
+    assert!(root.failure().unwrap().is_some());
+    assert!(
+        root.start_retirement_rewrite_preparation(&service, sequence, 1024, 1)
+            .is_err()
+    );
+    assert!(root.finish_retirement_inspection(&service).is_err());
+    assert_eq!(
+        root.observe().await.unwrap(),
+        CustodyWorkerStatus::Unavailable
+    );
+    assert_eq!(service.storage_usage().unwrap(), before);
+    root.start_retirement_rewrite_preparation(&service, sequence, 64 * 1024, 8 * 1024 * 1024)
+        .unwrap();
+    root.observe().await.unwrap();
+    let prepared = root
+        .finish_retirement_inspection(&service)
+        .unwrap()
+        .unwrap();
+    assert_eq!(prepared.reserved_rewrite_bytes(), 8 * 1024 * 1024);
+    assert_prepared(&prepared);
+    drop(prepared);
+    assert_eq!(service.storage_usage().unwrap(), before);
+    cleanup(&fixture, root).await;
+}
+
+/// Physical qualification survives a real worker panic and exact gated reopen.
+/// A later layout violation is an error, not the initial typed layout refusal;
+/// removing only the fixture-owned violation permits explicit repair.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn retirement_rewrite_qualified_policy_survives_worker_loss_and_reopen() {
+    use std::os::unix::fs::DirBuilderExt;
+
+    let fixture = Fixture::new(true);
+    let (root, service, sequence) = retired(&fixture).await;
+    let before = service.storage_usage().unwrap();
+    fixture
+        .probe
+        .panic_after_commit
+        .store(true, Ordering::SeqCst);
+    root.start_retirement_rewrite_preparation(&service, sequence, 64 * 1024, 8 * 1024 * 1024)
+        .unwrap();
+    root.observe().await.unwrap();
+    assert!(root.finish_retirement_inspection(&service).is_err());
+    root.observe().await.unwrap();
+    assert_eq!(service.storage_usage().unwrap(), before);
+
+    let nested = fixture.path.join("late-canonical");
+    std::fs::DirBuilder::new()
+        .mode(0o700)
+        .create(&nested)
+        .unwrap();
+    root.start_retirement_rewrite_preparation(&service, sequence, 64 * 1024, 8 * 1024 * 1024)
+        .unwrap();
+    root.observe().await.unwrap();
+    assert!(root.finish_retirement_inspection(&service).is_err());
+    // The invalid qualified root cannot even reopen as an ordinary healthy
+    // root. It must retain its error, with no candidate or source mutation.
+    root.observe().await.unwrap();
+    assert!(root.failure().unwrap().is_some());
+    assert_eq!(service.storage_usage().unwrap(), before);
+    assert!(nested.is_dir());
+    std::fs::remove_dir(&nested).unwrap();
+    cleanup(&fixture, root).await;
+}
+
+/// Unsupported private layout and insufficient physical envelope are expected
+/// pre-analysis refusals, not evidence that a healthy original became corrupt.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn retirement_rewrite_preparation_layout_refusal_keeps_ordinary_lane_usable() {
+    use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
+    for nested in [true, false] {
+        let fixture = Fixture::new(true);
+        let (root, service, sequence) = retired(&fixture).await;
+        let before = service.storage_usage().unwrap();
+        let disk = fixture.disk();
+        let directory = fixture.path.join("canonical");
+        let path = if nested {
+            std::fs::DirBuilder::new()
+                .mode(0o700)
+                .create(&directory)
+                .unwrap();
+            directory.join("retained")
+        } else {
+            fixture.path.join("retained")
+        };
+        let file = std::fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .mode(0o600)
+            .open(&path)
+            .unwrap();
+        if nested {
+            std::fs::write(&path, b"original canonical data").unwrap();
+        } else {
+            file.set_len(16 * 1024 * 1024).unwrap();
+        }
+        drop(file);
+        root.start_retirement_rewrite_preparation(&service, sequence, 64 * 1024, 8 * 1024 * 1024)
+            .unwrap();
+        root.observe().await.unwrap();
+        assert!(
+            root.finish_retirement_inspection(&service)
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(root.observe().await.unwrap(), CustodyWorkerStatus::Idle);
+        assert_eq!(service.storage_usage().unwrap(), before);
+        if nested {
+            assert_eq!(std::fs::read(&path).unwrap(), b"original canonical data");
+        } else {
+            assert_eq!(std::fs::metadata(&path).unwrap().len(), 16 * 1024 * 1024);
+        }
+        root.start_retirement_inspection(&service, sequence)
+            .unwrap();
+        root.observe().await.unwrap();
+        let candidate = root
+            .finish_retirement_inspection(&service)
+            .unwrap()
+            .unwrap();
+        drop(candidate);
+        assert_eq!(fixture.disk(), disk);
+        std::fs::remove_file(&path).unwrap();
+        if nested {
+            std::fs::remove_dir(&directory).unwrap();
+        }
+        root.start_retirement_rewrite_preparation(&service, sequence, 64 * 1024, 8 * 1024 * 1024)
+            .unwrap();
+        root.observe().await.unwrap();
+        let candidate = root
+            .finish_retirement_inspection(&service)
+            .unwrap()
+            .unwrap();
+        assert_eq!(candidate.reserved_rewrite_bytes(), 8 * 1024 * 1024);
+        drop(candidate);
+        cleanup(&fixture, root).await;
+    }
+}
+
 /// Reservation refusal precedes I/O. Insufficient encoded space returns no
 /// partial record but leaves a healthy root usable; an exact ceiling succeeds.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -179,7 +385,7 @@ async fn retirement_preservation_worker_keeps_reservation_across_cancel_and_stop
     let (root, service, sequence) = retired(&fixture).await;
     let before = service.storage_usage().unwrap();
     *fixture.probe.gate.0.lock().unwrap() = false;
-    root.start_retirement_preservation(&service, sequence, 64 * 1024)
+    root.start_retirement_rewrite_preparation(&service, sequence, 64 * 1024, 8 * 1024 * 1024)
         .unwrap();
     fixture.probe.started.notified().await;
     let captured = service.storage_usage().unwrap();
@@ -199,6 +405,7 @@ async fn retirement_preservation_worker_keeps_reservation_across_cancel_and_stop
         .unwrap();
     assert_prepared(&prepared);
     assert_eq!(service.storage_usage().unwrap(), captured);
+    assert_eq!(prepared.reserved_rewrite_bytes(), 8 * 1024 * 1024);
     assert!(
         root.start_retirement_preservation(&service, sequence, 1024)
             .is_err()

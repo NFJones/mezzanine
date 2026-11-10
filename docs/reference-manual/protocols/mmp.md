@@ -408,6 +408,21 @@ records retain their charge until their last owner drops. Insufficient encoded
 space returns no partial result and does not declare a healthy store corrupt.
 This is in-memory preparation only, not disk staging, physical rewrite capacity,
 a durable cleanup intent or normal actor activation.
+An explicit rewrite-preparation variant additionally reserves shared root-owned
+physical headroom (at most 8 MiB across all live leases). A minimum 64 KiB charge
+per lease bounds independent containers to 128. The complete pool is kept inside
+a conservative 160 MiB envelope before issuance, alongside the 64 MiB
+main-file ceiling, 80 MiB rollback allowance and every other private-root file.
+Qualification is explicit and sticky for the actual root owner. It requires a
+dedicated flat custody directory; a colocated nested canonical archive refuses
+qualification rather than escaping accounting. Existing unqualified roots keep
+their prior layout contract. Qualified boundaries validate footprint and pager settings;
+unsafe paths, WAL, oversized or excessive files refuse without deleting them.
+The lease retains the actual root lock and original store position through worker
+loss and returned-result lifetime. It creates no file or durable intent and is
+not free-space allocation, canonical verification or permission to delete mail.
+Direct lower-store connections and hostile same-user mutations are outside this
+cooperating-owner protocol; storage-full errors remain possible.
 Optional analysis now has an owned blocking-worker entrypoint on the existing
 serialized root lane. It retains capture/handle ownership across observer
 cancellation, checks the actual lower service at adoption, and permits settlement

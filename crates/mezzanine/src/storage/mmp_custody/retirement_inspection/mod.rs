@@ -75,6 +75,7 @@ pub(crate) struct SourceRetirementCandidate {
     /// Output storage remains charged through its actual last owner.
     _input: Arc<MessageSourceRetirementInspection>,
     preservation: Option<PreservationBuffer>,
+    rewrite: Option<Arc<super::physical_capacity::RewriteCapacityReservation>>,
 }
 
 impl SourceRetirementCandidate {
@@ -87,6 +88,26 @@ impl SourceRetirementCandidate {
     /// complete validation. Native blockers remain; these are not live sources.
     pub(crate) fn preserved_sources(&self) -> Option<&[PreservedSourceEvidence]> {
         self.preservation.as_ref().map(PreservationBuffer::records)
+    }
+
+    /// Quantitative reserved headroom only, never permission to delete originals.
+    pub(crate) fn reserved_rewrite_bytes(&self) -> usize {
+        self.rewrite
+            .as_ref()
+            .map_or(0, |reservation| reservation.bytes())
+    }
+
+    /// Called by the original root only after its worker qualified this lease's
+    /// exact owner/position and the complete bodyless candidate. No lease copy.
+    pub(crate) fn retain_rewrite_capacity(
+        &mut self,
+        reservation: Arc<super::physical_capacity::RewriteCapacityReservation>,
+    ) -> Result<()> {
+        if self.preservation.is_none() || self.rewrite.is_some() {
+            return Err(unavailable());
+        }
+        self.rewrite = Some(reservation);
+        Ok(())
     }
 
     /// Deterministic version-two commitment to the sorted closure and its exact
@@ -236,6 +257,7 @@ impl OwnedCustodyStore<'_> {
                 sources,
                 _input: input.clone(),
                 preservation,
+                rewrite: None,
             }))
         })();
         result.map_err(|error| SourceRetirementFailure {

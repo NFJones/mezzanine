@@ -36,6 +36,7 @@ mod inventory;
 pub(crate) mod native_continuity;
 pub(crate) mod native_input;
 pub(crate) mod ownership;
+pub(crate) mod physical_capacity;
 mod recovery;
 mod registration;
 pub(crate) mod registration_end;

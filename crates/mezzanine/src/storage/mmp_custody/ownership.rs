@@ -39,6 +39,11 @@ pub(crate) struct RootOwnership {
     /// Actual clock capability survives worker/store loss under this same root.
     clock: OnceLock<Result<std::sync::Arc<super::elapsed_clock::CustodyElapsedClock>>>,
     clock_source: super::elapsed_clock::ClockSource,
+    /// Shared by every root clone and held result, never reset on worker reopen.
+    pub(super) rewrite_reserved: std::sync::atomic::AtomicUsize,
+    /// Explicit qualification is sticky for this actual owner, not all legacy
+    /// roots whose canonical archives may share the parent directory.
+    physical_qualified: std::sync::atomic::AtomicBool,
 }
 
 impl Drop for RootOwnership {
@@ -70,6 +75,27 @@ pub(crate) struct OwnedCustodyStore<'a> {
 }
 
 impl OwnedCustodyStore<'_> {
+    /// Establishes the dedicated flat-root envelope before a rewrite result can
+    /// be issued. False is expected initial layout/capacity refusal; errors are
+    /// owner/path/pager/I/O failures. Success makes subsequent boundaries enforce
+    /// this policy through worker loss, with no downgrade to expected refusal.
+    pub(crate) fn qualify_physical_capacity(&mut self) -> Result<bool> {
+        self.revalidate()?;
+        super::physical_capacity::validate_connection(self.store)?;
+        if !super::physical_capacity::qualification_paths(
+            &self._owner.root,
+            &self._owner.rewrite_reserved,
+        )? {
+            self.revalidate()?;
+            return Ok(false);
+        }
+        self._owner
+            .physical_qualified
+            .store(true, std::sync::atomic::Ordering::Release);
+        self.revalidate()?;
+        Ok(true)
+    }
+
     /// Establishes actual suspend-inclusive time only on an empty original.
     /// The live root retains both success and failure through every later worker.
     pub(crate) fn initialize_elapsed_clock(&mut self) -> Result<()> {
@@ -225,6 +251,8 @@ impl RootOwnership {
             bound: OnceLock::new(),
             clock: OnceLock::new(),
             clock_source,
+            rewrite_reserved: std::sync::atomic::AtomicUsize::new(0),
+            physical_qualified: std::sync::atomic::AtomicBool::new(false),
         };
         owner.validate_root()?;
         Ok(owner)
@@ -233,6 +261,12 @@ impl RootOwnership {
     /// Rejects a replaced directory or lock pathname before opening a store.
     pub(crate) fn validate_root(&self) -> Result<()> {
         validate_directory_path(&self.root, &self.directory)?;
+        if self
+            .physical_qualified
+            .load(std::sync::atomic::Ordering::Acquire)
+        {
+            super::physical_capacity::validate_paths(&self.root, &self.rewrite_reserved)?;
+        }
         let path = self.root.join("owner.lock");
         validate_private_path(&path, false)?;
         let held = self._lock.metadata()?;
@@ -267,6 +301,12 @@ impl RootOwnership {
             return Err(MezError::conflict("MMP custody database path changed"));
         }
         store.checked_state(&store.connection)?;
+        if self
+            .physical_qualified
+            .load(std::sync::atomic::Ordering::Acquire)
+        {
+            super::physical_capacity::validate_connection(store)?;
+        }
         let _ = self.bound.set(BoundStore {
             store_id: store.store_id.clone(),
             database_identity: store.database_identity,

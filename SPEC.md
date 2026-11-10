@@ -17326,6 +17326,27 @@ reserved encoded space MUST discard all prefixes and return typed refusal, not
 mark a valid store corrupt or clear an existing repair gate. This preparation
 reserves RAM only; it is not a physical staging/rewrite reserve, durable cleanup
 intent, dependency-closed native plan or permission to replace original chunks.
+An explicit rewrite-preparation variant MAY reserve up to 8 MiB of shared
+root-owned physical headroom before worker issuance. All root clones and retained
+results MUST share its finite counter and retain the actual root lock through
+the last lease owner. Each lease MUST charge at least 64 KiB against that pool,
+bounding independent reservation containers to 128. The worker MUST qualify the
+original root and exact store position before attaching the reservation to
+validated bodyless evidence.
+Physical qualification MUST be explicit and require a dedicated flat custody
+root; nested canonical archives MUST NOT be silently exempted. Existing general
+roots remain unchanged until qualification succeeds. Once qualified, the actual
+owner MUST retain that policy through worker loss/reopen and enforce it at every
+owned boundary. These boundaries MUST charge the complete 64 MiB main-file
+ceiling, 80 MiB rollback-journal allowance, the full 8 MiB rewrite pool even before
+issuance, and all other private-root files/directory bytes within 160 MiB. Charge
+both apparent lengths and allocated blocks; reject unsafe paths, excessive entry
+counts, WAL sidecars and changed pager assumptions rather than deleting evidence
+or silently restoring policy. Supported DELETE/EXTRA, no-spill, memory-temp pager
+behavior is required. This cooperating-owner envelope is not an OS disk quota,
+free-block guarantee or protection from hostile same-user filesystem mutation;
+direct lower-store access does not participate. A reservation is not a durable
+cleanup intent, closed native plan or deletion authority, and creates no file.
 Optional analysis MAY use the existing serialized root blocking-worker lane.
 Its charged capture and actual handle MUST survive observer cancellation; only
 an actual join permits adoption, and adoption MUST check the issuing lower
