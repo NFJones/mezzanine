@@ -91,6 +91,7 @@ async fn sender_consumption_retirement_commits_to_handoff_and_registration_histo
         .unwrap()
         .unwrap();
     let source = &candidate.sources()[0];
+    super::super::retirement_inspection::assert_source_evidence(&fixture, source);
     assert_eq!(source.sequence, sequence);
     assert_eq!(source.unsettled_recipients, 0);
     assert_eq!(source.native_journal_references, 1);

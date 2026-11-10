@@ -388,6 +388,16 @@ commits to its store allocation, generation and watermark. Metadata remains with
 the existing charged 256 KiB accumulator. These are descriptive preimage references,
 not physical canonical-row verification, cleanup authority or native dependency
 closure; native journals and registration history must still be preserved.
+Inspection also fingerprints the separate `MMPAME01` payloadless preservation
+format using a counting checksum sink, without retaining another source buffer.
+It preserves original source/payload fingerprints, sizes, clocks, audience and
+native/registration attribution, but has no conversion to mail or live recovery.
+The version-two closure commitment includes this exact encoding's size/checksum.
+The bounded decoder validates framing and attribution, not the authenticity of
+omitted bytes; metadata and extensions can still be private. This codec neither
+persists a cleanup intent nor replaces original chunks or verifies canonical
+archive rows. Native journals remain blockers until actual dependency-preserving
+reclamation is implemented and qualified.
 Optional analysis now has an owned blocking-worker entrypoint on the existing
 serialized root lane. It retains capture/handle ownership across observer
 cancellation, checks the actual lower service at adoption, and permits settlement

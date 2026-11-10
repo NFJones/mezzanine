@@ -20,6 +20,11 @@ pub struct MessagePayloadFingerprint {
     sha256: [u8; 32],
 }
 impl MessagePayloadFingerprint {
+    /// Reconstitutes descriptive evidence only; no payload or source capability.
+    pub(super) fn preserved(bytes: usize, sha256: [u8; 32]) -> Self {
+        Self { bytes, sha256 }
+    }
+
     /// Returns the exact decoded UTF-8 length, excluding JSON escape syntax.
     pub fn bytes(&self) -> usize {
         self.bytes

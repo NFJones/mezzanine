@@ -2,6 +2,79 @@
 
 use super::*;
 
+/// Test-only independent materialization from actual original storage. Both the
+/// native-input and sender-handoff boundaries share this preservation oracle;
+/// production inspection retains only its fixed-size size/checksum pair.
+pub(super) fn assert_source_evidence(
+    fixture: &Fixture,
+    inspected: &crate::storage::mmp_custody::retirement_inspection::SourceRetirementInspection,
+) {
+    use mez_agent::messaging::{
+        decode_message_acceptance, decode_message_acceptance_metadata,
+        decode_message_acceptance_metadata_evidence,
+    };
+    use sha2::{Digest, Sha256};
+    let store =
+        MmpCustodyStore::open_existing(&fixture.path, "original-session", Default::default())
+            .unwrap();
+    let mut original = Vec::new();
+    let (digest, size) = store
+        .stream_accepted_occurrence(inspected.sequence, &mut original)
+        .unwrap();
+    assert_eq!(digest, inspected.source_sha256);
+    assert_eq!(size, original.len());
+    let limits = mez_agent::messaging::MessageAcceptanceDecodeLimits {
+        payload_bytes: 1024 * 1024,
+        auxiliary_bytes: 512 * 1024,
+        recipient_count: 4096,
+        recipient_bytes: 512 * 1024,
+    };
+    let metadata = decode_message_acceptance_metadata(original.as_slice(), limits).unwrap();
+    let mut encoded = Vec::new();
+    metadata
+        .write_metadata_evidence(&mut encoded, &digest, size)
+        .unwrap();
+    assert_eq!(
+        inspected.source_evidence.encoded_bytes,
+        encoded.len() as u64
+    );
+    assert_eq!(
+        inspected.source_evidence.sha256,
+        <[u8; 32]>::from(Sha256::digest(&encoded))
+    );
+    let preserved =
+        decode_message_acceptance_metadata_evidence(encoded.as_slice(), limits, size).unwrap();
+    assert_eq!(preserved.source_sha256(), &digest);
+    assert_eq!(preserved.original_encoded_bytes(), size);
+    let actual = preserved.metadata();
+    assert_eq!(actual.envelope(), metadata.envelope());
+    assert_eq!(actual.audience(), metadata.audience());
+    assert_eq!(actual.recipient_bindings(), metadata.recipient_bindings());
+    assert_eq!(actual.sequence(), metadata.sequence());
+    assert_eq!(actual.accepted_at_ms(), metadata.accepted_at_ms());
+    assert_eq!(
+        actual.sender_registered_after_sequence(),
+        metadata.sender_registered_after_sequence()
+    );
+    assert_eq!(actual.native_sender(), metadata.native_sender());
+    assert_eq!(
+        actual.custody_clock_domain(),
+        metadata.custody_clock_domain()
+    );
+    for index in 0..metadata.recipient_bindings().len() {
+        assert_eq!(
+            actual.native_recipient(index),
+            metadata.native_recipient(index)
+        );
+        assert_eq!(
+            actual.recipient_registration_namespace(index),
+            metadata.recipient_registration_namespace(index)
+        );
+    }
+    assert!(decode_message_acceptance(encoded.as_slice(), limits).is_err());
+    assert!(decode_message_acceptance_metadata(encoded.as_slice(), limits).is_err());
+}
+
 async fn cleanup(fixture: &Fixture, root: MmpCustodyRoot) {
     drop(root);
     wait_until_unlocked(&fixture.path).await;

@@ -20,6 +20,7 @@ use super::*;
 mod commitment;
 pub(crate) use commitment::JournalCommitment;
 use commitment::JournalHasher;
+pub(crate) use commitment::SourceEvidenceCommitment;
 
 /// Fits the separately charged 256 KiB accumulator, including vector overhead.
 const MAX_SLOTS: usize = 4096;
@@ -55,6 +56,8 @@ pub(crate) struct SourceRetirementInspection {
     pub dependencies: JournalCommitment,
     /// All b1/n1/o1 rows are conservatively preserved, not selected for deletion.
     pub preserved_registrations: JournalCommitment,
+    /// Exact payloadless preservation record size/checksum, not retained bytes.
+    pub source_evidence: SourceEvidenceCommitment,
 }
 
 /// Descriptive transitive closure of shared cumulative ACK source references.
@@ -75,12 +78,12 @@ impl SourceRetirementCandidate {
         &self.sources
     }
 
-    /// Deterministic version-one commitment to the sorted closure and its exact
+    /// Deterministic version-two commitment to the sorted closure and its exact
     /// validated store position. This does not confer deletion authority or
     /// replace live ownership/adoption checks. Equal member counts are not enough.
     pub(crate) fn commitment(&self) -> [u8; 32] {
         let mut hash = Sha256::new();
-        hash.update(b"mezzanine-mmp-retirement-candidate-v1\0");
+        hash.update(b"mezzanine-mmp-retirement-candidate-v2\0");
         if let Some(first) = self.sources.first() {
             hash.update((first.position.store_id.len() as u64).to_le_bytes());
             hash.update(&first.position.store_id);
@@ -96,6 +99,8 @@ impl SourceRetirementCandidate {
             hash.update(source.dependencies.sha256);
             hash.update(source.preserved_registrations.records.to_le_bytes());
             hash.update(source.preserved_registrations.sha256);
+            hash.update(source.source_evidence.encoded_bytes.to_le_bytes());
+            hash.update(source.source_evidence.sha256);
         }
         hash.finalize().into()
     }
@@ -248,9 +253,10 @@ fn inspect_in_snapshot(
     dependency: &mut dyn FnMut(u64) -> Result<()>,
 ) -> Result<SourceRetirementInspection> {
     let limits = input.decode_limits();
-    let (source, source_sha256, _) =
+    let (source, source_sha256, encoded_bytes) =
         store.read_accepted_metadata_in_snapshot(transaction, sequence, limits)?;
     let recipient_count = source.recipient_bindings().len();
+    let source_evidence = commitment::source_evidence(&source, &source_sha256, encoded_bytes)?;
     drop(source);
     if recipient_count == 0
         || recipient_count > MAX_SLOTS
@@ -419,6 +425,7 @@ fn inspect_in_snapshot(
         pending_native_journal_references,
         dependencies: dependencies.finish(),
         preserved_registrations: preserved_registrations.finish(),
+        source_evidence,
     })
 }
 

@@ -24,7 +24,8 @@ mod record_decode;
 mod record_reader;
 pub use record_decode::{
     MessageAcceptanceDecodeLimits, MessageAcceptanceEnvelope, MessageAcceptanceMetadata,
-    MessageAcceptanceSource, decode_message_acceptance, decode_message_acceptance_metadata,
+    MessageAcceptanceMetadataEvidence, MessageAcceptanceSource, decode_message_acceptance,
+    decode_message_acceptance_metadata, decode_message_acceptance_metadata_evidence,
 };
 pub use record_reader::MessagePayloadFingerprint;
 /// Computes immutable source integrity on the owned ACK worker, not the actor.

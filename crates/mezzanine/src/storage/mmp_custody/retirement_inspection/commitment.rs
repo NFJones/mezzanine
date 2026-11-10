@@ -7,6 +7,49 @@
 
 use super::*;
 
+/// Fixed-size descriptive output, charged in the existing candidate allowance.
+pub(crate) struct SourceEvidenceCommitment {
+    pub encoded_bytes: u64,
+    pub sha256: [u8; 32],
+}
+
+/// Streams the actual lower preservation encoder while the one already-charged
+/// source decoder is live. No source bytes or attribution vectors are copied.
+pub(super) fn source_evidence(
+    source: &mez_agent::messaging::MessageAcceptanceMetadata,
+    source_sha256: &[u8; 32],
+    encoded_bytes: usize,
+) -> Result<SourceEvidenceCommitment> {
+    struct Sink {
+        bytes: u64,
+        hash: Sha256,
+    }
+    impl std::io::Write for Sink {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.bytes = self
+                .bytes
+                .checked_add(bytes.len() as u64)
+                .ok_or_else(|| std::io::Error::other("source evidence size overflow"))?;
+            self.hash.update(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut sink = Sink {
+        bytes: 0,
+        hash: Sha256::new(),
+    };
+    source
+        .write_metadata_evidence(&mut sink, source_sha256, encoded_bytes)
+        .map_err(|_| unavailable())?;
+    Ok(SourceEvidenceCommitment {
+        encoded_bytes: sink.bytes,
+        sha256: sink.hash.finalize().into(),
+    })
+}
+
 /// Version-one deterministic commitment to a sequence of validated journal rows.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct JournalCommitment {

@@ -17301,6 +17301,19 @@ fit the existing charged 256 KiB accumulator; no second journal index is allowed
 These descriptive commitments are not durable cleanup intents, live capabilities,
 physical canonical-row verification or substitutes for later ownership/preimage
 revalidation. All native journals remain blockers and registration rows preserved.
+Optional inspection MAY additionally fingerprint a separate payloadless source
+preservation record. `MMPAME01` framing retains the original full-source checksum,
+encoded size and decoded payload length/checksum, followed by bounded immutable
+schema1/2/3/4 attribution with an empty payload placeholder. Its decoder MUST
+return descriptive metadata only, reject future/truncated/oversized/contradictory
+framing and nonempty placeholder bodies, and remain separate from acceptance,
+payload loading and live recovery. Decoding MUST NOT claim authentication of
+omitted bytes. The version-two sorted candidate commitment also binds this
+preservation record's encoded size/checksum. Production inspection MUST stream
+it to a fixed-size counting checksum sink under the existing decoder reservation,
+not retain another metadata/source buffer. Attribution and extensions can retain
+private data; this is not a redaction or wire format. No cleanup storage namespace
+or replacement of original payload chunks is activated by this codec.
 Optional analysis MAY use the existing serialized root blocking-worker lane.
 Its charged capture and actual handle MUST survive observer cancellation; only
 an actual join permits adoption, and adoption MUST check the issuing lower

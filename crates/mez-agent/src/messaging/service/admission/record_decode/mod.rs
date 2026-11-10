@@ -15,6 +15,14 @@ use serde::{Deserialize, Deserializer, de};
 use super::record_reader::RecordReader;
 use super::*;
 
+mod evidence;
+pub use evidence::{
+    MessageAcceptanceMetadataEvidence, decode_message_acceptance_metadata_evidence,
+};
+
+#[cfg(test)]
+mod evidence_tests;
+
 /// Independent bounds supplied by the trusted destination, not stored JSON.
 #[derive(Clone, Copy)]
 pub struct MessageAcceptanceDecodeLimits {
@@ -793,7 +801,7 @@ mod tests {
 
     /// Serializes a real unpublished admission, preserving the sender's actual
     /// registration floor and the exact binding captured by the lower owner.
-    fn source(payload: &str) -> (Vec<u8>, String) {
+    pub(super) fn source(payload: &str) -> (Vec<u8>, String) {
         let mut service = MessageService::default();
         let sender = service.register_agent(None, None, "sender", vec!["writer".into()]);
         let recipient = service.register_agent(None, None, "target", vec![]);
@@ -826,7 +834,7 @@ mod tests {
     }
 
     /// Supplies the same production ceilings used by the existing lower owner.
-    fn limits() -> MessageAcceptanceDecodeLimits {
+    pub(super) fn limits() -> MessageAcceptanceDecodeLimits {
         MessageAcceptanceDecodeLimits {
             payload_bytes: 1024 * 1024,
             auxiliary_bytes: 16 * 1024 * 1024,

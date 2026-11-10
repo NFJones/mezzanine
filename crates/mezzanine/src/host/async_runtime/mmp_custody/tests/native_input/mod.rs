@@ -532,6 +532,7 @@ async fn native_input_source_retirement_waits_for_real_proof_after_replay_evicti
                 .unwrap()
         };
         assert_eq!(candidate.sources().len(), 1);
+        super::retirement_inspection::assert_source_evidence(&fixture, &candidate.sources()[0]);
         assert_eq!(candidate.sources()[0].native_journal_references, 1);
         assert_eq!(candidate.sources()[0].pending_native_journal_references, 0);
         assert_eq!(
