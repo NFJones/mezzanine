@@ -185,6 +185,10 @@ impl RuntimeSessionService {
                 // A failed append may already have committed a prefix. Retain
                 // the worker-owned rows for checked logical replay; only a
                 // verified completion can retire their visibility.
+                if !retryable {
+                    self.persistence
+                        .fail_terminal_bookkeeping_append(&path, &entries, &error);
+                }
                 self.persistence
                     .invalidate_transcript_admission_at_path(&path, &conversation_id);
                 serde_json::json!({

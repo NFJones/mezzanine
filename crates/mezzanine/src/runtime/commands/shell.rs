@@ -541,7 +541,8 @@ impl RuntimeSessionService {
                 ));
             }
         }
-        if self.agent.loop_source_command_is_pending(&pane_id)
+        if (self.agent.loop_source_command_is_pending(&pane_id)
+            || self.waiting_loop_continuation_for_pane(&pane_id).is_some())
             && slash_invocation
                 .as_ref()
                 .is_some_and(|invocation| invocation.name == "stop")

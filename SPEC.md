@@ -8486,6 +8486,13 @@ before any controller restoration, conversation switch, or turn creation.
 Reuse-mode continuation history MUST also be prepared off the session actor.
 Its work MUST retain the settled predecessor and exact controller/iteration
 claim, and use the returned history without rereading it at turn admission.
+Terminal shell-slot release MUST NOT imply conversation-history settlement.
+A reuse continuation fenced by pending bookkeeping or canonical message receipts
+MUST retain its original ownership and defer without a source read, worker permit,
+new turn, or replay of predecessor effects. Existing settlement notifications
+MUST reconcile that wait exactly once against current pane, configuration,
+process and controller ownership. A failed archive check MUST fail locally and
+remain fail-closed rather than repeatedly checking the same failed source.
 Cancellation, replacement, duplicate callbacks, or source failure MUST NOT
 replay the settled iteration or submit a new user `/loop` command. A failed
 continuation MUST remain local to its controller; independently replaced pane

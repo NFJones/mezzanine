@@ -1356,6 +1356,10 @@ impl AsyncRuntimeSessionActor {
         if let Some((raw, result)) = completion {
             self.complete_stored_raw_message(raw, result);
         }
+        // Terminal consumption can release the last canonical receipt fencing
+        // a loop's next source read. Reconcile only after adoption and custody
+        // bookkeeping, never while a provisional proof still owns the source.
+        self.dispatch_pending_agent_prompt_history();
     }
 
     /// After the transport confirms its batch write, reserve the original cursor

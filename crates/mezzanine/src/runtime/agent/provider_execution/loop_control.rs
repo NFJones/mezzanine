@@ -166,9 +166,17 @@ impl RuntimeSessionService {
         &mut self,
         settled_turn_id: &str,
     ) -> Result<()> {
-        let Some(continuation) = self.take_agent_loop_continuation(settled_turn_id) else {
+        let Some(mut pending) = self.take_agent_loop_continuation(settled_turn_id) else {
             return Ok(());
         };
+        // A retained wait may observe a replacement controller or work turn.
+        // Drop only that stale wait, never recover against the replacement.
+        if let Some(source) = &pending.source
+            && !self.loop_continuation_source_is_current(source)
+        {
+            return Ok(());
+        }
+        let continuation = &pending.continuation;
         let Some(state) = self.agent_loop_state_by_id(&continuation.loop_id).cloned() else {
             return Ok(());
         };
@@ -176,8 +184,21 @@ impl RuntimeSessionService {
             == crate::runtime::agent_state::RuntimeAgentLoopMode::ReuseCurrentConversation
             && self.agent_source_preparation_uses_adapter()
         {
-            self.begin_loop_continuation_source(&continuation, settled_turn_id)
-                .map(|_| None)
+            match self.begin_loop_continuation_source(
+                continuation,
+                settled_turn_id,
+                pending.source.take(),
+            ) {
+                Ok(Some(source)) => {
+                    pending.source = Some(source);
+                    self.agent
+                        .agent_loop_continuations
+                        .insert(settled_turn_id.into(), pending);
+                    return Ok(());
+                }
+                Ok(None) => Ok(None),
+                Err(error) => Err(error),
+            }
         } else {
             self.start_agent_loop_work_turn(&continuation.pane_id)
                 .map(Some)
@@ -202,6 +223,32 @@ impl RuntimeSessionService {
         }
     }
 
+    /// Reconcile only retained history waits, not shell slots still completing.
+    /// Called from the existing history settlement drain; no timer, source read,
+    /// action replay or speculative turn is needed while the fence is pending.
+    pub(crate) fn resume_waiting_agent_loop_continuations(&mut self) -> Result<()> {
+        if matches!(
+            self.lifecycle_state(),
+            crate::runtime::RuntimeLifecycleState::Stopping
+                | crate::runtime::RuntimeLifecycleState::Killed
+                | crate::runtime::RuntimeLifecycleState::Failed
+        ) || self.message_restore_pending()
+        {
+            return Ok(());
+        }
+        let predecessors = self
+            .agent
+            .agent_loop_continuations
+            .iter()
+            .filter(|(_, pending)| pending.source.is_some())
+            .map(|(turn, _)| turn.clone())
+            .collect::<Vec<_>>();
+        for predecessor in predecessors {
+            self.start_deferred_agent_loop_continuation(&predecessor)?;
+        }
+        Ok(())
+    }
+
     /// Terminates one loop whose next iteration could not start after
     /// settlement.
     ///
@@ -219,6 +266,10 @@ impl RuntimeSessionService {
         let Some(state) = self.agent_loop_state_by_id(loop_id).cloned() else {
             return Err(error);
         };
+        let completed_iteration = self
+            .agent_loop_turn(settled_turn_id)
+            .filter(|turn| turn.loop_id == loop_id)
+            .map_or(state.iteration.saturating_sub(1), |turn| turn.iteration);
         let objective = self.preflight_agent_loop_parent_objective(&state)?;
         self.restore_agent_loop_parent_conversation(
             &state.invoking_pane_id,
@@ -246,7 +297,7 @@ impl RuntimeSessionService {
             &state.invoking_pane_id,
             &format!(
                 "loop: stopped after iteration {} because the next iteration could not start: {}",
-                state.iteration,
+                completed_iteration,
                 error.message()
             ),
         )?;

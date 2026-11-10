@@ -266,7 +266,11 @@ impl RuntimeSessionService {
         {
             admission_conversations.push(source.clone());
         }
-        self.check_loop_source_conversations(&admission_conversations)?;
+        // Internal continuations may capture ownership while chronology settles.
+        // Their wait is never executed; admission recaptures current read inputs.
+        if continuation.is_none() {
+            self.check_loop_source_conversations(&admission_conversations)?;
+        }
         let source_frontier = if parent.ephemeral {
             parent.ephemeral_transcript_source_entries
         } else {
@@ -306,21 +310,43 @@ impl RuntimeSessionService {
     }
 
     pub(crate) fn validate_loop_source_work(&self, work: &LoopSourceWork) -> Result<()> {
+        self.validate_loop_source_binding(work, false)?;
+        self.check_loop_source_conversations(&work.inner.admission_conversations)
+    }
+
+    /// A pre-read wait permits only chronology counters to advance. All binding,
+    /// controller, configuration and process fences remain exact; worker results
+    /// still use strict counter validation and cannot adopt an old read.
+    fn validate_loop_source_binding(
+        &self,
+        work: &LoopSourceWork,
+        history_progress: bool,
+    ) -> Result<()> {
         let original = &work.inner;
         let current = self
             .agent_shell_store()
             .get(&original.pane)
             .ok_or_else(|| MezError::conflict("loop source pane was removed"))?;
         let expected = &original.binding;
+        let chronology_matches = [
+            (current.transcript_entries, expected.transcript_entries),
+            (
+                current.transcript_high_water,
+                expected.transcript_high_water,
+            ),
+            (
+                current.ephemeral_transcript_source_entries,
+                expected.ephemeral_transcript_source_entries,
+            ),
+        ]
+        .into_iter()
+        .all(|(current, expected)| current == expected || (history_progress && current > expected));
         if current.session_id != expected.session_id
             || current.running_turn_id != expected.running_turn_id
             || current.ephemeral != expected.ephemeral
-            || current.transcript_entries != expected.transcript_entries
-            || current.transcript_high_water != expected.transcript_high_water
+            || !chronology_matches
             || current.ephemeral_transcript_source_conversation_id
                 != expected.ephemeral_transcript_source_conversation_id
-            || current.ephemeral_transcript_source_entries
-                != expected.ephemeral_transcript_source_entries
             || current.native_working_directory_generation() != expected.directory_generation
             || current.visibility != expected.visibility
             || current.allowed_actions != expected.allowed_actions
@@ -334,7 +360,6 @@ impl RuntimeSessionService {
         {
             return Err(MezError::conflict("loop source preparation became stale"));
         }
-        self.check_loop_source_conversations(&original.admission_conversations)?;
         let current = self.steering_process_binding(&original.pane)?;
         if !match (original.process.as_ref(), current.as_ref()) {
             (Some(old), Some(current)) => old.same_incarnation(current),

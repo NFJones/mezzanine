@@ -1818,10 +1818,14 @@ impl AsyncRuntimeSessionActor {
                     .settle_claimed_transcript(&entries, &path);
             }
             self.service.start_ready_agent_turns()?;
-            self.dispatch_pending_agent_prompt_history();
             transition
                 .side_effects
                 .extend(self.pending_provider_dispatch_side_effects()?);
+        }
+        if transition.applied {
+            // Successful settlement releases waits; exhausted writes report a
+            // local loop failure while preserving their original source fence.
+            self.dispatch_pending_agent_prompt_history();
         }
         self.queue_peer_message_delivery_timer_if_needed(async_runtime_current_unix_millis())?;
         Ok(transition)

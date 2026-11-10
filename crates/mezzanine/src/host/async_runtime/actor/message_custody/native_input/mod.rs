@@ -373,5 +373,6 @@ impl AsyncRuntimeSessionActor {
         if let Err(error) = self.service.complete_native_input_ack(id, continue_turn) {
             self.service.defer_native_input_completion(id, error);
         }
+        self.dispatch_pending_agent_prompt_history();
     }
 }

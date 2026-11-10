@@ -257,6 +257,15 @@ impl RuntimePersistenceComponent {
                 })
     }
 
+    /// A failed archive check remains fenced but must not look like a healthy
+    /// pending wait to a retained loop continuation. This never retries its read.
+    pub(crate) fn bookkeeping_failure(&self, conversation: &str) -> Option<MezError> {
+        self.bookkeeping_candidates
+            .iter()
+            .filter(|candidate| candidate.turn.conversation_id == conversation)
+            .find_map(|candidate| candidate.failure.as_deref().cloned())
+    }
+
     /// Consumes an exact worker claim; duplicate results cannot admit another append.
     pub(crate) fn take_bookkeeping_candidate(
         &mut self,
@@ -328,8 +337,34 @@ impl RuntimePersistenceComponent {
         self.bookkeeping_candidates.push(candidate);
     }
 
-    /// Called only after the existing full-batch/path completion gate accepts
-    /// a real write. A stale or unrelated callback cannot reach this retirement.
+    /// Retains a terminal append's nonretryable failure in its existing exact
+    /// candidate owner. Partial effects stay fenced; this never reissues a write.
+    pub(crate) fn fail_terminal_bookkeeping_append(
+        &mut self,
+        path: &std::path::Path,
+        batch: &crate::storage::transcript::TranscriptAppendBatch,
+        error: &str,
+    ) {
+        for candidate in &mut self.bookkeeping_candidates {
+            if candidate
+                .terminal_append_proposal()
+                .is_some_and(|(store, proposal)| {
+                    proposal == batch
+                        && store
+                            .transcript_path(batch.conversation_id())
+                            .is_ok_and(|owned| owned == path)
+                })
+            {
+                candidate.failure.get_or_insert_with(|| {
+                    Box::new(MezError::invalid_state(format!(
+                        "terminal transcript append failed: {error}"
+                    )))
+                });
+            }
+        }
+    }
+
+    /// Retires only an exact successful write after ordinary receipt validation.
     pub(super) fn settle_terminal_bookkeeping_append(
         &mut self,
         path: &std::path::Path,

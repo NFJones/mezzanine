@@ -627,6 +627,12 @@ impl AsyncRuntimeSessionActor {
 
     /// Starts worker preparation for every prompt-history dispatch currently owned by the service.
     pub(super) fn dispatch_pending_agent_prompt_history(&mut self) {
+        if let Err(error) = self.service.resume_waiting_agent_loop_continuations() {
+            let _ = self.service.append_runtime_diagnostic_event(format!(
+                r#"{{"kind":"loop_continuation_reconciliation_failed","error_kind":"{:?}"}}"#,
+                error.kind(),
+            ));
+        }
         for preparation in self.service.take_pending_agent_history_preparations() {
             let dispatch = match preparation {
                 crate::runtime::RuntimeAgentHistoryPreparationDispatch::Prompt(dispatch) => {
@@ -2982,6 +2988,11 @@ impl AsyncRuntimeSessionActor {
                             error.kind(),
                         ));
                     }
+                }
+                if result.is_err() {
+                    // A blocked original archive must fail its retained loop
+                    // locally instead of leaving an indistinguishable wait.
+                    self.dispatch_pending_agent_prompt_history();
                 }
                 self.dispatch_bookkeeping_candidates();
                 self.notify_event_delivery();

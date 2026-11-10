@@ -128,6 +128,417 @@ fn take(service: &mut RuntimeSessionService) -> crate::runtime::LoopSourceWork {
     work
 }
 
+/// Unlike `queued`, terminal persistence is asynchronous before the predecessor
+/// completes. Its unchecked snapshot must fence, not destroy, the next iteration.
+fn waiting_for_bookkeeping() -> (
+    crate::test_support::replay_epoch::Fixture,
+    RuntimeSessionService,
+    ClientId,
+    String,
+) {
+    let (fixture, mut service, primary) = setup();
+    service
+        .execute_agent_shell_command(
+            &primary,
+            "/loop --limit 3 --goal 'finish the objective' retain settled work",
+        )
+        .unwrap();
+    let predecessor = service
+        .agent_shell_store()
+        .get("%1")
+        .unwrap()
+        .running_turn_id
+        .clone()
+        .unwrap();
+    let profile = service
+        .agent_turn_model_profile(&predecessor)
+        .unwrap()
+        .clone();
+    service.use_agent_source_preparation_adapter();
+    service.use_transcript_effect_adapter();
+    let provider = UnmetGoal(AtomicUsize::new(0));
+    service
+        .execute_agent_turn_with_provider(&predecessor, &provider, profile)
+        .unwrap();
+    assert_eq!(provider.0.load(Ordering::SeqCst), 1);
+    assert!(
+        service.agent_loop_state("%1").is_some(),
+        "async terminal bookkeeping destroyed the pending loop"
+    );
+    assert!(
+        service
+            .agent_shell_store()
+            .get("%1")
+            .unwrap()
+            .running_turn_id
+            .is_none()
+    );
+    assert!(service.take_pending_agent_history_preparations().is_empty());
+    (fixture, service, primary, predecessor)
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn loop_reuse_waits_for_terminal_bookkeeping() {
+    let (_fixture, mut service, primary, predecessor) = waiting_for_bookkeeping();
+    assert_eq!(
+        service
+            .agent_turn_ledger()
+            .turn(&predecessor)
+            .unwrap()
+            .state,
+        mez_agent::AgentTurnState::Completed
+    );
+    // A waiting continuation consumes neither source capacity nor another turn.
+    let held = (0..8)
+        .map(|_| service.reserve_agent_source_preparation().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(service.agent_turn_ledger().turns().len(), 1);
+    service
+        .execute_agent_shell_command(&primary, "/stop")
+        .unwrap();
+    assert!(service.agent_loop_state("%1").is_none());
+    drop(held);
+}
+
+/// Checked history adoption and physical append settlement are distinct. Drive
+/// the actual actor receipt-admission worker, then hold its exact write claim.
+async fn hold_waiting_append(
+    actor: &mut AsyncRuntimeSessionActor,
+) -> (
+    crate::storage::transcript::AgentTranscriptStore,
+    std::path::PathBuf,
+    crate::storage::transcript::TranscriptAppendBatch,
+    u64,
+) {
+    let mut candidates = actor.service.claim_bookkeeping_candidates();
+    assert_eq!(candidates.len(), 1);
+    let work = candidates.pop().unwrap();
+    let history = work.execute();
+    assert!(history.is_ok(), "{history:?}");
+    Box::pin(
+        actor.handle_request(AsyncRuntimeRequest::CompleteBookkeepingCandidate { work, history }),
+    )
+    .await;
+    assert!(
+        actor
+            .service
+            .waiting_loop_continuation_for_pane("%1")
+            .is_some()
+    );
+    assert!(
+        actor
+            .service
+            .take_pending_agent_history_preparations()
+            .is_empty()
+    );
+    let completion = super::completion_source_handoff::next_completion(actor).await;
+    assert!(
+        matches!(&completion, AsyncRuntimeRequest::CompleteTranscriptReceipts { results, .. }
+        if !results.is_empty() && results.iter().all(|(_, result)| result.is_ok()))
+    );
+    Box::pin(actor.handle_request(completion)).await;
+    let mut held = None;
+    let mut others = Vec::new();
+    for (effect, claim) in actor.drain_persistence_claims(128).unwrap() {
+        match effect {
+            RuntimeSideEffect::PersistTranscriptEntries { store, path, batch } => {
+                assert!(held.replace((store, path, batch, claim.unwrap())).is_none());
+            }
+            effect => {
+                assert!(claim.is_none());
+                others.push(effect);
+            }
+        }
+    }
+    actor.admit_committed_side_effects(others).unwrap();
+    held.expect("checked terminal append did not retain an actor claim")
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn loop_reuse_resumes_once_after_exact_terminal_append() {
+    let (_fixture, service, primary, predecessor) = waiting_for_bookkeeping();
+    let (_, mut actor) = AsyncRuntimeSessionActor::new(service, Default::default()).unwrap();
+    let (store, path, batch, claim_id) = hold_waiting_append(&mut actor).await;
+    assert!(actor.service.check_agent_history_admission("%1").is_err());
+    // Unrelated control remains usable while no next-iteration turn exists.
+    actor
+        .service
+        .execute_agent_shell_command(&primary, "/directive still responsive")
+        .unwrap();
+    actor.dispatch_pending_agent_prompt_history();
+    assert_eq!(actor.service.agent_turn_ledger().turns().len(), 1);
+    // An actual partial commit must not release the wait or replay the turn.
+    store.fail_transcript_append_after_first();
+    let failed_store = store.clone();
+    let failed_batch = batch.clone();
+    let failure = tokio::task::spawn_blocking(move || {
+        failed_store.commit_accounted_transcript_batch(&failed_batch, claim_id)
+    })
+    .await
+    .unwrap()
+    .unwrap_err();
+    assert_eq!(failure.kind(), crate::MezErrorKind::Io);
+    actor
+        .apply_runtime_event(RuntimeEvent::Persistence(
+            PersistenceEvent::TranscriptClaim {
+                claim_id,
+                outcome: Box::new(PersistenceEvent::TranscriptFailed {
+                    conversation_id: batch.conversation_id().into(),
+                    first_sequence: batch.first_sequence(),
+                    batch: batch.clone(),
+                    path: path.clone(),
+                    error: failure.to_string(),
+                    retryable: true,
+                }),
+            },
+        ))
+        .await
+        .unwrap();
+    assert!(
+        actor
+            .service
+            .waiting_loop_continuation_for_pane("%1")
+            .is_some()
+    );
+    assert_eq!(actor.service.agent_turn_ledger().turns().len(), 1);
+    let worker_store = store.clone();
+    let worker_batch = batch.clone();
+    let bytes = tokio::task::spawn_blocking(move || {
+        worker_store.commit_accounted_transcript_batch(&worker_batch, claim_id)
+    })
+    .await
+    .unwrap()
+    .unwrap();
+    let event = PersistenceEvent::TranscriptClaim {
+        claim_id,
+        outcome: Box::new(PersistenceEvent::TranscriptCompleted {
+            conversation_id: batch.conversation_id().into(),
+            first_sequence: batch.first_sequence(),
+            batch: batch.clone(),
+            path: path.clone(),
+            bytes,
+        }),
+    };
+    actor
+        .apply_runtime_event(RuntimeEvent::Persistence(event.clone()))
+        .await
+        .unwrap();
+    actor
+        .apply_runtime_event(RuntimeEvent::Persistence(event))
+        .await
+        .unwrap();
+    let completion = super::completion_source_handoff::next_completion(&mut actor).await;
+    let (work, result) = match completion {
+        AsyncRuntimeRequest::CompleteLoopContinuationSource { work, result } => (work, result),
+        _ => panic!("terminal append did not wake the exact loop source"),
+    };
+    assert!(result.is_ok(), "{result:?}");
+    Box::pin(
+        actor.handle_request(AsyncRuntimeRequest::CompleteLoopContinuationSource {
+            work: work.clone(),
+            result,
+        }),
+    )
+    .await;
+    // A duplicate source callback cannot mint a third turn or replay effects.
+    Box::pin(
+        actor.handle_request(AsyncRuntimeRequest::CompleteLoopContinuationSource {
+            work,
+            result: Box::new(Err(crate::MezError::invalid_state("duplicate"))),
+        }),
+    )
+    .await;
+    assert_eq!(actor.service.agent_turn_ledger().turns().len(), 2);
+    let saved = store.inspect(batch.conversation_id()).unwrap();
+    for row in batch.entries() {
+        assert_eq!(
+            saved
+                .iter()
+                .filter(|saved| saved.sequence == row.sequence)
+                .count(),
+            1
+        );
+    }
+    let next = actor
+        .service
+        .agent_shell_store()
+        .get("%1")
+        .unwrap()
+        .running_turn_id
+        .as_ref()
+        .unwrap();
+    assert_eq!(actor.service.agent_loop_turn(next).unwrap().iteration, 2);
+    assert_eq!(
+        actor
+            .service
+            .agent_turn_ledger()
+            .turn(&predecessor)
+            .unwrap()
+            .state,
+        mez_agent::AgentTurnState::Completed
+    );
+    assert!(
+        actor
+            .service
+            .waiting_loop_continuation_for_pane("%1")
+            .is_none()
+    );
+    actor
+        .service
+        .execute_agent_shell_command(&primary, "/stop")
+        .unwrap();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn loop_reuse_wait_rejects_replaced_ownership() {
+    for change in [
+        "stop",
+        "config",
+        "binding",
+        "controller",
+        "process",
+        "shutdown",
+    ] {
+        let (_fixture, mut service, primary, predecessor) = waiting_for_bookkeeping();
+        match change {
+            "stop" => {
+                service
+                    .execute_agent_shell_command(&primary, "/stop")
+                    .unwrap();
+            }
+            "config" => {
+                service.replace_config_layers(Vec::new()).unwrap();
+            }
+            "binding" => {
+                service
+                    .agent_shell_store_mut()
+                    .bind_conversation("%1", "replacement-wait-conversation", 0)
+                    .unwrap();
+            }
+            "controller" => {
+                let id = service.agent_loop_state("%1").unwrap().loop_id.clone();
+                service.agent_loop_state_mut_by_id(&id).unwrap().iteration += 1;
+            }
+            "process" => {
+                service.start_initial_pane_process(Some("cat")).unwrap();
+            }
+            "shutdown" => {
+                service
+                    .apply_supervisor_shutdown_event("waiting loop test", false)
+                    .unwrap();
+            }
+            _ => unreachable!(),
+        }
+        let resumed = service.resume_waiting_agent_loop_continuations();
+        if change == "process" {
+            service.terminate_all_pane_processes().unwrap();
+        }
+        resumed.unwrap();
+        assert!(
+            service.take_pending_agent_history_preparations().is_empty(),
+            "{change}"
+        );
+        assert_eq!(service.agent_turn_ledger().turns().len(), 1, "{change}");
+        assert_eq!(
+            service
+                .agent_turn_ledger()
+                .turn(&predecessor)
+                .unwrap()
+                .state,
+            mez_agent::AgentTurnState::Completed
+        );
+        if change == "binding" {
+            assert_eq!(
+                service.agent_shell_store().get("%1").unwrap().session_id,
+                "replacement-wait-conversation"
+            );
+        }
+        if change == "controller" {
+            assert_eq!(service.agent_loop_state("%1").unwrap().iteration, 3);
+        }
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn loop_reuse_wait_reports_failed_archive_without_retry() {
+    let (_fixture, service, primary, predecessor) = waiting_for_bookkeeping();
+    let (_, mut actor) = AsyncRuntimeSessionActor::new(service, Default::default()).unwrap();
+    let work = actor.service.claim_bookkeeping_candidates().pop().unwrap();
+    Box::pin(
+        actor.handle_request(AsyncRuntimeRequest::CompleteBookkeepingCandidate {
+            work,
+            history: Err(crate::MezError::invalid_state(
+                "original archive unavailable",
+            )),
+        }),
+    )
+    .await;
+    assert!(actor.service.agent_loop_state("%1").is_none());
+    assert!(actor.service.check_agent_history_admission("%1").is_err());
+    assert!(actor.service.claim_bookkeeping_candidates().is_empty());
+    actor.dispatch_pending_agent_prompt_history();
+    assert_eq!(actor.service.agent_turn_ledger().turns().len(), 1);
+    assert_eq!(
+        actor
+            .service
+            .agent_turn_ledger()
+            .turn(&predecessor)
+            .unwrap()
+            .state,
+        mez_agent::AgentTurnState::Completed
+    );
+    let screen = actor
+        .service
+        .pane_screen("%1")
+        .unwrap()
+        .normal_content_lines()
+        .join("\n");
+    assert!(screen.contains("stopped after iteration 1"), "{screen}");
+    assert!(screen.contains("original archive unavailable"), "{screen}");
+    actor
+        .service
+        .execute_agent_shell_command(&primary, "/directive unaffected control")
+        .unwrap();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn loop_reuse_wait_reports_exhausted_append_without_replay() {
+    let (_fixture, service, _, predecessor) = waiting_for_bookkeeping();
+    let (_, mut actor) = AsyncRuntimeSessionActor::new(service, Default::default()).unwrap();
+    let (_, path, batch, claim_id) = hold_waiting_append(&mut actor).await;
+    // Retryable/uncertain effects must remain fenced, not restart the iteration.
+    for retryable in [true, false] {
+        actor
+            .apply_runtime_event(RuntimeEvent::Persistence(
+                PersistenceEvent::TranscriptClaim {
+                    claim_id,
+                    outcome: Box::new(PersistenceEvent::TranscriptFailed {
+                        conversation_id: batch.conversation_id().into(),
+                        first_sequence: batch.first_sequence(),
+                        batch: batch.clone(),
+                        path: path.clone(),
+                        error: "injected physical append failure".into(),
+                        retryable,
+                    }),
+                },
+            ))
+            .await
+            .unwrap();
+        assert_eq!(actor.service.agent_loop_state("%1").is_some(), retryable);
+        assert!(actor.service.check_agent_history_admission("%1").is_err());
+        assert_eq!(actor.service.agent_turn_ledger().turns().len(), 1);
+    }
+    assert_eq!(
+        actor
+            .service
+            .agent_turn_ledger()
+            .turn(&predecessor)
+            .unwrap()
+            .state,
+        mez_agent::AgentTurnState::Completed
+    );
+}
+
 /// The actual actor's existing history drain starts the blocking source worker.
 /// The physical flock excludes that read while actor control remains usable;
 /// release admits exactly the next controller iteration without HTTP/actions.

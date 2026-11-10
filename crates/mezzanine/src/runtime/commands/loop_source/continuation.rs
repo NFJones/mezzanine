@@ -12,7 +12,8 @@ impl RuntimeSessionService {
         &mut self,
         continuation: &RuntimeAgentLoopContinuation,
         predecessor: &str,
-    ) -> Result<()> {
+        waiting: Option<LoopSourceWork>,
+    ) -> Result<Option<LoopSourceWork>> {
         let state = self
             .agent_loop_state_by_id(&continuation.loop_id)
             .filter(|state| {
@@ -39,6 +40,42 @@ impl RuntimeSessionService {
                 "loop predecessor has not released its completed turn",
             ));
         }
+        let waiting = match waiting {
+            Some(waiting) => waiting,
+            None => self.capture_loop_history_work(
+                &continuation.pane_id,
+                &state.original_prompt,
+                state.mode,
+                None,
+                Some(predecessor),
+            )?,
+        };
+        self.validate_loop_source_binding(&waiting, true)?;
+        for conversation in &waiting.inner.admission_conversations {
+            if let Some(error) = self.persistence.bookkeeping_failure(conversation) {
+                return Err(error);
+            }
+        }
+        // Known local failures above still settle under admission inhibition.
+        // Only a healthy wait may reach new worker/read/turn admission below.
+        if self.ensure_completion_admission_open().is_err()
+            || self.completion_finalization_holds_new_work()
+        {
+            return Ok(Some(waiting));
+        }
+        if waiting
+            .inner
+            .admission_conversations
+            .iter()
+            .any(|conversation| {
+                self.persistence.bookkeeping_pending(conversation)
+                    || self.canonical_message_receipt_pending_for_conversation(conversation)
+            })
+        {
+            return Ok(Some(waiting));
+        }
+        // The waiting snapshot pins ownership, never the read frontier. Capture
+        // settled chronology only after all original conversation fences clear.
         let permit = self.reserve_agent_source_preparation()?;
         let work = self.capture_loop_history_work(
             &continuation.pane_id,
@@ -57,7 +94,7 @@ impl RuntimeSessionService {
         self.presentation.push_pending_agent_prompt_history(
             crate::runtime::RuntimeAgentHistoryPreparationDispatch::LoopContinuation(work),
         );
-        Ok(())
+        Ok(None)
     }
 
     /// Claims the exact retained allocation. A rejected source fails only the
@@ -175,6 +212,15 @@ impl RuntimeSessionService {
     /// Cancels admission immediately; worker clones retain physical capacity.
     /// Initial source preparation has no controller to terminate.
     pub(crate) fn cancel_pending_loop_source(&mut self, pane: &str) -> Result<()> {
+        if let Some(predecessor) = self.waiting_loop_continuation_for_pane(pane)
+            && let Some(pending) = self.take_agent_loop_continuation(&predecessor)
+            && let Some(source) = pending.source
+        {
+            self.fail_current_loop_continuation_source(
+                &source,
+                MezError::conflict("loop source preparation cancelled"),
+            )?;
+        }
         let work = self.agent.pending_loop_source_work(pane);
         self.agent.cancel_agent_command(pane);
         if let Some(work) = work {
@@ -184,6 +230,15 @@ impl RuntimeSessionService {
             )?;
         }
         Ok(())
+    }
+
+    /// Both pre-read waits and actual reader failures may retire only their
+    /// captured controller, and never an independently installed work turn.
+    pub(crate) fn loop_continuation_source_is_current(&self, work: &LoopSourceWork) -> bool {
+        work.inner.stale.as_ref().is_some_and(|original| {
+            self.agent_loop_state_by_id(&original.loop_id) == Some(original)
+                && !self.pane_has_active_agent_loop_turn(work.pane())
+        })
     }
 
     fn fail_current_loop_continuation_source(
@@ -197,8 +252,7 @@ impl RuntimeSessionService {
         let Some(original) = &work.inner.stale else {
             return Ok(());
         };
-        if self.agent_loop_state_by_id(&original.loop_id) != Some(original)
-            || self.pane_has_active_agent_loop_turn(work.pane())
+        if !self.loop_continuation_source_is_current(work)
             || matches!(
                 self.lifecycle_state(),
                 crate::runtime::RuntimeLifecycleState::Stopping

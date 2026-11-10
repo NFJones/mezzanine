@@ -456,7 +456,7 @@ pub(crate) struct RuntimeAgentComponent {
     /// cannot schedule the same iteration twice, and so the transition runs
     /// only for the exact turn whose shell completion released the pane's
     /// running-turn slot.
-    agent_loop_continuations: BTreeMap<String, RuntimeAgentLoopContinuation>,
+    agent_loop_continuations: BTreeMap<String, super::agent_state::RuntimeDeferredLoopContinuation>,
     /// Per-signature correction retry limit for failed model actions.
     agent_action_failure_retry_limit: usize,
     /// Total wall-clock budget snapshotted when each new agent turn is created.
@@ -4831,7 +4831,7 @@ impl RuntimeSessionService {
             .retain(|_, loop_turn| loop_turn.loop_id != loop_id);
         self.agent
             .agent_loop_continuations
-            .retain(|_, continuation| continuation.loop_id != loop_id);
+            .retain(|_, pending| pending.continuation.loop_id != loop_id);
         Some(state)
     }
 
@@ -4873,7 +4873,7 @@ impl RuntimeSessionService {
             .retain(|_, loop_turn| loop_turn.pane_id != pane_id);
         self.agent
             .agent_loop_continuations
-            .retain(|_, continuation| continuation.pane_id != pane_id);
+            .retain(|_, pending| pending.continuation.pane_id != pane_id);
     }
 
     /// Records one loop continuation awaiting its predecessor's settlement.
@@ -4887,17 +4887,30 @@ impl RuntimeSessionService {
         previous_turn_id: &str,
         continuation: RuntimeAgentLoopContinuation,
     ) {
-        self.agent
-            .agent_loop_continuations
-            .insert(previous_turn_id.to_string(), continuation);
+        self.agent.agent_loop_continuations.insert(
+            previous_turn_id.to_string(),
+            super::agent_state::RuntimeDeferredLoopContinuation {
+                continuation,
+                source: None,
+            },
+        );
     }
 
     /// Takes the deferred loop continuation recorded for one settled turn.
     pub(crate) fn take_agent_loop_continuation(
         &mut self,
         previous_turn_id: &str,
-    ) -> Option<RuntimeAgentLoopContinuation> {
+    ) -> Option<super::agent_state::RuntimeDeferredLoopContinuation> {
         self.agent.agent_loop_continuations.remove(previous_turn_id)
+    }
+
+    /// Finds only a pre-read history wait, never a still-completing shell slot.
+    pub(crate) fn waiting_loop_continuation_for_pane(&self, pane: &str) -> Option<String> {
+        self.agent
+            .agent_loop_continuations
+            .iter()
+            .find(|(_, pending)| pending.continuation.pane_id == pane && pending.source.is_some())
+            .map(|(predecessor, _)| predecessor.clone())
     }
 
     /// Mode captured by the next compaction admission; reload does not edit history.

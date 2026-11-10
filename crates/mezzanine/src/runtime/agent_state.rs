@@ -641,6 +641,15 @@ pub struct RuntimeAgentLoopContinuation {
     pub iteration: usize,
 }
 
+/// Existing continuation custody while its original conversation settles.
+/// The source pins ownership only: it has no permit and never executes a read.
+/// Read inputs are recaptured after settlement, under the same immutable fences.
+#[derive(Debug, Clone)]
+pub(crate) struct RuntimeDeferredLoopContinuation {
+    pub(crate) continuation: RuntimeAgentLoopContinuation,
+    pub(crate) source: Option<crate::runtime::commands::LoopSourceWork>,
+}
+
 /// Result of consuming one terminal loop-owned work turn.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RuntimeAgentLoopSettlement {
