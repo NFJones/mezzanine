@@ -19,6 +19,19 @@ async fn runtime_native_persistent_bridge_does_not_offer_parent_provider() {
         ));
         fs::DirBuilder::new().mode(0o700).create(&root).unwrap();
         let mut service = test_runtime_service();
+        // Claim preparation uses an explicitly offline configured provider.
+        // This fixture never executes its HTTP transport or the child's task.
+        service.replace_config_layers(vec![ConfigLayer {
+            name: "native-bridge-claim".into(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[agents]\nrouting=false\ndefault_provider=\"runtime-batch\"\ndefault_model_profile=\"default\"\nshell_mode=\"native\"\n[providers.runtime-batch]\nkind=\"openai-compatible\"\nbase_url=\"http://127.0.0.1:9/v1\"\nmodels=[\"test\"]\ndefault_model=\"test\"\n[model_profiles.default]\nprovider=\"runtime-batch\"\nmodel=\"test\"\n[permissions]\nsandbox=\"policy-only\"\n".into(),
+        }]).unwrap();
+        service.set_auth_store(crate::security::auth::AuthStore::new(
+            crate::security::auth::AuthPaths::under_config_root(&root.join("auth")),
+        ));
         service.set_agent_transcript_store(AgentTranscriptStore::new(root.join("transcripts")));
         service.set_agent_default_shell_mode(crate::runtime::config::ShellMode::Native);
         service
@@ -147,6 +160,13 @@ async fn runtime_native_persistent_bridge_does_not_offer_parent_provider() {
             .unwrap();
             assert_eq!(writer.failed, 0);
             let pending_after_completion = handle.pending_agent_provider_tasks().await.unwrap();
+            let continuation = handle
+                .claim_configured_agent_provider_task(agent.clone(), parent.turn_id.clone())
+                .await
+                .map(|dispatch| dispatch.map(|dispatch| dispatch.context.into_agent_context()));
+            let repeated_claim = handle
+                .claim_configured_agent_provider_task(agent, parent.turn_id.clone())
+                .await;
             handle.shutdown().await.unwrap();
             (
                 claim,
@@ -154,15 +174,22 @@ async fn runtime_native_persistent_bridge_does_not_offer_parent_provider() {
                 duplicate,
                 next_native,
                 pending_after_completion,
+                continuation,
+                repeated_claim,
             )
         };
-        let ((claim, completed, duplicate, next_native, pending_after_completion), mut exit) =
-            tokio::join!(client, actor.run());
-        let original = exit
-            .service
-            .agent_turn_executions()
-            .get(&parent.turn_id)
-            .cloned();
+        let (
+            (
+                claim,
+                completed,
+                duplicate,
+                next_native,
+                pending_after_completion,
+                continuation,
+                repeated_claim,
+            ),
+            mut exit,
+        ) = tokio::join!(client, actor.run());
         exit.service.terminate_all_pane_processes().unwrap();
         drop((exit, handle));
         let effect = fs::read_to_string(root.join("effect")).unwrap();
@@ -195,9 +222,25 @@ async fn runtime_native_persistent_bridge_does_not_offer_parent_provider() {
             1,
             "actual shell completion must release one legitimate continuation"
         );
+        let context = continuation
+            .unwrap()
+            .expect("actual post-ACK claim must succeed");
         assert_eq!(
-            original.unwrap().action_results[0].status,
-            ActionStatus::Succeeded
+            context
+                .blocks()
+                .iter()
+                .filter(|block| {
+                    block.source == mez_agent::ContextSourceKind::ActionResult
+                        && block.content.contains("bridge-shell")
+                        && block.content.contains("succeeded")
+                })
+                .count(),
+            1,
+            "claimed continuation must consume the original settled shell result"
+        );
+        assert!(
+            repeated_claim.unwrap().is_none(),
+            "one continuation cannot be claimed twice"
         );
     }
 }
