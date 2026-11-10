@@ -76,7 +76,7 @@ pub fn validate_agent_prompt_required(field: &str, value: &str) -> AgentPromptRe
 pub const AGENT_PROMPT_PROFILE_NAME: &str = "default";
 
 /// Current version of the default agent prompt profile.
-pub const AGENT_PROMPT_PROFILE_VERSION: u32 = 42;
+pub const AGENT_PROMPT_PROFILE_VERSION: u32 = 43;
 
 /// Model identity used to assemble one agent system prompt.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -225,8 +225,9 @@ fn push_section(prompt: &mut String, title: &str, body: &str) {
 #[cfg(test)]
 mod tests {
     use super::{
-        AgentPromptAssetSource, AgentPromptError, AgentPromptErrorKind, AgentPromptProfile,
-        AgentPromptResult, assemble_agent_system_prompt, validate_agent_prompt_required,
+        AGENT_PROMPT_PROFILE_VERSION, AgentPromptAssetSource, AgentPromptError,
+        AgentPromptErrorKind, AgentPromptProfile, AgentPromptResult, assemble_agent_system_prompt,
+        validate_agent_prompt_required,
     };
 
     /// Synthetic prompt assets used to test deterministic assembly without
@@ -271,7 +272,9 @@ mod tests {
         )
         .unwrap();
 
-        assert!(prompt.starts_with("1. Identity\nprofile default version 42 model test-model"));
+        assert!(prompt.starts_with(&format!(
+            "1. Identity\nprofile default version {AGENT_PROMPT_PROFILE_VERSION} model test-model"
+        )));
         assert!(prompt.contains("3. Repository Instructions\nrepository contract"));
         assert!(prompt.contains("Embedded active repository instruction contents:"));
         assert!(prompt.contains("first repository rule\n\nsecond rule"));

@@ -17,7 +17,6 @@ use super::actions::{
     execute_shell_action_through_pane, persist_turn_execution_transcript,
 };
 use super::network::execute_network_action_with_transport_async;
-use super::prompt;
 use super::prompt::build_agent_system_prompt;
 use super::provider::{
     AsyncModelProvider, CHATGPT_ACCOUNT_ID_HEADER, CHATGPT_SESSION_ID_HEADER,

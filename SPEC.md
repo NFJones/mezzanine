@@ -19317,6 +19317,21 @@ explained; repeated patch batches MUST NOT require redundant announcements.
 Prompt regression checks MUST distinguish structural/content contracts from
 model-behavior evaluations; substring assertions alone do not prove efficacy.
 
+Prompt consolidation SHOULD preserve distinct decision boundaries rather than
+literal explanatory prose. General execution/batching rules belong to Autonomy,
+inspection decisions to Actions, exact patch handling to Edits, and check
+selection to Validation. Judgment owns evidence, cleanup, and recovery policy;
+Trust owns untrusted-content and peer-authority boundaries. Subagents owns
+delegation/closure and Peer Messaging owns wait/reply decisions. Concise
+cross-references MAY reinforce high-consequence distinctions without repeating
+whole procedures. Required guidance MUST remain in the assembled prompt or its
+exposed action contract; moving it to documentation alone is insufficient.
+Consolidation MUST NOT weaken required content, alter action availability, or
+truncate required guidance to meet a size target. Test-only size comparisons
+MAY detect accidental growth but MUST NOT impose a production prompt limit.
+Report instruction coverage separately from measured model behavior and compare
+complete request instruction cost, not just the length of one asset.
+
 The prompt profile MUST identify a pane-scoped Mezzanine agent and SHOULD
 express behavior as execution rules instead of broad persona prose. It MUST
 nonetheless establish the intended persona as a careful, pragmatic engineering

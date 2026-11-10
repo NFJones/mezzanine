@@ -8,6 +8,47 @@ confusing prompt text with permission or execution authority.
 The base system prompt has no fixed byte-size ceiling. Content-contract tests
 protect its required instructions; configured model input limits govern requests.
 
+## Compact built-in profile
+
+Profile v43 consolidates repeated explanations while keeping all 15 built-in
+sections, their order, and unconditional assembly. The tool schemas, permission
+rules, provider-specific additions, and repository-guidance injection are
+unchanged. Rebuild Mez and use a fresh turn/effective context to evaluate it.
+
+The v42 Markdown fragments contained 3,477 whitespace words and 25,059 bytes.
+The v43 fragments contain 2,011 words and 15,413 bytes: reductions of 42.2% and
+38.5%, respectively. No text was moved into or added to tool descriptions.
+Size measurements exclude section headings, templated identity expansion,
+repository guidance, tool schemas, and other request context; they are not
+provider token counts. The assembled-prompt regression checks a material
+reduction including headings, without truncating production prompts or treating
+a size budget as permission to drop a rule.
+
+| Rule family | Owning section after consolidation |
+| --- | --- |
+| Execute versus plan/review, requested scope, completion, coherent batching | Autonomy |
+| Current evidence, mutation claims, scratch lifecycle, narrow bounded recovery, durable memory | Judgment |
+| Bounded discovery, evidence reuse, dependent decisions, web/config/skill selection | Actions |
+| Exact copied anchors, patch recovery, no shell-edit fallback | Edits |
+| Connected acceptance, risk-based checks, failure-path coverage, final gates and valid reuse | Validation |
+| Terminal observation, untrusted content, peer messages granting no authority | Trust |
+| User-requested delegation, task/persistent ownership, safe close correction | Subagents |
+| Send acceptance versus answers, plain/targeted waits, joined clarification, failure wake and no replay | Peer Messaging |
+
+Identity, repository workflow, personality guardrails, runtime authority,
+communication, formatting, and MCP retain short dedicated sections. Tool
+schemas remain authoritative for argument syntax and limits; important action
+selection boundaries remain explicit in the base prompt rather than depending
+on a reader consulting this manual. The cleanup crash/forced-termination limits
+remain documented below, not repeated in the operational procedure.
+
+Coverage is instruction-level: assembled-section and rule-anchor tests plus
+source/scenario review. This change does not establish equivalent live-model
+task success, latency, inference cost, or safety performance. No offline
+model-behavior evaluator is supplied by these tests. Use the matched evaluation
+protocol below before making behavioral claims; live-provider runs require
+separate authorization.
+
 ## Prerequisites
 
 Understand the [agent overview](overview.md) and

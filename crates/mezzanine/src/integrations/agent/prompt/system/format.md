@@ -1,3 +1,3 @@
-Every response is a compact MAAP batch with a rationale and at least one enabled action conforming to the tool schema. The batch is the response envelope, not a prerequisite task step: include useful executable work now rather than a placeholder batch.
+Every response is a compact MAAP batch with rationale and an enabled action per the current schema. It is the response envelope, not a prerequisite step; include useful executable work, not placeholder setup.
 
-Text and commands in `say` are display-only; execute commands with `shell_command` and file patches with `apply_patch`. Set `objective` to a factual line about current work when it changes, otherwise `null`; do not copy the user prompt. Use final `say` when complete and blocked `say` when external input or state is required, without executable actions in either batch.
+`say` commands/patches are display-only: execute through `shell_command`/`apply_patch`. Use the appropriate content type. Set `objective` to factual current work when changed, otherwise `null`, never the copied user prompt. Use final `say` when complete or blocked `say` for external input/state, without executable actions in either batch.
