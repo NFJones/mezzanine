@@ -286,8 +286,78 @@ fn source_lifetime_capacity_refuses_before_sequence_and_releases_dead_nodes() {
     assert_eq!(next.sequence(), before);
     let baseline = service.storage_usage().unwrap().unwrap().metadata_bytes;
     let capture = service.capture_source_retirement_fence(&scope).unwrap();
-    assert!(service.storage_usage().unwrap().unwrap().metadata_bytes >= baseline + 4096);
+    assert_eq!(
+        service.storage_usage().unwrap().unwrap().metadata_bytes,
+        baseline
+    );
     drop(capture);
+    assert_eq!(
+        service.storage_usage().unwrap().unwrap().metadata_bytes,
+        baseline
+    );
+}
+
+/// Ordinary optional captures may fill the exact ceiling. The first retirement
+/// fence must still fit independently of worker/native/ACK progress, and must
+/// retain its exclusive allowance until its actual final owner drops it.
+#[test]
+fn source_retirement_fence_progress_at_exact_metadata_ceiling() {
+    let (mut service, scope, sender, native) = scene();
+    let ticket = prepare(&mut service, &sender, &native, "cancelled-gap");
+    let sequence = ticket.sequence();
+    service.cancel_acceptance(&ticket).unwrap();
+    let policy = service.storage_custody.as_ref().unwrap();
+    let baseline = service.storage_metadata_base_usage().unwrap();
+    let ceiling = policy.limits.metadata_bytes;
+    let optional = checkpoint::reserve_checkpoint(
+        policy.checkpoint_bytes.clone(),
+        ceiling - baseline,
+        baseline,
+        ceiling,
+    )
+    .unwrap();
+    assert_eq!(
+        service.storage_usage().unwrap().unwrap().metadata_bytes,
+        ceiling
+    );
+    let fence = Arc::new(service.capture_source_retirement_fence(&scope).unwrap());
+    assert!(fence.has_no_live_source(sequence));
+    assert_eq!(
+        service.storage_usage().unwrap().unwrap().metadata_bytes,
+        ceiling
+    );
+    assert!(
+        matches!(service.capture_source_retirement_fence(&scope), Err(error) if error.kind() == MessageErrorKind::Capacity)
+    );
+    // A fence cannot spend these other independent progress allowances.
+    let worker = service
+        .reserve_storage_worker_metadata(storage_policy::WORKER_METADATA_QUANTUM)
+        .unwrap();
+    let native_lease = checkpoint::reserve_native_input_metadata(
+        policy.checkpoint_bytes.clone(),
+        policy.native_input_metadata_loan.clone(),
+        storage_policy::NATIVE_INPUT_METADATA_QUANTUM,
+        baseline,
+        ceiling,
+    )
+    .unwrap();
+    let ack = service
+        .reserve_storage_acknowledgement_metadata(512 * 1024)
+        .unwrap();
+    assert_eq!(
+        service.storage_usage().unwrap().unwrap().metadata_bytes,
+        ceiling
+    );
+    let final_owner = fence.clone();
+    drop(fence);
+    assert!(service.capture_source_retirement_fence(&scope).is_err());
+    drop(final_owner);
+    let again = service.capture_source_retirement_fence(&scope).unwrap();
+    assert!(again.has_no_live_source(sequence));
+    assert!(!again.has_no_live_source(sequence + 1));
+    assert!(again.belongs_to(&scope));
+    assert!(service.source_retirement_fence_is_original(&again));
+    drop((again, worker, native_lease, ack, optional));
     assert_eq!(
         service.storage_usage().unwrap().unwrap().metadata_bytes,
         baseline

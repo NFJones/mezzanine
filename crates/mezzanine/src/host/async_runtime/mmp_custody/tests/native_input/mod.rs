@@ -345,6 +345,12 @@ async fn native_input_optional_metadata_pressure_preserves_canonical_and_ack_pro
         }
     }
     assert!(!captures.is_empty());
+    // Absence inspection must not consume canonical-worker, native-anchor or
+    // ACK progress headroom, even while optional snapshots remain retained.
+    let fence = service
+        .capture_source_retirement_fence(root.storage_scope())
+        .unwrap();
+    assert!(!fence.has_no_live_source(sequence));
     let anchor = service
         .capture_native_input_anchor(&target.agent_id, sequence)
         .unwrap();
@@ -387,6 +393,8 @@ async fn native_input_optional_metadata_pressure_preserves_canonical_and_ack_pro
             <= 8 * 1024 * 1024
     );
     assert_eq!(scene.canonical_count(), 1);
+    assert!(scene.service.source_retirement_fence_is_original(&fence));
+    assert!(!fence.has_no_live_source(sequence));
     drop(captures);
 }
 
@@ -440,12 +448,30 @@ async fn native_input_source_retirement_waits_for_real_proof_after_replay_evicti
         target: _,
     } = scene;
     drop(anchor);
+    let mut captures = Vec::new();
+    loop {
+        match service.prepare_storage_snapshot(root.storage_scope()) {
+            Ok(capture) => {
+                assert!(captures.len() < 256);
+                captures.push(capture);
+            }
+            Err(error) => {
+                assert_eq!(
+                    error.kind(),
+                    mez_agent::messaging::MessageErrorKind::Capacity
+                );
+                break;
+            }
+        }
+    }
+    assert!(!captures.is_empty());
     let before = service
         .capture_source_retirement_fence(root.storage_scope())
         .unwrap();
     assert!(!before.has_no_live_source(sequence));
     drop(proof);
     assert!(!before.has_no_live_source(sequence));
+    drop(before);
     let disk = fixture.disk();
     let after = service
         .capture_source_retirement_fence(root.storage_scope())
@@ -461,6 +487,7 @@ async fn native_input_source_retirement_waits_for_real_proof_after_replay_evicti
         disk,
         "lifetime evidence never deletes stored rows"
     );
+    assert!(service.storage_usage().unwrap().unwrap().metadata_bytes <= 8 * 1024 * 1024);
     assert_eq!(root.observe().await.unwrap(), CustodyWorkerStatus::Idle);
 }
 

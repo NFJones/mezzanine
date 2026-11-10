@@ -351,7 +351,14 @@ charges 256 logical metadata bytes per entry within the existing ceiling; dead
 entries release their index nodes. A runtime/root-bound retirement fence records
 then-live exclusions within a frozen allocator range. It proves neither an
 accepted occurrence nor durable settlement (a cancelled sequence can be a gap),
-and grants no disk deletion authority. Envelope-only delivery pins still charge
+and grants no disk deletion authority. Its first actual capture has a separate
+164,096-byte precharged allowance (4,096 bytes plus 16 bytes per possible live
+source), independent of worker, native and ACK allowances. Optional captures
+cannot spend it; a concurrent fence pays its full ordinary charge. The final
+actual owner returns it. This reserve reduces ordinary admission room within
+the same 8 MiB ceiling and permits absence inspection under optional metadata
+pressure, not a guarantee of complete reclamation progress.
+Envelope-only delivery pins still charge
 the payload cache independently. Physical reclamation, dependency closure and
 crash-recoverable cleanup remain unfinished; this evidence does not enable them
 or default durable activation.

@@ -587,7 +587,7 @@ pub(super) fn reserve_checkpoint(
 }
 
 /// The actual last lease owner, not a root handle or a completed observer,
-/// returns its fixed worker/native/ACK quantum. No payload, source or I/O
+/// returns its fixed worker/native/ACK/retirement quantum. No payload, source or I/O
 /// authority lives here; ordinary captures cannot obtain these tokens.
 #[derive(Debug)]
 struct MetadataLoan(Arc<std::sync::atomic::AtomicBool>);
@@ -649,6 +649,26 @@ pub(super) fn reserve_acknowledgement_metadata(
     limit: usize,
 ) -> Result<MessageStorageSnapshotLease> {
     reserve_metadata_loan(budget, loan, bytes, base, limit, 512 * 1024)
+}
+
+/// A source-absence fence must be capturable even when optional metadata is
+/// full. Its own last owner returns this allowance, independently of worker,
+/// native proof and ACK lifetimes. A concurrent fence pays its full charge.
+pub(super) fn reserve_source_retirement_metadata(
+    budget: Arc<std::sync::atomic::AtomicUsize>,
+    loan: Arc<std::sync::atomic::AtomicBool>,
+    bytes: usize,
+    base: usize,
+    limit: usize,
+) -> Result<MessageStorageSnapshotLease> {
+    reserve_metadata_loan(
+        budget,
+        loan,
+        bytes,
+        base,
+        limit,
+        super::source_lifetimes::SOURCE_RETIREMENT_METADATA_QUANTUM,
+    )
 }
 
 /// Allocation-only transfer from one independently precharged finite pool.

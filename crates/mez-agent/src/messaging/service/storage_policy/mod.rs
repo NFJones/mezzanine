@@ -24,6 +24,7 @@ pub(super) const NATIVE_INPUT_METADATA_QUANTUM: usize = 1024 * 1024;
 /// borrowing the worker quantum never consumes either of these allowances.
 pub(super) const WORKER_HEADROOM: usize = WORKER_METADATA_QUANTUM
     + NATIVE_INPUT_METADATA_QUANTUM
+    + super::source_lifetimes::SOURCE_RETIREMENT_METADATA_QUANTUM
     + 512 * 1024
     + MESSAGE_PAYLOAD_DEMAND_BYTES;
 /// Bounded actor-owned cold-read continuation metadata, including IDs/overhead.
@@ -132,6 +133,9 @@ pub(in crate::messaging) struct StorageCustody {
     pub(super) native_input_metadata_loan: Arc<std::sync::atomic::AtomicBool>,
     /// Retained ACK identities own the separate precharged encoding allowance.
     pub(super) acknowledgement_metadata_loan: Arc<std::sync::atomic::AtomicBool>,
+    /// The actual first source-absence fence retains independent inspection
+    /// space; worker scratch and optional checkpoints cannot consume it.
+    pub(super) source_retirement_metadata_loan: Arc<std::sync::atomic::AtomicBool>,
     /// Weak actual source allocations, including owners beyond canonical indexes.
     pub(super) source_lifetimes: super::source_lifetimes::SourceLifetimes,
     /// Trusted product admission barrier; never selected by saved/wire data.
@@ -243,6 +247,7 @@ impl MessageService {
             worker_metadata_loan: Arc::default(),
             native_input_metadata_loan: Arc::default(),
             acknowledgement_metadata_loan: Arc::default(),
+            source_retirement_metadata_loan: Arc::default(),
             source_lifetimes: Default::default(),
             native_continuity_required: false,
             elapsed_clock: None,

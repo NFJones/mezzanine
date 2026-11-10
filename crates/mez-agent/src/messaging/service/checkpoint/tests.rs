@@ -337,6 +337,42 @@ fn worker_metadata_loan_bounds_excess_and_last_owner() {
     assert!(reserve_worker_metadata(budget, loan, quantum, base, base).is_ok());
 }
 
+/// The independent retirement reserve must return its exclusive token after a
+/// failed excess reservation, and never bypass ordinary excess accounting.
+#[test]
+fn source_retirement_metadata_loan_rolls_back_failed_excess() {
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+    let quantum = super::super::source_lifetimes::SOURCE_RETIREMENT_METADATA_QUANTUM;
+    let budget = Arc::new(AtomicUsize::new(0));
+    let loan = Arc::new(AtomicBool::new(false));
+    let base = quantum + 100;
+    let limit = base + 20;
+    assert!(
+        reserve_source_retirement_metadata(budget.clone(), loan.clone(), quantum + 21, base, limit)
+            .is_err()
+    );
+    assert!(!loan.load(Ordering::Acquire));
+    assert_eq!(budget.load(Ordering::Acquire), 0);
+    let lease = Arc::new(
+        reserve_source_retirement_metadata(budget.clone(), loan.clone(), quantum + 20, base, limit)
+            .unwrap(),
+    );
+    assert!(loan.load(Ordering::Acquire));
+    assert_eq!(budget.load(Ordering::Acquire), 20);
+    assert!(
+        reserve_source_retirement_metadata(budget.clone(), loan.clone(), 1, base, limit).is_err()
+    );
+    let last = lease.clone();
+    drop(lease);
+    assert!(loan.load(Ordering::Acquire));
+    drop(last);
+    assert!(!loan.load(Ordering::Acquire));
+    assert_eq!(budget.load(Ordering::Acquire), 0);
+    let lease = reserve_source_retirement_metadata(budget, loan, quantum, base, base).unwrap();
+    drop(lease);
+}
+
 /// A genuine post-TTL duplicate lookup updates the retained acceptance receipt,
 /// not the immutable original. Capture must preserve that legitimate expired
 /// status even after its payload becomes cold; it must not reject historical mail

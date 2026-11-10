@@ -17240,7 +17240,14 @@ of canonical commit or permission to receive. Storage ACK identities MUST own
 the separate 512 KiB ACK allowance through their final ticket/attempt/result
 reference, including after publication; a concurrent or later retained identity
 MUST fund its full charge while the original still owns that allowance.
-The worker/native quanta, separate 512 KiB ACK allowance, 64 KiB reader allowance, cache index,
+One source-retirement fence MUST have an independent precharged allowance of
+164,096 bytes (4,096 bytes framing plus 16 bytes per possible live source).
+Optional captures, source-validation workers, native anchors and ACKs MUST NOT
+consume it. The actual final fence owner MUST return it; a concurrent fence
+MUST fund its full charge from ordinary space. This enables the first bounded
+source-absence inspection at ordinary metadata capacity, not durable settlement,
+cleanup-intent publication or physical reclamation progress by itself.
+The worker/native/retirement quanta, separate 512 KiB ACK allowance, 64 KiB reader allowance, cache index,
 live sources and all other retained allocations MUST still fit the same 8 MiB
 ceiling; reserving usable worker headroom reduces ordinary admission capacity,
 not raises the ceiling. Recovery inventory/fold indexes and registration-end

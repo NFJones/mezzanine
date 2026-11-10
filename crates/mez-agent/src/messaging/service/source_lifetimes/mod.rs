@@ -18,6 +18,11 @@ pub(super) const SOURCE_LIFETIME_METADATA: usize = 256;
 /// earlier. This is not a larger pending-message or recipient admission limit.
 const MAX_LIVE_SOURCES: usize = 10_000;
 
+/// Covers container/framing overhead and two conservative sequence projections
+/// for the entire finite registry. Reserved independently of validation scratch;
+/// optional captures cannot prevent the first absence inspection from starting.
+pub(super) const SOURCE_RETIREMENT_METADATA_QUANTUM: usize = 4096 + MAX_LIVE_SOURCES * 16;
+
 /// Runtime-only allocation coverage; no saved sequence list can populate it.
 #[derive(Debug)]
 pub(super) struct SourceLifetimes {
@@ -141,8 +146,9 @@ impl MessageService {
         // and concurrent final drops only make this capture conservative.
         let mut live_sources = Vec::new();
         drop(sources);
-        let lease = checkpoint::reserve_checkpoint(
+        let lease = checkpoint::reserve_source_retirement_metadata(
             policy.checkpoint_bytes.clone(),
+            policy.source_retirement_metadata_loan.clone(),
             bytes,
             self.storage_metadata_base_usage()?,
             policy.limits.metadata_bytes,
