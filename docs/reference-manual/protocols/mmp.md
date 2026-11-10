@@ -379,6 +379,15 @@ result retains the charged original input; candidate metadata shares the existin
 256 KiB accumulator. Unsettled slots and native journals remain blockers. This
 does not install a runtime cleanup lane, resolve native dependency closure or
 authorize an intent, deletion, rewrite or default durable activation.
+Each inspected original now includes bounded commitments to its exact validated
+source-linked journal rows and to all preserved b1/n1/o1 registration provenance.
+They hash versioned domains, source identity, binary-ordered keys/checksums and row
+counts without retaining another journal index. Pending p1/u1 preparations are
+reported separately from committed native references. The sorted closure also
+commits to its store allocation, generation and watermark. Metadata remains within
+the existing charged 256 KiB accumulator. These are descriptive preimage references,
+not physical canonical-row verification, cleanup authority or native dependency
+closure; native journals and registration history must still be preserved.
 Optional analysis now has an owned blocking-worker entrypoint on the existing
 serialized root lane. It retains capture/handle ownership across observer
 cancellation, checks the actual lower service at adoption, and permits settlement

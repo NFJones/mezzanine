@@ -403,137 +403,245 @@ async fn native_input_optional_metadata_pressure_preserves_canonical_and_ack_pro
 /// only after its last real owner exits and never removes physical history.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn native_input_source_retirement_waits_for_real_proof_after_replay_eviction() {
-    let fixture = Fixture::new(true);
-    let mut scene = Scene::new(&fixture).await;
-    let sequence = scene.anchor.sequence();
-    let sender = scene.anchor.resident_envelope().unwrap().sender.clone();
-    scene.start();
-    let proof = scene.adopt().await;
-    scene.ack(&proof).await;
-    for index in 0..16 {
-        let ticket = scene
-            .service
-            .prepare_acceptance(
-                &sender.agent_id,
-                envelope(&sender, &scene.target, &format!("later-source-{index}")),
-                MessageScope::Session,
-                100,
-                4096,
-                None,
-            )
-            .unwrap();
-        scene.root.start(&mut scene.service, &ticket, None).unwrap();
+    for guarded in [false, true] {
+        let fixture = Fixture::new(true);
+        let mut scene = if guarded {
+            Scene::guarded(&fixture).await
+        } else {
+            Scene::new(&fixture).await
+        };
+        let sequence = scene.anchor.sequence();
+        let sender = scene.anchor.resident_envelope().unwrap().sender.clone();
+        scene.start();
+        let proof = scene.adopt().await;
+        scene.ack(&proof).await;
+        for index in 0..16 {
+            let ticket = scene
+                .service
+                .prepare_acceptance(
+                    &sender.agent_id,
+                    envelope(&sender, &scene.target, &format!("later-source-{index}")),
+                    MessageScope::Session,
+                    100,
+                    4096,
+                    None,
+                )
+                .unwrap();
+            scene.root.start(&mut scene.service, &ticket, None).unwrap();
+            assert_eq!(
+                scene.root.observe().await.unwrap(),
+                CustodyWorkerStatus::AwaitingAdoption
+            );
+            scene.root.adopt(&mut scene.service, None).unwrap();
+        }
+        assert_eq!(scene.canonical_count(), 1);
         assert_eq!(
-            scene.root.observe().await.unwrap(),
-            CustodyWorkerStatus::AwaitingAdoption
+            scene
+                .service
+                .storage_usage()
+                .unwrap()
+                .unwrap()
+                .pending_messages,
+            16
         );
-        scene.root.adopt(&mut scene.service, None).unwrap();
-    }
-    assert_eq!(scene.canonical_count(), 1);
-    assert_eq!(
-        scene
-            .service
-            .storage_usage()
-            .unwrap()
-            .unwrap()
-            .pending_messages,
-        16
-    );
-    let Scene {
-        root,
-        service,
-        anchor,
-        transcript: _,
-        row: _,
-        target: _,
-    } = scene;
-    drop(anchor);
-    let mut captures = Vec::new();
-    loop {
-        match service.prepare_storage_snapshot(root.storage_scope()) {
-            Ok(capture) => {
-                assert!(captures.len() < 256);
-                captures.push(capture);
-            }
-            Err(error) => {
-                assert_eq!(
-                    error.kind(),
-                    mez_agent::messaging::MessageErrorKind::Capacity
-                );
-                break;
+        let Scene {
+            root,
+            service,
+            anchor,
+            transcript: _,
+            row: _,
+            target: _,
+        } = scene;
+        drop(anchor);
+        let mut captures = Vec::new();
+        loop {
+            match service.prepare_storage_snapshot(root.storage_scope()) {
+                Ok(capture) => {
+                    assert!(captures.len() < 256);
+                    captures.push(capture);
+                }
+                Err(error) => {
+                    assert_eq!(
+                        error.kind(),
+                        mez_agent::messaging::MessageErrorKind::Capacity
+                    );
+                    break;
+                }
             }
         }
-    }
-    assert!(!captures.is_empty());
-    let before = service
-        .capture_source_retirement_fence(root.storage_scope())
-        .unwrap();
-    assert!(!before.has_no_live_source(sequence));
-    drop(proof);
-    assert!(!before.has_no_live_source(sequence));
-    drop(before);
-    let disk = fixture.disk();
-    let after = service
-        .capture_source_retirement_fence(root.storage_scope())
-        .unwrap();
-    assert!(service.source_retirement_fence_is_original(&after));
-    assert!(after.has_no_live_source(sequence));
-    for pending in sequence + 1..=sequence + 16 {
-        assert!(!after.has_no_live_source(pending));
-    }
-    assert!(!after.has_no_live_source(sequence + 17));
-    assert_eq!(
-        fixture.disk(),
-        disk,
-        "lifetime evidence never deletes stored rows"
-    );
-    assert!(service.storage_usage().unwrap().unwrap().metadata_bytes <= 8 * 1024 * 1024);
-    assert_eq!(root.observe().await.unwrap(), CustodyWorkerStatus::Idle);
-    // Full store inspection funds an additional bounded slot accumulator; the
-    // fence-only reserve does not claim that this fits at optional capacity.
-    drop((captures, after));
-    let input = service
-        .prepare_source_retirement_inspection(root.storage_scope())
-        .unwrap();
-    assert!(service.source_retirement_inspection_is_original(&input));
-    let owner = root.0.ownership.lock().unwrap().as_ref().unwrap().clone();
-    let inspected = {
-        let mut state = root.0.state.lock().unwrap();
-        let State::Idle(opened) = &mut *state else {
-            panic!("original idle store required");
+        assert!(!captures.is_empty());
+        let before = service
+            .capture_source_retirement_fence(root.storage_scope())
+            .unwrap();
+        assert!(!before.has_no_live_source(sequence));
+        drop(proof);
+        assert!(!before.has_no_live_source(sequence));
+        drop(before);
+        let disk = fixture.disk();
+        let after = service
+            .capture_source_retirement_fence(root.storage_scope())
+            .unwrap();
+        assert!(service.source_retirement_fence_is_original(&after));
+        assert!(after.has_no_live_source(sequence));
+        for pending in sequence + 1..=sequence + 16 {
+            assert!(!after.has_no_live_source(pending));
+        }
+        assert!(!after.has_no_live_source(sequence + 17));
+        assert_eq!(
+            fixture.disk(),
+            disk,
+            "lifetime evidence never deletes stored rows"
+        );
+        assert!(service.storage_usage().unwrap().unwrap().metadata_bytes <= 8 * 1024 * 1024);
+        assert_eq!(root.observe().await.unwrap(), CustodyWorkerStatus::Idle);
+        // Full store inspection funds an additional bounded slot accumulator; the
+        // fence-only reserve does not claim that this fits at optional capacity.
+        drop((captures, after));
+        let input = service
+            .prepare_source_retirement_inspection(root.storage_scope())
+            .unwrap();
+        assert!(service.source_retirement_inspection_is_original(&input));
+        let owner = root.0.ownership.lock().unwrap().as_ref().unwrap().clone();
+        let inspected = {
+            let mut state = root.0.state.lock().unwrap();
+            let State::Idle(opened) = &mut *state else {
+                panic!("original idle store required");
+            };
+            owner
+                .bind_store(&mut opened.store)
+                .unwrap()
+                .inspect_source_retirement(&input, root.storage_scope(), sequence)
+                .unwrap()
         };
-        owner
-            .bind_store(&mut opened.store)
-            .unwrap()
-            .inspect_source_retirement(&input, root.storage_scope(), sequence)
-            .unwrap()
-    };
-    assert_eq!(inspected.unsettled_recipients, 0);
-    assert_eq!(
-        inspected.native_journal_references, 1,
-        "actual c1 must remain a dependency"
-    );
-    let mut input = std::sync::Arc::new(input);
-    let candidate = {
-        let mut state = root.0.state.lock().unwrap();
-        let State::Idle(opened) = &mut *state else {
-            panic!("original idle store required");
+        assert_eq!(inspected.unsettled_recipients, 0);
+        assert_eq!(
+            inspected.native_journal_references, 1,
+            "actual c1 must remain a dependency"
+        );
+        let mut input = std::sync::Arc::new(input);
+        let candidate = {
+            let mut state = root.0.state.lock().unwrap();
+            let State::Idle(opened) = &mut *state else {
+                panic!("original idle store required");
+            };
+            owner
+                .bind_store(&mut opened.store)
+                .unwrap()
+                .inspect_source_retirement_candidate(&mut input, root.storage_scope(), sequence)
+                .unwrap()
+                .unwrap()
         };
-        owner
-            .bind_store(&mut opened.store)
-            .unwrap()
-            .inspect_source_retirement_candidate(&mut input, root.storage_scope(), sequence)
-            .unwrap()
-            .unwrap()
-    };
-    assert_eq!(candidate.sources().len(), 1);
-    assert_eq!(candidate.sources()[0].native_journal_references, 1);
-    assert_eq!(candidate.sources()[0].unsettled_recipients, 0);
-    assert_eq!(
-        fixture.disk(),
-        disk,
-        "inspection preserves canonical/source evidence"
-    );
+        assert_eq!(candidate.sources().len(), 1);
+        assert_eq!(candidate.sources()[0].native_journal_references, 1);
+        assert_eq!(candidate.sources()[0].pending_native_journal_references, 0);
+        assert_eq!(
+            candidate.sources()[0].dependencies.records,
+            2,
+            "actual c1 plus original ACK are committed dependencies"
+        );
+        assert_eq!(
+            candidate.sources()[0].preserved_registrations.records,
+            1 + u64::from(guarded),
+            "preserve actual n1 and guarded b1 without inventing legacy provenance"
+        );
+        assert_ne!(candidate.sources()[0].dependencies.sha256, [0; 32]);
+        assert_ne!(candidate.commitment(), [0; 32]);
+        {
+            use sha2::{Digest, Sha256};
+            let source = &candidate.sources()[0];
+            let connection = fixture.connection();
+            let mut statement = connection.prepare("SELECT key,value,digest FROM records WHERE key LIKE 'n1:%' OR key LIKE 'b1:%' OR key LIKE 'o1:%' ORDER BY key COLLATE BINARY").unwrap();
+            let rows = statement
+                .query_map([], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, Vec<u8>>(1)?,
+                        row.get::<_, Vec<u8>>(2)?,
+                    ))
+                })
+                .unwrap();
+            let mut hash = Sha256::new();
+            hash.update(b"mezzanine-mmp-retirement-registrations-v1\0");
+            hash.update(sequence.to_le_bytes());
+            hash.update(source.source_sha256);
+            let mut count = 0u64;
+            for row in rows {
+                let (key, value, digest) = row.unwrap();
+                assert_eq!(Sha256::digest(value).as_slice(), digest);
+                hash.update((key.len() as u64).to_le_bytes());
+                hash.update(key);
+                hash.update(digest);
+                count += 1;
+            }
+            hash.update(count.to_le_bytes());
+            assert_eq!(source.preserved_registrations.records, count);
+            assert_eq!(
+                source.preserved_registrations.sha256,
+                <[u8; 32]>::from(hash.finalize())
+            );
+        }
+        assert_eq!(candidate.sources()[0].unsettled_recipients, 0);
+        assert_eq!(
+            fixture.disk(),
+            disk,
+            "inspection preserves canonical/source evidence"
+        );
+        let committed_dependencies = candidate.sources()[0].dependencies.sha256;
+        let registrations = candidate.sources()[0].preserved_registrations.sha256;
+        drop(candidate);
+        // The fixture changes only the private journal phase label. This is not a
+        // new canonical write or a restored capability: both phases must remain
+        // explicit blockers, with distinct exact preimage commitments.
+        let connection = fixture.connection();
+        let committed_key: String = connection
+            .query_row("SELECT key FROM records WHERE key LIKE 'c1:%'", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        let pending_key = format!("p1:{}", &committed_key[3..]);
+        connection
+            .execute(
+                "UPDATE records SET key=?1 WHERE key=?2",
+                rusqlite::params![pending_key, committed_key],
+            )
+            .unwrap();
+        let pending = {
+            let mut state = root.0.state.lock().unwrap();
+            let State::Idle(opened) = &mut *state else {
+                panic!("original idle store required");
+            };
+            owner
+                .bind_store(&mut opened.store)
+                .unwrap()
+                .inspect_source_retirement_candidate(&mut input, root.storage_scope(), sequence)
+                .unwrap()
+                .unwrap()
+        };
+        assert_eq!(pending.sources()[0].native_journal_references, 1);
+        assert_eq!(pending.sources()[0].pending_native_journal_references, 1);
+        assert_eq!(pending.sources()[0].dependencies.records, 2);
+        assert_ne!(
+            pending.sources()[0].dependencies.sha256,
+            committed_dependencies
+        );
+        assert_eq!(
+            pending.sources()[0].preserved_registrations.sha256,
+            registrations
+        );
+        drop(pending);
+        connection
+            .execute(
+                "UPDATE records SET key=?1 WHERE key=?2",
+                rusqlite::params![committed_key, pending_key],
+            )
+            .unwrap();
+        drop(connection);
+        assert_eq!(fixture.disk(), disk);
+        drop((input, service, root, owner));
+        wait_until_unlocked(&fixture.path).await;
+        std::fs::remove_dir_all(&fixture.path).unwrap();
+        assert!(!fixture.path.exists());
+    }
 }
 
 /// Actual worker panic after canonical+c1 commit loses the positive reply, not

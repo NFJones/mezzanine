@@ -17290,6 +17290,17 @@ scans MAY reuse the existing decoder and 256 KiB accumulator, including candidat
 metadata. Native journals and unsettled slots remain explicit blockers; this
 bounded analysis is not a dependency-closed native cleanup plan, runtime cleanup
 lane, durable intent or physical reclamation implementation.
+Inspection MAY retain fixed-size version-one commitments to validated source-linked
+journal keys and row checksums, and separately to all conservatively preserved
+b1/n1/o1 registration rows, in binary key order within that same snapshot.
+Pending p1/u1 preparations MUST remain distinguished from committed c1/h1
+references; neither kind grants deletion or canonical-evidence disposal rights.
+The sorted closure commitment MUST include original source fingerprints and the
+exact validated store allocation/generation/watermark. Added result metadata MUST
+fit the existing charged 256 KiB accumulator; no second journal index is allowed.
+These descriptive commitments are not durable cleanup intents, live capabilities,
+physical canonical-row verification or substitutes for later ownership/preimage
+revalidation. All native journals remain blockers and registration rows preserved.
 Optional analysis MAY use the existing serialized root blocking-worker lane.
 Its charged capture and actual handle MUST survive observer cancellation; only
 an actual join permits adoption, and adoption MUST check the issuing lower

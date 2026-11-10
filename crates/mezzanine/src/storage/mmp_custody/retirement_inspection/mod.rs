@@ -17,6 +17,10 @@ use super::inventory::{CustodyInventoryEntry, CustodyJournalKind as Journal, Cus
 use super::ownership::OwnedCustodyStore;
 use super::*;
 
+mod commitment;
+pub(crate) use commitment::JournalCommitment;
+use commitment::JournalHasher;
+
 /// Fits the separately charged 256 KiB accumulator, including vector overhead.
 const MAX_SLOTS: usize = 4096;
 const SLOT_METADATA_BYTES: usize = 256 * 1024;
@@ -24,7 +28,8 @@ const SLOT_METADATA_BYTES: usize = 256 * 1024;
 const MAX_CANDIDATE_SOURCES: usize = 64;
 /// Covers source results, their small store identities and the sequence queue.
 /// This shares the existing slot accumulator lease, not additional uncharged RAM.
-const CANDIDATE_METADATA_BYTES: usize = 4096 + MAX_CANDIDATE_SOURCES * 256;
+const CANDIDATE_SOURCE_CHARGE: usize = 384;
+const CANDIDATE_METADATA_BYTES: usize = 4096 + MAX_CANDIDATE_SOURCES * CANDIDATE_SOURCE_CHARGE;
 
 #[derive(Clone, Copy, Default)]
 struct Slot {
@@ -44,6 +49,12 @@ pub(crate) struct SourceRetirementInspection {
     pub unsettled_recipients: usize,
     pub shared_acknowledgements: usize,
     pub native_journal_references: usize,
+    /// p1/u1 are unfinished canonical preparations, never settled evidence.
+    pub pending_native_journal_references: usize,
+    /// Exact k1/t1/d1/r1/s1/p1/c1/u1/h1 rows linked to this original.
+    pub dependencies: JournalCommitment,
+    /// All b1/n1/o1 rows are conservatively preserved, not selected for deletion.
+    pub preserved_registrations: JournalCommitment,
 }
 
 /// Descriptive transitive closure of shared cumulative ACK source references.
@@ -62,6 +73,31 @@ impl SourceRetirementCandidate {
     /// Borrows descriptive results without detaching them from their lease.
     pub(crate) fn sources(&self) -> &[SourceRetirementInspection] {
         &self.sources
+    }
+
+    /// Deterministic version-one commitment to the sorted closure and its exact
+    /// validated store position. This does not confer deletion authority or
+    /// replace live ownership/adoption checks. Equal member counts are not enough.
+    pub(crate) fn commitment(&self) -> [u8; 32] {
+        let mut hash = Sha256::new();
+        hash.update(b"mezzanine-mmp-retirement-candidate-v1\0");
+        if let Some(first) = self.sources.first() {
+            hash.update((first.position.store_id.len() as u64).to_le_bytes());
+            hash.update(&first.position.store_id);
+            hash.update(first.position.generation.to_le_bytes());
+            hash.update(first.position.sequence_watermark.to_le_bytes());
+            hash.update([u8::from(first.position.watermark_origin_trusted)]);
+        }
+        hash.update((self.sources.len() as u64).to_le_bytes());
+        for source in &self.sources {
+            hash.update(source.sequence.to_le_bytes());
+            hash.update(source.source_sha256);
+            hash.update(source.dependencies.records.to_le_bytes());
+            hash.update(source.dependencies.sha256);
+            hash.update(source.preserved_registrations.records.to_le_bytes());
+            hash.update(source.preserved_registrations.sha256);
+        }
+        hash.finalize().into()
     }
 
     /// Adoption checks the actual issuing lower service, not serialized labels.
@@ -232,6 +268,17 @@ fn inspect_in_snapshot(
     slots.resize(recipient_count, Slot::default());
     let mut shared_acknowledgements = 0usize;
     let mut native_journal_references = 0usize;
+    let mut pending_native_journal_references = 0usize;
+    let mut dependencies = JournalHasher::new(
+        b"mezzanine-mmp-retirement-dependencies-v1\0",
+        sequence,
+        &source_sha256,
+    );
+    let mut preserved_registrations = JournalHasher::new(
+        b"mezzanine-mmp-retirement-registrations-v1\0",
+        sequence,
+        &source_sha256,
+    );
     let mut original_seen = false;
     let mut visit = |entry: CustodyInventoryEntry<'_>| {
         match entry {
@@ -250,6 +297,7 @@ fn inspect_in_snapshot(
                     let ack =
                         store.read_stored_acknowledgement_in_snapshot(transaction, key, limits)?;
                     if ack.decisions.iter().any(|d| d.sequence == sequence) {
+                        dependencies.observe(transaction, key)?;
                         for decision in &ack.decisions {
                             dependency(decision.sequence)?;
                         }
@@ -267,6 +315,7 @@ fn inspect_in_snapshot(
                 Journal::Expiry => {
                     let frame = store.read_stored_expiry_in_snapshot(transaction, key, limits)?;
                     if frame.sequence == sequence {
+                        dependencies.observe(transaction, key)?;
                         for index in frame.binding_indices {
                             terminal(
                                 slot(&mut slots, index)?,
@@ -280,6 +329,7 @@ fn inspect_in_snapshot(
                     let frame =
                         store.read_stored_retirement_in_snapshot(transaction, key, limits)?;
                     if frame.sequence == sequence {
+                        dependencies.observe(transaction, key)?;
                         terminal(
                             slot(&mut slots, frame.binding_index)?,
                             DeliveryTerminalReason::RecipientRetired,
@@ -290,6 +340,7 @@ fn inspect_in_snapshot(
                 Journal::Release => {
                     let frame = store.read_stored_release_in_snapshot(transaction, key, limits)?;
                     if frame.sequence == sequence {
+                        dependencies.observe(transaction, key)?;
                         for (index, first, reason) in frame.entries {
                             release(slot(&mut slots, index)?, reason, first)?;
                         }
@@ -299,6 +350,7 @@ fn inspect_in_snapshot(
                     let frame =
                         store.read_stored_consumption_in_snapshot(transaction, key, limits)?;
                     if frame.sequence == sequence {
+                        dependencies.observe(transaction, key)?;
                         release(
                             slot(&mut slots, frame.binding_index)?,
                             frame.terminal.reason,
@@ -310,19 +362,27 @@ fn inspect_in_snapshot(
                     let journal = store
                         .read_native_input_in_snapshot(transaction, key, limits)?
                         .ok_or_else(unavailable)?;
-                    native_journal_references +=
-                        usize::from(journal.original_sequence() == sequence);
+                    if journal.original_sequence() == sequence {
+                        native_journal_references += 1;
+                        pending_native_journal_references += usize::from(key.starts_with("p1:"));
+                        dependencies.observe(transaction, key)?;
+                    }
                 }
                 Journal::TerminalHandoff => {
                     let journal = store
                         .read_handoff_in_snapshot(transaction, key, limits)?
                         .ok_or_else(unavailable)?;
-                    native_journal_references +=
-                        usize::from(journal.original_sequence() == sequence);
+                    if journal.original_sequence() == sequence {
+                        native_journal_references += 1;
+                        pending_native_journal_references += usize::from(key.starts_with("u1:"));
+                        dependencies.observe(transaction, key)?;
+                    }
                 }
                 // Registration provenance is deliberately preserved. This
                 // observation never proposes deletion of b1/n1/o1 records.
-                Journal::NativeContinuity | Journal::NativeLifetime | Journal::RegistrationEnd => {}
+                Journal::NativeContinuity | Journal::NativeLifetime | Journal::RegistrationEnd => {
+                    preserved_registrations.observe(transaction, key)?;
+                }
             },
         }
         Ok(())
@@ -356,6 +416,9 @@ fn inspect_in_snapshot(
         unsettled_recipients,
         shared_acknowledgements,
         native_journal_references,
+        pending_native_journal_references,
+        dependencies: dependencies.finish(),
+        preserved_registrations: preserved_registrations.finish(),
     })
 }
 

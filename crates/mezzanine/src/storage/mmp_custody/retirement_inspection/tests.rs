@@ -179,6 +179,13 @@ fn retired_source_inspection_preserves_shared_ack_and_missing_settlement() {
         assert_eq!(result.unsettled_recipients, 0);
         assert_eq!(result.shared_acknowledgements, usize::from(shared));
         assert_eq!(result.native_journal_references, 0);
+        assert_eq!(result.pending_native_journal_references, 0);
+        assert_eq!(
+            result.dependencies,
+            expected_journals(&store, first, &result.source_sha256, false)
+        );
+        assert_eq!(result.dependencies.records, 1);
+        let original_dependencies = result.dependencies.sha256;
         assert_eq!(result.position.store_id, store.store_id);
         assert_eq!(result.position.sequence_watermark, second);
         assert_ne!(result.source_sha256, [0; 32]);
@@ -211,6 +218,8 @@ fn retired_source_inspection_preserves_shared_ack_and_missing_settlement() {
             .inspect_source_retirement(&input, &scope, first)
             .unwrap();
         assert_eq!(result.unsettled_recipients, 1);
+        assert_eq!(result.dependencies.records, 0);
+        assert_ne!(result.dependencies.sha256, original_dependencies);
         let key = "a1:0000000000000001:chunk:00000000";
         store
             .connection
@@ -299,7 +308,53 @@ fn retired_source_inspection_requires_actual_terminal_release() {
         .unwrap();
     assert_eq!(result.unsettled_recipients, 0);
     assert_eq!(result.shared_acknowledgements, 0);
+    assert_eq!(result.dependencies.records, 2);
+    assert_eq!(
+        result.dependencies,
+        expected_journals(&store, sequence, &result.source_sha256, false)
+    );
+    let original_dependencies = result.dependencies.sha256;
     assert_eq!(image(&store), before);
+    // A later valid horizon changes the exact r1 preimage without changing its
+    // source, slot count or settled status. Counts alone cannot identify it.
+    let (old_key, mut bytes): (String, Vec<u8>) = store
+        .connection
+        .query_row(
+            "SELECT key,value FROM records WHERE key LIKE 'r1:%'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    bytes[40..48].copy_from_slice(&600_017u64.to_le_bytes());
+    let mut hash = Sha256::new();
+    hash.update(b"mezzanine-mmp-terminal-release-v1\0");
+    hash.update(&bytes);
+    let new_key = format!(
+        "r1:{}",
+        hash.finalize()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>()
+    );
+    store
+        .connection
+        .execute(
+            "UPDATE records SET key=?1,value=?2,digest=?3 WHERE key=?4",
+            params![new_key, bytes, Sha256::digest(&bytes).as_slice(), old_key],
+        )
+        .unwrap();
+    let changed = owner
+        .bind_store(&mut store)
+        .unwrap()
+        .inspect_source_retirement(&input, &scope, sequence)
+        .unwrap();
+    assert_eq!(changed.unsettled_recipients, 0);
+    assert_eq!(changed.dependencies.records, 2);
+    assert_ne!(changed.dependencies.sha256, original_dependencies);
+    assert_eq!(
+        changed.dependencies,
+        expected_journals(&store, sequence, &changed.source_sha256, false)
+    );
     store
         .connection
         .execute("DELETE FROM records WHERE key LIKE 'r1:%'", [])
@@ -310,6 +365,8 @@ fn retired_source_inspection_requires_actual_terminal_release() {
         .inspect_source_retirement(&input, &scope, sequence)
         .unwrap();
     assert_eq!(result.unsettled_recipients, 1);
+    assert_eq!(result.dependencies.records, 1);
+    assert_ne!(result.dependencies.sha256, original_dependencies);
 }
 
 fn candidate_mail(sender: &SenderIdentity, recipient: Recipient, id: usize) -> Envelope {
@@ -400,6 +457,16 @@ fn retired_source_candidate_follows_transitive_ack_dependencies() {
         .inspect_source_retirement_candidate(&mut input, &scope, sequences[0])
         .unwrap()
         .unwrap();
+    let closure_commitment = result.commitment();
+    assert_ne!(closure_commitment, [0; 32]);
+    assert_eq!(
+        result
+            .sources()
+            .iter()
+            .map(|s| s.dependencies.records)
+            .collect::<Vec<_>>(),
+        [1, 2, 1]
+    );
     assert_eq!(
         result
             .sources
@@ -444,6 +511,18 @@ fn retired_source_candidate_follows_transitive_ack_dependencies() {
             .prepare_source_retirement_inspection(&scope)
             .unwrap(),
     );
+    let alternate = owner
+        .bind_store(&mut store)
+        .unwrap()
+        .inspect_source_retirement_candidate(&mut input, &scope, sequences[1])
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        alternate.commitment(),
+        closure_commitment,
+        "seed order cannot change the sorted closure commitment"
+    );
+    drop(alternate);
     let weak = Arc::downgrade(&input);
     assert!(
         owner
@@ -490,7 +569,7 @@ fn retired_source_candidate_has_a_finite_dependency_quantum() {
     assert!(
         MAX_SLOTS * std::mem::size_of::<Slot>() + CANDIDATE_METADATA_BYTES <= SLOT_METADATA_BYTES
     );
-    assert!(std::mem::size_of::<SourceRetirementInspection>() + 32 < 256);
+    assert!(std::mem::size_of::<SourceRetirementInspection>() + 32 < CANDIDATE_SOURCE_CHARGE);
     for count in [MAX_CANDIDATE_SOURCES, MAX_CANDIDATE_SOURCES + 1] {
         let fixture = Fixture::new();
         let owner = RootOwnership::acquire(&fixture.0).unwrap();
@@ -549,6 +628,49 @@ fn retired_source_candidate_has_a_finite_dependency_quantum() {
             assert!(result.unwrap().is_none());
         }
         assert_eq!(image(&store), before);
+    }
+}
+
+/// Independent materialized oracle for fixtures where all selected journals
+/// concern the inspected original. Production only retains a streaming hash.
+fn expected_journals(
+    store: &MmpCustodyStore,
+    sequence: u64,
+    source: &[u8; 32],
+    registrations: bool,
+) -> JournalCommitment {
+    let domain: &[u8] = if registrations {
+        b"mezzanine-mmp-retirement-registrations-v1\0"
+    } else {
+        b"mezzanine-mmp-retirement-dependencies-v1\0"
+    };
+    let mut hash = Sha256::new();
+    hash.update(domain);
+    hash.update(sequence.to_le_bytes());
+    hash.update(source);
+    let mut count = 0u64;
+    for (key, bytes, digest) in image(store) {
+        let selected = if registrations {
+            key.starts_with("b1:") || key.starts_with("n1:") || key.starts_with("o1:")
+        } else {
+            [
+                "k1:", "t1:", "d1:", "r1:", "s1:", "p1:", "c1:", "u1:", "h1:",
+            ]
+            .iter()
+            .any(|prefix| key.starts_with(prefix))
+        };
+        if selected {
+            assert_eq!(Sha256::digest(&bytes).as_slice(), digest);
+            hash.update((key.len() as u64).to_le_bytes());
+            hash.update(key.as_bytes());
+            hash.update(digest);
+            count += 1;
+        }
+    }
+    hash.update(count.to_le_bytes());
+    JournalCommitment {
+        records: count,
+        sha256: hash.finalize().into(),
     }
 }
 
