@@ -17264,6 +17264,17 @@ deletion authority from source absence alone. Allocator gaps and envelope-only
 payload pins are distinct from original source rights; payload pins remain
 independently charged. Physical reclamation and shared-record dependency closure
 remain separate required storage qualification.
+Read-only retirement inspection MUST validate the actual original source and
+all store records in one owned SQLite snapshot without retaining a second full
+inventory/fold index. Its lower-issued input MUST retain the original fence and
+charge source decoder/scratch/framing plus a bounded 256 KiB recipient-slot
+accumulator before I/O. The accumulator still requires ordinary metadata room;
+the fence-only reserve is not a complete reclamation-progress guarantee.
+Inspection MUST distinguish positive ACKs and released terminal outcomes from
+expiry exclusions or unreleased outcomes. Shared cumulative ACK references and
+native input/handoff journals MUST remain explicit dependencies. Descriptive
+settlement counts MUST NOT grant physical deletion, canonical-evidence disposal,
+cleanup-intent publication or allocator/elapsed-history reconstruction rights.
 Admission MUST check the combined native attribution, registration namespaces,
 elapsed-clock metadata and any newly required source-only end intents against
 that same metadata ceiling before copying source bindings or reserving its

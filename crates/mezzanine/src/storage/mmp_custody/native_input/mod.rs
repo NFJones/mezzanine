@@ -42,6 +42,13 @@ pub(super) struct NativeInputJournal {
     transcript: CustodyTranscriptPlan,
 }
 
+impl NativeInputJournal {
+    /// Descriptive original reference only, not canonical retention authority.
+    pub(super) fn original_sequence(&self) -> u64 {
+        self.source.message_sequence
+    }
+}
+
 /// Immutable first preparation retained outside the actual worker through loss.
 struct Preparation {
     journal: NativeInputJournal,

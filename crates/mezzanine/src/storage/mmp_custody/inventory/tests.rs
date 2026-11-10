@@ -38,6 +38,45 @@ fn limits() -> MessageAcceptanceDecodeLimits {
     }
 }
 
+/// A private constant-space accumulator; no observation escapes a failed scan
+/// or failed transaction. The supplied baseline covers the caller's scratch.
+fn streamed_counts(store: &MmpCustodyStore) -> Result<(CustodyScanPosition, [usize; 3])> {
+    let transaction = store
+        .connection
+        .unchecked_transaction()
+        .map_err(database_error)?;
+    let mut counts = [0usize; 3];
+    let mut visit = |entry: CustodyInventoryEntry<'_>| {
+        match entry {
+            CustodyInventoryEntry::Occurrence(source) => {
+                assert!(source.sequence > 0 && source.digest != [0; 32]);
+                assert!(source.encoded_bytes > 0 && source.recipient_count > 0);
+                counts[0] += 1;
+            }
+            CustodyInventoryEntry::Aborted(sequence) => {
+                assert!(sequence > 0);
+                counts[1] += 1;
+            }
+            CustodyInventoryEntry::Journal(kind, key) => {
+                assert!(!key.is_empty());
+                if kind == CustodyJournalKind::Acknowledgement {
+                    assert!(key.starts_with("k1:"));
+                }
+                counts[2] += 1;
+            }
+        }
+        Ok(())
+    };
+    let position = store.visit_inventory_in_snapshot(
+        &transaction,
+        limits(),
+        MAX_INVENTORY_METADATA,
+        &mut visit,
+    )?;
+    store.finish_transaction(transaction)?;
+    Ok((position, counts))
+}
+
 /// Creates one ordinary envelope under an actual registered sender and target.
 fn envelope(
     sender: &mez_agent::messaging::SenderIdentity,
@@ -162,6 +201,23 @@ fn inventory_preserves_committed_originals_ack_and_cancelled_gap() {
     assert!(inventory.generation > 0);
     assert_eq!(inventory.sequence_watermark, 3);
     assert!(inventory.watermark_origin_trusted);
+    let (position, counts) = streamed_counts(&store).unwrap();
+    assert_eq!(counts, [2, 0, 1]);
+    assert_eq!(position.store_id, inventory.store_id);
+    assert_eq!(position.generation, inventory.generation);
+    assert_eq!(position.sequence_watermark, inventory.sequence_watermark);
+    assert_eq!(
+        position.watermark_origin_trusted,
+        inventory.watermark_origin_trusted
+    );
+    let transaction = store.connection.unchecked_transaction().unwrap();
+    assert!(
+        store
+            .inventory_in_snapshot_with_metadata(&transaction, limits(), MAX_INVENTORY_METADATA,)
+            .is_err(),
+        "a collected index must still fund retained references"
+    );
+    transaction.rollback().unwrap();
     assert_eq!(
         inventory
             .occurrences
@@ -653,6 +709,7 @@ fn inventory_rejects_unknown_extra_and_corrupt_rows() {
             }
         }
         assert!(store.inventory_custody(limits()).is_err(), "{corruption}");
+        assert!(streamed_counts(&store).is_err(), "streaming {corruption}");
     }
 }
 
@@ -696,10 +753,16 @@ fn inventory_uses_one_actual_same_store_snapshot() {
     let other = MmpCustodyStore::open(&other_fixture.0, "another-session").unwrap();
     let foreign = other.connection.unchecked_transaction().unwrap();
     assert!(store.inventory_in_snapshot(&foreign, limits()).is_err());
+    assert!(
+        store
+            .visit_inventory_in_snapshot(&foreign, limits(), 0, &mut |_| Ok(()))
+            .is_err()
+    );
     let mut pending = PendingScan {
         enabled: true,
         found: None,
         batch: Vec::new(),
+        visitor: None,
     };
     assert!(
         store
@@ -1064,6 +1127,7 @@ fn restart_preflight_validates_all_accepted_sources_and_acknowledgements() {
         enabled: true,
         found: None,
         batch: Vec::new(),
+        visitor: None,
     };
     let snapshot = store
         .scan_inventory(&transaction, limits(), &mut pending, 0)

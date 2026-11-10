@@ -489,6 +489,35 @@ async fn native_input_source_retirement_waits_for_real_proof_after_replay_evicti
     );
     assert!(service.storage_usage().unwrap().unwrap().metadata_bytes <= 8 * 1024 * 1024);
     assert_eq!(root.observe().await.unwrap(), CustodyWorkerStatus::Idle);
+    // Full store inspection funds an additional bounded slot accumulator; the
+    // fence-only reserve does not claim that this fits at optional capacity.
+    drop((captures, after));
+    let input = service
+        .prepare_source_retirement_inspection(root.storage_scope())
+        .unwrap();
+    assert!(service.source_retirement_inspection_is_original(&input));
+    let owner = root.0.ownership.lock().unwrap().as_ref().unwrap().clone();
+    let inspected = {
+        let mut state = root.0.state.lock().unwrap();
+        let State::Idle(opened) = &mut *state else {
+            panic!("original idle store required");
+        };
+        owner
+            .bind_store(&mut opened.store)
+            .unwrap()
+            .inspect_source_retirement(&input, root.storage_scope(), sequence)
+            .unwrap()
+    };
+    assert_eq!(inspected.unsettled_recipients, 0);
+    assert_eq!(
+        inspected.native_journal_references, 1,
+        "actual c1 must remain a dependency"
+    );
+    assert_eq!(
+        fixture.disk(),
+        disk,
+        "inspection preserves canonical/source evidence"
+    );
 }
 
 /// Actual worker panic after canonical+c1 commit loses the positive reply, not

@@ -71,6 +71,11 @@ pub(in crate::storage::mmp_custody) struct HandoffJournal {
     pub(super) transcript: CustodyTranscriptPlan,
 }
 impl HandoffJournal {
+    /// Descriptive original reference only; even h1 is not deletion authority.
+    pub(in crate::storage::mmp_custody) fn original_sequence(&self) -> u64 {
+        self.source.sequence
+    }
+
     /// Constructs a first physical plan only from an actual terminal anchor.
     pub(super) fn capture(
         anchor: &MessageTerminalHandoffAnchor,

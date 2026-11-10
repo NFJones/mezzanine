@@ -39,6 +39,7 @@ pub(crate) mod ownership;
 mod recovery;
 mod registration;
 pub(crate) mod registration_end;
+pub(crate) mod retirement_inspection;
 pub(crate) mod terminal_custody;
 pub(crate) mod terminal_handoff;
 

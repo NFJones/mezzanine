@@ -23,6 +23,11 @@ const MAX_LIVE_SOURCES: usize = 10_000;
 /// optional captures cannot prevent the first absence inspection from starting.
 pub(super) const SOURCE_RETIREMENT_METADATA_QUANTUM: usize = 4096 + MAX_LIVE_SOURCES * 16;
 
+/// One fixed recipient-slot accumulator in addition to the existing complete
+/// source decoder/scratch/framing allowance. This excess still needs ordinary
+/// room; absence inspection alone is not a full reclamation progress reserve.
+const INSPECTION_METADATA_BYTES: usize = storage_policy::WORKER_METADATA_QUANTUM + 256 * 1024;
+
 /// Runtime-only allocation coverage; no saved sequence list can populate it.
 #[derive(Debug)]
 pub(super) struct SourceLifetimes {
@@ -99,6 +104,38 @@ pub struct MessageSourceRetirementFence {
     _lease: MessageStorageSnapshotLease,
 }
 
+/// A bounded original-source inspection input, never a cleanup intent or I/O
+/// permission. The real worker must retain this input through its actual exit.
+/// Optional snapshots cannot consume the fence allowance, but the additional
+/// slot accumulator must fit ordinary space before this input can be issued.
+pub struct MessageSourceRetirementInspection {
+    fence: MessageSourceRetirementFence,
+    _scratch: MessageStorageSnapshotLease,
+}
+
+impl MessageSourceRetirementInspection {
+    /// Checks actual runtime-issued root scope, not a serialized owner label.
+    pub fn belongs_to(&self, scope: &MessageStorageScope) -> bool {
+        self.fence.belongs_to(scope)
+    }
+
+    /// Source absence is only a prerequisite to separately verified settlement.
+    pub fn has_no_live_source(&self, sequence: MessageSequence) -> bool {
+        self.fence.has_no_live_source(sequence)
+    }
+
+    /// Original admission's finite source quantum; no payload is materialized
+    /// by a metadata-only inspection even though its original length is checked.
+    pub fn decode_limits(&self) -> MessageAcceptanceDecodeLimits {
+        MessageAcceptanceDecodeLimits {
+            payload_bytes: 1024 * 1024,
+            auxiliary_bytes: 512 * 1024,
+            recipient_count: 4096,
+            recipient_bytes: 512 * 1024,
+        }
+    }
+}
+
 impl std::fmt::Debug for MessageSourceRetirementFence {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("MessageSourceRetirementFence")
@@ -127,6 +164,29 @@ impl MessageSourceRetirementFence {
 }
 
 impl MessageService {
+    /// Reserves all inspection scratch before any source/journal scan. Failure
+    /// retains no input or loan and changes no sequence, custody or offers.
+    pub fn prepare_source_retirement_inspection(
+        &self,
+        scope: &MessageStorageScope,
+    ) -> Result<MessageSourceRetirementInspection> {
+        let fence = self.capture_source_retirement_fence(scope)?;
+        let scratch = self.reserve_storage_worker_metadata(INSPECTION_METADATA_BYTES)?;
+        Ok(MessageSourceRetirementInspection {
+            fence,
+            _scratch: scratch,
+        })
+    }
+
+    /// Revalidate this exact original at work admission/adoption. A matching
+    /// saved store, scope or allocator range cannot replace the live service.
+    pub fn source_retirement_inspection_is_original(
+        &self,
+        inspection: &MessageSourceRetirementInspection,
+    ) -> bool {
+        self.source_retirement_fence_is_original(&inspection.fence)
+    }
+
     /// Captures bounded source-lifetime exclusions without reading payloads,
     /// selecting recipients, acknowledging mail or retiring native capabilities.
     /// All originals are recorded before admission/worker exposure and during

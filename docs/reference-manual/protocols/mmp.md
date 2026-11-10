@@ -363,6 +363,16 @@ the payload cache independently. Physical reclamation, dependency closure and
 crash-recoverable cleanup remain unfinished; this evidence does not enable them
 or default durable activation.
 
+Read-only original retirement inspection streams the same strict inventory
+validators in one owned store snapshot, retaining only one source's recipient
+slots rather than another full history index. Its lower-issued input charges
+source decoder/scratch/framing and a 256 KiB slot accumulator before I/O; that
+extra accumulator still needs ordinary room. It reports durable unsettled slots,
+shared cumulative ACK dependencies and native input/handoff references. Expiry
+exclusions alone do not release terminal outcomes. These observations neither
+authorize deletion nor dispose of canonical evidence, and do not implement a
+closed resumable cleanup plan or a full at-cap reclamation guarantee.
+
 Storage-policy sources preserve immutable schema2 native attribution. Guarded sources retain schema3 recipient attribution; clock-qualified sources use schema4, additionally recording the original store allocation as a descriptive elapsed domain. Each source records one original registration namespace per recipient without a reconnect credential or live end marker. Legacy sources remain unknown for this added attribution. Each source records the
 original native sender/recipient conversation and opaque incarnation (or explicit
 raw/unbound absence) in the original recipient order. The actual native shell,

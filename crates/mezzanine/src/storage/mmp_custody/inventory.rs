@@ -99,14 +99,52 @@ pub(crate) struct RestartInventory {
 }
 
 /// Internal scan mode and quarantine, retained until the transaction commits.
-struct PendingScan {
+struct PendingScan<'a> {
     /// Whether the caller requested a quarantined unresolved occurrence.
     enabled: bool,
     /// Sole unresolved projection found so far, if any.
     found: Option<PendingCustodyRef>,
     /// Bounded last-batch digest from the same store snapshot.
     batch: Vec<u8>,
+    /// Streaming scans retain no reference index. The caller owns and charges
+    /// its bounded private accumulator and all decoder scratch independently.
+    visitor: Option<&'a mut InventoryVisitor<'a>>,
 }
+
+/// One validated descriptive record, borrowed only during a private scan.
+/// A visitor must quarantine its output until the entire scan and transaction
+/// succeed. Neither an entry nor the resulting position grants cleanup rights.
+pub(super) enum CustodyInventoryEntry<'a> {
+    Occurrence(StoredOccurrenceRef),
+    Aborted(u64),
+    Journal(CustodyJournalKind, &'a str),
+}
+
+/// Exhaustive journal classification shared by collected and streaming scans.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum CustodyJournalKind {
+    Acknowledgement,
+    Expiry,
+    Retirement,
+    Release,
+    Consumption,
+    NativeContinuity,
+    NativeLifetime,
+    RegistrationEnd,
+    NativeInput,
+    TerminalHandoff,
+}
+
+/// Small descriptive position from a fully validated streaming scan. No empty
+/// reference vectors can be mistaken for evidence that the store has no mail.
+pub(super) struct CustodyScanPosition {
+    pub store_id: Vec<u8>,
+    pub generation: u64,
+    pub sequence_watermark: u64,
+    pub watermark_origin_trusted: bool,
+}
+
+type InventoryVisitor<'a> = dyn FnMut(CustodyInventoryEntry<'_>) -> Result<()> + 'a;
 
 /// One canonical occurrence namespace under the ordered store-key scan.
 struct Group {
@@ -181,6 +219,7 @@ impl MmpCustodyStore {
             enabled: true,
             found: None,
             batch: Vec::new(),
+            visitor: None,
         };
         let inventory = self.scan_inventory(transaction, limits, &mut pending, 0)?;
         Ok(RestartInventory {
@@ -211,8 +250,37 @@ impl MmpCustodyStore {
             enabled: false,
             found: None,
             batch: Vec::new(),
+            visitor: None,
         };
         self.scan_inventory(transaction, limits, &mut pending, metadata_base)
+    }
+
+    /// Validates all settled rows without building source or journal indexes.
+    /// The baseline must already charge the caller's bounded accumulator, row
+    /// framing and decoder scratch. Visitors must have no external effects;
+    /// their partial observations remain quarantined until this complete scan
+    /// and its caller-owned same-store transaction both succeed. Unresolved
+    /// stages, unknown rows and every existing integrity refusal stay errors.
+    pub(super) fn visit_inventory_in_snapshot<'a>(
+        &self,
+        transaction: &rusqlite::Transaction<'_>,
+        limits: MessageAcceptanceDecodeLimits,
+        metadata_base: usize,
+        visitor: &'a mut InventoryVisitor<'a>,
+    ) -> Result<CustodyScanPosition> {
+        let mut pending = PendingScan {
+            enabled: false,
+            found: None,
+            batch: Vec::new(),
+            visitor: Some(visitor),
+        };
+        let inventory = self.scan_inventory(transaction, limits, &mut pending, metadata_base)?;
+        Ok(CustodyScanPosition {
+            store_id: inventory.store_id,
+            generation: inventory.generation,
+            sequence_watermark: inventory.sequence_watermark,
+            watermark_origin_trusted: inventory.watermark_origin_trusted,
+        })
     }
 
     /// Performs the shared bounded scan under the caller's exact transaction.
@@ -220,7 +288,7 @@ impl MmpCustodyStore {
         &self,
         transaction: &rusqlite::Transaction<'_>,
         limits: MessageAcceptanceDecodeLimits,
-        pending: &mut PendingScan,
+        pending: &mut PendingScan<'_>,
         metadata_base: usize,
     ) -> Result<CustodyInventory> {
         let mut metadata = 0usize;
@@ -290,12 +358,14 @@ impl MmpCustodyStore {
                             )?;
                         }
                         self.read_stored_release_in_snapshot(transaction, key, limits)?;
-                        charge(&mut metadata, ACK_CHARGE)?;
-                        inventory
-                            .release_keys
-                            .try_reserve(1)
-                            .map_err(|_| invalid("release inventory capacity"))?;
-                        inventory.release_keys.push(key.to_owned());
+                        if pending.visitor.is_none() {
+                            charge(&mut metadata, ACK_CHARGE)?;
+                            inventory
+                                .release_keys
+                                .try_reserve(1)
+                                .map_err(|_| invalid("release inventory capacity"))?;
+                            inventory.release_keys.push(key.to_owned());
+                        }
                     }
                     Key::Consumption(key) => {
                         if let Some(previous) = group.take() {
@@ -309,12 +379,14 @@ impl MmpCustodyStore {
                             )?;
                         }
                         self.read_stored_consumption_in_snapshot(transaction, key, limits)?;
-                        charge(&mut metadata, ACK_CHARGE)?;
-                        inventory
-                            .consumption_keys
-                            .try_reserve(1)
-                            .map_err(|_| invalid("release inventory capacity"))?;
-                        inventory.consumption_keys.push(key.to_owned());
+                        if pending.visitor.is_none() {
+                            charge(&mut metadata, ACK_CHARGE)?;
+                            inventory
+                                .consumption_keys
+                                .try_reserve(1)
+                                .map_err(|_| invalid("release inventory capacity"))?;
+                            inventory.consumption_keys.push(key.to_owned());
+                        }
                     }
                     Key::Expiry(key) => {
                         if let Some(previous) = group.take() {
@@ -328,12 +400,14 @@ impl MmpCustodyStore {
                             )?;
                         }
                         self.read_stored_expiry_in_snapshot(transaction, key, limits)?;
-                        charge(&mut metadata, ACK_CHARGE)?;
-                        inventory
-                            .expiry_keys
-                            .try_reserve(1)
-                            .map_err(|_| invalid("expiry inventory capacity"))?;
-                        inventory.expiry_keys.push(key.to_owned());
+                        if pending.visitor.is_none() {
+                            charge(&mut metadata, ACK_CHARGE)?;
+                            inventory
+                                .expiry_keys
+                                .try_reserve(1)
+                                .map_err(|_| invalid("expiry inventory capacity"))?;
+                            inventory.expiry_keys.push(key.to_owned());
+                        }
                     }
                     Key::NativeInput(key) => {
                         if let Some(previous) = group.take() {
@@ -356,7 +430,9 @@ impl MmpCustodyStore {
                         if self.read(&other)?.is_some() {
                             return Err(invalid("native input has two journal phases"));
                         }
-                        charge(&mut metadata, ACK_CHARGE)?;
+                        if pending.visitor.is_none() {
+                            charge(&mut metadata, ACK_CHARGE)?;
+                        }
                     }
                     Key::TerminalHandoff(key) => {
                         if let Some(previous) = group.take() {
@@ -379,7 +455,9 @@ impl MmpCustodyStore {
                         if self.read(&other)?.is_some() {
                             return Err(invalid("terminal handoff has two journal phases"));
                         }
-                        charge(&mut metadata, ACK_CHARGE)?;
+                        if pending.visitor.is_none() {
+                            charge(&mut metadata, ACK_CHARGE)?;
+                        }
                     }
                     Key::Retirement(key) => {
                         if let Some(previous) = group.take() {
@@ -393,12 +471,14 @@ impl MmpCustodyStore {
                             )?;
                         }
                         self.read_stored_retirement_in_snapshot(transaction, key, limits)?;
-                        charge(&mut metadata, ACK_CHARGE)?;
-                        inventory
-                            .retirement_keys
-                            .try_reserve(1)
-                            .map_err(|_| invalid("retirement inventory allocation failed"))?;
-                        inventory.retirement_keys.push(key.to_string());
+                        if pending.visitor.is_none() {
+                            charge(&mut metadata, ACK_CHARGE)?;
+                            inventory
+                                .retirement_keys
+                                .try_reserve(1)
+                                .map_err(|_| invalid("retirement inventory allocation failed"))?;
+                            inventory.retirement_keys.push(key.to_string());
+                        }
                     }
                     Key::RegistrationEnd(key) => {
                         if let Some(previous) = group.take() {
@@ -413,12 +493,16 @@ impl MmpCustodyStore {
                         }
                         self.read_registration_end_in_snapshot(transaction, key)?
                             .ok_or_else(|| invalid("registration end record is missing"))?;
-                        charge(&mut metadata, ACK_CHARGE)?;
-                        inventory
-                            .registration_end_keys
-                            .try_reserve(1)
-                            .map_err(|_| invalid("registration end inventory allocation failed"))?;
-                        inventory.registration_end_keys.push(key.to_string());
+                        if pending.visitor.is_none() {
+                            charge(&mut metadata, ACK_CHARGE)?;
+                            inventory
+                                .registration_end_keys
+                                .try_reserve(1)
+                                .map_err(|_| {
+                                    invalid("registration end inventory allocation failed")
+                                })?;
+                            inventory.registration_end_keys.push(key.to_string());
+                        }
                     }
                     Key::NativeLifetime(key) => {
                         if let Some(previous) = group.take() {
@@ -433,12 +517,13 @@ impl MmpCustodyStore {
                         }
                         self.read_native_lifetime_in_snapshot(transaction, key)?
                             .ok_or_else(|| invalid("native lifetime record is missing"))?;
-                        charge(&mut metadata, ACK_CHARGE)?;
-                        inventory
-                            .native_lifetime_keys
-                            .try_reserve(1)
-                            .map_err(|_| invalid("native lifetime inventory allocation failed"))?;
-                        inventory.native_lifetime_keys.push(key.to_string());
+                        if pending.visitor.is_none() {
+                            charge(&mut metadata, ACK_CHARGE)?;
+                            inventory.native_lifetime_keys.try_reserve(1).map_err(|_| {
+                                invalid("native lifetime inventory allocation failed")
+                            })?;
+                            inventory.native_lifetime_keys.push(key.to_string());
+                        }
                     }
                     Key::NativeContinuity(key) => {
                         if let Some(previous) = group.take() {
@@ -453,12 +538,14 @@ impl MmpCustodyStore {
                         }
                         self.read_native_continuity_in_snapshot(transaction, key)?
                             .ok_or_else(|| invalid("native continuity record is missing"))?;
-                        charge(&mut metadata, ACK_CHARGE)?;
-                        inventory
-                            .native_continuity_keys
-                            .try_reserve(1)
-                            .map_err(|_| invalid("native inventory allocation failed"))?;
-                        inventory.native_continuity_keys.push(key.to_string());
+                        if pending.visitor.is_none() {
+                            charge(&mut metadata, ACK_CHARGE)?;
+                            inventory
+                                .native_continuity_keys
+                                .try_reserve(1)
+                                .map_err(|_| invalid("native inventory allocation failed"))?;
+                            inventory.native_continuity_keys.push(key.to_string());
+                        }
                     }
                     Key::Acknowledgement(key) => {
                         if let Some(previous) = group.take() {
@@ -475,17 +562,19 @@ impl MmpCustodyStore {
                         // before retaining a compact key, not the ACK's payloads.
                         let _ =
                             self.read_stored_acknowledgement_in_snapshot(transaction, key, limits)?;
-                        charge(&mut metadata, ACK_CHARGE)?;
-                        inventory
-                            .acknowledgement_keys
-                            .try_reserve(1)
-                            .map_err(|_| invalid("inventory allocation failed"))?;
-                        let mut owned = String::new();
-                        owned
-                            .try_reserve_exact(key.len())
-                            .map_err(|_| invalid("inventory allocation failed"))?;
-                        owned.push_str(key);
-                        inventory.acknowledgement_keys.push(owned);
+                        if pending.visitor.is_none() {
+                            charge(&mut metadata, ACK_CHARGE)?;
+                            inventory
+                                .acknowledgement_keys
+                                .try_reserve(1)
+                                .map_err(|_| invalid("inventory allocation failed"))?;
+                            let mut owned = String::new();
+                            owned
+                                .try_reserve_exact(key.len())
+                                .map_err(|_| invalid("inventory allocation failed"))?;
+                            owned.push_str(key);
+                            inventory.acknowledgement_keys.push(owned);
+                        }
                     }
                     item => {
                         let sequence = match item {
@@ -544,6 +633,11 @@ impl MmpCustodyStore {
                         }
                     }
                 }
+                if let Some(visitor) = &mut pending.visitor
+                    && let Some(kind) = journal_kind(parse_key(&key)?)
+                {
+                    visitor(CustodyInventoryEntry::Journal(kind, &key))?;
+                }
             }
         }
         if seen_rows != row_count {
@@ -571,7 +665,7 @@ impl MmpCustodyStore {
         limits: MessageAcceptanceDecodeLimits,
         metadata: &mut usize,
         inventory: &mut CustodyInventory,
-        pending: &mut PendingScan,
+        pending: &mut PendingScan<'_>,
     ) -> Result<()> {
         if group.sequence > inventory.sequence_watermark {
             return Err(invalid("occurrence exceeds sequence watermark"));
@@ -585,17 +679,24 @@ impl MmpCustodyStore {
             if group.chunks != encoded_bytes.div_ceil(64 * 1024) {
                 return Err(invalid("occurrence chunks are incomplete or extra"));
             }
-            charge(metadata, OCCURRENCE_CHARGE)?;
-            inventory
-                .occurrences
-                .try_reserve(1)
-                .map_err(|_| invalid("inventory allocation failed"))?;
-            inventory.occurrences.push(StoredOccurrenceRef {
+            let occurrence = StoredOccurrenceRef {
                 sequence: group.sequence,
                 digest,
                 encoded_bytes,
                 recipient_count: source.recipient_bindings().len(),
-            });
+            };
+            // No source decoder allocation overlaps a visitor's next read.
+            drop(source);
+            if let Some(visitor) = &mut pending.visitor {
+                visitor(CustodyInventoryEntry::Occurrence(occurrence))?;
+            } else {
+                charge(metadata, OCCURRENCE_CHARGE)?;
+                inventory
+                    .occurrences
+                    .try_reserve(1)
+                    .map_err(|_| invalid("inventory allocation failed"))?;
+                inventory.occurrences.push(occurrence);
+            }
         } else {
             let stage_key = format!("a1:{:016x}:stage", group.sequence);
             let stage = read_record(transaction, &stage_key)?
@@ -607,12 +708,16 @@ impl MmpCustodyStore {
                     inventory.generation,
                     self.limits.logical_bytes,
                 )?;
-                charge(metadata, ABORT_CHARGE)?;
-                inventory
-                    .aborted_sequences
-                    .try_reserve(1)
-                    .map_err(|_| invalid("inventory allocation failed"))?;
-                inventory.aborted_sequences.push(group.sequence);
+                if let Some(visitor) = &mut pending.visitor {
+                    visitor(CustodyInventoryEntry::Aborted(group.sequence))?;
+                } else {
+                    charge(metadata, ABORT_CHARGE)?;
+                    inventory
+                        .aborted_sequences
+                        .try_reserve(1)
+                        .map_err(|_| invalid("inventory allocation failed"))?;
+                    inventory.aborted_sequences.push(group.sequence);
+                }
             } else {
                 if !pending.enabled || pending.found.is_some() {
                     return Err(invalid("uncommitted occurrence requires reconciliation"));
@@ -655,6 +760,24 @@ impl MmpCustodyStore {
         }
         Ok(())
     }
+}
+
+/// Classifies only an already parsed key; new key kinds must be handled here.
+fn journal_kind(key: Key<'_>) -> Option<CustodyJournalKind> {
+    use CustodyJournalKind as J;
+    Some(match key {
+        Key::Acknowledgement(_) => J::Acknowledgement,
+        Key::Expiry(_) => J::Expiry,
+        Key::Retirement(_) => J::Retirement,
+        Key::Release(_) => J::Release,
+        Key::Consumption(_) => J::Consumption,
+        Key::NativeContinuity(_) => J::NativeContinuity,
+        Key::NativeLifetime(_) => J::NativeLifetime,
+        Key::RegistrationEnd(_) => J::RegistrationEnd,
+        Key::NativeInput(_) => J::NativeInput,
+        Key::TerminalHandoff(_) => J::TerminalHandoff,
+        Key::Chunk(_, _) | Key::Stage(_) | Key::Commit(_) => return None,
+    })
 }
 
 /// Parses only exact lowercase canonical internal keys and bounded indexes.

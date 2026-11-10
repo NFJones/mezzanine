@@ -363,3 +363,60 @@ fn source_retirement_fence_progress_at_exact_metadata_ceiling() {
         baseline
     );
 }
+
+/// The full source/journal inspection needs charged slot space in addition to
+/// its first fence. Refusal must return both loans; actual last input ownership
+/// keeps scratch charged even after another observer stops using it.
+#[test]
+fn source_retirement_inspection_reserves_slots_and_releases_failed_input() {
+    let (service, scope, _, _) = scene();
+    let policy = service.storage_custody.as_ref().unwrap();
+    let baseline = service.storage_metadata_base_usage().unwrap();
+    let ceiling = policy.limits.metadata_bytes;
+    let optional = checkpoint::reserve_checkpoint(
+        policy.checkpoint_bytes.clone(),
+        ceiling - baseline,
+        baseline,
+        ceiling,
+    )
+    .unwrap();
+    assert!(
+        matches!(service.prepare_source_retirement_inspection(&scope), Err(error) if error.kind() == MessageErrorKind::Capacity)
+    );
+    assert_eq!(
+        service.storage_usage().unwrap().unwrap().metadata_bytes,
+        ceiling
+    );
+    let fence = service.capture_source_retirement_fence(&scope).unwrap();
+    let worker = service
+        .reserve_storage_worker_metadata(storage_policy::WORKER_METADATA_QUANTUM)
+        .unwrap();
+    drop((fence, worker, optional));
+    let input = Arc::new(
+        service
+            .prepare_source_retirement_inspection(&scope)
+            .unwrap(),
+    );
+    assert!(service.source_retirement_inspection_is_original(&input));
+    assert!(input.belongs_to(&scope));
+    assert_eq!(
+        service.storage_usage().unwrap().unwrap().metadata_bytes,
+        baseline + 256 * 1024
+    );
+    let final_owner = input.clone();
+    drop(input);
+    assert_eq!(
+        service.storage_usage().unwrap().unwrap().metadata_bytes,
+        baseline + 256 * 1024
+    );
+    drop(final_owner);
+    assert_eq!(
+        service.storage_usage().unwrap().unwrap().metadata_bytes,
+        baseline
+    );
+    assert!(
+        service
+            .prepare_source_retirement_inspection(&MessageStorageScope::default())
+            .is_err()
+    );
+}
