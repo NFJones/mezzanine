@@ -7,6 +7,33 @@ use crate::runtime::RuntimeSessionService;
 use crate::storage::token_usage::TokenUsageStore;
 use tokio::io::AsyncReadExt;
 
+/// The confirmation consumer may live outside runtime. Compile the exact
+/// facade types and method contracts here, without opening runtime::agent.
+#[test]
+fn budget_legacy_confirmation_contract_is_reachable_from_host() {
+    use crate::runtime::{
+        RuntimeBudgetLegacyAccountStart, RuntimeBudgetLegacyChoice,
+        RuntimeBudgetLegacyConfirmation, RuntimeBudgetLegacyDisclosure,
+    };
+    let _: fn(
+        &RuntimeSessionService,
+        &mez_core::ids::ClientId,
+        &str,
+        RuntimeBudgetLegacyChoice,
+    ) -> Result<RuntimeBudgetLegacyConfirmation> =
+        RuntimeSessionService::prepare_runtime_budget_legacy_resolution;
+    let _: fn(
+        &mut RuntimeSessionService,
+        &mez_core::ids::ClientId,
+        RuntimeBudgetLegacyConfirmation,
+    ) -> Result<()> = RuntimeSessionService::confirm_runtime_budget_legacy_resolution;
+    let _: Option<RuntimeBudgetLegacyDisclosure<'_>> = None;
+    assert_ne!(
+        RuntimeBudgetLegacyAccountStart::NewAt(1),
+        RuntimeBudgetLegacyAccountStart::PreserveExisting,
+    );
+}
+
 /// The shared fixture creates this unique directory itself. Keep the exact path
 /// until every owned service/request/socket has retired, then verify deletion.
 /// Drop cannot await request retirement: on unwind it diagnoses and retains,

@@ -26,11 +26,9 @@ mod reclamation;
     not(test),
     expect(dead_code, reason = "confirmation UI is a downstream budget slice")
 )]
-mod resolution;
+pub(crate) mod resolution;
 mod resume;
 mod transitions;
-#[cfg(test)]
-pub(crate) use resolution::{RuntimeBudgetLegacyAccountStart, RuntimeBudgetLegacyChoice};
 pub(crate) use resume::RuntimeBudgetResumeCapture;
 
 /// Bounds actor capture ownership, not lifetime accounts in the durable ledger.
@@ -57,7 +55,7 @@ enum Source {
     /// Explicit human association, not a claim of provable historical lineage.
     #[cfg_attr(
         not(test),
-        expect(
+        allow(
             dead_code,
             reason = "constructed by the staged human confirmation port"
         )

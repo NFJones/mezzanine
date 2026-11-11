@@ -225,6 +225,18 @@ pub struct RuntimeSessionService {
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 mod agent;
+// Staged human confirmation contract only; accounting internals stay private.
+#[cfg_attr(
+    not(test),
+    allow(
+        unused_imports,
+        reason = "confirmation UI is a downstream budget slice"
+    )
+)]
+pub(crate) use agent::token_budget::resolution::{
+    RuntimeBudgetLegacyAccountStart, RuntimeBudgetLegacyChoice, RuntimeBudgetLegacyConfirmation,
+    RuntimeBudgetLegacyDisclosure,
+};
 pub(crate) use agent::{
     RuntimeAgentComponent, RuntimeCompactionDeliveryObserver, RuntimeCompactionDispatchDelivery,
     RuntimeMessageActionAdmission, RuntimePowerInhibitionStatus, RuntimePreparedTrackedMessage,

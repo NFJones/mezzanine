@@ -2,7 +2,7 @@
 //! publication. No supplied lineage or historical aggregate becomes expense.
 
 use super::*;
-use crate::runtime::agent::token_budget::RuntimeBudgetLegacyChoice as Choice;
+use crate::runtime::agent::token_budget::resolution::RuntimeBudgetLegacyChoice as Choice;
 
 /// A committed existing-account association keeps its immutable operation even
 /// if actor checkpointing and then the anchor mirror become unavailable.
@@ -375,7 +375,7 @@ async fn runtime_budget_legacy_cancel_then_confirm_discloses_original_boundary()
     assert!(disclosure.historical_usage_incomplete);
     assert_eq!(
         disclosure.account_start,
-        crate::runtime::agent::token_budget::RuntimeBudgetLegacyAccountStart::NewAt(boundary)
+        crate::runtime::RuntimeBudgetLegacyAccountStart::NewAt(boundary)
     );
     scene
         .service
@@ -493,7 +493,7 @@ async fn runtime_budget_legacy_existing_account_retains_expense_and_marks_gap() 
     assert!(disclosure.historical_usage_incomplete);
     assert_eq!(
         disclosure.account_start,
-        crate::runtime::agent::token_budget::RuntimeBudgetLegacyAccountStart::PreserveExisting
+        crate::runtime::RuntimeBudgetLegacyAccountStart::PreserveExisting
     );
     scene
         .service
