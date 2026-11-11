@@ -21,8 +21,12 @@ use crate::storage::token_usage::TokenUsageStore;
 use crate::storage::token_usage::budget::membership::BudgetMembership;
 use crate::storage::transcript::{AgentTranscriptStore, BudgetBindingLease};
 
+mod reclamation;
 mod resume;
 pub(crate) use resume::RuntimeBudgetResumeCapture;
+
+/// Bounds actor capture ownership, not lifetime accounts in the durable ledger.
+const RUNTIME_BUDGET_MEMBERSHIP_LIMIT: usize = 4096;
 
 /// One runtime-selected source, never inferred from a current depth-zero label.
 #[derive(Debug, Clone)]
@@ -240,11 +244,7 @@ impl RuntimeSessionService {
             .entries
             .contains_key(&turn.conversation_id)
         {
-            if self.agent.budget_memberships.entries.len() >= 4096 {
-                return Err(MezError::invalid_state(
-                    "runtime budget membership capacity reached",
-                ));
-            }
+            self.reserve_runtime_budget_capture_capacity(1)?;
             let source = if turn.parent_turn_id.is_none()
                 && session
                     .budget_conversation_birth
@@ -505,13 +505,9 @@ impl RuntimeSessionService {
                 "budget child already has different original ownership",
             ));
         }
-        if self.agent.budget_memberships.entries.len() >= 4096 {
-            return Err(MezError::invalid_state(
-                "runtime budget membership capacity reached",
-            ));
-        }
         let conversation = child.session_id.clone();
         let native = child.native_message_incarnation.clone();
+        self.reserve_runtime_budget_capture_capacity(1)?;
         self.agent.budget_memberships.entries.insert(
             conversation,
             Entry {
@@ -576,7 +572,7 @@ impl RuntimeSessionService {
     /// Startup/restore worker only: qualify every affected original reference
     /// before hydration changes any pane. Legacy absence remains unknown.
     pub(crate) fn prepare_restored_budget_memberships<'a>(
-        &self,
+        &mut self,
         transcripts: &AgentTranscriptStore,
         records: impl IntoIterator<Item = &'a mez_agent::transcript::AgentSessionMetadata>,
     ) -> Result<BTreeMap<String, RuntimeBudgetRestore>> {
@@ -594,13 +590,10 @@ impl RuntimeSessionService {
                 }
                 continue;
             };
-            if prepared.contains_key(&record.conversation_id)
-                || self.agent.budget_memberships.entries.len() + prepared.len() >= 4096
-            {
-                return Err(MezError::conflict(
-                    "budget restore capacity or duplicate subject",
-                ));
+            if prepared.contains_key(&record.conversation_id) {
+                return Err(MezError::conflict("budget restore duplicate subject"));
             }
+            self.reserve_runtime_budget_capture_capacity(prepared.len() + 1)?;
             let store = self.persistence.cloned_token_usage_store().ok_or_else(|| {
                 MezError::invalid_state("budget restore accounting store unavailable")
             })?;
@@ -628,12 +621,6 @@ impl RuntimeSessionService {
     ) -> Result<()> {
         if self.persistence.token_usage_store() != Some(&work.store)
             || self.persistence.transcript_store() != Some(&work.transcripts)
-            || (!self
-                .agent
-                .budget_memberships
-                .entries
-                .contains_key(&work.member.conversation)
-                && self.agent.budget_memberships.entries.len() >= 4096)
         {
             return Err(MezError::conflict(
                 "budget restore repository or capacity changed",
@@ -645,6 +632,14 @@ impl RuntimeSessionService {
             .filter(|session| session.session_id == work.member.conversation)
             .ok_or_else(|| MezError::conflict("budget restore target changed"))?;
         let native = session.native_message_incarnation.clone();
+        if !self
+            .agent
+            .budget_memberships
+            .entries
+            .contains_key(&work.member.conversation)
+        {
+            self.reserve_runtime_budget_capture_capacity(1)?;
+        }
         self.agent.budget_memberships.entries.insert(
             work.member.conversation.clone(),
             Entry {
@@ -688,6 +683,50 @@ impl RuntimeSessionService {
     #[cfg(test)]
     pub(crate) fn enable_runtime_budget_membership_for_tests(&mut self) {
         self.agent.budget_memberships.enabled = true;
+    }
+
+    /// Synthetic actor metadata pressure only: no additional database account,
+    /// process, descriptor or durable acknowledgment is fabricated by this seam.
+    #[cfg(test)]
+    pub(crate) fn fill_runtime_budget_captures_for_tests(
+        &mut self,
+        conversation: &str,
+        unresolved: bool,
+    ) {
+        let mut template = self
+            .agent
+            .budget_memberships
+            .entries
+            .get(conversation)
+            .unwrap()
+            .clone();
+        template.lease = None;
+        template.ready = false;
+        template.source = Source::Existing;
+        if unresolved {
+            self.agent
+                .budget_memberships
+                .entries
+                .get_mut(conversation)
+                .unwrap()
+                .member = None;
+            template.member = None;
+        }
+        for index in 1..4096 {
+            let key = format!("synthetic-retired-budget-{index}");
+            let mut entry = template.clone();
+            entry.identity = Arc::new(());
+            entry.preparation = Arc::new(());
+            if let Some(member) = &mut entry.member {
+                member.conversation = key.clone();
+            }
+            self.agent.budget_memberships.entries.insert(key, entry);
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn runtime_budget_capture_count_for_tests(&self) -> usize {
+        self.agent.budget_memberships.entries.len()
     }
 
     /// Issued provider work retains native binding custody independently of the

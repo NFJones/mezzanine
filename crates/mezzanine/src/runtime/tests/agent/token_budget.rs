@@ -6,6 +6,7 @@ use crate::storage::token_usage::TokenUsageStore;
 use crate::storage::token_usage::budget::membership::BudgetMembershipState;
 
 mod checkpoint;
+mod reclamation;
 
 struct Scene {
     service: RuntimeSessionService,
@@ -687,6 +688,9 @@ async fn runtime_budget_preparation_real_loop_new_retains_original_account() {
         .unwrap()
         .0;
     scene.service.stop_agent_turn_for_pane("%1").unwrap();
+    scene
+        .service
+        .fill_runtime_budget_captures_for_tests(&root.conversation_id, false);
     scene
         .service
         .execute_agent_shell_command(

@@ -173,12 +173,12 @@ impl RuntimeSessionService {
         // the service. Reconcile accepted worker receipts before validating
         // counted history; missing or conflicting rows still fail closed.
         store.recover_append_receipts()?;
-        let mut budget_restore = self.prepare_restored_budget_memberships(
-            &store,
-            records
-                .iter()
-                .filter(|record| runtime_pane_by_id(&self.session, &record.pane_id).is_ok()),
-        )?;
+        let budget_records = records
+            .iter()
+            .filter(|record| runtime_pane_by_id(&self.session, &record.pane_id).is_ok())
+            .collect::<Vec<_>>();
+        let mut budget_restore =
+            self.prepare_restored_budget_memberships(&store, budget_records)?;
         let session_id = self.session.id.as_str().to_string();
         if let Some(notice) = store.agent_session_metadata_recovery_notice(&session_id)? {
             self.append_runtime_diagnostic_event(

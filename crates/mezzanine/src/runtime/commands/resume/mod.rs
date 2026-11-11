@@ -668,6 +668,10 @@ impl RuntimeSessionService {
         let previous_budget = budget
             .as_ref()
             .map(|_| self.snapshot_runtime_budget_resume(&conversation_id));
+        // Capacity reclamation during provisional target adoption must not
+        // discard the accounting entry needed by a later shell rollback.
+        let previous_budget_source =
+            self.snapshot_runtime_budget_resume(&previous_session.session_id);
         let previous_primary_names = self.snapshot_primary_agent_names();
         let previous_composer_titles = self.snapshot_composer_titles();
         let previous_agent_screen = self
@@ -920,6 +924,7 @@ impl RuntimeSessionService {
                 if let Some(previous_budget) = previous_budget {
                     self.rollback_runtime_budget_resume(previous_budget);
                 }
+                self.rollback_runtime_budget_resume(previous_budget_source);
                 self.restore_composer_titles(previous_composer_titles.clone());
                 self.restore_primary_agent_names(previous_primary_names);
                 self.agent_shell_store_mut()

@@ -21542,6 +21542,14 @@ alongside shell and authority rollback. No new account or parent teardown right
 may be inferred from the independently resumed child's history.
 These staged ports MUST remain distinct from production budget activation.
 
+Runtime budget membership captures MUST remain bounded at4096 entries. Capacity
+reclamation MAY discard only detached, acknowledged actor metadata with no
+outstanding preparation or rollback owner. Current pane bindings, saved loop
+anchors and unresolved proposals MUST remain retained. Reclamation MUST NOT
+delete durable accounts, usage, receipt fences or original worker descriptors;
+releasing an actor holder is NOT proof that an issued worker has retired. If
+protected captures fill the bound, admission MUST refuse without evicting them.
+
 These bytes are descriptive checkpoint facts. Ordinary transcript/conversation
 restoration MUST continue creating a fresh live incarnation even when the saved
 epoch is valid. Decoding MUST NOT construct a live token, registration or reconnect

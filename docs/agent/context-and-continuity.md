@@ -1215,6 +1215,13 @@ holder together. A child resumed without its parent keeps its account but gains
 no parent close/reuse/cleanup authority. These ports still do not activate budget
 enforcement or resolve unproven legacy ancestry.
 
+Actor capture memory has a separate 4,096-entry bound. At capacity, completed
+detached captures can be reclaimed without touching durable membership or usage.
+Live pane/loop sources, unresolved proposals and outstanding preparation/rollback
+owners remain protected; issued workers retain their own lifetime descriptors.
+If protected captures fill the bound, new capture admission stays unavailable
+rather than evicting accounting evidence or resetting an account.
+
 ## Related pages
 
 - [Subagents and messaging](subagents-and-messaging.md)
