@@ -173,6 +173,12 @@ impl RuntimeSessionService {
         // the service. Reconcile accepted worker receipts before validating
         // counted history; missing or conflicting rows still fail closed.
         store.recover_append_receipts()?;
+        let mut budget_restore = self.prepare_restored_budget_memberships(
+            &store,
+            records
+                .iter()
+                .filter(|record| runtime_pane_by_id(&self.session, &record.pane_id).is_ok()),
+        )?;
         let session_id = self.session.id.as_str().to_string();
         if let Some(notice) = store.agent_session_metadata_recovery_notice(&session_id)? {
             self.append_runtime_diagnostic_event(
@@ -266,6 +272,16 @@ impl RuntimeSessionService {
                 None
             };
             let prepared_objective = store.effective_persisted_objective(&conversation_id)?;
+            let prepared_model_identity = store.conversation_model_identity(&conversation_id)?;
+            let prepared_parent_objective = if persistent_owner.is_some() {
+                Some(store.parent_objective(&conversation_id)?.ok_or_else(|| {
+                    MezError::invalid_state(
+                        "persistent subagent restore requires a parent objective",
+                    )
+                })?)
+            } else {
+                None
+            };
             let visibility = runtime_agent_session_metadata_visibility(&metadata.visibility)?;
             let log_level = AgentLogLevel::parse(&metadata.log_level).ok_or_else(|| {
                 MezError::invalid_args("agent session metadata log level is invalid")
@@ -424,6 +440,9 @@ impl RuntimeSessionService {
             });
 
             let previous_session = self.agent_shell_store().get(&pane_id).cloned();
+            let previous_authority = subagent_lineage
+                .as_ref()
+                .map(|_| self.snapshot_subagent_authority_state(&format!("agent-{pane_id}")));
             let previous_agent_screen = self
                 .agent_pane_screen_state(&pane_id)
                 .map(|state| (state.conversation_id().to_string(), state.screen().clone()));
@@ -553,9 +572,70 @@ impl RuntimeSessionService {
                     &conversation_id,
                     &metadata.steering_recovery,
                 )?;
+                #[cfg(test)]
+                self.check_budget_restore_after_install_for_tests()?;
+                if let Some(lineage) = subagent_lineage {
+                    let agent_id = format!("agent-{pane_id}");
+                    let runtime_lineage = crate::runtime::RuntimeSubagentLineage {
+                        parent_agent_id: lineage.parent_agent_id.clone(),
+                        root_agent_id: lineage.root_agent_id,
+                        depth: lineage.depth,
+                        display_name: lineage.display_name,
+                        terminal: lineage.terminal,
+                    };
+                    if persistent_owner.is_some() {
+                        self.set_subagent_lineage(agent_id.clone(), runtime_lineage);
+                    } else {
+                        self.set_restored_subagent_lineage(agent_id.clone(), runtime_lineage);
+                    }
+                    if let Some(parent_conversation_id) = persistent_owner {
+                        let objective = prepared_parent_objective.ok_or_else(|| {
+                            MezError::invalid_state("prepared persistent objective unavailable")
+                        })?;
+                        self.set_persistent_subagent(
+                            agent_id.clone(),
+                            crate::runtime::RuntimePersistentSubagent {
+                                conversation_id: conversation_id.clone(),
+                                parent_agent_id: lineage.parent_agent_id,
+                                parent_conversation_id,
+                                objective,
+                                close_authority_revoked: false,
+                            },
+                        );
+                        self.restore_persistent_subagent_scope(
+                            &agent_id,
+                            persistent_scope.expect("validated persistent scope"),
+                        )?;
+                        let agent_id =
+                            mez_core::ids::AgentId::opaque(agent_id).ok_or_else(|| {
+                                MezError::invalid_state(
+                                    "restored persistent subagent id is invalid for MMP",
+                                )
+                            })?;
+                        if self
+                            .control
+                            .message_service()
+                            .subscription(&agent_id)
+                            .is_none()
+                        {
+                            self.control
+                                .message_service_mut()
+                                .subscribe_from_retained_start(&agent_id)?;
+                        }
+                    }
+                }
+                // All fallible hydration/authority steps precede custody
+                // adoption. Failure still owns the preflight proposal and
+                // executes the same previous-pane rollback below.
+                if let Some(budget) = budget_restore.remove(&conversation_id) {
+                    self.adopt_restored_budget_membership(&pane_id, budget)?;
+                }
                 Ok(())
             })();
             if let Err(error) = hydrate_result {
+                if let Some(authority) = previous_authority {
+                    self.restore_subagent_authority_state(&format!("agent-{pane_id}"), authority);
+                }
                 if let Some(previous_session) = previous_session {
                     self.agent_shell_store_mut()
                         .restore_session(&pane_id, previous_session.clone())?;
@@ -604,9 +684,7 @@ impl RuntimeSessionService {
             // validation in this iteration has passed, so a skipped conversation
             // cannot leave its profile override behind for the next conversation
             // restored onto the same pane.
-            if let Some((profile_name, selection)) =
-                store.conversation_model_identity(&conversation_id)?
-            {
+            if let Some((profile_name, selection)) = prepared_model_identity {
                 self.restore_agent_model_profile_identity(
                     &pane_id,
                     &profile_name,
@@ -615,57 +693,6 @@ impl RuntimeSessionService {
             }
             if running_turn_id.is_some() {
                 interrupted = interrupted.saturating_add(1);
-            }
-            if let Some(lineage) = subagent_lineage {
-                let agent_id = format!("agent-{pane_id}");
-                let runtime_lineage = crate::runtime::RuntimeSubagentLineage {
-                    parent_agent_id: lineage.parent_agent_id.clone(),
-                    root_agent_id: lineage.root_agent_id,
-                    depth: lineage.depth,
-                    display_name: lineage.display_name,
-                    terminal: lineage.terminal,
-                };
-                if persistent_owner.is_some() {
-                    self.set_subagent_lineage(agent_id.clone(), runtime_lineage);
-                } else {
-                    self.set_restored_subagent_lineage(agent_id.clone(), runtime_lineage);
-                }
-                if let Some(parent_conversation_id) = persistent_owner {
-                    let objective = store.parent_objective(&conversation_id)?.ok_or_else(|| {
-                        MezError::invalid_state(
-                            "persistent subagent restore requires a parent objective",
-                        )
-                    })?;
-                    self.set_persistent_subagent(
-                        agent_id.clone(),
-                        crate::runtime::RuntimePersistentSubagent {
-                            conversation_id: conversation_id.clone(),
-                            parent_agent_id: lineage.parent_agent_id,
-                            parent_conversation_id,
-                            objective,
-                            close_authority_revoked: false,
-                        },
-                    );
-                    self.restore_persistent_subagent_scope(
-                        &agent_id,
-                        persistent_scope.expect("validated persistent scope"),
-                    )?;
-                    let agent_id = mez_core::ids::AgentId::opaque(agent_id).ok_or_else(|| {
-                        MezError::invalid_state(
-                            "restored persistent subagent id is invalid for MMP",
-                        )
-                    })?;
-                    if self
-                        .control
-                        .message_service()
-                        .subscription(&agent_id)
-                        .is_none()
-                    {
-                        self.control
-                            .message_service_mut()
-                            .subscribe_from_retained_start(&agent_id)?;
-                    }
-                }
             }
             installed_cleanup_bindings.insert((format!("agent-{pane_id}"), conversation_id));
             restored = restored.saturating_add(1);
@@ -896,6 +923,7 @@ impl RuntimeSessionService {
                     mezzanine_session_id: mezzanine_session_id.clone(),
                     pane_id: session.pane_id.clone(),
                     conversation_id: conversation_id.clone(),
+                    budget_reference: self.runtime_budget_checkpoint_reference(&conversation_id)?,
                     native_message_incarnation: Some(
                         session.native_message_incarnation.snapshot_identity(),
                     ),

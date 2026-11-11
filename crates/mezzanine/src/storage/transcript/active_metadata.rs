@@ -676,6 +676,16 @@ impl AgentTranscriptStore {
         id: &str,
         records: &[AgentSessionMetadata],
     ) -> Result<usize> {
+        // Match compound publication: conversation custody precedes the session
+        // checkpoint lock, including direct writers and empty replacements.
+        let subjects = records
+            .iter()
+            .map(|record| record.conversation_id.as_str())
+            .collect::<std::collections::BTreeSet<_>>();
+        let _conversations = subjects
+            .into_iter()
+            .map(|id| self.acquire_conversation_lock(id))
+            .collect::<Result<Vec<_>>>()?;
         let _lock = self.lock_agent_session_metadata(id)?;
         self.save_agent_session_metadata_locked(id, records)
             .map_err(PublicationFailure::into_error)
@@ -691,6 +701,7 @@ impl AgentTranscriptStore {
             validate_session_id(id)?;
             for record in records {
                 record.validate()?;
+                self.validate_budget_checkpoint_locked(record)?;
                 if record.mezzanine_session_id != id {
                     return Err(MezError::invalid_args(
                         "agent session metadata belongs to a different Mezzanine session",
@@ -711,6 +722,23 @@ impl AgentTranscriptStore {
                     Some(checkpoint) => checkpoint,
                     None => self.legacy_checkpoint(id)?,
                 };
+            let original = checkpoint_records(
+                &self.agent_session_metadata_checkpoint_file(id),
+                &previous,
+                id,
+            )?;
+            for record in records {
+                if record.budget_reference.is_none()
+                    && original.iter().any(|old| {
+                        old.conversation_id == record.conversation_id
+                            && old.budget_reference.is_some()
+                    })
+                {
+                    return Err(MezError::conflict(
+                        "original budget checkpoint reference cannot be removed",
+                    ));
+                }
+            }
             Ok(Checkpoint {
                 version: VERSION,
                 mezzanine_session_id: id.to_string(),

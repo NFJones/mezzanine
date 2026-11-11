@@ -37,7 +37,7 @@ fn active_metadata_version7_epoch_absence_remains_unknown_during_migration() {
     assert_eq!(migrated.native_message_incarnation, None);
     assert!(migrated.persistent_subagent_owned);
     let rewritten = encode_agent_session_metadata(&migrated).unwrap();
-    assert!(rewritten.starts_with("mez-agent-session-metadata/8\t"));
+    assert!(rewritten.starts_with("mez-agent-session-metadata/9\t"));
     assert_eq!(decode_agent_session_metadata(&rewritten).unwrap(), record);
     assert!(decode_agent_session_metadata(&format!("{legacy}\tnull")).is_err());
 }
@@ -50,7 +50,7 @@ fn active_metadata_native_epoch_rejects_malformed_and_future_rows() {
     let record = agent_session_metadata("$scope", "native");
     let encoded = encode_agent_session_metadata(&record).unwrap();
     let fields: Vec<_> = encoded.split('\t').collect();
-    assert_eq!(fields.len(), 37);
+    assert_eq!(fields.len(), 38);
     for value in [
         "true".to_string(),
         serde_json::to_string(&[0; 16]).unwrap(),
@@ -63,7 +63,7 @@ fn active_metadata_native_epoch_rejects_malformed_and_future_rows() {
     assert!(decode_agent_session_metadata(&fields[..36].join("\t")).is_err());
     assert!(decode_agent_session_metadata(&format!("{encoded}\tnull")).is_err());
     assert!(
-        decode_agent_session_metadata(&encoded.replacen("metadata/8", "metadata/9", 1)).is_err()
+        decode_agent_session_metadata(&encoded.replacen("metadata/9", "metadata/10", 1)).is_err()
     );
 }
 

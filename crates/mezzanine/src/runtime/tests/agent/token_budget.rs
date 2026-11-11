@@ -5,6 +5,8 @@ use super::*;
 use crate::storage::token_usage::TokenUsageStore;
 use crate::storage::token_usage::budget::membership::BudgetMembershipState;
 
+mod checkpoint;
+
 struct Scene {
     service: RuntimeSessionService,
     store: TokenUsageStore,

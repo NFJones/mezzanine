@@ -1197,6 +1197,16 @@ The records contain accounting identities, counters and custody metadata, not
 prompts, credentials or private peer payloads; historical text can still contain
 sensitive user data and retains the privacy cautions above.
 
+Active checkpoint row9 also retains the exact accounting reference. Older rows
+stay unknown; they cannot acquire budget provenance from extra columns. Once a
+conversation's reference is checkpointed, ordinary metadata updates cannot drop
+it. Restore checks the original stores and acquires the original free lifetime
+lock before changing the pane. A still-live holder or conflicting/missing source
+refuses while preserving the previous binding. Failed history hydration releases
+only the preflight holder. Successful restore keeps accounting custody but does
+not restore native shell/MMP identity or provider readiness. Publication completed
+before actor adoption remains an explicit unresolved interval, not zero expense.
+
 ## Related pages
 
 - [Subagents and messaging](subagents-and-messaging.md)

@@ -8,6 +8,31 @@ use crate::storage::transcript::AgentTranscriptStore;
 use membership::BudgetMembership;
 
 impl TokenUsageStore {
+    /// Original-store restore preflight. This performs no publication or expense
+    /// mutation and returns genuine lifetime custody, not a decoded capability.
+    pub(crate) fn restore_native_budget_membership(
+        &self,
+        transcripts: &AgentTranscriptStore,
+        reference: &mez_agent::token_budget::BudgetCheckpointReference,
+    ) -> Result<(
+        BudgetMembership,
+        crate::storage::transcript::BudgetBindingLease,
+    )> {
+        if self.budget_namespace()? != reference.namespace.as_str() {
+            return Err(MezError::conflict("budget restore namespace mismatch"));
+        }
+        let (member, lease) = transcripts.reacquire_native_budget_binding(reference)?;
+        if self.budget_membership(&reference.conversation)?
+            != Some((member.clone(), BudgetMembershipState::Active))
+            || self.budget_binding_owner(&member)?.as_deref() != Some(reference.owner.as_str())
+        {
+            return Err(MezError::conflict(
+                "budget restore database provenance mismatch",
+            ));
+        }
+        Ok((member, lease))
+    }
+
     /// Native runtime publication retains actual kernel lifetime custody through
     /// actor adoption and every issued worker. A new owner can recover only after
     /// all original holders close the same pinned inode; persisted labels and

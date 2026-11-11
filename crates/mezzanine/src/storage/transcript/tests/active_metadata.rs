@@ -6,6 +6,7 @@
 use super::*;
 use std::io::{Read, Seek, SeekFrom};
 
+mod budget;
 mod native_binding;
 mod ownership;
 

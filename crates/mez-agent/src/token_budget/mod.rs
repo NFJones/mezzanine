@@ -6,8 +6,10 @@
 //! Counters are inclusive input and reported output: cache and reasoning subsets
 //! MUST NOT be added again. Unknown coverage alone is not numeric exhaustion.
 
+mod checkpoint;
 mod quantity;
 mod usage;
+pub use checkpoint::BudgetCheckpointReference;
 pub use quantity::{MAX_TOKEN_LIMIT, TokenQuantityError, parse_token_quantity};
 pub use usage::{AttemptUsage, BudgetUsageError, UsageCoverage, UsageSnapshot, UsageTotals};
 

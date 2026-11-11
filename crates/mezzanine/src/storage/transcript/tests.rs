@@ -1547,6 +1547,7 @@ fn agent_session_metadata(
         mezzanine_session_id: mezzanine_session_id.to_string(),
         pane_id: "%1".to_string(),
         conversation_id: conversation_id.to_string(),
+        budget_reference: None,
         native_message_incarnation: None,
         persistent_subagent_owned: false,
         primary_display_name: None,
@@ -4975,7 +4976,7 @@ fn agent_session_metadata_round_trips_project_partitions() {
         usage,
     }];
     let encoded = encode_agent_session_metadata(&metadata).unwrap();
-    assert!(encoded.starts_with("mez-agent-session-metadata/8\t"));
+    assert!(encoded.starts_with("mez-agent-session-metadata/9\t"));
     assert_eq!(decode_agent_session_metadata(&encoded).unwrap(), metadata);
     metadata.project_token_usage[0].usage.input_tokens += 1;
     assert!(encode_agent_session_metadata(&metadata).is_err());
@@ -9205,10 +9206,12 @@ fn transcript_sequence_allocation_reports_an_unterminated_tail() {
 /// These callers supply unknown native epochs; removing the row8 tail must not
 /// fabricate an original binding or shift any older ownership/steering fields.
 fn pre_native_epoch_metadata(encoded: &str) -> String {
+    let (encoded, budget) = encoded.rsplit_once('\t').unwrap();
+    assert_eq!(budget, "null");
     let (prefix, epoch) = encoded.rsplit_once('\t').unwrap();
     assert_eq!(epoch, "null");
     prefix.replacen(
-        "mez-agent-session-metadata/8",
+        "mez-agent-session-metadata/9",
         "mez-agent-session-metadata/7",
         1,
     )

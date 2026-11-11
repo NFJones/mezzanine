@@ -4,6 +4,78 @@
 use super::*;
 use crate::storage::transcript::AgentTranscriptStore;
 
+/// Restore never repairs missing/future stores, changed DB custody or incomplete
+/// mirrors into a new account. Every case owns its entire isolated fixture.
+#[test]
+fn budget_native_restore_refuses_changed_original_evidence() {
+    use mez_agent::token_budget::BudgetCheckpointReference;
+    for case in 0..8 {
+        let f = Fixture::new();
+        let transcripts = AgentTranscriptStore::new(f.root.join("transcripts"));
+        let member = f.member("root", None);
+        let lease = f
+            .store
+            .publish_native_budget_membership(&transcripts, &member, "original", None)
+            .unwrap();
+        drop(lease);
+        let mut reference = BudgetCheckpointReference {
+            namespace: BudgetReceiptId::new(member.namespace.clone()).unwrap(),
+            root: member.root.clone(),
+            conversation: member.conversation.clone(),
+            operation: BudgetReceiptId::new(member.operation.clone()).unwrap(),
+            owner: BudgetReceiptId::new("original").unwrap(),
+        };
+        let before = f.store.budget_account(&member.root).unwrap();
+        let directory = f.root.join("transcripts/root");
+        match case {
+            0 => reference.namespace = BudgetReceiptId::new("foreign").unwrap(),
+            1 => reference.owner = BudgetReceiptId::new("foreign").unwrap(),
+            2 => {
+                let connection = f.store.open_budget().unwrap();
+                connection
+                    .execute("UPDATE budget_bindings SET owner='foreign'", [])
+                    .unwrap();
+            }
+            3 => {
+                let connection = f.store.open_budget().unwrap();
+                connection
+                    .execute("UPDATE budget_memberships SET state=1", [])
+                    .unwrap();
+            }
+            4 => {
+                std::fs::rename(f.store.path(), f.root.join("retained.sqlite")).unwrap();
+            }
+            5 => {
+                let connection = f.store.open_budget().unwrap();
+                connection.pragma_update(None, "user_version", 999).unwrap();
+            }
+            6 => std::fs::remove_file(directory.join("budget-binding.lock")).unwrap(),
+            7 => {
+                let path = directory.join("budget-binding.json");
+                let mut mirror: serde_json::Value =
+                    serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+                mirror["bound"] = false.into();
+                std::fs::write(path, serde_json::to_vec(&mirror).unwrap()).unwrap();
+            }
+            _ => unreachable!(),
+        }
+        assert!(
+            f.store
+                .restore_native_budget_membership(&transcripts, &reference)
+                .is_err(),
+            "case {case}"
+        );
+        if case == 4 {
+            assert!(
+                !f.store.path().exists(),
+                "restore must not recreate missing ledger"
+            );
+        } else if case != 5 {
+            assert_eq!(f.store.budget_account(&member.root).unwrap(), before);
+        }
+    }
+}
+
 /// Missing, future and foreign mirrors and unsafe lock nodes cannot fabricate
 /// native retirement. Every refusal preserves both durable owner and expense.
 #[test]

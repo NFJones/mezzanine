@@ -21508,7 +21508,7 @@ Sorted conversation locks MUST precede the session checkpoint lock; a shared
 legacy recovery backup lock follows it. An empty published checkpoint MUST
 remain authoritative and MUST NOT resurrect legacy bindings on restart.
 
-Within that envelope, active metadata row8 MUST append the original actual
+Within that envelope, active metadata row8 introduced the original actual
 native shell incarnation as an optional fixed16-byte UUIDv4/RFC4122 value.
 Runtime capture MUST record the actual shell token; independent durable binding
 of the same conversation changes it, while exact shell rollback preserves it.
@@ -21516,6 +21516,24 @@ Validated row versions1 through7 MUST migrate with unknown (`None`) native
 incarnation, preserving all existing fields/qualifications. Re-encoding legacy
 rows MUST NOT invent a native identity. Unsupported versions, missing/extra
 columns or malformed UUID version/variant/length MUST reject.
+
+Active metadata row9 MUST additionally append an optional exact budget reference:
+original namespace, root, conversation, membership operation and binding owner.
+Versions1 through8 MUST retain unknown budget provenance and MUST NOT interpret
+an undeclared tail as that reference. New writers MUST preserve any previously
+checkpointed reference for a retained conversation and validate present references
+against the immutable conversation metadata and completed native binding mirror.
+The separate publication-before-actor-adoption interval MAY retain an absent
+reference, but restore MUST refuse it when budget membership already exists;
+absence MUST NOT create an unlimited replacement account.
+Before changing any affected pane, restore MUST validate the original database,
+namespace, active membership and completed mirror and nonblockingly acquire the
+same private lifetime-lock inode. A live original holder, missing/future store or
+changed provenance MUST refuse without replacing the previous pane binding.
+Failed hydration MUST release only its preflight holder, not rewrite the source
+or replay work. Successful hydration MUST retain custody and budget provenance
+without restoring provider readiness, native shell identity or cleanup authority.
+These staged ports MUST remain distinct from production budget activation.
 
 These bytes are descriptive checkpoint facts. Ordinary transcript/conversation
 restoration MUST continue creating a fresh live incarnation even when the saved

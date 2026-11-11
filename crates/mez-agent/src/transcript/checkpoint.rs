@@ -23,6 +23,9 @@ pub struct AgentSessionMetadata {
     pub pane_id: String,
     /// Durable conversation identity bound to the pane.
     pub conversation_id: String,
+    /// Inert original budget provenance; absent legacy checkpoints remain
+    /// unknown and cannot fabricate a new root or live binding.
+    pub budget_reference: Option<crate::token_budget::BudgetCheckpointReference>,
     /// Original actual shell epoch, retained as inert bytes for trusted recovery.
     /// Legacy absence stays unknown; generic restore cannot adopt these bytes.
     pub native_message_incarnation: Option<[u8; 16]>,
@@ -119,6 +122,14 @@ impl AgentSessionMetadata {
         validate_required("mezzanine session id", &self.mezzanine_session_id)?;
         validate_required("pane id", &self.pane_id)?;
         validate_conversation_id(&self.conversation_id)?;
+        if let Some(reference) = &self.budget_reference {
+            reference.validate()?;
+            if reference.conversation != self.conversation_id {
+                return Err(TranscriptContractError::new(
+                    "budget checkpoint subject mismatch",
+                ));
+            }
+        }
         super::validate_steering_recovery(&self.steering_recovery)?;
         if self.native_message_incarnation.is_some_and(|bytes| {
             let id = uuid::Uuid::from_bytes(bytes);

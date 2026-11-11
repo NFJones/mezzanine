@@ -186,6 +186,107 @@ fn write_native(directory: &Path, expected: &NativeMirror) -> Result<()> {
 }
 
 impl AgentTranscriptStore {
+    /// Caller holds the conversation lock before the active-checkpoint lock.
+    /// A plain metadata save cannot erase or replace published accounting
+    /// provenance. This checks descriptive evidence, not live custody or usage.
+    pub(crate) fn validate_budget_checkpoint_locked(
+        &self,
+        record: &mez_agent::transcript::AgentSessionMetadata,
+    ) -> Result<()> {
+        let membership = self
+            .read_conversation_metadata_locked(&record.conversation_id)?
+            .budget_membership;
+        match (membership.as_ref(), record.budget_reference.as_ref()) {
+            (None, None) => Ok(()),
+            // Publication may finish before the actor receives its outcome.
+            // That actor cannot invent an acknowledgement. The checkpoint
+            // owner separately forbids dropping a previously captured reference;
+            // restore refuses this unresolved interval until exact recovery.
+            (Some(_), None) => Ok(()),
+            (Some(member), Some(reference)) => {
+                let directory = self.session_dir_for(&record.conversation_id)?;
+                let mirror = read_native(&directory.join(BINDING_FILE))?.ok_or_else(|| {
+                    MezError::conflict("budget checkpoint binding mirror missing")
+                })?;
+                if member.namespace != reference.namespace.as_str()
+                    || member.root != reference.root
+                    || member.conversation != reference.conversation
+                    || member.operation != reference.operation.as_str()
+                    || !mirror.bound
+                    || mirror.membership != *member
+                    || mirror.owner != reference.owner.as_str()
+                {
+                    return Err(MezError::conflict("budget checkpoint provenance changed"));
+                }
+                Ok(())
+            }
+            _ => Err(MezError::conflict(
+                "budget checkpoint provenance missing or unexpected",
+            )),
+        }
+    }
+
+    /// Reacquires the exact completed original binding without rewriting any
+    /// record. Used by restore preflight before changing a live pane. A saved
+    /// owner alone is never authority: the original private inode must be free.
+    pub(crate) fn reacquire_native_budget_binding(
+        &self,
+        reference: &mez_agent::token_budget::BudgetCheckpointReference,
+    ) -> Result<(BudgetMembership, BudgetBindingLease)> {
+        reference.validate()?;
+        let _conversation = self.acquire_conversation_lock(&reference.conversation)?;
+        let directory = self.session_dir_for(&reference.conversation)?;
+        let mirror = read_native(&directory.join(BINDING_FILE))?
+            .ok_or_else(|| MezError::conflict("budget restore binding mirror missing"))?;
+        let member = &mirror.membership;
+        if !mirror.bound
+            || member.namespace != reference.namespace.as_str()
+            || member.root != reference.root
+            || member.conversation != reference.conversation
+            || member.operation != reference.operation.as_str()
+            || mirror.owner != reference.owner.as_str()
+            || self
+                .read_conversation_metadata_locked(&reference.conversation)?
+                .budget_membership
+                .as_ref()
+                != Some(member)
+        {
+            return Err(MezError::conflict("budget restore provenance mismatch"));
+        }
+        let path = directory.join(LOCK_FILE);
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .custom_flags(
+                (rustix::fs::OFlags::NOFOLLOW
+                    | rustix::fs::OFlags::NONBLOCK
+                    | rustix::fs::OFlags::CLOEXEC)
+                    .bits() as i32,
+            )
+            .open(&path)?;
+        let metadata = file.metadata()?;
+        validate_lock_file(&metadata)?;
+        if identity(&metadata) != mirror.lock {
+            return Err(MezError::conflict("budget restore lifetime inode changed"));
+        }
+        flock(&file, FlockOperation::NonBlockingLockExclusive).map_err(|error| {
+            if error == rustix::io::Errno::WOULDBLOCK {
+                MezError::conflict("budget restore original binding still live")
+            } else {
+                std::io::Error::from(error).into()
+            }
+        })?;
+        let lease = BudgetBindingLease(Arc::new(Lease {
+            file,
+            path,
+            member: member.clone(),
+            owner: mirror.owner.clone(),
+            identity: mirror.lock,
+        }));
+        lease.revalidate()?;
+        Ok((mirror.membership, lease))
+    }
+
     /// Acquires or revalidates native lifetime custody and durably publishes its
     /// transfer intent BEFORE SQLite changes owner. Legacy or missing expected
     /// custody refuses; original holders must release the same pinned inode.

@@ -13,7 +13,7 @@ fn active_metadata_ownership_qualification_round_trips() {
         let mut metadata = agent_session_metadata("$ownership", "persistent-child");
         metadata.persistent_subagent_owned = owned;
         let encoded = encode_agent_session_metadata(&metadata).unwrap();
-        assert!(encoded.starts_with("mez-agent-session-metadata/8\t"));
+        assert!(encoded.starts_with("mez-agent-session-metadata/9\t"));
         assert_eq!(decode_agent_session_metadata(&encoded).unwrap(), metadata);
     }
 }

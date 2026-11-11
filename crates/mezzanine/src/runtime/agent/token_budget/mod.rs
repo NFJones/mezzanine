@@ -12,6 +12,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use mez_agent::token_budget::BudgetRootId;
+use mez_agent::token_budget::{BudgetCheckpointReference, BudgetReceiptId};
 use mez_agent::{AgentConversationKind, AgentTurnRecord};
 
 use crate::error::{MezError, Result};
@@ -62,6 +63,8 @@ pub(crate) struct RuntimeBudgetMemberships {
     /// ordinary production resume/fork or pretend to enforce finite limits.
     enabled: bool,
     entries: BTreeMap<String, Entry>,
+    #[cfg(test)]
+    fail_restore_after_install: bool,
 }
 
 /// Immutable worker snapshot; the actor retains its original entry throughout I/O.
@@ -83,6 +86,17 @@ pub(crate) struct RuntimeBudgetMembershipWork {
 pub(crate) struct RuntimeBudgetMembershipOutcome {
     work: RuntimeBudgetMembershipWork,
     result: Result<(BudgetMembership, BudgetBindingLease)>,
+}
+
+/// Restore preflight retains the original stores and acquired kernel holder
+/// through all fallible hydration. Dropping a refused proposal only releases
+/// that holder; no saved checkpoint, expense or active pane is rewritten.
+pub(crate) struct RuntimeBudgetRestore {
+    store: TokenUsageStore,
+    transcripts: AgentTranscriptStore,
+    member: BudgetMembership,
+    owner: String,
+    lease: BudgetBindingLease,
 }
 
 impl RuntimeBudgetMembershipWork {
@@ -363,7 +377,19 @@ impl RuntimeSessionService {
         }
         entry.member = Some(member);
         entry.lease = Some(lease);
-        entry.ready = true;
+        entry.ready = false;
+        // The original membership/mirror is already durable. In adapter mode
+        // this captures a row9 obligation only: enqueue is NOT its durable ACK.
+        // Production activation still requires composed persistence admission.
+        self.checkpoint_agent_session_metadata()?;
+        if let Some(entry) = self
+            .agent
+            .budget_memberships
+            .entries
+            .get_mut(&work.conversation)
+        {
+            entry.ready = true;
+        }
         Ok(())
     }
 
@@ -502,6 +528,141 @@ impl RuntimeSessionService {
                 lease: None,
             },
         );
+        Ok(())
+    }
+
+    /// Captures qualified retained accounting custody, never performs actor I/O.
+    /// A loop may checkpoint its saved anchor rather than its live ephemeral
+    /// conversation, and rebind may precede preparation. This reference grants
+    /// neither native-incarnation continuity nor provider readiness.
+    pub(crate) fn runtime_budget_checkpoint_reference(
+        &self,
+        conversation: &str,
+    ) -> Result<Option<BudgetCheckpointReference>> {
+        let Some(entry) = self.agent.budget_memberships.entries.get(conversation) else {
+            return Ok(None);
+        };
+        let Some(member) = &entry.member else {
+            return Ok(None);
+        };
+        if self.persistence.token_usage_store() != Some(&entry.store)
+            || self.persistence.transcript_store() != Some(&entry.transcripts)
+            || entry
+                .lease
+                .as_ref()
+                .is_none_or(|lease| !lease.matches(member, &entry.owner))
+        {
+            return Err(MezError::conflict(
+                "budget checkpoint live binding mismatch",
+            ));
+        }
+        let id = |value: &str| {
+            BudgetReceiptId::new(value)
+                .map_err(|_| MezError::invalid_state("budget checkpoint identity invalid"))
+        };
+        Ok(Some(BudgetCheckpointReference {
+            namespace: id(&member.namespace)?,
+            root: member.root.clone(),
+            conversation: member.conversation.clone(),
+            operation: id(&member.operation)?,
+            owner: id(&entry.owner)?,
+        }))
+    }
+
+    /// Startup/restore worker only: qualify every affected original reference
+    /// before hydration changes any pane. Legacy absence remains unknown.
+    pub(crate) fn prepare_restored_budget_memberships<'a>(
+        &self,
+        transcripts: &AgentTranscriptStore,
+        records: impl IntoIterator<Item = &'a mez_agent::transcript::AgentSessionMetadata>,
+    ) -> Result<BTreeMap<String, RuntimeBudgetRestore>> {
+        let mut prepared = BTreeMap::new();
+        for record in records {
+            record.validate()?;
+            let Some(reference) = &record.budget_reference else {
+                if transcripts
+                    .conversation_budget_membership(&record.conversation_id)?
+                    .is_some()
+                {
+                    return Err(MezError::conflict(
+                        "original budget checkpoint reference missing",
+                    ));
+                }
+                continue;
+            };
+            if prepared.contains_key(&record.conversation_id)
+                || self.agent.budget_memberships.entries.len() + prepared.len() >= 4096
+            {
+                return Err(MezError::conflict(
+                    "budget restore capacity or duplicate subject",
+                ));
+            }
+            let store = self.persistence.cloned_token_usage_store().ok_or_else(|| {
+                MezError::invalid_state("budget restore accounting store unavailable")
+            })?;
+            let (member, lease) = store.restore_native_budget_membership(transcripts, reference)?;
+            prepared.insert(
+                record.conversation_id.clone(),
+                RuntimeBudgetRestore {
+                    store,
+                    transcripts: transcripts.clone(),
+                    member,
+                    owner: reference.owner.as_str().to_owned(),
+                    lease,
+                },
+            );
+        }
+        Ok(prepared)
+    }
+
+    /// Adopts a preflight holder only after ordinary hydration succeeded. It
+    /// preserves accounting, not native shell/MMP/cleanup identity or readiness.
+    pub(crate) fn adopt_restored_budget_membership(
+        &mut self,
+        pane: &str,
+        work: RuntimeBudgetRestore,
+    ) -> Result<()> {
+        let session = self
+            .agent_shell_store()
+            .get(pane)
+            .filter(|session| session.session_id == work.member.conversation)
+            .ok_or_else(|| MezError::conflict("budget restore target changed"))?;
+        let native = session.native_message_incarnation.clone();
+        self.agent.budget_memberships.entries.insert(
+            work.member.conversation.clone(),
+            Entry {
+                identity: Arc::new(()),
+                preparation: Arc::new(()),
+                ready: false,
+                store: work.store,
+                transcripts: work.transcripts,
+                pane: pane.to_owned(),
+                native,
+                owner: work.owner,
+                source: Source::Existing,
+                member: Some(work.member),
+                lease: Some(work.lease),
+            },
+        );
+        Ok(())
+    }
+
+    /// Exercises the real preparation/claim boundary before product activation.
+    /// Only isolated tests enable these incomplete lifecycle ports for now.
+    #[cfg(test)]
+    pub(crate) fn fail_budget_restore_after_install_for_tests(&mut self) {
+        self.agent.budget_memberships.fail_restore_after_install = true;
+    }
+
+    /// Fault at the actual post-install/pre-custody boundary, scoped to one
+    /// generated runtime rather than a global process environment switch.
+    #[cfg(test)]
+    pub(crate) fn check_budget_restore_after_install_for_tests(&mut self) -> Result<()> {
+        if std::mem::take(&mut self.agent.budget_memberships.fail_restore_after_install) {
+            return Err(MezError::invalid_state(
+                "injected budget restore post-install failure",
+            ));
+        }
         Ok(())
     }
 

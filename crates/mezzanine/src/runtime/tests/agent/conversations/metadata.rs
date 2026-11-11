@@ -40,6 +40,7 @@ fn runtime_resume_restores_provider_token_usage_from_session_metadata() {
                 mezzanine_session_id: mezzanine_session_id.clone(),
                 pane_id: "%1".to_string(),
                 conversation_id: "saved-tokens".to_string(),
+                budget_reference: None,
                 native_message_incarnation: None,
                 persistent_subagent_owned: false,
                 primary_display_name: None,

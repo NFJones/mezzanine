@@ -1498,6 +1498,7 @@ mod tests {
                         mezzanine_session_id: mezzanine_session_id.clone(),
                         pane_id: bound_pane_id.clone(),
                         conversation_id: "restored-agent-bound".to_string(),
+                        budget_reference: None,
                         native_message_incarnation: None,
                         persistent_subagent_owned: false,
                         primary_display_name: None,

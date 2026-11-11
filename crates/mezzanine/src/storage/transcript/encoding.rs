@@ -36,7 +36,9 @@ const LEGACY_PROMPT_HISTORY_VERSION: &str = "mez-agent-prompt-history/1";
 ///
 /// Keeping this value documented makes the contract explicit at the module
 /// boundary and avoids relying on call-site inference.
-const AGENT_SESSION_METADATA_VERSION: &str = "mez-agent-session-metadata/8";
+const AGENT_SESSION_METADATA_VERSION: &str = "mez-agent-session-metadata/9";
+/// Original native shell epochs before explicit budget provenance.
+const PRE_BUDGET_AGENT_SESSION_METADATA_VERSION: &str = "mez-agent-session-metadata/8";
 /// Qualified persistent ownership before original native shell epochs.
 const UNBOUND_AGENT_SESSION_METADATA_VERSION: &str = "mez-agent-session-metadata/7";
 /// Acceptance-stamped receipts before explicit persistent ownership qualification.
@@ -539,6 +541,8 @@ pub(super) fn encode_agent_session_metadata(metadata: &AgentSessionMetadata) -> 
         metadata.persistent_subagent_owned.to_string(),
         serde_json::to_string(&metadata.native_message_incarnation)
             .map_err(|_| MezError::invalid_state("native epoch metadata encoding failed"))?,
+        serde_json::to_string(&metadata.budget_reference)
+            .map_err(|_| MezError::invalid_state("budget checkpoint encoding failed"))?,
     ]
     .into_iter()
     .map(|field| escape_field(&field))
@@ -554,15 +558,21 @@ pub(super) fn decode_agent_session_metadata(line: &str) -> Result<AgentSessionMe
         .is_some_and(|version| version == LEGACY_AGENT_SESSION_METADATA_VERSION);
     let current = fields.first().is_some_and(|version| {
         version == AGENT_SESSION_METADATA_VERSION
+            || version == PRE_BUDGET_AGENT_SESSION_METADATA_VERSION
             || version == UNBOUND_AGENT_SESSION_METADATA_VERSION
             || version == UNQUALIFIED_AGENT_SESSION_METADATA_VERSION
             || version == UNSTAMPED_AGENT_SESSION_METADATA_VERSION
     });
-    let native_version = fields
+    let budget_version = fields
         .first()
         .is_some_and(|version| version == AGENT_SESSION_METADATA_VERSION);
+    let native_version = fields.first().is_some_and(|version| {
+        version == AGENT_SESSION_METADATA_VERSION
+            || version == PRE_BUDGET_AGENT_SESSION_METADATA_VERSION
+    });
     let qualified_version = fields.first().is_some_and(|version| {
         version == AGENT_SESSION_METADATA_VERSION
+            || version == PRE_BUDGET_AGENT_SESSION_METADATA_VERSION
             || version == UNBOUND_AGENT_SESSION_METADATA_VERSION
     });
     let project_version = fields
@@ -574,7 +584,8 @@ pub(super) fn decode_agent_session_metadata(line: &str) -> Result<AgentSessionMe
     let unordered_version = fields
         .first()
         .is_some_and(|version| version == UNORDERED_AGENT_SESSION_METADATA_VERSION);
-    if !((native_version && fields.len() == 37)
+    if !((budget_version && fields.len() == 38)
+        || (native_version && !budget_version && fields.len() == 37)
         || (!native_version && qualified_version && fields.len() == 36)
         || (current && !qualified_version && fields.len() == 35)
         || (unordered_version && fields.len() == 35)
@@ -720,6 +731,12 @@ pub(super) fn decode_agent_session_metadata(line: &str) -> Result<AgentSessionMe
         mezzanine_session_id: fields[1].clone(),
         pane_id: fields[2].clone(),
         conversation_id: fields[3].clone(),
+        budget_reference: if budget_version {
+            serde_json::from_str(&fields[37])
+                .map_err(|_| MezError::invalid_args("invalid budget checkpoint reference"))?
+        } else {
+            None
+        },
         native_message_incarnation: if native_version {
             serde_json::from_str(&fields[36])
                 .map_err(|_| MezError::invalid_args("invalid native epoch metadata"))?
