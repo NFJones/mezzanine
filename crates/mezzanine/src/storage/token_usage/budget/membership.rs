@@ -104,6 +104,24 @@ impl TokenUsageStore {
                     "budget parent is not active in original root",
                 ));
             }
+            // An explicitly associated legacy conversation introduces unknown
+            // historical coverage, not historical spend. Preserve the original
+            // account boundary/counters/overrides and expose that gap atomically
+            // with membership registration; exact replay above is inert.
+            if member.legacy_coverage_gap {
+                let mut root = account(&tx, &member.root)?;
+                if !root.legacy_coverage_gap {
+                    root.legacy_coverage_gap = true;
+                    root.accounting_revision =
+                        root.accounting_revision.checked_add(1).ok_or_else(|| {
+                            MezError::invalid_state("budget accounting revision overflow")
+                        })?;
+                    tx.execute(
+                        "UPDATE budget_roots SET body=?1 WHERE id=?2",
+                        params![encode(&root)?, member.root.as_str()],
+                    )?;
+                }
+            }
         } else {
             let original = BudgetAccount {
                 root: member.root.clone(),

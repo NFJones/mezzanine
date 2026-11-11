@@ -60,6 +60,34 @@ impl AgentTranscriptStore {
             .budget_membership)
     }
 
+    /// Positive absence proof for correcting a rejected, unpublished human
+    /// choice. Existing metadata, mirror, intent or lifetime inode prevents
+    /// reselection, even when inconsistent. This never deletes/repairs evidence.
+    pub(crate) fn budget_publication_is_absent(&self, conversation: &str) -> Result<bool> {
+        validate_conversation_id(conversation)?;
+        let _lease = self.acquire_conversation_lock(conversation)?;
+        if self
+            .read_conversation_metadata_locked(conversation)?
+            .budget_membership
+            .is_some()
+        {
+            return Ok(false);
+        }
+        let directory = self.session_dir_for(conversation)?;
+        for name in [
+            BINDING_FILE,
+            "budget-binding.lock",
+            ".budget-binding-v2.json.tmp",
+        ] {
+            match std_fs::symlink_metadata(directory.join(name)) {
+                Ok(_) => return Ok(false),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error.into()),
+            }
+        }
+        Ok(true)
+    }
+
     /// Publishes one immutable reference, retaining unrelated sidecar settings.
     /// After this succeeds, even an unrelated later metadata write must preserve
     /// it. A changed root/namespace/operation is never an update or repair.

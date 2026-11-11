@@ -1234,7 +1234,7 @@ again. The deferred command worker acquires custody before its replay lock;
 actor adoption and checkpoint failure restore the previous shell and accounting
 holder together. A child resumed without its parent keeps its account but gains
 no parent close/reuse/cleanup authority. These ports still do not activate budget
-enforcement or resolve unproven legacy ancestry.
+enforcement.
 
 Authenticated human saved forks capture a fresh independent accounting proposal;
 copying history does not copy the source's lifetime expense. Generic historical
@@ -1242,6 +1242,22 @@ binding is not new-account authority, and delegated context forks keep their
 original owner. Setup rollback discards a proposal only after actual target
 teardown; uncertain cleanup retains it nonready. Human new/clear departures
 release only obsolete actor custody, while issued workers keep their own holders.
+
+The staged legacy-resolution port requires the same attached human primary to
+confirm an explicit existing account anchor or a new independent account, with
+the proposed accounting-start boundary and historical coverage gap disclosed.
+Cancelling leaves the conversation nonready. Confirmation captures a proposal;
+only the original preparation worker can publish it. Rebind, repository change
+or competing preparation invalidates the confirmation. Association with an
+existing account preserves all known expense, limits and its original start
+boundary, while marking historical coverage incomplete. It grants no structural
+parent or teardown authority. The user-facing confirmation UI remains downstream;
+these internal ports do not make budget controls or enforcement operational.
+The captured disclosure labels the exact new/existing choice and anchor, the
+new membership boundary, and whether the account starts now or keeps its existing
+start. An invalid selection can be corrected after the exact worker proves no
+publication evidence exists and all other preparation holders have retired;
+partial or uncertain publication keeps the original proposal instead.
 
 Actor capture memory has a separate 4,096-entry bound. At capacity, completed
 detached captures can be reclaimed without touching durable membership or usage.

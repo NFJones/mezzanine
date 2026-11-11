@@ -56,6 +56,7 @@ impl RuntimeSessionService {
                 identity: Arc::new(()),
                 preparation: Arc::new(()),
                 ready: false,
+                namespace: None,
                 store,
                 transcripts,
                 pane: pane.to_owned(),

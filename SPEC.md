@@ -21588,6 +21588,28 @@ after proven target teardown; uncertain teardown MUST retain it nonready. A
 committed new/clear departure MUST release only its exact old actor holder,
 never a worker descriptor or durable account, so later resume remains possible.
 
+Unprovable legacy ancestry MAY be resolved only through an authenticated human
+confirmation of an explicitly selected active account anchor or a new independent
+account. The confirmation MUST bind the original conversation, native incarnation,
+repositories and unresolved proposal generation, and disclose its accounting-start
+boundary and incomplete historical coverage. Cancellation MUST leave the original
+membership unavailable. A selected anchor is an accounting association, not proof
+of structural lineage or cleanup authority. Existing known expense, overrides and
+the account's original start boundary MUST remain unchanged; introducing a legacy
+member MUST atomically mark account coverage incomplete. Confirmation alone MUST
+NOT imply durable publication or readiness. The original worker-observed namespace
+MUST survive unresolved preparation; a same-path ledger replacement MUST refuse.
+The existing worker MUST validate immutable active anchor metadata, completed
+native mirror and unchanged private inode, retain the same proposal through
+partial publication and refuse changed/missing provenance, never reset an account.
+An invalid anchor choice MAY become selectable again only after its exact worker
+proves target membership, metadata, mirror, intent and lifetime inode absent,
+before attempting publication, with no other preparation owner outstanding. Any
+uncertain or partial publication MUST retain its original proposal. Disclosure
+MUST identify the captured choice and anchor, distinguish membership start from
+preserved existing-account start, and explicitly label incomplete historical usage.
+These ports do not supply the downstream confirmation UI or activate enforcement.
+
 Runtime budget membership captures MUST remain bounded at4096 entries. Capacity
 reclamation MAY discard only detached, acknowledged actor metadata with no
 outstanding preparation or rollback owner. Current pane bindings, saved loop

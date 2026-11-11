@@ -226,6 +226,41 @@ impl AgentTranscriptStore {
         }
     }
 
+    /// Qualifies an accounting anchor without acquiring its lifetime lock or
+    /// granting any live custody. A healthy live anchor is allowed; missing,
+    /// incomplete, foreign or replaced evidence is never repaired by selection.
+    pub(crate) fn validate_native_budget_anchor(
+        &self,
+        member: &BudgetMembership,
+        owner: &str,
+    ) -> Result<()> {
+        member.validate()?;
+        validate_owner(owner)?;
+        let _conversation = self.acquire_conversation_lock(&member.conversation)?;
+        let directory = self.session_dir_for(&member.conversation)?;
+        let mirror = read_native(&directory.join(BINDING_FILE))?
+            .ok_or_else(|| MezError::conflict("budget account anchor mirror missing"))?;
+        if !mirror.bound
+            || mirror.membership != *member
+            || mirror.owner != owner
+            || self
+                .read_conversation_metadata_locked(&member.conversation)?
+                .budget_membership
+                .as_ref()
+                != Some(member)
+        {
+            return Err(MezError::conflict(
+                "budget account anchor provenance changed",
+            ));
+        }
+        let metadata = std_fs::symlink_metadata(directory.join(LOCK_FILE))?;
+        validate_lock_file(&metadata)?;
+        if identity(&metadata) != mirror.lock {
+            return Err(MezError::conflict("budget account anchor inode changed"));
+        }
+        Ok(())
+    }
+
     /// Reacquires the exact completed original binding without rewriting any
     /// record. Used by restore preflight before changing a live pane. A saved
     /// owner alone is never authority: the original private inode must be free,

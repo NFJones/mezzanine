@@ -10,6 +10,7 @@ use rusqlite::params;
 mod native_custody;
 mod policy_projection;
 mod reporting;
+mod resolution;
 
 struct Fixture {
     store: TokenUsageStore,

@@ -7,6 +7,7 @@ use crate::storage::token_usage::budget::membership::BudgetMembershipState;
 
 mod checkpoint;
 mod reclamation;
+mod resolution;
 mod transitions;
 
 struct Scene {

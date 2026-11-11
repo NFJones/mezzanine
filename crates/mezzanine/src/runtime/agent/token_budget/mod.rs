@@ -22,8 +22,15 @@ use crate::storage::token_usage::budget::membership::BudgetMembership;
 use crate::storage::transcript::{AgentTranscriptStore, BudgetBindingLease};
 
 mod reclamation;
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "confirmation UI is a downstream budget slice")
+)]
+mod resolution;
 mod resume;
 mod transitions;
+#[cfg(test)]
+pub(crate) use resolution::{RuntimeBudgetLegacyAccountStart, RuntimeBudgetLegacyChoice};
 pub(crate) use resume::RuntimeBudgetResumeCapture;
 
 /// Bounds actor capture ownership, not lifetime accounts in the durable ledger.
@@ -47,6 +54,20 @@ enum Source {
     },
     /// No creation permission: durable original membership must already exist.
     Existing,
+    /// Explicit human association, not a claim of provable historical lineage.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "constructed by the staged human confirmation port"
+        )
+    )]
+    LegacyExisting {
+        root: BudgetRootId,
+        anchor: String,
+        operation: String,
+        started_at: u64,
+    },
 }
 
 impl Source {
@@ -66,6 +87,8 @@ struct Entry {
     identity: Arc<()>,
     preparation: Arc<()>,
     ready: bool,
+    /// First worker-qualified namespace survives unresolved legacy preparation.
+    namespace: Option<String>,
     store: TokenUsageStore,
     transcripts: AgentTranscriptStore,
     pane: String,
@@ -92,6 +115,7 @@ pub(crate) struct RuntimeBudgetMemberships {
 pub(crate) struct RuntimeBudgetMembershipWork {
     store: TokenUsageStore,
     transcripts: AgentTranscriptStore,
+    namespace: Option<String>,
     conversation: String,
     pane: String,
     native: mez_agent::messaging::MessageNativeIncarnation,
@@ -105,6 +129,9 @@ pub(crate) struct RuntimeBudgetMembershipWork {
 /// Exact returned source plus its publication outcome, never an inferred ACK.
 pub(crate) struct RuntimeBudgetMembershipOutcome {
     work: RuntimeBudgetMembershipWork,
+    namespace: Option<String>,
+    /// Only a prepublication anchor refusal with positive absence evidence.
+    unpublished_legacy_rejection: bool,
     result: Result<(BudgetMembership, BudgetBindingLease)>,
 }
 
@@ -123,12 +150,37 @@ pub(crate) struct RuntimeBudgetRestore {
 impl RuntimeBudgetMembershipWork {
     /// Runs only on the existing supervised external-preparation worker.
     pub(crate) fn execute(self) -> RuntimeBudgetMembershipOutcome {
-        let result = self.publish();
-        RuntimeBudgetMembershipOutcome { work: self, result }
+        let mut unpublished_legacy_rejection = false;
+        let (namespace, result) = match self.store.budget_namespace() {
+            Ok(namespace) => {
+                let result = if self
+                    .namespace
+                    .as_ref()
+                    .is_some_and(|expected| expected != &namespace)
+                {
+                    Err(MezError::conflict(
+                        "original budget accounting namespace changed",
+                    ))
+                } else {
+                    self.publish(namespace.clone(), &mut unpublished_legacy_rejection)
+                };
+                (Some(namespace), result)
+            }
+            Err(error) => (None, Err(error)),
+        };
+        RuntimeBudgetMembershipOutcome {
+            work: self,
+            namespace,
+            unpublished_legacy_rejection,
+            result,
+        }
     }
 
-    fn publish(&self) -> Result<(BudgetMembership, BudgetBindingLease)> {
-        let namespace = self.store.budget_namespace()?;
+    fn publish(
+        &self,
+        namespace: String,
+        unpublished_legacy_rejection: &mut bool,
+    ) -> Result<(BudgetMembership, BudgetBindingLease)> {
         let existing = self
             .transcripts
             .conversation_budget_membership(&self.conversation)?;
@@ -170,6 +222,50 @@ impl RuntimeBudgetMembershipWork {
                         operation.clone(),
                         *started_at,
                         parent.legacy_coverage_gap,
+                    )
+                }
+                Source::LegacyExisting {
+                    root,
+                    anchor,
+                    operation,
+                    started_at,
+                } => {
+                    let validation = (|| -> Result<()> {
+                        let (parent, state) =
+                            self.store.budget_membership(anchor)?.ok_or_else(|| {
+                                MezError::conflict("selected budget account anchor unavailable")
+                            })?;
+                        if parent.root != *root || parent.namespace != namespace
+                            || state != crate::storage::token_usage::budget::membership::BudgetMembershipState::Active
+                        {
+                            return Err(MezError::conflict("selected budget account anchor changed"));
+                        }
+                        let owner = self.store.budget_binding_owner(&parent)?.ok_or_else(|| {
+                            MezError::conflict("selected budget account anchor owner missing")
+                        })?;
+                        self.transcripts
+                            .validate_native_budget_anchor(&parent, &owner)
+                    })();
+                    if let Err(error) = validation {
+                        // No mutation has been attempted by this worker. A prior
+                        // partial publication still forbids changing proposals.
+                        // Any failed absence observation retains the original.
+                        *unpublished_legacy_rejection = self
+                            .store
+                            .budget_membership(&self.conversation)
+                            .is_ok_and(|member| member.is_none())
+                            && self
+                                .transcripts
+                                .budget_publication_is_absent(&self.conversation)
+                                .is_ok_and(|absent| absent);
+                        return Err(error);
+                    }
+                    (
+                        root.clone(),
+                        Some(anchor.clone()),
+                        operation.clone(),
+                        *started_at,
+                        true,
                     )
                 }
                 Source::Existing => {
@@ -275,6 +371,7 @@ impl RuntimeSessionService {
                     identity: Arc::new(()),
                     preparation: Arc::new(()),
                     ready: false,
+                    namespace: None,
                     store: store.clone(),
                     transcripts: transcripts.clone(),
                     pane: turn.pane_id.clone(),
@@ -321,6 +418,7 @@ impl RuntimeSessionService {
         Ok(Some(RuntimeBudgetMembershipWork {
             store,
             transcripts,
+            namespace: entry.namespace.clone(),
             conversation: turn.conversation_id,
             pane: turn.pane_id,
             native: entry.native.clone(),
@@ -367,6 +465,33 @@ impl RuntimeSessionService {
             || entry.owner != work.owner
         {
             return Ok(());
+        }
+        if let Some(namespace) = outcome.namespace {
+            if entry
+                .namespace
+                .as_ref()
+                .is_some_and(|expected| expected != &namespace)
+            {
+                return Err(MezError::conflict(
+                    "original budget accounting namespace changed",
+                ));
+            }
+            entry.namespace = Some(namespace);
+        }
+        if outcome.unpublished_legacy_rejection
+            && outcome.result.is_err()
+            && matches!(entry.source, Source::LegacyExisting { .. })
+            && entry.member.is_none()
+            && entry.lease.is_none()
+            && Arc::strong_count(&entry.identity) == 2
+            && Arc::strong_count(&entry.preparation) == 2
+        {
+            // Only this exact prepublication result permits a new human choice.
+            // No durable evidence is deleted; future publication still checks
+            // immutable target identity against concurrent writers.
+            entry.source = Source::Existing;
+            entry.identity = Arc::new(());
+            entry.preparation = Arc::new(());
         }
         let (member, lease) = outcome.result?;
         if member.conversation != work.conversation {
@@ -518,6 +643,7 @@ impl RuntimeSessionService {
                 identity: Arc::new(()),
                 preparation: Arc::new(()),
                 ready: false,
+                namespace: Some(parent.namespace.clone()),
                 store,
                 transcripts,
                 pane: child_pane.to_owned(),
@@ -650,6 +776,7 @@ impl RuntimeSessionService {
                 identity: Arc::new(()),
                 preparation: Arc::new(()),
                 ready: false,
+                namespace: Some(work.member.namespace.clone()),
                 store: work.store,
                 transcripts: work.transcripts,
                 pane: pane.to_owned(),
