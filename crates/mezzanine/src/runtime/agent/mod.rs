@@ -284,6 +284,7 @@ mod shell_state;
 mod skills;
 mod startup;
 mod steering;
+pub(crate) mod token_budget;
 pub(crate) use steering::Receipt as RuntimeSteeringReceipt;
 mod subagents;
 mod trace;
@@ -350,6 +351,8 @@ pub(crate) struct RuntimeCompactionStatus {
 /// private so neighboring runtime subsystems use typed agent operations.
 #[derive(Debug, Default)]
 pub(crate) struct RuntimeAgentComponent {
+    /// Immutable accounting ownership retained independently of delegation depth.
+    budget_memberships: token_budget::RuntimeBudgetMemberships,
     /// Fair scheduling state for queued, running, and blocked agent turns.
     agent_scheduler: AgentScheduler,
     /// Provider retry attempts and effect-boundary phase owned by `mez-agent`.

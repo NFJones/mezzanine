@@ -343,6 +343,7 @@ impl RuntimeSessionService {
                 // Saved epoch bytes remain inert on generic transcript restore;
                 // continuity requires the original-store whole-session path.
                 native_message_incarnation: Default::default(),
+                budget_conversation_birth: Default::default(),
                 pane_id: pane_id.clone(),
                 native_working_directory: None,
                 project_scope: target_project_scope.clone(),

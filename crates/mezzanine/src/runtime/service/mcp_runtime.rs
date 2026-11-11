@@ -38,6 +38,7 @@ impl RuntimeSessionService {
         work: RuntimeAgentProviderPreparationWork,
     ) -> RuntimeAgentProviderPreparationOutcome {
         let RuntimeAgentProviderPreparationWork {
+            budget_membership,
             accounting_projects,
             mcp_plans,
             allow_stdio,
@@ -48,6 +49,17 @@ impl RuntimeSessionService {
             refresh_provider_credential,
             attempted_mcp_servers,
         } = work;
+        let budget_membership = if let Some(work) = budget_membership {
+            Some(tokio::task::spawn_blocking(move || work.execute()).await)
+        } else {
+            None
+        };
+        // A join failure is surfaced as preparation failure below, never as a
+        // manufactured membership acknowledgement.
+        let budget_join_failed = budget_membership
+            .as_ref()
+            .is_some_and(|result| result.is_err());
+        let budget_membership = budget_membership.and_then(|result| result.ok());
         let accounting_projects = if let Some((store, records)) = accounting_projects {
             let worker_store = store.clone();
             let worker_records = records.clone();
@@ -229,9 +241,16 @@ impl RuntimeSessionService {
             None
         };
         RuntimeAgentProviderPreparationOutcome {
+            budget_membership,
             accounting_projects,
             mcp,
-            provider_refresh_error,
+            provider_refresh_error: if budget_join_failed {
+                Some(MezError::invalid_state(
+                    "budget membership preparation worker failed",
+                ))
+            } else {
+                provider_refresh_error
+            },
             attempted_mcp_servers,
         }
     }
@@ -279,7 +298,9 @@ impl RuntimeSessionService {
             .provider(&profile.provider)
             .ok_or_else(|| MezError::config("provider preparation provider is not configured"))?;
         let identity = provider_auth_refresh_identity(provider);
+        let budget_membership = self.prepare_runtime_budget_membership(turn_id)?;
         let mut work = self.prepare_external_provider_work(true, allow_stdio)?;
+        work.budget_membership = budget_membership;
         work.provider_auth_refresh_profiles = vec![identity];
         Ok(work)
     }
@@ -358,6 +379,7 @@ impl RuntimeSessionService {
                 }
             }
             Ok(RuntimeAgentProviderPreparationWork {
+                budget_membership: None,
                 accounting_projects: self.persistence.cloned_token_usage_store().zip(
                     self.integration
                         .project_trust_store()
@@ -386,6 +408,11 @@ impl RuntimeSessionService {
         &mut self,
         outcome: RuntimeAgentProviderPreparationOutcome,
     ) -> Result<()> {
+        // Independent prepared transports must return to their original owner
+        // even when membership publication refused this conversation.
+        let budget_result = outcome.budget_membership.map_or(Ok(()), |membership| {
+            self.apply_runtime_budget_membership(membership)
+        });
         if let Some((store, records, result)) = outcome.accounting_projects {
             let current = self
                 .integration
@@ -459,6 +486,7 @@ impl RuntimeSessionService {
         *self.integration.mcp_registry_mut() = registry;
         result?;
         let _ = self.persist_registry_update_plan(&self.registry_update_plan());
+        budget_result?;
         if let Some(error) = outcome.provider_refresh_error {
             return Err(error);
         }

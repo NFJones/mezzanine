@@ -195,6 +195,26 @@ pub enum AgentConversationKind {
     Subagent,
 }
 
+/// Runtime-only evidence of a genuinely fresh native conversation constructor.
+/// Default and generic restore carry no birth evidence; labels, turn triggers
+/// and decoded metadata cannot recreate it. Exact rollback clones preserve it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AgentConversationBirth(Option<(String, crate::messaging::MessageNativeIncarnation)>);
+
+impl AgentConversationBirth {
+    /// Checks the original conversation and actual native binding together.
+    /// This evidence classifies accounting creation, never execution authority.
+    pub fn matches(
+        &self,
+        conversation: &str,
+        native: &crate::messaging::MessageNativeIncarnation,
+    ) -> bool {
+        self.0.as_ref().is_some_and(|(original, incarnation)| {
+            original == conversation && incarnation == native
+        })
+    }
+}
+
 /// Carries Agent Shell Session state for this subsystem.
 ///
 /// The type keeps related data explicit so callers can inspect and move
@@ -210,6 +230,9 @@ pub struct AgentShellSession {
     /// conversation labels. Exact rollback clones preserve it; independent
     /// bindings create a new value. Generic checkpoint restore cannot revive it.
     pub native_message_incarnation: crate::messaging::MessageNativeIncarnation,
+    /// Constructor-only accounting birth witness. Never serialized or inferred
+    /// from restored conversation kind, transcript count or supplied identity.
+    pub budget_conversation_birth: AgentConversationBirth,
     /// Stores the pane id value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
@@ -346,11 +369,17 @@ impl AgentShellStore {
         let pane_id = pane_id.into();
         validate_agent_shell_required("pane id", &pane_id)?;
         if !self.sessions_by_pane.contains_key(&pane_id) {
+            let session_id = new_agent_session_uuid();
+            let native_message_incarnation = crate::messaging::MessageNativeIncarnation::default();
             self.sessions_by_pane.insert(
                 pane_id.clone(),
                 AgentShellSession {
-                    session_id: new_agent_session_uuid(),
-                    native_message_incarnation: Default::default(),
+                    budget_conversation_birth: AgentConversationBirth(Some((
+                        session_id.clone(),
+                        native_message_incarnation.clone(),
+                    ))),
+                    session_id,
+                    native_message_incarnation,
                     pane_id: pane_id.clone(),
                     native_working_directory: None,
                     project_scope: None,
@@ -809,6 +838,7 @@ impl AgentShellStore {
             ));
         }
         session.session_id = conversation_id;
+        session.budget_conversation_birth = Default::default();
         if !persistence.ephemeral {
             session.native_message_incarnation = Default::default();
         }
@@ -918,11 +948,17 @@ impl AgentShellStore {
                 "cannot start a new conversation while an agent turn is running",
             ));
         }
+        let session_id = new_agent_session_uuid();
+        let native_message_incarnation = crate::messaging::MessageNativeIncarnation::default();
         self.sessions_by_pane.insert(
             pane_id.to_string(),
             AgentShellSession {
-                session_id: new_agent_session_uuid(),
-                native_message_incarnation: Default::default(),
+                budget_conversation_birth: AgentConversationBirth(Some((
+                    session_id.clone(),
+                    native_message_incarnation.clone(),
+                ))),
+                session_id,
+                native_message_incarnation,
                 pane_id: pane_id.to_string(),
                 native_working_directory: None,
                 project_scope: None,
@@ -1382,6 +1418,70 @@ pub fn agent_shell_visibility_name(visibility: AgentShellVisibility) -> &'static
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Only fresh construction carries birth evidence. Cloned rollback is exact;
+    /// delegated/ephemeral/generic bindings and public labels cannot recreate it.
+    #[test]
+    fn agent_shell_budget_birth_is_native_constructor_bound() {
+        let mut store = AgentShellStore::default();
+        let original = store.enter_or_resume("%1").unwrap().clone();
+        assert!(
+            original
+                .budget_conversation_birth
+                .matches(&original.session_id, &original.native_message_incarnation)
+        );
+        assert!(
+            !original
+                .budget_conversation_birth
+                .matches("other", &original.native_message_incarnation)
+        );
+        assert!(
+            !original
+                .budget_conversation_birth
+                .matches(&original.session_id, &Default::default())
+        );
+        assert!(
+            !AgentConversationBirth::default()
+                .matches(&original.session_id, &original.native_message_incarnation)
+        );
+        for kind in [0, 1, 2] {
+            let mut bound = store.clone();
+            match kind {
+                0 => {
+                    bound
+                        .bind_conversation("%1", &original.session_id, 0)
+                        .unwrap();
+                }
+                1 => {
+                    bound
+                        .bind_subagent_conversation_with_lineage("%1", "child", 0, None)
+                        .unwrap();
+                }
+                _ => {
+                    bound
+                        .bind_ephemeral_conversation_with_lineage("%1", "ephemeral", 0, None)
+                        .unwrap();
+                }
+            }
+            let session = bound.get("%1").unwrap();
+            assert!(
+                !session
+                    .budget_conversation_birth
+                    .matches(&session.session_id, &session.native_message_incarnation)
+            );
+        }
+        let fresh = store.start_new_conversation("%1").unwrap();
+        assert!(
+            fresh
+                .budget_conversation_birth
+                .matches(&fresh.session_id, &fresh.native_message_incarnation)
+        );
+        assert!(
+            !original
+                .budget_conversation_birth
+                .matches(&fresh.session_id, &fresh.native_message_incarnation)
+        );
+    }
 
     /// The human current-project browser belongs to discovery, and its help
     /// must distinguish a literal all-session option from model discovery.

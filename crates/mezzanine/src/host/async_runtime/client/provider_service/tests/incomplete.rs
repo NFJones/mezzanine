@@ -103,9 +103,11 @@ pub(super) async fn prepared_fixture(prompt: &str) -> (RuntimeSessionService, Ag
     service.set_auth_store(crate::security::auth::AuthStore::new(
         crate::security::auth::AuthPaths::under_config_root(&root.join("auth")),
     ));
-    service.set_token_usage_store(crate::storage::token_usage::TokenUsageStore::new(
-        root.join("usage.sqlite"),
-    ));
+    let usage = crate::storage::token_usage::TokenUsageStore::new(root.join("usage.sqlite"));
+    // Match host startup: attaching a handle does not initialize a missing
+    // budget ledger, and preparation must never manufacture one after loss.
+    usage.initialize(1).unwrap();
+    service.set_token_usage_store(usage);
     service.set_agent_transcript_store(crate::storage::transcript::AgentTranscriptStore::new(
         root.join("transcripts"),
     ));

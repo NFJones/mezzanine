@@ -50,9 +50,9 @@ async fn qualify_terminal_facts(
     let store = AgentTranscriptStore::new(root.join("transcripts"));
     let mut service = test_service();
     service.set_agent_transcript_store(store.clone());
-    service.set_token_usage_store(crate::storage::token_usage::TokenUsageStore::new(
-        root.join("usage.sqlite"),
-    ));
+    let usage = crate::storage::token_usage::TokenUsageStore::new(root.join("usage.sqlite"));
+    usage.initialize(1).unwrap();
+    service.set_token_usage_store(usage);
     service.set_auth_store(crate::security::auth::AuthStore::new(
         crate::security::auth::AuthPaths::under_config_root(&root.join("auth")),
     ));
@@ -80,6 +80,9 @@ async fn qualify_terminal_facts(
         .turn(&task.turn_id)
         .unwrap()
         .clone();
+    let preparation = service.prepare_agent_provider_work(&turn.turn_id).unwrap();
+    let outcome = RuntimeSessionService::execute_agent_provider_preparation(preparation).await;
+    service.apply_agent_provider_preparation(outcome).unwrap();
     let facts = mez_agent::recovery_attribution::RecoveryFacts {
         turn_id: turn.turn_id.clone(),
         agent_id: turn.agent_id.clone(),

@@ -15,6 +15,9 @@ use std::collections::BTreeMap;
 /// worker performs credential refresh and MCP discovery without holding the
 /// actor. The resulting outcome returns every live transport to actor ownership.
 pub(crate) struct RuntimeAgentProviderPreparationWork {
+    /// Original membership publication in the existing external preparation lane.
+    pub(crate) budget_membership:
+        Option<crate::runtime::agent::token_budget::RuntimeBudgetMembershipWork>,
     /// Registered project snapshot to qualify on the blocking worker, not the actor.
     pub(crate) accounting_projects: Option<(
         crate::storage::token_usage::TokenUsageStore,
@@ -40,6 +43,9 @@ pub(crate) struct RuntimeAgentProviderPreparationWork {
 
 /// External preparation result returned to the serialized runtime actor.
 pub(crate) struct RuntimeAgentProviderPreparationOutcome {
+    /// Exact returned accounting publication owner and outcome.
+    pub(crate) budget_membership:
+        Option<crate::runtime::agent::token_budget::RuntimeBudgetMembershipOutcome>,
     /// Mapping result retains exact repository ownership; failure means unavailable.
     pub(crate) accounting_projects: Option<(
         crate::storage::token_usage::TokenUsageStore,

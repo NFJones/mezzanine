@@ -877,6 +877,9 @@ impl RuntimeSessionService {
         let Some(turn) = self.ready_agent_provider_turn(agent_id, turn_id)? else {
             return Ok(None);
         };
+        if !self.runtime_budget_membership_is_ready(&turn) {
+            return Ok(None);
+        }
         // Every transport captures authority and accounting from current trust.
         // Native filesystem preflight is not a freshness boundary for managed
         // providers. Refresh failure contracts authority and prevents dispatch.

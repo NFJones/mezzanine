@@ -30,3 +30,4 @@ mod scheduling;
 mod shell;
 mod skills;
 mod subagent_pane_close;
+mod token_budget;

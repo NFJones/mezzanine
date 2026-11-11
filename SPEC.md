@@ -16512,6 +16512,18 @@ refuse rather than silently recreate evidence. Future, foreign, symlink or
 oversized binding records MUST refuse. Runtime adoption still requires its own
 live conversation/generation and original-owner qualification.
 
+The internal runtime preparation ports MUST capture one original operation,
+native incarnation and repository before off-actor publication. Only the exact
+current preparation may acknowledge readiness; supersession, repository or
+binding replacement and failed revalidation MUST NOT reuse an earlier success.
+Membership refusal MUST NOT discard independently prepared MCP transports.
+Fresh-account creation MUST use native constructor-bound birth evidence, never
+turn-trigger, depth or restored-kind labels. Generic rebinding/restore MUST NOT
+reconstruct that evidence from storage. The preparation ports remain inactive
+in production until the full lifecycle, qualified retirement/rebind and active
+checkpoint owners are connected. Attaching repositories alone MUST NOT activate
+them or alter normal production conversation behavior.
+
 An optional cumulative input/output budget MUST belong to one durable root
 conversation and all its owned descendants and auxiliary inference. This includes
 task/persistent/nested children, routed work, loops, model sizing, repairs, retries,
