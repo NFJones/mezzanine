@@ -411,6 +411,14 @@ pub(super) fn path_completion_allowed(
     surface: SelectorSurface,
     context: &SelectorTokenContext,
 ) -> bool {
+    if surface == SelectorSurface::AgentCommand
+        && context
+            .tokens_before
+            .first()
+            .is_some_and(|command| command.trim_start_matches('/') == "compaction-mode")
+    {
+        return false;
+    }
     if surface == SelectorSurface::MezzanineCommand
         && mezzanine_role_suppresses_candidates(&context.role)
     {

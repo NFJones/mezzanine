@@ -75,6 +75,16 @@ pub(super) fn selector_candidates_with_filesystem(
     extra_candidates: &[SelectorExtraCandidate],
     filesystem_candidates: &[SelectorCandidate],
 ) -> Vec<SelectorCandidate> {
+    // This command has a finite grammar. Neither runtime extras nor prefetched
+    // filesystem snapshots may introduce operands the parser cannot consume.
+    if surface == SelectorSurface::AgentCommand
+        && context
+            .tokens_before
+            .first()
+            .is_some_and(|command| command.trim_start_matches('/') == "compaction-mode")
+    {
+        return agent_candidates(context);
+    }
     if surface == SelectorSurface::MezzanineCommand
         && mezzanine_role_suppresses_candidates(&context.role)
     {
@@ -382,6 +392,15 @@ pub(super) fn agent_argument_candidates(
     if command == "shell-mode" {
         let candidates = shell_mode_argument_candidates(context);
         return dedupe_selector_candidates(candidates);
+    }
+    if command == "compaction-mode" {
+        return match context.tokens_before.get(1..) {
+            Some([]) => value_candidates(&["status", "summary", "raw_tail", "reset"]),
+            Some([operation]) if matches!(operation.as_str(), "summary" | "raw_tail" | "reset") => {
+                flag_candidates(&["--global"])
+            }
+            _ => Vec::new(),
+        };
     }
     if command == "routing"
         && context

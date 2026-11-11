@@ -74,6 +74,10 @@ does not change approval or [sandbox authority](../safety-and-trust/sandboxing.m
 `/compaction-mode summary` or `/compaction-mode raw_tail` selects this live pane's
 next compaction policy. `/compaction-mode reset` removes its override. Append
 `--global` to set/reset the persistent default without clearing pane overrides.
+Press Tab after `/compaction-mode ` to browse `status`, `summary`, `raw_tail`,
+and `reset`; shadow text shows these optional operations without editing the
+draft. After `summary`, `raw_tail`, or `reset`, completion and shadow text offer
+the optional `--global` scope. Browsing these hints does not run the command.
 Only direct primary-client input may mutate it. Local/global changes wait for
 target/all-pane compaction to settle; status stays available. Selection itself
 does no model work. See [context and continuity](context-and-continuity.md).

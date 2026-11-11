@@ -2,6 +2,7 @@
 
 use super::*;
 
+mod compaction_mode;
 mod composer_bindings;
 mod external_editor;
 mod input;

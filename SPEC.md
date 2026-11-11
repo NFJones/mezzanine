@@ -15724,6 +15724,13 @@ The baseline command capabilities are:
   explicit override (or none), configured default, primary-file value/provenance,
   persistence acknowledgement and active captured mode. Only `summary`,
   `raw_tail`, and `reset` mutate selection; they MAY take one trailing `--global`.
+  The composer MUST offer `status`, `summary`, `raw_tail`, and `reset` as first
+  argument completions and expose them in an optional-argument shadow hint.
+  Only `summary`, `raw_tail`, and `reset` MAY offer a following `--global`
+  completion or optional-scope hint. Completed status/global forms and invalid
+  extra arguments MUST NOT advertise further options or filesystem operands.
+  Completion and shadow rendering MUST NOT submit the command, change selection
+  or configuration, or start compaction/provider work.
   Local selection MUST require authenticated primary input and create an explicit
   live-pane override even when equal to the default. Reset MUST remove it.
   Identical set/reset MUST be a no-op. Overrides MUST survive new/clear/resume

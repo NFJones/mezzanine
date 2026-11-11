@@ -361,6 +361,20 @@ fn parameter_shadow_hint(
         && context
             .tokens_before
             .first()
+            .is_some_and(|command| command.trim_start_matches('/') == "compaction-mode")
+        && let Some([operation]) = context.tokens_before.get(1..)
+        && matches!(operation.as_str(), "summary" | "raw_tail" | "reset")
+    {
+        return Some(SelectorShadowHint {
+            insert_at: cursor,
+            text: " [--global]".to_string(),
+            kind: SelectorCandidateKind::Value,
+        });
+    }
+    if surface == SelectorSurface::AgentCommand
+        && context
+            .tokens_before
+            .first()
             .is_some_and(|command| command.trim_start_matches('/') == "sandbox")
         && let Some(text) = sandbox_parameter_shadow_text(context)
     {

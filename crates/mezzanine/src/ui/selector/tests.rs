@@ -1,5 +1,7 @@
 //! Product selector adapter tests.
 
+mod compaction_mode;
+
 use super::api::{
     shadow_hint_with_extra_in_working_directory,
     start_active_selector_with_extra_in_working_directory,

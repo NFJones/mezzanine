@@ -54,6 +54,7 @@ pub(super) fn mezzanine_parameter_hint(command: &str) -> Option<&'static str> {
 pub(super) fn agent_parameter_hint(command: &str) -> Option<&'static str> {
     match command {
         "cd" => Some(" [--sync-pane] [--] [directory]"),
+        "compaction-mode" => Some(" [status|summary|raw_tail|reset]"),
         "directive" => Some(" <status|show|clear|default|none|text>"),
         "loop" => Some(" [--fork|--new] [--limit <int>] [--goal <string>] <prompt>"),
         "list-agents" => Some(" [--all]"),
