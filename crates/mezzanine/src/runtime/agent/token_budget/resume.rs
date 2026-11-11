@@ -77,21 +77,28 @@ pub(crate) struct RuntimeBudgetResumeRollback {
 }
 
 impl RuntimeSessionService {
-    /// A committed independent resume retires only the departed actor holder.
+    /// A committed conversation departure retires only the old actor holder.
     /// Issued workers keep their own Arc leases; no label or Stop attests their
     /// retirement. Failed transactions never call this nonfallible commit step.
-    pub(crate) fn retire_runtime_budget_resume_departure(
+    pub(crate) fn retire_runtime_budget_departure(
         &mut self,
         pane: &str,
-        previous: &mez_agent::AgentShellSession,
+        previous_conversation: &str,
+        previous_native: &mez_agent::messaging::MessageNativeIncarnation,
     ) {
+        if self.agent_shell_store().get(pane).is_some_and(|session| {
+            session.session_id == previous_conversation
+                && &session.native_message_incarnation == previous_native
+        }) {
+            return;
+        }
         if let Some(entry) = self
             .agent
             .budget_memberships
             .entries
-            .get_mut(&previous.session_id)
+            .get_mut(previous_conversation)
             && entry.pane == pane
-            && entry.native == previous.native_message_incarnation
+            && &entry.native == previous_native
         {
             entry.ready = false;
             entry.lease = None;
@@ -149,8 +156,8 @@ impl RuntimeSessionService {
         }
     }
 
-    /// Used only by the synchronous serialized resume transaction, before any
-    /// other actor event can replace the provisional adopted entry.
+    /// Used only by serialized resume/fork transactions before another actor
+    /// event can replace the provisional entry. Fork requires proven teardown.
     pub(crate) fn rollback_runtime_budget_resume(&mut self, snapshot: RuntimeBudgetResumeRollback) {
         self.agent
             .budget_memberships

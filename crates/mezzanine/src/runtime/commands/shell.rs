@@ -635,6 +635,11 @@ impl RuntimeSessionService {
                     .get(&pane_id)
                     .map(|session| session.session_id.clone())
             });
+        let replaced_budget_native = replaced_conversation_id.as_ref().and_then(|_| {
+            self.agent_shell_store()
+                .get(&pane_id)
+                .map(|session| session.native_message_incarnation.clone())
+        });
         if slash_invocation
             .as_ref()
             .is_some_and(|invocation| invocation.name == "list-mcp")
@@ -1348,6 +1353,15 @@ impl RuntimeSessionService {
         if let Some(AgentShellCommandOutcome::Mutated { command, .. }) = outcome.as_ref()
             && matches!(command.as_str(), "new" | "clear")
         {
+            // The lower command has already replaced the binding and this
+            // suffix does not roll it back. Later presentation failure cannot
+            // justify retaining an obsolete actor lease indefinitely.
+            if let (Some(conversation), Some(native)) = (
+                replaced_conversation_id.as_deref(),
+                replaced_budget_native.as_ref(),
+            ) {
+                self.retire_runtime_budget_departure(&pane_id, conversation, native);
+            }
             let agent_id = format!("agent-{pane_id}");
             self.retire_persistent_subagent_binding(&agent_id);
             self.revoke_persistent_close_for_parent(&agent_id);

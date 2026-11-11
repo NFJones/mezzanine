@@ -348,6 +348,7 @@ impl RuntimeSessionService {
     /// Selects a post-bind fixture failure: one cleans normally, two retains a
     /// live pane, and three reports uncertainty after the real pane close.
     /// Four returns the actual native guard before binding the target.
+    /// Five fails after budget capture; six also retains the live target pane.
     #[cfg(test)]
     pub(crate) fn fail_saved_fork_adoption_for_tests(read: &SavedForkRead, fault: u8) {
         read.test_fault
@@ -384,6 +385,7 @@ impl RuntimeSessionService {
         let copied_shell_mode = self.agent_shell_mode_override(pane_id);
         let startup_mode = copied_shell_mode.unwrap_or_else(|| self.agent_default_shell_mode());
         let previous_primary_names = self.snapshot_primary_agent_names();
+        let previous_budget = self.snapshot_runtime_budget_resume(&read.work.target);
         adoption.cleanup_safe = false;
         let previous_processes = self.tracked_runtime_pane_process_ids();
         let previous_panes = self
@@ -454,7 +456,7 @@ impl RuntimeSessionService {
                 )
             };
             #[cfg(test)]
-            if read.test_fault.load(std::sync::atomic::Ordering::SeqCst) != 0 {
+            if (1..=3).contains(&read.test_fault.load(std::sync::atomic::Ordering::SeqCst)) {
                 return Err(MezError::invalid_state(
                     "injected fork post-binding setup failure",
                 ));
@@ -505,6 +507,20 @@ impl RuntimeSessionService {
             }
             // Fork metadata deliberately inherits no objective or authority.
             // The ordinary entry path has registered the fresh message identity.
+            self.capture_runtime_budget_human_fork(
+                primary_client_id,
+                &started.pane_id,
+                &session_id,
+            )?;
+            #[cfg(test)]
+            if matches!(
+                read.test_fault.load(std::sync::atomic::Ordering::SeqCst),
+                5 | 6
+            ) {
+                return Err(MezError::invalid_state(
+                    "injected fork failure after budget capture",
+                ));
+            }
             if self.persistence.transcript_uses_adapter() {
                 // Persist adopted bindings independently of the source command's
                 // eventual display claim. This queues owned work, never store I/O.
@@ -517,7 +533,10 @@ impl RuntimeSessionService {
             Err(error) => {
                 self.restore_primary_agent_names(previous_primary_names);
                 #[cfg(test)]
-                let skip_close = read.test_fault.load(std::sync::atomic::Ordering::SeqCst) == 2;
+                let skip_close = matches!(
+                    read.test_fault.load(std::sync::atomic::Ordering::SeqCst),
+                    2 | 6
+                );
                 #[cfg(not(test))]
                 let skip_close = false;
                 let pane_cleanup = if skip_close {
@@ -558,6 +577,7 @@ impl RuntimeSessionService {
                             .unwrap_or_else(|| "pane, process or binding remains".to_string()),
                     )));
                 }
+                self.rollback_runtime_budget_resume(previous_budget);
                 return Err(error);
             }
         };

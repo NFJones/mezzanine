@@ -1038,7 +1038,11 @@ impl RuntimeSessionService {
             }
         };
         if conversation_replaced {
-            self.retire_runtime_budget_resume_departure(pane_id, &previous_session);
+            self.retire_runtime_budget_departure(
+                pane_id,
+                &previous_session.session_id,
+                &previous_session.native_message_incarnation,
+            );
         }
         self.commit_agent_resume_progress_replacement(pane_id, &previous_presentation);
         self.install_composer_saved_title(&composer_title_metadata);

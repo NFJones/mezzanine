@@ -21579,6 +21579,15 @@ alongside shell and authority rollback. No new account or parent teardown right
 may be inferred from the independently resumed child's history.
 These staged ports MUST remain distinct from production budget activation.
 
+An authenticated human saved fork MAY capture a fresh independent account only
+after exact deferred claim/publication and attached-primary validation. Generic
+historical binds MUST NOT acquire that authority, and delegated context forks
+MUST retain captured original ownership. Source lifetime expense MUST NOT be
+copied into the new account. Failed fork setup MAY discard its proposal only
+after proven target teardown; uncertain teardown MUST retain it nonready. A
+committed new/clear departure MUST release only its exact old actor holder,
+never a worker descriptor or durable account, so later resume remains possible.
+
 Runtime budget membership captures MUST remain bounded at4096 entries. Capacity
 reclamation MAY discard only detached, acknowledged actor metadata with no
 outstanding preparation or rollback owner. Current pane bindings, saved loop

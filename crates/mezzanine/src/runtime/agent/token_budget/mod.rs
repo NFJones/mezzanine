@@ -23,6 +23,7 @@ use crate::storage::transcript::{AgentTranscriptStore, BudgetBindingLease};
 
 mod reclamation;
 mod resume;
+mod transitions;
 pub(crate) use resume::RuntimeBudgetResumeCapture;
 
 /// Bounds actor capture ownership, not lifetime accounts in the durable ledger.
@@ -46,6 +47,18 @@ enum Source {
     },
     /// No creation permission: durable original membership must already exist.
     Existing,
+}
+
+impl Source {
+    fn independent(started_at: u64, legacy_gap: bool) -> Result<Self> {
+        Ok(Self::Independent {
+            root: BudgetRootId::new(crate::storage::token_usage::new_token_usage_event_id())
+                .map_err(|_| MezError::invalid_state("generated budget root identity invalid"))?,
+            operation: crate::storage::token_usage::new_token_usage_event_id(),
+            started_at,
+            legacy_gap,
+        })
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -252,16 +265,7 @@ impl RuntimeSessionService {
                 && session.conversation_kind == AgentConversationKind::Root
                 && !session.ephemeral
             {
-                Source::Independent {
-                    root:
-                        BudgetRootId::new(crate::storage::token_usage::new_token_usage_event_id())
-                            .map_err(|_| {
-                            MezError::invalid_state("generated budget root identity invalid")
-                        })?,
-                    operation: crate::storage::token_usage::new_token_usage_event_id(),
-                    started_at: turn.started_at_unix_seconds,
-                    legacy_gap: false,
-                }
+                Source::independent(turn.started_at_unix_seconds, false)?
             } else {
                 Source::Existing
             };

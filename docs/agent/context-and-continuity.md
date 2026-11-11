@@ -1236,6 +1236,13 @@ holder together. A child resumed without its parent keeps its account but gains
 no parent close/reuse/cleanup authority. These ports still do not activate budget
 enforcement or resolve unproven legacy ancestry.
 
+Authenticated human saved forks capture a fresh independent accounting proposal;
+copying history does not copy the source's lifetime expense. Generic historical
+binding is not new-account authority, and delegated context forks keep their
+original owner. Setup rollback discards a proposal only after actual target
+teardown; uncertain cleanup retains it nonready. Human new/clear departures
+release only obsolete actor custody, while issued workers keep their own holders.
+
 Actor capture memory has a separate 4,096-entry bound. At capacity, completed
 detached captures can be reclaimed without touching durable membership or usage.
 Live pane/loop sources, unresolved proposals and outstanding preparation/rollback
