@@ -17,6 +17,75 @@ pub(crate) struct BudgetPolicyOperation {
 }
 
 impl TokenUsageStore {
+    /// Reads existing exact custody without creating missing membership. The
+    /// native coordinator qualifies this observation under its lifetime lock.
+    pub(crate) fn budget_binding_owner(
+        &self,
+        member: &membership::BudgetMembership,
+    ) -> Result<Option<String>> {
+        let connection = self.open_budget()?;
+        let (original, phase) = membership::membership(&connection, &member.conversation)?
+            .ok_or_else(|| MezError::conflict("budget binding membership unavailable"))?;
+        if original != *member || phase == BudgetMembershipState::Pending {
+            return Err(MezError::conflict("budget binding publication unavailable"));
+        }
+        let owner: Option<String> = connection
+            .query_row(
+                "SELECT owner FROM budget_bindings WHERE conversation=?1",
+                [&member.conversation],
+                |r| r.get(0),
+            )
+            .optional()?;
+        if let Some(owner) = &owner {
+            validate_id(owner)?;
+        }
+        Ok(owner)
+    }
+
+    /// Changes only the exact observed owner while actual native lifetime
+    /// custody is held. Public ids alone cannot construct this lease. Missing
+    /// or changed observations refuse; no expense, policy or attempt is reset.
+    pub(crate) fn transfer_native_budget_binding(
+        &self,
+        member: &membership::BudgetMembership,
+        owner: &str,
+        previous: Option<&str>,
+        lease: &crate::storage::transcript::BudgetBindingLease,
+    ) -> Result<()> {
+        validate_id(owner)?;
+        if !lease.matches(member, owner) {
+            return Err(MezError::conflict(
+                "native budget binding lease subject mismatch",
+            ));
+        }
+        let mut connection = self.open_budget()?;
+        let tx = connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let (original, phase) = membership::membership(&tx, &member.conversation)?
+            .ok_or_else(|| MezError::conflict("native budget membership unavailable"))?;
+        if original != *member || phase == BudgetMembershipState::Pending {
+            return Err(MezError::conflict(
+                "native budget membership is not published",
+            ));
+        }
+        let actual: Option<String> = tx
+            .query_row(
+                "SELECT owner FROM budget_bindings WHERE conversation=?1",
+                [&member.conversation],
+                |r| r.get(0),
+            )
+            .optional()?;
+        if actual.as_deref() != previous {
+            return Err(MezError::conflict(
+                "native budget database custody changed before transfer",
+            ));
+        }
+        lease.revalidate()?;
+        tx.execute("INSERT INTO budget_bindings(conversation,owner) VALUES(?1,?2) ON CONFLICT(conversation) DO UPDATE SET owner=excluded.owner",
+            params![member.conversation, owner])?;
+        tx.commit()?;
+        Ok(())
+    }
+
     /// Commits one root override operation without resetting lifetime usage.
     /// A lost reply re-queries the original operation, not today's account view.
     /// This repository method does not itself authenticate a human or wake work.

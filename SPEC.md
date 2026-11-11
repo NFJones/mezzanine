@@ -16512,6 +16512,24 @@ refuse rather than silently recreate evidence. Future, foreign, symlink or
 oversized binding records MUST refuse. Runtime adoption still requires its own
 live conversation/generation and original-owner qualification.
 
+The staged native binding coordinator MAY use version-two `budget-binding.json`
+with exact prior database owner, transfer phase and the device/inode of a private
+empty single-link `budget-binding.lock`. This inode MUST NOT be replaced or
+unlinked by the protocol. Every live actor binding and issued provider worker
+MUST retain the same kernel-backed exclusive lifetime custody. Rebinding MAY
+revoke actor custody but MUST NOT release a worker's retained holder. A successor
+MUST acquire that same inode nonblockingly before transferring the exact observed
+SQLite owner; database row deletion, elapsed time and persisted labels are not
+retirement proof. Missing/replaced custody MUST refuse locally. Unrelated roots
+MUST remain available. The lease MUST be revalidated before database mutation.
+Intent, database compare-and-swap, completed mirror and activation are separate
+durable boundaries. Exact interrupted staging MAY finish only with matching
+membership, inode, original intent and committed database owner; foreign or
+partial residue MUST remain diagnosed rather than deleted. Recovery MUST NOT
+rerun inference/effects, reset expense or grant cleanup/control authority.
+Version-one mirrors remain bookkeeping-only and MUST NOT be silently upgraded
+into native retirement evidence. These ports do not activate production budgets.
+
 The internal runtime preparation ports MUST capture one original operation,
 native incarnation and repository before off-actor publication. Only the exact
 current preparation may acknowledge readiness; supersession, repository or

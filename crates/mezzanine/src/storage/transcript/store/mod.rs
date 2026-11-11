@@ -7,6 +7,7 @@
 //! change independently of that authoritative replay projection.
 
 mod budget;
+pub(crate) use budget::BudgetBindingLease;
 mod frozen_copy;
 #[cfg(test)]
 mod legacy_fixtures;

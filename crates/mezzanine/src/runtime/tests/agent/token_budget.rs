@@ -189,6 +189,102 @@ async fn runtime_budget_preparation_generic_rebind_cannot_mint_fresh_account() {
     );
 }
 
+/// Rebinding the same durable conversation rotates only live custody. An actual
+/// claimed dispatch retains its original lock after Stop/rebind, and a new
+/// preparation cannot adopt or run until that last original holder retires.
+#[tokio::test]
+async fn runtime_budget_preparation_rebind_waits_for_original_dispatch_retirement() {
+    let mut scene = Scene::new();
+    let turn = scene.start();
+    let work = scene
+        .service
+        .prepare_agent_provider_work(&turn.turn_id)
+        .unwrap();
+    let outcome = RuntimeSessionService::execute_agent_provider_preparation(work).await;
+    scene
+        .service
+        .apply_agent_provider_preparation(outcome)
+        .unwrap();
+    let original = scene
+        .store
+        .budget_membership(&turn.conversation_id)
+        .unwrap()
+        .unwrap()
+        .0;
+    let dispatch = scene
+        .service
+        .claim_configured_agent_provider_task(
+            &AgentId::opaque(turn.agent_id.clone()).unwrap(),
+            &turn.turn_id,
+        )
+        .unwrap()
+        .unwrap();
+    assert!(dispatch.budget_binding_lease.is_some());
+    let old_native = scene
+        .service
+        .agent_shell_store()
+        .get("%1")
+        .unwrap()
+        .native_message_incarnation
+        .clone();
+    scene.service.stop_agent_turn_for_pane("%1").unwrap();
+    scene
+        .service
+        .agent_shell_store_mut()
+        .bind_conversation("%1", &turn.conversation_id, 0)
+        .unwrap();
+    assert_ne!(
+        scene
+            .service
+            .agent_shell_store()
+            .get("%1")
+            .unwrap()
+            .native_message_incarnation,
+        old_native
+    );
+    let replacement = scene.start();
+    let work = scene
+        .service
+        .prepare_agent_provider_work(&replacement.turn_id)
+        .unwrap();
+    let outcome = RuntimeSessionService::execute_agent_provider_preparation(work).await;
+    assert!(
+        scene
+            .service
+            .apply_agent_provider_preparation(outcome)
+            .is_err()
+    );
+    assert!(
+        !scene
+            .service
+            .runtime_budget_membership_is_ready(&replacement)
+    );
+    drop(dispatch);
+    let work = scene
+        .service
+        .prepare_agent_provider_work(&replacement.turn_id)
+        .unwrap();
+    let outcome = RuntimeSessionService::execute_agent_provider_preparation(work).await;
+    scene
+        .service
+        .apply_agent_provider_preparation(outcome)
+        .unwrap();
+    assert!(
+        scene
+            .service
+            .runtime_budget_membership_is_ready(&replacement)
+    );
+    assert_eq!(
+        scene
+            .store
+            .budget_membership(&turn.conversation_id)
+            .unwrap()
+            .unwrap()
+            .0,
+        original
+    );
+}
+
 /// A lost initialized store is not recreated during the existing preparation
 /// lane, and the affected turn cannot borrow readiness from another account.
 #[tokio::test]

@@ -1173,6 +1173,30 @@ bypasses the model-work API entirely. See the
 [architecture contract](../contributing/architecture.md#product-composition) for
 those boundaries; an in-memory completion marker is not a durable receipt.
 
+## Staged root-budget accounting
+
+The internal root-budget substrate records immutable conversation membership and
+lifetime known usage in the existing private token-usage database. These staged
+ports are not a released `/session-budget` command and do not enable production
+provider or action enforcement.
+
+Native binding publication uses a private pinned lifetime-lock inode plus an
+exact version-two binding companion. A replacement may take custody only after
+the original actor and every issued provider worker release that same lock.
+Stopping or replacing a pane, deleting a database binding row, or waiting for a
+timestamp to age is not proof that a worker retired. Missing, foreign or replaced
+custody fails locally rather than resetting expense. An unrelated root can still
+make progress. Version-one companions are descriptive bookkeeping, not native
+retirement evidence, and are not silently upgraded into that authority.
+
+Interrupted publication can recover its exact membership and operation across
+intent, database transfer, completed mirror and activation. These are separate
+durable writes, not one cross-store transaction. Recovery does not rerun provider
+requests or historical effects and does not grant cleanup or messaging rights.
+The records contain accounting identities, counters and custody metadata, not
+prompts, credentials or private peer payloads; historical text can still contain
+sensitive user data and retains the privacy cautions above.
+
 ## Related pages
 
 - [Subagents and messaging](subagents-and-messaging.md)

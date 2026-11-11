@@ -7,6 +7,8 @@ use mez_agent::token_budget::{BudgetAttemptId, BudgetReceiptId, UsageSnapshot};
 use receipts::{BudgetAttempt, BudgetAttemptPurpose, BudgetReceipt};
 use rusqlite::params;
 
+mod native_custody;
+
 struct Fixture {
     store: TokenUsageStore,
     root: std::path::PathBuf,

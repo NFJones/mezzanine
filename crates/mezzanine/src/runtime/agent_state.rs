@@ -301,6 +301,9 @@ pub struct RuntimeAgentProviderDispatch {
     pub turn_limits: mez_agent::AgentTurnLimits,
     /// Immutable accounting attribution; never resampled on response settlement.
     pub(crate) accounting_origin: crate::storage::token_usage::AccountingOrigin,
+    /// Kernel-backed original binding custody, retained through actual worker
+    /// retirement independently of actor replacement or observer cancellation.
+    pub(crate) budget_binding_lease: Option<crate::storage::transcript::BudgetBindingLease>,
     /// Stores the turn value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module

@@ -2393,6 +2393,7 @@ async fn execute_runtime_agent_provider_dispatch(
         claim_generation,
         turn_limits,
         accounting_origin: _,
+        budget_binding_lease: _budget_binding_lease,
         turn,
         context,
         allowed_actions,
@@ -2837,6 +2838,7 @@ mod tests {
 
     mod auxiliary_actor_faults;
     mod auxiliary_containment;
+    mod budget_custody;
     mod compaction_waves;
     mod incomplete;
     mod network_progress;

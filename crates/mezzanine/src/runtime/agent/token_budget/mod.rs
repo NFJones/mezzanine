@@ -18,7 +18,7 @@ use crate::error::{MezError, Result};
 use crate::runtime::RuntimeSessionService;
 use crate::storage::token_usage::TokenUsageStore;
 use crate::storage::token_usage::budget::membership::BudgetMembership;
-use crate::storage::transcript::AgentTranscriptStore;
+use crate::storage::transcript::{AgentTranscriptStore, BudgetBindingLease};
 
 /// One runtime-selected source, never inferred from a current depth-zero label.
 #[derive(Debug, Clone)]
@@ -52,6 +52,7 @@ struct Entry {
     owner: String,
     source: Source,
     member: Option<BudgetMembership>,
+    lease: Option<BudgetBindingLease>,
 }
 
 /// Bounded retained ownership, not a second work queue or scheduler.
@@ -75,12 +76,13 @@ pub(crate) struct RuntimeBudgetMembershipWork {
     preparation: Arc<()>,
     owner: String,
     source: Source,
+    lease: Option<BudgetBindingLease>,
 }
 
 /// Exact returned source plus its publication outcome, never an inferred ACK.
 pub(crate) struct RuntimeBudgetMembershipOutcome {
     work: RuntimeBudgetMembershipWork,
-    result: Result<BudgetMembership>,
+    result: Result<(BudgetMembership, BudgetBindingLease)>,
 }
 
 impl RuntimeBudgetMembershipWork {
@@ -90,7 +92,7 @@ impl RuntimeBudgetMembershipWork {
         RuntimeBudgetMembershipOutcome { work: self, result }
     }
 
-    fn publish(&self) -> Result<BudgetMembership> {
+    fn publish(&self) -> Result<(BudgetMembership, BudgetBindingLease)> {
         let namespace = self.store.budget_namespace()?;
         let existing = self
             .transcripts
@@ -160,9 +162,13 @@ impl RuntimeBudgetMembershipWork {
             }
             member
         };
-        self.store
-            .publish_budget_membership(&self.transcripts, &member, &self.owner)?;
-        Ok(member)
+        let lease = self.store.publish_native_budget_membership(
+            &self.transcripts,
+            &member,
+            &self.owner,
+            self.lease.as_ref(),
+        )?;
+        Ok((member, lease))
     }
 }
 
@@ -254,6 +260,7 @@ impl RuntimeSessionService {
                     owner: crate::storage::token_usage::new_token_usage_event_id(),
                     source,
                     member: None,
+                    lease: None,
                 },
             );
         }
@@ -264,9 +271,23 @@ impl RuntimeSessionService {
             .get_mut(&turn.conversation_id)
             .ok_or_else(|| MezError::invalid_state("budget preparation entry unavailable"))?;
         if entry.pane != turn.pane_id || entry.native != session.native_message_incarnation {
-            return Err(MezError::conflict(
-                "budget binding requires original retirement before reuse",
-            ));
+            if entry.store != store || entry.transcripts != transcripts {
+                return Err(MezError::conflict(
+                    "budget repository replacement requires explicit resolution",
+                ));
+            }
+            // The ordinary conversation owner has already rebound this session.
+            // Revoke actor custody, not worker custody: issued dispatches and
+            // outstanding preparations keep their original Arc-held inode lock.
+            // The replacement worker must acquire that SAME lock off actor and
+            // load existing provenance; it cannot mint a new root on rebind.
+            entry.identity = Arc::new(());
+            entry.pane = turn.pane_id.clone();
+            entry.native = session.native_message_incarnation.clone();
+            entry.owner = crate::storage::token_usage::new_token_usage_event_id();
+            entry.source = Source::Existing;
+            entry.member = None;
+            entry.lease = None;
         }
         if entry.store != store || entry.transcripts != transcripts {
             return Err(MezError::conflict(
@@ -285,6 +306,7 @@ impl RuntimeSessionService {
             preparation: entry.preparation.clone(),
             owner: entry.owner.clone(),
             source: entry.source.clone(),
+            lease: entry.lease.clone(),
         }))
     }
 
@@ -324,7 +346,7 @@ impl RuntimeSessionService {
         {
             return Ok(());
         }
-        let member = outcome.result?;
+        let (member, lease) = outcome.result?;
         if member.conversation != work.conversation {
             return Err(MezError::conflict(
                 "budget preparation outcome subject mismatch",
@@ -340,6 +362,7 @@ impl RuntimeSessionService {
             ));
         }
         entry.member = Some(member);
+        entry.lease = Some(lease);
         entry.ready = true;
         Ok(())
     }
@@ -362,6 +385,7 @@ impl RuntimeSessionService {
             .is_some_and(|entry| {
                 entry.ready
                     && entry.member.is_some()
+                    && entry.lease.is_some()
                     && self.persistence.token_usage_store() == Some(&entry.store)
                     && self.persistence.transcript_store() == Some(&entry.transcripts)
                     && entry.pane == turn.pane_id
@@ -475,6 +499,7 @@ impl RuntimeSessionService {
                     started_at: crate::runtime::current_unix_seconds(),
                 },
                 member: None,
+                lease: None,
             },
         );
         Ok(())
@@ -485,5 +510,18 @@ impl RuntimeSessionService {
     #[cfg(test)]
     pub(crate) fn enable_runtime_budget_membership_for_tests(&mut self) {
         self.agent.budget_memberships.enabled = true;
+    }
+
+    /// Issued provider work retains native binding custody independently of the
+    /// actor. Dropping/replacing an actor cannot retire a worker's original lock.
+    pub(crate) fn runtime_budget_lease_for_turn(
+        &self,
+        turn: &AgentTurnRecord,
+    ) -> Option<BudgetBindingLease> {
+        self.agent
+            .budget_memberships
+            .entries
+            .get(&turn.conversation_id)
+            .and_then(|entry| entry.lease.clone())
     }
 }

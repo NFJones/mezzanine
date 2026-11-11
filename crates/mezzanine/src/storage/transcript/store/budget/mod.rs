@@ -6,6 +6,9 @@
 use super::*;
 use crate::storage::token_usage::budget::membership::BudgetMembership;
 
+mod custody;
+pub(crate) use custody::BudgetBindingLease;
+
 const BINDING_FILE: &str = "budget-binding.json";
 
 /// Version-one active checkpoint companion, qualified by original runtime owner.
@@ -174,7 +177,7 @@ impl AgentTranscriptStore {
 
 /// Pin the exact regular file, reject symlinks, and bound reads even if another
 /// writer grows it after metadata inspection. No private record bytes in errors.
-fn read_binding(path: &Path) -> Result<Option<BindingMirror>> {
+fn read_binding_bytes(path: &Path) -> Result<Option<Vec<u8>>> {
     let descriptor = match rustix::fs::open(
         path,
         rustix::fs::OFlags::RDONLY
@@ -201,6 +204,14 @@ fn read_binding(path: &Path) -> Result<Option<BindingMirror>> {
             "budget binding mirror exceeds bound",
         ));
     }
+    Ok(Some(body))
+}
+
+/// Legacy bookkeeping reader deliberately refuses the native custody format.
+fn read_binding(path: &Path) -> Result<Option<BindingMirror>> {
+    let Some(body) = read_binding_bytes(path)? else {
+        return Ok(None);
+    };
     let mirror: BindingMirror = serde_json::from_slice(&body)
         .map_err(|_| MezError::invalid_state("invalid budget binding mirror"))?;
     if mirror.version != 1 {
