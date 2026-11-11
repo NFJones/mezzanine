@@ -1180,6 +1180,13 @@ lifetime known usage in the existing private token-usage database. These staged
 ports are not a released `/session-budget` command and do not enable production
 provider or action enforcement.
 
+Telemetry schema 16 also retains a config-derived policy projection and exact
+publication receipts. Uninitialized, updating and conflicted projections provide
+no admission policy; old/new/third-document recovery reconciles bookkeeping only.
+It cannot write the primary config, prove that file was durably saved, or notify
+live runtimes. Those concrete publisher and enforcement integrations remain
+unfinished. Migration preserves existing lifetime accounts and known usage.
+
 Native binding publication uses a private pinned lifetime-lock inode plus an
 exact version-two binding companion. A replacement may take custody only after
 the original actor and every issued provider worker release that same lock.

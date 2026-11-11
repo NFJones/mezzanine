@@ -8,6 +8,7 @@ use receipts::{BudgetAttempt, BudgetAttemptPurpose, BudgetReceipt};
 use rusqlite::params;
 
 mod native_custody;
+mod policy_projection;
 
 struct Fixture {
     store: TokenUsageStore,

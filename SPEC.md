@@ -16500,6 +16500,20 @@ runtime-qualified original retirement may release exact custody. Schema migratio
 alone MUST NOT activate conversations, infer ancestry, authenticate policy edits,
 issue providers, publish global policy or claim the complete budget feature.
 
+Telemetry schema16 adds a config-derived budget projection and exact publication
+receipts without replacing lifetime accounts. The primary config MUST remain the
+only authored global policy. An uninitialized, updating or conflicted projection
+MUST NOT authorize admission. One pending publication MUST fence competing writers;
+exact replay MUST return its original outcome. Under the concrete publisher's held
+writer, an observed original digest MAY settle an ordinary operation as unapplied,
+the proposed digest MAY commit its validated projection, and a third digest MUST
+retain a conflict. Superseding that conflict requires its exact operation, revision,
+source and observed digest; an unapplied superseding write MUST NOT revive policy
+backed by a different document. File validation, durable publication, native writer
+ownership and live propagation remain concrete publisher obligations: these SQLite
+ports alone MUST NOT claim file durability, active enforcement or cross-store
+atomicity, and recovery MUST NOT rewrite config or replay providers/effects.
+
 Conversation metadata6 MAY carry an immutable exact budget membership reference;
 versions1–5 MUST NOT acquire that meaning from an unexpected new field. A
 version-one `budget-binding.json` companion MUST mirror the exact membership and

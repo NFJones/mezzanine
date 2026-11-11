@@ -9,6 +9,7 @@
 
 pub(crate) mod membership;
 pub(crate) mod operations;
+pub(crate) mod policy_projection;
 pub(crate) mod publication;
 pub(crate) mod receipts;
 mod schema;
@@ -24,6 +25,13 @@ use membership::BudgetMembershipState;
 /// Called only inside the accounting store's held migration transaction.
 pub(super) fn initialize_schema(transaction: &rusqlite::Transaction<'_>) -> Result<()> {
     schema::initialize_schema(transaction)
+}
+
+/// Adds only the version16 config-derived projection, preserving lifetime rows.
+pub(super) fn initialize_policy_projection_schema(
+    transaction: &rusqlite::Transaction<'_>,
+) -> Result<()> {
+    policy_projection::initialize_schema(transaction)
 }
 
 /// Durable lifetime view; start boundary does not imply pre-feature coverage.
