@@ -665,3 +665,60 @@ fn budget_publication_temporary_recovery_and_special_nodes_are_bounded() {
         std::fs::rename(&saved, &mirror).unwrap();
     }
 }
+
+/// Exit immediately after COMMIT, before returning an acknowledgement to the
+/// parent. Reopening must recover the same outcome and charge once. This is an
+/// actual abrupt process exit, not a power-loss or runtime-restart qualification.
+#[test]
+fn budget_storage_receipt_commit_before_process_exit_reopens_once() {
+    const CHILD_STORE: &str = "MEZ_TEST_BUDGET_COMMIT_EXIT_STORE";
+    const TEST: &str = "storage::token_usage::budget::tests::budget_storage_receipt_commit_before_process_exit_reopens_once";
+    if let Some(path) = std::env::var_os(CHILD_STORE) {
+        let store = TokenUsageStore::new(std::path::PathBuf::from(path));
+        let member = store.budget_membership("root").unwrap().unwrap().0;
+        let original = attempt(&member, "crash-attempt");
+        store
+            .commit_budget_receipt(&receipt(
+                &original,
+                "crash-receipt",
+                Some(17),
+                Some(6),
+                true,
+            ))
+            .unwrap();
+        std::process::exit(77);
+    }
+    let f = Fixture::new();
+    let member = f.member("root", None);
+    f.active(&member);
+    let original = attempt(&member, "crash-attempt");
+    f.store.register_budget_attempt(&original).unwrap();
+    let status = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", TEST, "--quiet"])
+        .env(CHILD_STORE, f.store.path())
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .unwrap();
+    assert_eq!(status.code(), Some(77));
+    let reopened = TokenUsageStore::new(f.store.path());
+    let original_receipt = receipt(&original, "crash-receipt", Some(17), Some(6), true);
+    let first = reopened.commit_budget_receipt(&original_receipt).unwrap();
+    assert_eq!(first.accounting_revision, 1);
+    assert_eq!(
+        first.known,
+        UsageTotals {
+            input: 17,
+            output: 6
+        }
+    );
+    assert_eq!(
+        reopened.commit_budget_receipt(&original_receipt).unwrap(),
+        first
+    );
+    assert_eq!(
+        reopened.budget_account(&member.root).unwrap().known,
+        first.known
+    );
+}
