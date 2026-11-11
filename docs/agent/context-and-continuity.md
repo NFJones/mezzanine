@@ -1207,6 +1207,14 @@ only the preflight holder. Successful restore keeps accounting custody but does
 not restore native shell/MMP identity or provider readiness. Publication completed
 before actor adoption remains an explicit unresolved interval, not zero expense.
 
+Ordinary saved `/resume` uses the same original-account checks. It can retain a
+same-pane native holder only after checking the exact mirror, database and inode
+again. The deferred command worker acquires custody before its replay lock;
+actor adoption and checkpoint failure restore the previous shell and accounting
+holder together. A child resumed without its parent keeps its account but gains
+no parent close/reuse/cleanup authority. These ports still do not activate budget
+enforcement or resolve unproven legacy ancestry.
+
 ## Related pages
 
 - [Subagents and messaging](subagents-and-messaging.md)

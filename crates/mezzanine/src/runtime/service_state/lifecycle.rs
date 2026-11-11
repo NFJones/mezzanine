@@ -409,6 +409,8 @@ pub(crate) enum RuntimeAgentCommandPrepared {
 /// Immutable actor snapshot used to project a direct resume outside the actor.
 #[derive(Debug, Clone)]
 pub(crate) struct RuntimeDirectResumeProjectionWork {
+    /// Original accounting source, qualified off actor before replay locking.
+    pub(crate) budget: crate::runtime::agent::token_budget::RuntimeBudgetResumeCapture,
     /// Pane that owns the resumed conversation.
     pub(crate) pane_id: String,
     /// Exact terminal geometry represented by the candidate screen.
@@ -466,6 +468,8 @@ pub(crate) struct RuntimeDirectResumeProjection {
 /// creates this bundle without accessing live runtime state.
 #[derive(Debug, Clone)]
 pub(crate) struct RuntimeDirectResumeRead {
+    /// Original-store custody retained through the actor's rollback transaction.
+    pub(crate) budget: Option<crate::runtime::agent::token_budget::RuntimeBudgetRestore>,
     /// Checked source frontier and raw-tail count captured on the reader.
     pub(crate) transcript_position: mez_agent::AgentTranscriptPosition,
 

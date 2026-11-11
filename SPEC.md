@@ -21533,6 +21533,13 @@ changed provenance MUST refuse without replacing the previous pane binding.
 Failed hydration MUST release only its preflight holder, not rewrite the source
 or replay work. Successful hydration MUST retain custody and budget provenance
 without restoring provider readiness, native shell identity or cleanup authority.
+Ordinary saved `/resume` MUST qualify the same existing account before binding,
+including standalone child history without its original parent. A same-pane
+resume MAY retain its exact native holder, but MUST repeat mirror/database/inode
+validation. A worker MUST acquire budget custody before its conversation replay
+lock; failed actor adoption/checkpointing MUST restore previous in-memory custody
+alongside shell and authority rollback. No new account or parent teardown right
+may be inferred from the independently resumed child's history.
 These staged ports MUST remain distinct from production budget activation.
 
 These bytes are descriptive checkpoint facts. Ordinary transcript/conversation

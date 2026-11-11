@@ -638,6 +638,7 @@ impl RuntimeSessionService {
                     store,
                     selector,
                     projection: Box::new(crate::runtime::RuntimeDirectResumeProjectionWork {
+                        budget: self.capture_runtime_budget_resume(pane_id)?,
                         pane_id: pane_id.to_string(),
                         size,
                         session: self.session().clone(),

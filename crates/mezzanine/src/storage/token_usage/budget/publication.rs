@@ -18,10 +18,24 @@ impl TokenUsageStore {
         BudgetMembership,
         crate::storage::transcript::BudgetBindingLease,
     )> {
+        self.restore_retained_native_budget_membership(transcripts, reference, None)
+    }
+
+    /// Same original-store checks for a same-pane resume that already owns the
+    /// exact holder. Reusing a descriptor does not waive mirror/DB validation.
+    pub(crate) fn restore_retained_native_budget_membership(
+        &self,
+        transcripts: &AgentTranscriptStore,
+        reference: &mez_agent::token_budget::BudgetCheckpointReference,
+        retained: Option<&crate::storage::transcript::BudgetBindingLease>,
+    ) -> Result<(
+        BudgetMembership,
+        crate::storage::transcript::BudgetBindingLease,
+    )> {
         if self.budget_namespace()? != reference.namespace.as_str() {
             return Err(MezError::conflict("budget restore namespace mismatch"));
         }
-        let (member, lease) = transcripts.reacquire_native_budget_binding(reference)?;
+        let (member, lease) = transcripts.reacquire_native_budget_binding(reference, retained)?;
         if self.budget_membership(&reference.conversation)?
             != Some((member.clone(), BudgetMembershipState::Active))
             || self.budget_binding_owner(&member)?.as_deref() != Some(reference.owner.as_str())

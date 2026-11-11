@@ -53,6 +53,12 @@ pub(crate) fn read_direct_resume(
             })?,
         conversation_id => conversation_id.to_string(),
     };
+    // Accounting preflight takes the same conversation lock internally, so it
+    // must precede the replay snapshot lock rather than recursively acquire it.
+    let budget = projection_work
+        .map(|work| work.budget.prepare(store, &conversation_id))
+        .transpose()?
+        .flatten();
     // Discovery and transcript metadata must be read after acquiring the same
     // lease as fork adoption. A reader queued behind compensation must not keep
     // a pre-lock saved-session snapshot and later bind deleted/replaced history.
@@ -139,6 +145,7 @@ pub(crate) fn read_direct_resume(
         .transpose()?;
     let presentation_entries = projection.is_none().then_some(presentation_entries);
     Ok(crate::runtime::RuntimeDirectResumeRead {
+        budget,
         transcript_position,
         prepared_objective: store.effective_persisted_objective(&conversation_id)?,
         restored_model_identity: store.conversation_model_identity(&conversation_id)?,
@@ -556,7 +563,10 @@ impl RuntimeSessionService {
                     .to_string(),
             });
         }
-        let prepared_read = read_direct_resume(&store, selector, None)?;
+        let mut prepared_read = read_direct_resume(&store, selector, None)?;
+        prepared_read.budget = self
+            .capture_runtime_budget_resume(pane_id)?
+            .prepare(&store, &prepared_read.conversation_id)?;
         self.execute_agent_shell_resume_command_with_read(pane_id, store, prepared_read, false)
     }
 
@@ -613,6 +623,7 @@ impl RuntimeSessionService {
     ) -> Result<AgentShellCommandOutcome> {
         self.validate_direct_resume_projection(pane_id, &prepared_read)?;
         let RuntimeDirectResumeRead {
+            budget,
             transcript_position,
             conversation_id,
             primary_display_name,
@@ -654,6 +665,9 @@ impl RuntimeSessionService {
             .get(pane_id)
             .cloned()
             .ok_or_else(|| MezError::invalid_state("agent shell session not found for pane"))?;
+        let previous_budget = budget
+            .as_ref()
+            .map(|_| self.snapshot_runtime_budget_resume(&conversation_id));
         let previous_primary_names = self.snapshot_primary_agent_names();
         let previous_composer_titles = self.snapshot_composer_titles();
         let previous_agent_screen = self
@@ -880,6 +894,9 @@ impl RuntimeSessionService {
                     selection.as_ref(),
                 );
             }
+            if let Some(budget) = budget {
+                self.adopt_restored_budget_membership(pane_id, budget)?;
+            }
             #[cfg(test)]
             if self.take_agent_resume_after_authority_restore_failure_for_tests() {
                 return Err(MezError::invalid_state(
@@ -900,6 +917,9 @@ impl RuntimeSessionService {
         let (session_id, transcript_entries, visibility) = match resume_result {
             Ok(result) => result,
             Err(error) => {
+                if let Some(previous_budget) = previous_budget {
+                    self.rollback_runtime_budget_resume(previous_budget);
+                }
                 self.restore_composer_titles(previous_composer_titles.clone());
                 self.restore_primary_agent_names(previous_primary_names);
                 self.agent_shell_store_mut()
@@ -1012,6 +1032,9 @@ impl RuntimeSessionService {
                 return Err(error);
             }
         };
+        if conversation_replaced {
+            self.retire_runtime_budget_resume_departure(pane_id, &previous_session);
+        }
         self.commit_agent_resume_progress_replacement(pane_id, &previous_presentation);
         self.install_composer_saved_title(&composer_title_metadata);
         self.request_steering_presentation(pane_id);

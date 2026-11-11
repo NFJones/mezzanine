@@ -21,6 +21,9 @@ use crate::storage::token_usage::TokenUsageStore;
 use crate::storage::token_usage::budget::membership::BudgetMembership;
 use crate::storage::transcript::{AgentTranscriptStore, BudgetBindingLease};
 
+mod resume;
+pub(crate) use resume::RuntimeBudgetResumeCapture;
+
 /// One runtime-selected source, never inferred from a current depth-zero label.
 #[derive(Debug, Clone)]
 enum Source {
@@ -41,7 +44,7 @@ enum Source {
     Existing,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct Entry {
     identity: Arc<()>,
     preparation: Arc<()>,
@@ -91,6 +94,7 @@ pub(crate) struct RuntimeBudgetMembershipOutcome {
 /// Restore preflight retains the original stores and acquired kernel holder
 /// through all fallible hydration. Dropping a refused proposal only releases
 /// that holder; no saved checkpoint, expense or active pane is rewritten.
+#[derive(Debug, Clone)]
 pub(crate) struct RuntimeBudgetRestore {
     store: TokenUsageStore,
     transcripts: AgentTranscriptStore,
@@ -622,6 +626,19 @@ impl RuntimeSessionService {
         pane: &str,
         work: RuntimeBudgetRestore,
     ) -> Result<()> {
+        if self.persistence.token_usage_store() != Some(&work.store)
+            || self.persistence.transcript_store() != Some(&work.transcripts)
+            || (!self
+                .agent
+                .budget_memberships
+                .entries
+                .contains_key(&work.member.conversation)
+                && self.agent.budget_memberships.entries.len() >= 4096)
+        {
+            return Err(MezError::conflict(
+                "budget restore repository or capacity changed",
+            ));
+        }
         let session = self
             .agent_shell_store()
             .get(pane)

@@ -784,6 +784,7 @@ async fn runtime_budget_preparation_real_persistent_spawn_inherits_before_later_
         value["agent"]["id"].as_str().unwrap().to_owned()
     }
 
+    let retained_root;
     let mut scene = Scene::new();
     let _primary = scene
         .service
@@ -920,4 +921,44 @@ async fn runtime_budget_preparation_real_persistent_spawn_inherits_before_later_
         }
         parent_agent = child_agent;
     }
+    // The last successfully published nested child can resume independently
+    // after every original native owner retires. The deliberately conflicting
+    // third child's pending record is not silently repaired or adopted.
+    let store = scene.store.clone();
+    let transcripts = scene.transcripts.clone();
+    retained_root = std::mem::replace(&mut scene._root, OwnedRoot::new());
+    drop(scene);
+    let mut resumed = Scene::new();
+    resumed.service.set_token_usage_store(store.clone());
+    resumed.service.set_agent_transcript_store(transcripts);
+    resumed
+        .service
+        .execute_agent_shell_resume_command(
+            "%1",
+            &format!("/resume {}", parent_member.conversation),
+        )
+        .unwrap();
+    let reference = resumed
+        .service
+        .runtime_budget_checkpoint_reference(&parent_member.conversation)
+        .unwrap()
+        .unwrap();
+    assert_eq!(reference.root, root_member.root);
+    assert_eq!(reference.operation.as_str(), parent_member.operation);
+    assert_eq!(
+        store
+            .budget_membership(&parent_member.conversation)
+            .unwrap()
+            .unwrap()
+            .0,
+        parent_member
+    );
+    assert!(
+        !resumed
+            .service
+            .subagent_lineage_has_live_parent_authority("agent-%1")
+    );
+    assert!(resumed.service.persistent_subagent("agent-%1").is_none());
+    drop(resumed);
+    drop(retained_root);
 }

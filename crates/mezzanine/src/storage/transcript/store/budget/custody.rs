@@ -228,10 +228,13 @@ impl AgentTranscriptStore {
 
     /// Reacquires the exact completed original binding without rewriting any
     /// record. Used by restore preflight before changing a live pane. A saved
-    /// owner alone is never authority: the original private inode must be free.
+    /// owner alone is never authority: the original private inode must be free,
+    /// or the invoking pane must retain that exact descriptor. Both paths
+    /// revalidate the completed mirror, immutable membership and pinned inode.
     pub(crate) fn reacquire_native_budget_binding(
         &self,
         reference: &mez_agent::token_budget::BudgetCheckpointReference,
+        retained: Option<&BudgetBindingLease>,
     ) -> Result<(BudgetMembership, BudgetBindingLease)> {
         reference.validate()?;
         let _conversation = self.acquire_conversation_lock(&reference.conversation)?;
@@ -254,6 +257,18 @@ impl AgentTranscriptStore {
             return Err(MezError::conflict("budget restore provenance mismatch"));
         }
         let path = directory.join(LOCK_FILE);
+        if let Some(retained) = retained {
+            if !retained.matches(member, &mirror.owner)
+                || retained.0.path != path
+                || retained.0.identity != mirror.lock
+            {
+                return Err(MezError::conflict(
+                    "budget restore retained custody changed",
+                ));
+            }
+            retained.revalidate()?;
+            return Ok((mirror.membership, retained.clone()));
+        }
         let file = OpenOptions::new()
             .read(true)
             .write(true)
