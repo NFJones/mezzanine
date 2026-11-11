@@ -181,6 +181,8 @@ pub mod subagent;
 pub mod subagent_output;
 /// Provider interaction and MAAP action-surface contracts.
 pub mod surface;
+/// Pure root-session token limits, quantities and checked usage decisions.
+pub mod token_budget;
 /// Provider-independent transcript projection and persistence contracts.
 pub mod transcript;
 /// Provider-independent agent turn-ledger error contracts.

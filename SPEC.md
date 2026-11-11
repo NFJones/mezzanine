@@ -16479,6 +16479,89 @@ each server keyed by configured MCP server id in headings or labels, and MUST
 show server-specific status, retryability, blacklist reason, transport, and
 tool state without requiring users to parse JSON-like object text.
 
+### Root-session token budget contract
+
+The shared token-budget contracts define the following integration requirements.
+Shared types and parsers alone MUST NOT advertise a usable `/session-budget`
+command or claim provider/effect enforcement. Command registration, configuration
+keys and runtime admission require their connected durable product owners.
+
+An optional cumulative input/output budget MUST belong to one durable root
+conversation and all its owned descendants and auxiliary inference. This includes
+task/persistent/nested children, routed work, loops, model sizing, repairs, retries,
+compaction, titles, memory generation, macro judges and failure summaries. A global
+default applies independently to each root, never as a cross-root pool. Independent
+human new/fork MUST start a fresh account; delegated context churn MUST retain its
+original account. Resume/restart MUST retain known usage and root overrides.
+Accounting membership MUST NOT confer teardown, reuse, messaging or control rights.
+
+Budget input MUST count normalized inclusive input, including cache exactly once.
+Output MUST count reported output without adding reasoning again. Ordinary
+`/status` billed-input semantics remain unchanged; budget input MUST be labeled
+inclusive. Each dimension is independent: unlimited never exhausts, zero blocks
+immediately, and a finite limit exhausts at `known_used >= limit`. Limits are
+absolute cumulative values; changing/removing/reinstalling them MUST NOT reset
+expense. Remaining is clamped to zero; known excess is reported separately.
+
+Missing input/output MUST remain distinct from explicit zero and from a partial
+known subtotal. Monotonic attempt snapshots MUST reconcile only their new delta;
+final aggregates replace prefixes, not add them again. Exact duplicate receipts
+MUST be inert, changed replay/provenance and regressing counters MUST refuse,
+and authoritative unsigned totals MUST use checked arithmetic. Usage from failed,
+discarded or cancelled output MUST still settle under its original owner.
+Unknown remote expense alone is incomplete coverage, not permanent numeric
+exhaustion. Pending/unavailable accounting and identity/integrity faults are
+separate operational holds, never evidence that a numeric threshold was reached.
+
+This is an observed-provider-usage threshold, NOT an exact invoice or numerical
+overshoot cap. Already-issued work may overshoot and remote billing may remain
+unknown after local retirement. Initially a root with either finite dimension
+MUST allow at most one locally outstanding concrete inference attempt; unlimited
+roots retain normal concurrency. Installing finite policy amid issued work MUST
+fence new attempts and drain that exposure rather than pretend it never existed.
+Every actual send/retry MUST revalidate immutable membership, policy/accounting
+revisions and its single-use admission. No new inference or executable effect may
+be authorized after an observed crossing is installed. Essential exact receipt,
+result, cleanup and durable settlement MUST continue for already-issued work.
+Budget inhibition MUST be reversible and orthogonal to pause, approval, dependency,
+Stop and integrity gates. A sufficient raise/lift MUST clear only budget exhaustion
+and fairly resume eligible work once, without a new prompt or uncertain-effect
+replay; clearing only one exhausted dimension is insufficient. Unrelated roots,
+manual terminals and authenticated human status/policy/Stop controls remain useful.
+OpenAI generation-parameter omission requirements remain unconditional.
+
+Per dimension, explicit root finite/unlimited overrides primary defaults, then
+unlimited. Explicit unlimited masks finite defaults; equal-to-default remains an
+override. Global edits MUST preserve root overrides. Intended primary-only keys
+are `agents.session_input_token_budget` and `agents.session_output_token_budget`;
+their registration/persistence belongs to the product integration, not this pure
+foundation. Model, peer, hook, task and project-overlay policy changes MUST refuse,
+including parent/container removal routes. Durable policy adoption MUST report
+durable/applied/pending/failed outcomes truthfully across all live participants of
+the same local primary-config/accounting namespace; no silently stale admission or
+second independently authored database global policy layer is permitted.
+
+The common exact quantity grammar MUST accept ASCII nonnegative decimal integers
+(including leading zeroes) and case-insensitive decimal K/M/B/T/P/E suffixes.
+Fractions require a suffix and whole-token results: `1.5M = 1500000`, `0.001K = 1`.
+Signs, unsuffixed fractions, fractional tokens, exponent notation, whitespace,
+commas, textual underscores, binary/unknown suffixes, NaN/infinity and overflow
+MUST reject. Arithmetic MUST NOT use floating point. External finite limits are
+bounded by `i64::MAX`; lifetime counters remain checked unsigned. Canonical output
+is integer or lowercase `unlimited`; compact display MUST NOT conceal precision.
+
+The shared typed grammar is bare `/session-budget` or exact `status` for read-only
+inspection, or `[--global] --input VALUE [--output VALUE]` (also output first).
+Flags MAY appear in any order, once each. Values are an exact quantity, lowercase
+`unlimited`, or lowercase `inherit`. No scope means the invoking conversation's
+immutable root, including child panes. Local inherit removes one root override;
+global inherit unsets one primary key. Omitted fields remain unchanged. Lone
+global, duplicate/unknown flags, missing values, trailing operands, mixed status
+and mutation, invalid quoting and `--flag=value` MUST reject. Tokenize once with
+shlex; already-tokenized quoted operands MUST NOT be re-split. Both fields MUST
+parse before any side effect, directory creation, generation change or wake.
+Invalid command input MUST stay a local error, not become a provider prompt.
+
 ## 12. Local Message Passing Protocol
 
 Mezzanine MUST provide a local message passing protocol that allows agents to
