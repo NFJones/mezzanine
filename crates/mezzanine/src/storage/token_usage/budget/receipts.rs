@@ -20,6 +20,9 @@ pub(crate) struct BudgetAttempt {
     pub model: ModelTokenUsageKey,
     /// Closed runtime-selected purpose vocabulary, never arbitrary request text.
     pub purpose: BudgetAttemptPurpose,
+    /// Captured before issue; legacy absence never invents project attribution.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reporting_origin: Option<super::reporting::BudgetReportingOrigin>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -40,6 +43,9 @@ pub(crate) struct BudgetReceipt {
     pub id: BudgetReceiptId,
     pub attempt: BudgetAttempt,
     pub snapshot: UsageSnapshot,
+    /// Optional normalized cumulative reporting evidence, not a second charge.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reporting: Option<super::reporting::BudgetReportingObservation>,
 }
 
 /// Original acknowledged outcome, stable even when later receipts advance totals.
@@ -50,6 +56,9 @@ pub(crate) struct BudgetReceiptOutcome {
     pub root: BudgetRootId,
     pub known: UsageTotals,
     pub accounting_revision: u64,
+    /// Optional exact reporting/partition precision from this transaction.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reporting: Option<super::reporting::BudgetReportingProjection>,
 }
 
 /// Keep the merged known subtotal separate from terminal missing-category facts.
@@ -59,11 +68,19 @@ pub(crate) struct BudgetReceiptOutcome {
 struct StoredAttemptUsage {
     prefix: UsageSnapshot,
     terminal: Option<UsageSnapshot>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    reported: Option<mez_agent::ModelTokenUsage>,
+    /// Coverage at the last reporting boundary, not the retained high-water.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    reporting_baseline: Option<super::reporting::BudgetReportingBaseline>,
 }
 
 impl BudgetAttempt {
     fn validate(&self) -> Result<()> {
         validate_id(&self.namespace)?;
+        if let Some(origin) = &self.reporting_origin {
+            origin.validate()?;
+        }
         mez_agent::transcript::validate_conversation_id(&self.conversation)?;
         for value in [&self.model.provider, &self.model.model] {
             if value.is_empty() || value.len() > 256 || value.chars().any(char::is_control) {
@@ -202,6 +219,13 @@ impl TokenUsageStore {
                 account.known,
             )
             .map_err(usage_error)?;
+        let (reported, reporting) = super::reporting::settle_reporting_event(
+            &tx,
+            receipt,
+            next.observed(),
+            previous.reported,
+            previous.reporting_baseline,
+        )?;
         account.known = totals;
         account.accounting_revision = account
             .accounting_revision
@@ -212,6 +236,7 @@ impl TokenUsageStore {
             root: receipt.attempt.root.clone(),
             known: totals,
             accounting_revision: account.accounting_revision,
+            reporting,
         };
         let stored = StoredAttemptUsage {
             prefix: UsageSnapshot {
@@ -223,6 +248,14 @@ impl TokenUsageStore {
             } else {
                 previous.terminal
             },
+            reported,
+            reporting_baseline: receipt
+                .reporting
+                .as_ref()
+                .map(|observation| {
+                    super::reporting::BudgetReportingBaseline::capture(observation.usage)
+                })
+                .or(previous.reporting_baseline),
         };
         tx.execute(
             "UPDATE budget_attempts SET snapshot=?1,terminal=?2 WHERE id=?3",

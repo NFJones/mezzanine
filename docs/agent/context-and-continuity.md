@@ -1187,6 +1187,20 @@ It cannot write the primary config, prove that file was durably saved, or notify
 live runtimes. Those concrete publisher and enforcement integrations remain
 unfinished. Migration preserves existing lifetime accounts and known usage.
 
+Schema 17 adds atomic receipt/reporting settlement in the same database. An
+original attempt can retain project attribution; a frozen cumulative observation
+then adds only its unreported delta to the existing native rolling-event ledger.
+Cache and reasoning remain subsets, not extra inclusive expense. Late category
+counts that cannot fit the newest interval remain in the original receipt;
+that interval reports unavailable categories rather than an invented split.
+An unknown or omitted preceding cache observation likewise leaves the next
+interval's cache partition unknown, even when the cumulative difference fits.
+Inclusive input/output stay exact even across rolling-window or pruning cuts. Missing
+dimensions stay unknown, explicit zero can settle without an empty event, and
+old receipts cannot recreate pruned reporting rows. Older absent attribution is
+not backfilled. Concrete provider capture and acknowledged admission are still
+unfinished; this storage port does not activate enforcement.
+
 Native binding publication uses a private pinned lifetime-lock inode plus an
 exact version-two binding companion. A replacement may take custody only after
 the original actor and every issued provider worker release that same lock.

@@ -16514,6 +16514,29 @@ ownership and live propagation remain concrete publisher obligations: these SQLi
 ports alone MUST NOT claim file durability, active enforcement or cross-store
 atomicity, and recovery MUST NOT rewrite config or replay providers/effects.
 
+Telemetry schema17 is a semantic fence for receipt-owned native reporting.
+Attempts MAY retain original project attribution, and receipts MAY carry frozen
+observation time and normalized cumulative reporting counters. The existing
+native reporting event, last-reported snapshot, lifetime totals and original
+receipt MUST commit in the same SQLite transaction. Reporting MUST difference
+only previously unreported counters, never add cache to inclusive input or
+reasoning to inclusive output again. A late category disclosure that cannot fit
+the new interval MUST retain its cumulative evidence but mark that interval's
+category unavailable, with exact projection precision in the receipt outcome.
+An exact cache partition MUST have category knowledge at the preceding reporting
+boundary; a retained cumulative high-water mark MUST NOT fill an omitted baseline
+merely because the resulting numerical delta fits the new input interval.
+It MUST NOT invent temporal allocation or let additive legacy interpretation
+inflate the interval's inclusive expense. An occupied event identity without its
+original receipt MUST refuse even when its payload is identical. Missing input
+or output MUST NOT become zero to create a report; partial budget evidence MUST
+remain retainable without optional reporting. Explicit zero MAY settle without
+an empty rolling event. Legacy absent reporting provenance MUST remain absent;
+migration MUST NOT reconstruct attribution or expense. Rolling pruning MUST NOT
+remove lifetime receipts, and replay MUST NOT recreate a pruned reporting event.
+These repository ports MUST NOT claim actual per-send capture, durable worker
+acknowledgment or production admission enforcement before their integration.
+
 Conversation metadata6 MAY carry an immutable exact budget membership reference;
 versions1–5 MUST NOT acquire that meaning from an unexpected new field. A
 version-one `budget-binding.json` companion MUST mirror the exact membership and

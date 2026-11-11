@@ -12,6 +12,7 @@ pub(crate) mod operations;
 pub(crate) mod policy_projection;
 pub(crate) mod publication;
 pub(crate) mod receipts;
+pub(crate) mod reporting;
 mod schema;
 
 use mez_agent::token_budget::{BudgetOverride, BudgetRootId, UsageTotals};

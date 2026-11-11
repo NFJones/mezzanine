@@ -19,9 +19,9 @@ use super::{
     set_private_file_permissions, sqlite_i64,
 };
 
-/// Version16 adds config-derived budget publication fencing. Older writers must
-/// refuse rather than bypass pending publication or lifetime accounting.
-pub(super) const SCHEMA_VERSION: i64 = 16;
+/// Version17 fences receipt-owned reporting attribution and cumulative snapshots.
+/// Older writers must not bypass reporting/receipt atomicity or policy fences.
+pub(super) const SCHEMA_VERSION: i64 = 17;
 const SECONDS_PER_DAY: u64 = 86_400;
 
 /// One immutable provider/model usage delta.
@@ -92,6 +92,22 @@ impl TokenUsageStore {
         let mut connection = self.open()?;
         let transaction =
             connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let changed = Self::append_native_event_in_transaction(&transaction, event)?;
+        transaction.commit()?;
+        Ok(changed)
+    }
+
+    /// Same native event semantics under a caller-owned accounting transaction.
+    /// This does not commit, prune history, or grant a second expense owner.
+    pub(super) fn append_native_event_in_transaction(
+        transaction: &rusqlite::Transaction<'_>,
+        event: &TokenUsageEvent,
+    ) -> Result<bool> {
+        if event.id.trim().is_empty() {
+            return Err(MezError::invalid_args(
+                "token usage event id must not be empty",
+            ));
+        }
         let existing = transaction.query_row(
             "SELECT observed_at, provider, model, input_tokens, output_tokens, reasoning_tokens,
                     cached_input_tokens, cache_write_input_tokens, project_id FROM token_usage_events WHERE id = ?1 AND event_source = 'native'",
@@ -145,7 +161,6 @@ impl TokenUsageStore {
                     .map(super::AccountingProjectId::as_str),
             ],
         )?;
-        transaction.commit()?;
         Ok(changed == 1)
     }
 
@@ -401,7 +416,7 @@ fn initialize_schema(
                  PRAGMA user_version = 1;",
             )?;
         }
-        1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | SCHEMA_VERSION => {}
+        1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | SCHEMA_VERSION => {}
         future if future > SCHEMA_VERSION => {
             return Err(MezError::invalid_state(format!(
                 "token usage database schema version {future} is newer than supported version {SCHEMA_VERSION}"
@@ -548,6 +563,11 @@ fn initialize_schema(
     if version < 16 {
         super::budget::initialize_policy_projection_schema(&transaction)?;
         transaction.execute_batch("PRAGMA user_version=16;")?;
+    }
+    if version < 17 {
+        // Representation fence only. Old receipt/attempt rows remain literal;
+        // absent reporting provenance stays absent, never inferred from history.
+        transaction.execute_batch("PRAGMA user_version=17;")?;
     }
     transaction.commit()?;
     Ok(())

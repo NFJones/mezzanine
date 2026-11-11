@@ -9,6 +9,7 @@ use rusqlite::params;
 
 mod native_custody;
 mod policy_projection;
+mod reporting;
 
 struct Fixture {
     store: TokenUsageStore,
@@ -85,6 +86,7 @@ fn attempt(member: &BudgetMembership, id: &str) -> BudgetAttempt {
         conversation: member.conversation.clone(),
         model: mez_agent::ModelTokenUsageKey::new("fake", "offline"),
         purpose: BudgetAttemptPurpose::Execution,
+        reporting_origin: None,
     }
 }
 fn receipt(
@@ -102,6 +104,7 @@ fn receipt(
             output,
             terminal,
         },
+        reporting: None,
     }
 }
 
