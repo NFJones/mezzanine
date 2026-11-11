@@ -9,6 +9,7 @@
 
 pub(crate) mod membership;
 pub(crate) mod operations;
+pub(crate) mod publication;
 pub(crate) mod receipts;
 mod schema;
 

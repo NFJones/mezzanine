@@ -456,3 +456,212 @@ fn budget_storage_schema14_upgrade_and_collision_preserve_original_data() {
     f.store.initialize(100).unwrap();
     assert_eq!(f.store.budget_namespace().unwrap(), namespace);
 }
+
+/// Actual metadata publication refusal retains the original pending DB record;
+/// retry completes the same operation without minting another account.
+#[test]
+fn budget_publication_metadata_failure_recovers_original_operation() {
+    let f = Fixture::new();
+    let transcripts =
+        crate::storage::transcript::AgentTranscriptStore::new(f.root.join("transcripts"));
+    let member = f.member("root", None);
+    transcripts.fail_next_metadata_write_after_promotion();
+    assert!(
+        f.store
+            .publish_budget_membership(&transcripts, &member, "owner")
+            .is_err()
+    );
+    assert_eq!(
+        f.store.budget_membership("root").unwrap().unwrap().1,
+        BudgetMembershipState::Pending
+    );
+    assert!(
+        f.store
+            .register_budget_attempt(&attempt(&member, "early"))
+            .is_err()
+    );
+    f.store
+        .publish_budget_membership(&transcripts, &member, "owner")
+        .unwrap();
+    assert_eq!(
+        f.store.budget_membership("root").unwrap().unwrap().1,
+        BudgetMembershipState::Active
+    );
+    assert_eq!(
+        transcripts.conversation_budget_membership("root").unwrap(),
+        Some(member.clone())
+    );
+    assert!(
+        transcripts
+            .has_budget_binding_mirror(&member, "owner")
+            .unwrap()
+    );
+    let reopened = TokenUsageStore::new(f.store.path());
+    reopened
+        .publish_budget_membership(&transcripts, &member, "owner")
+        .unwrap();
+    assert!(
+        reopened
+            .publish_budget_membership(&transcripts, &member, "foreign")
+            .is_err()
+    );
+    assert!(
+        reopened
+            .register_budget_attempt(&attempt(&member, "allowed"))
+            .unwrap()
+    );
+}
+
+/// A real wrong-kind mirror node refuses after metadata publication and binding
+/// reservation. Repair resumes publication, not model work or an alternate root.
+#[test]
+fn budget_publication_mirror_failure_retains_published_phase() {
+    let f = Fixture::new();
+    let transcripts =
+        crate::storage::transcript::AgentTranscriptStore::new(f.root.join("transcripts"));
+    let member = f.member("root", None);
+    f.store.prepare_budget_membership(&member).unwrap();
+    transcripts
+        .publish_conversation_budget_membership(&member)
+        .unwrap();
+    f.store
+        .advance_budget_membership(
+            &member,
+            BudgetMembershipState::Pending,
+            BudgetMembershipState::Published,
+        )
+        .unwrap();
+    let mirror = f.root.join("transcripts/root/budget-binding.json");
+    std::fs::create_dir(&mirror).unwrap();
+    assert!(
+        f.store
+            .publish_budget_membership(&transcripts, &member, "owner")
+            .is_err()
+    );
+    assert_eq!(
+        f.store.budget_membership("root").unwrap().unwrap().1,
+        BudgetMembershipState::Published
+    );
+    assert!(f.store.claim_budget_binding(&member, "foreign").is_err());
+    std::fs::remove_dir(&mirror).unwrap();
+    f.store
+        .publish_budget_membership(&transcripts, &member, "owner")
+        .unwrap();
+    assert!(
+        transcripts
+            .has_budget_binding_mirror(&member, "owner")
+            .unwrap()
+    );
+}
+
+/// Already-active metadata/mirror loss is not a fresh publication. Future or
+/// foreign subjects refuse without changing the original lifetime account.
+#[test]
+fn budget_publication_active_missing_future_and_foreign_evidence_refuse() {
+    let f = Fixture::new();
+    let transcripts =
+        crate::storage::transcript::AgentTranscriptStore::new(f.root.join("transcripts"));
+    let member = f.member("root", None);
+    f.store
+        .publish_budget_membership(&transcripts, &member, "owner")
+        .unwrap();
+    let metadata = f.root.join("transcripts/root/metadata.json");
+    let mirror = f.root.join("transcripts/root/budget-binding.json");
+    let original_metadata = std::fs::read(&metadata).unwrap();
+    let original_mirror = std::fs::read(&mirror).unwrap();
+    std::fs::remove_file(&mirror).unwrap();
+    assert!(
+        f.store
+            .publish_budget_membership(&transcripts, &member, "owner")
+            .is_err()
+    );
+    assert!(!mirror.exists());
+    let mut future: serde_json::Value = serde_json::from_slice(&original_mirror).unwrap();
+    future["version"] = serde_json::json!(2);
+    std::fs::write(&mirror, serde_json::to_vec(&future).unwrap()).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&mirror, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    assert!(
+        f.store
+            .publish_budget_membership(&transcripts, &member, "owner")
+            .is_err()
+    );
+    std::fs::write(&mirror, &original_mirror).unwrap();
+    let mut foreign: serde_json::Value = serde_json::from_slice(&original_metadata).unwrap();
+    foreign["budget_membership"]["conversation"] = serde_json::json!("other");
+    std::fs::write(&metadata, serde_json::to_vec(&foreign).unwrap()).unwrap();
+    assert!(transcripts.conversation_budget_membership("root").is_err());
+    std::fs::write(&metadata, &original_metadata).unwrap();
+    std::fs::remove_file(&metadata).unwrap();
+    assert!(
+        f.store
+            .publish_budget_membership(&transcripts, &member, "owner")
+            .is_err()
+    );
+    assert!(!metadata.exists());
+    assert_eq!(
+        f.store.budget_account(&member.root).unwrap().known,
+        UsageTotals::default()
+    );
+}
+
+/// The fixed temporary slot supports exact complete crash residue, but never
+/// overwrites partial/foreign content or follows links/blocks on a FIFO.
+#[test]
+fn budget_publication_temporary_recovery_and_special_nodes_are_bounded() {
+    let f = Fixture::new();
+    let transcripts =
+        crate::storage::transcript::AgentTranscriptStore::new(f.root.join("transcripts"));
+    let member = f.member("root", None);
+    f.store.prepare_budget_membership(&member).unwrap();
+    transcripts
+        .publish_conversation_budget_membership(&member)
+        .unwrap();
+    f.store
+        .advance_budget_membership(
+            &member,
+            BudgetMembershipState::Pending,
+            BudgetMembershipState::Published,
+        )
+        .unwrap();
+    f.store.claim_budget_binding(&member, "owner").unwrap();
+    transcripts
+        .publish_budget_binding_mirror(&member, "owner")
+        .unwrap();
+    let mirror = f.root.join("transcripts/root/budget-binding.json");
+    let temporary = f.root.join("transcripts/root/.budget-binding.json.tmp");
+    std::fs::rename(&mirror, &temporary).unwrap();
+    f.store
+        .publish_budget_membership(&transcripts, &member, "owner")
+        .unwrap();
+    assert!(mirror.exists());
+    assert!(!temporary.exists());
+    #[cfg(unix)]
+    {
+        let saved = f.root.join("saved-mirror");
+        std::fs::rename(&mirror, &saved).unwrap();
+        std::os::unix::fs::symlink(&saved, &mirror).unwrap();
+        assert!(
+            transcripts
+                .has_budget_binding_mirror(&member, "owner")
+                .is_err()
+        );
+        std::fs::remove_file(&mirror).unwrap();
+        rustix::fs::mkfifoat(
+            rustix::fs::CWD,
+            &mirror,
+            rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
+        )
+        .unwrap();
+        assert!(
+            transcripts
+                .has_budget_binding_mirror(&member, "owner")
+                .is_err()
+        );
+        std::fs::remove_file(&mirror).unwrap();
+        std::fs::rename(&saved, &mirror).unwrap();
+    }
+}

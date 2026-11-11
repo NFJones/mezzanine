@@ -43,7 +43,7 @@ impl BudgetMembershipState {
 }
 
 impl BudgetMembership {
-    fn validate(&self) -> Result<()> {
+    pub(crate) fn validate(&self) -> Result<()> {
         validate_id(&self.namespace)?;
         validate_id(&self.operation)?;
         mez_agent::transcript::validate_conversation_id(&self.conversation)?;

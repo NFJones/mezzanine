@@ -263,7 +263,7 @@ fn metadata_versions_one_through_four_import_original_raw_origins() {
         );
         let metadata: serde_json::Value =
             serde_json::from_slice(&fs::read(directory.join("metadata.json")).unwrap()).unwrap();
-        assert_eq!(metadata["version"], 5);
+        assert_eq!(metadata["version"], 6);
         assert_eq!(metadata["row_origins_required"], true);
         let reopened = AgentTranscriptStore::new(store.root());
         let next = reopened

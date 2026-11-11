@@ -2079,7 +2079,7 @@ fn transcript_store_persists_user_objective_without_overwriting_kind() {
             .unwrap()
     );
     let metadata = fs::read_to_string(root.join("source").join("metadata.json")).unwrap();
-    assert!(metadata.contains("\"version\":5"));
+    assert!(metadata.contains("\"version\":6"));
     assert!(metadata.contains("\"conversation_kind\":\"root\""));
     assert!(store.delete("source").unwrap());
     assert!(!root.join("source").join("metadata.json").exists());

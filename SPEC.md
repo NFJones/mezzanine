@@ -16500,6 +16500,18 @@ runtime-qualified original retirement may release exact custody. Schema migratio
 alone MUST NOT activate conversations, infer ancestry, authenticate policy edits,
 issue providers, publish global policy or claim the complete budget feature.
 
+Conversation metadata6 MAY carry an immutable exact budget membership reference;
+versions1–5 MUST NOT acquire that meaning from an unexpected new field. A
+version-one `budget-binding.json` companion MUST mirror the exact membership and
+runtime-generated owner. Its bytes are bookkeeping, not native liveness or
+control authority. Publication MUST retain the original database operation
+through metadata durability, published phase, binding reservation and durable
+mirror before database activation. Partial failure MAY finish only that original
+operation. Previously published missing metadata or an active missing mirror MUST
+refuse rather than silently recreate evidence. Future, foreign, symlink or
+oversized binding records MUST refuse. Runtime adoption still requires its own
+live conversation/generation and original-owner qualification.
+
 An optional cumulative input/output budget MUST belong to one durable root
 conversation and all its owned descendants and auxiliary inference. This includes
 task/persistent/nested children, routed work, loops, model sizing, repairs, retries,

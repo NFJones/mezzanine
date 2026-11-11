@@ -6,6 +6,7 @@
 //! once an epoch represents a prefix or selective range, its raw source cannot
 //! change independently of that authoritative replay projection.
 
+mod budget;
 mod frozen_copy;
 #[cfg(test)]
 mod legacy_fixtures;
@@ -127,7 +128,7 @@ const SESSION_SUMMARY_FILE_NAME: &str = "summary.json";
 /// Defines the versioned durable conversation classification sidecar.
 const SESSION_METADATA_FILE_NAME: &str = "metadata.json";
 /// Current per-conversation metadata schema version.
-const SESSION_METADATA_VERSION: u64 = 5;
+const SESSION_METADATA_VERSION: u64 = 6;
 /// Versioned authoritative summary and replay-boundary sidecar.
 const COMPACTION_EPOCH_FILE_NAME: &str = "compaction-epoch.json";
 /// Maximum encoded size accepted for one durable compaction epoch.
@@ -255,6 +256,9 @@ pub(super) fn validate_compaction_range_sources(
 struct ConversationMetadata {
     version: u64,
     conversation_kind: String,
+    /// Immutable accounting provenance, never a runnable/control capability.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    budget_membership: Option<crate::storage::token_usage::budget::membership::BudgetMembership>,
     /// Immutable primary display identity; legacy roots backfill on activation only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     primary_display_name: Option<String>,
@@ -328,6 +332,14 @@ pub(crate) struct AgentModelProfileSelection {
 /// Rejects incomplete child sidecars while preserving true legacy root
 /// conversations, which predate every child-contract field.
 fn validate_conversation_metadata_contract(metadata: &ConversationMetadata) -> Result<()> {
+    if let Some(member) = &metadata.budget_membership {
+        if metadata.version < 6 {
+            return Err(MezError::invalid_args(
+                "legacy metadata cannot qualify budget membership",
+            ));
+        }
+        member.validate()?;
+    }
     if let Some(name) = metadata.primary_display_name.as_deref()
         && (metadata.conversation_kind != "root"
             || name.is_empty()
@@ -5686,6 +5698,7 @@ impl AgentTranscriptStore {
             return Ok(ConversationMetadata {
                 version: SESSION_METADATA_VERSION,
                 conversation_kind: "root".to_string(),
+                budget_membership: None,
                 primary_display_name: None,
                 user_objective: None,
                 parent_objective: None,
@@ -5705,7 +5718,7 @@ impl AgentTranscriptStore {
             MezError::invalid_args(format!("conversation metadata decode failed: {error}"))
         })?;
         match metadata.version {
-            1 | 2 | 3 | 4 | SESSION_METADATA_VERSION => {}
+            1 | 2 | 3 | 4 | 5 | SESSION_METADATA_VERSION => {}
             _ => {
                 return Err(MezError::invalid_args(
                     "unsupported conversation metadata version",
@@ -5719,6 +5732,15 @@ impl AgentTranscriptStore {
             mez_agent::messaging::normalize_objective(objective)?;
         }
         validate_conversation_metadata_contract(&metadata)?;
+        if metadata
+            .budget_membership
+            .as_ref()
+            .is_some_and(|member| member.conversation != conversation_id)
+        {
+            return Err(MezError::conflict(
+                "conversation budget membership subject mismatch",
+            ));
+        }
         Ok(metadata)
     }
 
