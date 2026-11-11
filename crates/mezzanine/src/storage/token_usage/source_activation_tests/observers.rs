@@ -121,6 +121,7 @@ fn external_source_history_schema10_migration_never_invents_completeness() {
         .unwrap()
         .unwrap();
     let database = rusqlite::Connection::open(fixture.store.path()).unwrap();
+    super::super::remove_empty_budget_schema_for_legacy_fixture(&database);
     database.execute_batch("DROP TABLE external_copilot_calls; DROP TABLE external_usage_view_resets; ALTER TABLE external_usage_source_activations DROP COLUMN observer_history_gap; PRAGMA user_version=10;").unwrap();
     assert!(
         fixture
@@ -634,6 +635,7 @@ fn external_source_observer_schema9_migration_is_inert() {
         .renew_external_source_activation(&source, &activation, 2, &renewal, 1101)
         .unwrap();
     let database = rusqlite::Connection::open(fixture.store.path()).unwrap();
+    super::super::remove_empty_budget_schema_for_legacy_fixture(&database);
     database.execute_batch("DROP TABLE external_copilot_calls; DROP TABLE external_usage_view_resets; ALTER TABLE external_usage_source_activations DROP COLUMN observer_history_gap; ALTER TABLE external_usage_source_activations DROP COLUMN observer_fence; PRAGMA user_version=9;").unwrap();
     assert!(fixture.store.external_source_activation(&source).is_err());
     let receipt = fixture

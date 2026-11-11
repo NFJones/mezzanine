@@ -12,6 +12,11 @@ use std::path::{Path, PathBuf};
 
 use crate::error::{MezError, Result};
 
+#[allow(
+    dead_code,
+    reason = "worker-only budget repository is consumed by the next membership activation phase of d0df2701"
+)]
+pub(crate) mod budget;
 mod external;
 mod external_attempt;
 mod external_requests;
@@ -139,3 +144,24 @@ mod request_tests;
 mod source_activation_tests;
 #[cfg(test)]
 mod tests;
+
+/// Historical fixtures rewind a fresh generated database. Remove only the new
+/// EMPTY budget tables first; never turn production migration into IF NOT EXISTS
+/// or let a test discard actual membership/expense to obtain an old schema.
+#[cfg(test)]
+fn remove_empty_budget_schema_for_legacy_fixture(connection: &rusqlite::Connection) {
+    for table in [
+        "budget_bindings",
+        "budget_operations",
+        "budget_receipts",
+        "budget_attempts",
+        "budget_memberships",
+        "budget_roots",
+    ] {
+        let count: i64 = connection
+            .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 0, "legacy fixture contains live budget records");
+    }
+    connection.execute_batch("DROP TABLE budget_bindings; DROP TABLE budget_operations; DROP TABLE budget_receipts; DROP TABLE budget_attempts; DROP TABLE budget_memberships; DROP TABLE budget_roots; DROP TABLE budget_namespace;").unwrap();
+}

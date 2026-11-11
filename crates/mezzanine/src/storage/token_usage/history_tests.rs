@@ -116,6 +116,7 @@ fn attributed_migration_preserves_legacy_receipts_and_rolls_back_failure() {
     };
     store.ingest_external(&report, 100).unwrap();
     let connection = rusqlite::Connection::open(store.path()).unwrap();
+    super::remove_empty_budget_schema_for_legacy_fixture(&connection);
     connection
         .execute_batch(
             "DROP INDEX token_usage_events_project_time;

@@ -498,6 +498,7 @@ mod tests {
                 .external_source_usage_snapshot(&fixture.key)
                 .is_err()
         );
+        super::super::remove_empty_budget_schema_for_legacy_fixture(&connection);
         connection
             .execute_batch("DROP TABLE external_copilot_calls; DROP TABLE external_usage_view_resets; PRAGMA user_version=11;")
             .unwrap();

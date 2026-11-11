@@ -18,6 +18,7 @@ fn legacy_launch_schema13_migration_preserves_rows_and_native_refusal() {
     let (store, legacy) = fixture();
     store.ingest_external(&legacy, 100).unwrap();
     let sql = Connection::open(store.path()).unwrap();
+    super::remove_empty_budget_schema_for_legacy_fixture(&sql);
     sql.execute_batch("DROP TABLE external_copilot_calls; PRAGMA user_version=12;")
         .unwrap();
     let before = contents(&sql);
@@ -67,6 +68,7 @@ fn legacy_launch_schema13_migration_writer_refusal_preserves_version_and_expense
     let (store, legacy) = fixture();
     store.ingest_external(&legacy, 100).unwrap();
     let sql = Connection::open(store.path()).unwrap();
+    super::remove_empty_budget_schema_for_legacy_fixture(&sql);
     sql.execute_batch(
         "DROP TABLE external_copilot_calls; PRAGMA user_version=12; BEGIN IMMEDIATE;",
     )

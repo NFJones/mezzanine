@@ -662,6 +662,7 @@ mod tests {
             };
             store.ingest_external(&report, 100).unwrap();
             let connection = store.open().unwrap();
+            super::super::remove_empty_budget_schema_for_legacy_fixture(&connection);
             connection
                 .execute_batch("DROP TABLE external_copilot_calls; DROP TABLE external_usage_view_resets; DROP TABLE external_usage_source_activations; DROP TABLE external_usage_sources; DROP TABLE external_usage_observations; DROP TABLE external_usage_requests; PRAGMA user_version=4;")
                 .unwrap();

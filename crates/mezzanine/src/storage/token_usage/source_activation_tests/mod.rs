@@ -100,6 +100,7 @@ fn external_source_activation_inspection_does_not_create_or_migrate() {
 /// Empty post-v8 alias/reset tables are removed to match that historical schema.
 /// Both migration controls use this helper; it never opens user storage.
 fn v8_activation_fixture(database: &rusqlite::Connection) {
+    super::remove_empty_budget_schema_for_legacy_fixture(database);
     database.execute_batch("DROP TABLE external_copilot_calls; DROP TABLE external_usage_view_resets;
         CREATE TEMP TABLE fixture_v8_rows AS SELECT owner,attempt,ancestry,prepared_at_boot_ms,expires_at_boot_ms,revision,state FROM external_usage_source_activations;
         DROP TABLE external_usage_source_activations;
@@ -772,6 +773,7 @@ fn external_source_activation_migration_keeps_legacy_mappings_inert() {
     let event = existing_expense();
     store.append(&event).unwrap();
     let database = rusqlite::Connection::open(store.path()).unwrap();
+    super::remove_empty_budget_schema_for_legacy_fixture(&database);
     database
         .execute_batch(
             "DROP TABLE external_copilot_calls; DROP TABLE external_usage_view_resets; DROP TABLE IF EXISTS external_usage_source_activations; PRAGMA user_version=7;",

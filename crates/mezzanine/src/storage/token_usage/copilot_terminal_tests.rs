@@ -278,6 +278,7 @@ fn copilot_terminal_schema13_upgrade_preserves_legacy_observations() {
     let legacy = report(&a, 42, &call, 100);
     store.ingest_external(&legacy, 101).unwrap();
     let connection = store.open().unwrap();
+    super::remove_empty_budget_schema_for_legacy_fixture(&connection);
     connection
         .execute_batch("DROP TABLE external_copilot_calls; PRAGMA user_version=13;")
         .unwrap();
@@ -295,7 +296,7 @@ fn copilot_terminal_schema13_upgrade_preserves_legacy_observations() {
         connection
             .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
             .unwrap(),
-        14
+        super::store::SCHEMA_VERSION
     );
     drop(connection);
     drop(reopened);

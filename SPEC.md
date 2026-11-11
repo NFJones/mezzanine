@@ -16486,6 +16486,20 @@ Shared types and parsers alone MUST NOT advertise a usable `/session-budget`
 command or claim provider/effect enforcement. Command registration, configuration
 keys and runtime admission require their connected durable product owners.
 
+Telemetry schema15 adds worker-only root-budget records to the existing private
+token-usage database. Its namespace, immutable memberships, pending/publication/
+activation phases, exact binding custody, attempts, receipt outcomes and root
+override operations MUST survive ordinary rolling event pruning. Unsigned
+lifetime counters/revisions MUST retain their full range without SQLite signed
+narrowing. Exact replay MUST return its original committed outcome; changed
+replay, regressing observations and arithmetic overflow MUST refuse atomically.
+Known prefixes MUST remain separate from terminal missing-category facts.
+Expected missing/future stores MUST NOT be recreated as zero expense by these
+ports. A second binding owner MUST refuse without age-based reclamation; only
+runtime-qualified original retirement may release exact custody. Schema migration
+alone MUST NOT activate conversations, infer ancestry, authenticate policy edits,
+issue providers, publish global policy or claim the complete budget feature.
+
 An optional cumulative input/output budget MUST belong to one durable root
 conversation and all its owned descendants and auxiliary inference. This includes
 task/persistent/nested children, routed work, loops, model sizing, repairs, retries,
