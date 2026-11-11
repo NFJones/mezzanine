@@ -465,6 +465,7 @@ impl RuntimeSessionService {
                     Some(parent_session.session_id.clone()),
                     parent_session.transcript_high_water,
                 )?;
+            self.capture_runtime_budget_inheritance(&parent_session.session_id, &child_pane_id)?;
             if let Some(project_scope) = parent_session.project_scope.clone() {
                 self.agent_shell_store_mut()
                     .install_project_scope(&child_pane_id, project_scope)?;

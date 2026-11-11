@@ -1300,6 +1300,14 @@ impl RuntimeSessionService {
                 return Err(error);
             }
         };
+        if let Err(error) =
+            self.capture_runtime_budget_inheritance(&state.parent_conversation_id, pane_id)
+        {
+            self.agent_shell_store_mut()
+                .restore_session(pane_id, previous)?;
+            self.set_frozen_replay_binding(pane_id, previous_frozen);
+            return Err(error);
+        }
         if let Some(cleanup) = cleanup
             && let Err(error) = self.commit_routed_cleanup_rebind(cleanup, &target)
         {

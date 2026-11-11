@@ -44,6 +44,14 @@ impl Drop for OwnedRoot {
     }
 }
 
+impl Drop for Scene {
+    fn drop(&mut self) {
+        // This generated service owns every process it can retire. No caller
+        // supplied process identity or another live runtime participates.
+        self.service.terminate_all_pane_processes().unwrap();
+    }
+}
+
 impl Scene {
     fn new() -> Self {
         let root = OwnedRoot::new();
@@ -553,4 +561,265 @@ async fn runtime_budget_preparation_repository_replacement_rejects_old_adoption(
             .unwrap()
             .is_none()
     );
+}
+
+/// The actual /loop --new command changes context, not accounting ownership.
+/// Its fresh ephemeral conversation must publish under the frozen original root.
+#[tokio::test]
+async fn runtime_budget_preparation_real_loop_new_retains_original_account() {
+    let mut scene = Scene::new();
+    let primary = scene
+        .service
+        .attach_primary("primary", true, Size::new(120, 30).unwrap(), 120)
+        .unwrap();
+    let root = scene.start();
+    let work = scene
+        .service
+        .prepare_agent_provider_work(&root.turn_id)
+        .unwrap();
+    let outcome = RuntimeSessionService::execute_agent_provider_preparation(work).await;
+    scene
+        .service
+        .apply_agent_provider_preparation(outcome)
+        .unwrap();
+    let original = scene
+        .store
+        .budget_membership(&root.conversation_id)
+        .unwrap()
+        .unwrap()
+        .0;
+    scene.service.stop_agent_turn_for_pane("%1").unwrap();
+    scene
+        .service
+        .execute_agent_shell_command(
+            &primary,
+            "/loop --new --limit 1 --goal 'qualify ownership' generate one offline result",
+        )
+        .unwrap();
+    let child = scene.service.agent_shell_store().get("%1").unwrap().clone();
+    assert!(child.ephemeral);
+    assert_ne!(child.session_id, root.conversation_id);
+    let task = scene
+        .service
+        .pending_agent_provider_tasks()
+        .into_iter()
+        .find(|task| {
+            scene
+                .service
+                .agent_turn_ledger()
+                .turn(&task.turn_id)
+                .is_some_and(|turn| turn.conversation_id == child.session_id)
+        })
+        .unwrap();
+    let work = scene
+        .service
+        .prepare_agent_provider_work(&task.turn_id)
+        .unwrap();
+    let outcome = RuntimeSessionService::execute_agent_provider_preparation(work).await;
+    scene
+        .service
+        .apply_agent_provider_preparation(outcome)
+        .unwrap();
+    let (member, phase) = scene
+        .store
+        .budget_membership(&child.session_id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(phase, BudgetMembershipState::Active);
+    assert_eq!(member.root, original.root);
+    assert_eq!(
+        member.parent.as_deref(),
+        Some(original.conversation.as_str())
+    );
+    assert_eq!(
+        scene
+            .store
+            .budget_membership(&root.conversation_id)
+            .unwrap()
+            .unwrap()
+            .0,
+        original
+    );
+}
+
+/// Idle persistent descendants retain the creation owner even when their later
+/// user-labelled prompt has no parent turn. Publication remains worker-owned.
+#[tokio::test]
+async fn runtime_budget_preparation_real_persistent_spawn_inherits_before_later_turn() {
+    fn spawn(scene: &mut Scene, parent_agent: &str) -> String {
+        let parent = scene
+            .service
+            .agent_shell_store()
+            .get(parent_agent.strip_prefix("agent-").unwrap())
+            .unwrap()
+            .session_id
+            .clone();
+        let response = scene
+            .service
+            .spawn_runtime_persistent_subagent_session_owned(
+                SubagentSpawnRequest {
+                    parent_agent_id: parent_agent.into(),
+                    requested_role: "worker".into(),
+                    placement: "new-pane".into(),
+                    cooperation_mode: CooperationMode::ExploreOnly,
+                    cooperation_mode_defaulted: false,
+                    read_scopes: Vec::new(),
+                    read_scopes_defaulted: false,
+                    write_scopes: Vec::new(),
+                    write_scopes_defaulted: false,
+                    session_mode: mez_agent::SubagentSessionMode::New,
+                    initial_model_size: None,
+                    initial_reasoning_effort: None,
+                    task_prompt: String::new(),
+                    explicit_user_approval: false,
+                    skip_initial_turn: true,
+                },
+                RuntimeSubagentPlacement::NewPane {
+                    direction: SplitDirection::Vertical,
+                    select: false,
+                },
+                &parent,
+                "budget inheritance fixture",
+            )
+            .unwrap();
+        let value: serde_json::Value = serde_json::from_str(&response).unwrap();
+        value["agent"]["id"].as_str().unwrap().to_owned()
+    }
+
+    let mut scene = Scene::new();
+    let _primary = scene
+        .service
+        .attach_primary("primary", true, Size::new(120, 30).unwrap(), 120)
+        .unwrap();
+    scene
+        .service
+        .configure_subagent_policy(8, 8, 8, 8, SubagentWaitPolicy::Detach);
+    let root = scene.start();
+    let work = scene
+        .service
+        .prepare_agent_provider_work(&root.turn_id)
+        .unwrap();
+    let outcome = RuntimeSessionService::execute_agent_provider_preparation(work).await;
+    scene
+        .service
+        .apply_agent_provider_preparation(outcome)
+        .unwrap();
+    let root_member = scene
+        .store
+        .budget_membership(&root.conversation_id)
+        .unwrap()
+        .unwrap()
+        .0;
+
+    let mut parent_agent = "agent-%1".to_owned();
+    let mut parent_member = root_member.clone();
+    for level in 0..3 {
+        let child_agent = spawn(&mut scene, &parent_agent);
+        let pane = child_agent.strip_prefix("agent-").unwrap();
+        let child_conversation = scene
+            .service
+            .agent_shell_store()
+            .get(pane)
+            .unwrap()
+            .session_id
+            .clone();
+        // Capture is actor-only; durable activation still waits for the existing
+        // preparation worker, even for an idle persistent child.
+        assert!(
+            scene
+                .store
+                .budget_membership(&child_conversation)
+                .unwrap()
+                .is_none()
+        );
+        let signature = mez_agent::EnvironmentSignature::new(
+            "linux",
+            "x86_64",
+            None,
+            "test-host",
+            "test-user",
+            None,
+            "/bin/sh",
+            mez_agent::ShellClassification::PosixSh,
+            None,
+            Some("/usr/bin:/bin".into()),
+            scene._root.to_string_lossy(),
+            None,
+            false,
+            None,
+            Vec::new(),
+        )
+        .unwrap();
+        scene
+            .service
+            .set_pane_environment_signature_for_tests(pane, signature);
+        mark_test_pane_ready(&mut scene.service, pane);
+        let started = scene
+            .service
+            .start_agent_prompt_turn(pane, "later persistent work")
+            .unwrap();
+        let turn = scene
+            .service
+            .agent_turn_ledger()
+            .turn(&started.turn_id)
+            .unwrap()
+            .clone();
+        assert!(turn.parent_turn_id.is_none());
+        let work = scene
+            .service
+            .prepare_agent_provider_work(&turn.turn_id)
+            .unwrap();
+        if level == 2 {
+            let competing = crate::storage::token_usage::budget::membership::BudgetMembership {
+                namespace: root_member.namespace.clone(),
+                root: root_member.root.clone(),
+                conversation: child_conversation.clone(),
+                parent: Some(parent_member.conversation.clone()),
+                operation: "different-inherited-operation".into(),
+                started_at: 1,
+                legacy_coverage_gap: parent_member.legacy_coverage_gap,
+            };
+            scene.store.prepare_budget_membership(&competing).unwrap();
+            scene
+                .transcripts
+                .publish_conversation_budget_membership(&competing)
+                .unwrap();
+            let outcome = RuntimeSessionService::execute_agent_provider_preparation(work).await;
+            assert!(
+                scene
+                    .service
+                    .apply_agent_provider_preparation(outcome)
+                    .is_err()
+            );
+            assert!(!scene.service.runtime_budget_membership_is_ready(&turn));
+            assert_eq!(
+                scene
+                    .store
+                    .budget_membership(&child_conversation)
+                    .unwrap()
+                    .unwrap(),
+                (competing, BudgetMembershipState::Pending)
+            );
+        } else {
+            let outcome = RuntimeSessionService::execute_agent_provider_preparation(work).await;
+            scene
+                .service
+                .apply_agent_provider_preparation(outcome)
+                .unwrap();
+            let (member, phase) = scene
+                .store
+                .budget_membership(&child_conversation)
+                .unwrap()
+                .unwrap();
+            assert_eq!(phase, BudgetMembershipState::Active);
+            assert_eq!(member.root, root_member.root);
+            assert_eq!(
+                member.parent.as_deref(),
+                Some(parent_member.conversation.as_str())
+            );
+            assert!(scene.service.runtime_budget_membership_is_ready(&turn));
+            parent_member = member;
+        }
+        parent_agent = child_agent;
+    }
 }

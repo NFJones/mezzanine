@@ -221,29 +221,7 @@ impl RuntimeSessionService {
                     "runtime budget membership capacity reached",
                 ));
             }
-            let parent = turn
-                .parent_turn_id
-                .as_ref()
-                .and_then(|id| {
-                    self.agent_turn_ledger()
-                        .turns()
-                        .iter()
-                        .find(|turn| &turn.turn_id == id)
-                })
-                .and_then(|parent| {
-                    self.agent
-                        .budget_memberships
-                        .entries
-                        .get(&parent.conversation_id)
-                })
-                .and_then(|entry| entry.member.clone());
-            let source = if let Some(parent) = parent {
-                Source::Inherited {
-                    parent,
-                    operation: crate::storage::token_usage::new_token_usage_event_id(),
-                    started_at: turn.started_at_unix_seconds,
-                }
-            } else if turn.parent_turn_id.is_none()
+            let source = if turn.parent_turn_id.is_none()
                 && session
                     .budget_conversation_birth
                     .matches(&session.session_id, &session.native_message_incarnation)
@@ -395,6 +373,111 @@ impl RuntimeSessionService {
                                 && session.native_message_incarnation == entry.native
                         })
             })
+    }
+
+    /// Resolves the actual parent shell only after native spawn authorization.
+    /// Disabled assembly does not impose new identity requirements on callers.
+    pub(crate) fn capture_runtime_budget_spawn_inheritance(
+        &mut self,
+        parent_agent: &str,
+        child_pane: &str,
+    ) -> Result<()> {
+        if !self.agent.budget_memberships.enabled {
+            return Ok(());
+        }
+        let parent_pane = parent_agent
+            .strip_prefix("agent-")
+            .ok_or_else(|| MezError::invalid_state("budget parent native identity unavailable"))?;
+        let parent_conversation = self
+            .agent_shell_store()
+            .get(parent_pane)
+            .ok_or_else(|| MezError::invalid_state("budget parent conversation unavailable"))?
+            .session_id
+            .clone();
+        self.capture_runtime_budget_inheritance(&parent_conversation, child_pane)
+    }
+
+    /// Freezes an original active parent's accounting membership at a genuine
+    /// lifecycle creation/rebind boundary, before child work is queued. Callers
+    /// supply a conversation from their validated native owner/controller, never
+    /// a model-supplied lineage or a current depth-zero label. No I/O, scheduling,
+    /// teardown, message authority or parent readiness is granted by this capture.
+    /// The child must still complete its exact off-actor publication/adoption.
+    pub(crate) fn capture_runtime_budget_inheritance(
+        &mut self,
+        parent_conversation: &str,
+        child_pane: &str,
+    ) -> Result<()> {
+        if !self.agent.budget_memberships.enabled {
+            return Ok(());
+        }
+        let parent = self
+            .agent
+            .budget_memberships
+            .entries
+            .get(parent_conversation)
+            .ok_or_else(|| {
+                MezError::invalid_state("original parent budget ownership unavailable")
+            })?;
+        if self.persistence.token_usage_store() != Some(&parent.store)
+            || self.persistence.transcript_store() != Some(&parent.transcripts)
+        {
+            return Err(MezError::conflict("parent budget repository changed"));
+        }
+        let store = parent.store.clone();
+        let transcripts = parent.transcripts.clone();
+        let parent = parent.member.clone().ok_or_else(|| {
+            MezError::invalid_state("original parent budget membership is not active")
+        })?;
+        let child = self
+            .agent_shell_store()
+            .get(child_pane)
+            .ok_or_else(|| MezError::invalid_state("budget child native binding unavailable"))?;
+        if child.session_id == parent.conversation {
+            return Err(MezError::conflict(
+                "budget inheritance cannot parent itself",
+            ));
+        }
+        if let Some(original) = self.agent.budget_memberships.entries.get(&child.session_id) {
+            if original.pane == child_pane
+                && original.native == child.native_message_incarnation
+                && original.store == store
+                && original.transcripts == transcripts
+                && matches!(&original.source, Source::Inherited { parent: captured, .. } if captured == &parent)
+            {
+                return Ok(());
+            }
+            return Err(MezError::conflict(
+                "budget child already has different original ownership",
+            ));
+        }
+        if self.agent.budget_memberships.entries.len() >= 4096 {
+            return Err(MezError::invalid_state(
+                "runtime budget membership capacity reached",
+            ));
+        }
+        let conversation = child.session_id.clone();
+        let native = child.native_message_incarnation.clone();
+        self.agent.budget_memberships.entries.insert(
+            conversation,
+            Entry {
+                identity: Arc::new(()),
+                preparation: Arc::new(()),
+                ready: false,
+                store,
+                transcripts,
+                pane: child_pane.to_owned(),
+                native,
+                owner: crate::storage::token_usage::new_token_usage_event_id(),
+                source: Source::Inherited {
+                    parent,
+                    operation: crate::storage::token_usage::new_token_usage_event_id(),
+                    started_at: crate::runtime::current_unix_seconds(),
+                },
+                member: None,
+            },
+        );
+        Ok(())
     }
 
     /// Exercises the real preparation/claim boundary before product activation.

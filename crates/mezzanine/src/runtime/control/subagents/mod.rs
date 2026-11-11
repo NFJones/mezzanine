@@ -875,6 +875,12 @@ impl RuntimeSessionService {
             self.cleanup_failed_subagent_spawn(controller, &started.pane_id, &child_agent_id, None);
             return Err(error.into());
         }
+        let budget_inheritance =
+            self.capture_runtime_budget_spawn_inheritance(&spawn.parent_agent_id, &started.pane_id);
+        if let Err(error) = budget_inheritance {
+            self.cleanup_failed_subagent_spawn(controller, &started.pane_id, &child_agent_id, None);
+            return Err(error);
+        }
         // Routed roots are rebound to ephemeral conversations by their
         // workflow controller. Their depth-zero runtime lineage is transient,
         // so it must not become a durable child contract that restore could

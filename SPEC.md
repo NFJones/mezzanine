@@ -16524,6 +16524,13 @@ in production until the full lifecycle, qualified retirement/rebind and active
 checkpoint owners are connected. Attaching repositories alone MUST NOT activate
 them or alter normal production conversation behavior.
 
+The staged spawn, routed-worker and loop binding owners MUST capture the original
+active parent's exact membership before queuing descendant work. Idle persistent
+children MUST retain that creation capture for later prompts without parent-turn
+links. A provider-preparation lookup MUST NOT infer inheritance from a supplied
+parent-turn id. Capture alone grants no runnable, cleanup or messaging authority;
+each child still requires its original durable publication and exact adoption.
+
 An optional cumulative input/output budget MUST belong to one durable root
 conversation and all its owned descendants and auxiliary inference. This includes
 task/persistent/nested children, routed work, loops, model sizing, repairs, retries,
