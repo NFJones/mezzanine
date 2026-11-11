@@ -22,6 +22,27 @@ const PROVIDER_ACTION_EXECUTION_SEPARATOR: &str = "~mez~";
 const PROVIDER_ACTION_EXECUTION_DIGEST_LEN: usize = 16;
 
 impl RuntimeSessionService {
+    /// Returns the latest accepted response group belonging to this turn, not
+    /// an imported assistant event. Chronology is installed before reentrant
+    /// action dispatch, whereas the stored execution can still be its predecessor.
+    /// Matching this identity grants no settlement or continuation authority.
+    pub(in crate::runtime::agent) fn agent_turn_current_response_group(
+        &self,
+        turn_id: &str,
+    ) -> Option<&ContextExecutionGroupId> {
+        let imported = self.agent_turn_imported_history_sequence_high_water(turn_id);
+        self.agent_turn_contexts()
+            .get(turn_id)?
+            .chronology()
+            .iter()
+            .rev()
+            .find(|event| {
+                event.sequence().get() > imported
+                    && event.block().source == ContextSourceKind::TranscriptAssistant
+            })?
+            .execution_group_id()
+    }
+
     /// Retains sealed diagnostics before provider-error source capture. Normal
     /// response admission performs the same append on its local candidate so a
     /// rejected response cannot partially mutate the original canonical body.

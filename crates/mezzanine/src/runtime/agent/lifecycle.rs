@@ -614,9 +614,10 @@ impl RuntimeSessionService {
         Ok(session)
     }
 
-    /// Completes the scheduler entry for one running turn and finishes the
-    /// terminal runtime turn through the cleanup path that matches its current
-    /// pane shell binding.
+    /// Retires one terminal turn's scheduler custody from any state after the
+    /// existing completion gates, then finishes through its pane-binding path.
+    /// Waiting, blocked and reacquiring turns still hold exclusivity claims;
+    /// running-only completion would leak them after a local application error.
     ///
     /// # Parameters
     /// - `turn`: The running turn being settled.
@@ -653,7 +654,13 @@ impl RuntimeSessionService {
         if self.complete_provider_error_routed_presentation(&turn.turn_id, state)? {
             return Ok(());
         }
-        let _ = self.agent.agent_scheduler.complete(&turn.turn_id);
+        match self.agent.agent_scheduler.cancel(&turn.turn_id) {
+            Ok(_) => {}
+            // Stop or another checked terminal owner may already have retired
+            // this exact entry. No other scheduler error is a successful finish.
+            Err(error) if error.kind() == mez_agent::SchedulerErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
         let trace = self.append_agent_trace_turn_event(
             &turn.pane_id,
             &turn.turn_id,

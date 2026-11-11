@@ -175,6 +175,20 @@ impl RuntimeSessionService {
     /// Prevents reentrant receive recovery from settling the previous stored
     /// batch while a newer accepted response is still being applied.
     fn joined_coordination_response_source_current(&self, turn_id: &str) -> bool {
+        let Some(execution) = self.agent_turn_executions().get(turn_id) else {
+            return false;
+        };
+        let Ok(current) =
+            super::super::provider_execution::provider_log_execution_group_id(execution)
+        else {
+            return false;
+        };
+        // Initial spawn batches have no coordination-mail owner yet. Their
+        // second spawn can reenter receive recovery after the first join was
+        // registered, so the canonical response identity must gate those too.
+        if self.agent_turn_current_response_group(turn_id) != Some(&current) {
+            return false;
+        }
         let Some(owner) = self.agent.joined_coordination.get(turn_id) else {
             return true;
         };
@@ -184,12 +198,7 @@ impl RuntimeSessionService {
         let Some(group) = owner.applying_group.as_ref() else {
             return false;
         };
-        self.agent_turn_executions()
-            .get(turn_id)
-            .is_some_and(|execution| {
-                super::super::provider_execution::provider_log_execution_group_id(execution)
-                    .is_ok_and(|current| &current == group)
-            })
+        &current == group
     }
 
     /// Identifies an unissued coordination answer that explicit Resume will

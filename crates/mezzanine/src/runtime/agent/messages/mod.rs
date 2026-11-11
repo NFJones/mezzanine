@@ -273,9 +273,8 @@ impl RuntimeSessionService {
             return assistant.is_none();
         };
         self.completion_stored_execution_continuation_ready(turn_id)
-            && super::provider_execution::provider_log_execution_group_id(execution).is_ok_and(
-                |group| assistant.is_some_and(|event| event.execution_group_id() == Some(&group)),
-            )
+            && super::provider_execution::provider_log_execution_group_id(execution)
+                .is_ok_and(|group| self.agent_turn_current_response_group(turn_id) == Some(&group))
     }
 
     /// Fairly reacquires capacity and settles one parked peer wait after model

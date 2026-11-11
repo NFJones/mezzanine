@@ -15156,6 +15156,15 @@ failed, and the parent MUST NOT resume provider execution until it reacquires
 capacity. Duplicate terminal child observations MUST be idempotent. A join
 settlement invariant failure MUST fail the parent visibly and MUST NOT leave it
 indefinitely blocked.
+Reentrant message delivery during response application MUST NOT park a parent
+using an older stored execution. Its stored execution group MUST match the
+latest current-turn canonical assistant event before joined recovery may park
+or offer coordination; imported assistant history MUST NOT establish that match.
+After required terminal settlement permits retirement, the exact turn's scheduler
+entry and agent/pane claims MUST be released from queued, running, blocked,
+waiting or reacquiring state. An already absent entry MAY be an idempotent no-op;
+other scheduler errors MUST NOT be silently accepted. This retirement MUST NOT
+bypass original joined-source retention or unfinished effect/publication gates.
 Before provider-result parking releases a joined parent, the runtime MUST retain
 the original spawn request, execution group, action and result slot independently
 of the replaceable latest execution. Exact repeated capture MUST preserve that
