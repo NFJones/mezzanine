@@ -19,6 +19,9 @@ enum Fault {
     Finish,
     MalformedEvent,
     AbsentUsage,
+    PartialCounters,
+    PartialZero,
+    EmptyCounters,
 }
 
 struct PartialUsageTransport {
@@ -67,6 +70,33 @@ impl AsyncProviderHttpTransport for PartialUsageTransport {
                 })
                 .await;
             }
+            if matches!(
+                self.fault,
+                Fault::PartialCounters | Fault::PartialZero | Fault::EmptyCounters
+            ) {
+                let output = if matches!(self.fault, Fault::PartialZero) {
+                    0
+                } else {
+                    9
+                };
+                let usage = if matches!(self.fault, Fault::EmptyCounters) {
+                    serde_json::json!({})
+                } else if self.anthropic {
+                    serde_json::json!({"input_tokens":3,"output_tokens":output})
+                } else {
+                    serde_json::json!({"completion_tokens":output})
+                };
+                let partial = if self.anthropic {
+                    serde_json::json!({"type":"message_delta", "usage":usage})
+                } else {
+                    serde_json::json!({"choices":[], "usage":usage})
+                };
+                on_event(mez_agent::SseEvent {
+                    name: None,
+                    data: partial.to_string(),
+                })
+                .await;
+            }
             if matches!(self.fault, Fault::MalformedEvent) {
                 // OpenAI/Anthropic latch a decoder error here; DeepSeek's
                 // tolerant decoder instead rejects missing MAAP at finish.
@@ -106,6 +136,9 @@ async fn shared_chat_stream_failures_preserve_decoded_expense() {
             Fault::Finish,
             Fault::MalformedEvent,
             Fault::AbsentUsage,
+            Fault::PartialCounters,
+            Fault::PartialZero,
+            Fault::EmptyCounters,
         ] {
             let sends = Arc::new(AtomicUsize::new(0));
             let transport = PartialUsageTransport {
@@ -203,6 +236,10 @@ async fn assert_expense<P: AsyncModelProvider>(
         (usage.input_tokens, usage.output_tokens),
         if matches!(fault, Fault::AbsentUsage) {
             (0, 0)
+        } else if matches!(fault, Fault::PartialCounters) {
+            (11, 9)
+        } else if matches!(fault, Fault::PartialZero) {
+            (11, 0)
         } else {
             (11, 7)
         },

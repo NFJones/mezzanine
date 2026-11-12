@@ -405,22 +405,36 @@ fn anthropic_usage_from_value(value: Option<&serde_json::Value>) -> ModelTokenUs
 }
 
 /// Overlays cumulative Anthropic usage fields from one stream event.
-fn anthropic_overlay_usage(current: &mut ModelTokenUsage, value: Option<&serde_json::Value>) {
-    let next = anthropic_usage_from_value(value);
-    if next.input_tokens > 0 {
-        current.input_tokens = next.input_tokens;
+fn anthropic_overlay_usage(
+    current: &mut ModelTokenUsage,
+    uncached_input: &mut u64,
+    value: Option<&serde_json::Value>,
+) {
+    let Some(value) = value else { return };
+    // Anthropic input_tokens excludes cache reads/writes. Preserve those
+    // independent cumulative components when a later frame omits them.
+    if let Some(input) = value
+        .get("input_tokens")
+        .and_then(serde_json::Value::as_u64)
+    {
+        *uncached_input = input;
     }
-    if next.output_tokens > 0 {
-        current.output_tokens = next.output_tokens;
-    }
-    if next.reasoning_tokens > 0 {
-        current.reasoning_tokens = next.reasoning_tokens;
-    }
-    if next.cached_input_tokens.is_some() {
-        current.cached_input_tokens = next.cached_input_tokens;
-    }
-    if next.cache_write_input_tokens.is_some() {
-        current.cache_write_input_tokens = next.cache_write_input_tokens;
+    current.cached_input_tokens = value
+        .get("cache_read_input_tokens")
+        .and_then(serde_json::Value::as_u64)
+        .or(current.cached_input_tokens);
+    current.cache_write_input_tokens = value
+        .get("cache_creation_input_tokens")
+        .and_then(serde_json::Value::as_u64)
+        .or(current.cache_write_input_tokens);
+    current.input_tokens = uncached_input
+        .saturating_add(current.cached_input_tokens.unwrap_or(0))
+        .saturating_add(current.cache_write_input_tokens.unwrap_or(0));
+    if let Some(output) = value
+        .get("output_tokens")
+        .and_then(serde_json::Value::as_u64)
+    {
+        current.output_tokens = output;
     }
 }
 
@@ -663,6 +677,8 @@ fn parse_anthropic_messages_http_body(
 pub struct AnthropicMessagesStreamDecoder {
     model: Option<String>,
     usage: ModelTokenUsage,
+    // Raw cumulative component, never reconstructed from saturated totals.
+    uncached_input_tokens: u64,
     stop_reason: Option<String>,
     completed: bool,
     blocks: BTreeMap<u64, AnthropicStreamContentBlock>,
@@ -715,7 +731,11 @@ impl AnthropicMessagesStreamDecoder {
                         .and_then(serde_json::Value::as_str)
                         .map(str::to_string);
                 }
-                anthropic_overlay_usage(&mut self.usage, value.pointer("/message/usage"));
+                anthropic_overlay_usage(
+                    &mut self.usage,
+                    &mut self.uncached_input_tokens,
+                    value.pointer("/message/usage"),
+                );
                 Ok(None)
             }
             Some("content_block_start") => {
@@ -794,7 +814,11 @@ impl AnthropicMessagesStreamDecoder {
                 {
                     self.stop_reason = Some(reason.to_string());
                 }
-                anthropic_overlay_usage(&mut self.usage, value.get("usage"));
+                anthropic_overlay_usage(
+                    &mut self.usage,
+                    &mut self.uncached_input_tokens,
+                    value.get("usage"),
+                );
                 Ok(None)
             }
             Some("message_stop") => {
@@ -858,6 +882,7 @@ fn parse_anthropic_messages_stream_body(
 ) -> Result<AnthropicMessagesResponse, AnthropicResponseError> {
     let mut model = None;
     let mut usage = ModelTokenUsage::default();
+    let mut uncached_input = 0;
     let mut stop_reason = None::<String>;
     let mut completed = false;
     let mut blocks = BTreeMap::<u64, AnthropicStreamContentBlock>::new();
@@ -903,7 +928,11 @@ fn parse_anthropic_messages_stream_body(
                             .and_then(serde_json::Value::as_str)
                             .map(str::to_string);
                     }
-                    anthropic_overlay_usage(&mut usage, value.pointer("/message/usage"));
+                    anthropic_overlay_usage(
+                        &mut usage,
+                        &mut uncached_input,
+                        value.pointer("/message/usage"),
+                    );
                 }
                 Some("content_block_start") => {
                     let index = value
@@ -967,7 +996,7 @@ fn parse_anthropic_messages_stream_body(
                     {
                         stop_reason = Some(reason.to_string());
                     }
-                    anthropic_overlay_usage(&mut usage, value.get("usage"));
+                    anthropic_overlay_usage(&mut usage, &mut uncached_input, value.get("usage"));
                 }
                 Some("message_stop") => completed = true,
                 Some("ping") => {}
@@ -1673,12 +1702,30 @@ mod tests {
         let mut overlaid = ModelTokenUsage::default();
         anthropic_overlay_usage(
             &mut overlaid,
+            &mut 0,
             Some(&serde_json::json!({
                 "cache_creation_input_tokens": 13
             })),
         );
 
         assert_eq!(overlaid.cache_write_input_tokens, Some(13));
+    }
+
+    /// Legacy normalization saturates inclusive input, so the raw component
+    /// must survive independently even when that total cannot be inverted.
+    #[test]
+    fn anthropic_stream_keeps_raw_input_across_saturated_cache_updates() {
+        let mut usage = ModelTokenUsage::default();
+        let mut uncached = 0;
+        for raw in [
+            serde_json::json!({"input_tokens":u64::MAX,"cache_read_input_tokens":3}),
+            serde_json::json!({"cache_read_input_tokens":0,"output_tokens":1}),
+        ] {
+            anthropic_overlay_usage(&mut usage, &mut uncached, Some(&raw));
+            assert_eq!(uncached, u64::MAX);
+            assert_eq!(usage.input_tokens, u64::MAX);
+        }
+        assert_eq!(usage.cached_input_tokens, Some(0));
     }
 
     /// Verifies Anthropic native `tool_use` blocks are translated into one

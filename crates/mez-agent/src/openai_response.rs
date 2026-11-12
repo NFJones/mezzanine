@@ -204,7 +204,7 @@ impl OpenAiResponsesStreamDecoder {
                 "OpenAI stream event was not JSON: {error}"
             ))
         })?;
-        self.reported_usage = reported_openai_usage(&value).or(self.reported_usage);
+        self.reported_usage = overlay_openai_reported_usage(self.reported_usage, &value);
         if let Some(error) = value.get("error").filter(|error| !error.is_null()) {
             let message = error
                 .get("message")
@@ -214,9 +214,8 @@ impl OpenAiResponsesStreamDecoder {
             return Err(ProviderResponseError::invalid_state(message)
                 .with_provider_failure_json(openai_provider_failure_event_json(&value)));
         }
-        let event_usage = openai_token_usage_from_response_value(&value);
-        if !event_usage.is_zero() {
-            self.usage = event_usage;
+        if let Some(usage) = self.reported_usage {
+            self.usage = usage;
         }
 
         let event_type = value
@@ -473,7 +472,7 @@ pub fn parse_openai_responses_stream_body(
                     "OpenAI stream event was not JSON: {error}"
                 ))
             })?;
-            reported_usage = reported_openai_usage(&value).or(reported_usage);
+            reported_usage = overlay_openai_reported_usage(reported_usage, &value);
             if let Some(error) = value.get("error").filter(|error| !error.is_null()) {
                 let message = error
                     .get("message")
@@ -483,9 +482,8 @@ pub fn parse_openai_responses_stream_body(
                 return Err(ProviderResponseError::invalid_state(message)
                     .with_provider_failure_json(openai_provider_failure_event_json(&value)));
             }
-            let event_usage = openai_token_usage_from_response_value(&value);
-            if !event_usage.is_zero() {
-                usage = event_usage;
+            if let Some(reported) = reported_usage {
+                usage = reported;
             }
 
             let event_type = value
@@ -691,7 +689,64 @@ fn reported_openai_usage(value: &serde_json::Value) -> Option<ModelTokenUsage> {
     ]
     .iter()
     .any(|key| usage.get(key).and_then(serde_json::Value::as_u64).is_some());
-    (has_counter || parsed != ModelTokenUsage::default()).then_some(parsed)
+    let has_reasoning_counter = [
+        "/output_tokens_details/reasoning_tokens",
+        "/completion_tokens_details/reasoning_tokens",
+    ]
+    .iter()
+    .any(|path| {
+        usage
+            .pointer(path)
+            .and_then(serde_json::Value::as_u64)
+            .is_some()
+    });
+    (has_counter || has_reasoning_counter || parsed != ModelTokenUsage::default()).then_some(parsed)
+}
+
+/// Overlays only observed cumulative fields, including explicit zero. Missing
+/// dimensions retain earlier knowledge; this never adds a final aggregate to
+/// its prefixes or infers per-dimension completeness from normalized counters.
+fn overlay_openai_reported_usage(
+    previous: Option<ModelTokenUsage>,
+    value: &serde_json::Value,
+) -> Option<ModelTokenUsage> {
+    let Some(next) = reported_openai_usage(value) else {
+        return previous;
+    };
+    let raw = value
+        .get("usage")
+        .or_else(|| value.pointer("/response/usage"))?;
+    let mut merged = previous.unwrap_or_default();
+    if ["input_tokens", "prompt_tokens"]
+        .iter()
+        .any(|field| raw.get(field).and_then(serde_json::Value::as_u64).is_some())
+    {
+        merged.input_tokens = next.input_tokens;
+    }
+    if ["output_tokens", "completion_tokens"]
+        .iter()
+        .any(|field| raw.get(field).and_then(serde_json::Value::as_u64).is_some())
+    {
+        merged.output_tokens = next.output_tokens;
+    }
+    if [
+        "/output_tokens_details/reasoning_tokens",
+        "/completion_tokens_details/reasoning_tokens",
+        "/reasoning_tokens",
+    ]
+    .iter()
+    .any(|path| {
+        raw.pointer(path)
+            .and_then(serde_json::Value::as_u64)
+            .is_some()
+    }) {
+        merged.reasoning_tokens = next.reasoning_tokens;
+    }
+    merged.cached_input_tokens = next.cached_input_tokens.or(merged.cached_input_tokens);
+    merged.cache_write_input_tokens = next
+        .cache_write_input_tokens
+        .or(merged.cache_write_input_tokens);
+    Some(merged)
 }
 
 /// Attaches one selected receipt; it is never added to output-limit state for
@@ -993,6 +1048,75 @@ fn openai_output_index(value: &serde_json::Value) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Cumulative frames may omit an unchanged dimension. Explicit zero is a
+    /// new observation, not permission to retain a prior positive value.
+    #[test]
+    fn openai_stream_partial_usage_preserves_dimensions_and_explicit_zero() {
+        let mut decoder = OpenAiResponsesStreamDecoder::default();
+        for (usage, expected) in [
+            (
+                serde_json::json!({"input_tokens":11,"output_tokens":7}),
+                (11, 7),
+            ),
+            (serde_json::json!({"output_tokens":9}), (11, 9)),
+            (serde_json::json!({"output_tokens":0}), (11, 0)),
+            (serde_json::json!({}), (11, 0)),
+        ] {
+            decoder.push_event(&crate::SseEvent {
+                name: None,
+                data: serde_json::json!({"type":"response.in_progress", "response":{"usage":usage}}).to_string(),
+            }).unwrap();
+            let observed = decoder.incurred_usage().unwrap();
+            assert_eq!((observed.input_tokens, observed.output_tokens), expected);
+        }
+    }
+
+    /// A reasoning-only zero still constitutes a receipt. Both public SSE
+    /// entry points must replace the prior reasoning subtotal without erasing
+    /// earlier input/output or adding the cumulative frames together.
+    #[test]
+    fn openai_stream_nested_reasoning_zero_matches_buffered_and_incremental() {
+        for details in ["output_tokens_details", "completion_tokens_details"] {
+            let mut first = serde_json::json!({"input_tokens":11,"output_tokens":7});
+            first[details] = serde_json::json!({"reasoning_tokens":3});
+            let mut second = serde_json::json!({});
+            second[details] = serde_json::json!({"reasoning_tokens":0});
+            let frames = [
+                serde_json::json!({"type":"response.in_progress","response":{"usage":first}}),
+                serde_json::json!({"type":"response.in_progress","response":{"usage":second}}),
+                serde_json::json!({"type":"response.output_text.delta","delta":"done"}),
+                serde_json::json!({"type":"response.completed","response":{"model":"fixture","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"done"}]}]}}),
+            ];
+            let incremental = parse_openai_responses_stream_events(
+                frames.iter().map(|value| crate::SseEvent {
+                    name: None,
+                    data: value.to_string(),
+                }),
+                "fixture",
+            )
+            .unwrap();
+            let body = frames
+                .iter()
+                .map(|value| format!("data: {value}\n\n"))
+                .collect::<String>();
+            let buffered = parse_openai_responses_stream_body(&body, "fixture").unwrap();
+            assert_eq!(incremental.0, "fixture");
+            assert_eq!(buffered.0, "fixture");
+            assert_eq!(incremental.1, "done");
+            assert_eq!(buffered.1, "done");
+            assert_eq!(incremental.2, buffered.2);
+            assert_eq!(
+                (
+                    incremental.2.input_tokens,
+                    incremental.2.output_tokens,
+                    incremental.2.reasoning_tokens
+                ),
+                (11, 7, 0),
+                "{details}"
+            );
+        }
+    }
 
     /// Verifies unary Responses parsing preserves the complete ordered native
     /// output sequence needed by a stateless follow-up request.

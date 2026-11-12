@@ -501,7 +501,31 @@ impl DeepSeekChatCompletionsStreamDecoder {
                 .map(str::to_string);
         }
         if let Some(usage) = value.get("usage") {
-            self.usage = parse_deepseek_usage(usage);
+            let next = parse_deepseek_usage(usage);
+            if usage
+                .get("prompt_tokens")
+                .and_then(serde_json::Value::as_u64)
+                .is_some()
+            {
+                self.usage.input_tokens = next.input_tokens;
+            }
+            if usage
+                .get("completion_tokens")
+                .and_then(serde_json::Value::as_u64)
+                .is_some()
+            {
+                self.usage.output_tokens = next.output_tokens;
+            }
+            if usage
+                .pointer("/completion_tokens_details/reasoning_tokens")
+                .or_else(|| usage.get("reasoning_tokens"))
+                .and_then(serde_json::Value::as_u64)
+                .is_some()
+            {
+                self.usage.reasoning_tokens = next.reasoning_tokens;
+            }
+            self.usage.cached_input_tokens =
+                next.cached_input_tokens.or(self.usage.cached_input_tokens);
         }
 
         let mut visible_progress = String::new();

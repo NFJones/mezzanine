@@ -1027,8 +1027,48 @@ impl OpenAiChatCompletionsStreamDecoder {
                 .and_then(serde_json::Value::as_str)
                 .map(str::to_string);
         }
-        if let Some(usage) = value.get("usage").filter(|usage| !usage.is_null()) {
-            self.usage = Some(usage.clone());
+        if let Some(usage) = value.get("usage").and_then(serde_json::Value::as_object) {
+            let mut next = usage.clone();
+            // Carry only known numeric fields from earlier cumulative frames,
+            // not an ever-growing union of arbitrary provider metadata.
+            for field in ["prompt_tokens", "completion_tokens"] {
+                if next
+                    .get(field)
+                    .and_then(serde_json::Value::as_u64)
+                    .is_none()
+                    && let Some(previous) = self
+                        .usage
+                        .as_ref()
+                        .and_then(|usage| usage.get(field))
+                        .and_then(serde_json::Value::as_u64)
+                {
+                    next.insert(field.into(), previous.into());
+                }
+            }
+            for (details, field) in [
+                ("prompt_tokens_details", "cached_tokens"),
+                ("completion_tokens_details", "reasoning_tokens"),
+            ] {
+                if next
+                    .get(details)
+                    .and_then(|value| value.get(field))
+                    .and_then(serde_json::Value::as_u64)
+                    .is_none()
+                    && let Some(previous) = self
+                        .usage
+                        .as_ref()
+                        .and_then(|usage| usage.get(details))
+                        .and_then(|value| value.get(field))
+                        .and_then(serde_json::Value::as_u64)
+                {
+                    let value = next.entry(details).or_insert_with(|| serde_json::json!({}));
+                    if !value.is_object() {
+                        *value = serde_json::json!({});
+                    }
+                    value[field] = previous.into();
+                }
+            }
+            self.usage = Some(serde_json::Value::Object(next));
         }
         let choices = value
             .get("choices")

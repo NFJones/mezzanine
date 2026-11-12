@@ -8425,6 +8425,11 @@ Known counters decoded from a chat stream MUST also survive transport cutoff,
 non-success HTTP status, and stream decoding/finalization refusal. Retaining
 normalized numeric counters does not establish missing-dimension coverage or
 make an absent usage report an explicit zero-cost receipt.
+Cumulative stream usage frames MUST update only observed counters: an omitted
+dimension MUST NOT erase its earlier subtotal, and explicit zero MUST NOT be
+treated as omission. Cache-exclusive input components MUST be retained
+independently before computing cache-inclusive input. Final cumulative values
+replace corresponding prefixes; they MUST NOT be added to those prefixes.
 `agents.turn_timeout_ms` MUST be a positive integer and MUST default to
 `1800000`. The runtime MUST snapshot this duration as an absolute
 millisecond-resolution deadline when each turn is created. Reloading the

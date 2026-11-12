@@ -66,6 +66,10 @@ Known decoded usage remains incurred even when later MAAP validation rejects the
 provider's output. Chat adapters also retain already decoded counters when the
 stream ends in a transport, HTTP-status, decoder, or finalization failure. Missing
 usage remains unavailable; normalized counters alone do not prove full coverage.
+Cumulative stream frames replace only counters they actually report, including
+explicit zero. Missing fields preserve prior subtotals; cache-exclusive input
+components are retained independently before inclusive input is computed. A
+final aggregate is not added a second time to its previously reported prefixes.
 
 Set `agents.provider_error_retry_unlimited = true` only for daemonized work that
 should wait through an extended provider outage. This separate switch ignores
