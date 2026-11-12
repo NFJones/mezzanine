@@ -66,6 +66,8 @@ Known decoded usage remains incurred even when later MAAP validation rejects the
 provider's output. Chat adapters also retain already decoded counters when the
 stream ends in a transport, HTTP-status, decoder, or finalization failure. Missing
 usage remains unavailable; normalized counters alone do not prove full coverage.
+When one streaming event carries both a provider error and usage, recognized
+counters are retained before rejecting the output; the error remains a failure.
 After the first streaming output error, subsequently received events still reach
 the decoder for usage retention, but emit no further progress and cannot turn
 that failed request into a successful result. This does not extend the transport

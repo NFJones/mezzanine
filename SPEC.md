@@ -8425,6 +8425,12 @@ Known counters decoded from a chat stream MUST also survive transport cutoff,
 non-success HTTP status, and stream decoding/finalization refusal. Retaining
 normalized numeric counters does not establish missing-dimension coverage or
 make an absent usage report an explicit zero-cost receipt.
+When a received event carries both a provider error and recognized usage,
+accounting MUST capture the counters before rejecting that event's output.
+Rejected model/content fields MUST NOT become accepted response/action output.
+After an output failure is latched, subsequently received events MUST still be decoded for
+usage retention without emitting further progress or turning the request into
+a success. This rule does not extend transport deadlines or retry the exchange.
 Cumulative stream usage frames MUST update only observed counters: an omitted
 dimension MUST NOT erase its earlier subtotal, and explicit zero MUST NOT be
 treated as omission. Cache-exclusive input components MUST be retained

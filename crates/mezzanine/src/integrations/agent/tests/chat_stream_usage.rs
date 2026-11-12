@@ -26,6 +26,24 @@ enum Fault {
     LateUsage,
     LateUsageCancel,
     LateUsageZero,
+    ErrorWithUsage,
+    ErrorPartialUsage,
+    ErrorZeroUsage,
+    ErrorFirstUsage,
+    ErrorUsageCancel,
+}
+
+impl Fault {
+    fn carries_error_usage(self) -> bool {
+        matches!(
+            self,
+            Self::ErrorWithUsage
+                | Self::ErrorPartialUsage
+                | Self::ErrorZeroUsage
+                | Self::ErrorFirstUsage
+                | Self::ErrorUsageCancel
+        )
+    }
 }
 
 struct PartialUsageTransport {
@@ -67,10 +85,41 @@ impl AsyncProviderHttpTransport for PartialUsageTransport {
                 serde_json::json!({"model":"fixture", "choices":[],
                     "usage":{"prompt_tokens":11,"completion_tokens":7}})
             };
-            if !matches!(self.fault, Fault::AbsentUsage) {
+            if !matches!(self.fault, Fault::AbsentUsage | Fault::ErrorFirstUsage) {
                 on_event(mez_agent::SseEvent {
                     name: None,
                     data: value.to_string(),
+                })
+                .await;
+            }
+            if self.fault.carries_error_usage() {
+                // A failed output and its expense can arrive in the SAME
+                // received event. Error handling must not hide the counters.
+                let usage = if matches!(self.fault, Fault::ErrorPartialUsage) {
+                    if self.anthropic {
+                        serde_json::json!({"output_tokens":0})
+                    } else {
+                        serde_json::json!({"completion_tokens":0})
+                    }
+                } else if matches!(self.fault, Fault::ErrorZeroUsage) {
+                    if self.anthropic {
+                        serde_json::json!({"input_tokens":0,"output_tokens":0,
+                            "cache_read_input_tokens":0,"cache_creation_input_tokens":0})
+                    } else {
+                        serde_json::json!({"prompt_tokens":0,"completion_tokens":0})
+                    }
+                } else if self.anthropic {
+                    serde_json::json!({"input_tokens":5,"output_tokens":9,
+                        "cache_read_input_tokens":5,"cache_creation_input_tokens":3})
+                } else {
+                    serde_json::json!({"prompt_tokens":13,"completion_tokens":9})
+                };
+                on_event(mez_agent::SseEvent {
+                    name: Some("error".into()),
+                    data: serde_json::json!({"type":"error", "error":{
+                        "type":"overloaded_error", "message":"fixture remote error"
+                    }, "usage":usage})
+                    .to_string(),
                 })
                 .await;
             }
@@ -142,7 +191,10 @@ impl AsyncProviderHttpTransport for PartialUsageTransport {
                 })
                 .await;
             }
-            if matches!(self.fault, Fault::CancelAfterUsage | Fault::LateUsageCancel) {
+            if matches!(
+                self.fault,
+                Fault::CancelAfterUsage | Fault::LateUsageCancel | Fault::ErrorUsageCancel
+            ) {
                 std::future::pending::<()>().await;
             }
             if matches!(self.fault, Fault::Transport | Fault::AbsentUsage) {
@@ -182,6 +234,11 @@ async fn shared_chat_stream_failures_preserve_decoded_expense() {
             Fault::LateUsage,
             Fault::LateUsageCancel,
             Fault::LateUsageZero,
+            Fault::ErrorWithUsage,
+            Fault::ErrorPartialUsage,
+            Fault::ErrorZeroUsage,
+            Fault::ErrorFirstUsage,
+            Fault::ErrorUsageCancel,
         ] {
             let sends = Arc::new(AtomicUsize::new(0));
             let transport = PartialUsageTransport {
@@ -279,7 +336,10 @@ async fn assert_expense<P: AsyncModelProvider>(
         .with_reported_usage(reported.clone());
     let observed =
         ObservedAsyncModelProvider::new(&provider, &observer, ProviderRequestPurpose::Execution);
-    if matches!(fault, Fault::CancelAfterUsage | Fault::LateUsageCancel) {
+    if matches!(
+        fault,
+        Fault::CancelAfterUsage | Fault::LateUsageCancel | Fault::ErrorUsageCancel
+    ) {
         let mut future = observed.send_request_async(request);
         std::future::poll_fn(|cx| {
             assert!(future.as_mut().poll(cx).is_pending());
@@ -299,7 +359,7 @@ async fn assert_expense<P: AsyncModelProvider>(
         let usage = retained[0].usage.unwrap();
         assert_eq!(
             (usage.input_tokens, usage.output_tokens),
-            if matches!(fault, Fault::LateUsageCancel) {
+            if matches!(fault, Fault::LateUsageCancel | Fault::ErrorUsageCancel) {
                 (13, 9)
             } else {
                 (11, 7)
@@ -318,13 +378,16 @@ async fn assert_expense<P: AsyncModelProvider>(
         (usage.input_tokens, usage.output_tokens),
         if matches!(fault, Fault::AbsentUsage) {
             (0, 0)
-        } else if matches!(fault, Fault::LateUsage) {
+        } else if matches!(
+            fault,
+            Fault::LateUsage | Fault::ErrorWithUsage | Fault::ErrorFirstUsage
+        ) {
             (13, 9)
-        } else if matches!(fault, Fault::LateUsageZero) {
+        } else if matches!(fault, Fault::LateUsageZero | Fault::ErrorZeroUsage) {
             (0, 0)
         } else if matches!(fault, Fault::PartialCounters) {
             (11, 9)
-        } else if matches!(fault, Fault::PartialZero) {
+        } else if matches!(fault, Fault::PartialZero | Fault::ErrorPartialUsage) {
             (11, 0)
         } else {
             (11, 7)
@@ -333,6 +396,16 @@ async fn assert_expense<P: AsyncModelProvider>(
     );
     if matches!(fault, Fault::Transport | Fault::AbsentUsage) {
         assert_eq!(error.message(), "fixture transport cutoff");
+    }
+    if fault.carries_error_usage() {
+        match family {
+            "openai-compatible" => assert!(error.message().contains("reported a provider error")),
+            "anthropic" => assert!(error.message().contains("fixture remote error")),
+            // Existing tolerant decoding does not turn a usage-bearing error
+            // into a valid DeepSeek MAAP completion.
+            "deepseek" => assert!(error.message().contains("MAAP")),
+            _ => unreachable!(),
+        }
     }
     if matches!(fault, Fault::LateUsage | Fault::LateUsageZero) && family != "deepseek" {
         assert!(error.message().contains("JSON"), "{family}: {error:?}");

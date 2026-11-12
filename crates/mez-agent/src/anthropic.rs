@@ -708,6 +708,13 @@ impl AnthropicMessagesStreamDecoder {
         if event.name.as_deref() == Some("error")
             || value.get("type").and_then(serde_json::Value::as_str) == Some("error")
         {
+            // Failed output can still carry a newer cumulative expense. Keep
+            // the normal error path and do not touch content/model state.
+            anthropic_overlay_usage(
+                &mut self.usage,
+                &mut self.uncached_input_tokens,
+                value.get("usage"),
+            );
             return Err(
                 anthropic_provider_error_from_value(&value, "Anthropic stream error")
                     .unwrap_or_else(|| {
@@ -903,18 +910,22 @@ fn parse_anthropic_messages_stream_body(
             if event_name == Some("error")
                 || value.get("type").and_then(serde_json::Value::as_str) == Some("error")
             {
-                return Err(
-                    anthropic_provider_error_from_value(&value, "Anthropic stream error")
-                        .unwrap_or_else(|| {
-                            ProviderResponseError::invalid_state(
-                                "Anthropic stream returned an error event",
-                            )
-                            .with_provider_failure_json(
-                                anthropic_provider_failure_event_json(&value),
-                            )
-                        })
-                        .into(),
-                );
+                anthropic_overlay_usage(&mut usage, &mut uncached_input, value.get("usage"));
+                let error = anthropic_provider_error_from_value(&value, "Anthropic stream error")
+                    .unwrap_or_else(|| {
+                        ProviderResponseError::invalid_state(
+                            "Anthropic stream returned an error event",
+                        )
+                        .with_provider_failure_json(anthropic_provider_failure_event_json(&value))
+                    });
+                // This legacy numeric accumulator cannot qualify zero-only
+                // presence. Do not manufacture a receipt from its defaults.
+                return Err(if usage.is_zero() {
+                    error
+                } else {
+                    error.with_incurred_usage(usage)
+                }
+                .into());
             }
             match value
                 .get("type")
@@ -1285,6 +1296,78 @@ fn anthropic_usage_u64(value: &serde_json::Value, key: &str) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Buffered and incremental error events retain only cumulative accounting,
+    /// never model/content success. Zero replaces an earlier positive prefix;
+    /// absent fields preserve it. Numeric defaults are not presence evidence.
+    #[test]
+    fn anthropic_error_event_retains_same_event_usage() {
+        let prefix = serde_json::json!({"type":"message_start", "message":{
+            "usage":{"input_tokens":3,"cache_read_input_tokens":5,
+                "cache_creation_input_tokens":3,"output_tokens":7}
+        }});
+        for (usage, expected) in [
+            (
+                serde_json::json!({"input_tokens":5,"output_tokens":9}),
+                (13, 9),
+            ),
+            (serde_json::json!({"output_tokens":9}), (11, 9)),
+            (
+                serde_json::json!({"input_tokens":0,"output_tokens":0,
+                "cache_read_input_tokens":0,"cache_creation_input_tokens":0}),
+                (0, 0),
+            ),
+            (serde_json::Value::Null, (11, 7)),
+        ] {
+            let event = serde_json::json!({"type":"error", "usage":usage,
+                "error":{"type":"overloaded_error","message":"fixture remote error"}});
+            let mut decoder = AnthropicMessagesStreamDecoder::default();
+            decoder
+                .push_event(&crate::SseEvent {
+                    name: None,
+                    data: prefix.to_string(),
+                })
+                .unwrap();
+            let error = decoder
+                .push_event(&crate::SseEvent {
+                    name: Some("error".into()),
+                    data: event.to_string(),
+                })
+                .unwrap_err();
+            assert!(error.to_string().contains("fixture remote error"));
+            assert_eq!(
+                (
+                    decoder.reported_usage().input_tokens,
+                    decoder.reported_usage().output_tokens
+                ),
+                expected
+            );
+            assert!(decoder.model.is_none());
+            assert!(decoder.blocks.is_empty());
+            let body = format!("data: {prefix}\n\nevent: error\ndata: {event}\n\n");
+            let error = parse_anthropic_messages_provider_body(
+                &body, "fallback", true, "turn", "agent", true,
+            )
+            .unwrap_err();
+            let AnthropicResponseError::Provider(error) = error else {
+                panic!("expected original provider error");
+            };
+            assert!(error.message().contains("fixture remote error"));
+            let incurred = error.incurred_usage();
+            assert_eq!(
+                incurred.map(|usage| (usage.input_tokens, usage.output_tokens)),
+                (expected != (0, 0)).then_some(expected)
+            );
+        }
+        let error = parse_anthropic_messages_provider_body(
+            "event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"fixture remote error\"}}\n\n",
+            "fallback", true, "turn", "agent", true
+        ).unwrap_err();
+        let AnthropicResponseError::Provider(error) = error else {
+            panic!("expected original provider error");
+        };
+        assert!(error.incurred_usage().is_none());
+    }
 
     /// Verifies Anthropic retains relocated recipient guidance in its input schema.
     /// Prompt consolidation must not make action syntax Responses-API-only.

@@ -1010,23 +1010,8 @@ impl OpenAiChatCompletionsStreamDecoder {
                 "OpenAI-compatible Chat Completions stream event is invalid JSON: {error}"
             ))
         })?;
-        if value.get("error").is_some() {
-            return Err(ProviderResponseError::invalid_state(
-                "OpenAI-compatible Chat Completions stream reported a provider error",
-            )
-            .with_provider_failure_json(
-                serde_json::json!({"provider": "openai_chat_completions", "stream_error": true})
-                    .to_string(),
-            )
-            .into());
-        }
-        self.valid_json_events += 1;
-        if self.model.is_none() {
-            self.model = value
-                .get("model")
-                .and_then(serde_json::Value::as_str)
-                .map(str::to_string);
-        }
+        // An error and its expense can share a received event. Capture only
+        // accounting before rejecting it; no rejected output becomes usable.
         if let Some(usage) = value.get("usage").and_then(serde_json::Value::as_object) {
             let mut next = usage.clone();
             // Carry only known numeric fields from earlier cumulative frames,
@@ -1069,6 +1054,23 @@ impl OpenAiChatCompletionsStreamDecoder {
                 }
             }
             self.usage = Some(serde_json::Value::Object(next));
+        }
+        if value.get("error").is_some() {
+            return Err(ProviderResponseError::invalid_state(
+                "OpenAI-compatible Chat Completions stream reported a provider error",
+            )
+            .with_provider_failure_json(
+                serde_json::json!({"provider": "openai_chat_completions", "stream_error": true})
+                    .to_string(),
+            )
+            .into());
+        }
+        self.valid_json_events += 1;
+        if self.model.is_none() {
+            self.model = value
+                .get("model")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string);
         }
         let choices = value
             .get("choices")
@@ -1200,6 +1202,56 @@ impl OpenAiChatCompletionsStreamDecoder {
 
 #[cfg(test)]
 mod tests {
+    /// Rejected frames update only expense, not valid-event/model/output state.
+    /// Explicit zero replaces the old aggregate; omitted counters preserve it.
+    #[test]
+    fn openai_chat_error_event_retains_same_event_usage_only() {
+        for (usage, expected) in [
+            (
+                serde_json::json!({"prompt_tokens":13,"completion_tokens":9}),
+                (13, 9),
+            ),
+            (serde_json::json!({"completion_tokens":9}), (11, 9)),
+            (
+                serde_json::json!({"prompt_tokens":0,"completion_tokens":0}),
+                (0, 0),
+            ),
+            (serde_json::Value::Null, (11, 7)),
+        ] {
+            let mut decoder = super::OpenAiChatCompletionsStreamDecoder::default();
+            decoder
+                .push_event(&crate::SseEvent {
+                    name: None,
+                    data: serde_json::json!({"choices":[],"usage":{
+                    "prompt_tokens":11,"completion_tokens":7}})
+                    .to_string(),
+                })
+                .unwrap();
+            let error = decoder
+                .push_event(&crate::SseEvent {
+                    name: Some("error".into()),
+                    data: serde_json::json!({"error":{"message":"fixture remote error"},
+                    "model":"rejected-model", "usage":usage,
+                    "choices":[{"delta":{"content":"rejected-output"}}]})
+                    .to_string(),
+                })
+                .unwrap_err();
+            assert!(error.to_string().contains("reported a provider error"));
+            assert_eq!(
+                (
+                    decoder.reported_usage().input_tokens,
+                    decoder.reported_usage().output_tokens
+                ),
+                expected
+            );
+            assert_eq!(decoder.valid_json_events, 1);
+            assert!(decoder.model.is_none());
+            assert!(decoder.text_content.is_empty());
+            assert!(decoder.tool_calls.is_empty());
+            assert!(!decoder.terminal);
+        }
+    }
+
     use super::*;
     use crate::{AllowedActionSet, ContextSourceKind, ModelInteractionKind, ModelMessage};
 
