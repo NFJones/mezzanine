@@ -83,6 +83,11 @@ native binding and outstanding exposure together; a lost authorization reply
 can recover evidence, not another send permit. Terminal usage alone cannot
 release exposure. These internal ports do not enable production token budgets:
 physical-send, fair-waiting and worker-retirement integration remains required.
+All journal-owned provider purposes wait for their own observation's actor ACK
+before returning or making an adapter-internal next exchange, including turn-less
+requests. Losing that consumer fails locally and keeps the original evidence for
+retirement; an original provider error and known expense remain intact. An actor
+ACK is only handoff, not a durable budget receipt, send permit or retirement proof.
 Chat adapters also retain already decoded counters when the
 stream ends in a transport, HTTP-status, decoder, or finalization failure. Missing
 usage remains unavailable; normalized counters alone do not prove full coverage.

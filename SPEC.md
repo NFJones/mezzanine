@@ -8457,6 +8457,16 @@ known expense, its original retirement owner MUST retain that expense before
 releasing the producer. Retaining an interrupted prefix MUST NOT duplicate a
 normal observation already retained before channel delivery. Local future
 destruction proves neither remote completion nor durable receipt acknowledgment.
+Every journal-owned provider purpose MUST await its exact original observation's
+actor-ingress acknowledgment before returning output or issuing an adapter-internal
+next exchange, including turn-less work without a claim generation. Wrong IDs
+MUST NOT release the wait. Consumer loss MUST wake it as a local delivery failure,
+retain the original evidence and prevent further calls through that observer;
+an original provider failure and known expense MUST remain intact. Cancellation
+MUST retain unacknowledged evidence for its existing retirement owner. Optional
+diagnostics without a retained journal MUST NOT acquire an unserviceable gate.
+This acknowledgment is actor handoff only, NOT a durable budget receipt, provider
+send permission, worker-retirement proof or complete budget enforcement.
 `agents.turn_timeout_ms` MUST be a positive integer and MUST default to
 `1800000`. The runtime MUST snapshot this duration as an absolute
 millisecond-resolution deadline when each turn is created. Reloading the

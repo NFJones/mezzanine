@@ -541,6 +541,8 @@ use mez_agent::{
     provider_failure_json_with_retry_headers as openai_provider_failure_json_with_retry_headers,
 };
 pub(crate) use observation_delivery::PendingProviderWireObservations;
+#[cfg(test)]
+pub(crate) use observation_delivery::observe_and_acknowledge_for_test;
 use openai_chat_completions::OpenAiChatCompletionsDialect;
 
 use mez_agent::{CHATGPT_RESPONSES_ENDPOINT, OPENAI_RESPONSES_ENDPOINT};
@@ -745,7 +747,7 @@ pub struct ProviderWireRequestObserver {
     claim_generation: Option<u64>,
     pending: Option<PendingProviderWireObservations>,
     reported: Option<SharedProviderReportedUsage>,
-    /// A required compaction receipt lost its actor delivery channel. The
+    /// A journal-owned observation lost its actor delivery channel. The
     /// observed adapter must fail locally instead of advancing private work.
     delivery_failed: AtomicBool,
 }
@@ -793,6 +795,15 @@ impl ProviderWireRequestObserver {
     pub(crate) fn with_reported_usage(mut self, reported: SharedProviderReportedUsage) -> Self {
         self.reported = Some(reported);
         self
+    }
+
+    /// A valid original ACK does not make a closed consumer serviceable for
+    /// continuation or another request. Optional diagnostics remain best effort.
+    fn required_delivery_failed(&self) -> bool {
+        if self.pending.is_some() && self.sender.is_closed() {
+            self.delivery_failed.store(true, Ordering::Release);
+        }
+        self.delivery_failed.load(Ordering::Acquire)
     }
 
     /// Allocates the next process-local request identity.
@@ -958,9 +969,7 @@ impl<'a> ProviderWireObservationContext<'a> {
         );
         self.retain_wire_observation(&observation);
         let id = observation.request_id.clone();
-        let requires_checkpoint = self.purpose == ProviderRequestPurpose::Compaction
-            && self.observer.claim_generation.is_some()
-            && self.observer.pending.is_some();
+        let requires_checkpoint = self.observer.pending.is_some();
         if self.observer.sender.send(observation).await.is_err() {
             if requires_checkpoint {
                 self.observer.delivery_failed.store(true, Ordering::Release);
@@ -968,7 +977,13 @@ impl<'a> ProviderWireObservationContext<'a> {
             return;
         }
         if requires_checkpoint && let Some(pending) = &self.observer.pending {
-            pending.wait_for_acknowledgment(&id).await;
+            tokio::select! {
+                biased;
+                () = pending.wait_for_acknowledgment(&id) => {}
+                () = self.observer.sender.closed() => {
+                    self.observer.delivery_failed.store(true, Ordering::Release);
+                }
+            }
         }
     }
 
@@ -1783,12 +1798,10 @@ impl<P: AsyncModelProvider> AsyncModelProvider for ObservedAsyncModelProvider<'_
         request: &'a ModelRequest,
         progress: Option<tokio::sync::mpsc::Sender<mez_agent::StreamingSayEvent>>,
     ) -> Pin<Box<dyn Future<Output = Result<ModelResponse>> + Send + 'a>> {
-        if self.purpose == ProviderRequestPurpose::Compaction
-            && self.observer.delivery_failed.load(Ordering::Acquire)
-        {
+        if self.observer.required_delivery_failed() {
             return Box::pin(async {
                 Err(MezError::invalid_state(
-                    "compaction usage acknowledgment unavailable",
+                    "provider observation acknowledgment unavailable",
                 ))
             });
         }
@@ -1802,16 +1815,21 @@ impl<P: AsyncModelProvider> AsyncModelProvider for ObservedAsyncModelProvider<'_
             .provider
             .send_request_async_with_progress_and_observation(request, progress, Some(observation));
         Box::pin(async move {
+            // Construction is not admission: the consumer may close before
+            // this future's first poll. Do not poll provider I/O in that case.
+            if self.observer.required_delivery_failed() {
+                return Err(MezError::invalid_state(
+                    "provider observation acknowledgment unavailable",
+                ));
+            }
             let result = call.await;
-            if self.purpose == ProviderRequestPurpose::Compaction
-                && self.observer.delivery_failed.load(Ordering::Acquire)
-            {
+            if self.observer.required_delivery_failed() {
                 return match result {
                     // Receipt delivery is secondary to an original provider
                     // failure. Preserve its typed cause and incurred expense.
                     Err(error) => Err(error),
                     Ok(response) => Err(MezError::invalid_state(
-                        "compaction usage acknowledgment unavailable",
+                        "provider observation acknowledgment unavailable",
                     )
                     .with_provider_incurred_usage(response.usage)),
                 };

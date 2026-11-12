@@ -6,7 +6,7 @@ use super::*;
 use crate::integrations::agent::provider::{
     AnthropicMessagesProvider, DeepSeekChatCompletionsProvider, ObservedAsyncModelProvider,
     PendingProviderWireObservations, ProviderReportedUsage, ProviderRequestPurpose,
-    ProviderWireRequestObserver,
+    ProviderWireRequestObserver, observe_and_acknowledge_for_test,
 };
 use std::sync::{
     Arc, Mutex,
@@ -264,7 +264,12 @@ async fn assert_unary_expense<P: AsyncModelProvider>(
         .with_reported_usage(reported.clone());
     let observed =
         ObservedAsyncModelProvider::new(&provider, &observer, ProviderRequestPurpose::Execution);
-    let result = observed.send_request_async(request).await;
+    let (result, mut delivered) = observe_and_acknowledge_for_test(
+        observed.send_request_async(request),
+        &mut receiver,
+        &pending,
+    )
+    .await;
     assert_eq!(
         result.is_ok(),
         matches!(
@@ -304,7 +309,8 @@ async fn assert_unary_expense<P: AsyncModelProvider>(
         expected,
         "{family}/{outcome:?}: {result:?}"
     );
-    let observation = receiver.try_recv().unwrap();
+    assert_eq!(delivered.len(), 1);
+    let observation = delivered.pop().unwrap();
     assert_eq!(observation.succeeded, result.is_ok());
     assert_eq!(
         observation.usage_presence,
@@ -319,7 +325,7 @@ async fn assert_unary_expense<P: AsyncModelProvider>(
         "{family}/{outcome:?}"
     );
     assert_eq!(observation.conversation_id, "fixture-original");
-    assert_eq!(pending.snapshot(), vec![observation]);
+    assert!(pending.is_empty());
     assert!(receiver.try_recv().is_err());
     assert_eq!(sends.load(Ordering::SeqCst), 1);
     let reported = *reported.lock().unwrap();
@@ -394,6 +400,110 @@ fn unary_retry_request(family: &str) -> ModelRequest {
         .unwrap(),
     )
     .unwrap()
+}
+
+/// The actual DeepSeek forced-MAAP exchange must not overtake the first wire
+/// observation's ACK, and neither dropped consumers nor cancellation may send
+/// attempt two. No provider, filesystem or subprocess participates.
+#[tokio::test]
+async fn deepseek_second_physical_send_waits_for_ack_and_refuses_delivery_loss() {
+    for ending in 0..5 {
+        let sends = Arc::new(AtomicUsize::new(0));
+        let transport = ForcedRetryTransport {
+            first: true.into(),
+            second: UnaryUsageTransport {
+                anthropic: false,
+                outcome: Outcome::Valid,
+                sends: sends.clone(),
+            },
+        };
+        let provider = DeepSeekChatCompletionsProvider::without_auth(transport).unwrap();
+        let request = unary_retry_request("deepseek");
+        let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
+        let pending = PendingProviderWireObservations::default();
+        let reported = Arc::new(Mutex::new(ProviderReportedUsage::default()));
+        let observer = ProviderWireRequestObserver::new("retry-ack-original", "%1", sender)
+            .with_pending_observations(pending.clone())
+            .with_reported_usage(reported.clone());
+        let observed = ObservedAsyncModelProvider::new(
+            &provider,
+            &observer,
+            ProviderRequestPurpose::Execution,
+        );
+        let mut call = Box::pin(tokio::task::unconstrained(
+            observed.send_request_async(&request),
+        ));
+        if ending == 0 {
+            // An already-closed required sink cannot admit even attempt one.
+            drop(receiver);
+            let error = call.await.unwrap_err();
+            assert_eq!(error.provider_incurred_usage().input_tokens, 0);
+            assert_eq!(sends.load(Ordering::SeqCst), 0);
+            assert!(pending.is_empty());
+            assert!(observed.send_request_async(&request).await.is_err());
+            assert_eq!(sends.load(Ordering::SeqCst), 0);
+            continue;
+        }
+        let first = tokio::select! {
+            biased;
+            _ = &mut call => panic!("retry advanced before first observation ACK"),
+            observation = receiver.recv() => observation.unwrap(),
+        };
+        assert_eq!(first.attempt_index, 1);
+        assert_eq!(first.conversation_id, "retry-ack-original");
+        assert_eq!(sends.load(Ordering::SeqCst), 1);
+        assert_eq!(reported.lock().unwrap().usage.input_tokens, 10);
+        pending.acknowledge("foreign-wire-id");
+        std::future::poll_fn(|cx| {
+            assert!(call.as_mut().poll(cx).is_pending());
+            std::task::Poll::Ready(())
+        })
+        .await;
+        assert_eq!(sends.load(Ordering::SeqCst), 1);
+        if ending == 1 {
+            drop(call);
+            assert_eq!(pending.snapshot(), vec![first]);
+            assert_eq!(reported.lock().unwrap().known_observations, 1);
+            continue;
+        }
+        if ending == 2 {
+            drop(receiver);
+            let error = call.await.unwrap_err();
+            assert_eq!(error.provider_incurred_usage().input_tokens, 10);
+            assert_eq!(pending.snapshot(), vec![first]);
+            assert_eq!(sends.load(Ordering::SeqCst), 1);
+            continue;
+        }
+        pending.acknowledge(&first.request_id);
+        if ending == 4 {
+            // Both exact ACK and closure are ready before the producer resumes.
+            drop(receiver);
+            assert!(call.await.is_err());
+            assert_eq!(
+                sends.load(Ordering::SeqCst),
+                1,
+                "ACK concealed consumer loss"
+            );
+            assert!(pending.is_empty(), "the original ACK remains valid");
+            assert!(observed.send_request_async(&request).await.is_err());
+            assert_eq!(sends.load(Ordering::SeqCst), 1);
+            continue;
+        }
+        let second = tokio::select! {
+            biased;
+            _ = &mut call => panic!("retry advanced before second observation ACK"),
+            observation = receiver.recv() => observation.unwrap(),
+        };
+        assert_eq!(second.attempt_index, 2);
+        assert_ne!(second.request_id, first.request_id);
+        assert_eq!(second.conversation_id, first.conversation_id);
+        assert_eq!(sends.load(Ordering::SeqCst), 2);
+        assert_eq!(pending.snapshot(), vec![second.clone()]);
+        pending.acknowledge(&second.request_id);
+        assert!(call.await.unwrap().action_batch.is_some());
+        assert!(pending.is_empty());
+        assert_eq!(reported.lock().unwrap().known_observations, 2);
+    }
 }
 
 struct ForcedRetryTransport {
@@ -472,7 +582,12 @@ async fn deepseek_unary_retry_failures_preserve_distinct_attempt_expense() {
             &observer,
             ProviderRequestPurpose::Execution,
         );
-        let result = observed.send_request_async(&request).await;
+        let (result, delivered) = observe_and_acknowledge_for_test(
+            observed.send_request_async(&request),
+            &mut receiver,
+            &pending,
+        )
+        .await;
         assert_eq!(
             result.is_ok(),
             matches!(
@@ -481,8 +596,7 @@ async fn deepseek_unary_retry_failures_preserve_distinct_attempt_expense() {
             ),
             "{outcome:?}: {result:?}"
         );
-        let first = receiver.try_recv().unwrap();
-        let second = receiver.try_recv().unwrap();
+        let [first, second]: [_; 2] = delivered.try_into().unwrap();
         assert_eq!((first.attempt_index, second.attempt_index), (1, 2));
         assert_ne!(first.request_id, second.request_id);
         assert_eq!(second.retry_reason.as_deref(), Some("provider_forced_maap"));
@@ -529,10 +643,7 @@ async fn deepseek_unary_retry_failures_preserve_distinct_attempt_expense() {
             "{outcome:?}"
         );
         assert_eq!(second.succeeded, result.is_ok());
-        let retained = pending.snapshot();
-        assert_eq!(retained.len(), 2);
-        assert!(retained.contains(&first));
-        assert!(retained.contains(&second));
+        assert!(pending.is_empty());
         assert!(receiver.try_recv().is_err());
         assert_eq!(sends.load(Ordering::SeqCst), 2);
         let reported = *reported.lock().unwrap();

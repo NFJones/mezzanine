@@ -204,7 +204,7 @@ async fn responses_primary_usage_presence_survives_failure_and_cancellation() {
                 ProviderRequestPurpose::Execution,
             );
             let request = request();
-            if cancel {
+            let retained = if cancel {
                 let mut future = observed.send_request_async(&request);
                 std::future::poll_fn(|cx| {
                     assert!(future.as_mut().poll(cx).is_pending());
@@ -213,19 +213,25 @@ async fn responses_primary_usage_presence_survives_failure_and_cancellation() {
                 .await;
                 drop(future);
                 assert!(receiver.try_recv().is_err());
+                pending.snapshot()
             } else {
-                let result = observed.send_request_async(&request).await;
+                let (result, delivered) =
+                    crate::integrations::agent::provider::observe_and_acknowledge_for_test(
+                        observed.send_request_async(&request),
+                        &mut receiver,
+                        &pending,
+                    )
+                    .await;
                 if succeed {
                     assert!(result.unwrap().action_batch.is_some());
                 } else {
                     let error = result.unwrap_err();
                     assert!(error.message().contains("fixture refusal"), "{error:?}");
                 }
-                let delivered = receiver.try_recv().unwrap();
-                assert_eq!(pending.snapshot(), vec![delivered]);
+                assert!(pending.is_empty());
                 assert!(receiver.try_recv().is_err());
-            }
-            let retained = pending.snapshot();
+                delivered
+            };
             if cancel && !known {
                 assert!(retained.is_empty());
             } else {
@@ -370,6 +376,7 @@ struct InterruptedResponsesTransport {
     ending: StreamEnding,
     positive_prefix: bool,
     error_before_final_usage: bool,
+    on_send: Option<Box<dyn Fn() + Send + Sync>>,
 }
 
 #[derive(Clone, Copy)]
@@ -405,6 +412,9 @@ impl AsyncProviderHttpTransport for InterruptedResponsesTransport {
     ) -> InterruptedHttpFuture<'a> {
         Box::pin(async move {
             self.sends.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if let Some(on_send) = &self.on_send {
+                on_send();
+            }
             for (index, (input, output)) in self
                 .positive_prefix
                 .then_some((11, 7))
@@ -495,6 +505,7 @@ async fn responses_stream_cancellation_retains_original_expense() {
                     ending: StreamEnding::Pending,
                     positive_prefix: false,
                     error_before_final_usage: false,
+                    on_send: None,
                 },
             )
             .unwrap();
@@ -572,6 +583,9 @@ async fn responses_stream_retirement_handoff_conserves_one_observation() {
         ((0, 0), StreamEnding::Panic, false, false, true),
     ] {
         let sends = Arc::new(AtomicUsize::new(0));
+        let (sender, receiver) = tokio::sync::mpsc::channel(1);
+        let receiver = Arc::new(Mutex::new(receiver));
+        let close_receiver = receiver.clone();
         let provider = OpenAiResponsesProvider::with_endpoint_headers_and_stream(
             "fixture-key",
             "https://example.test/responses",
@@ -584,13 +598,16 @@ async fn responses_stream_retirement_handoff_conserves_one_observation() {
                 ending,
                 positive_prefix,
                 error_before_final_usage: false,
+                // Close only after actual transport admission, so this still
+                // proves conservation of incurred expense on delivery failure.
+                on_send: closed.then(|| {
+                    Box::new(move || {
+                        close_receiver.lock().unwrap().close();
+                    }) as Box<dyn Fn() + Send + Sync>
+                }),
             },
         )
         .unwrap();
-        let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
-        if closed {
-            receiver.close();
-        }
         let pending = PendingProviderWireObservations::default();
         let reported = Arc::new(Mutex::new(ProviderReportedUsage::default()));
         let observer = ProviderWireRequestObserver::new("handoff-original", "%1", sender)
@@ -612,10 +629,16 @@ async fn responses_stream_retirement_handoff_conserves_one_observation() {
                 &observer,
                 ProviderRequestPurpose::Execution,
             );
-            assert!(first.send_request_async(&request).await.is_err());
+            let mut call = first.send_request_async(&request);
+            std::future::poll_fn(|cx| {
+                assert!(call.as_mut().poll(cx).is_pending());
+                std::task::Poll::Ready(())
+            })
+            .await;
             let first = pending.snapshot();
             assert_eq!(first.len(), 1);
             pending.acknowledge(&first[0].request_id);
+            assert!(call.await.is_err());
         }
         let mut future = observed.send_request_async(&request);
         std::future::poll_fn(|cx| {
@@ -648,16 +671,16 @@ async fn responses_stream_retirement_handoff_conserves_one_observation() {
         }
         assert_eq!(reported.usage, total);
         if matches!(ending, StreamEnding::Panic) || closed {
-            assert!(receiver.try_recv().is_err());
+            assert!(receiver.lock().unwrap().try_recv().is_err());
         } else if saturated {
             assert_ne!(
-                receiver.try_recv().unwrap().request_id,
+                receiver.lock().unwrap().try_recv().unwrap().request_id,
                 retained[0].request_id
             );
-            assert!(receiver.try_recv().is_err());
+            assert!(receiver.lock().unwrap().try_recv().is_err());
         } else {
-            assert_eq!(receiver.try_recv().unwrap(), retained[0]);
-            assert!(receiver.try_recv().is_err());
+            assert_eq!(receiver.lock().unwrap().try_recv().unwrap(), retained[0]);
+            assert!(receiver.lock().unwrap().try_recv().is_err());
         }
     }
 }
@@ -693,6 +716,7 @@ async fn responses_stream_late_usage_after_error_is_retained_once() {
                     },
                     positive_prefix: true,
                     error_before_final_usage: true,
+                    on_send: None,
                 },
             )
             .unwrap();
@@ -708,7 +732,7 @@ async fn responses_stream_late_usage_after_error_is_retained_once() {
                 ProviderRequestPurpose::Memory,
             );
             let request = request();
-            if cancel {
+            let retained = if cancel {
                 let mut future = observed.send_request_async(&request);
                 std::future::poll_fn(|cx| {
                     assert!(future.as_mut().poll(cx).is_pending());
@@ -717,17 +741,24 @@ async fn responses_stream_late_usage_after_error_is_retained_once() {
                 .await;
                 drop(future);
                 assert!(receiver.try_recv().is_err());
+                pending.snapshot()
             } else {
-                let error = observed.send_request_async(&request).await.unwrap_err();
+                let (result, delivered) =
+                    crate::integrations::agent::provider::observe_and_acknowledge_for_test(
+                        observed.send_request_async(&request),
+                        &mut receiver,
+                        &pending,
+                    )
+                    .await;
+                let error = result.unwrap_err();
                 assert!(error.message().contains("not JSON"), "{error:?}");
                 let usage = error.provider_incurred_usage();
                 assert_eq!((usage.input_tokens, usage.output_tokens), (input, output));
-                let observation = receiver.try_recv().unwrap();
-                assert_eq!(observation, pending.snapshot()[0]);
+                assert!(pending.is_empty());
                 assert!(receiver.try_recv().is_err());
-            }
+                delivered
+            };
             assert_eq!(sends.load(Ordering::SeqCst), 1);
-            let retained = pending.snapshot();
             assert_eq!(retained.len(), 1);
             assert_eq!(retained[0].conversation_id, "late-original");
             assert!(!retained[0].succeeded);

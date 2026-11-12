@@ -968,9 +968,9 @@ async fn max_messages_stop_during_backoff_preserves_expense_and_executes_nothing
 }
 
 /// Service-owned cleanup survives aborting a monitor while its producer is
-/// blocked on a full wire-observation channel. Both reported attempts are
-/// flushed only after producer destruction, through ordinary actor ingress,
-/// and duplicate journal delivery cannot bill either attempt twice.
+/// blocked on a full wire-observation channel. The first actor ACK permits the
+/// second attempt, but its old channel offer still saturates delivery. Cleanup
+/// transfers the second only after producer destruction; neither is billed twice.
 #[tokio::test]
 async fn max_messages_service_stop_flushes_backpressured_wire_journal() {
     let (service, dispatch) = issued_fixture().await;
@@ -1008,8 +1008,14 @@ async fn max_messages_service_stop_flushes_backpressured_wire_journal() {
             &observer,
             ProviderRequestPurpose::Execution,
         );
-        let _ = provider.send_request_async(&request).await;
+        let mut first = provider.send_request_async(&request);
+        std::future::poll_fn(|cx| {
+            assert!(first.as_mut().poll(cx).is_pending());
+            std::task::Poll::Ready(())
+        })
+        .await;
         worker_reached.notify_one();
+        let _ = first.await;
         let _ = provider.send_request_async(&request).await;
     });
     let abort = producer.abort_handle();
@@ -1030,11 +1036,24 @@ async fn max_messages_service_stop_flushes_backpressured_wire_journal() {
     });
     let client = async {
         reached.notified().await;
-        // The producer records its second observation synchronously before
-        // yielding on the full channel; this bounded handoff is not a delay.
-        while pending.len() < 2 {
-            tokio::task::yield_now().await;
-        }
+        let first = pending.snapshot();
+        assert_eq!(first.len(), 1);
+        submit_pending_provider_observation(&handle, &pending, first[0].clone())
+            .await
+            .unwrap();
+        // Do not consume the first channel offer: it still fills capacity one.
+        // The second call must retain its own evidence before blocking there.
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                let retained = pending.snapshot();
+                if retained.len() == 1 && retained[0].request_id != first[0].request_id {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
         abort_agent_provider_workers(&mut workers, &handle, &drains, &mut owners)
             .await
             .unwrap();

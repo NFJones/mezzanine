@@ -2,8 +2,8 @@
 //!
 //! This is the existing observation journal, not an execution queue or billing
 //! ledger. Producers retain content-free evidence before cancellable delivery;
-//! monitors acknowledge only successful actor ingress. Compactor continuations
-//! can await their own receipt without racing a post-retirement drain. Producer
+//! monitors acknowledge only successful actor ingress. Journal-owned continuations
+//! await their own observation without racing a post-retirement drain. Producer
 //! cancellation leaves unacknowledged evidence for its original retirement owner.
 
 use super::ProviderWireRequestObservation;
@@ -80,3 +80,28 @@ impl PendingProviderWireObservations {
 
 #[cfg(test)]
 mod tests;
+
+/// Drives a real adapter future against a fixture consumer. Verify retention
+/// before each exact ACK, then return delivered evidence for expense assertions.
+/// This does not pretend that actor ingress is durable budget settlement.
+#[cfg(test)]
+pub(crate) async fn observe_and_acknowledge_for_test<F: std::future::Future>(
+    call: F,
+    receiver: &mut tokio::sync::mpsc::Receiver<ProviderWireRequestObservation>,
+    pending: &PendingProviderWireObservations,
+) -> (F::Output, Vec<ProviderWireRequestObservation>) {
+    tokio::pin!(call);
+    let mut observations = Vec::new();
+    loop {
+        tokio::select! {
+            biased;
+            result = &mut call => return (result, observations),
+            observation = receiver.recv() => {
+                let observation = observation.expect("fixture producer closed before completion");
+                assert!(pending.snapshot().contains(&observation));
+                pending.acknowledge(&observation.request_id);
+                observations.push(observation);
+            }
+        }
+    }
+}

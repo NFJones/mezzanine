@@ -253,7 +253,7 @@ async fn assert_zero_receipt<P: AsyncModelProvider>(
         .with_reported_usage(reported.clone());
     let observed =
         ObservedAsyncModelProvider::new(&provider, &observer, ProviderRequestPurpose::Execution);
-    if cancel {
+    let retained = if cancel {
         let mut future = observed.send_request_async(request);
         std::future::poll_fn(|cx| {
             assert!(future.as_mut().poll(cx).is_pending());
@@ -262,14 +262,21 @@ async fn assert_zero_receipt<P: AsyncModelProvider>(
         .await;
         drop(future);
         assert!(receiver.try_recv().is_err());
+        pending.snapshot()
     } else {
-        let response = observed.send_request_async(request).await.unwrap();
+        let (result, delivered) =
+            crate::integrations::agent::provider::observe_and_acknowledge_for_test(
+                observed.send_request_async(request),
+                &mut receiver,
+                &pending,
+            )
+            .await;
+        let response = result.unwrap();
         assert!(response.action_batch.is_some());
-        let delivered = receiver.try_recv().unwrap();
-        assert_eq!(pending.snapshot(), vec![delivered]);
+        assert!(pending.is_empty());
         assert!(receiver.try_recv().is_err());
-    }
-    let retained = pending.snapshot();
+        delivered
+    };
     if absent && cancel {
         assert!(retained.is_empty());
     } else {

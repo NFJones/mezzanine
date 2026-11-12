@@ -372,7 +372,14 @@ async fn assert_expense<P: AsyncModelProvider>(
         assert!(receiver.try_recv().is_err());
         return;
     }
-    let error = observed.send_request_async(request).await.unwrap_err();
+    let (result, mut delivered) =
+        crate::integrations::agent::provider::observe_and_acknowledge_for_test(
+            observed.send_request_async(request),
+            &mut receiver,
+            &pending,
+        )
+        .await;
+    let error = result.unwrap_err();
     let usage = error.provider_incurred_usage();
     assert_eq!(
         (usage.input_tokens, usage.output_tokens),
@@ -410,7 +417,8 @@ async fn assert_expense<P: AsyncModelProvider>(
     if matches!(fault, Fault::LateUsage | Fault::LateUsageZero) && family != "deepseek" {
         assert!(error.message().contains("JSON"), "{family}: {error:?}");
     }
-    let observation = receiver.try_recv().unwrap();
+    assert_eq!(delivered.len(), 1);
+    let observation = delivered.pop().unwrap();
     assert!(!observation.succeeded);
     assert_eq!(
         observation.usage,
@@ -422,7 +430,7 @@ async fn assert_expense<P: AsyncModelProvider>(
     );
     assert!(receiver.try_recv().is_err());
     assert_eq!(sends.load(Ordering::SeqCst), 1);
-    assert_eq!(pending.snapshot().len(), 1);
+    assert!(pending.is_empty());
     let reported = *reported.lock().unwrap();
     assert_eq!(
         reported.known_observations,

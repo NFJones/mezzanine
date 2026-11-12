@@ -680,6 +680,12 @@ where
                             &first_result,
                         )
                         .await;
+                    if observation.observer.required_delivery_failed() {
+                        return Err(MezError::invalid_state(
+                            "provider observation acknowledgment unavailable",
+                        )
+                        .with_provider_incurred_usage(parsed.usage));
+                    }
                 }
                 let mut retry_request = retry.request;
                 self.apply_extra_headers(&mut retry_request);
