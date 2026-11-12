@@ -428,6 +428,7 @@ impl RuntimeSessionService {
             self.runtime_memory_default_ttl_days(),
         )?;
         self.queue_agent_remember_task(RuntimeAgentRememberTask {
+            budget_capture: None,
             pane_id: pane_id.to_string(),
             conversation_id: self
                 .agent_shell_store()
@@ -615,6 +616,7 @@ impl RuntimeSessionService {
             return Ok(None);
         }
         self.require_auxiliary_accounting_capacity()?;
+        let budget_owner = self.claim_runtime_budget_remember(pane_id)?;
         let Some(task) = self.take_pending_agent_remember_task(pane_id) else {
             return Ok(None);
         };
@@ -633,7 +635,11 @@ impl RuntimeSessionService {
             }
         };
         self.claim_agent_remember_task_state(pane_id, task.clone());
-        Ok(Some(RuntimeAgentRememberDispatch { task, provider }))
+        Ok(Some(RuntimeAgentRememberDispatch {
+            budget_owner,
+            task,
+            provider,
+        }))
     }
 
     /// Builds the durable memory scope used for `/remember` records.

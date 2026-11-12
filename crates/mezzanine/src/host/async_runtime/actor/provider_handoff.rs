@@ -31,6 +31,14 @@ pub(crate) enum SourceDispatch {
     Title(String, String),
 }
 
+/// Non-owning retirement witnesses only: neither a worker nor a request payload.
+/// The caller and physical work/result each retain their sole strong reference.
+#[derive(Debug)]
+pub(crate) struct AuxiliaryBudgetPreparation {
+    observer: std::sync::Weak<()>,
+    worker: std::sync::Weak<()>,
+}
+
 impl SourceDispatch {
     /// Extracts only supported source-owned descriptor families.
     fn from_effect(effect: &RuntimeSideEffect, service: &RuntimeSessionService) -> Option<Self> {
@@ -176,6 +184,72 @@ impl AsyncRuntimeSessionActor {
         }
     }
 
+    /// Register custody before returning the work. A lost reply or cancelled
+    /// public handle cannot leave a source offered forever. Do not reoffer it
+    /// while either the original observer or physical worker/result survives.
+    pub(super) fn prepare_auxiliary_budget_source(
+        &mut self,
+        source: &crate::runtime::RuntimeBudgetAuxiliarySource,
+    ) -> Result<Option<crate::runtime::RuntimeAgentProviderPreparationWork>> {
+        self.recover_retired_auxiliary_preparations();
+        use crate::runtime::RuntimeBudgetAuxiliarySource;
+        let key = match source {
+            RuntimeBudgetAuxiliarySource::Compaction { pane, generation } => {
+                SourceDispatch::Compaction(pane.clone(), *generation)
+            }
+            RuntimeBudgetAuxiliarySource::Remember { pane, observation } => {
+                SourceDispatch::Remember(pane.clone(), observation.clone())
+            }
+            RuntimeBudgetAuxiliarySource::Title {
+                conversation,
+                dispatch,
+            } => SourceDispatch::Title(conversation.clone(), dispatch.clone()),
+        };
+        // No unbounded backlog of cancelled observers or abandoned publications.
+        if self.auxiliary_budget_preparations.contains_key(&key)
+            || self.auxiliary_budget_preparations.len() >= 4096
+        {
+            return Err(crate::error::MezError::conflict(
+                "original auxiliary budget preparation is still retained or at capacity",
+            ));
+        }
+        let Some(mut work) = self.service.prepare_runtime_budget_auxiliary(source)? else {
+            return Ok(None);
+        };
+        let observer = std::sync::Arc::new(());
+        let worker = std::sync::Arc::new(());
+        self.auxiliary_budget_preparations.insert(
+            key.clone(),
+            AuxiliaryBudgetPreparation {
+                observer: std::sync::Arc::downgrade(&observer),
+                worker: std::sync::Arc::downgrade(&worker),
+            },
+        );
+        self.offered_dispatch_sources.insert(key);
+        work.budget_preparation_observer = Some(observer);
+        work.budget_preparation_worker = Some(worker);
+        Ok(Some(work))
+    }
+
+    /// Existing refill/timer progress observes physical retirement; there is no
+    /// detached callback, provider replay, deadline guess or new recovery queue.
+    pub(super) fn recover_retired_auxiliary_preparations(&mut self) -> usize {
+        let retired: Vec<_> = self
+            .auxiliary_budget_preparations
+            .iter()
+            .filter(|(_, custody)| {
+                custody.observer.strong_count() == 0 && custody.worker.strong_count() == 0
+            })
+            .map(|(source, _)| source.clone())
+            .collect();
+        let count = retired.len();
+        for source in retired {
+            self.auxiliary_budget_preparations.remove(&source);
+            self.settle_source_offer(source);
+        }
+        count
+    }
+
     /// Fences recovered descriptors before drain-triggered refill can see their
     /// still-pending service sources. Arbitrary adapter records cannot grow it.
     pub(super) fn record_provider_offers(&mut self, effects: &[RuntimeSideEffect]) {
@@ -198,6 +272,7 @@ impl AsyncRuntimeSessionActor {
     /// Only genuinely refused sources participate; no work payload is removed
     /// from the service and no action/provider/event is replayed.
     pub(super) fn queue_fitting_provider_sources(&mut self) -> Result<usize> {
+        self.recover_retired_auxiliary_preparations();
         self.offered_dispatch_sources
             .retain(|source| source.is_owned(&self.service));
         self.refused_dispatch_sources

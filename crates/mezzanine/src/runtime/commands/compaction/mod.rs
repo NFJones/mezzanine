@@ -317,6 +317,7 @@ impl RuntimeSessionService {
         });
         self.refresh_project_trust_store_from_disk_if_changed()?;
         self.queue_agent_compaction_task(RuntimeAgentCompactionTask {
+            budget_capture: None,
             source_owner: Some(replay_source.original.clone()),
             replay_source: Some(replay_source),
             task_generation: 0,
@@ -409,6 +410,10 @@ impl RuntimeSessionService {
             .is_some_and(|task| task.request.is_some())
         {
             self.require_auxiliary_accounting_capacity()?;
+            self.claim_runtime_budget_auxiliary(
+                self.retained_agent_compaction_task(pane_id, task_generation)
+                    .and_then(|task| task.budget_capture.as_ref()),
+            )?;
         }
         let Some(task) = self.take_pending_agent_compaction_task(pane_id) else {
             return Ok(None);
@@ -563,7 +568,9 @@ impl RuntimeSessionService {
         self.claim_agent_compaction_task_state(pane_id, task.clone());
         let delivery = crate::runtime::RuntimeCompactionDispatchDelivery::new();
         self.track_compaction_dispatch_delivery(&task, delivery.observer())?;
+        let budget_owner = self.claim_runtime_budget_auxiliary(task.budget_capture.as_ref())?;
         Ok(RuntimeAgentCompactionDispatch {
+            budget_owner,
             delivery,
             task,
             provider,

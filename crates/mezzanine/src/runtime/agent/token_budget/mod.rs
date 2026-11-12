@@ -21,6 +21,7 @@ use crate::storage::token_usage::TokenUsageStore;
 use crate::storage::token_usage::budget::membership::BudgetMembership;
 use crate::storage::transcript::{AgentTranscriptStore, BudgetBindingLease};
 
+pub(crate) mod auxiliary;
 mod reclamation;
 #[cfg_attr(
     not(test),
@@ -319,15 +320,30 @@ impl RuntimeSessionService {
             .find(|turn| turn.turn_id == turn_id)
             .cloned()
             .ok_or_else(|| MezError::invalid_state("budget preparation turn unavailable"))?;
+        self.prepare_runtime_budget_conversation(
+            &turn.pane_id,
+            &turn.conversation_id,
+            turn.parent_turn_id.is_none(),
+            turn.started_at_unix_seconds,
+        )
+    }
+
+    /// Shared I/O-free source capture for genuine turns and native auxiliary
+    /// operations. A turn-less request does not fabricate a ledger turn.
+    pub(super) fn prepare_runtime_budget_conversation(
+        &mut self,
+        pane: &str,
+        conversation: &str,
+        independent_birth_allowed: bool,
+        started_at: u64,
+    ) -> Result<Option<RuntimeBudgetMembershipWork>> {
+        if !self.agent.budget_memberships.enabled {
+            return Ok(None);
+        }
         // Starting a new validation attempt revokes any prior acknowledgement,
         // including when the checks below refuse before new work can be issued.
         // Retain the original ownership proposal, not the old readiness receipt.
-        if let Some(entry) = self
-            .agent
-            .budget_memberships
-            .entries
-            .get_mut(&turn.conversation_id)
-        {
+        if let Some(entry) = self.agent.budget_memberships.entries.get_mut(conversation) {
             entry.preparation = Arc::new(());
             entry.ready = false;
         }
@@ -341,30 +357,30 @@ impl RuntimeSessionService {
             .ok_or_else(|| MezError::invalid_state("budget transcript repository unavailable"))?;
         let session = self
             .agent_shell_store()
-            .get(&turn.pane_id)
-            .filter(|session| session.session_id == turn.conversation_id)
+            .get(pane)
+            .filter(|session| session.session_id == conversation)
             .cloned()
             .ok_or_else(|| MezError::conflict("budget preparation conversation changed"))?;
         if !self
             .agent
             .budget_memberships
             .entries
-            .contains_key(&turn.conversation_id)
+            .contains_key(conversation)
         {
             self.reserve_runtime_budget_capture_capacity(1)?;
-            let source = if turn.parent_turn_id.is_none()
+            let source = if independent_birth_allowed
                 && session
                     .budget_conversation_birth
                     .matches(&session.session_id, &session.native_message_incarnation)
                 && session.conversation_kind == AgentConversationKind::Root
                 && !session.ephemeral
             {
-                Source::independent(turn.started_at_unix_seconds, false)?
+                Source::independent(started_at, false)?
             } else {
                 Source::Existing
             };
             self.agent.budget_memberships.entries.insert(
-                turn.conversation_id.clone(),
+                conversation.to_owned(),
                 Entry {
                     identity: Arc::new(()),
                     preparation: Arc::new(()),
@@ -372,7 +388,7 @@ impl RuntimeSessionService {
                     namespace: None,
                     store: store.clone(),
                     transcripts: transcripts.clone(),
-                    pane: turn.pane_id.clone(),
+                    pane: pane.to_owned(),
                     native: session.native_message_incarnation.clone(),
                     owner: crate::storage::token_usage::new_token_usage_event_id(),
                     source,
@@ -385,9 +401,9 @@ impl RuntimeSessionService {
             .agent
             .budget_memberships
             .entries
-            .get_mut(&turn.conversation_id)
+            .get_mut(conversation)
             .ok_or_else(|| MezError::invalid_state("budget preparation entry unavailable"))?;
-        if entry.pane != turn.pane_id || entry.native != session.native_message_incarnation {
+        if entry.pane != pane || entry.native != session.native_message_incarnation {
             if entry.store != store || entry.transcripts != transcripts {
                 return Err(MezError::conflict(
                     "budget repository replacement requires explicit resolution",
@@ -399,7 +415,7 @@ impl RuntimeSessionService {
             // The replacement worker must acquire that SAME lock off actor and
             // load existing provenance; it cannot mint a new root on rebind.
             entry.identity = Arc::new(());
-            entry.pane = turn.pane_id.clone();
+            entry.pane = pane.to_owned();
             entry.native = session.native_message_incarnation.clone();
             entry.owner = crate::storage::token_usage::new_token_usage_event_id();
             entry.source = Source::Existing;
@@ -417,8 +433,8 @@ impl RuntimeSessionService {
             store,
             transcripts,
             namespace: entry.namespace.clone(),
-            conversation: turn.conversation_id,
-            pane: turn.pane_id,
+            conversation: conversation.to_owned(),
+            pane: pane.to_owned(),
             native: entry.native.clone(),
             identity: entry.identity.clone(),
             preparation: entry.preparation.clone(),

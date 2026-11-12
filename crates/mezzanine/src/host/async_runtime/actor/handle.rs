@@ -1330,15 +1330,39 @@ impl AsyncRuntimeSessionHandle {
         .await?
     }
 
+    /// Uses the existing off-actor preparation worker; no auxiliary request may
+    /// infer an account from a pane label or perform SQLite work on the actor.
+    async fn prepare_auxiliary_budget(
+        &self,
+        source: crate::runtime::RuntimeBudgetAuxiliarySource,
+    ) -> Result<Option<crate::runtime::RuntimeAgentProviderPreparationOutcome>> {
+        let work = self
+            .request(|reply| AsyncRuntimeRequest::PrepareAuxiliaryBudget { source, reply })
+            .await??;
+        match work {
+            Some(work) => Ok(Some(
+                super::RuntimeSessionService::execute_agent_provider_preparation(work).await,
+            )),
+            None => Ok(None),
+        }
+    }
+
     /// Claims one queued model-backed compaction task for async execution.
     pub async fn claim_agent_compaction_task(
         &self,
         pane_id: String,
         task_generation: u64,
     ) -> Result<Option<crate::runtime::RuntimeAgentCompactionDispatch>> {
+        let budget_preparation = self
+            .prepare_auxiliary_budget(crate::runtime::RuntimeBudgetAuxiliarySource::Compaction {
+                pane: pane_id.clone(),
+                generation: task_generation,
+            })
+            .await;
         self.request(|reply| AsyncRuntimeRequest::ClaimAgentCompactionTask {
             pane_id,
             task_generation,
+            budget_preparation,
             reply,
         })
         .await?
@@ -1414,9 +1438,16 @@ impl AsyncRuntimeSessionHandle {
         pane_id: String,
         observation_id: String,
     ) -> Result<Option<crate::runtime::RuntimeAgentRememberDispatch>> {
+        let budget_preparation = self
+            .prepare_auxiliary_budget(crate::runtime::RuntimeBudgetAuxiliarySource::Remember {
+                pane: pane_id.clone(),
+                observation: observation_id.clone(),
+            })
+            .await;
         self.request(|reply| AsyncRuntimeRequest::ClaimAgentRememberTask {
             pane_id,
             observation_id,
+            budget_preparation,
             reply,
         })
         .await?
@@ -1428,9 +1459,16 @@ impl AsyncRuntimeSessionHandle {
         conversation_id: String,
         dispatch_id: String,
     ) -> Result<Option<crate::runtime::RuntimeAgentSessionTitleDispatch>> {
+        let budget_preparation = self
+            .prepare_auxiliary_budget(crate::runtime::RuntimeBudgetAuxiliarySource::Title {
+                conversation: conversation_id.clone(),
+                dispatch: dispatch_id.clone(),
+            })
+            .await;
         self.request(|reply| AsyncRuntimeRequest::ClaimAgentSessionTitleTask {
             conversation_id,
             dispatch_id,
+            budget_preparation,
             reply,
         })
         .await?

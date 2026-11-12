@@ -27,6 +27,7 @@ fn runtime_accounting_memory_cancelled_completion_retains_expense() {
         .session_id
         .clone();
     let task = crate::runtime::RuntimeAgentRememberTask {
+        budget_capture: None,
         pane_id: "%1".into(),
         conversation_id: conversation.clone(),
         accounting_origin: AccountingOrigin::Unattributed,

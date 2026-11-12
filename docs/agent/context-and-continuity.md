@@ -1259,6 +1259,15 @@ start. An invalid selection can be corrected after the exact worker proves no
 publication evidence exists and all other preparation holders have retired;
 partial or uncertain publication keeps the original proposal instead.
 
+Compaction inference, `/remember` and generated titles now capture their original
+native conversation at queue time and use the same membership preparation worker
+before claim. A cold auxiliary can establish its genuine new root without making
+up an ordinary turn. Stale native bindings, replaced repositories and unavailable
+publication refuse the request; retries retain original ownership. Issued request
+futures retain the actual account holder independently of actor/pane lifetime.
+Raw-tail publication needs no inference admission. This remains staged ownership,
+not operational budget enforcement or a durable-ACK promise for queued checkpoints.
+
 Actor capture memory has a separate 4,096-entry bound. At capacity, completed
 detached captures can be reclaimed without touching durable membership or usage.
 Live pane/loop sources, unresolved proposals and outstanding preparation/rollback

@@ -3592,14 +3592,27 @@ impl AsyncRuntimeSessionActor {
                 }
                 false
             }
+            AsyncRuntimeRequest::PrepareAuxiliaryBudget { source, reply } => {
+                let result = self.prepare_auxiliary_budget_source(&source);
+                let _ = reply.send(result);
+                false
+            }
             AsyncRuntimeRequest::ClaimAgentCompactionTask {
                 pane_id,
                 task_generation,
+                budget_preparation,
                 reply,
             } => {
-                let result = self
-                    .service
-                    .claim_agent_compaction_task(&pane_id, task_generation);
+                let result = budget_preparation
+                    .and_then(|preparation| {
+                        preparation.map_or(Ok(()), |preparation| {
+                            self.service.apply_agent_provider_preparation(preparation)
+                        })
+                    })
+                    .and_then(|()| {
+                        self.service
+                            .claim_agent_compaction_task(&pane_id, task_generation)
+                    });
                 // Settle before mandatory lease admission can return early. A
                 // constructor failure may already have consumed the pending task.
                 self.settle_source_offer(super::SourceDispatch::Compaction(
@@ -3665,11 +3678,19 @@ impl AsyncRuntimeSessionActor {
             AsyncRuntimeRequest::ClaimAgentRememberTask {
                 pane_id,
                 observation_id,
+                budget_preparation,
                 reply,
             } => {
-                let result = self
-                    .service
-                    .claim_agent_remember_task(&pane_id, &observation_id);
+                let result = budget_preparation
+                    .and_then(|preparation| {
+                        preparation.map_or(Ok(()), |preparation| {
+                            self.service.apply_agent_provider_preparation(preparation)
+                        })
+                    })
+                    .and_then(|()| {
+                        self.service
+                            .claim_agent_remember_task(&pane_id, &observation_id)
+                    });
                 self.settle_source_offer(super::SourceDispatch::Remember(pane_id, observation_id));
                 let should_notify = result.is_ok();
                 let _ = reply.send(result);
@@ -3681,11 +3702,19 @@ impl AsyncRuntimeSessionActor {
             AsyncRuntimeRequest::ClaimAgentSessionTitleTask {
                 conversation_id,
                 dispatch_id,
+                budget_preparation,
                 reply,
             } => {
-                let result = self
-                    .service
-                    .claim_agent_session_title_dispatch(&conversation_id, &dispatch_id);
+                let result = budget_preparation
+                    .and_then(|preparation| {
+                        preparation.map_or(Ok(()), |preparation| {
+                            self.service.apply_agent_provider_preparation(preparation)
+                        })
+                    })
+                    .and_then(|()| {
+                        self.service
+                            .claim_agent_session_title_dispatch(&conversation_id, &dispatch_id)
+                    });
                 self.settle_source_offer(super::SourceDispatch::Title(
                     conversation_id,
                     dispatch_id,

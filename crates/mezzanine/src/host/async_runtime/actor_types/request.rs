@@ -1300,12 +1300,19 @@ pub(in crate::host::async_runtime) enum AsyncRuntimeRequest {
         /// Reports whether the actor installed the rebuilt page.
         reply: oneshot::Sender<Result<bool>>,
     },
+    /// Captures membership work for an exact existing auxiliary descriptor.
+    PrepareAuxiliaryBudget {
+        source: crate::runtime::RuntimeBudgetAuxiliarySource,
+        reply: oneshot::Sender<Result<Option<RuntimeAgentProviderPreparationWork>>>,
+    },
     /// Claims a queued model-backed conversation compaction task.
     ClaimAgentCompactionTask {
         /// Pane whose queued compaction should be claimed.
         pane_id: String,
         /// Exact task generation requested by the dispatch side effect.
         task_generation: u64,
+        /// Original worker result, applied before any provider construction.
+        budget_preparation: Result<Option<RuntimeAgentProviderPreparationOutcome>>,
         /// Stores the reply value for this data structure.
         ///
         /// The field is part of structured state exchanged across this module
@@ -1318,6 +1325,8 @@ pub(in crate::host::async_runtime) enum AsyncRuntimeRequest {
         pane_id: String,
         /// Existing observation identity captured by the dispatch descriptor.
         observation_id: String,
+        /// Original worker result, applied before any provider construction.
+        budget_preparation: Result<Option<RuntimeAgentProviderPreparationOutcome>>,
         /// Stores the reply value for this data structure.
         ///
         /// The field is part of structured state exchanged across this module
@@ -1330,6 +1339,8 @@ pub(in crate::host::async_runtime) enum AsyncRuntimeRequest {
         conversation_id: String,
         /// Exact pending dispatch offered to this worker.
         dispatch_id: String,
+        /// Original worker result, applied before any provider construction.
+        budget_preparation: Result<Option<RuntimeAgentProviderPreparationOutcome>>,
         /// Stores the reply value for this data structure.
         ///
         /// The field is part of structured state exchanged across this module
@@ -1762,6 +1773,7 @@ impl AsyncRuntimeRequest {
             | Self::AgentCompactionClaimIsCurrent { .. }
             | Self::QueueProviderPollTimerIfNeeded { .. }
             | Self::PrepareConfiguredAgentProviderTask { .. }
+            | Self::PrepareAuxiliaryBudget { .. }
             | Self::ClaimConfiguredAgentProviderTask { .. }
             | Self::ClaimApprovedExternalAction { .. }
             | Self::ClaimNativeShellAction { .. }

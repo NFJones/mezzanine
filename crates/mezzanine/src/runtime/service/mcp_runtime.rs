@@ -48,9 +48,22 @@ impl RuntimeSessionService {
             provider_auth_refresh_profiles,
             refresh_provider_credential,
             attempted_mcp_servers,
+            budget_preparation_observer,
+            budget_preparation_worker,
+            #[cfg(test)]
+            budget_test_worker_started,
         } = work;
         let budget_membership = if let Some(work) = budget_membership {
-            Some(tokio::task::spawn_blocking(move || work.execute()).await)
+            Some(
+                tokio::task::spawn_blocking(move || {
+                    #[cfg(test)]
+                    if let Some(started) = budget_test_worker_started {
+                        let _ = started.send(());
+                    }
+                    (work.execute(), budget_preparation_worker)
+                })
+                .await,
+            )
         } else {
             None
         };
@@ -59,7 +72,11 @@ impl RuntimeSessionService {
         let budget_join_failed = budget_membership
             .as_ref()
             .is_some_and(|result| result.is_err());
-        let budget_membership = budget_membership.and_then(|result| result.ok());
+        let (budget_membership, budget_preparation_worker) = budget_membership
+            .and_then(|result| result.ok())
+            .map_or((None, None), |(membership, worker)| {
+                (Some(membership), worker)
+            });
         let accounting_projects = if let Some((store, records)) = accounting_projects {
             let worker_store = store.clone();
             let worker_records = records.clone();
@@ -252,6 +269,8 @@ impl RuntimeSessionService {
                 provider_refresh_error
             },
             attempted_mcp_servers,
+            _budget_preparation_observer: budget_preparation_observer,
+            _budget_preparation_worker: budget_preparation_worker,
         }
     }
 
@@ -393,6 +412,10 @@ impl RuntimeSessionService {
                 provider_auth_refresh_profiles,
                 refresh_provider_credential,
                 attempted_mcp_servers: server_ids.len(),
+                budget_preparation_observer: None,
+                budget_preparation_worker: None,
+                #[cfg(test)]
+                budget_test_worker_started: None,
             })
         })();
         *self.integration.mcp_registry_mut() = registry;

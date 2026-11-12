@@ -684,6 +684,9 @@ pub(crate) struct RuntimeCompactionSourceOwner {
 /// metadata needed to finish compaction once a model response returns.
 #[derive(Debug, Clone)]
 pub struct RuntimeAgentCompactionTask {
+    /// Original native budget subject, preserved across retries and rebinding.
+    pub(crate) budget_capture:
+        Option<super::agent::token_budget::auxiliary::RuntimeBudgetAuxiliaryCapture>,
     /// Original source/store capture; once present even missing storage is frozen.
     pub(crate) source_owner: Option<std::sync::Arc<RuntimeCompactionSourceOwner>>,
     /// Exact canonical prefix frozen before rendering the actual provider input.
@@ -745,6 +748,9 @@ pub enum RuntimeActiveTurnCompactionTrigger {
 /// Claimed model compaction dispatch owned by an async provider worker.
 #[derive(Debug, Clone)]
 pub struct RuntimeAgentCompactionDispatch {
+    /// Original account and actual binding holder retained until request retirement.
+    pub(crate) budget_owner:
+        Option<super::agent::token_budget::auxiliary::RuntimeBudgetAuxiliaryOwner>,
     /// Actual reply-value custody, independent of the original expense owner.
     pub(crate) delivery: super::RuntimeCompactionDispatchDelivery,
     /// Compaction task metadata and provider request.
@@ -764,6 +770,9 @@ pub struct RuntimeAgentCompactionDispatch {
 /// needed to persist generated records once a model response returns.
 #[derive(Debug, Clone)]
 pub struct RuntimeAgentRememberTask {
+    /// Original native budget subject, never borrowed from a later pane binding.
+    pub(crate) budget_capture:
+        Option<super::agent::token_budget::auxiliary::RuntimeBudgetAuxiliaryCapture>,
     /// Pane whose visible status should remain `memorizing`.
     pub pane_id: String,
     /// Original conversation, independent of later pane rebinding.
@@ -785,6 +794,9 @@ pub struct RuntimeAgentRememberTask {
 /// Claimed model memory dispatch owned by an async provider worker.
 #[derive(Debug, Clone)]
 pub struct RuntimeAgentRememberDispatch {
+    /// Original account and actual binding holder retained until request retirement.
+    pub(crate) budget_owner:
+        Option<super::agent::token_budget::auxiliary::RuntimeBudgetAuxiliaryOwner>,
     /// Remember task metadata and provider request.
     pub task: RuntimeAgentRememberTask,
     /// Provider used to execute the memory-generation request.
@@ -799,6 +811,9 @@ pub struct RuntimeAgentRememberDispatch {
 /// entry, so generating a title cannot create or mutate turn machinery.
 #[derive(Debug, Clone)]
 pub struct RuntimeAgentSessionTitleTask {
+    /// Original native budget subject, retained independently of title presentation.
+    pub(crate) budget_capture:
+        Option<super::agent::token_budget::auxiliary::RuntimeBudgetAuxiliaryCapture>,
     /// Exact pending dispatch, preserved on no-I/O rollback and renewed for retry.
     /// This is a source fence, never an accounting owner or execution authority.
     pub dispatch_id: String,
@@ -825,6 +840,9 @@ pub struct RuntimeAgentSessionTitleTask {
 /// Claimed generated session-title dispatch owned by an async provider worker.
 #[derive(Debug, Clone)]
 pub struct RuntimeAgentSessionTitleDispatch {
+    /// Original account and actual binding holder retained until request retirement.
+    pub(crate) budget_owner:
+        Option<super::agent::token_budget::auxiliary::RuntimeBudgetAuxiliaryOwner>,
     /// Title task metadata and bounded provider request.
     pub task: RuntimeAgentSessionTitleTask,
     /// Provider used to execute the title request.

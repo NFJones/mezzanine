@@ -165,6 +165,7 @@ async fn claim(
         .handle_request(AsyncRuntimeRequest::ClaimAgentSessionTitleTask {
             conversation_id: conversation.to_string(),
             dispatch_id: dispatch.to_string(),
+            budget_preparation: Ok(None),
             reply,
         })
         .await;

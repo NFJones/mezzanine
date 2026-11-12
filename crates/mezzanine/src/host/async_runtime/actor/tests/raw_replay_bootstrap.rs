@@ -518,6 +518,7 @@ async fn first_saved_head_uses_actual_raw_producer(pending_append: bool) {
         .handle_request(AsyncRuntimeRequest::ClaimAgentCompactionTask {
             pane_id: "%1".into(),
             task_generation: generation,
+            budget_preparation: Ok(None),
             reply,
         })
         .await;
@@ -834,6 +835,7 @@ async fn raw_replay_bootstrap_manual_uses_owned_history_without_a_new_task() {
             .handle_request(AsyncRuntimeRequest::ClaimAgentCompactionTask {
                 pane_id: "%1".into(),
                 task_generation: generation,
+                budget_preparation: Ok(None),
                 reply,
             })
             .await;

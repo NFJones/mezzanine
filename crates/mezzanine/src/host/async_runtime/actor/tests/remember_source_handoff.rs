@@ -7,10 +7,21 @@
 use super::super::*;
 
 /// Owns generated fixture storage through actor destruction, including unwind.
-struct FixtureRoot(std::path::PathBuf);
+struct FixtureRoot(std::path::PathBuf, Option<std::sync::Weak<()>>);
 
 impl Drop for FixtureRoot {
     fn drop(&mut self) {
+        if self
+            .1
+            .as_ref()
+            .is_some_and(|worker| worker.strong_count() > 0)
+        {
+            eprintln!(
+                "remember handoff fixture retained for physical publication: {}",
+                self.0.display()
+            );
+            return;
+        }
         if let Err(error) = std::fs::remove_dir_all(&self.0) {
             eprintln!("remember handoff fixture storage cleanup failed: {error}");
         }
@@ -26,11 +37,26 @@ fn pending_remember_at_capacity() -> (FixtureRoot, AsyncRuntimeSessionActor, Cli
 /// Optional auth-store attachment faults real provider construction after
 /// successful command admission; no credentials or fake task are injected.
 fn pending_remember_with_auth(auth: bool) -> (FixtureRoot, AsyncRuntimeSessionActor, ClientId) {
+    let (root, actor, primary, _) = pending_remember_with_handle(auth);
+    (root, actor, primary)
+}
+
+fn pending_remember_with_handle(
+    auth: bool,
+) -> (
+    FixtureRoot,
+    AsyncRuntimeSessionActor,
+    ClientId,
+    AsyncRuntimeSessionHandle,
+) {
     use crate::config::{ConfigFormat, ConfigLayer, ConfigScope};
-    let root = FixtureRoot(std::env::temp_dir().join(format!(
-        "mez-remember-handoff-{:032x}",
-        rand::random::<u128>()
-    )));
+    let root = FixtureRoot(
+        std::env::temp_dir().join(format!(
+            "mez-remember-handoff-{:032x}",
+            rand::random::<u128>()
+        )),
+        None,
+    );
     let mut service = crate::test_support::runtime::RuntimeServiceFixture::new().build();
     service.set_config_root(root.0.clone());
     service.set_agent_transcript_store(crate::storage::transcript::AgentTranscriptStore::new(
@@ -61,7 +87,7 @@ fn pending_remember_with_auth(auth: bool) -> (FixtureRoot, AsyncRuntimeSessionAc
         .unwrap();
     assert!(service.agent_is_remembering("%1"), "{admitted}");
     assert_eq!(service.pending_agent_remember_tasks(), vec!["%1"]);
-    let (_, mut actor) = AsyncRuntimeSessionActor::new(
+    let (handle, mut actor) = AsyncRuntimeSessionActor::new(
         service,
         AsyncRuntimeActorConfig {
             side_effect_buffer: 1,
@@ -87,7 +113,203 @@ fn pending_remember_with_auth(auth: bool) -> (FixtureRoot, AsyncRuntimeSessionAc
                 .collect(),
         )
         .unwrap();
-    (root, actor, primary)
+    (root, actor, primary, handle)
+}
+
+/// A lost capture reply cannot strand its exact recovered source offer.
+#[tokio::test]
+async fn cancelled_budget_preparation_recovers_exact_offered_memory_source() {
+    let (_root, mut actor, primary) = pending_remember_at_capacity();
+    actor
+        .service
+        .execute_agent_shell_command(&primary, "/stop")
+        .unwrap();
+    let path = actor
+        .service
+        .agent_transcript_store()
+        .unwrap()
+        .root()
+        .parent()
+        .unwrap()
+        .join("usage.sqlite");
+    let store = crate::storage::token_usage::TokenUsageStore::new(path);
+    store.initialize(1).unwrap();
+    actor.service.set_token_usage_store(store);
+    actor.service.enable_runtime_budget_membership_for_tests();
+    actor
+        .service
+        .execute_agent_shell_command(
+            &primary,
+            "/remember Preserve cancelled preparation ownership.",
+        )
+        .unwrap();
+    let (effects, observation) = pending(&actor);
+    assert!(actor.admit_committed_side_effects(effects).is_err());
+    actor.drain_timer_side_effects(1).unwrap();
+    assert_eq!(
+        actor
+            .drain_agent_provider_dispatch_side_effects(1)
+            .unwrap()
+            .len(),
+        1
+    );
+    let (reply, response) = tokio::sync::oneshot::channel();
+    actor
+        .handle_request(AsyncRuntimeRequest::PrepareAuxiliaryBudget {
+            source: crate::runtime::RuntimeBudgetAuxiliarySource::Remember {
+                pane: "%1".into(),
+                observation: observation.clone(),
+            },
+            reply,
+        })
+        .await;
+    let work = response.await.unwrap().unwrap().unwrap();
+    actor.drain_timer_side_effects(256).unwrap();
+    assert!(actor.drain_timer_side_effects(256).unwrap().is_empty());
+    assert!(
+        actor
+            .drain_agent_provider_dispatch_side_effects(1)
+            .unwrap()
+            .is_empty()
+    );
+    // Memory-only work must keep the ordinary fallback poll alive, rather
+    // than depend on an ordinary turn, title or unrelated timer drain.
+    let (reply, response) = tokio::sync::oneshot::channel();
+    actor
+        .handle_request(AsyncRuntimeRequest::QueueProviderPollTimerIfNeeded {
+            generation: 991,
+            delay_ms: 100,
+            reply,
+        })
+        .await;
+    assert!(response.await.unwrap().unwrap());
+    let timers = actor.drain_timer_side_effects(256).unwrap();
+    assert!(
+        matches!(timers.as_slice(), [RuntimeSideEffect::ScheduleTimer { key, .. }]
+        if key == &RuntimeTimerKey::new(RuntimeTimerKind::ProviderPoll, "agent-provider", 991))
+    );
+    assert!(actor.drain_timer_side_effects(256).unwrap().is_empty());
+    // The receiver disappears before polling the external preparation future.
+    // No worker was issued, so recovery must not require an eventual Claim.
+    drop(work);
+    let recovered = actor.drain_agent_provider_dispatch_side_effects(1).unwrap();
+    assert!(
+        matches!(recovered.as_slice(), [RuntimeSideEffect::DispatchAgentRemember { observation_id, .. }] if observation_id == &observation),
+        "lost source: {recovered:?}"
+    );
+}
+
+/// Cancellation retires the observer, not the blocking SQL job or its returned
+/// publication holder. Refilling must wait for actual physical/result retirement.
+#[tokio::test]
+async fn cancelled_budget_preparation_waits_for_blocked_publication_retirement() {
+    let (mut root, mut actor, primary, handle) = pending_remember_with_handle(true);
+    actor
+        .service
+        .execute_agent_shell_command(&primary, "/stop")
+        .unwrap();
+    let store = crate::storage::token_usage::TokenUsageStore::new(root.0.join("usage.sqlite"));
+    store.initialize(1).unwrap();
+    actor.service.set_token_usage_store(store.clone());
+    actor.service.enable_runtime_budget_membership_for_tests();
+    actor
+        .service
+        .execute_agent_shell_command(&primary, "/remember Keep the original blocked publication.")
+        .unwrap();
+    let (effects, observation) = pending(&actor);
+    assert!(actor.admit_committed_side_effects(effects).is_err());
+    actor.drain_timer_side_effects(1).unwrap();
+    assert_eq!(
+        actor
+            .drain_agent_provider_dispatch_side_effects(1)
+            .unwrap()
+            .len(),
+        1
+    );
+    let source = crate::runtime::RuntimeBudgetAuxiliarySource::Remember {
+        pane: "%1".into(),
+        observation: observation.clone(),
+    };
+    let requested_observation = observation.clone();
+    let preparation = tokio::spawn(async move {
+        handle
+            .claim_agent_remember_task("%1".into(), requested_observation)
+            .await
+    });
+    let queued = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        loop {
+            let request = actor
+                .request_ingress
+                .lock()
+                .unwrap()
+                .dequeue_normal_request();
+            if let Some(request) = request {
+                break request;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    let AsyncRuntimeRequest::PrepareAuxiliaryBudget { reply, .. } = queued.envelope.request else {
+        panic!("public claim must first request budget preparation");
+    };
+    // Same actor preparation owner; intercept only to attach a notification
+    // from inside the real blocking closure before returning the exact reply.
+    let mut work = actor
+        .prepare_auxiliary_budget_source(&source)
+        .unwrap()
+        .unwrap();
+    let physical = std::sync::Arc::downgrade(work.budget_preparation_worker.as_ref().unwrap());
+    let observer = std::sync::Arc::downgrade(work.budget_preparation_observer.as_ref().unwrap());
+    root.1 = Some(physical.clone());
+    let connection = rusqlite::Connection::open(store.path()).unwrap();
+    connection.execute_batch("BEGIN EXCLUSIVE;").unwrap();
+    let (started, receiver) = tokio::sync::oneshot::channel();
+    work.budget_test_worker_started = Some(started);
+    assert!(reply.send(Ok(Some(work))).is_ok());
+    tokio::time::timeout(std::time::Duration::from_secs(10), receiver)
+        .await
+        .unwrap()
+        .unwrap();
+    preparation.abort();
+    assert!(preparation.await.err().unwrap().is_cancelled());
+    assert_eq!(observer.strong_count(), 0);
+    assert_eq!(physical.strong_count(), 1);
+    assert!(
+        actor
+            .drain_agent_provider_dispatch_side_effects(1)
+            .unwrap()
+            .is_empty()
+    );
+    // Releasing the test-owned transaction permits the ORIGINAL blocking work
+    // to finish. No provider request was issued or is replayed by this recovery.
+    connection.execute_batch("ROLLBACK;").unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        while physical.strong_count() > 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    let recovered = actor.drain_agent_provider_dispatch_side_effects(1).unwrap();
+    assert!(
+        matches!(recovered.as_slice(), [RuntimeSideEffect::DispatchAgentRemember { observation_id, .. }] if observation_id == &observation)
+    );
+    let work = actor
+        .prepare_auxiliary_budget_source(&source)
+        .unwrap()
+        .unwrap();
+    let outcome = RuntimeSessionService::execute_agent_provider_preparation(work).await;
+    actor
+        .service
+        .apply_agent_provider_preparation(outcome)
+        .unwrap();
+    let dispatch = claim(&mut actor, &observation).await.unwrap().unwrap();
+    assert_eq!(dispatch.task.observation_id, observation);
+    assert!(dispatch.budget_owner.is_some());
+    assert!(actor.service.agent_turn_ledger().turns().is_empty());
+    drop((dispatch, actor, connection));
 }
 
 /// Issues the actual actor claim, carrying only the identity in the descriptor.
@@ -100,6 +322,7 @@ async fn claim(
         .handle_request(AsyncRuntimeRequest::ClaimAgentRememberTask {
             pane_id: "%1".into(),
             observation_id: observation_id.to_string(),
+            budget_preparation: Ok(None),
             reply,
         })
         .await;

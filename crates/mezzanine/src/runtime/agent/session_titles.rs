@@ -664,6 +664,7 @@ impl RuntimeSessionService {
         self.agent.pending_agent_session_title_tasks.insert(
             conversation_id.to_string(),
             RuntimeAgentSessionTitleTask {
+                budget_capture: self.capture_runtime_budget_auxiliary(pane_id, conversation_id),
                 dispatch_id: crate::storage::token_usage::new_token_usage_event_id(),
                 attempt_id: String::new(),
                 accounting_origin: self.capture_agent_accounting_origin_for_pane(pane_id),
@@ -848,6 +849,13 @@ impl RuntimeSessionService {
         else {
             return Ok(None);
         };
+        let budget_owner = match self.claim_runtime_budget_auxiliary(task.budget_capture.as_ref()) {
+            Ok(owner) => owner,
+            Err(error) => {
+                self.restore_pending_agent_session_title_task(task);
+                return Err(error);
+            }
+        };
         let provider = match self
             .runtime_model_provider_for_profile(&task.model_profile, "provider_session_title")
         {
@@ -905,7 +913,11 @@ impl RuntimeSessionService {
                 timeout_ms: SESSION_TITLE_CLAIM_TIMEOUT_MS,
             },
         );
-        Ok(Some(RuntimeAgentSessionTitleDispatch { task, provider }))
+        Ok(Some(RuntimeAgentSessionTitleDispatch {
+            budget_owner,
+            task,
+            provider,
+        }))
     }
 
     /// Sets a small issued-owner limit for deterministic admission regressions.

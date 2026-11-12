@@ -1229,11 +1229,17 @@ impl AsyncRuntimeSessionActor {
         target_pane_id: &str,
         target_generation: u64,
     ) -> bool {
-        self.offered_dispatch_sources
-            .contains(&super::SourceDispatch::Compaction(
+        self.auxiliary_budget_preparations
+            .contains_key(&super::SourceDispatch::Compaction(
                 target_pane_id.to_string(),
                 target_generation,
             ))
+            || self
+                .offered_dispatch_sources
+                .contains(&super::SourceDispatch::Compaction(
+                    target_pane_id.to_string(),
+                    target_generation,
+                ))
             || self.side_effect_routes.any_provider(|effect| {
                 matches!(
                     effect,
@@ -1249,11 +1255,17 @@ impl AsyncRuntimeSessionActor {
         target_pane_id: &str,
         target_observation_id: &str,
     ) -> bool {
-        self.offered_dispatch_sources
-            .contains(&super::SourceDispatch::Remember(
+        self.auxiliary_budget_preparations
+            .contains_key(&super::SourceDispatch::Remember(
                 target_pane_id.to_string(),
                 target_observation_id.to_string(),
             ))
+            || self
+                .offered_dispatch_sources
+                .contains(&super::SourceDispatch::Remember(
+                    target_pane_id.to_string(),
+                    target_observation_id.to_string(),
+                ))
             || self.side_effect_routes.any_provider(|effect| {
                 matches!(
                     effect,
@@ -1269,7 +1281,7 @@ impl AsyncRuntimeSessionActor {
         target_conversation_id: &str,
         target_dispatch_id: &str,
     ) -> bool {
-        self.offered_dispatch_sources.contains(&super::SourceDispatch::Title(target_conversation_id.to_string(), target_dispatch_id.to_string())) || self.side_effect_routes.any_provider(|effect| {
+        self.auxiliary_budget_preparations.contains_key(&super::SourceDispatch::Title(target_conversation_id.to_string(), target_dispatch_id.to_string())) || self.offered_dispatch_sources.contains(&super::SourceDispatch::Title(target_conversation_id.to_string(), target_dispatch_id.to_string())) || self.side_effect_routes.any_provider(|effect| {
             matches!(
                 effect,
                 RuntimeSideEffect::DispatchAgentSessionTitle { conversation_id, dispatch_id }

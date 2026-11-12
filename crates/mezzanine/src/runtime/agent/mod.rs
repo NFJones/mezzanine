@@ -3385,6 +3385,10 @@ impl RuntimeSessionService {
 
     /// Queues one compaction task and marks its pane active.
     pub(crate) fn queue_agent_compaction_task(&mut self, mut task: RuntimeAgentCompactionTask) {
+        if task.budget_capture.is_none() {
+            task.budget_capture =
+                self.capture_runtime_budget_auxiliary(&task.pane_id, &task.conversation_id);
+        }
         if task.source_owner.is_none() {
             let turn_id = task.resume_turn_id.as_deref();
             let history = turn_id
@@ -3962,7 +3966,11 @@ impl RuntimeSessionService {
     }
 
     /// Queues one durable-memory task and marks its pane active.
-    pub(crate) fn queue_agent_remember_task(&mut self, task: RuntimeAgentRememberTask) {
+    pub(crate) fn queue_agent_remember_task(&mut self, mut task: RuntimeAgentRememberTask) {
+        if task.budget_capture.is_none() {
+            task.budget_capture =
+                self.capture_runtime_budget_auxiliary(&task.pane_id, &task.conversation_id);
+        }
         let pane_id = task.pane_id.clone();
         self.agent
             .agent_remembering_panes

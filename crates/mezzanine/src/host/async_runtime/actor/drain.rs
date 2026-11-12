@@ -21,6 +21,12 @@ impl AsyncRuntimeSessionActor {
     /// Observes only actual dropped dispatch values. Queue refusal keeps newly
     /// ready work in existing source recovery until this drain frees capacity.
     fn settle_abandoned_compaction_deliveries(&mut self) -> Result<()> {
+        // An empty provider lane must still observe cancelled preparation
+        // retirement. Refill only on this actual ownership change, not every
+        // empty poll; no unrelated timer/input is needed to recover the source.
+        if self.recover_retired_auxiliary_preparations() > 0 {
+            self.queue_fitting_provider_sources()?;
+        }
         if self.service.settle_abandoned_compaction_dispatches()? {
             self.notify_event_delivery();
             let effects = self.pending_provider_dispatch_side_effects()?;

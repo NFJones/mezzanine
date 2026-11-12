@@ -21610,6 +21610,23 @@ MUST identify the captured choice and anchor, distinguish membership start from
 preserved existing-account start, and explicitly label incomplete historical usage.
 These ports do not supply the downstream confirmation UI or activate enforcement.
 
+Turn-less compaction, durable-memory generation and generated-title requests MUST
+capture their original conversation, native incarnation and repositories before
+queuing. Retries MUST preserve that capture rather than borrow a later pane bind.
+Before claiming inference they MUST use the existing off-actor preparation lane
+to publish the same account membership, without fabricating an ordinary turn,
+implicitly starting MCP transports or refreshing unrelated credentials. Claims
+MUST revalidate the original source and retain actual binding custody through
+provider-future retirement. A raw-tail publication with no inference is exempt.
+Preparation refusal MUST retain the original pending source and settle its exact
+offer; valid bookkeeping recovery MUST NOT replay provider work. This ownership
+slice alone does not activate budget policy or per-attempt receipt enforcement.
+Cancellation before claim MUST retain the exact offered source until both its
+caller and physical preparation work/result retire. Existing source refill MUST
+then reoffer the original pending operation without replacement input. Retained
+preparation metadata MUST remain bounded; neither caller cancellation nor a lost
+reply proves publication retirement or durable acknowledgement.
+
 Runtime budget membership captures MUST remain bounded at4096 entries. Capacity
 reclamation MAY discard only detached, acknowledged actor metadata with no
 outstanding preparation or rollback owner. Current pane bindings, saved loop

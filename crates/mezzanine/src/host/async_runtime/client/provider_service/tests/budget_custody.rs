@@ -70,6 +70,109 @@ async fn budget_native_custody_http_fixture_unwind_preserves_live_lock() {
     qualify_http_custody(true).await;
 }
 
+/// A concrete auxiliary HTTP future, not just a retained task or dispatch,
+/// keeps the original account inode after every actor/native fixture retires.
+#[tokio::test]
+async fn budget_auxiliary_actual_memory_http_retains_original_custody_until_join() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let (mut service, _, _) =
+        super::incomplete::prepared_fixture("prepare auxiliary custody").await;
+    let transcripts = service.agent_transcript_store().unwrap().clone();
+    let path = transcripts.root().parent().unwrap().to_owned();
+    let mut root = FixtureRoot(Some(path.clone()));
+    let store = TokenUsageStore::new(path.join("usage.sqlite"));
+    let primary = service
+        .session()
+        .clients()
+        .iter()
+        .find(|client| service.session().is_attached_primary(&client.id))
+        .unwrap()
+        .id
+        .clone();
+    service
+        .execute_agent_shell_command(&primary, "/stop")
+        .unwrap();
+    service.set_config_root(path.clone());
+    service.replace_config_layers(vec![ConfigLayer {
+        name: "budget-auxiliary-http".into(), path: None, format: ConfigFormat::Toml,
+        scope: ConfigScope::Primary, trusted: true,
+        text: format!("[agents]\nrouting=false\nshell_mode=\"native\"\ndefault_provider=\"local-chat\"\ndefault_model_profile=\"default\"\n[permissions]\nsandbox=\"policy-only\"\n[providers.local-chat]\nkind=\"openai-compatible\"\nbase_url=\"http://{address}/v1\"\nmodels=[\"test-model\"]\ndefault_model=\"test-model\"\n[model_profiles.default]\nprovider=\"local-chat\"\nmodel=\"test-model\"\n"),
+    }]).unwrap();
+    service.enable_runtime_budget_membership_for_tests();
+    let primary = service
+        .session()
+        .clients()
+        .iter()
+        .find(|client| service.session().is_attached_primary(&client.id))
+        .unwrap()
+        .id
+        .clone();
+    service
+        .execute_agent_shell_command(&primary, "/remember Preserve the original request account.")
+        .unwrap();
+    let observation = service
+        .pending_agent_remember_observation_id("%1")
+        .unwrap()
+        .to_owned();
+    let work = service
+        .prepare_runtime_budget_auxiliary(&crate::runtime::RuntimeBudgetAuxiliarySource::Remember {
+            pane: "%1".into(),
+            observation: observation.clone(),
+        })
+        .unwrap()
+        .unwrap();
+    let outcome = RuntimeSessionService::execute_agent_provider_preparation(work).await;
+    service.apply_agent_provider_preparation(outcome).unwrap();
+    let dispatch = service
+        .claim_agent_remember_task("%1", &observation)
+        .unwrap()
+        .unwrap();
+    let member = dispatch.budget_owner.as_ref().unwrap().member.clone();
+    let (sender, _observations) = tokio::sync::mpsc::channel(8);
+    let observer = ProviderWireRequestObserver::new(member.conversation.clone(), "%1", sender);
+    let request = tokio::spawn(execute_runtime_agent_remember_dispatch(dispatch, observer));
+    let request_guard = AbortProviderWorkerOnDrop(request.abort_handle());
+    let (mut socket, _) = tokio::time::timeout(Duration::from_secs(10), listener.accept())
+        .await
+        .unwrap()
+        .unwrap();
+    let mut bytes = Vec::new();
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while !bytes.windows(4).any(|bytes| bytes == b"\r\n\r\n") {
+            let mut chunk = [0; 1024];
+            let read = socket.read(&mut chunk).await.unwrap();
+            assert!(read > 0);
+            bytes.extend_from_slice(&chunk[..read]);
+            assert!(bytes.len() <= 1024 * 1024);
+        }
+    })
+    .await
+    .unwrap();
+    service.terminate_all_pane_processes().unwrap();
+    drop(service);
+    assert!(!request.is_finished());
+    let refused = store
+        .publish_native_budget_membership(&transcripts, &member, "auxiliary-successor", None)
+        .is_err();
+    request.abort();
+    let mut request = request;
+    let joined = tokio::time::timeout(Duration::from_secs(10), &mut request)
+        .await
+        .unwrap();
+    drop(request_guard);
+    assert!(joined.unwrap_err().is_cancelled());
+    assert!(
+        refused,
+        "issued auxiliary future must retain original native custody"
+    );
+    let successor = store
+        .publish_native_budget_membership(&transcripts, &member, "auxiliary-successor", None)
+        .unwrap();
+    drop((successor, socket, listener));
+    root.cleanup();
+}
+
 async fn qualify_http_custody(unwind: bool) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();

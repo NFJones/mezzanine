@@ -2536,12 +2536,16 @@ async fn execute_runtime_agent_compaction_dispatch(
         ));
     }
     let RuntimeAgentCompactionDispatch {
+        budget_owner: _budget_owner,
         delivery: _delivery,
         task,
         provider,
         provider_options,
         stream,
     } = dispatch;
+    if let Some(owner) = &_budget_owner {
+        owner.validate_request(&task.conversation_id)?;
+    }
     let source = task.replay_source.as_ref().ok_or_else(|| {
         MezError::invalid_state("compaction dispatch lacks its frozen epoch source")
     })?;
@@ -2594,7 +2598,14 @@ async fn execute_runtime_agent_remember_dispatch(
     dispatch: RuntimeAgentRememberDispatch,
     observer: ProviderWireRequestObserver,
 ) -> Result<mez_agent::ModelResponse> {
-    let RuntimeAgentRememberDispatch { task, provider } = dispatch;
+    let RuntimeAgentRememberDispatch {
+        budget_owner: _budget_owner,
+        task,
+        provider,
+    } = dispatch;
+    if let Some(owner) = &_budget_owner {
+        owner.validate_request(&task.conversation_id)?;
+    }
     match provider {
         RuntimeAgentProviderDispatchProvider::OpenAi(provider) => {
             observed_provider_request(
@@ -2643,7 +2654,20 @@ async fn execute_runtime_agent_session_title_dispatch(
     dispatch: RuntimeAgentSessionTitleDispatch,
     observer: ProviderWireRequestObserver,
 ) -> (AgentSessionTitleOutcome, mez_agent::ModelTokenUsage) {
-    let RuntimeAgentSessionTitleDispatch { task, provider } = dispatch;
+    let RuntimeAgentSessionTitleDispatch {
+        budget_owner: _budget_owner,
+        task,
+        provider,
+    } = dispatch;
+    if _budget_owner
+        .as_ref()
+        .is_some_and(|owner| owner.validate_request(&task.conversation_id).is_err())
+    {
+        return (
+            AgentSessionTitleOutcome::Rejected("provider_error".into()),
+            Default::default(),
+        );
+    }
     session_title_response_outcome(
         observed_dispatch_provider_request(
             &provider,

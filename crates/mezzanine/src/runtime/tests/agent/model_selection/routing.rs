@@ -2211,6 +2211,7 @@ fn runtime_routed_child_malformed_compaction_completion_recovers_parent() {
     service.claim_agent_compaction_task_state(
         worker_turn.pane_id.clone(),
         RuntimeAgentCompactionTask {
+            budget_capture: None,
             source_owner: None,
             replay_source: None,
             task_generation: 0,
@@ -2290,6 +2291,7 @@ fn runtime_routed_child_post_summary_compaction_failure_recovers_parent() {
     service.claim_agent_compaction_task_state(
         worker_turn.pane_id.clone(),
         RuntimeAgentCompactionTask {
+            budget_capture: None,
             source_owner: None,
             replay_source: None,
             task_generation: 0,

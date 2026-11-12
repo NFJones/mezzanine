@@ -151,6 +151,7 @@ async fn case_with_mode(ephemeral: bool, raw: bool) -> Case {
         .handle_request(AsyncRuntimeRequest::ClaimAgentCompactionTask {
             pane_id: "%1".into(),
             task_generation: generation,
+            budget_preparation: Ok(None),
             reply,
         })
         .await;

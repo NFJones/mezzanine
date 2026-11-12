@@ -198,6 +198,7 @@ pub(in crate::runtime::commands::compaction) fn manual_replay_task(
         )
     });
     Ok(RuntimeAgentCompactionTask {
+        budget_capture: None,
         source_owner: Some(source.original.clone()),
         replay_source: Some(source.clone()),
         task_generation: 0,

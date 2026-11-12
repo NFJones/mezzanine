@@ -19,6 +19,7 @@ async fn claim(
         .handle_request(AsyncRuntimeRequest::ClaimAgentCompactionTask {
             pane_id: "%1".into(),
             task_generation: generation,
+            budget_preparation: Ok(None),
             reply,
         })
         .await;
@@ -607,6 +608,7 @@ async fn refused_compaction_recovers_and_claims_once() {
             .handle_request(AsyncRuntimeRequest::ClaimAgentCompactionTask {
                 pane_id: "%1".into(),
                 task_generation: generation,
+                budget_preparation: Ok(None),
                 reply,
             })
             .await;
@@ -630,6 +632,7 @@ async fn refused_compaction_recovers_and_claims_once() {
             .handle_request(AsyncRuntimeRequest::ClaimAgentCompactionTask {
                 pane_id: "%1".into(),
                 task_generation: generation,
+                budget_preparation: Ok(None),
                 reply,
             })
             .await;
@@ -878,6 +881,7 @@ async fn compaction_lost_claim_reply_retires_undispatched_owner() {
         .handle_request(AsyncRuntimeRequest::ClaimAgentCompactionTask {
             pane_id: "%1".into(),
             task_generation: generation,
+            budget_preparation: Ok(None),
             reply,
         })
         .await;
@@ -909,6 +913,7 @@ async fn compaction_delivered_reply_dropped_before_receive_retires_zero_expense(
         .handle_request(AsyncRuntimeRequest::ClaimAgentCompactionTask {
             pane_id: "%1".into(),
             task_generation: generation,
+            budget_preparation: Ok(None),
             reply,
         })
         .await;
@@ -956,6 +961,7 @@ async fn compaction_delivered_reply_dropped_after_stop_retires_zero_expense() {
         .handle_request(AsyncRuntimeRequest::ClaimAgentCompactionTask {
             pane_id: "%1".into(),
             task_generation: generation,
+            budget_preparation: Ok(None),
             reply,
         })
         .await;

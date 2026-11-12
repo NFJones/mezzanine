@@ -39,6 +39,38 @@ pub(crate) struct RuntimeAgentProviderPreparationWork {
     pub(crate) refresh_provider_credential: bool,
     /// Number of MCP servers considered by this preparation pass.
     pub(crate) attempted_mcp_servers: usize,
+    /// Sole caller witness; cancellation releases this independently of work.
+    pub(crate) budget_preparation_observer: Option<std::sync::Arc<()>>,
+    /// Sole physical work/result witness, moved through the blocking closure.
+    pub(crate) budget_preparation_worker: Option<std::sync::Arc<()>>,
+    /// Deterministic fixture notification from inside the actual blocking job.
+    #[cfg(test)]
+    pub(crate) budget_test_worker_started: Option<tokio::sync::oneshot::Sender<()>>,
+}
+
+impl RuntimeAgentProviderPreparationWork {
+    /// Auxiliary membership uses the same supervised preparation operation,
+    /// without credential refresh, MCP discovery or unrelated executable work.
+    pub(crate) fn budget_only(
+        membership: crate::runtime::agent::token_budget::RuntimeBudgetMembershipWork,
+    ) -> Self {
+        Self {
+            budget_membership: Some(membership),
+            accounting_projects: None,
+            mcp_plans: Vec::new(),
+            allow_stdio: false,
+            environment: BTreeMap::new(),
+            auth_store: None,
+            provider_auth_refresh_leeway_seconds: 0,
+            provider_auth_refresh_profiles: Vec::new(),
+            refresh_provider_credential: false,
+            attempted_mcp_servers: 0,
+            budget_preparation_observer: None,
+            budget_preparation_worker: None,
+            #[cfg(test)]
+            budget_test_worker_started: None,
+        }
+    }
 }
 
 /// External preparation result returned to the serialized runtime actor.
@@ -58,6 +90,10 @@ pub(crate) struct RuntimeAgentProviderPreparationOutcome {
     pub(crate) provider_refresh_error: Option<MezError>,
     /// Number of MCP servers considered by this preparation pass.
     pub(crate) attempted_mcp_servers: usize,
+    /// Drop after membership: losing an outcome is not an acknowledgement.
+    pub(crate) _budget_preparation_observer: Option<std::sync::Arc<()>>,
+    /// Last field: all returned publication holders retire before this witness.
+    pub(crate) _budget_preparation_worker: Option<std::sync::Arc<()>>,
 }
 
 /// Result of discovering one configured MCP server outside the runtime actor.
