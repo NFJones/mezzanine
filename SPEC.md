@@ -8421,6 +8421,10 @@ failure handling. Explicit runtime or adapter retries remain separately owned;
 this transport rule MUST NOT change ordinary fetch/search routing policy.
 Known decoded provider usage MUST survive subsequent MAAP validation failure;
 rejecting malformed output MUST NOT erase already incurred inference expense.
+Known counters decoded from a chat stream MUST also survive transport cutoff,
+non-success HTTP status, and stream decoding/finalization refusal. Retaining
+normalized numeric counters does not establish missing-dimension coverage or
+make an absent usage report an explicit zero-cost receipt.
 `agents.turn_timeout_ms` MUST be a positive integer and MUST default to
 `1800000`. The runtime MUST snapshot this duration as an absolute
 millisecond-resolution deadline when each turn is created. Reloading the

@@ -63,7 +63,9 @@ library. A redirect is returned to the provider adapter as a non-success respons
 it cannot silently submit a second billable request. Explicit runtime/adapter
 retries retain their own lifecycle. Ordinary fetch and search routing is unchanged.
 Known decoded usage remains incurred even when later MAAP validation rejects the
-provider's output.
+provider's output. Chat adapters also retain already decoded counters when the
+stream ends in a transport, HTTP-status, decoder, or finalization failure. Missing
+usage remains unavailable; normalized counters alone do not prove full coverage.
 
 Set `agents.provider_error_retry_unlimited = true` only for daemonized work that
 should wait through an extended provider outage. This separate switch ignores

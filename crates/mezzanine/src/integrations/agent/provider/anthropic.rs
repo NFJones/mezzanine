@@ -155,6 +155,10 @@ impl ChatCompletionsDialect for AnthropicMessagesDialect {
 }
 
 impl ChatCompletionsStreamDecoder for AnthropicMessagesStreamDecoder {
+    fn reported_usage(&self) -> mez_agent::ModelTokenUsage {
+        AnthropicMessagesStreamDecoder::reported_usage(self)
+    }
+
     fn push_event(&mut self, event: &SseEvent) -> Result<Option<String>> {
         Ok(AnthropicMessagesStreamDecoder::push_event(self, event)?)
     }

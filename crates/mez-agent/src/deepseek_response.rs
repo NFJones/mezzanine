@@ -479,6 +479,12 @@ pub struct DeepSeekChatCompletionsStreamDecoder {
 }
 
 impl DeepSeekChatCompletionsStreamDecoder {
+    /// Returns retained normalized counters independently of output usability.
+    /// Zero here does not prove that missing wire dimensions were reported.
+    pub fn reported_usage(&self) -> ModelTokenUsage {
+        self.usage
+    }
+
     /// Applies one complete SSE event and returns display-safe text progress.
     pub fn push_event(&mut self, event: &crate::SseEvent) -> Option<String> {
         let data = event.data.trim();

@@ -1019,6 +1019,7 @@ fn memory_store_action(id: &str) -> AgentAction {
 mod action_results;
 mod agent_runtime;
 mod agent_shell;
+mod chat_stream_usage;
 mod deepseek_provider;
 mod mcp_runtime;
 mod model_context;

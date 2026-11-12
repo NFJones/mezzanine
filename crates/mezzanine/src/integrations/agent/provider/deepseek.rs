@@ -180,6 +180,10 @@ fn deepseek_required_maap_response(
 }
 
 impl ChatCompletionsStreamDecoder for DeepSeekChatCompletionsStreamDecoder {
+    fn reported_usage(&self) -> mez_agent::ModelTokenUsage {
+        DeepSeekChatCompletionsStreamDecoder::reported_usage(self)
+    }
+
     fn push_event(&mut self, event: &SseEvent) -> Result<Option<String>> {
         Ok(DeepSeekChatCompletionsStreamDecoder::push_event(
             self, event,

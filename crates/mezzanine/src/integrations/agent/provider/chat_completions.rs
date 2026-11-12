@@ -30,6 +30,10 @@ use std::pin::Pin;
 
 /// Incremental provider-specific state for one Chat Completions SSE response.
 pub trait ChatCompletionsStreamDecoder: Send {
+    /// Retained normalized counters before consuming output finalization. This
+    /// legacy shape is not per-dimension presence or durable receipt authority.
+    fn reported_usage(&self) -> mez_agent::ModelTokenUsage;
+
     /// Applies one complete SSE event and returns display-safe text progress.
     fn push_event(&mut self, event: &SseEvent) -> Result<Option<String>>;
 
@@ -521,10 +525,20 @@ where
             } else {
                 self.transport.send_async(&http_request).await
             };
+            // Capture before any fallible status/output suffix or consuming
+            // finish. Reattach, never add, this same physical attempt's expense.
+            let incurred_usage = stream_decoder
+                .as_ref()
+                .map(|decoder| decoder.reported_usage())
+                .filter(|usage| !usage.is_zero());
+            let retain_usage = |error: MezError| match incurred_usage {
+                Some(usage) => error.with_provider_incurred_usage(usage),
+                None => error,
+            };
             let response = match response_result {
                 Ok(response) => response,
                 Err(error) => {
-                    let result = Err(error.into());
+                    let result = Err(retain_usage(error.into()));
                     if let Some(observation) = observation.as_ref() {
                         observation.observe(request, 1, None, &result).await;
                     }
@@ -532,14 +546,16 @@ where
                 }
             };
             if !(200..300).contains(&response.status_code) {
-                let result = Err(self.provider_status_error("Chat Completions", &response));
+                let result = Err(retain_usage(
+                    self.provider_status_error("Chat Completions", &response),
+                ));
                 if let Some(observation) = observation.as_ref() {
                     observation.observe(request, 1, None, &result).await;
                 }
                 return result;
             }
             if let Some(error) = forwarding.error {
-                let result = Err(error);
+                let result = Err(retain_usage(error));
                 if let Some(observation) = observation.as_ref() {
                     observation.observe(request, 1, None, &result).await;
                 }
@@ -562,7 +578,7 @@ where
             let mut parsed = match parsed_result {
                 Ok(parsed) => parsed,
                 Err(error) => {
-                    let result = Err(error);
+                    let result = Err(retain_usage(error));
                     if let Some(observation) = observation.as_ref() {
                         observation.observe(request, 1, None, &result).await;
                     }
@@ -644,7 +660,10 @@ where
                 }
                 result
             } else {
-                let result = self.dialect.require_action_batch(parsed, request);
+                let result = self
+                    .dialect
+                    .require_action_batch(parsed, request)
+                    .map_err(retain_usage);
                 if let Some(observation) = observation.as_ref() {
                     observation.observe(request, 1, None, &result).await;
                 }
