@@ -58,6 +58,13 @@ temporary provider unavailability five times. Configure the finite count with
 `agents.provider_error_retry_limit`; `0` disables those finite retries. Delays
 start at one second and grow to a maximum of 15 minutes.
 
+Inference HTTP exchanges do not follow redirects or retry inside the HTTP
+library. A redirect is returned to the provider adapter as a non-success response;
+it cannot silently submit a second billable request. Explicit runtime/adapter
+retries retain their own lifecycle. Ordinary fetch and search routing is unchanged.
+Known decoded usage remains incurred even when later MAAP validation rejects the
+provider's output.
+
 Set `agents.provider_error_retry_unlimited = true` only for daemonized work that
 should wait through an extended provider outage. This separate switch ignores
 the finite count for eligible transient provider failures and continues at the

@@ -80,6 +80,40 @@ fn openai_error_with_incurred_usage(
     }
 }
 
+/// MAAP validation follows successful Responses decoding. Its rejection must
+/// retain the exact decoded expense, not turn the physical inference into a
+/// zero-cost parse failure. The original typed validation diagnostic survives.
+fn openai_action_batch_with_usage(
+    raw_text: &str,
+    request: &ModelRequest,
+    usage: mez_agent::ModelTokenUsage,
+) -> Result<Option<mez_agent::MaapBatch>> {
+    (|| {
+        if !request.interaction_kind.expects_maap_batch() {
+            return Ok(None);
+        }
+        match parse_provider_native_maap_action_batch(raw_text, request)? {
+            Some(batch) => Ok(Some(batch)),
+            None => parse_fenced_maap_action_batch_for_turn(
+                raw_text,
+                &request.turn_id,
+                &request.agent_id,
+            )
+            .map_err(|error| provider_maap_parse_error(error, raw_text)),
+        }
+    })()
+    .map_err(|error: MezError| {
+        // This legacy normalized shape cannot distinguish absent dimensions
+        // from zero. Do not mint a zero receipt here; presence-aware budget
+        // settlement must retain the original per-dimension wire evidence.
+        let reported = (!usage.is_zero()
+            || usage.cached_input_tokens.is_some()
+            || usage.cache_write_input_tokens.is_some())
+        .then_some(usage);
+        openai_error_with_incurred_usage(error, reported)
+    })
+}
+
 /// Extracts a completed Responses identifier for private comparison lineage.
 ///
 /// The identifier is never projected into observations or transcript content.
@@ -2515,19 +2549,7 @@ impl<T: ProviderHttpTransport> ModelProvider for OpenAiResponsesProvider<T> {
                 self.stream && !openai_response_is_json(&response.headers),
             )?;
         let quota_usage = provider_quota_usage_from_headers(&response.headers);
-        let action_batch = if !request.interaction_kind.expects_maap_batch() {
-            None
-        } else {
-            match parse_provider_native_maap_action_batch(&raw_text, request)? {
-                Some(batch) => Some(batch),
-                None => parse_fenced_maap_action_batch_for_turn(
-                    &raw_text,
-                    &request.turn_id,
-                    &request.agent_id,
-                )
-                .map_err(|error| provider_maap_parse_error(error, &raw_text))?,
-            }
-        };
+        let action_batch = openai_action_batch_with_usage(&raw_text, request, usage)?;
         self.record_openai_cache_comparison_baseline(request, &response, comparison_generation);
         Ok(ModelResponse {
             provider: ModelProvider::provider_id(self).to_string(),
@@ -2605,19 +2627,7 @@ impl<T: AsyncProviderHttpTransport> OpenAiResponsesProvider<T> {
                         parse_openai_responses_provider_body(&response.body, &request.model, false)?
                     };
                 let quota_usage = provider_quota_usage_from_headers(&response.headers);
-                let action_batch = if !request.interaction_kind.expects_maap_batch() {
-                    None
-                } else {
-                    match parse_provider_native_maap_action_batch(&raw_text, request)? {
-                        Some(batch) => Some(batch),
-                        None => parse_fenced_maap_action_batch_for_turn(
-                            &raw_text,
-                            &request.turn_id,
-                            &request.agent_id,
-                        )
-                        .map_err(|error| provider_maap_parse_error(error, &raw_text))?,
-                    }
-                };
+                let action_batch = openai_action_batch_with_usage(&raw_text, request, usage)?;
                 Ok(ModelResponse {
                     provider: AsyncModelProvider::provider_id(self).to_string(),
                     model,

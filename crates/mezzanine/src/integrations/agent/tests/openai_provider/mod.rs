@@ -10,3 +10,4 @@ mod compatible_chat;
 mod response_errors;
 mod response_parsing;
 mod transport;
+mod usage_retention;

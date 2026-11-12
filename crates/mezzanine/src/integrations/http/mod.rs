@@ -70,6 +70,18 @@ struct HttpExecution<'a> {
 }
 
 impl HttpExecution<'_> {
+    /// One admitted inference exchange cannot authorize a redirect or a hidden
+    /// library retry. Preserve provider proxy/TLS settings independently of the
+    /// stricter fixed-endpoint authenticated-search bundle.
+    fn inference() -> Self {
+        Self {
+            mode: HttpResponseMode::Inference,
+            routing: HttpRoutingPolicy::Inference,
+            deadline: None,
+            auth: search::WireAuth::None,
+        }
+    }
+
     /// Keeps legacy routing while making response interpretation explicit.
     fn legacy(mode: HttpResponseMode) -> Self {
         Self {
@@ -215,8 +227,10 @@ struct ProviderHttpClientPolicy {
 /// Construction bundles; compression and pool limits are fixed for all clients.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum HttpRoutingPolicy {
-    /// Preserve inference/fetch/DDG ambient routing and redirect behavior.
+    /// Preserve fetch/DDG ambient routing and redirect behavior.
     Legacy,
+    /// One provider exchange; no implicit redirects/retries, ambient proxy kept.
+    Inference,
     /// Verified HTTPS, no redirects, and no ambient proxy discovery.
     AuthenticatedSearch,
 }
@@ -247,13 +261,15 @@ fn provider_http_client_builder(policy: ProviderHttpClientPolicy) -> reqwest::Cl
         .no_brotli()
         .no_deflate()
         .no_zstd();
-    let builder = if policy.routing == HttpRoutingPolicy::AuthenticatedSearch {
-        builder
+    let builder = match policy.routing {
+        HttpRoutingPolicy::Legacy => builder,
+        HttpRoutingPolicy::Inference => builder
+            .redirect(reqwest::redirect::Policy::none())
+            .retry(reqwest::retry::never()),
+        HttpRoutingPolicy::AuthenticatedSearch => builder
             .redirect(reqwest::redirect::Policy::none())
             .no_proxy()
-            .retry(reqwest::retry::never())
-    } else {
-        builder
+            .retry(reqwest::retry::never()),
     };
     if policy.plaintext_http {
         builder.tls_certs_only(std::iter::empty::<reqwest::Certificate>())
@@ -476,7 +492,7 @@ impl AsyncProviderHttpTransport for ReqwestProviderHttpTransport {
         Box::pin(async move {
             self.send_async_with_observers(
                 request,
-                HttpExecution::legacy(HttpResponseMode::Inference),
+                HttpExecution::inference(),
                 Some(on_event),
                 None,
             )
@@ -759,6 +775,9 @@ fn retained_utf8(mut body: Vec<u8>, truncated: bool) -> ProviderHttpResult<Strin
 
 #[cfg(test)]
 mod hardening_tests;
+
+#[cfg(test)]
+mod inference_routing_tests;
 
 #[cfg(test)]
 mod provider_transport_tests {

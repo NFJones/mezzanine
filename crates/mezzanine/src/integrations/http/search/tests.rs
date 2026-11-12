@@ -214,11 +214,17 @@ async fn search_http_redirect_targets_receive_zero_requests_with_warm_pool() {
                     assert_eq!(error.message(), format!("search HTTP status {status}"));
                 } else {
                     use super::super::AsyncProviderHttpTransport;
+                    // Warm the actual ordinary fetch policy, not inference,
+                    // which independently prohibits implicit redirects.
+                    let mut observer = |_| {
+                        Box::pin(async {})
+                            as std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>
+                    };
                     let response = ReqwestProviderHttpTransport
-                        .send_async(&request.request)
+                        .send_async_with_body_chunks(&request.request, &mut observer)
                         .await
                         .unwrap();
-                    assert_eq!(response.status_code, 200);
+                    assert_eq!(response.response.status_code, 200);
                 }
                 source.await.unwrap();
                 assert_eq!(receiver.await.unwrap(), usize::from(!strict));

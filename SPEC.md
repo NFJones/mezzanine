@@ -8414,6 +8414,13 @@ authoritative incomplete-inference replacement retries or non-retryable
 provider failures infinite. Reloading either setting MUST affect
 the next observed provider failure without invalidating an already scheduled
 retry generation or changing its selected delay.
+Concrete inference HTTP clients MUST disable automatic redirects and library
+retries: one explicit adapter exchange MUST NOT silently submit another request.
+Redirect responses MUST reach the provider adapter unchanged for ordinary local
+failure handling. Explicit runtime or adapter retries remain separately owned;
+this transport rule MUST NOT change ordinary fetch/search routing policy.
+Known decoded provider usage MUST survive subsequent MAAP validation failure;
+rejecting malformed output MUST NOT erase already incurred inference expense.
 `agents.turn_timeout_ms` MUST be a positive integer and MUST default to
 `1800000`. The runtime MUST snapshot this duration as an absolute
 millisecond-resolution deadline when each turn is created. Reloading the
