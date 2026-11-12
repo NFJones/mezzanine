@@ -16,6 +16,7 @@ use std::{future::Future, pin::Pin};
 
 #[derive(Clone, Copy, Debug)]
 enum Outcome {
+    Transport,
     MissingContent,
     MalformedMaap,
     OutputLimit,
@@ -24,6 +25,7 @@ enum Outcome {
     AbsentUsage,
     ZeroUsage,
     PartialUsage,
+    PartialInputUsage,
     InvalidUsage,
     InvalidJson,
     MissingMaap,
@@ -48,6 +50,11 @@ impl AsyncProviderHttpTransport for UnaryUsageTransport {
     > {
         Box::pin(async move {
             self.sends.fetch_add(1, Ordering::SeqCst);
+            if matches!(self.outcome, Outcome::Transport) {
+                return Err(mez_agent::ProviderHttpError::invalid_state(
+                    "fixture transport cutoff",
+                ));
+            }
             let text = if matches!(
                 self.outcome,
                 Outcome::Valid | Outcome::ValidAbsentUsage | Outcome::ValidZeroUsage
@@ -103,6 +110,13 @@ impl AsyncProviderHttpTransport for UnaryUsageTransport {
                         serde_json::json!({"completion_tokens":7})
                     };
                 }
+                Outcome::PartialInputUsage => {
+                    body["usage"] = if self.anthropic {
+                        serde_json::json!({"input_tokens":11})
+                    } else {
+                        serde_json::json!({"prompt_tokens":11})
+                    };
+                }
                 Outcome::InvalidUsage => {
                     body["usage"] = serde_json::json!({"input_tokens":-1,
                         "output_tokens":"7", "prompt_tokens":false,
@@ -114,6 +128,7 @@ impl AsyncProviderHttpTransport for UnaryUsageTransport {
                     body["usage"]["reasoning_tokens"] = 7.into();
                 }
                 Outcome::MalformedMaap
+                | Outcome::Transport
                 | Outcome::InvalidJson
                 | Outcome::MissingMaap
                 | Outcome::Valid => {}
@@ -150,6 +165,7 @@ async fn shared_chat_unary_failures_preserve_response_expense() {
             Outcome::AbsentUsage,
             Outcome::ZeroUsage,
             Outcome::PartialUsage,
+            Outcome::PartialInputUsage,
             Outcome::InvalidUsage,
             Outcome::InvalidJson,
             Outcome::MissingMaap,
@@ -268,6 +284,8 @@ async fn assert_unary_expense<P: AsyncModelProvider>(
         (0, 0)
     } else if matches!(outcome, Outcome::PartialUsage) {
         (0, 7)
+    } else if matches!(outcome, Outcome::PartialInputUsage) {
+        (11, 0)
     } else {
         (11, 7)
     };
@@ -288,6 +306,13 @@ async fn assert_unary_expense<P: AsyncModelProvider>(
     );
     let observation = receiver.try_recv().unwrap();
     assert_eq!(observation.succeeded, result.is_ok());
+    assert_eq!(
+        observation.usage_presence,
+        Some(mez_agent::ModelTokenUsagePresence {
+            input: present && !matches!(outcome, Outcome::PartialUsage),
+            output: present && !matches!(outcome, Outcome::PartialInputUsage),
+        })
+    );
     assert_eq!(
         observation.usage.map(|u| (u.input_tokens, u.output_tokens)),
         present.then_some(expected),
@@ -410,6 +435,7 @@ impl AsyncProviderHttpTransport for ForcedRetryTransport {
 #[tokio::test]
 async fn deepseek_unary_retry_failures_preserve_distinct_attempt_expense() {
     for outcome in [
+        Outcome::Transport,
         Outcome::MissingContent,
         Outcome::MalformedMaap,
         Outcome::OutputLimit,
@@ -463,12 +489,20 @@ async fn deepseek_unary_retry_failures_preserve_distinct_attempt_expense() {
         assert_eq!(first.conversation_id, "retry-original");
         assert_eq!(second.conversation_id, "retry-original");
         assert_eq!(
+            first.usage_presence,
+            Some(mez_agent::ModelTokenUsagePresence {
+                input: true,
+                output: true
+            })
+        );
+        assert_eq!(
             first.usage.map(|u| (u.input_tokens, u.output_tokens)),
             Some((10, 4))
         );
         let present = !matches!(
             outcome,
-            Outcome::AbsentUsage
+            Outcome::Transport
+                | Outcome::AbsentUsage
                 | Outcome::ValidAbsentUsage
                 | Outcome::InvalidUsage
                 | Outcome::InvalidJson
@@ -485,6 +519,14 @@ async fn deepseek_unary_retry_failures_preserve_distinct_attempt_expense() {
             second.usage.map(|u| (u.input_tokens, u.output_tokens)),
             present.then_some(expected),
             "{outcome:?}: {result:?}"
+        );
+        assert_eq!(
+            second.usage_presence,
+            Some(mez_agent::ModelTokenUsagePresence {
+                input: present && !matches!(outcome, Outcome::PartialUsage),
+                output: present,
+            }),
+            "{outcome:?}"
         );
         assert_eq!(second.succeeded, result.is_ok());
         let retained = pending.snapshot();

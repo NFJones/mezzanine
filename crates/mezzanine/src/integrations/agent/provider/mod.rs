@@ -649,6 +649,9 @@ pub struct ProviderWireRequestObservation {
     pub diagnostics_failed: bool,
     /// Exact usage returned by this request, when provider accounting exists.
     pub usage: Option<mez_agent::ModelTokenUsage>,
+    /// Independent primary wire-counter presence. None is legacy/unqualified;
+    /// false is missing/invalid, not numeric zero. This is not final coverage.
+    pub usage_presence: Option<mez_agent::ModelTokenUsagePresence>,
     /// Whether the provider request returned a usable response.
     pub succeeded: bool,
     /// Content-free failure classification when the request failed.
@@ -827,6 +830,7 @@ struct FinalWireObservation {
     response_diagnostics: Option<OpenAiResponseDiagnostics>,
     elapsed_ms: Option<u64>,
     usage_evidence: WireUsageEvidence,
+    usage_presence: Option<mez_agent::ModelTokenUsagePresence>,
 }
 
 impl<'a> ProviderWireObservationContext<'a> {
@@ -868,6 +872,7 @@ impl<'a> ProviderWireObservationContext<'a> {
                 response_diagnostics: None,
                 elapsed_ms: None,
                 usage_evidence: WireUsageEvidence::ResultFallback(None),
+                usage_presence: None,
             },
             result,
         )
@@ -881,7 +886,10 @@ impl<'a> ProviderWireObservationContext<'a> {
         request: &ModelRequest,
         attempt_index: usize,
         retry_reason: Option<&str>,
-        reported_usage: Option<mez_agent::ModelTokenUsage>,
+        reported_usage: Option<(
+            mez_agent::ModelTokenUsage,
+            mez_agent::ModelTokenUsagePresence,
+        )>,
         result: &Result<ModelResponse>,
     ) {
         self.observe_with_final_wire(
@@ -892,7 +900,12 @@ impl<'a> ProviderWireObservationContext<'a> {
                 final_wire_diagnostics: None,
                 response_diagnostics: None,
                 elapsed_ms: None,
-                usage_evidence: WireUsageEvidence::Concrete(reported_usage),
+                usage_evidence: WireUsageEvidence::Concrete(reported_usage.map(|(usage, _)| usage)),
+                usage_presence: Some(
+                    reported_usage
+                        .map(|(_, presence)| presence)
+                        .unwrap_or_default(),
+                ),
             },
             result,
         )
@@ -1031,6 +1044,7 @@ impl<'a> ProviderWireObservationContext<'a> {
             openai_diagnostics: self.openai_diagnostics.clone(),
             diagnostics_failed: self.diagnostics_failed,
             usage,
+            usage_presence: final_wire.usage_presence,
             succeeded,
             failure_kind,
             elapsed_ms: final_wire.elapsed_ms,
@@ -2672,7 +2686,10 @@ impl<T: AsyncProviderHttpTransport> OpenAiResponsesProvider<T> {
                             if let (Some(custody), Some(usage)) =
                                 (usage_custody.as_mut(), stream_decoder.incurred_usage())
                             {
-                                custody.update_reported(usage);
+                                custody.update_reported_with_presence(
+                                    usage,
+                                    stream_decoder.incurred_usage_presence(),
+                                );
                             }
                             result
                         },
@@ -2688,6 +2705,26 @@ impl<T: AsyncProviderHttpTransport> OpenAiResponsesProvider<T> {
             let response = response.map_err(|error| {
                 openai_error_with_incurred_usage(error.into(), stream_decoder.incurred_usage())
             })?;
+            // Unary JSON (including a JSON error returned to an SSE request)
+            // carries its own source evidence before any output/status suffix.
+            let body_usage = serde_json::from_str::<serde_json::Value>(&response.body)
+                .ok()
+                .and_then(|value| {
+                    mez_agent::openai_response::reported_openai_usage(&value).map(|usage| {
+                        (
+                            usage,
+                            mez_agent::openai_response::openai_responses_usage_presence(&value),
+                        )
+                    })
+                });
+            if let Some((usage, presence)) = body_usage
+                && let Some(custody) = usage_custody.as_mut()
+            {
+                custody.update_reported_with_presence(usage, presence);
+            }
+            let incurred_usage = body_usage
+                .map(|(usage, _)| usage)
+                .or_else(|| stream_decoder.incurred_usage());
             let response_diagnostics = openai_response_diagnostics(&response);
             if !(200..300).contains(&response.status_code) {
                 return Err(openai_error_with_incurred_usage(
@@ -2703,11 +2740,10 @@ impl<T: AsyncProviderHttpTransport> OpenAiResponsesProvider<T> {
                             &response.headers,
                         ),
                     ),
-                    stream_decoder.incurred_usage(),
+                    incurred_usage,
                 ));
             }
             self.capture_chatgpt_turn_state(request, &response.headers);
-            let incurred_usage = stream_decoder.incurred_usage();
             let result = (|| -> Result<ModelResponse> {
                 if let Some(error) = forwarding.error {
                     return Err(error.into());
@@ -2935,10 +2971,16 @@ impl<T: AsyncProviderHttpTransport> AsyncModelProvider for OpenAiResponsesProvid
                             final_wire_diagnostics: Some(final_wire_diagnostics),
                             response_diagnostics,
                             elapsed_ms: Some(elapsed_ms),
-                            usage_evidence: WireUsageEvidence::ResultFallback(
+                            usage_evidence: WireUsageEvidence::Concrete(
                                 usage_custody
                                     .as_ref()
                                     .and_then(|owner| owner.reported_usage()),
+                            ),
+                            usage_presence: Some(
+                                usage_custody
+                                    .as_ref()
+                                    .and_then(|owner| owner.reported_presence())
+                                    .unwrap_or_default(),
                             ),
                         },
                         &result,

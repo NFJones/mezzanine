@@ -894,6 +894,7 @@ mod provider_wire_tests {
             ),
             diagnostics_failed: false,
             usage,
+            usage_presence: None,
             succeeded: true,
             failure_kind: None,
             elapsed_ms: None,

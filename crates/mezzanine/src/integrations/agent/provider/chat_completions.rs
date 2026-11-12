@@ -34,6 +34,9 @@ pub trait ChatCompletionsStreamDecoder: Send {
     /// legacy shape is not per-dimension presence or durable receipt authority.
     fn reported_usage(&self) -> mez_agent::ModelTokenUsage;
 
+    /// Cumulative primary-counter evidence, independent of output/finality.
+    fn reported_usage_presence(&self) -> mez_agent::ModelTokenUsagePresence;
+
     /// Applies one complete SSE event and returns display-safe text progress.
     fn push_event(&mut self, event: &SseEvent) -> Result<Option<String>>;
 
@@ -110,7 +113,13 @@ pub trait ChatCompletionsDialect: Clone + Send + Sync + Default + 'static {
     /// status/output refusal. None means no qualified counters, not zero. This
     /// reuses the dialect's normalizer and grants no accepted-output authority
     /// or independent dimension completeness. SSE uses its decoder instead.
-    fn response_usage(&self, _body: &str) -> Option<mez_agent::ModelTokenUsage> {
+    fn response_usage(
+        &self,
+        _body: &str,
+    ) -> Option<(
+        mez_agent::ModelTokenUsage,
+        mez_agent::ModelTokenUsagePresence,
+    )> {
         None
     }
 
@@ -533,7 +542,10 @@ where
                         |event| {
                             let result = decoder.push_event(event);
                             if let Some(custody) = stream_usage.as_mut() {
-                                custody.update(decoder.reported_usage());
+                                custody.update_with_presence(
+                                    decoder.reported_usage(),
+                                    decoder.reported_usage_presence(),
+                                );
                             }
                             result
                         },
@@ -556,12 +568,12 @@ where
                 .as_ref()
                 .ok()
                 .and_then(|response| self.dialect.response_usage(&response.body));
-            if let Some(usage) = response_usage
+            if let Some((usage, presence)) = response_usage
                 && let Some(custody) = stream_usage.as_mut()
             {
-                custody.update_reported(usage);
+                custody.update_reported_with_presence(usage, presence);
             }
-            let incurred_usage = response_usage.or_else(|| {
+            let incurred_usage = response_usage.map(|(usage, _)| usage).or_else(|| {
                 stream_decoder
                     .as_ref()
                     .map(|decoder| decoder.reported_usage())
@@ -572,7 +584,7 @@ where
             };
             let reported_usage = stream_usage
                 .as_ref()
-                .and_then(|owner| owner.reported_usage());
+                .and_then(|owner| owner.reported_evidence());
             let response = match response_result {
                 Ok(response) => response,
                 Err(error) => {
@@ -685,7 +697,13 @@ where
                         let result = Err(error.into());
                         if let Some(observation) = observation.as_ref() {
                             observation
-                                .observe(request, 2, Some("provider_forced_maap"), &result)
+                                .observe_with_reported_usage(
+                                    request,
+                                    2,
+                                    Some("provider_forced_maap"),
+                                    None,
+                                    &result,
+                                )
                                 .await;
                         }
                         return result;
@@ -694,13 +712,13 @@ where
                 // The second physical exchange has its own expense. Never
                 // borrow the first attempt's retained prefix for this report.
                 let retry_usage = self.dialect.response_usage(&retry_response.body);
-                if let Some(usage) = retry_usage
+                if let Some((usage, presence)) = retry_usage
                     && let Some(custody) = retry_custody.as_mut()
                 {
-                    custody.update_reported(usage);
+                    custody.update_reported_with_presence(usage, presence);
                 }
                 let retain_retry_usage = |error: MezError| match retry_usage {
-                    Some(usage) => error.with_provider_incurred_usage(usage),
+                    Some((usage, _)) => error.with_provider_incurred_usage(usage),
                     None => error,
                 };
                 if !(200..300).contains(&retry_response.status_code) {

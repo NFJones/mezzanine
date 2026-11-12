@@ -451,6 +451,21 @@ pub fn parse_deepseek_usage(usage: &serde_json::Value) -> ModelTokenUsage {
     }
 }
 
+/// Returns independent primary-counter source evidence. Optional reasoning and
+/// cache subsets cannot manufacture an input/output total or final coverage.
+pub fn deepseek_usage_presence(usage: &serde_json::Value) -> crate::ModelTokenUsagePresence {
+    crate::ModelTokenUsagePresence {
+        input: usage
+            .get("prompt_tokens")
+            .and_then(serde_json::Value::as_u64)
+            .is_some(),
+        output: usage
+            .get("completion_tokens")
+            .and_then(serde_json::Value::as_u64)
+            .is_some(),
+    }
+}
+
 /// Extracts DeepSeek reasoning token usage from the documented nested shape.
 /// Only numeric fields participate in precedence; explicit nested zero wins.
 fn deepseek_reasoning_tokens_from_usage(usage: &serde_json::Value) -> Option<u64> {
@@ -480,6 +495,7 @@ pub struct DeepSeekChatCompletionsStreamDecoder {
     tool_calls: BTreeMap<u64, DeepSeekStreamToolCall>,
     model: Option<String>,
     usage: ModelTokenUsage,
+    usage_presence: crate::ModelTokenUsagePresence,
     finish_reason: Option<String>,
 }
 
@@ -488,6 +504,11 @@ impl DeepSeekChatCompletionsStreamDecoder {
     /// Zero here does not prove that missing wire dimensions were reported.
     pub fn reported_usage(&self) -> ModelTokenUsage {
         self.usage
+    }
+
+    /// Independent cumulative primary-counter presence, not final coverage.
+    pub fn reported_usage_presence(&self) -> crate::ModelTokenUsagePresence {
+        self.usage_presence
     }
 
     /// Applies one complete SSE event and returns display-safe text progress.
@@ -506,6 +527,7 @@ impl DeepSeekChatCompletionsStreamDecoder {
                 .map(str::to_string);
         }
         if let Some(usage) = value.get("usage") {
+            self.usage_presence.merge(deepseek_usage_presence(usage));
             let next = parse_deepseek_usage(usage);
             if usage
                 .get("prompt_tokens")

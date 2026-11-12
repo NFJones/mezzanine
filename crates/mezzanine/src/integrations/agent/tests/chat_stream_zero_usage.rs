@@ -18,6 +18,7 @@ struct ZeroCacheTransport {
     family: &'static str,
     write: bool,
     absent: bool,
+    bare_zero: Option<mez_agent::ModelTokenUsagePresence>,
     cancel: bool,
     sends: Arc<AtomicUsize>,
 }
@@ -49,6 +50,23 @@ impl AsyncProviderHttpTransport for ZeroCacheTransport {
             }]}).to_string();
             let usage = if self.absent {
                 serde_json::Value::Null
+            } else if let Some(presence) = self.bare_zero {
+                let mut usage = serde_json::json!({});
+                if presence.input {
+                    usage[if self.family == "anthropic" {
+                        "input_tokens"
+                    } else {
+                        "prompt_tokens"
+                    }] = 0.into();
+                }
+                if presence.output {
+                    usage[if self.family == "anthropic" {
+                        "output_tokens"
+                    } else {
+                        "completion_tokens"
+                    }] = 0.into();
+                }
+                usage
             } else if self.family == "anthropic" {
                 if self.write {
                     serde_json::json!({"input_tokens":0,"output_tokens":0,"cache_creation_input_tokens":0})
@@ -95,7 +113,35 @@ impl AsyncProviderHttpTransport for ZeroCacheTransport {
 #[tokio::test]
 async fn shared_chat_stream_zero_cache_receipts_survive_success_and_cancellation() {
     for family in ["openai-compatible", "deepseek", "anthropic"] {
-        for (write, absent) in [(false, false), (false, true), (true, false)] {
+        for (write, absent, bare_zero) in [
+            (false, false, None),
+            (false, true, None),
+            (true, false, None),
+            (
+                false,
+                false,
+                Some(mez_agent::ModelTokenUsagePresence {
+                    input: true,
+                    output: true,
+                }),
+            ),
+            (
+                false,
+                false,
+                Some(mez_agent::ModelTokenUsagePresence {
+                    input: true,
+                    output: false,
+                }),
+            ),
+            (
+                false,
+                false,
+                Some(mez_agent::ModelTokenUsagePresence {
+                    input: false,
+                    output: true,
+                }),
+            ),
+        ] {
             if write && family != "anthropic" {
                 continue;
             }
@@ -105,6 +151,7 @@ async fn shared_chat_stream_zero_cache_receipts_survive_success_and_cancellation
                     family,
                     write,
                     absent,
+                    bare_zero,
                     cancel,
                     sends: sends.clone(),
                 };
@@ -148,7 +195,10 @@ async fn shared_chat_stream_zero_cache_receipts_survive_success_and_cancellation
                                 &auth, family, None, &options, 1000, transport,
                             )
                             .unwrap();
-                        assert_zero_receipt(provider, &request, write, absent, cancel, sends).await;
+                        assert_zero_receipt(
+                            provider, &request, write, absent, bare_zero, cancel, sends,
+                        )
+                        .await;
                         assert!(!root.exists());
                     }
                     "deepseek" => {
@@ -159,6 +209,7 @@ async fn shared_chat_stream_zero_cache_receipts_survive_success_and_cancellation
                             &request,
                             write,
                             absent,
+                            bare_zero,
                             cancel,
                             sends,
                         )
@@ -172,6 +223,7 @@ async fn shared_chat_stream_zero_cache_receipts_survive_success_and_cancellation
                             &request,
                             write,
                             absent,
+                            bare_zero,
                             cancel,
                             sends,
                         )
@@ -189,6 +241,7 @@ async fn assert_zero_receipt<P: AsyncModelProvider>(
     request: &ModelRequest,
     write: bool,
     absent: bool,
+    bare_zero: Option<mez_agent::ModelTokenUsagePresence>,
     cancel: bool,
     sends: Arc<AtomicUsize>,
 ) {
@@ -222,10 +275,17 @@ async fn assert_zero_receipt<P: AsyncModelProvider>(
     } else {
         assert_eq!(retained.len(), 1);
         let expected = (!absent).then_some(ModelTokenUsage {
-            cached_input_tokens: (!write).then_some(0),
-            cache_write_input_tokens: write.then_some(0),
+            cached_input_tokens: (!write && bare_zero.is_none()).then_some(0),
+            cache_write_input_tokens: (write && bare_zero.is_none()).then_some(0),
             ..Default::default()
         });
+        assert_eq!(
+            retained[0].usage_presence,
+            Some(bare_zero.unwrap_or(mez_agent::ModelTokenUsagePresence {
+                input: !absent,
+                output: !absent
+            }))
+        );
         assert_eq!(
             retained[0].usage, expected,
             "{} write={write} cancel={cancel}",

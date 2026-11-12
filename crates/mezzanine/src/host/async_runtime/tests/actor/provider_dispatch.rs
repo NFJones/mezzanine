@@ -619,6 +619,7 @@ async fn async_actor_optional_provider_progress_pressure_preserves_failure() {
                         openai_diagnostics: None,
                         diagnostics_failed: false,
                         usage: None,
+                        usage_presence: None,
                         succeeded: true,
                         failure_kind: None,
                         elapsed_ms: None,

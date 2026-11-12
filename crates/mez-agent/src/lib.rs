@@ -196,7 +196,7 @@ pub mod turn_runner;
 
 pub use accounting::{
     AgentContextUsageSnapshot, LatestModelRequestUsage, ModelTokenUsage, ModelTokenUsageKey,
-    ProjectTokenUsage, agent_context_usage_snapshot,
+    ModelTokenUsagePresence, ProjectTokenUsage, agent_context_usage_snapshot,
 };
 pub use action_gates::apply_default_action_gates;
 pub use action_planning::{

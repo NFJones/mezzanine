@@ -13,6 +13,7 @@ pub(super) struct StreamUsageCustody<'request, 'observer> {
     context: &'request ProviderWireObservationContext<'observer>,
     request: &'request ModelRequest,
     usage: Option<mez_agent::ModelTokenUsage>,
+    presence: Option<mez_agent::ModelTokenUsagePresence>,
     retained_before: u64,
     attempt_index: usize,
     retry_reason: Option<&'static str>,
@@ -38,29 +39,57 @@ impl<'request, 'observer> StreamUsageCustody<'request, 'observer> {
             context,
             request,
             usage: None,
+            presence: None,
             retained_before: context.retained_observations.load(Ordering::Acquire),
             attempt_index,
             retry_reason,
         }
     }
 
-    /// Replace the cumulative prefix, never add frames. Explicit cache Option
-    /// fields qualify receipt presence even at zero; numeric defaults alone
-    /// cannot qualify a zero-only report or independent dimension completeness.
-    pub(super) fn update(&mut self, usage: mez_agent::ModelTokenUsage) {
+    /// Replace a cumulative prefix, never add frames. Primary source evidence
+    /// qualifies zero independently of optional cache fields. Presence is not
+    /// proof of final/composite coverage or worker retirement.
+    pub(super) fn update_with_presence(
+        &mut self,
+        usage: mez_agent::ModelTokenUsage,
+        presence: mez_agent::ModelTokenUsagePresence,
+    ) {
+        self.presence = Some(presence);
         if self.usage.is_some()
             || !usage.is_zero()
             || usage.cached_input_tokens.is_some()
             || usage.cache_write_input_tokens.is_some()
+            || presence.any()
         {
             self.usage = Some(usage);
         }
     }
 
-    /// A decoder with explicit receipt presence can also qualify a zero-only
-    /// report. This still does not establish independent dimension coverage.
-    pub(super) fn update_reported(&mut self, usage: mez_agent::ModelTokenUsage) {
+    /// Transfer numeric receipt and its source evidence together, never infer
+    /// either dimension from a normalized default or a logical retry total.
+    pub(super) fn reported_evidence(
+        &self,
+    ) -> Option<(
+        mez_agent::ModelTokenUsage,
+        mez_agent::ModelTokenUsagePresence,
+    )> {
+        self.usage.zip(self.presence)
+    }
+
+    /// A source parser has independently qualified at least one numeric field,
+    /// possibly only a zero reasoning/cache subset. Primary dimensions remain
+    /// independently absent when they were not actually reported.
+    pub(super) fn update_reported_with_presence(
+        &mut self,
+        usage: mez_agent::ModelTokenUsage,
+        presence: mez_agent::ModelTokenUsagePresence,
+    ) {
         self.usage = Some(usage);
+        self.presence = Some(presence);
+    }
+
+    pub(super) fn reported_presence(&self) -> Option<mez_agent::ModelTokenUsagePresence> {
+        self.presence
     }
 
     /// Normal retention must receive the same qualified presence before it can
@@ -87,6 +116,7 @@ impl Drop for StreamUsageCustody<'_, '_> {
                     response_diagnostics: None,
                     elapsed_ms: None,
                     usage_evidence: super::WireUsageEvidence::Concrete(None),
+                    usage_presence: self.presence,
                 },
                 Some(usage),
                 false,

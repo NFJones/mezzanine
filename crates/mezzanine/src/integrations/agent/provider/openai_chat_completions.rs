@@ -104,7 +104,13 @@ impl ChatCompletionsDialect for OpenAiChatCompletionsDialect {
         parse_openai_chat_completions_http_response(response, request, provider_id, stream)
     }
 
-    fn response_usage(&self, body: &str) -> Option<mez_agent::ModelTokenUsage> {
+    fn response_usage(
+        &self,
+        body: &str,
+    ) -> Option<(
+        mez_agent::ModelTokenUsage,
+        mez_agent::ModelTokenUsagePresence,
+    )> {
         let root: serde_json::Value = serde_json::from_str(body).ok()?;
         let usage = root.get("usage")?;
         [
@@ -120,7 +126,12 @@ impl ChatCompletionsDialect for OpenAiChatCompletionsDialect {
                 .and_then(serde_json::Value::as_u64)
                 .is_some()
         })
-        .then(|| mez_agent::openai_chat_completions_usage(&root))
+        .then(|| {
+            (
+                mez_agent::openai_chat_completions_usage(&root),
+                mez_agent::openai_chat_completions::openai_chat_completions_usage_presence(&root),
+            )
+        })
     }
 
     fn effective_stream(&self, _request: &ModelRequest, _stream: bool) -> bool {
@@ -264,6 +275,10 @@ fn parse_openai_chat_completions_http_response(
 impl ChatCompletionsStreamDecoder for OpenAiChatCompletionsStreamDecoder {
     fn reported_usage(&self) -> mez_agent::ModelTokenUsage {
         OpenAiChatCompletionsStreamDecoder::reported_usage(self)
+    }
+
+    fn reported_usage_presence(&self) -> mez_agent::ModelTokenUsagePresence {
+        OpenAiChatCompletionsStreamDecoder::reported_usage_presence(self)
     }
 
     fn push_event(&mut self, event: &SseEvent) -> Result<Option<String>> {

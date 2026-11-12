@@ -60,6 +60,32 @@ pub struct ModelTokenUsage {
     pub cache_write_input_tokens: Option<u64>,
 }
 
+/// Source-field evidence for primary input/output counters, independent of
+/// numeric defaults. A true bit includes an explicitly reported zero. It does
+/// not prove remote completion, final usage, or complete composite input (for
+/// example Anthropic cache-exclusive input plus separately reported caches).
+/// Missing/invalid fields do not erase earlier cumulative evidence.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ModelTokenUsagePresence {
+    /// The provider's primary input counter was explicitly numeric.
+    pub input: bool,
+    /// The provider's primary output counter was explicitly numeric.
+    pub output: bool,
+}
+
+impl ModelTokenUsagePresence {
+    /// Retains independent cumulative source evidence, never additive expense.
+    pub fn merge(&mut self, next: Self) {
+        self.input |= next.input;
+        self.output |= next.output;
+    }
+
+    /// Whether either primary counter, including zero, has been observed.
+    pub fn any(self) -> bool {
+        self.input || self.output
+    }
+}
+
 /// One persisted native expense partition; project identity grants no authority.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ProjectTokenUsage {
@@ -218,6 +244,98 @@ pub fn agent_context_usage_snapshot(
 
 #[cfg(test)]
 mod tests {
+    /// Source counters, not normalized defaults, establish independent primary
+    /// presence. Empty/invalid later frames preserve cumulative knowledge and
+    /// a provider error can still report the other dimension at explicit zero.
+    #[test]
+    fn provider_primary_usage_presence_is_independent_and_cumulative() {
+        use crate::ModelTokenUsagePresence as Presence;
+        let mut responses = crate::OpenAiResponsesStreamDecoder::default();
+        let mut openai = crate::OpenAiChatCompletionsStreamDecoder::default();
+        let mut deepseek = crate::DeepSeekChatCompletionsStreamDecoder::default();
+        let mut anthropic = crate::AnthropicMessagesStreamDecoder::default();
+        assert_eq!(responses.incurred_usage_presence(), Presence::default());
+        assert_eq!(openai.reported_usage_presence(), Presence::default());
+        assert_eq!(deepseek.reported_usage_presence(), Presence::default());
+        assert_eq!(anthropic.reported_usage_presence(), Presence::default());
+        for (index, expected) in [
+            Presence {
+                input: true,
+                output: false,
+            },
+            Presence {
+                input: true,
+                output: false,
+            },
+            Presence {
+                input: true,
+                output: false,
+            },
+            Presence {
+                input: true,
+                output: true,
+            },
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            for family in ["responses", "openai", "deepseek", "anthropic"] {
+                let input = if family == "responses" || family == "anthropic" {
+                    "input_tokens"
+                } else {
+                    "prompt_tokens"
+                };
+                let output = if family == "responses" || family == "anthropic" {
+                    "output_tokens"
+                } else {
+                    "completion_tokens"
+                };
+                let usage = match index {
+                    0 => serde_json::json!({input:0}),
+                    1 => serde_json::json!({}),
+                    2 => serde_json::json!({input:false,output:"invalid"}),
+                    _ => serde_json::json!({output:0}),
+                };
+                let error = index == 3;
+                let mut value = if family == "responses" {
+                    serde_json::json!({"type":"response.in_progress","response":{"usage":usage}})
+                } else if family == "anthropic" {
+                    serde_json::json!({"type":"message_delta","usage":usage})
+                } else {
+                    serde_json::json!({"choices":[],"usage":usage})
+                };
+                if error {
+                    value["error"] =
+                        serde_json::json!({"type":"overloaded_error","message":"fixture refusal"});
+                }
+                let event = crate::SseEvent {
+                    name: error.then(|| "error".into()),
+                    data: value.to_string(),
+                };
+                let actual = match family {
+                    "responses" => {
+                        let _ = responses.push_event(&event);
+                        responses.incurred_usage_presence()
+                    }
+                    "openai" => {
+                        let _ = openai.push_event(&event);
+                        openai.reported_usage_presence()
+                    }
+                    "deepseek" => {
+                        deepseek.push_event(&event);
+                        deepseek.reported_usage_presence()
+                    }
+                    "anthropic" => {
+                        let _ = anthropic.push_event(&event);
+                        anthropic.reported_usage_presence()
+                    }
+                    _ => unreachable!(),
+                };
+                assert_eq!(actual, expected, "{family}/{index}");
+            }
+        }
+    }
+
     use super::{
         LatestModelRequestUsage, ModelTokenUsage, ModelTokenUsageKey, agent_context_usage_snapshot,
     };

@@ -406,6 +406,27 @@ pub fn anthropic_usage_from_value(value: Option<&serde_json::Value>) -> ModelTok
     }
 }
 
+/// Returns primary-counter evidence, not composite inclusive-input coverage.
+/// Anthropic's input counter is cache-exclusive; cache presence remains in the
+/// normalized usage's independent Option fields and must be qualified too.
+pub fn anthropic_usage_presence(
+    value: Option<&serde_json::Value>,
+) -> crate::ModelTokenUsagePresence {
+    let Some(value) = value else {
+        return Default::default();
+    };
+    crate::ModelTokenUsagePresence {
+        input: value
+            .get("input_tokens")
+            .and_then(serde_json::Value::as_u64)
+            .is_some(),
+        output: value
+            .get("output_tokens")
+            .and_then(serde_json::Value::as_u64)
+            .is_some(),
+    }
+}
+
 /// Overlays cumulative Anthropic usage fields from one stream event.
 fn anthropic_overlay_usage(
     current: &mut ModelTokenUsage,
@@ -679,6 +700,7 @@ fn parse_anthropic_messages_http_body(
 pub struct AnthropicMessagesStreamDecoder {
     model: Option<String>,
     usage: ModelTokenUsage,
+    usage_presence: crate::ModelTokenUsagePresence,
     // Raw cumulative component, never reconstructed from saturated totals.
     uncached_input_tokens: u64,
     stop_reason: Option<String>,
@@ -691,6 +713,12 @@ impl AnthropicMessagesStreamDecoder {
     /// Zero here does not prove that missing wire dimensions were reported.
     pub fn reported_usage(&self) -> ModelTokenUsage {
         self.usage
+    }
+
+    /// Independent cumulative primary-counter evidence, not composite/final
+    /// coverage. Explicit zero is retained independently in each dimension.
+    pub fn reported_usage_presence(&self) -> crate::ModelTokenUsagePresence {
+        self.usage_presence
     }
 
     /// Applies one complete SSE event and returns display-safe text progress.
@@ -712,6 +740,8 @@ impl AnthropicMessagesStreamDecoder {
         {
             // Failed output can still carry a newer cumulative expense. Keep
             // the normal error path and do not touch content/model state.
+            self.usage_presence
+                .merge(anthropic_usage_presence(value.get("usage")));
             anthropic_overlay_usage(
                 &mut self.usage,
                 &mut self.uncached_input_tokens,
@@ -740,6 +770,8 @@ impl AnthropicMessagesStreamDecoder {
                         .and_then(serde_json::Value::as_str)
                         .map(str::to_string);
                 }
+                self.usage_presence
+                    .merge(anthropic_usage_presence(value.pointer("/message/usage")));
                 anthropic_overlay_usage(
                     &mut self.usage,
                     &mut self.uncached_input_tokens,
@@ -823,6 +855,8 @@ impl AnthropicMessagesStreamDecoder {
                 {
                     self.stop_reason = Some(reason.to_string());
                 }
+                self.usage_presence
+                    .merge(anthropic_usage_presence(value.get("usage")));
                 anthropic_overlay_usage(
                     &mut self.usage,
                     &mut self.uncached_input_tokens,

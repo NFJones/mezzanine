@@ -2,6 +2,244 @@
 
 use super::*;
 
+struct PresenceResponsesTransport {
+    usage: serde_json::Value,
+    stream: bool,
+    cancel: bool,
+    status: u16,
+    succeed: bool,
+    sends: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl AsyncProviderHttpTransport for PresenceResponsesTransport {
+    fn send_async<'a>(&'a self, _: &'a ProviderHttpRequest) -> InterruptedHttpFuture<'a> {
+        Box::pin(async move {
+            self.sends.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(self.response())
+        })
+    }
+
+    fn send_async_with_sse_events<'a>(
+        &'a self,
+        _: &'a ProviderHttpRequest,
+        on_event: &'a mut (
+                    dyn FnMut(
+            mez_agent::SseEvent,
+        )
+            -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>
+                        + Send
+                ),
+    ) -> InterruptedHttpFuture<'a> {
+        Box::pin(async move {
+            self.sends.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            // A non-success response can be JSON even though SSE was requested.
+            if self.status == 200 {
+                on_event(mez_agent::SseEvent {
+                    name: None,
+                    data: serde_json::json!({
+                        "type":"response.in_progress", "response":{"usage":self.usage}
+                    })
+                    .to_string(),
+                })
+                .await;
+                if self.cancel {
+                    std::future::pending::<()>().await;
+                }
+                if self.succeed {
+                    on_event(mez_agent::SseEvent {
+                        name: None,
+                        data: serde_json::json!({"type":"response.output_text.delta",
+                            "delta":self.completed()["output_text"]})
+                        .to_string(),
+                    })
+                    .await;
+                }
+                on_event(mez_agent::SseEvent {
+                    name: None,
+                    data: if self.succeed {
+                        serde_json::json!({"type":"response.completed","response":self.completed()})
+                    } else {
+                        serde_json::json!({
+                            "type":"error", "error":{"message":"fixture refusal"}
+                        })
+                    }
+                    .to_string(),
+                })
+                .await;
+            }
+            Ok(self.response())
+        })
+    }
+}
+
+impl PresenceResponsesTransport {
+    fn completed(&self) -> serde_json::Value {
+        serde_json::json!({"model":"gpt-test","status":"completed","usage":self.usage,
+            "output_text":serde_json::json!({"rationale":"fixture","actions":[{
+                "type":"say","status":"final","content_type":"text/plain; charset=utf-8","text":"done"
+            }]}).to_string()})
+    }
+
+    fn response(&self) -> ProviderHttpResponse {
+        ProviderHttpResponse {
+            status_code: self.status,
+            headers: std::collections::BTreeMap::from([(
+                "content-type".into(),
+                if self.stream && self.status == 200 {
+                    "text/event-stream"
+                } else {
+                    "application/json"
+                }
+                .into(),
+            )]),
+            body: if self.stream && self.status == 200 {
+                String::new()
+            } else if self.succeed {
+                self.completed().to_string()
+            } else {
+                serde_json::json!({"error":{"message":"fixture refusal"},"usage":self.usage})
+                    .to_string()
+            },
+        }
+    }
+}
+
+/// Source evidence is independent per dimension and survives the real adapter
+/// error/retirement boundary. No response or field-presence bit is a durable ACK.
+#[tokio::test]
+async fn responses_primary_usage_presence_survives_failure_and_cancellation() {
+    use crate::integrations::agent::provider::{
+        ObservedAsyncModelProvider, PendingProviderWireObservations, ProviderRequestPurpose,
+        ProviderWireRequestObserver,
+    };
+    use mez_agent::ModelTokenUsagePresence as Presence;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    for (usage, presence, known) in [
+        (serde_json::Value::Null, Presence::default(), false),
+        (serde_json::json!({}), Presence::default(), false),
+        (
+            serde_json::json!({"input_tokens":false,"output_tokens":"7"}),
+            Presence::default(),
+            false,
+        ),
+        (
+            serde_json::json!({"input_tokens":0}),
+            Presence {
+                input: true,
+                output: false,
+            },
+            true,
+        ),
+        (
+            serde_json::json!({"output_tokens":0}),
+            Presence {
+                input: false,
+                output: true,
+            },
+            true,
+        ),
+        (
+            serde_json::json!({"input_tokens":0,"output_tokens":0}),
+            Presence {
+                input: true,
+                output: true,
+            },
+            true,
+        ),
+        (
+            serde_json::json!({"input_tokens":null,"prompt_tokens":0,"output_tokens":false,"completion_tokens":0}),
+            Presence {
+                input: true,
+                output: true,
+            },
+            true,
+        ),
+        (
+            serde_json::json!({"input_tokens_details":{"cached_tokens":0}}),
+            Presence::default(),
+            true,
+        ),
+        (
+            serde_json::json!({"output_tokens_details":{"reasoning_tokens":0}}),
+            Presence::default(),
+            true,
+        ),
+    ] {
+        for (stream, cancel, status, succeed) in [
+            (false, false, 200, false),
+            (true, false, 200, false),
+            (true, true, 200, false),
+            (false, false, 503, false),
+            (true, false, 503, false),
+            (false, false, 200, true),
+            (true, false, 200, true),
+        ] {
+            let sends = Arc::new(AtomicUsize::new(0));
+            let provider = OpenAiResponsesProvider::with_endpoint_headers_and_stream(
+                "fixture-key",
+                "https://example.test/responses",
+                1000,
+                Default::default(),
+                stream,
+                PresenceResponsesTransport {
+                    usage: usage.clone(),
+                    stream,
+                    cancel,
+                    status,
+                    succeed,
+                    sends: sends.clone(),
+                },
+            )
+            .unwrap();
+            let (sender, mut receiver) = tokio::sync::mpsc::channel(2);
+            let pending = PendingProviderWireObservations::default();
+            let observer = ProviderWireRequestObserver::new("presence-original", "%1", sender)
+                .with_pending_observations(pending.clone());
+            let observed = ObservedAsyncModelProvider::new(
+                &provider,
+                &observer,
+                ProviderRequestPurpose::Execution,
+            );
+            let request = request();
+            if cancel {
+                let mut future = observed.send_request_async(&request);
+                std::future::poll_fn(|cx| {
+                    assert!(future.as_mut().poll(cx).is_pending());
+                    std::task::Poll::Ready(())
+                })
+                .await;
+                drop(future);
+                assert!(receiver.try_recv().is_err());
+            } else {
+                let result = observed.send_request_async(&request).await;
+                if succeed {
+                    assert!(result.unwrap().action_batch.is_some());
+                } else {
+                    let error = result.unwrap_err();
+                    assert!(error.message().contains("fixture refusal"), "{error:?}");
+                }
+                let delivered = receiver.try_recv().unwrap();
+                assert_eq!(pending.snapshot(), vec![delivered]);
+                assert!(receiver.try_recv().is_err());
+            }
+            let retained = pending.snapshot();
+            if cancel && !known {
+                assert!(retained.is_empty());
+            } else {
+                assert_eq!(retained.len(), 1);
+                assert_eq!(retained[0].usage_presence, Some(presence), "{usage:?}");
+                assert_eq!(retained[0].usage.is_some(), known, "{usage:?}");
+                assert_eq!(retained[0].conversation_id, "presence-original");
+                assert_eq!(retained[0].succeeded, succeed);
+            }
+            assert_eq!(sends.load(Ordering::SeqCst), 1);
+        }
+    }
+}
+
 fn request() -> ModelRequest {
     assemble_model_request(
         &ModelProfile {

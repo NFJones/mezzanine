@@ -953,6 +953,24 @@ pub fn openai_chat_completions_usage(root: &serde_json::Value) -> ModelTokenUsag
     }
 }
 
+/// Returns primary wire-counter presence without deriving it from normalized
+/// zeros or optional cache/reasoning subsets. This is not final coverage.
+pub fn openai_chat_completions_usage_presence(
+    root: &serde_json::Value,
+) -> crate::ModelTokenUsagePresence {
+    let usage = root.get("usage").unwrap_or(&serde_json::Value::Null);
+    crate::ModelTokenUsagePresence {
+        input: usage
+            .get("prompt_tokens")
+            .and_then(serde_json::Value::as_u64)
+            .is_some(),
+        output: usage
+            .get("completion_tokens")
+            .and_then(serde_json::Value::as_u64)
+            .is_some(),
+    }
+}
+
 /// Accumulated fields for one indexed OpenAI-compatible streamed tool call.
 #[derive(Debug, Default)]
 struct OpenAiChatCompletionsStreamToolCall {
@@ -985,6 +1003,16 @@ impl OpenAiChatCompletionsStreamDecoder {
         self.usage
             .as_ref()
             .map(|usage| openai_chat_completions_usage(&serde_json::json!({"usage": usage})))
+            .unwrap_or_default()
+    }
+
+    /// Independent cumulative primary-counter presence, not final coverage.
+    pub fn reported_usage_presence(&self) -> crate::ModelTokenUsagePresence {
+        self.usage
+            .as_ref()
+            .map(|usage| {
+                openai_chat_completions_usage_presence(&serde_json::json!({"usage":usage}))
+            })
             .unwrap_or_default()
     }
 

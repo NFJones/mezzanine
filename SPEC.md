@@ -8428,6 +8428,15 @@ exchange's usage separately; first-attempt expense MUST NOT be borrowed as
 second-attempt usage. Missing/invalid counters MUST NOT fabricate receipt
 presence, while recognized explicit zero MUST remain distinguishable from
 absence. Numeric receipt presence alone does not prove dimension completeness.
+Native adapter observations MUST retain independent primary input/output source
+presence before output validation and through original-owner cancellation
+custody. Explicit numeric zero establishes presence; absent, null, invalid, cache
+or reasoning subset fields MUST NOT manufacture a primary counter. Cumulative
+omission MUST NOT erase earlier presence. Legacy/unqualified observations MUST
+remain distinguishable from a concrete observation with neither primary field.
+Presence is NOT remote finality, complete composite input, worker retirement,
+durable receipt acknowledgment or an admission permit. In particular Anthropic
+primary input is cache-exclusive and requires separate cache qualification.
 Known counters decoded from a chat stream MUST also survive transport cutoff,
 non-success HTTP status, and stream decoding/finalization refusal. Retaining
 normalized numeric counters does not establish missing-dimension coverage or

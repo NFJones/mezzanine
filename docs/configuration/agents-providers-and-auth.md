@@ -69,6 +69,14 @@ bodies returned to streaming requests. Adapter-internal retries retain each
 exchange separately, never charging the first request as the second's expense.
 Missing or invalid counters remain unavailable; a recognized explicit zero is
 retained, without claiming independent dimension completeness.
+Native observations also retain primary input/output source presence separately.
+A numeric zero is present; absent/null/invalid fields remain unknown even when
+legacy normalized totals display zero. Cache or reasoning subsets alone do not
+establish either primary counter. Cumulative omissions retain earlier evidence.
+These bits survive original-owner cancellation custody but do not prove final
+usage, worker retirement, durable acknowledgment or budget permission. Anthropic
+primary input is cache-exclusive, so its presence alone cannot prove complete
+inclusive input without separately qualified cache components.
 Chat adapters also retain already decoded counters when the
 stream ends in a transport, HTTP-status, decoder, or finalization failure. Missing
 usage remains unavailable; normalized counters alone do not prove full coverage.

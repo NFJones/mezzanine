@@ -165,6 +165,7 @@ pub struct OpenAiResponsesStreamDecoder {
     /// Numeric receipt survives unusable/partial output without granting it
     /// output-limit continuation or execution authority.
     reported_usage: Option<ModelTokenUsage>,
+    usage_presence: crate::ModelTokenUsagePresence,
     function_calls: BTreeMap<u64, OpenAiFunctionCallAccumulator>,
     completed_output_items: BTreeMap<u64, serde_json::Value>,
     completed_response_output: Option<Vec<serde_json::Value>>,
@@ -178,6 +179,11 @@ impl OpenAiResponsesStreamDecoder {
     /// before a body or parser finish result can carry the expense forward.
     pub fn incurred_usage(&self) -> Option<ModelTokenUsage> {
         self.reported_usage
+    }
+
+    /// Cumulative primary source counters, including zero; not remote finality.
+    pub fn incurred_usage_presence(&self) -> crate::ModelTokenUsagePresence {
+        self.usage_presence
     }
 
     /// Applies one complete SSE event and returns display-safe text progress.
@@ -205,6 +211,8 @@ impl OpenAiResponsesStreamDecoder {
             ))
         })?;
         self.reported_usage = overlay_openai_reported_usage(self.reported_usage, &value);
+        self.usage_presence
+            .merge(openai_responses_usage_presence(&value));
         if let Some(error) = value.get("error").filter(|error| !error.is_null()) {
             let message = error
                 .get("message")
@@ -674,7 +682,7 @@ fn openai_response_output_event(value: &serde_json::Value) -> Vec<ProviderTransc
 
 /// Retains an actual numeric usage receipt without inventing one from absent
 /// or empty metadata. Explicit zero counters remain distinct from no receipt.
-fn reported_openai_usage(value: &serde_json::Value) -> Option<ModelTokenUsage> {
+pub fn reported_openai_usage(value: &serde_json::Value) -> Option<ModelTokenUsage> {
     let usage = value
         .get("usage")
         .or_else(|| value.pointer("/response/usage"))
@@ -758,6 +766,27 @@ fn with_observed_usage(
     match usage {
         Some(usage) => error.with_incurred_usage(usage),
         None => error,
+    }
+}
+
+/// Returns independent primary-counter presence using the same numeric aliases
+/// as normalization, before any output validation. This is not final coverage.
+pub fn openai_responses_usage_presence(
+    value: &serde_json::Value,
+) -> crate::ModelTokenUsagePresence {
+    let Some(usage) = value
+        .get("usage")
+        .or_else(|| value.pointer("/response/usage"))
+    else {
+        return Default::default();
+    };
+    crate::ModelTokenUsagePresence {
+        input: ["input_tokens", "prompt_tokens"]
+            .iter()
+            .any(|key| usage.get(key).and_then(serde_json::Value::as_u64).is_some()),
+        output: ["output_tokens", "completion_tokens"]
+            .iter()
+            .any(|key| usage.get(key).and_then(serde_json::Value::as_u64).is_some()),
     }
 }
 
