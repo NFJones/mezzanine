@@ -298,23 +298,47 @@ fn budget_native_custody_process_exit_recovers_each_publication_boundary() {
         let root = std::path::PathBuf::from(root);
         let store = TokenUsageStore::new(root.join("usage.sqlite"));
         let transcripts = AgentTranscriptStore::new(root.join("transcripts"));
-        let member = store.budget_membership("root").unwrap().unwrap().0;
+        let member: BudgetMembership =
+            serde_json::from_str(&std::env::var("MEZ_TEST_NATIVE_BUDGET_MEMBER").unwrap()).unwrap();
         let phase: u8 = std::env::var("MEZ_TEST_NATIVE_BUDGET_PHASE")
             .unwrap()
             .parse()
             .unwrap();
+        assert_eq!(
+            store.prepare_budget_membership(&member).unwrap(),
+            BudgetMembershipState::Pending
+        );
+        if phase == 0 {
+            std::process::exit(77);
+        }
+        transcripts
+            .publish_conversation_budget_membership(&member)
+            .unwrap();
+        if phase == 1 {
+            std::process::exit(77);
+        }
+        store
+            .advance_budget_membership(
+                &member,
+                BudgetMembershipState::Pending,
+                BudgetMembershipState::Published,
+            )
+            .unwrap();
+        if phase == 2 {
+            std::process::exit(77);
+        }
         let lease = transcripts
             .prepare_native_budget_binding(&member, "original", None, false, None)
             .unwrap();
-        if phase >= 1 {
+        if phase >= 4 {
             store
                 .transfer_native_budget_binding(&member, "original", None, &lease)
                 .unwrap();
         }
-        if phase >= 2 {
+        if phase >= 5 {
             transcripts.complete_native_budget_binding(&lease).unwrap();
         }
-        if phase >= 3 {
+        if phase >= 6 {
             store
                 .advance_budget_membership(
                     &member,
@@ -325,31 +349,49 @@ fn budget_native_custody_process_exit_recovers_each_publication_boundary() {
         }
         std::process::exit(77);
     }
-    for phase in 0..4 {
+    for phase in 0..7 {
         let f = Fixture::new();
         let transcripts = AgentTranscriptStore::new(f.root.join("transcripts"));
         let member = f.member("root", None);
-        f.store.prepare_budget_membership(&member).unwrap();
-        transcripts
-            .publish_conversation_budget_membership(&member)
-            .unwrap();
-        f.store
-            .advance_budget_membership(
-                &member,
-                BudgetMembershipState::Pending,
-                BudgetMembershipState::Published,
-            )
-            .unwrap();
         let status = std::process::Command::new(std::env::current_exe().unwrap())
             .args(["--exact", TEST, "--quiet"])
             .env(ENV, &f.root)
             .env("MEZ_TEST_NATIVE_BUDGET_PHASE", phase.to_string())
+            .env(
+                "MEZ_TEST_NATIVE_BUDGET_MEMBER",
+                serde_json::to_string(&member).unwrap(),
+            )
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .status()
             .unwrap();
         assert_eq!(status.code(), Some(77));
+        let expected_phase = match phase {
+            0 | 1 => BudgetMembershipState::Pending,
+            6 => BudgetMembershipState::Active,
+            _ => BudgetMembershipState::Published,
+        };
+        assert_eq!(
+            f.store.budget_membership("root").unwrap().unwrap(),
+            (member.clone(), expected_phase),
+            "crash boundary {phase} must be genuinely reached",
+        );
+        assert_eq!(
+            transcripts.conversation_budget_membership("root").unwrap(),
+            (phase != 0).then(|| member.clone()),
+        );
+        let mut changed = member.clone();
+        changed.operation = "replacement-operation".into();
+        assert!(
+            f.store
+                .publish_native_budget_membership(&transcripts, &changed, "successor", None)
+                .is_err()
+        );
+        assert_eq!(
+            f.store.budget_membership("root").unwrap().unwrap(),
+            (member.clone(), expected_phase),
+        );
         let lease = f
             .store
             .publish_native_budget_membership(&transcripts, &member, "successor", None)

@@ -933,11 +933,9 @@ pub struct AsyncRuntimeSessionActor {
     pub(super) side_effect_routes: RuntimeSideEffectRouter,
     /// Source-owned provider-lane descriptors offered but not yet claimed.
     pub(super) offered_dispatch_sources: std::collections::BTreeSet<super::actor::SourceDispatch>,
-    /// Exact auxiliary preparation witnesses, bounded independently of caller lifetime.
-    pub(super) auxiliary_budget_preparations: std::collections::BTreeMap<
-        super::actor::SourceDispatch,
-        super::actor::AuxiliaryBudgetPreparation,
-    >,
+    /// Exact ordinary/auxiliary witnesses, bounded independently of caller lifetime.
+    pub(super) budget_preparations:
+        std::collections::BTreeMap<super::actor::SourceDispatch, super::actor::BudgetPreparation>,
     /// Service sources whose committed provider-lane descriptors were refused.
     pub(super) refused_dispatch_sources: std::collections::BTreeSet<super::actor::SourceDispatch>,
     /// Rotates service, provider, synchronized-output and retry-timer priority.

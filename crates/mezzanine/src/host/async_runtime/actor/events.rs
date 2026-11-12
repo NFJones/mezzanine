@@ -1229,7 +1229,7 @@ impl AsyncRuntimeSessionActor {
         target_pane_id: &str,
         target_generation: u64,
     ) -> bool {
-        self.auxiliary_budget_preparations
+        self.budget_preparations
             .contains_key(&super::SourceDispatch::Compaction(
                 target_pane_id.to_string(),
                 target_generation,
@@ -1255,7 +1255,7 @@ impl AsyncRuntimeSessionActor {
         target_pane_id: &str,
         target_observation_id: &str,
     ) -> bool {
-        self.auxiliary_budget_preparations
+        self.budget_preparations
             .contains_key(&super::SourceDispatch::Remember(
                 target_pane_id.to_string(),
                 target_observation_id.to_string(),
@@ -1281,7 +1281,7 @@ impl AsyncRuntimeSessionActor {
         target_conversation_id: &str,
         target_dispatch_id: &str,
     ) -> bool {
-        self.auxiliary_budget_preparations.contains_key(&super::SourceDispatch::Title(target_conversation_id.to_string(), target_dispatch_id.to_string())) || self.offered_dispatch_sources.contains(&super::SourceDispatch::Title(target_conversation_id.to_string(), target_dispatch_id.to_string())) || self.side_effect_routes.any_provider(|effect| {
+        self.budget_preparations.contains_key(&super::SourceDispatch::Title(target_conversation_id.to_string(), target_dispatch_id.to_string())) || self.offered_dispatch_sources.contains(&super::SourceDispatch::Title(target_conversation_id.to_string(), target_dispatch_id.to_string())) || self.side_effect_routes.any_provider(|effect| {
             matches!(
                 effect,
                 RuntimeSideEffect::DispatchAgentSessionTitle { conversation_id, dispatch_id }
@@ -1489,8 +1489,11 @@ impl AsyncRuntimeSessionActor {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub(super) fn provider_dispatch_is_already_queued(&self, turn_id: &str) -> bool {
-        self.offered_dispatch_sources
-            .contains(&super::SourceDispatch::Provider(turn_id.to_string()))
+        self.budget_preparations
+            .contains_key(&super::SourceDispatch::Provider(turn_id.to_string()))
+            || self
+                .offered_dispatch_sources
+                .contains(&super::SourceDispatch::Provider(turn_id.to_string()))
             || self.side_effect_routes.any_provider(|effect| {
                 matches!(
                     effect,

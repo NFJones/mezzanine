@@ -87,7 +87,7 @@ pub(super) mod snapshot_resume;
 mod source_end;
 pub(super) mod terminal_layout;
 
-pub(super) use provider_handoff::{AuxiliaryBudgetPreparation, SourceDispatch};
+pub(super) use provider_handoff::{BudgetPreparation, SourceDispatch};
 
 #[cfg(test)]
 mod tests;

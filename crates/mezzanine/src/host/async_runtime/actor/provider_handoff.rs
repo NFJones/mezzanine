@@ -34,7 +34,7 @@ pub(crate) enum SourceDispatch {
 /// Non-owning retirement witnesses only: neither a worker nor a request payload.
 /// The caller and physical work/result each retain their sole strong reference.
 #[derive(Debug)]
-pub(crate) struct AuxiliaryBudgetPreparation {
+pub(crate) struct BudgetPreparation {
     observer: std::sync::Weak<()>,
     worker: std::sync::Weak<()>,
 }
@@ -184,6 +184,33 @@ impl AsyncRuntimeSessionActor {
         }
     }
 
+    /// Ordinary membership publication uses the same bounded retirement owner
+    /// as auxiliary preparation. Capture must be registered before reply, since
+    /// a lost reply is not proof that physical work or its result has retired.
+    pub(super) fn prepare_provider_budget_source(
+        &mut self,
+        agent: &mez_core::ids::AgentId,
+        turn: &str,
+    ) -> Result<Option<crate::runtime::RuntimeAgentProviderPreparationWork>> {
+        self.recover_retired_budget_preparations();
+        let key = SourceDispatch::Provider(turn.to_owned());
+        if self.budget_preparations.contains_key(&key) {
+            return Ok(None);
+        }
+        let Some(mut work) = self
+            .service
+            .prepare_pending_agent_provider_work(agent, turn)?
+        else {
+            return Ok(None);
+        };
+        // Disabled assembly preserves the established non-budget preparation
+        // contract. The witness follows actual membership work, not MCP/auth.
+        if work.budget_membership.is_some() {
+            self.retain_budget_preparation_source(key, &mut work)?;
+        }
+        Ok(Some(work))
+    }
+
     /// Register custody before returning the work. A lost reply or cancelled
     /// public handle cannot leave a source offered forever. Do not reoffer it
     /// while either the original observer or physical worker/result survives.
@@ -191,7 +218,7 @@ impl AsyncRuntimeSessionActor {
         &mut self,
         source: &crate::runtime::RuntimeBudgetAuxiliarySource,
     ) -> Result<Option<crate::runtime::RuntimeAgentProviderPreparationWork>> {
-        self.recover_retired_auxiliary_preparations();
+        self.recover_retired_budget_preparations();
         use crate::runtime::RuntimeBudgetAuxiliarySource;
         let key = match source {
             RuntimeBudgetAuxiliarySource::Compaction { pane, generation } => {
@@ -206,9 +233,7 @@ impl AsyncRuntimeSessionActor {
             } => SourceDispatch::Title(conversation.clone(), dispatch.clone()),
         };
         // No unbounded backlog of cancelled observers or abandoned publications.
-        if self.auxiliary_budget_preparations.contains_key(&key)
-            || self.auxiliary_budget_preparations.len() >= 4096
-        {
+        if self.budget_preparations.contains_key(&key) || self.budget_preparations.len() >= 4096 {
             return Err(crate::error::MezError::conflict(
                 "original auxiliary budget preparation is still retained or at capacity",
             ));
@@ -216,11 +241,27 @@ impl AsyncRuntimeSessionActor {
         let Some(mut work) = self.service.prepare_runtime_budget_auxiliary(source)? else {
             return Ok(None);
         };
+        self.retain_budget_preparation_source(key, &mut work)?;
+        Ok(Some(work))
+    }
+
+    /// One finite owner shared by ordinary and auxiliary membership work. It
+    /// contains no payload and confers no provider/MCP/effect replay authority.
+    fn retain_budget_preparation_source(
+        &mut self,
+        key: SourceDispatch,
+        work: &mut crate::runtime::RuntimeAgentProviderPreparationWork,
+    ) -> Result<()> {
+        if self.budget_preparations.contains_key(&key) || self.budget_preparations.len() >= 4096 {
+            return Err(crate::error::MezError::conflict(
+                "original budget preparation is still retained or at capacity",
+            ));
+        }
         let observer = std::sync::Arc::new(());
         let worker = std::sync::Arc::new(());
-        self.auxiliary_budget_preparations.insert(
+        self.budget_preparations.insert(
             key.clone(),
-            AuxiliaryBudgetPreparation {
+            BudgetPreparation {
                 observer: std::sync::Arc::downgrade(&observer),
                 worker: std::sync::Arc::downgrade(&worker),
             },
@@ -228,14 +269,14 @@ impl AsyncRuntimeSessionActor {
         self.offered_dispatch_sources.insert(key);
         work.budget_preparation_observer = Some(observer);
         work.budget_preparation_worker = Some(worker);
-        Ok(Some(work))
+        Ok(())
     }
 
     /// Existing refill/timer progress observes physical retirement; there is no
     /// detached callback, provider replay, deadline guess or new recovery queue.
-    pub(super) fn recover_retired_auxiliary_preparations(&mut self) -> usize {
+    pub(super) fn recover_retired_budget_preparations(&mut self) -> usize {
         let retired: Vec<_> = self
-            .auxiliary_budget_preparations
+            .budget_preparations
             .iter()
             .filter(|(_, custody)| {
                 custody.observer.strong_count() == 0 && custody.worker.strong_count() == 0
@@ -244,7 +285,7 @@ impl AsyncRuntimeSessionActor {
             .collect();
         let count = retired.len();
         for source in retired {
-            self.auxiliary_budget_preparations.remove(&source);
+            self.budget_preparations.remove(&source);
             self.settle_source_offer(source);
         }
         count
@@ -272,7 +313,7 @@ impl AsyncRuntimeSessionActor {
     /// Only genuinely refused sources participate; no work payload is removed
     /// from the service and no action/provider/event is replayed.
     pub(super) fn queue_fitting_provider_sources(&mut self) -> Result<usize> {
-        self.recover_retired_auxiliary_preparations();
+        self.recover_retired_budget_preparations();
         self.offered_dispatch_sources
             .retain(|source| source.is_owned(&self.service));
         self.refused_dispatch_sources

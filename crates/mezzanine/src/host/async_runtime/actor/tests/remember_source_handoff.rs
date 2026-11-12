@@ -312,6 +312,268 @@ async fn cancelled_budget_preparation_waits_for_blocked_publication_retirement()
     drop((dispatch, actor, connection));
 }
 
+/// Ordinary preparation must recover the exact offered source when the public
+/// caller disappears before its capture reply. No worker or provider was sent.
+#[tokio::test]
+async fn cancelled_ordinary_budget_capture_recovers_original_provider_offer() {
+    recover_ordinary_budget_preparation(false).await;
+}
+
+/// Cancellation of the public claim cannot reoffer a source while its actual
+/// SQLite worker/result survives, or strand it after physical retirement.
+#[tokio::test]
+async fn cancelled_ordinary_budget_publication_recovers_after_physical_retirement() {
+    recover_ordinary_budget_preparation(true).await;
+}
+
+async fn recover_ordinary_budget_preparation(blocked: bool) {
+    let (mut root, mut actor, primary, handle) = pending_remember_with_handle(true);
+    actor
+        .service
+        .execute_agent_shell_command(&primary, "/stop")
+        .unwrap();
+    let store = crate::storage::token_usage::TokenUsageStore::new(root.0.join("usage.sqlite"));
+    store.initialize(1).unwrap();
+    actor.service.set_token_usage_store(store.clone());
+    actor.service.enable_runtime_budget_membership_for_tests();
+    actor
+        .service
+        .execute_agent_shell_command(&primary, "retain original ordinary offer")
+        .unwrap();
+    let turn = actor.service.pending_agent_provider_tasks().remove(0);
+    let effects: Vec<_> = actor
+        .pending_provider_dispatch_side_effects()
+        .unwrap()
+        .into_iter()
+        .filter(|effect| matches!(effect, RuntimeSideEffect::DispatchAgentProvider { .. }))
+        .collect();
+    assert!(
+        matches!(effects.as_slice(), [RuntimeSideEffect::DispatchAgentProvider { turn_id, .. }] if turn_id == &turn.turn_id),
+        "ordinary offer projection: {effects:?}"
+    );
+    assert!(actor.admit_committed_side_effects(effects).is_err());
+    actor.drain_timer_side_effects(1).unwrap();
+    assert_eq!(
+        actor
+            .drain_agent_provider_dispatch_side_effects(1)
+            .unwrap()
+            .len(),
+        1
+    );
+    let requested = turn.turn_id.clone();
+    let retry_handle = handle.clone();
+    let claim = tokio::spawn(async move {
+        handle
+            .claim_configured_agent_provider_task(
+                mez_core::ids::AgentId::opaque("agent-%1").unwrap(),
+                requested,
+            )
+            .await
+    });
+    let queued = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        loop {
+            if let Some(request) = actor
+                .request_ingress
+                .lock()
+                .unwrap()
+                .dequeue_normal_request()
+            {
+                break request;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(matches!(
+        &queued.envelope.request,
+        AsyncRuntimeRequest::PrepareConfiguredAgentProviderTask { .. }
+    ));
+    if blocked {
+        let AsyncRuntimeRequest::PrepareConfiguredAgentProviderTask {
+            agent_id,
+            turn_id,
+            reply,
+        } = queued.envelope.request
+        else {
+            unreachable!();
+        };
+        // Drive the real Prepare reducer, intercepting only to install the
+        // fixture notification inside its actual blocking closure.
+        let (capture, captured) = tokio::sync::oneshot::channel();
+        actor
+            .handle_request(AsyncRuntimeRequest::PrepareConfiguredAgentProviderTask {
+                agent_id,
+                turn_id,
+                reply: capture,
+            })
+            .await;
+        let mut work = captured.await.unwrap().unwrap().unwrap();
+        let physical = std::sync::Arc::downgrade(work.budget_preparation_worker.as_ref().unwrap());
+        let observer =
+            std::sync::Arc::downgrade(work.budget_preparation_observer.as_ref().unwrap());
+        root.1 = Some(physical.clone());
+        let connection = rusqlite::Connection::open(store.path()).unwrap();
+        connection.execute_batch("BEGIN EXCLUSIVE;").unwrap();
+        let (started, receiver) = tokio::sync::oneshot::channel();
+        work.budget_test_worker_started = Some(started);
+        assert!(reply.send(Ok(Some(work))).is_ok());
+        tokio::time::timeout(std::time::Duration::from_secs(10), receiver)
+            .await
+            .unwrap()
+            .unwrap();
+        claim.abort();
+        assert!(claim.await.err().unwrap().is_cancelled());
+        assert_eq!(observer.strong_count(), 0);
+        assert_eq!(physical.strong_count(), 1);
+        assert!(
+            actor
+                .drain_agent_provider_dispatch_side_effects(1)
+                .unwrap()
+                .is_empty()
+        );
+        // A healthy actor request completes while the original SQL worker is
+        // blocked. No provider or unrelated input is needed for retirement.
+        let (reply, response) = tokio::sync::oneshot::channel();
+        actor
+            .handle_request(AsyncRuntimeRequest::PrepareConfiguredAgentProviderTask {
+                agent_id: mez_core::ids::AgentId::opaque("agent-%1").unwrap(),
+                turn_id: turn.turn_id.clone(),
+                reply,
+            })
+            .await;
+        assert!(response.await.unwrap().unwrap().is_none());
+        assert!(
+            actor
+                .drain_agent_provider_dispatch_side_effects(1)
+                .unwrap()
+                .is_empty()
+        );
+        connection.execute_batch("ROLLBACK;").unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            while physical.strong_count() > 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+    } else {
+        claim.abort();
+        assert!(claim.await.err().unwrap().is_cancelled());
+        actor.handle_request(queued.envelope.request).await;
+    }
+    let recovered = actor.drain_agent_provider_dispatch_side_effects(1).unwrap();
+    assert!(
+        matches!(recovered.as_slice(), [RuntimeSideEffect::DispatchAgentProvider { turn_id, .. }] if turn_id == &turn.turn_id),
+        "lost original source: {recovered:?}"
+    );
+    // The same public claim can now prepare and claim the ORIGINAL turn once.
+    let signature = mez_agent::EnvironmentSignature::new(
+        "linux",
+        "x86_64",
+        None,
+        "test-host",
+        "test-user",
+        None,
+        "/bin/sh",
+        mez_agent::ShellClassification::PosixSh,
+        None,
+        Some("/usr/bin:/bin".into()),
+        root.0.to_string_lossy(),
+        None,
+        false,
+        None,
+        Vec::new(),
+    )
+    .unwrap();
+    actor
+        .service
+        .set_pane_environment_signature_for_tests("%1", signature);
+    actor
+        .service
+        .set_pane_readiness("%1", mez_agent::PaneReadinessState::Ready);
+    // This fixture has no pane process. Qualify its exact generated resolver
+    // request with a real local shell, just as the path-resolution fixtures do.
+    if let Some(request) = actor.service.primary_path_resolution_request("%1").unwrap() {
+        let command = mez_agent::shell::pane_path_resolution_command(
+            &request,
+            mez_agent::ShellClassification::PosixSh,
+        )
+        .unwrap();
+        let output = std::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg(command)
+            .current_dir(&root.0)
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        let key = actor
+            .service
+            .path_resolution_cache_key("%1", &request)
+            .unwrap();
+        actor
+            .service
+            .observe_path_resolution_transaction_end(
+                "ordinary-budget-fixture",
+                "%1",
+                0,
+                key,
+                &String::from_utf8(output.stdout).unwrap(),
+                false,
+            )
+            .unwrap();
+    }
+    actor.drain_timer_side_effects(64).unwrap();
+    let requested = turn.turn_id.clone();
+    let retry = tokio::spawn(async move {
+        retry_handle
+            .claim_configured_agent_provider_task(
+                mez_core::ids::AgentId::opaque("agent-%1").unwrap(),
+                requested,
+            )
+            .await
+    });
+    for _ in 0..2 {
+        let queued = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            loop {
+                if let Some(request) = actor
+                    .request_ingress
+                    .lock()
+                    .unwrap()
+                    .dequeue_normal_request()
+                {
+                    break request;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        actor.handle_request(queued.envelope.request).await;
+    }
+    let dispatch = retry.await.unwrap().unwrap().unwrap_or_else(|| {
+        panic!(
+            "recovered claim unavailable: turn={:?} events={:?}",
+            actor.service.agent_turn_ledger().turn(&turn.turn_id),
+            actor.service.event_log(),
+        )
+    });
+    assert_eq!(dispatch.turn.turn_id, turn.turn_id);
+    assert!(dispatch.budget_owner.is_some());
+    drop(dispatch);
+    assert!(
+        actor
+            .drain_agent_provider_dispatch_side_effects(1)
+            .unwrap()
+            .is_empty()
+    );
+    actor
+        .service
+        .execute_agent_shell_command(&primary, "/stop")
+        .unwrap();
+    drop(actor);
+}
+
 /// Issues the actual actor claim, carrying only the identity in the descriptor.
 async fn claim(
     actor: &mut AsyncRuntimeSessionActor,

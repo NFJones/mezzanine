@@ -24,7 +24,7 @@ impl AsyncRuntimeSessionActor {
         // An empty provider lane must still observe cancelled preparation
         // retirement. Refill only on this actual ownership change, not every
         // empty poll; no unrelated timer/input is needed to recover the source.
-        if self.recover_retired_auxiliary_preparations() > 0 {
+        if self.recover_retired_budget_preparations() > 0 {
             self.queue_fitting_provider_sources()?;
         }
         if self.service.settle_abandoned_compaction_dispatches()? {

@@ -21621,9 +21621,10 @@ provider-future retirement. A raw-tail publication with no inference is exempt.
 Preparation refusal MUST retain the original pending source and settle its exact
 offer; valid bookkeeping recovery MUST NOT replay provider work. This ownership
 slice alone does not activate budget policy or per-attempt receipt enforcement.
-Cancellation before claim MUST retain the exact offered source until both its
-caller and physical preparation work/result retire. Existing source refill MUST
-then reoffer the original pending operation without replacement input. Retained
+Ordinary provider and auxiliary cancellation before claim MUST retain the exact
+offered source until both its caller and physical preparation work/result retire.
+Existing source refill MUST then reoffer the original pending operation without
+replacement input. Retained
 preparation metadata MUST remain bounded; neither caller cancellation nor a lost
 reply proves publication retirement or durable acknowledgement.
 

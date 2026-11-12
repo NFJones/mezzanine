@@ -3147,10 +3147,7 @@ impl AsyncRuntimeSessionActor {
                 turn_id,
                 reply,
             } => {
-                let result = match self
-                    .service
-                    .prepare_pending_agent_provider_work(&agent_id, &turn_id)
-                {
+                let result = match self.prepare_provider_budget_source(&agent_id, &turn_id) {
                     Ok(work) => Ok(work),
                     Err(error) => self
                         .service
