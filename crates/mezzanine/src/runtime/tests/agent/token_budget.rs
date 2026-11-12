@@ -7,6 +7,7 @@ use crate::storage::token_usage::budget::membership::BudgetMembershipState;
 
 mod auxiliary;
 mod checkpoint;
+mod descendants;
 mod reclamation;
 mod request;
 mod resolution;
