@@ -70,6 +70,11 @@ Cumulative stream frames replace only counters they actually report, including
 explicit zero. Missing fields preserve prior subtotals; cache-exclusive input
 components are retained independently before inclusive input is computed. A
 final aggregate is not added a second time to its previously reported prefixes.
+Observed streaming requests also transfer decoded expense to their original
+retirement owner if the request future is cancelled or unwinds. This transfer
+does not duplicate a normal observation already retained for delivery, and does
+not prove remote completion or a durable budget receipt acknowledgment. Numeric
+chat counters alone still cannot distinguish a zero-only report from no report.
 
 Set `agents.provider_error_retry_unlimited = true` only for daemonized work that
 should wait through an extended provider outage. This separate switch ignores

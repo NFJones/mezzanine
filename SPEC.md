@@ -8430,6 +8430,11 @@ dimension MUST NOT erase its earlier subtotal, and explicit zero MUST NOT be
 treated as omission. Cache-exclusive input components MUST be retained
 independently before computing cache-inclusive input. Final cumulative values
 replace corresponding prefixes; they MUST NOT be added to those prefixes.
+If an observed streaming request future is cancelled or unwinds after decoding
+known expense, its original retirement owner MUST retain that expense before
+releasing the producer. Retaining an interrupted prefix MUST NOT duplicate a
+normal observation already retained before channel delivery. Local future
+destruction proves neither remote completion nor durable receipt acknowledgment.
 `agents.turn_timeout_ms` MUST be a positive integer and MUST default to
 `1800000`. The runtime MUST snapshot this duration as an absolute
 millisecond-resolution deadline when each turn is created. Reloading the

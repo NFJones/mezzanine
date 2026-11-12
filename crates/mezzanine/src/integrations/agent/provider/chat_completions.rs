@@ -515,9 +515,22 @@ where
                 None
             };
             let mut forwarding = SseProgressForwarder::default();
+            let mut stream_usage = observation.as_ref().map(|context| {
+                super::stream_usage_custody::StreamUsageCustody::new(context, request)
+            });
             let response_result = if let Some(decoder) = stream_decoder.as_mut() {
                 let mut on_event = |event| {
-                    forwarding.on_event(&event, |event| decoder.push_event(event), progress.clone())
+                    forwarding.on_event(
+                        &event,
+                        |event| {
+                            let result = decoder.push_event(event);
+                            if let Some(custody) = stream_usage.as_mut() {
+                                custody.update(decoder.reported_usage());
+                            }
+                            result
+                        },
+                        progress.clone(),
+                    )
                 };
                 self.transport
                     .send_async_with_sse_events(&http_request, &mut on_event)
@@ -535,12 +548,17 @@ where
                 Some(usage) => error.with_provider_incurred_usage(usage),
                 None => error,
             };
+            let reported_usage = stream_usage
+                .as_ref()
+                .and_then(|owner| owner.reported_usage());
             let response = match response_result {
                 Ok(response) => response,
                 Err(error) => {
                     let result = Err(retain_usage(error.into()));
                     if let Some(observation) = observation.as_ref() {
-                        observation.observe(request, 1, None, &result).await;
+                        observation
+                            .observe_with_reported_usage(request, 1, None, reported_usage, &result)
+                            .await;
                     }
                     return result;
                 }
@@ -550,14 +568,18 @@ where
                     self.provider_status_error("Chat Completions", &response),
                 ));
                 if let Some(observation) = observation.as_ref() {
-                    observation.observe(request, 1, None, &result).await;
+                    observation
+                        .observe_with_reported_usage(request, 1, None, reported_usage, &result)
+                        .await;
                 }
                 return result;
             }
             if let Some(error) = forwarding.error {
                 let result = Err(retain_usage(error));
                 if let Some(observation) = observation.as_ref() {
-                    observation.observe(request, 1, None, &result).await;
+                    observation
+                        .observe_with_reported_usage(request, 1, None, reported_usage, &result)
+                        .await;
                 }
                 return result;
             }
@@ -580,7 +602,9 @@ where
                 Err(error) => {
                     let result = Err(retain_usage(error));
                     if let Some(observation) = observation.as_ref() {
-                        observation.observe(request, 1, None, &result).await;
+                        observation
+                            .observe_with_reported_usage(request, 1, None, reported_usage, &result)
+                            .await;
                     }
                     return result;
                 }
@@ -597,7 +621,15 @@ where
                 Err(error) => {
                     if let Some(observation) = observation.as_ref() {
                         let first_result = Ok(parsed);
-                        observation.observe(request, 1, None, &first_result).await;
+                        observation
+                            .observe_with_reported_usage(
+                                request,
+                                1,
+                                None,
+                                reported_usage,
+                                &first_result,
+                            )
+                            .await;
                     }
                     return Err(error);
                 }
@@ -606,7 +638,13 @@ where
                 if let Some(observation) = observation.as_ref() {
                     let first_result = Ok(parsed.clone());
                     observation
-                        .observe(request, 1, Some("provider_forced_maap"), &first_result)
+                        .observe_with_reported_usage(
+                            request,
+                            1,
+                            Some("provider_forced_maap"),
+                            reported_usage,
+                            &first_result,
+                        )
                         .await;
                 }
                 let mut retry_request = retry.request;
@@ -665,7 +703,9 @@ where
                     .require_action_batch(parsed, request)
                     .map_err(retain_usage);
                 if let Some(observation) = observation.as_ref() {
-                    observation.observe(request, 1, None, &result).await;
+                    observation
+                        .observe_with_reported_usage(request, 1, None, reported_usage, &result)
+                        .await;
                 }
                 result
             }

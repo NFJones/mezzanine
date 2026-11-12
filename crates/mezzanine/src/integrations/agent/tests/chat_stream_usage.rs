@@ -22,6 +22,7 @@ enum Fault {
     PartialCounters,
     PartialZero,
     EmptyCounters,
+    CancelAfterUsage,
 }
 
 struct PartialUsageTransport {
@@ -106,6 +107,9 @@ impl AsyncProviderHttpTransport for PartialUsageTransport {
                 })
                 .await;
             }
+            if matches!(self.fault, Fault::CancelAfterUsage) {
+                std::future::pending::<()>().await;
+            }
             if matches!(self.fault, Fault::Transport | Fault::AbsentUsage) {
                 return Err(mez_agent::ProviderHttpError::invalid_state(
                     "fixture transport cutoff",
@@ -139,6 +143,7 @@ async fn shared_chat_stream_failures_preserve_decoded_expense() {
             Fault::PartialCounters,
             Fault::PartialZero,
             Fault::EmptyCounters,
+            Fault::CancelAfterUsage,
         ] {
             let sends = Arc::new(AtomicUsize::new(0));
             let transport = PartialUsageTransport {
@@ -227,9 +232,41 @@ async fn assert_expense<P: AsyncModelProvider>(
     sends: Arc<AtomicUsize>,
 ) {
     let (sender, mut receiver) = tokio::sync::mpsc::channel(2);
-    let observer = ProviderWireRequestObserver::new("fixture-original", "%1", sender);
+    let pending = crate::integrations::agent::provider::PendingProviderWireObservations::default();
+    let reported = Arc::new(std::sync::Mutex::new(
+        crate::integrations::agent::provider::ProviderReportedUsage::default(),
+    ));
+    let observer = ProviderWireRequestObserver::new("fixture-original", "%1", sender)
+        .with_pending_observations(pending.clone())
+        .with_reported_usage(reported.clone());
     let observed =
         ObservedAsyncModelProvider::new(&provider, &observer, ProviderRequestPurpose::Execution);
+    if matches!(fault, Fault::CancelAfterUsage) {
+        let mut future = observed.send_request_async(request);
+        std::future::poll_fn(|cx| {
+            assert!(future.as_mut().poll(cx).is_pending());
+            std::task::Poll::Ready(())
+        })
+        .await;
+        assert_eq!(sends.load(Ordering::SeqCst), 1);
+        drop(future);
+        // Actual future destruction, not a timeout, transfers the decoded
+        // prefix to the original retirement journal without a usable result.
+        let retained = pending.snapshot();
+        assert_eq!(
+            retained.len(),
+            1,
+            "{family}: cancellation lost decoded expense"
+        );
+        let usage = retained[0].usage.unwrap();
+        assert_eq!((usage.input_tokens, usage.output_tokens), (11, 7));
+        assert!(!retained[0].succeeded);
+        let reported = *reported.lock().unwrap();
+        assert_eq!(reported.known_observations, 1);
+        assert_eq!(reported.usage, usage);
+        assert!(receiver.try_recv().is_err());
+        return;
+    }
     let error = observed.send_request_async(request).await.unwrap_err();
     let usage = error.provider_incurred_usage();
     assert_eq!(
@@ -260,4 +297,11 @@ async fn assert_expense<P: AsyncModelProvider>(
     );
     assert!(receiver.try_recv().is_err());
     assert_eq!(sends.load(Ordering::SeqCst), 1);
+    assert_eq!(pending.snapshot().len(), 1);
+    let reported = *reported.lock().unwrap();
+    assert_eq!(
+        reported.known_observations,
+        u64::from(!matches!(fault, Fault::AbsentUsage))
+    );
+    assert_eq!(reported.usage, usage);
 }

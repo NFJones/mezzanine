@@ -505,6 +505,7 @@ mod deepseek;
 mod errors;
 mod observation_delivery;
 mod openai_chat_completions;
+mod stream_usage_custody;
 use crate::integrations::http::AsyncProviderHttpTransport;
 #[cfg(test)]
 use crate::integrations::http::ProviderHttpTransport;
@@ -807,6 +808,8 @@ pub struct ProviderWireObservationContext<'a> {
     cache_namespace: String,
     openai_diagnostics: Option<mez_agent::OpenAiPromptCacheDiagnostics>,
     diagnostics_failed: bool,
+    /// Handoff generation only, not another usage ledger or admission permit.
+    retained_observations: AtomicU64,
 }
 
 /// Content-free details captured from one final OpenAI Responses wire attempt.
@@ -814,6 +817,8 @@ struct FinalWireObservation {
     final_wire_diagnostics: Option<OpenAiFinalWireDiagnostics>,
     response_diagnostics: Option<OpenAiResponseDiagnostics>,
     elapsed_ms: Option<u64>,
+    /// Decoder-qualified presence, including zero, not inferred from defaults.
+    reported_usage: Option<mez_agent::ModelTokenUsage>,
 }
 
 impl<'a> ProviderWireObservationContext<'a> {
@@ -834,6 +839,7 @@ impl<'a> ProviderWireObservationContext<'a> {
             cache_namespace,
             openai_diagnostics,
             diagnostics_failed,
+            retained_observations: AtomicU64::new(0),
         }
     }
 
@@ -845,6 +851,19 @@ impl<'a> ProviderWireObservationContext<'a> {
         retry_reason: Option<&str>,
         result: &Result<ModelResponse>,
     ) {
+        self.observe_with_reported_usage(request, attempt_index, retry_reason, None, result)
+            .await;
+    }
+
+    /// Transfer qualified prefix presence before disarming cancellation custody.
+    async fn observe_with_reported_usage(
+        &self,
+        request: &ModelRequest,
+        attempt_index: usize,
+        retry_reason: Option<&str>,
+        reported_usage: Option<mez_agent::ModelTokenUsage>,
+        result: &Result<ModelResponse>,
+    ) {
         self.observe_with_final_wire(
             request,
             attempt_index,
@@ -853,6 +872,7 @@ impl<'a> ProviderWireObservationContext<'a> {
                 final_wire_diagnostics: None,
                 response_diagnostics: None,
                 elapsed_ms: None,
+                reported_usage,
             },
             result,
         )
@@ -885,12 +905,53 @@ impl<'a> ProviderWireObservationContext<'a> {
                     let usage = error.provider_incurred_usage();
                     (!usage.is_zero()).then_some(usage)
                 })
-            });
+            })
+            .or(final_wire.reported_usage);
         let failure_kind = result
             .as_ref()
             .err()
             .map(|error| provider_wire_failure_kind(error).to_string());
-        let observation = ProviderWireRequestObservation {
+        let observation = self.build_wire_observation(
+            request,
+            attempt_index,
+            retry_reason,
+            final_wire,
+            usage,
+            result.is_ok(),
+            failure_kind,
+        );
+        self.retain_wire_observation(&observation);
+        let id = observation.request_id.clone();
+        let requires_checkpoint = self.purpose == ProviderRequestPurpose::Compaction
+            && self.observer.claim_generation.is_some()
+            && self.observer.pending.is_some();
+        if self.observer.sender.send(observation).await.is_err() {
+            if requires_checkpoint {
+                self.observer.delivery_failed.store(true, Ordering::Release);
+            }
+            return;
+        }
+        if requires_checkpoint && let Some(pending) = &self.observer.pending {
+            pending.wait_for_acknowledgment(&id).await;
+        }
+    }
+
+    /// Builds only content-free diagnostics; neither registration nor permission.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one existing wire observation boundary"
+    )]
+    fn build_wire_observation(
+        &self,
+        request: &ModelRequest,
+        attempt_index: usize,
+        retry_reason: Option<&str>,
+        final_wire: FinalWireObservation,
+        usage: Option<mez_agent::ModelTokenUsage>,
+        succeeded: bool,
+        failure_kind: Option<String>,
+    ) -> ProviderWireRequestObservation {
+        ProviderWireRequestObservation {
             request_id: self.observer.next_request_id(),
             claim_generation: self.observer.claim_generation,
             attempt_index,
@@ -947,10 +1008,15 @@ impl<'a> ProviderWireObservationContext<'a> {
             openai_diagnostics: self.openai_diagnostics.clone(),
             diagnostics_failed: self.diagnostics_failed,
             usage,
-            succeeded: result.is_ok(),
+            succeeded,
             failure_kind,
             elapsed_ms: final_wire.elapsed_ms,
-        };
+        }
+    }
+
+    /// Retains one immutable completed or interrupted observation before any
+    /// cancellable channel operation. Producer retirement still gates draining.
+    fn retain_wire_observation(&self, observation: &ProviderWireRequestObservation) {
         if let (Some(reported), Some(usage)) = (&self.observer.reported, observation.usage) {
             // Each concrete attempt emits one fresh wire identity above. Keep
             // only its disjoint counters, never response content or a growing
@@ -959,22 +1025,10 @@ impl<'a> ProviderWireObservationContext<'a> {
             reported.usage.add_assign(usage);
             reported.known_observations = reported.known_observations.saturating_add(1);
         }
-        let id = observation.request_id.clone();
         if let Some(pending) = &self.observer.pending {
             pending.retain(observation.clone());
         }
-        let requires_checkpoint = self.purpose == ProviderRequestPurpose::Compaction
-            && self.observer.claim_generation.is_some()
-            && self.observer.pending.is_some();
-        if self.observer.sender.send(observation).await.is_err() {
-            if requires_checkpoint {
-                self.observer.delivery_failed.store(true, Ordering::Release);
-            }
-            return;
-        }
-        if requires_checkpoint && let Some(pending) = &self.observer.pending {
-            pending.wait_for_acknowledgment(&id).await;
-        }
+        self.retained_observations.fetch_add(1, Ordering::Release);
     }
 }
 
@@ -2566,11 +2620,14 @@ impl<T: ProviderHttpTransport> ModelProvider for OpenAiResponsesProvider<T> {
 
 impl<T: AsyncProviderHttpTransport> OpenAiResponsesProvider<T> {
     /// Sends one already-constructed Responses request and normalizes its result.
-    fn send_openai_responses_http_request_async<'a>(
+    fn send_openai_responses_http_request_async<'a, 'request: 'a, 'observer: 'request>(
         &'a self,
         request: &'a ModelRequest,
         http_request: ProviderHttpRequest,
         progress: Option<tokio::sync::mpsc::Sender<mez_agent::StreamingSayEvent>>,
+        mut usage_custody: Option<
+            &'a mut stream_usage_custody::StreamUsageCustody<'request, 'observer>,
+        >,
     ) -> Pin<Box<dyn Future<Output = Result<OpenAiResponsesCompleted>> + Send + 'a>> {
         Box::pin(async move {
             let cache_namespace = openai_cache_comparison_namespace(self);
@@ -2584,7 +2641,15 @@ impl<T: AsyncProviderHttpTransport> OpenAiResponsesProvider<T> {
                 let mut on_event = |event| {
                     forwarding.on_event(
                         &event,
-                        |event| stream_decoder.push_event(event),
+                        |event| {
+                            let result = stream_decoder.push_event(event);
+                            if let (Some(custody), Some(usage)) =
+                                (usage_custody.as_mut(), stream_decoder.incurred_usage())
+                            {
+                                custody.update_reported(usage);
+                            }
+                            result
+                        },
                         progress.clone(),
                     )
                 };
@@ -2593,8 +2658,8 @@ impl<T: AsyncProviderHttpTransport> OpenAiResponsesProvider<T> {
                     .await
             } else {
                 self.transport.send_async(&http_request).await
-            }
-            .map_err(|error| {
+            };
+            let response = response.map_err(|error| {
                 openai_error_with_incurred_usage(error.into(), stream_decoder.incurred_usage())
             })?;
             let response_diagnostics = openai_response_diagnostics(&response);
@@ -2616,6 +2681,7 @@ impl<T: AsyncProviderHttpTransport> OpenAiResponsesProvider<T> {
                 ));
             }
             self.capture_chatgpt_turn_state(request, &response.headers);
+            let incurred_usage = stream_decoder.incurred_usage();
             let result = (|| -> Result<ModelResponse> {
                 if let Some(error) = forwarding.error {
                     return Err(error.into());
@@ -2638,7 +2704,8 @@ impl<T: AsyncProviderHttpTransport> OpenAiResponsesProvider<T> {
                     action_batch,
                     provider_transcript_events,
                 })
-            })();
+            })()
+            .map_err(|error| openai_error_with_incurred_usage(error, incurred_usage));
             if result.is_ok() {
                 self.record_openai_cache_comparison_baseline(
                     request,
@@ -2779,7 +2846,7 @@ impl<T: AsyncProviderHttpTransport> AsyncModelProvider for OpenAiResponsesProvid
                     self.timeout_ms,
                     comparison_response_id.as_deref(),
                 )?;
-            self.send_openai_responses_http_request_async(request, http_request, progress)
+            self.send_openai_responses_http_request_async(request, http_request, progress, None)
                 .await
                 .and_then(|(response, _)| response)
         })
@@ -2816,8 +2883,16 @@ impl<T: AsyncProviderHttpTransport> AsyncModelProvider for OpenAiResponsesProvid
                 )?;
             let final_wire_diagnostics = openai_final_wire_diagnostics(&http_request);
             let started_at = Instant::now();
+            let mut usage_custody = observation
+                .as_ref()
+                .map(|context| stream_usage_custody::StreamUsageCustody::new(context, request));
             let completed = self
-                .send_openai_responses_http_request_async(request, http_request, progress)
+                .send_openai_responses_http_request_async(
+                    request,
+                    http_request,
+                    progress,
+                    usage_custody.as_mut(),
+                )
                 .await;
             let elapsed_ms = u64::try_from(started_at.elapsed().as_millis()).unwrap_or(u64::MAX);
             let (result, response_diagnostics) = match completed {
@@ -2834,6 +2909,9 @@ impl<T: AsyncProviderHttpTransport> AsyncModelProvider for OpenAiResponsesProvid
                             final_wire_diagnostics: Some(final_wire_diagnostics),
                             response_diagnostics,
                             elapsed_ms: Some(elapsed_ms),
+                            reported_usage: usage_custody
+                                .as_ref()
+                                .and_then(|owner| owner.reported_usage()),
                         },
                         &result,
                     )
