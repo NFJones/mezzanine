@@ -151,6 +151,7 @@ mod tests;
 #[cfg(test)]
 fn remove_empty_budget_schema_for_legacy_fixture(connection: &rusqlite::Connection) {
     for table in [
+        "budget_admissions",
         "budget_policy_publications",
         "budget_bindings",
         "budget_operations",
@@ -177,7 +178,7 @@ fn remove_empty_budget_schema_for_legacy_fixture(connection: &rusqlite::Connecti
     assert!(projection.committed.is_none() && projection.pending.is_none());
     connection
         .execute_batch(
-            "DROP TABLE budget_policy_projection; DROP TABLE budget_policy_publications;",
+            "DROP TABLE budget_admissions; DROP TABLE budget_policy_projection; DROP TABLE budget_policy_publications;",
         )
         .unwrap();
     connection.execute_batch("DROP TABLE budget_bindings; DROP TABLE budget_operations; DROP TABLE budget_receipts; DROP TABLE budget_attempts; DROP TABLE budget_memberships; DROP TABLE budget_roots; DROP TABLE budget_namespace;").unwrap();

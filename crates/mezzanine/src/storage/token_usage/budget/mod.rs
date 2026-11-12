@@ -7,6 +7,11 @@
 //! rolling event retention never deletes these records. Missing expected stores
 //! refuse instead of recreating zero expense. No provider/effect replay lives here.
 
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "physical-send driver integration is downstream")
+)]
+pub(crate) mod admission;
 pub(crate) mod membership;
 pub(crate) mod operations;
 pub(crate) mod policy_projection;
@@ -33,6 +38,11 @@ pub(super) fn initialize_policy_projection_schema(
     transaction: &rusqlite::Transaction<'_>,
 ) -> Result<()> {
     policy_projection::initialize_schema(transaction)
+}
+
+/// Adds only native authorization evidence, never grants for old attempts.
+pub(super) fn initialize_admission_schema(transaction: &rusqlite::Transaction<'_>) -> Result<()> {
+    admission::initialize_schema(transaction)
 }
 
 /// Durable lifetime view; start boundary does not imply pre-feature coverage.

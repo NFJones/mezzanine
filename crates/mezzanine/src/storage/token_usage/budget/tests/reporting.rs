@@ -508,7 +508,10 @@ fn budget_reporting_legacy_migration_and_invalid_provenance_never_invent_expense
             Ok((r.get(0)?, r.get(1)?))
         })
         .unwrap();
-    db.execute_batch("PRAGMA user_version=16;").unwrap();
+    // Reconstruct the actual old schema, not a downgraded version stamp with
+    // the later admission table still present.
+    db.execute_batch("DROP TABLE budget_admissions; PRAGMA user_version=16;")
+        .unwrap();
     f.store.initialize(100).unwrap();
     let after_bytes: (String, String) = db
         .query_row("SELECT body,outcome FROM budget_receipts", [], |r| {

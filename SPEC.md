@@ -16580,6 +16580,28 @@ remove lifetime receipts, and replay MUST NOT recreate a pruned reporting event.
 These repository ports MUST NOT claim actual per-send capture, durable worker
 acknowledgment or production admission enforcement before their integration.
 
+Telemetry schema18 adds native admission evidence in the same accounting store.
+A new authorization MUST atomically validate the exact active native membership,
+binding and retained inode, resolve current primary-derived policy plus root
+overrides, check known lifetime totals and outstanding exposure, and register
+the attempt under the policy/receipt writer ordering. Global projection, root
+override and accounting revisions MUST remain independent. Missing or updating
+policy MUST NOT authorize unlimited work. A finite root MUST refuse while any
+earlier authorized exposure or legacy unsettled registration remains; unlimited
+policy MUST preserve concurrent admission. Both paths share the bounded global
+unsettled/exposure capacity. Held admission MUST NOT register an attempt.
+Only a new committed grant MAY return a non-cloneable one-use native permit.
+Replay and read-only reconciliation MUST return original evidence, never another
+permit, and registration alone MUST NOT be upgraded into possible repeated work.
+Permit consumption MUST retain native lifetime custody. A lost/dropped permit,
+terminal expense receipt or binding replacement MUST NOT erase issued exposure.
+Migration MUST preserve old records literally without inventing authorization;
+future/colliding schemas MUST refuse atomically. The staged boundary has no
+exposure-release port until actual worker retirement and durable evidence
+transfer are connected. It MUST NOT advertise working finite budgets or enable
+production assembly before physical-send, fair waiting, receipt and retirement
+integration is complete.
+
 Conversation metadata6 MAY carry an immutable exact budget membership reference;
 versions1–5 MUST NOT acquire that meaning from an unexpected new field. A
 version-one `budget-binding.json` companion MUST mirror the exact membership and

@@ -256,7 +256,7 @@ fn validate_digest(value: &str) -> Result<()> {
     Ok(())
 }
 
-fn read_projection(connection: &Connection) -> Result<BudgetPolicyProjection> {
+pub(super) fn read_projection(connection: &Connection) -> Result<BudgetPolicyProjection> {
     let body: String = connection.query_row(
         "SELECT body FROM budget_policy_projection WHERE singleton=1",
         [],

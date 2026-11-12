@@ -1,11 +1,16 @@
 //! Frozen request expense custody shared by ordinary and turn-less inference.
 //!
-//! These ports prepare immutable bookkeeping, never provider admission. Workers
-//! must register each concrete attempt before its send, retain exact receipts
-//! through ACK uncertainty, and independently enforce policy/source authority.
+//! Registration remains bookkeeping only. Native authorization additionally
+//! checks current durable policy and exposure in one transaction; only a new
+//! grant returns a one-use permit. Physical-send/retirement driver assembly is
+//! still downstream. Neither ACK recovery nor receipt replay reissues inference.
 
 use super::*;
 use crate::storage::token_usage::AccountingOrigin;
+use crate::storage::token_usage::budget::admission::{
+    BudgetAdmissionHold, BudgetAdmissionOutcome, BudgetAttemptAdmission, BudgetIssuedAttempt,
+    BudgetSendPermit,
+};
 use crate::storage::token_usage::budget::receipts::{
     BudgetAttempt, BudgetAttemptPurpose, BudgetReceipt, BudgetReceiptOutcome,
 };
@@ -83,6 +88,34 @@ pub(crate) struct RuntimeBudgetAttemptWork(Arc<AttemptSource>);
     expect(dead_code, reason = "concrete attempt admission is downstream")
 )]
 impl RuntimeBudgetAttemptWork {
+    /// Worker-only actual-admission port, not preparation-time permission. The
+    /// existing frozen identity survives a held result or uncertain grant ACK.
+    pub(crate) fn authorize(&self) -> Result<RuntimeBudgetAttemptAdmission> {
+        let owner = &self.0.owner;
+        match owner.store.authorize_budget_attempt(
+            &self.0.attempt,
+            &owner.member,
+            &owner.binding_owner,
+            &owner.lease,
+        )? {
+            BudgetAttemptAdmission::Authorized(permit) => Ok(
+                RuntimeBudgetAttemptAdmission::Authorized(RuntimeBudgetSendPermit {
+                    source: self.0.clone(),
+                    permit,
+                }),
+            ),
+            BudgetAttemptAdmission::PreviouslyAuthorized(outcome) => {
+                Ok(RuntimeBudgetAttemptAdmission::PreviouslyAuthorized(outcome))
+            }
+            BudgetAttemptAdmission::Held(reason) => Ok(RuntimeBudgetAttemptAdmission::Held(reason)),
+        }
+    }
+
+    /// Existing-only read of original authorization evidence, never a permit.
+    pub(crate) fn reconcile_admission(&self) -> Result<Option<BudgetAdmissionOutcome>> {
+        self.0.owner.store.budget_attempt_admission(&self.0.attempt)
+    }
+
     /// Blocking-worker only. A successful database registration is NOT a spend
     /// permit, proof of a send, or authority to repeat an uncertain remote call.
     pub(crate) fn execute(&self) -> Result<RuntimeBudgetRegisteredAttempt> {
@@ -101,6 +134,69 @@ impl RuntimeBudgetAttemptWork {
             .store
             .budget_attempt_registration(&self.0.attempt)?;
         Ok(exists.then(|| RuntimeBudgetRegisteredAttempt(self.0.clone())))
+    }
+}
+
+/// Native grant result; replay evidence cannot be consumed as another permit.
+#[derive(Debug)]
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "physical-send driver integration is downstream")
+)]
+pub(crate) enum RuntimeBudgetAttemptAdmission {
+    Authorized(RuntimeBudgetSendPermit),
+    PreviouslyAuthorized(BudgetAdmissionOutcome),
+    Held(BudgetAdmissionHold),
+}
+
+#[derive(Debug)]
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "physical-send driver integration is downstream")
+)]
+pub(crate) struct RuntimeBudgetSendPermit {
+    source: Arc<AttemptSource>,
+    permit: BudgetSendPermit,
+}
+
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "physical-send driver integration is downstream")
+)]
+impl RuntimeBudgetSendPermit {
+    /// Consume once off actor immediately before the physical send, retaining
+    /// original request/native custody for settlement and actual retirement.
+    pub(crate) fn consume(self) -> Result<RuntimeBudgetIssuedAttempt> {
+        Ok(RuntimeBudgetIssuedAttempt {
+            registered: RuntimeBudgetRegisteredAttempt(self.source),
+            issued: self.permit.consume()?,
+        })
+    }
+}
+
+/// Non-cloneable consumed grant. Its original expense descriptor may be cloned
+/// for receipt work, but neither value supplies another send permission.
+#[derive(Debug)]
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "physical-send driver integration is downstream")
+)]
+pub(crate) struct RuntimeBudgetIssuedAttempt {
+    registered: RuntimeBudgetRegisteredAttempt,
+    issued: BudgetIssuedAttempt,
+}
+
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "physical-send driver integration is downstream")
+)]
+impl RuntimeBudgetIssuedAttempt {
+    pub(crate) fn registered(&self) -> &RuntimeBudgetRegisteredAttempt {
+        &self.registered
+    }
+
+    pub(crate) fn outcome(&self) -> &BudgetAdmissionOutcome {
+        self.issued.outcome()
     }
 }
 

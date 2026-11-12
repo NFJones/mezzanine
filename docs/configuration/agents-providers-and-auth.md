@@ -77,6 +77,12 @@ These bits survive original-owner cancellation custody but do not prove final
 usage, worker retirement, durable acknowledgment or budget permission. Anthropic
 primary input is cache-exclusive, so its presence alone cannot prove complete
 inclusive input without separately qualified cache components.
+The staged native budget repository also distinguishes attempt registration
+from a one-use authorization. Its transaction checks current policy, root usage,
+native binding and outstanding exposure together; a lost authorization reply
+can recover evidence, not another send permit. Terminal usage alone cannot
+release exposure. These internal ports do not enable production token budgets:
+physical-send, fair-waiting and worker-retirement integration remains required.
 Chat adapters also retain already decoded counters when the
 stream ends in a transport, HTTP-status, decoder, or finalization failure. Missing
 usage remains unavailable; normalized counters alone do not prove full coverage.

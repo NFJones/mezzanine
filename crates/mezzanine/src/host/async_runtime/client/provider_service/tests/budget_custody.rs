@@ -23,6 +23,12 @@ fn budget_request_bookkeeping_contract_is_reachable_from_host() {
         RuntimeBudgetAttemptWork::execute;
     let _: fn(&RuntimeBudgetAttemptWork) -> Result<Option<RuntimeBudgetRegisteredAttempt>> =
         RuntimeBudgetAttemptWork::reconcile_registration;
+    let _: fn(&RuntimeBudgetAttemptWork) -> Result<crate::runtime::RuntimeBudgetAttemptAdmission> =
+        RuntimeBudgetAttemptWork::authorize;
+    let _: fn(
+        crate::runtime::RuntimeBudgetSendPermit,
+    ) -> Result<crate::runtime::RuntimeBudgetIssuedAttempt> =
+        crate::runtime::RuntimeBudgetSendPermit::consume;
     let _: fn(
         &RuntimeBudgetRegisteredAttempt,
         mez_agent::token_budget::UsageSnapshot,

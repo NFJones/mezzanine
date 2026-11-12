@@ -19,9 +19,9 @@ use super::{
     set_private_file_permissions, sqlite_i64,
 };
 
-/// Version17 fences receipt-owned reporting attribution and cumulative snapshots.
-/// Older writers must not bypass reporting/receipt atomicity or policy fences.
-pub(super) const SCHEMA_VERSION: i64 = 17;
+/// Version18 adds durable native admission exposure. Older writers must not
+/// bypass authorization, reporting/receipt atomicity or policy fences.
+pub(super) const SCHEMA_VERSION: i64 = 18;
 const SECONDS_PER_DAY: u64 = 86_400;
 
 /// One immutable provider/model usage delta.
@@ -416,7 +416,8 @@ fn initialize_schema(
                  PRAGMA user_version = 1;",
             )?;
         }
-        1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | SCHEMA_VERSION => {}
+        1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17
+        | SCHEMA_VERSION => {}
         future if future > SCHEMA_VERSION => {
             return Err(MezError::invalid_state(format!(
                 "token usage database schema version {future} is newer than supported version {SCHEMA_VERSION}"
@@ -568,6 +569,10 @@ fn initialize_schema(
         // Representation fence only. Old receipt/attempt rows remain literal;
         // absent reporting provenance stays absent, never inferred from history.
         transaction.execute_batch("PRAGMA user_version=17;")?;
+    }
+    if version < 18 {
+        super::budget::initialize_admission_schema(&transaction)?;
+        transaction.execute_batch("PRAGMA user_version=18;")?;
     }
     transaction.commit()?;
     Ok(())

@@ -7,6 +7,7 @@ use mez_agent::token_budget::{BudgetAttemptId, BudgetReceiptId, UsageSnapshot};
 use receipts::{BudgetAttempt, BudgetAttemptPurpose, BudgetReceipt};
 use rusqlite::params;
 
+mod admission;
 mod native_custody;
 mod policy_projection;
 mod reconciliation;

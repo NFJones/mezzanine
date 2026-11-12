@@ -263,7 +263,7 @@ fn budget_policy_projection_migration_preserves_lifetime_and_rejects_missing_fut
     let account = f.store.budget_account(&member.root).unwrap();
     let namespace = f.store.budget_namespace().unwrap();
     let db = Connection::open(f.store.path()).unwrap();
-    db.execute_batch("DROP TABLE budget_policy_projection; DROP TABLE budget_policy_publications; PRAGMA user_version=15;").unwrap();
+    db.execute_batch("DROP TABLE budget_admissions; DROP TABLE budget_policy_projection; DROP TABLE budget_policy_publications; PRAGMA user_version=15;").unwrap();
     assert!(f.store.budget_policy_projection().is_err());
     f.store.initialize(100).unwrap();
     f.store.initialize(100).unwrap();

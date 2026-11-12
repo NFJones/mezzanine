@@ -76,7 +76,7 @@ struct StoredAttemptUsage {
 }
 
 impl BudgetAttempt {
-    fn validate(&self) -> Result<()> {
+    pub(super) fn validate(&self) -> Result<()> {
         validate_id(&self.namespace)?;
         if let Some(origin) = &self.reporting_origin {
             origin.validate()?;
@@ -127,36 +127,11 @@ impl TokenUsageStore {
     /// finite-root concurrency and revision checks; this is not a spend permit.
     pub(crate) fn register_budget_attempt(&self, attempt: &BudgetAttempt) -> Result<bool> {
         attempt.validate()?;
-        let body = encode(attempt)?;
         let mut connection = self.open_budget()?;
         let tx = connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-        if namespace(&tx)? != attempt.namespace {
-            return Err(MezError::conflict("budget attempt namespace mismatch"));
-        }
-        let (member, phase) = super::membership::membership(&tx, &attempt.conversation)?
-            .ok_or_else(|| MezError::conflict("budget attempt membership unavailable"))?;
-        if member.root != attempt.root || phase != BudgetMembershipState::Active {
-            return Err(MezError::conflict(
-                "budget attempt requires original active membership",
-            ));
-        }
-        if attempt_registration(&tx, attempt)? {
-            return Ok(false);
-        }
-        let outstanding: i64 = tx.query_row(
-            "SELECT COUNT(*) FROM budget_attempts WHERE terminal=0",
-            [],
-            |r| r.get(0),
-        )?;
-        if outstanding >= 4096 {
-            return Err(MezError::invalid_state(
-                "budget unsettled attempt capacity reached",
-            ));
-        }
-        tx.execute("INSERT INTO budget_attempts(id,root,conversation,body,snapshot,terminal) VALUES(?1,?2,?3,?4,?5,0)",
-            params![attempt.id.as_str(), attempt.root.as_str(), attempt.conversation, body, encode(&StoredAttemptUsage::default())?])?;
+        let inserted = register_attempt(&tx, attempt)?;
         tx.commit()?;
-        Ok(true)
+        Ok(inserted)
     }
 
     /// Commits ONLY the new known delta under original frozen provenance. Root
@@ -286,9 +261,50 @@ impl TokenUsageStore {
     }
 }
 
+/// Shares one registration transaction with native authorization. This helper
+/// does not commit, authorize a send, or upgrade an older registration.
+pub(super) fn register_attempt(connection: &Connection, attempt: &BudgetAttempt) -> Result<bool> {
+    if namespace(connection)? != attempt.namespace {
+        return Err(MezError::conflict("budget attempt namespace mismatch"));
+    }
+    let (member, phase) = super::membership::membership(connection, &attempt.conversation)?
+        .ok_or_else(|| MezError::conflict("budget attempt membership unavailable"))?;
+    if member.root != attempt.root || phase != BudgetMembershipState::Active {
+        return Err(MezError::conflict(
+            "budget attempt requires original active membership",
+        ));
+    }
+    if attempt_registration(connection, attempt)? {
+        return Ok(false);
+    }
+    if outstanding_attempts(connection)? >= 4096 {
+        return Err(MezError::invalid_state(
+            "budget unsettled attempt capacity reached",
+        ));
+    }
+    connection.execute("INSERT INTO budget_attempts(id,root,conversation,body,snapshot,terminal) VALUES(?1,?2,?3,?4,?5,0)",
+        params![attempt.id.as_str(), attempt.root.as_str(), attempt.conversation, encode(attempt)?, encode(&StoredAttemptUsage::default())?])?;
+    Ok(true)
+}
+
+/// A terminal expense receipt cannot remove still-authorized local exposure.
+/// Both indexed branches are bounded by the existing unsettled capacity.
+pub(super) fn outstanding_attempts(connection: &Connection) -> Result<i64> {
+    Ok(connection.query_row(
+        "SELECT COUNT(*) FROM (
+            SELECT id FROM budget_attempts WHERE terminal=0
+            UNION SELECT attempt FROM budget_admissions)",
+        [],
+        |r| r.get(0),
+    )?)
+}
+
 /// Shared replay/query validation keeps the read-only recovery port at least
 /// as strict as mutation replay, including indexed-column/body consistency.
-fn attempt_registration(connection: &Connection, attempt: &BudgetAttempt) -> Result<bool> {
+pub(super) fn attempt_registration(
+    connection: &Connection,
+    attempt: &BudgetAttempt,
+) -> Result<bool> {
     let existing: Option<(String, String, String)> = connection
         .query_row(
             "SELECT body,root,conversation FROM budget_attempts WHERE id=?1",
