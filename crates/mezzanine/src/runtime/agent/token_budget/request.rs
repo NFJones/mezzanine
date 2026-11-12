@@ -227,6 +227,7 @@ impl RuntimeBudgetRegisteredAttempt {
         Ok(RuntimeBudgetReceiptWork(Arc::new(ReceiptSource {
             attempt: self.clone(),
             receipt,
+            commit: std::sync::OnceLock::new(),
         })))
     }
 }
@@ -235,6 +236,7 @@ impl RuntimeBudgetRegisteredAttempt {
 struct ReceiptSource {
     attempt: RuntimeBudgetRegisteredAttempt,
     receipt: BudgetReceipt,
+    commit: std::sync::OnceLock<super::receipt_commit::SharedReceiptCommit>,
 }
 
 /// Exact known usage plus original custody retained until real durable ACK.
@@ -246,6 +248,15 @@ pub(crate) struct RuntimeBudgetReceiptWork(Arc<ReceiptSource>);
     expect(dead_code, reason = "receipt driver integration is downstream")
 )]
 impl RuntimeBudgetReceiptWork {
+    /// Pure capture; every clone of this immutable receipt shares one writer.
+    /// The service must retain this owner outside cancellable ACK waiters.
+    pub(crate) fn commit_owner(&self) -> super::receipt_commit::RuntimeBudgetReceiptCommit {
+        super::receipt_commit::RuntimeBudgetReceiptCommit::new(
+            self.clone(),
+            self.0.commit.get_or_init(Default::default).clone(),
+        )
+    }
+
     /// Blocking-worker only; repeat ONLY this immutable bookkeeping work after
     /// reconciliation, never the provider/effects that produced its counters.
     pub(crate) fn execute(&self) -> Result<BudgetReceiptOutcome> {

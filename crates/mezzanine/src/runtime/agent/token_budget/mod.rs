@@ -22,6 +22,14 @@ use crate::storage::token_usage::budget::membership::BudgetMembership;
 use crate::storage::transcript::{AgentTranscriptStore, BudgetBindingLease};
 
 pub(crate) mod auxiliary;
+#[cfg_attr(
+    not(test),
+    allow(
+        dead_code,
+        reason = "durable provider receipt integration is downstream"
+    )
+)]
+pub(crate) mod receipt_commit;
 mod reclamation;
 pub(crate) mod request;
 #[cfg_attr(

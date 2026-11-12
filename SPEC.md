@@ -16684,6 +16684,14 @@ final aggregates replace prefixes, not add them again. Exact duplicate receipts
 MUST be inert, changed replay/provenance and regressing counters MUST refuse,
 and authoritative unsigned totals MUST use checked arithmetic. Usage from failed,
 discarded or cancelled output MUST still settle under its original owner.
+Frozen receipt clones MUST share one retained blocking writer and its original
+outcome. Cancelling an acknowledgment waiter MUST NOT detach or repeat that
+writer. Reconciliation MUST observe its actual join before querying the exact
+original receipt through a read-only worker; failed queries are not absence.
+After an observed writer failure, a fresh positive absence query MAY permit one
+explicit retry of that same immutable bookkeeping operation, never inference or
+effects. Receipt acknowledgment alone MUST NOT release provider exposure or
+attest provider retirement. These staged custody ports do not activate budgets.
 Unknown remote expense alone is incomplete coverage, not permanent numeric
 exhaustion. Pending/unavailable accounting and identity/integrity faults are
 separate operational holds, never evidence that a numeric threshold was reached.

@@ -88,6 +88,12 @@ before returning or making an adapter-internal next exchange, including turn-les
 requests. Losing that consumer fails locally and keeps the original evidence for
 retirement; an original provider error and known expense remain intact. An actor
 ACK is only handoff, not a durable budget receipt, send permit or retirement proof.
+The staged durable-receipt owner retains the actual blocking writer across
+canceled waiters. Frozen receipt clones share its original result. An uncertain
+write requires observing that writer and querying the original receipt; only a
+new positive absence query permits an explicit bookkeeping retry. Failed queries
+never count as acknowledgment or absence, and no provider request is replayed.
+This internal custody port does not enable production budget enforcement.
 Chat adapters also retain already decoded counters when the
 stream ends in a transport, HTTP-status, decoder, or finalization failure. Missing
 usage remains unavailable; normalized counters alone do not prove full coverage.

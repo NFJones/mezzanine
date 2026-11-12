@@ -8,6 +8,8 @@ use crate::storage::token_usage::budget::reporting::BudgetReportingObservation;
 use mez_agent::token_budget::{UsageSnapshot, UsageTotals};
 use mez_agent::{ModelTokenUsage, ModelTokenUsageKey};
 
+mod receipt_commit;
+
 async fn issued(scene: &mut Scene) -> crate::runtime::RuntimeAgentProviderDispatch {
     let turn = scene.start();
     let work = scene
@@ -32,9 +34,7 @@ async fn issued(scene: &mut Scene) -> crate::runtime::RuntimeAgentProviderDispat
 async fn settle(
     work: RuntimeBudgetReceiptWork,
 ) -> Result<crate::storage::token_usage::budget::receipts::BudgetReceiptOutcome> {
-    tokio::task::spawn_blocking(move || work.execute())
-        .await
-        .unwrap()
+    work.commit_owner().commit().await
 }
 
 /// Real runtime frozen owner -> worker grant -> receipt transaction, with no
@@ -264,7 +264,12 @@ async fn runtime_budget_request_receipt_keeps_original_store_and_custody_after_r
     connection
         .execute_batch("DROP TRIGGER refuse_request_receipt;")
         .unwrap();
-    let acknowledged = settle(report.clone()).await.unwrap();
+    assert!(settle(report.clone()).await.is_err());
+    let acknowledged = {
+        let receipt = report.commit_owner();
+        assert!(receipt.reconcile().await.unwrap().is_none());
+        receipt.retry_after_absence().await.unwrap()
+    };
     let check = report.clone();
     assert_eq!(
         tokio::task::spawn_blocking(move || check.reconcile())
