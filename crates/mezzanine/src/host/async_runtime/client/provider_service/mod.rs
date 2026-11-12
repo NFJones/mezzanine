@@ -52,6 +52,8 @@ mod budget_receipts;
 mod filesystem_ownership;
 mod native_ownership;
 use native_ownership::NativeWorkerOwner;
+mod producer_join;
+use producer_join::{ProviderProducer, ProviderProducerJoin};
 
 mod service_retirement;
 pub(in crate::host::async_runtime) use service_retirement::AgentProviderServiceRetirement;
@@ -130,14 +132,16 @@ struct ProviderObservationDrain {
     reported: Option<SharedProviderReportedUsage>,
 }
 
-/// Shared destruction observation and first flush failure, not proof of physical
-/// inference retirement. Failure publication cannot depend on actor settlement.
-/// Borrow the original receiver across awaits so canceling a cleanup observer
-/// neither consumes its signal nor removes the supervisor's journal custody.
+/// Shared destruction notice, actual task join and first flush failure. Real
+/// monitors attach the original producer join; a notice alone is not proof of
+/// retirement. Even that task join does not attest a physical exchange's remote
+/// completion. Borrow original handles across awaits so cancellation cannot
+/// detach the producer or remove the supervisor's journal/error custody.
 #[derive(Clone)]
 struct ProviderProducerCompletion(
     std::sync::Arc<tokio::sync::Mutex<Option<tokio::sync::oneshot::Receiver<()>>>>,
     std::sync::Arc<std::sync::Mutex<Option<MezError>>>,
+    Option<std::sync::Arc<dyn ProviderProducerJoin>>,
 );
 
 impl From<tokio::sync::oneshot::Receiver<()>> for ProviderProducerCompletion {
@@ -145,11 +149,17 @@ impl From<tokio::sync::oneshot::Receiver<()>> for ProviderProducerCompletion {
         Self(
             std::sync::Arc::new(tokio::sync::Mutex::new(Some(receiver))),
             Default::default(),
+            None,
         )
     }
 }
 
 impl ProviderProducerCompletion {
+    fn with_join(mut self, producer: std::sync::Arc<dyn ProviderProducerJoin>) -> Self {
+        self.2 = Some(producer);
+        self
+    }
+
     /// A known flush refusal must survive cancellation of later actor settlement.
     fn retain_failure(&self, result: &Result<()>) {
         if let Err(error) = result {
@@ -168,6 +178,9 @@ impl ProviderProducerCompletion {
     }
 
     async fn observe(&self) {
+        if let Some(producer) = &self.2 {
+            producer.observe().await;
+        }
         let mut original = self.0.lock().await;
         if let Some(receiver) = original.as_mut() {
             let _ = receiver.await;
@@ -1673,10 +1686,10 @@ where
     let pending_observations: PendingProviderWireObservations = Default::default();
     let (completed_sender, completed) = tokio::sync::oneshot::channel();
     let worker_pending = pending_observations.clone();
-    let mut worker = tokio::spawn(async move {
+    let worker = ProviderProducer::new(tokio::spawn(async move {
         let _completed = ProviderCompletionOnDrop(Some(completed_sender));
         factory(progress_sender, observation_sender, worker_pending).await
-    });
+    }));
     let drain_key = ProviderObservationOwner::Inference(turn_id.clone(), claim_generation);
     drains
         .lock()
@@ -1685,7 +1698,8 @@ where
             drain_key.clone(),
             ProviderObservationDrain {
                 abort: worker.abort_handle(),
-                completed: completed.into(),
+                completed: ProviderProducerCompletion::from(completed)
+                    .with_join(worker.retirement()),
                 pending: pending_observations.clone(),
                 reported: None,
             },
@@ -1695,7 +1709,8 @@ where
     let mut projection_dirty = false;
     loop {
         tokio::select! {
-            result = &mut worker => {
+            result = worker.result() => {
+                let result = result?;
                 handle.record_latency_phase(
                     crate::host::async_runtime::AsyncRuntimeLatencyPhase::ProviderTotal,
                     latency.total_elapsed_ms(Instant::now()),
@@ -1812,7 +1827,7 @@ where
                         latency.total_elapsed_ms(Instant::now()),
                     );
                     worker.abort();
-                    let _ = (&mut worker).await;
+                    let _ = worker.result().await?;
                     flush_pending_provider_observations(&handle, &pending_observations).await?;
                     drains.lock().unwrap_or_else(|error| error.into_inner()).remove(&drain_key);
                     return Ok(None);
@@ -1822,7 +1837,7 @@ where
         let lifecycle_state = *lifecycle.borrow();
         if is_terminal_runtime_lifecycle_state(lifecycle_state) {
             worker.abort();
-            let _ = (&mut worker).await;
+            let _ = worker.result().await?;
             flush_pending_provider_observations(&handle, &pending_observations).await?;
             drains
                 .lock()
@@ -1839,7 +1854,7 @@ where
             &lifecycle,
         )? {
             worker.abort();
-            let _ = (&mut worker).await;
+            let _ = worker.result().await?;
             flush_pending_provider_observations(&handle, &pending_observations).await?;
             drains
                 .lock()
@@ -1947,10 +1962,11 @@ where
             .with_reported_usage(reported.clone());
     let (completed_sender, completed) = tokio::sync::oneshot::channel();
     let completion = ProviderCompletionOnDrop(Some(completed_sender));
-    let (mut worker, _worker_owner) = spawn_auxiliary_provider_worker(move || async move {
+    let (worker, _worker_owner) = spawn_auxiliary_provider_worker(move || async move {
         let _completion = completion;
         execute(dispatch, observer).await
     });
+    let worker = ProviderProducer::new(worker);
     drains
         .lock()
         .unwrap_or_else(|error| error.into_inner())
@@ -1958,14 +1974,16 @@ where
             drain_key.clone(),
             ProviderObservationDrain {
                 abort: worker.abort_handle(),
-                completed: completed.into(),
+                completed: ProviderProducerCompletion::from(completed)
+                    .with_join(worker.retirement()),
                 pending: pending.clone(),
                 reported: Some(reported),
             },
         );
     loop {
         tokio::select! {
-            result = &mut worker => {
+            result = worker.result() => {
+                let result = result?;
                 while let Ok(observation) = observation_receiver.try_recv() {
                     submit_pending_provider_observation(&handle, &pending, observation).await?;
                 }
@@ -2040,10 +2058,11 @@ where
             .with_reported_usage(reported.clone());
     let (completed_sender, completed) = tokio::sync::oneshot::channel();
     let completion = ProviderCompletionOnDrop(Some(completed_sender));
-    let (mut worker, _worker_owner) = spawn_auxiliary_provider_worker(move || async move {
+    let (worker, _worker_owner) = spawn_auxiliary_provider_worker(move || async move {
         let _completion = completion;
         execute(dispatch, observer).await
     });
+    let worker = ProviderProducer::new(worker);
     drains
         .lock()
         .unwrap_or_else(|error| error.into_inner())
@@ -2051,14 +2070,16 @@ where
             drain_key.clone(),
             ProviderObservationDrain {
                 abort: worker.abort_handle(),
-                completed: completed.into(),
+                completed: ProviderProducerCompletion::from(completed)
+                    .with_join(worker.retirement()),
                 pending: pending.clone(),
                 reported: Some(reported),
             },
         );
     loop {
         tokio::select! {
-            result = &mut worker => {
+            result = worker.result() => {
+                let result = result?;
                 while let Ok(observation) = observation_receiver.try_recv() {
                     submit_pending_provider_observation(&handle, &pending, observation).await?;
                 }
@@ -2124,10 +2145,11 @@ where
             .with_reported_usage(reported.clone());
     let (completed_sender, completed) = tokio::sync::oneshot::channel();
     let completion = ProviderCompletionOnDrop(Some(completed_sender));
-    let (mut worker, _worker_owner) = spawn_auxiliary_provider_worker(move || async move {
+    let (worker, _worker_owner) = spawn_auxiliary_provider_worker(move || async move {
         let _completion = completion;
         execute(dispatch, observer).await
     });
+    let worker = ProviderProducer::new(worker);
     drains
         .lock()
         .unwrap_or_else(|error| error.into_inner())
@@ -2135,14 +2157,16 @@ where
             drain_key.clone(),
             ProviderObservationDrain {
                 abort: worker.abort_handle(),
-                completed: completed.into(),
+                completed: ProviderProducerCompletion::from(completed)
+                    .with_join(worker.retirement()),
                 pending: pending.clone(),
                 reported: Some(reported),
             },
         );
     loop {
         tokio::select! {
-            outcome = &mut worker => {
+            outcome = worker.result() => {
+                let outcome = outcome?;
                 while let Ok(observation) = observation_receiver.try_recv() {
                     submit_pending_provider_observation(&handle, &pending, observation).await?;
                 }

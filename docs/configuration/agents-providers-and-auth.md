@@ -106,6 +106,12 @@ in the existing service-retirement owner, along with its persistence dependency.
 An explicit later bookkeeping recovery may complete the handoff, but does not
 erase the original failure or replay inference/effects. Producer destruction is
 not proof that a physical provider exchange has retired.
+Ordinary and auxiliary monitors also share the actual producer task join with
+their retained retirement owner. A canceled waiter leaves that handle and its
+original result available; observing retirement again cannot create a second
+result or restart work. A destruction notice or abort request is not a join,
+and even the task join does not establish remote completion or release budget
+exposure. Production budget enforcement remains disabled at this staged boundary.
 Chat adapters also retain already decoded counters when the
 stream ends in a transport, HTTP-status, decoder, or finalization failure. Missing
 usage remains unavailable; normalized counters alone do not prove full coverage.

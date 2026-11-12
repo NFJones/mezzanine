@@ -106,12 +106,12 @@ async fn qualify_retirement(fault: Fault) {
     let weak_factory = Arc::downgrade(&factory);
     drop(factory);
     let (completed_sender, completed) = tokio::sync::oneshot::channel();
-    let producer = tokio::spawn(async move {
+    let producer = ProviderProducer::new(tokio::spawn(async move {
         let _completion = ProviderCompletionOnDrop(Some(completed_sender));
         ObservedAsyncModelProvider::new(&provider, &observer, ProviderRequestPurpose::Execution)
             .send_request_async(&request)
             .await
-    });
+    }));
     let observation = receiver.recv().await.unwrap();
     let (handle, actor) =
         crate::host::async_runtime::AsyncRuntimeSessionActor::new(service, Default::default())
@@ -152,7 +152,7 @@ async fn qualify_retirement(fault: Fault) {
         key.clone(),
         ProviderObservationDrain {
             abort: producer.abort_handle(),
-            completed: completed.into(),
+            completed: ProviderProducerCompletion::from(completed).with_join(producer.retirement()),
             pending,
             reported: None,
         },
@@ -279,7 +279,7 @@ async fn qualify_retirement(fault: Fault) {
         } else {
             retirement.retire().await.unwrap();
         }
-        assert!(producer.await.unwrap_err().is_cancelled());
+        assert!(producer.result().await.unwrap().unwrap_err().is_cancelled());
         let empty = drains.lock().unwrap().is_empty();
         let released = weak_factory.upgrade().is_none();
         assert!(dependencies.lock().unwrap().is_empty());

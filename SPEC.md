@@ -16707,6 +16707,12 @@ persistence dependency. Only successful exact receipt/actor handoff may remove
 that original journal; an old cleanup observer MUST NOT remove a replacement.
 Later successful bookkeeping transfer MUST NOT erase an original cleanup error
 or authorize replay of provider requests, actor outcomes or external effects.
+Provider monitors and their retained retirement drains MUST share the actual
+producer task join handle and its original result. Cancelling a join observer
+MUST NOT detach that handle or consume its result. Repeated retirement observation
+MUST NOT poll a consumed handle or manufacture another result. A destruction
+notice or abort request alone is not a join; a producer task join alone still
+does not prove physical exchange retirement, remote completion or exposure release.
 Unknown remote expense alone is incomplete coverage, not permanent numeric
 exhaustion. Pending/unavailable accounting and identity/integrity faults are
 separate operational holds, never evidence that a numeric threshold was reached.
