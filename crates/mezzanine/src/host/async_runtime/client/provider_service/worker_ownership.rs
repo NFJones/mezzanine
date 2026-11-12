@@ -489,14 +489,15 @@ pub(super) fn with_reported_auxiliary_failure_usage(
     Ok((event, false))
 }
 
-/// Destroys one retained producer before reading its final reported counters.
-/// Observation delivery errors remain distinct from the available cost snapshot.
+/// Observes destruction before reading final counters. The caller retains the
+/// original map entry throughout this borrow, including failed/canceled flushes.
+/// This signal alone never proves physical inference retirement or releases it.
 async fn retire_observation_drain(
     handle: &AsyncRuntimeSessionHandle,
-    drain: ProviderObservationDrain,
+    drain: &ProviderObservationDrain,
 ) -> (ProviderReportedUsage, Result<()>) {
     drain.abort.abort();
-    let _ = drain.completed.await;
+    drain.completed.observe().await;
     let reported = drain
         .reported
         .as_ref()
@@ -504,7 +505,25 @@ async fn retire_observation_drain(
             *reported.lock().unwrap_or_else(|error| error.into_inner())
         });
     let delivery = flush_pending_provider_observations(handle, &drain.pending).await;
+    // This result may next cross the cancellable actor-settlement await. Keep
+    // its first cause with the original map-owned source before returning it.
+    drain.completed.retain_failure(&delivery);
     (reported, delivery)
+}
+
+/// Remove only the successfully handed-off original, never a same-key successor.
+pub(super) fn release_observation_drain(
+    drains: &ProviderObservationDrains,
+    key: &ProviderObservationOwner,
+    original: &ProviderObservationDrain,
+) {
+    let mut retained = drains.lock().unwrap_or_else(|error| error.into_inner());
+    if retained
+        .get(key)
+        .is_some_and(|current| current.completed.same_source(&original.completed))
+    {
+        retained.remove(key);
+    }
 }
 
 /// Retires a captured request producer and attempts both diagnostic delivery
@@ -528,10 +547,17 @@ async fn retire_request_owner(
         drains
             .lock()
             .unwrap_or_else(|error| error.into_inner())
-            .remove(&owner.key())
+            .get(&owner.key())
+            .cloned()
     };
     let (reported, delivery) = match drain {
-        Some(drain) => retire_observation_drain(handle, drain).await,
+        Some(drain) => {
+            let result = retire_observation_drain(handle, &drain).await;
+            if result.1.is_ok() {
+                release_observation_drain(drains, &owner.key(), &drain);
+            }
+            result
+        }
         None => (ProviderReportedUsage::default(), Ok(())),
     };
     let closed = handle.lifecycle_state_watcher().has_changed().is_err();
@@ -719,10 +745,25 @@ pub(super) async fn retire_agent_provider_workers(
     }
     // Fatal monitor failures were observed above but remain retained until their
     // producer is destroyed. Other root producers use the same expense drain.
-    let retained = std::mem::take(&mut *drains.lock().unwrap_or_else(|error| error.into_inner()));
+    // Clone bounded owner handles, not receipt payloads. Never take the map into
+    // an abortable local future: later supervisor retirement must find failures.
+    let retained: Vec<_> = drains
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .iter()
+        .map(|(key, drain)| (key.clone(), drain.clone()))
+        .collect();
     let mut reported = BTreeMap::new();
     for (key, drain) in retained {
-        let (usage, delivery) = retire_observation_drain(handle, drain).await;
+        // Transfer previously observed refusal before any new await or journal
+        // release. Recovery can finish handoff, not rewrite failure as success.
+        if let Some(error) = drain.completed.failure() {
+            keep_cleanup_error(failures, Err(error));
+        }
+        let (usage, delivery) = retire_observation_drain(handle, &drain).await;
+        if delivery.is_ok() {
+            release_observation_drain(drains, &key, &drain);
+        }
         reported.insert(key, usage);
         keep_cleanup_error(failures, delivery);
     }

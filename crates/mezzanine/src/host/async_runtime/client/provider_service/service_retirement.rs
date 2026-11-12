@@ -5,6 +5,9 @@
 //! task's handle. The driver therefore finishes its original cleanup even when
 //! a request owner is temporarily local to a join future. If the driver fails,
 //! retained per-service state permits observed cleanup of remaining workers.
+//! Failed observation flushes remain in that same state across cleanup waits;
+//! exact handoff removes only their original journal. Later recovery preserves
+//! the original failure and never resubmits an already-issued actor outcome.
 //! Same-actor persistence dependencies live in the actual work state, independent
 //! of outer and cleanup observers; final writer records remain serviceable until
 //! publisher retirement finishes. Normal supervision never detaches cleanup or
@@ -276,6 +279,23 @@ impl AgentProviderServiceRetirement {
             Ok(completed) => primary.map(|count| count.saturating_add(completed)),
             Err(error) => finish_provider_service_result(primary, Err(error)),
         };
+        let pending_journals = !self
+            .work
+            .state
+            .lock()
+            .await
+            .drains
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .is_empty();
+        if pending_journals {
+            return finish_provider_service_result(
+                result,
+                Err(MezError::invalid_state(
+                    "provider retirement retains unacknowledged observation journals",
+                )),
+            );
+        }
         // No await follows release. Cancelled observers leave this work-owned
         // barrier installed until a resumed actual retirement attempt finishes.
         let released = self

@@ -121,12 +121,63 @@ fn native_worker_join_failure(error: &tokio::task::JoinError) -> &'static str {
 /// Service-owned expense evidence surviving monitor abort or early failure.
 /// Producer destruction is acknowledged before the ordinary wire journal is
 /// drained; this owner never sends provider requests or authorizes output.
+#[derive(Clone)]
 struct ProviderObservationDrain {
     abort: tokio::task::AbortHandle,
-    completed: tokio::sync::oneshot::Receiver<()>,
+    completed: ProviderProducerCompletion,
     pending: PendingProviderWireObservations,
     /// Auxiliary reported expense independent of wire-channel acknowledgment.
     reported: Option<SharedProviderReportedUsage>,
+}
+
+/// Shared destruction observation and first flush failure, not proof of physical
+/// inference retirement. Failure publication cannot depend on actor settlement.
+/// Borrow the original receiver across awaits so canceling a cleanup observer
+/// neither consumes its signal nor removes the supervisor's journal custody.
+#[derive(Clone)]
+struct ProviderProducerCompletion(
+    std::sync::Arc<tokio::sync::Mutex<Option<tokio::sync::oneshot::Receiver<()>>>>,
+    std::sync::Arc<std::sync::Mutex<Option<MezError>>>,
+);
+
+impl From<tokio::sync::oneshot::Receiver<()>> for ProviderProducerCompletion {
+    fn from(receiver: tokio::sync::oneshot::Receiver<()>) -> Self {
+        Self(
+            std::sync::Arc::new(tokio::sync::Mutex::new(Some(receiver))),
+            Default::default(),
+        )
+    }
+}
+
+impl ProviderProducerCompletion {
+    /// A known flush refusal must survive cancellation of later actor settlement.
+    fn retain_failure(&self, result: &Result<()>) {
+        if let Err(error) = result {
+            self.1
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .get_or_insert_with(|| error.clone());
+        }
+    }
+
+    fn failure(&self) -> Option<MezError> {
+        self.1
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone()
+    }
+
+    async fn observe(&self) {
+        let mut original = self.0.lock().await;
+        if let Some(receiver) = original.as_mut() {
+            let _ = receiver.await;
+            *original = None;
+        }
+    }
+
+    fn same_source(&self, other: &Self) -> bool {
+        std::sync::Arc::ptr_eq(&self.0, &other.0)
+    }
 }
 
 /// Retained cleanup owners for the currently active inference monitors.
@@ -492,8 +543,14 @@ where
     let result = finish_provider_service_result(result, cleanup);
     // The returned result now owns the error; no await can lose it between
     // this transfer and the wrapper's observed completion.
-    *service_failure = None;
-    *cleanup_failures = ProviderCleanupFailures::default();
+    if drains
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .is_empty()
+    {
+        *service_failure = None;
+        *cleanup_failures = ProviderCleanupFailures::default();
+    }
     result
 }
 
@@ -1628,7 +1685,7 @@ where
             drain_key.clone(),
             ProviderObservationDrain {
                 abort: worker.abort_handle(),
-                completed,
+                completed: completed.into(),
                 pending: pending_observations.clone(),
                 reported: None,
             },
@@ -1901,7 +1958,7 @@ where
             drain_key.clone(),
             ProviderObservationDrain {
                 abort: worker.abort_handle(),
-                completed,
+                completed: completed.into(),
                 pending: pending.clone(),
                 reported: Some(reported),
             },
@@ -1994,7 +2051,7 @@ where
             drain_key.clone(),
             ProviderObservationDrain {
                 abort: worker.abort_handle(),
-                completed,
+                completed: completed.into(),
                 pending: pending.clone(),
                 reported: Some(reported),
             },
@@ -2078,7 +2135,7 @@ where
             drain_key.clone(),
             ProviderObservationDrain {
                 abort: worker.abort_handle(),
-                completed,
+                completed: completed.into(),
                 pending: pending.clone(),
                 reported: Some(reported),
             },

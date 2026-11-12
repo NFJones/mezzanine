@@ -101,6 +101,11 @@ registered attempt cannot be reused for another wire exchange, even through a
 cloned descriptor. Wire receipts currently checkpoint subtotals only, preserving
 missing/zero distinctions and qualified subset lower bounds without claiming
 final coverage, releasing exposure, or duplicating rolling usage reports.
+Failed or cancelled final flushing keeps the original journal and shared writer
+in the existing service-retirement owner, along with its persistence dependency.
+An explicit later bookkeeping recovery may complete the handoff, but does not
+erase the original failure or replay inference/effects. Producer destruction is
+not proof that a physical provider exchange has retired.
 Chat adapters also retain already decoded counters when the
 stream ends in a transport, HTTP-status, decoder, or finalization failure. Missing
 usage remains unavailable; normalized counters alone do not prove full coverage.

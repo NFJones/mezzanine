@@ -16700,6 +16700,13 @@ exchange. One registered attempt MUST NOT bind a different wire observation,
 including through a cloned descriptor. A wire subtotal MUST preserve independent
 missing/zero knowledge and MAY retain qualified cache/reasoning lower bounds;
 it MUST NOT claim terminal completeness or add a second rolling-reporting event.
+Failed or cancelled final observation flushing MUST leave the original journal
+and shared receipt writer in the existing service-retirement owner. Producer
+destruction alone MUST NOT discard that custody or release its same-actor
+persistence dependency. Only successful exact receipt/actor handoff may remove
+that original journal; an old cleanup observer MUST NOT remove a replacement.
+Later successful bookkeeping transfer MUST NOT erase an original cleanup error
+or authorize replay of provider requests, actor outcomes or external effects.
 Unknown remote expense alone is incomplete coverage, not permanent numeric
 exhaustion. Pending/unavailable accounting and identity/integrity faults are
 separate operational holds, never evidence that a numeric threshold was reached.

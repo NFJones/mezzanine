@@ -1023,7 +1023,7 @@ async fn max_messages_service_stop_flushes_backpressured_wire_journal() {
         ProviderObservationOwner::Inference(dispatch.turn.turn_id.clone(), 7),
         ProviderObservationDrain {
             abort: abort.clone(),
-            completed,
+            completed: completed.into(),
             pending: pending.clone(),
             reported: None,
         },

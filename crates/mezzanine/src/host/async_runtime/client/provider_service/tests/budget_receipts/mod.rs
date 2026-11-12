@@ -2,6 +2,8 @@
 //! Admission is explicitly prepared before the fake physical exchange; this
 //! staged bridge does not claim production activation or retirement release.
 
+mod retirement;
+
 use super::super::budget_receipts::BudgetObservationReceipts;
 use super::*;
 use crate::integrations::agent::provider::{
