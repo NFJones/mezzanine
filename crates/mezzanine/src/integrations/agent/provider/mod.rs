@@ -540,9 +540,11 @@ use mez_agent::{
     provider_error_detail as openai_provider_error_detail,
     provider_failure_json_with_retry_headers as openai_provider_failure_json_with_retry_headers,
 };
-pub(crate) use observation_delivery::PendingProviderWireObservations;
 #[cfg(test)]
 pub(crate) use observation_delivery::observe_and_acknowledge_for_test;
+pub(crate) use observation_delivery::{
+    PendingProviderWireObservations, ProviderObservationReceipt, ProviderObservationReceiptFactory,
+};
 use openai_chat_completions::OpenAiChatCompletionsDialect;
 
 use mez_agent::{CHATGPT_RESPONSES_ENDPOINT, OPENAI_RESPONSES_ENDPOINT};
@@ -746,6 +748,7 @@ pub struct ProviderWireRequestObserver {
     sender: tokio::sync::mpsc::Sender<ProviderWireRequestObservation>,
     claim_generation: Option<u64>,
     pending: Option<PendingProviderWireObservations>,
+    budget_receipts: Option<std::sync::Arc<dyn ProviderObservationReceiptFactory>>,
     reported: Option<SharedProviderReportedUsage>,
     /// A journal-owned observation lost its actor delivery channel. The
     /// observed adapter must fail locally instead of advancing private work.
@@ -769,6 +772,7 @@ impl ProviderWireRequestObserver {
             sender,
             claim_generation: None,
             pending: None,
+            budget_receipts: None,
             reported: None,
             delivery_failed: AtomicBool::new(false),
         }
@@ -787,6 +791,25 @@ impl ProviderWireRequestObserver {
     ) -> Self {
         self.pending = Some(pending);
         self
+    }
+
+    /// Staged native receipt capture requires original journal custody before I/O.
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "physical-attempt assembly remains staged")
+    )]
+    pub(crate) fn with_budget_receipts(
+        mut self,
+        factory: std::sync::Arc<dyn ProviderObservationReceiptFactory>,
+    ) -> Result<Self> {
+        self.pending
+            .as_ref()
+            .ok_or_else(|| {
+                MezError::invalid_state("budget receipts require an original observation journal")
+            })?
+            .require_budget_receipts()?;
+        self.budget_receipts = Some(factory);
+        Ok(self)
     }
 
     /// Retains each normalized wire report once before cancellable delivery.
@@ -1078,7 +1101,8 @@ impl<'a> ProviderWireObservationContext<'a> {
             reported.known_observations = reported.known_observations.saturating_add(1);
         }
         if let Some(pending) = &self.observer.pending {
-            pending.retain(observation.clone());
+            pending
+                .retain_with_receipt(observation.clone(), self.observer.budget_receipts.as_ref());
         }
         self.retained_observations.fetch_add(1, Ordering::Release);
     }

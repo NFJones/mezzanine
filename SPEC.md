@@ -16692,6 +16692,14 @@ After an observed writer failure, a fresh positive absence query MAY permit one
 explicit retry of that same immutable bookkeeping operation, never inference or
 effects. Receipt acknowledgment alone MUST NOT release provider exposure or
 attest provider retirement. These staged custody ports do not activate budgets.
+Budgeted wire observations MUST retain their original receipt and native source
+in the same journal before cancellable delivery. Actor acknowledgment MUST NOT
+remove an uncommitted, refused or conflicting budgeted entry. Durable receipt
+commit MUST precede actor handoff; neither milestone alone authorizes another
+exchange. One registered attempt MUST NOT bind a different wire observation,
+including through a cloned descriptor. A wire subtotal MUST preserve independent
+missing/zero knowledge and MAY retain qualified cache/reasoning lower bounds;
+it MUST NOT claim terminal completeness or add a second rolling-reporting event.
 Unknown remote expense alone is incomplete coverage, not permanent numeric
 exhaustion. Pending/unavailable accounting and identity/integrity faults are
 separate operational holds, never evidence that a numeric threshold was reached.

@@ -5,15 +5,53 @@
 //! monitors acknowledge only successful actor ingress. Journal-owned continuations
 //! await their own observation without racing a post-retirement drain. Producer
 //! cancellation leaves unacknowledged evidence for its original retirement owner.
+//! A staged budgeted entry additionally retains its frozen native receipt before
+//! delivery and requires durable checkpointing before that actor handoff. These
+//! subtotals neither attest final coverage nor release issued provider exposure.
 
 use super::ProviderWireRequestObservation;
+use crate::error::{MezError, Result};
 use std::collections::BTreeMap;
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use tokio::sync::Notify;
 
+/// A frozen original receipt, never permission to send or release exposure.
+/// Implementations retain their actual writer across canceled checkpoint waits.
+pub(crate) trait ProviderObservationReceipt: Send + Sync {
+    fn checkpoint(&self) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>>;
+}
+
+/// Pure, bounded capture before channel delivery; no filesystem or provider I/O.
+/// Each physical exchange needs its own original registered-attempt descriptor.
+pub(crate) trait ProviderObservationReceiptFactory: Send + Sync {
+    fn freeze(
+        &self,
+        observation: &ProviderWireRequestObservation,
+    ) -> Result<Arc<dyn ProviderObservationReceipt>>;
+}
+
+enum BudgetCheckpoint {
+    Unbudgeted,
+    Pending(Arc<dyn ProviderObservationReceipt>),
+    Committed(Arc<dyn ProviderObservationReceipt>),
+    Refused(MezError),
+}
+
+struct Entry {
+    observation: ProviderWireRequestObservation,
+    budget: BudgetCheckpoint,
+    // Even a failed pure capture must retain its original native descriptor.
+    _factory: Option<Arc<dyn ProviderObservationReceiptFactory>>,
+    conflicted: bool,
+}
+
 #[derive(Default)]
 struct Journal {
-    entries: Mutex<BTreeMap<String, ProviderWireRequestObservation>>,
+    entries: Mutex<BTreeMap<String, Entry>>,
+    budget_required: AtomicBool,
     acknowledged: Notify,
 }
 
@@ -24,7 +62,7 @@ pub(crate) struct PendingProviderWireObservations(Arc<Journal>);
 impl PendingProviderWireObservations {
     /// Preserves already reported expense even when a prior presentation panic
     /// poisoned the lock; no payload or execution authority lives in this map.
-    fn entries(&self) -> MutexGuard<'_, BTreeMap<String, ProviderWireRequestObservation>> {
+    fn entries(&self) -> MutexGuard<'_, BTreeMap<String, Entry>> {
         self.0
             .entries
             .lock()
@@ -32,14 +70,125 @@ impl PendingProviderWireObservations {
     }
 
     /// Retains an immutable receipt before sending through the bounded channel.
+    #[cfg(test)]
     pub(crate) fn retain(&self, observation: ProviderWireRequestObservation) {
-        self.entries()
-            .insert(observation.request_id.clone(), observation);
+        self.retain_with_receipt(observation, None);
     }
 
-    /// Removes a receipt only after successful actor ingress and wakes waiters.
+    /// Records missing factory work as a refusal, never silently unbudgeted.
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "physical-attempt assembly remains staged")
+    )]
+    pub(crate) fn require_budget_receipts(&self) -> Result<()> {
+        let entries = self.entries();
+        if !entries.is_empty() {
+            return Err(MezError::conflict(
+                "budget observation journal already contains work",
+            ));
+        }
+        self.0.budget_required.store(true, Ordering::Release);
+        Ok(())
+    }
+
+    /// The checkpoint and observation enter the SAME journal before any await.
+    /// A failed freeze preserves the wire evidence and fences acknowledgment.
+    pub(crate) fn retain_with_receipt(
+        &self,
+        observation: ProviderWireRequestObservation,
+        factory: Option<&Arc<dyn ProviderObservationReceiptFactory>>,
+    ) {
+        let budget = if let Some(factory) = factory {
+            self.0.budget_required.store(true, Ordering::Release);
+            match factory.freeze(&observation) {
+                Ok(receipt) => BudgetCheckpoint::Pending(receipt),
+                Err(error) => BudgetCheckpoint::Refused(error),
+            }
+        } else if self.0.budget_required.load(Ordering::Acquire) {
+            BudgetCheckpoint::Refused(MezError::invalid_state(
+                "original budget receipt unavailable",
+            ))
+        } else {
+            BudgetCheckpoint::Unbudgeted
+        };
+        let mut entries = self.entries();
+        if let Some(original) = entries.get_mut(&observation.request_id) {
+            if original.observation != observation {
+                original.conflicted = true;
+            }
+            return;
+        }
+        entries.insert(
+            observation.request_id.clone(),
+            Entry {
+                observation,
+                budget,
+                _factory: factory.cloned(),
+                conflicted: false,
+            },
+        );
+    }
+
+    /// Runs only original bookkeeping, outside the synchronous journal lock.
+    /// The entry retains its actual writer even if this monitor is canceled.
+    pub(crate) async fn checkpoint(
+        &self,
+        observation: &ProviderWireRequestObservation,
+    ) -> Result<()> {
+        let receipt = {
+            let entries = self.entries();
+            let Some(entry) = entries.get(&observation.request_id) else {
+                return if self.0.budget_required.load(Ordering::Acquire) {
+                    Err(MezError::conflict(
+                        "original budget observation unavailable",
+                    ))
+                } else {
+                    Ok(())
+                };
+            };
+            if entry.conflicted || entry.observation != *observation {
+                return Err(MezError::conflict(
+                    "provider observation checkpoint changed",
+                ));
+            }
+            match &entry.budget {
+                BudgetCheckpoint::Unbudgeted | BudgetCheckpoint::Committed(_) => return Ok(()),
+                BudgetCheckpoint::Refused(error) => return Err(error.clone()),
+                BudgetCheckpoint::Pending(receipt) => receipt.clone(),
+            }
+        };
+        receipt.checkpoint().await?;
+        let mut entries = self.entries();
+        let entry = entries.get_mut(&observation.request_id).ok_or_else(|| {
+            MezError::conflict("budget observation disappeared before checkpoint")
+        })?;
+        if entry.conflicted {
+            return Err(MezError::conflict("retained provider observation changed"));
+        }
+        match &entry.budget {
+            BudgetCheckpoint::Committed(original) if Arc::ptr_eq(original, &receipt) => Ok(()),
+            BudgetCheckpoint::Pending(original) if Arc::ptr_eq(original, &receipt) => {
+                entry.budget = BudgetCheckpoint::Committed(receipt);
+                Ok(())
+            }
+            _ => Err(MezError::conflict(
+                "budget observation checkpoint owner changed",
+            )),
+        }
+    }
+
+    /// Actor ingress cannot remove an uncommitted/refused budget receipt.
     pub(crate) fn acknowledge(&self, id: &str) {
-        let removed = self.entries().remove(id).is_some();
+        let mut entries = self.entries();
+        let eligible = entries.get(id).is_some_and(|entry| {
+            !entry.conflicted
+                && matches!(
+                    entry.budget,
+                    BudgetCheckpoint::Unbudgeted | BudgetCheckpoint::Committed(_)
+                )
+        });
+        let removed = eligible && entries.remove(id).is_some();
+        drop(entries);
         if removed {
             self.0.acknowledged.notify_waiters();
         }
@@ -48,7 +197,10 @@ impl PendingProviderWireObservations {
     /// Copies retained evidence after the producer is physically retired. A
     /// live producer must use per-receipt acknowledgment instead of this drain.
     pub(crate) fn snapshot(&self) -> Vec<ProviderWireRequestObservation> {
-        self.entries().values().cloned().collect()
+        self.entries()
+            .values()
+            .map(|entry| entry.observation.clone())
+            .collect()
     }
 
     /// Waits for this exact actor acknowledgment. Register before examining the

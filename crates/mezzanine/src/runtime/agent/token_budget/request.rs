@@ -65,6 +65,7 @@ impl RuntimeBudgetRequestOwner {
         Ok(RuntimeBudgetAttemptWork(Arc::new(AttemptSource {
             owner: self.clone(),
             attempt,
+            wire: std::sync::OnceLock::new(),
         })))
     }
 }
@@ -73,6 +74,15 @@ impl RuntimeBudgetRequestOwner {
 struct AttemptSource {
     owner: RuntimeBudgetRequestOwner,
     attempt: BudgetAttempt,
+    wire: std::sync::OnceLock<WireReceiptCapture>,
+}
+
+/// Data and shared writer state only: no reverse reference to AttemptSource.
+#[derive(Debug)]
+struct WireReceiptCapture {
+    observation: crate::integrations::agent::provider::ProviderWireRequestObservation,
+    receipt: Result<BudgetReceipt>,
+    commit: super::receipt_commit::SharedReceiptCommit,
 }
 
 /// Immutable original registration work; keep it until the ACK is reconciled.
@@ -209,6 +219,111 @@ pub(crate) struct RuntimeBudgetRegisteredAttempt(Arc<AttemptSource>);
     expect(dead_code, reason = "receipt driver integration is downstream")
 )]
 impl RuntimeBudgetRegisteredAttempt {
+    /// Pure capture of a native wire subtotal, not final coverage or retirement.
+    /// Cache-only/reasoning-only evidence is a lower bound, never an invented
+    /// missing primary zero. Original reporting remains on its existing path.
+    pub(crate) fn freeze_wire_receipt(
+        &self,
+        observation: &crate::integrations::agent::provider::ProviderWireRequestObservation,
+    ) -> Result<RuntimeBudgetReceiptWork> {
+        let captured = self.0.wire.get_or_init(|| WireReceiptCapture {
+            observation: observation.clone(),
+            receipt: self.capture_wire_receipt(observation),
+            commit: Default::default(),
+        });
+        if captured.observation != *observation {
+            return Err(MezError::conflict(
+                "registered budget attempt already owns another exchange",
+            ));
+        }
+        Ok(RuntimeBudgetReceiptWork(Arc::new(ReceiptSource {
+            attempt: self.clone(),
+            receipt: captured.receipt.clone()?,
+            commit: std::sync::OnceLock::from(captured.commit.clone()),
+        })))
+    }
+
+    fn capture_wire_receipt(
+        &self,
+        observation: &crate::integrations::agent::provider::ProviderWireRequestObservation,
+    ) -> Result<BudgetReceipt> {
+        use crate::integrations::agent::provider::ProviderRequestPurpose as Purpose;
+        let original = &self.0.attempt;
+        let purpose = match original.purpose {
+            BudgetAttemptPurpose::Execution => Purpose::Execution,
+            BudgetAttemptPurpose::Routing => Purpose::Routing,
+            BudgetAttemptPurpose::Compaction => Purpose::Compaction,
+            BudgetAttemptPurpose::Memory => Purpose::Memory,
+            BudgetAttemptPurpose::Title
+            | BudgetAttemptPurpose::MacroJudge
+            | BudgetAttemptPurpose::SandboxAssessment
+            | BudgetAttemptPurpose::FailureSummary => Purpose::Auxiliary,
+        };
+        if observation.conversation_id != original.conversation
+            || observation.provider != original.model.provider
+            || observation.model != original.model.model
+            || observation.purpose != purpose
+            || observation.request_id.is_empty()
+            || observation.request_id.len() > 256
+        {
+            return Err(MezError::conflict(
+                "budget wire receipt original identity changed",
+            ));
+        }
+        let presence = observation.usage_presence.ok_or_else(|| {
+            MezError::invalid_state("budget wire receipt requires qualified counter evidence")
+        })?;
+        let mut snapshot = UsageSnapshot::default();
+        if let Some(usage) = observation.usage {
+            let cache =
+                usage.cached_input_tokens.is_some() || usage.cache_write_input_tokens.is_some();
+            let cache_lower_bound = usage
+                .cached_input_tokens
+                .unwrap_or(0)
+                .checked_add(usage.cache_write_input_tokens.unwrap_or(0))
+                .ok_or_else(|| MezError::conflict("budget cache subtotal overflow"))?;
+            if presence.input && cache_lower_bound > usage.input_tokens {
+                return Err(MezError::conflict("budget input contradicts cache subsets"));
+            }
+            if !presence.input && usage.input_tokens > cache_lower_bound {
+                return Err(MezError::conflict(
+                    "budget input lacks original counter evidence",
+                ));
+            }
+            if !presence.output && usage.output_tokens != 0 {
+                return Err(MezError::conflict(
+                    "budget output lacks original counter evidence",
+                ));
+            }
+            if presence.output && usage.reasoning_tokens > usage.output_tokens {
+                return Err(MezError::conflict(
+                    "budget output contradicts reasoning subset",
+                ));
+            }
+            if presence.input || cache {
+                snapshot.input = Some(usage.input_tokens.max(cache_lower_bound));
+            }
+            snapshot.output = if presence.output {
+                Some(usage.output_tokens)
+            } else {
+                (usage.reasoning_tokens != 0).then_some(usage.reasoning_tokens)
+            };
+        } else if presence.input || presence.output {
+            return Err(MezError::conflict(
+                "budget reported counters lost their values",
+            ));
+        }
+        Ok(BudgetReceipt {
+            id: BudgetReceiptId::new(crate::storage::token_usage::new_token_usage_event_id())
+                .map_err(|error| MezError::invalid_state(error.to_string()))?,
+            attempt: self.0.attempt.clone(),
+            snapshot,
+            // Actor ingress still owns the existing rolling-reporting event.
+            // Do not project a second expense event for the same exchange.
+            reporting: None,
+        })
+    }
+
     /// Freeze reported knowledge once before cancellable delivery. Reporting
     /// time/counters and receipt ID survive retries byte-for-byte; missing
     /// dimensions remain missing rather than becoming an invented zero.
@@ -243,10 +358,6 @@ struct ReceiptSource {
 #[derive(Debug, Clone)]
 pub(crate) struct RuntimeBudgetReceiptWork(Arc<ReceiptSource>);
 
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "receipt driver integration is downstream")
-)]
 impl RuntimeBudgetReceiptWork {
     /// Pure capture; every clone of this immutable receipt shares one writer.
     /// The service must retain this owner outside cancellable ACK waiters.

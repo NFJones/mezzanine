@@ -94,6 +94,13 @@ write requires observing that writer and querying the original receipt; only a
 new positive absence query permits an explicit bookkeeping retry. Failed queries
 never count as acknowledgment or absence, and no provider request is replayed.
 This internal custody port does not enable production budget enforcement.
+Budgeted observations retain that frozen receipt in the original wire journal
+before channel delivery. The staged handoff commits it before actor adoption;
+actor ACK alone cannot discard an uncommitted or conflicting receipt. One
+registered attempt cannot be reused for another wire exchange, even through a
+cloned descriptor. Wire receipts currently checkpoint subtotals only, preserving
+missing/zero distinctions and qualified subset lower bounds without claiming
+final coverage, releasing exposure, or duplicating rolling usage reports.
 Chat adapters also retain already decoded counters when the
 stream ends in a transport, HTTP-status, decoder, or finalization failure. Missing
 usage remains unavailable; normalized counters alone do not prove full coverage.

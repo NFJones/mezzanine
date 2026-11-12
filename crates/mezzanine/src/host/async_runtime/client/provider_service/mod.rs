@@ -44,6 +44,11 @@ use worker_ownership::{
     take_completed_auxiliary_usage, with_reported_auxiliary_failure_usage,
 };
 
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "physical-attempt assembly remains staged")
+)]
+mod budget_receipts;
 mod filesystem_ownership;
 mod native_ownership;
 use native_ownership::NativeWorkerOwner;
@@ -1799,6 +1804,7 @@ async fn submit_pending_provider_observation(
     observation: ProviderWireRequestObservation,
 ) -> Result<()> {
     let id = observation.request_id.clone();
+    pending.checkpoint(&observation).await?;
     submit_provider_wire_request_observation(handle, observation).await?;
     pending.acknowledge(&id);
     Ok(())
@@ -2866,6 +2872,7 @@ mod tests {
     mod auxiliary_actor_faults;
     mod auxiliary_containment;
     mod budget_custody;
+    mod budget_receipts;
     mod compaction_waves;
     mod incomplete;
     mod network_progress;

@@ -72,9 +72,9 @@ fn budget_legacy_confirmation_contract_is_reachable_from_host() {
 /// until every owned service/request/socket has retired, then verify deletion.
 /// Drop cannot await request retirement: on unwind it diagnoses and retains,
 /// never unlinks a live custody inode or risks a second panic during cleanup.
-struct FixtureRoot(Option<std::path::PathBuf>);
+pub(super) struct FixtureRoot(pub(super) Option<std::path::PathBuf>);
 impl FixtureRoot {
-    fn cleanup(&mut self) {
+    pub(super) fn cleanup(&mut self) {
         let path = self.0.as_ref().unwrap();
         std::fs::remove_dir_all(path).unwrap();
         assert!(!path.exists());

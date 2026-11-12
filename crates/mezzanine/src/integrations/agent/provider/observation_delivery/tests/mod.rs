@@ -2,6 +2,8 @@
 //! aborted waits and failed channels retain the same original expense evidence.
 //! This handoff is not durable budget settlement or native retirement proof.
 
+mod budget;
+
 use super::*;
 use crate::error::Result;
 use crate::integrations::agent::provider::{
