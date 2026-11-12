@@ -9,6 +9,7 @@ use rusqlite::params;
 
 mod native_custody;
 mod policy_projection;
+mod reconciliation;
 mod reporting;
 mod resolution;
 
@@ -711,7 +712,10 @@ fn budget_storage_receipt_commit_before_process_exit_reopens_once() {
     assert_eq!(status.code(), Some(77));
     let reopened = TokenUsageStore::new(f.store.path());
     let original_receipt = receipt(&original, "crash-receipt", Some(17), Some(6), true);
-    let first = reopened.commit_budget_receipt(&original_receipt).unwrap();
+    let first = reopened
+        .budget_receipt_outcome(&original_receipt)
+        .unwrap()
+        .unwrap();
     assert_eq!(first.accounting_revision, 1);
     assert_eq!(
         first.known,

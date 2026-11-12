@@ -94,6 +94,35 @@ impl BudgetAttempt {
 }
 
 impl TokenUsageStore {
+    /// Reconciles a lost registration acknowledgement without registering or
+    /// reissuing anything. Absence is distinct from conflicting provenance or
+    /// an unavailable original repository. This is never a spend permit.
+    pub(crate) fn budget_attempt_registration(&self, attempt: &BudgetAttempt) -> Result<bool> {
+        attempt.validate()?;
+        let mut connection = self.open_budget_query()?;
+        let snapshot = connection.transaction()?;
+        if namespace(&snapshot)? != attempt.namespace {
+            return Err(MezError::conflict("budget attempt namespace mismatch"));
+        }
+        attempt_registration(&snapshot, attempt)
+    }
+
+    /// Queries only the original immutable receipt outcome after commit/ACK
+    /// uncertainty. Later account revisions cannot replace that outcome. A
+    /// missing receipt is not a successful zero settlement or retry authority.
+    pub(crate) fn budget_receipt_outcome(
+        &self,
+        receipt: &BudgetReceipt,
+    ) -> Result<Option<BudgetReceiptOutcome>> {
+        receipt.attempt.validate()?;
+        let mut connection = self.open_budget_query()?;
+        let snapshot = connection.transaction()?;
+        if namespace(&snapshot)? != receipt.attempt.namespace {
+            return Err(MezError::conflict("budget receipt namespace mismatch"));
+        }
+        receipt_outcome(&snapshot, receipt)
+    }
+
     /// Durably registers a concrete attempt. Caller still owns actual admission,
     /// finite-root concurrency and revision checks; this is not a spend permit.
     pub(crate) fn register_budget_attempt(&self, attempt: &BudgetAttempt) -> Result<bool> {
@@ -111,17 +140,7 @@ impl TokenUsageStore {
                 "budget attempt requires original active membership",
             ));
         }
-        let existing: Option<String> = tx
-            .query_row(
-                "SELECT body FROM budget_attempts WHERE id=?1",
-                [attempt.id.as_str()],
-                |r| r.get(0),
-            )
-            .optional()?;
-        if let Some(existing) = existing {
-            if decode::<BudgetAttempt>(&existing)? != *attempt {
-                return Err(MezError::conflict("budget attempt changed replay"));
-            }
+        if attempt_registration(&tx, attempt)? {
             return Ok(false);
         }
         let outstanding: i64 = tx.query_row(
@@ -154,23 +173,7 @@ impl TokenUsageStore {
         if namespace(&tx)? != receipt.attempt.namespace {
             return Err(MezError::conflict("budget receipt namespace mismatch"));
         }
-        if let Some((stored, outcome)) = tx
-            .query_row(
-                "SELECT body,outcome FROM budget_receipts WHERE id=?1",
-                [receipt.id.as_str()],
-                |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
-            )
-            .optional()?
-        {
-            if decode::<BudgetReceipt>(&stored)? != *receipt {
-                return Err(MezError::conflict("budget receipt changed replay"));
-            }
-            let outcome: BudgetReceiptOutcome = decode(&outcome)?;
-            if outcome.receipt != receipt.id || outcome.root != receipt.attempt.root {
-                return Err(MezError::conflict(
-                    "budget receipt outcome identity mismatch",
-                ));
-            }
+        if let Some(outcome) = receipt_outcome(&tx, receipt)? {
             return Ok(outcome);
         }
         let (original, snapshot, root, conversation, terminal): (
@@ -281,6 +284,54 @@ impl TokenUsageStore {
         tx.commit()?;
         Ok(outcome)
     }
+}
+
+/// Shared replay/query validation keeps the read-only recovery port at least
+/// as strict as mutation replay, including indexed-column/body consistency.
+fn attempt_registration(connection: &Connection, attempt: &BudgetAttempt) -> Result<bool> {
+    let existing: Option<(String, String, String)> = connection
+        .query_row(
+            "SELECT body,root,conversation FROM budget_attempts WHERE id=?1",
+            [attempt.id.as_str()],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .optional()?;
+    let Some((body, root, conversation)) = existing else {
+        return Ok(false);
+    };
+    if decode::<BudgetAttempt>(&body)? != *attempt
+        || root != attempt.root.as_str()
+        || conversation != attempt.conversation
+    {
+        return Err(MezError::conflict("budget attempt changed replay"));
+    }
+    Ok(true)
+}
+
+fn receipt_outcome(
+    connection: &Connection,
+    receipt: &BudgetReceipt,
+) -> Result<Option<BudgetReceiptOutcome>> {
+    let existing: Option<(String, String, String)> = connection
+        .query_row(
+            "SELECT body,outcome,attempt FROM budget_receipts WHERE id=?1",
+            [receipt.id.as_str()],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .optional()?;
+    let Some((body, outcome, attempt)) = existing else {
+        return Ok(None);
+    };
+    if decode::<BudgetReceipt>(&body)? != *receipt || attempt != receipt.attempt.id.as_str() {
+        return Err(MezError::conflict("budget receipt changed replay"));
+    }
+    let outcome: BudgetReceiptOutcome = decode(&outcome)?;
+    if outcome.receipt != receipt.id || outcome.root != receipt.attempt.root {
+        return Err(MezError::conflict(
+            "budget receipt outcome identity mismatch",
+        ));
+    }
+    Ok(Some(outcome))
 }
 
 fn usage_error(error: mez_agent::token_budget::BudgetUsageError) -> MezError {

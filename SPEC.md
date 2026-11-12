@@ -21627,6 +21627,14 @@ then reoffer the original pending operation without replacement input. Retained
 preparation metadata MUST remain bounded; neither caller cancellation nor a lost
 reply proves publication retirement or durable acknowledgement.
 
+Worker-side reconciliation of an uncertain attempt-registration or receipt ACK
+MUST query the exact original namespace and immutable request/receipt using a
+read-only database snapshot. It MUST return the original stored outcome even
+after later expense advances account revisions. Missing evidence MUST remain
+distinct from conflicting provenance or an unavailable store, and MUST NOT
+authorize a provider retry, fabricate zero settlement or create a replacement
+ledger. Indexed relationship columns and encoded provenance MUST agree.
+
 Runtime budget membership captures MUST remain bounded at4096 entries. Capacity
 reclamation MAY discard only detached, acknowledged actor metadata with no
 outstanding preparation or rollback owner. Current pane bindings, saved loop

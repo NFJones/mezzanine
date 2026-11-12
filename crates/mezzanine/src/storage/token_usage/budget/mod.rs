@@ -66,13 +66,20 @@ impl TokenUsageStore {
     /// Existing-only admission is crucial after a store was lost or replaced.
     /// Schema migration belongs to ordinary explicit store initialization.
     fn open_budget(&self) -> Result<Connection> {
-        let connection = Connection::open_with_flags(
-            self.path(),
-            OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-        )
-        .map_err(|error| {
-            MezError::from(error).with_context("open existing budget accounting store")
-        })?;
+        self.open_budget_mode(OpenFlags::SQLITE_OPEN_READ_WRITE)
+    }
+
+    /// ACK reconciliation cannot create a store or perform recovery writes.
+    fn open_budget_query(&self) -> Result<Connection> {
+        self.open_budget_mode(OpenFlags::SQLITE_OPEN_READ_ONLY)
+    }
+
+    fn open_budget_mode(&self, mode: OpenFlags) -> Result<Connection> {
+        let connection =
+            Connection::open_with_flags(self.path(), mode | OpenFlags::SQLITE_OPEN_NO_MUTEX)
+                .map_err(|error| {
+                    MezError::from(error).with_context("open existing budget accounting store")
+                })?;
         connection.busy_timeout(std::time::Duration::from_millis(250))?;
         let version: i64 = connection.query_row("PRAGMA user_version", [], |r| r.get(0))?;
         if version != super::store::SCHEMA_VERSION {

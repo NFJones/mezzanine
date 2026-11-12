@@ -1268,6 +1268,12 @@ futures retain the actual account holder independently of actor/pane lifetime.
 Raw-tail publication needs no inference admission. This remains staged ownership,
 not operational budget enforcement or a durable-ACK promise for queued checkpoints.
 
+The worker-side recovery ports can query an exact attempt registration or receipt
+after an ACK is lost, without repeating registration or settlement. They use a
+read-only snapshot of the original namespace and return the original outcome,
+not a newer account total. Absence is not a successful zero receipt or permission
+to repeat inference; store loss and changed provenance remain unavailable/conflict.
+
 Actor capture memory has a separate 4,096-entry bound. At capacity, completed
 detached captures can be reclaimed without touching durable membership or usage.
 Live pane/loop sources, unresolved proposals and outstanding preparation/rollback
