@@ -388,6 +388,42 @@ async fn runtime_budget_auxiliary_cold_title_and_remember_share_one_account_with
         .unwrap();
     assert_eq!(remember.budget_owner.as_ref().unwrap().member, original);
     assert!(scene.service.agent_turn_ledger().turns().is_empty());
+    {
+        use crate::storage::token_usage::budget::receipts::BudgetAttemptPurpose;
+        let work = remember
+            .budget_owner
+            .as_ref()
+            .unwrap()
+            .prepare_attempt(
+                mez_agent::ModelTokenUsageKey::new(
+                    &remember.task.model_profile.provider,
+                    &remember.task.model_profile.model,
+                ),
+                BudgetAttemptPurpose::Memory,
+            )
+            .unwrap();
+        let registered = tokio::task::spawn_blocking(move || work.execute())
+            .await
+            .unwrap()
+            .unwrap();
+        let receipt = registered
+            .freeze_receipt(
+                mez_agent::token_budget::UsageSnapshot {
+                    input: Some(5),
+                    output: Some(2),
+                    terminal: true,
+                },
+                None,
+            )
+            .unwrap();
+        let outcome = tokio::task::spawn_blocking(move || receipt.execute())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(outcome.root, original.root);
+        assert_eq!(outcome.known.input, 5);
+        assert_eq!(outcome.known.output, 2);
+    }
     // Both genuine dispatches hold the original inode independently of actor
     // lifetime. No parent/child cleanup or execution authority is implied.
     let title_owner = title.budget_owner.unwrap();

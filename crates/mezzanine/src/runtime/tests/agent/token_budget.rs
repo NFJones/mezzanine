@@ -8,6 +8,7 @@ use crate::storage::token_usage::budget::membership::BudgetMembershipState;
 mod auxiliary;
 mod checkpoint;
 mod reclamation;
+mod request;
 mod resolution;
 mod transitions;
 
@@ -225,7 +226,7 @@ async fn runtime_budget_preparation_rebind_waits_for_original_dispatch_retiremen
         )
         .unwrap()
         .unwrap();
-    assert!(dispatch.budget_binding_lease.is_some());
+    assert!(dispatch.budget_owner.is_some());
     let old_native = scene
         .service
         .agent_shell_store()

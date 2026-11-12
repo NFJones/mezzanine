@@ -21635,6 +21635,13 @@ distinct from conflicting provenance or an unavailable store, and MUST NOT
 authorize a provider retry, fabricate zero settlement or create a replacement
 ledger. Indexed relationship columns and encoded provenance MUST agree.
 
+Ordinary and auxiliary issued requests MUST carry the same complete frozen
+expense owner: original membership, actual binding holder, repository and project
+origin. Worker-only attempt and receipt work MUST retain that owner through
+registration, known-usage delivery and ACK reconciliation, including after Stop,
+rebind or repository replacement. A registration ACK is not a provider permit;
+these bookkeeping ports MUST NOT imply per-attempt enforcement is operational.
+
 Runtime budget membership captures MUST remain bounded at4096 entries. Capacity
 reclamation MAY discard only detached, acknowledged actor metadata with no
 outstanding preparation or rollback owner. Current pane bindings, saved loop

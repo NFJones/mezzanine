@@ -303,7 +303,7 @@ pub struct RuntimeAgentProviderDispatch {
     pub(crate) accounting_origin: crate::storage::token_usage::AccountingOrigin,
     /// Kernel-backed original binding custody, retained through actual worker
     /// retirement independently of actor replacement or observer cancellation.
-    pub(crate) budget_binding_lease: Option<crate::storage::transcript::BudgetBindingLease>,
+    pub(crate) budget_owner: Option<super::RuntimeBudgetRequestOwner>,
     /// Stores the turn value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
@@ -749,8 +749,7 @@ pub enum RuntimeActiveTurnCompactionTrigger {
 #[derive(Debug, Clone)]
 pub struct RuntimeAgentCompactionDispatch {
     /// Original account and actual binding holder retained until request retirement.
-    pub(crate) budget_owner:
-        Option<super::agent::token_budget::auxiliary::RuntimeBudgetAuxiliaryOwner>,
+    pub(crate) budget_owner: Option<super::RuntimeBudgetRequestOwner>,
     /// Actual reply-value custody, independent of the original expense owner.
     pub(crate) delivery: super::RuntimeCompactionDispatchDelivery,
     /// Compaction task metadata and provider request.
@@ -795,8 +794,7 @@ pub struct RuntimeAgentRememberTask {
 #[derive(Debug, Clone)]
 pub struct RuntimeAgentRememberDispatch {
     /// Original account and actual binding holder retained until request retirement.
-    pub(crate) budget_owner:
-        Option<super::agent::token_budget::auxiliary::RuntimeBudgetAuxiliaryOwner>,
+    pub(crate) budget_owner: Option<super::RuntimeBudgetRequestOwner>,
     /// Remember task metadata and provider request.
     pub task: RuntimeAgentRememberTask,
     /// Provider used to execute the memory-generation request.
@@ -841,8 +839,7 @@ pub struct RuntimeAgentSessionTitleTask {
 #[derive(Debug, Clone)]
 pub struct RuntimeAgentSessionTitleDispatch {
     /// Original account and actual binding holder retained until request retirement.
-    pub(crate) budget_owner:
-        Option<super::agent::token_budget::auxiliary::RuntimeBudgetAuxiliaryOwner>,
+    pub(crate) budget_owner: Option<super::RuntimeBudgetRequestOwner>,
     /// Title task metadata and bounded provider request.
     pub task: RuntimeAgentSessionTitleTask,
     /// Provider used to execute the title request.

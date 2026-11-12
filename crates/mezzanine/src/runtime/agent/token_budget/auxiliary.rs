@@ -2,6 +2,7 @@
 //! is descriptive and I/O-free; the existing provider preparation worker must
 //! publish membership before claim. These records grant no execution authority.
 
+use super::request::RuntimeBudgetRequestOwner;
 use super::*;
 
 /// Exact queued operation selected by the existing auxiliary scheduler.
@@ -30,30 +31,7 @@ pub(crate) struct RuntimeBudgetAuxiliaryCapture {
     started_at: u64,
     store: Option<TokenUsageStore>,
     transcripts: Option<AgentTranscriptStore>,
-}
-
-/// Issued request retains its original immutable membership and actual holder
-/// until the provider future retires, independently of pane/actor replacement.
-#[derive(Debug, Clone)]
-pub(crate) struct RuntimeBudgetAuxiliaryOwner {
-    pub(crate) member: BudgetMembership,
-    pub(crate) lease: BudgetBindingLease,
-    binding_owner: String,
-}
-
-impl RuntimeBudgetAuxiliaryOwner {
-    /// Pure execution-boundary subject check; this is not a policy permit or a
-    /// disk revalidation. The held descriptor remains owned across the request.
-    pub(crate) fn validate_request(&self, conversation: &str) -> Result<()> {
-        if self.member.conversation != conversation
-            || !self.lease.matches(&self.member, &self.binding_owner)
-        {
-            return Err(MezError::conflict(
-                "auxiliary budget request subject changed",
-            ));
-        }
-        Ok(())
-    }
+    origin: crate::storage::token_usage::AccountingOrigin,
 }
 
 impl RuntimeSessionService {
@@ -61,7 +39,7 @@ impl RuntimeSessionService {
     pub(crate) fn claim_runtime_budget_remember(
         &self,
         pane: &str,
-    ) -> Result<Option<RuntimeBudgetAuxiliaryOwner>> {
+    ) -> Result<Option<RuntimeBudgetRequestOwner>> {
         self.claim_runtime_budget_auxiliary(
             self.agent
                 .pending_agent_remember_tasks
@@ -91,6 +69,7 @@ impl RuntimeSessionService {
             started_at: crate::runtime::current_unix_seconds(),
             store: self.persistence.cloned_token_usage_store(),
             transcripts: self.persistence.cloned_transcript_store(),
+            origin: self.capture_agent_accounting_origin_for_pane(pane),
         })
     }
 
@@ -183,7 +162,7 @@ impl RuntimeSessionService {
     pub(crate) fn claim_runtime_budget_auxiliary(
         &self,
         capture: Option<&RuntimeBudgetAuxiliaryCapture>,
-    ) -> Result<Option<RuntimeBudgetAuxiliaryOwner>> {
+    ) -> Result<Option<RuntimeBudgetRequestOwner>> {
         if !self.agent.budget_memberships.enabled {
             return Ok(None);
         }
@@ -212,10 +191,12 @@ impl RuntimeSessionService {
             .clone()
             .filter(|lease| lease.matches(&member, &entry.owner))
             .ok_or_else(|| MezError::invalid_state("auxiliary budget custody absent"))?;
-        Ok(Some(RuntimeBudgetAuxiliaryOwner {
+        Ok(Some(RuntimeBudgetRequestOwner {
             member,
             lease,
             binding_owner: entry.owner.clone(),
+            store: entry.store.clone(),
+            origin: capture.origin.clone(),
         }))
     }
 }

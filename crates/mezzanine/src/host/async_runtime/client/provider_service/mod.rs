@@ -2393,7 +2393,7 @@ async fn execute_runtime_agent_provider_dispatch(
         claim_generation,
         turn_limits,
         accounting_origin: _,
-        budget_binding_lease: _budget_binding_lease,
+        budget_owner: _budget_owner,
         turn,
         context,
         allowed_actions,
@@ -2417,6 +2417,9 @@ async fn execute_runtime_agent_provider_dispatch(
         macro_bridge_recipients,
         loop_turn: _,
     } = dispatch;
+    if let Some(owner) = &_budget_owner {
+        owner.validate_request(&turn.conversation_id)?;
+    }
     let previous_request = context.previous_request().cloned();
     let context = context.into_agent_context();
     let routing_token_usage_by_model = std::collections::BTreeMap::new();

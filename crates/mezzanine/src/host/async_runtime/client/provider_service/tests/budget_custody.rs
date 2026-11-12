@@ -7,6 +7,34 @@ use crate::runtime::RuntimeSessionService;
 use crate::storage::token_usage::TokenUsageStore;
 use tokio::io::AsyncReadExt;
 
+/// Host/adapters can name the sealed values without opening runtime internals.
+#[test]
+fn budget_request_bookkeeping_contract_is_reachable_from_host() {
+    use crate::runtime::{
+        RuntimeBudgetAttemptWork, RuntimeBudgetReceiptWork, RuntimeBudgetRegisteredAttempt,
+        RuntimeBudgetRequestOwner,
+    };
+    let _: fn(
+        &RuntimeBudgetRequestOwner,
+        mez_agent::ModelTokenUsageKey,
+        crate::storage::token_usage::budget::receipts::BudgetAttemptPurpose,
+    ) -> Result<RuntimeBudgetAttemptWork> = RuntimeBudgetRequestOwner::prepare_attempt;
+    let _: fn(&RuntimeBudgetAttemptWork) -> Result<RuntimeBudgetRegisteredAttempt> =
+        RuntimeBudgetAttemptWork::execute;
+    let _: fn(&RuntimeBudgetAttemptWork) -> Result<Option<RuntimeBudgetRegisteredAttempt>> =
+        RuntimeBudgetAttemptWork::reconcile_registration;
+    let _: fn(
+        &RuntimeBudgetRegisteredAttempt,
+        mez_agent::token_budget::UsageSnapshot,
+        Option<crate::storage::token_usage::budget::reporting::BudgetReportingObservation>,
+    ) -> Result<RuntimeBudgetReceiptWork> = RuntimeBudgetRegisteredAttempt::freeze_receipt;
+    let _: fn(
+        &RuntimeBudgetReceiptWork,
+    ) -> Result<
+        Option<crate::storage::token_usage::budget::receipts::BudgetReceiptOutcome>,
+    > = RuntimeBudgetReceiptWork::reconcile;
+}
+
 /// The confirmation consumer may live outside runtime. Compile the exact
 /// facade types and method contracts here, without opening runtime::agent.
 #[test]
@@ -199,7 +227,7 @@ async fn qualify_http_custody(unwind: bool) {
         .record_claimed_agent_provider_task(&dispatch, 7, 30_000)
         .unwrap();
     dispatch.claim_generation = 7;
-    assert!(dispatch.budget_binding_lease.is_some());
+    assert!(dispatch.budget_owner.is_some());
     let member = store
         .budget_membership(&dispatch.turn.conversation_id)
         .unwrap()

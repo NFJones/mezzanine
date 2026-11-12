@@ -23,6 +23,7 @@ use crate::storage::transcript::{AgentTranscriptStore, BudgetBindingLease};
 
 pub(crate) mod auxiliary;
 mod reclamation;
+pub(crate) mod request;
 #[cfg_attr(
     not(test),
     expect(dead_code, reason = "confirmation UI is a downstream budget slice")
@@ -876,14 +877,38 @@ impl RuntimeSessionService {
 
     /// Issued provider work retains native binding custody independently of the
     /// actor. Dropping/replacing an actor cannot retire a worker's original lock.
-    pub(crate) fn runtime_budget_lease_for_turn(
+    pub(crate) fn runtime_budget_request_owner(
         &self,
         turn: &AgentTurnRecord,
-    ) -> Option<BudgetBindingLease> {
-        self.agent
+    ) -> Result<Option<request::RuntimeBudgetRequestOwner>> {
+        if !self.agent.budget_memberships.enabled {
+            return Ok(None);
+        }
+        if !self.runtime_budget_membership_is_ready(turn) {
+            return Err(MezError::invalid_state(
+                "budget request membership is not ready",
+            ));
+        }
+        let entry = self
+            .agent
             .budget_memberships
             .entries
             .get(&turn.conversation_id)
-            .and_then(|entry| entry.lease.clone())
+            .ok_or_else(|| MezError::invalid_state("budget request owner unavailable"))?;
+        let owner = request::RuntimeBudgetRequestOwner {
+            member: entry
+                .member
+                .clone()
+                .ok_or_else(|| MezError::invalid_state("budget request member unavailable"))?,
+            lease: entry
+                .lease
+                .clone()
+                .ok_or_else(|| MezError::invalid_state("budget request custody unavailable"))?,
+            binding_owner: entry.owner.clone(),
+            store: entry.store.clone(),
+            origin: self.capture_agent_accounting_origin_for_pane(&turn.pane_id),
+        };
+        owner.validate_request(&turn.conversation_id)?;
+        Ok(Some(owner))
     }
 }

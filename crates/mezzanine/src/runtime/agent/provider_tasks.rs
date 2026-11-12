@@ -1302,6 +1302,7 @@ impl RuntimeSessionService {
             .unwrap_or_else(|| self.shell_classification_for_pane(&turn.pane_id))
             .as_str()
             .to_string();
+        let budget_owner = self.runtime_budget_request_owner(&turn)?;
         self.agent.pending_agent_provider_tasks.remove(turn_id);
         let trace = self.append_agent_trace_turn_event(
             &turn.pane_id,
@@ -1311,7 +1312,7 @@ impl RuntimeSessionService {
         self.note_completion_optional_error(turn_id, trace);
         Ok(Some(RuntimeAgentProviderDispatch {
             accounting_origin: self.capture_agent_accounting_origin_for_pane(&turn.pane_id),
-            budget_binding_lease: self.runtime_budget_lease_for_turn(&turn),
+            budget_owner,
             macro_bridge_recipients: self.macro_bridge_message_recipient_ids(&turn.turn_id),
             claim_generation: 0,
             turn_limits: mez_agent::AgentTurnLimits {

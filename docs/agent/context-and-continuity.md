@@ -1274,6 +1274,13 @@ read-only snapshot of the original namespace and return the original outcome,
 not a newer account total. Absence is not a successful zero receipt or permission
 to repeat inference; store loss and changed provenance remain unavailable/conflict.
 
+Ordinary and auxiliary dispatches share a complete frozen expense owner, including
+the original repository and project attribution as well as account and native
+custody. Immutable worker-only registration/receipt values keep that ownership
+after Stop, rebind or store replacement. Their positive ACKs acknowledge only
+bookkeeping, not permission to issue or repeat a provider request. Concrete
+per-attempt admission and automatic receipt-driver wiring remain downstream.
+
 Actor capture memory has a separate 4,096-entry bound. At capacity, completed
 detached captures can be reclaimed without touching durable membership or usage.
 Live pane/loop sources, unresolved proposals and outstanding preparation/rollback

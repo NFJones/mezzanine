@@ -226,6 +226,17 @@ pub struct RuntimeSessionService {
 /// declaration makes the boundary available to the crate.
 mod agent;
 pub(crate) use agent::token_budget::auxiliary::RuntimeBudgetAuxiliarySource;
+#[cfg_attr(
+    not(test),
+    allow(
+        unused_imports,
+        reason = "concrete receipt driver is a downstream budget slice"
+    )
+)]
+pub(crate) use agent::token_budget::request::{
+    RuntimeBudgetAttemptWork, RuntimeBudgetReceiptWork, RuntimeBudgetRegisteredAttempt,
+    RuntimeBudgetRequestOwner,
+};
 // Staged human confirmation contract only; accounting internals stay private.
 #[cfg_attr(
     not(test),
