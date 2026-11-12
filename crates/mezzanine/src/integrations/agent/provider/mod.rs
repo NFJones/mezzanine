@@ -1292,8 +1292,10 @@ fn bounded_streaming_say_events(
 
 /// Latches the first dialect decoder error while forwarding only the source
 /// event's MAAP fragments in order. The event that fails decoding can still
-/// contain a usable fragment; subsequent events are ignored. Decoder state,
-/// completion, HTTP errors and retries remain owned by each adapter.
+/// contain a usable fragment; subsequent progress is suppressed, but received
+/// events still reach the decoder so later usage evidence is not discarded.
+/// The first error remains authoritative: later output cannot restore success.
+/// Completion, HTTP errors and retries remain owned by each adapter.
 struct SseProgressForwarder<E> {
     error: Option<E>,
     extractor: mez_agent::StreamingSayExtractor,
@@ -1318,13 +1320,14 @@ impl<E> SseProgressForwarder<E> {
         progress: Option<tokio::sync::mpsc::Sender<mez_agent::StreamingSayEvent>>,
     ) -> Pin<Box<dyn Future<Output = ()> + Send>> {
         let mut events = Vec::new();
-        if self.error.is_none() {
-            if let Err(error) = decode(event) {
-                self.error = Some(error);
-            }
-            if let Some(fragment) = provider_maap_stream_fragment(event) {
-                events = bounded_streaming_say_events(self.extractor.push_delta(&fragment));
-            }
+        let forward_progress = self.error.is_none();
+        if let Err(error) = decode(event)
+            && self.error.is_none()
+        {
+            self.error = Some(error);
+        }
+        if forward_progress && let Some(fragment) = provider_maap_stream_fragment(event) {
+            events = bounded_streaming_say_events(self.extractor.push_delta(&fragment));
         }
         Box::pin(async move {
             let Some(progress) = progress else {
@@ -1385,7 +1388,7 @@ mod streaming_say_progress_tests {
     }
 
     /// The first decoder failure still forwards its own parseable fragment,
-    /// while later events cannot mutate the decoder or emit more progress.
+    /// while later events update decoder evidence but emit no more progress.
     #[tokio::test]
     async fn sse_forwarder_latches_first_error_after_forwarding_its_event() {
         let mut forwarder = SseProgressForwarder::<&str>::default();
@@ -1414,7 +1417,7 @@ mod streaming_say_progress_tests {
                 Some(sender.clone()),
             )
             .await;
-        assert!(!decoded_later);
+        assert!(decoded_later);
         assert_eq!(forwarder.error, Some("first failure"));
         assert!(receiver.try_recv().is_err());
         drop(receiver);

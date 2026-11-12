@@ -131,6 +131,7 @@ struct InterruptedResponsesTransport {
     sends: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     ending: StreamEnding,
     positive_prefix: bool,
+    error_before_final_usage: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -166,17 +167,50 @@ impl AsyncProviderHttpTransport for InterruptedResponsesTransport {
     ) -> InterruptedHttpFuture<'a> {
         Box::pin(async move {
             self.sends.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            for (input, output) in self
+            for (index, (input, output)) in self
                 .positive_prefix
                 .then_some((11, 7))
                 .into_iter()
                 .chain(self.usage)
+                .enumerate()
             {
+                if self.error_before_final_usage && index == usize::from(self.positive_prefix) {
+                    on_event(mez_agent::SseEvent {
+                        name: None,
+                        data: "not-json".into(),
+                    })
+                    .await;
+                }
                 on_event(mez_agent::SseEvent {
                     name: None,
                     data: serde_json::json!({
                         "type":"response.in_progress",
                         "response":{"usage":{"input_tokens":input,"output_tokens":output}}
+                    })
+                    .to_string(),
+                })
+                .await;
+            }
+            if self.error_before_final_usage {
+                let text = serde_json::json!({
+                    "rationale":"late output is not recovery",
+                    "actions":[{"type":"say","status":"final","text":"late success"}]
+                })
+                .to_string();
+                on_event(mez_agent::SseEvent {
+                    name: None,
+                    data: serde_json::json!({
+                        "type":"response.output_text.delta", "delta":text
+                    })
+                    .to_string(),
+                })
+                .await;
+                on_event(mez_agent::SseEvent {
+                    name: None,
+                    data: serde_json::json!({
+                        "type":"response.completed", "response":{
+                            "model":"gpt-test", "status":"completed", "output_text":text
+                        }
                     })
                     .to_string(),
                 })
@@ -222,6 +256,7 @@ async fn responses_stream_cancellation_retains_original_expense() {
                     sends: sends.clone(),
                     ending: StreamEnding::Pending,
                     positive_prefix: false,
+                    error_before_final_usage: false,
                 },
             )
             .unwrap();
@@ -310,6 +345,7 @@ async fn responses_stream_retirement_handoff_conserves_one_observation() {
                 sends: sends.clone(),
                 ending,
                 positive_prefix,
+                error_before_final_usage: false,
             },
         )
         .unwrap();
@@ -384,6 +420,84 @@ async fn responses_stream_retirement_handoff_conserves_one_observation() {
         } else {
             assert_eq!(receiver.try_recv().unwrap(), retained[0]);
             assert!(receiver.try_recv().is_err());
+        }
+    }
+}
+
+/// Already received expense remains attributable after output failed. A later
+/// valid completion must neither erase the first error nor authorize success.
+#[tokio::test]
+async fn responses_stream_late_usage_after_error_is_retained_once() {
+    use crate::integrations::agent::provider::{
+        ObservedAsyncModelProvider, PendingProviderWireObservations, ProviderReportedUsage,
+        ProviderRequestPurpose, ProviderWireRequestObserver,
+    };
+    use std::sync::{
+        Arc, Mutex,
+        atomic::{AtomicUsize, Ordering},
+    };
+    for (input, output) in [(13, 9), (0, 0)] {
+        for cancel in [false, true] {
+            let sends = Arc::new(AtomicUsize::new(0));
+            let provider = OpenAiResponsesProvider::with_endpoint_headers_and_stream(
+                "fixture-key",
+                "https://example.test/responses",
+                1_000,
+                Default::default(),
+                true,
+                InterruptedResponsesTransport {
+                    usage: Some((input, output)),
+                    sends: sends.clone(),
+                    ending: if cancel {
+                        StreamEnding::Pending
+                    } else {
+                        StreamEnding::Return
+                    },
+                    positive_prefix: true,
+                    error_before_final_usage: true,
+                },
+            )
+            .unwrap();
+            let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
+            let pending = PendingProviderWireObservations::default();
+            let reported = Arc::new(Mutex::new(ProviderReportedUsage::default()));
+            let observer = ProviderWireRequestObserver::new("late-original", "%1", sender)
+                .with_pending_observations(pending.clone())
+                .with_reported_usage(reported.clone());
+            let observed = ObservedAsyncModelProvider::new(
+                &provider,
+                &observer,
+                ProviderRequestPurpose::Memory,
+            );
+            let request = request();
+            if cancel {
+                let mut future = observed.send_request_async(&request);
+                std::future::poll_fn(|cx| {
+                    assert!(future.as_mut().poll(cx).is_pending());
+                    std::task::Poll::Ready(())
+                })
+                .await;
+                drop(future);
+                assert!(receiver.try_recv().is_err());
+            } else {
+                let error = observed.send_request_async(&request).await.unwrap_err();
+                assert!(error.message().contains("not JSON"), "{error:?}");
+                let usage = error.provider_incurred_usage();
+                assert_eq!((usage.input_tokens, usage.output_tokens), (input, output));
+                let observation = receiver.try_recv().unwrap();
+                assert_eq!(observation, pending.snapshot()[0]);
+                assert!(receiver.try_recv().is_err());
+            }
+            assert_eq!(sends.load(Ordering::SeqCst), 1);
+            let retained = pending.snapshot();
+            assert_eq!(retained.len(), 1);
+            assert_eq!(retained[0].conversation_id, "late-original");
+            assert!(!retained[0].succeeded);
+            let usage = retained[0].usage.unwrap();
+            assert_eq!((usage.input_tokens, usage.output_tokens), (input, output));
+            let reported = *reported.lock().unwrap();
+            assert_eq!(reported.known_observations, 1);
+            assert_eq!(reported.usage, usage);
         }
     }
 }

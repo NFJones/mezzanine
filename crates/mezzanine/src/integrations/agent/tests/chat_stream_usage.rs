@@ -23,6 +23,9 @@ enum Fault {
     PartialZero,
     EmptyCounters,
     CancelAfterUsage,
+    LateUsage,
+    LateUsageCancel,
+    LateUsageZero,
 }
 
 struct PartialUsageTransport {
@@ -98,16 +101,48 @@ impl AsyncProviderHttpTransport for PartialUsageTransport {
                 })
                 .await;
             }
-            if matches!(self.fault, Fault::MalformedEvent) {
+            let late_usage = matches!(
+                self.fault,
+                Fault::LateUsage | Fault::LateUsageCancel | Fault::LateUsageZero
+            );
+            if matches!(self.fault, Fault::MalformedEvent) || late_usage {
                 // OpenAI/Anthropic latch a decoder error here; DeepSeek's
                 // tolerant decoder instead rejects missing MAAP at finish.
                 on_event(mez_agent::SseEvent {
                     name: None,
-                    data: "{\"type\":\"content_block_delta\"}".into(),
+                    data: if late_usage {
+                        "not-json".into()
+                    } else {
+                        "{\"type\":\"content_block_delta\"}".into()
+                    },
                 })
                 .await;
             }
-            if matches!(self.fault, Fault::CancelAfterUsage) {
+            if late_usage {
+                // These bytes were actually received on the same exchange,
+                // after unusable output. They are not a second inference.
+                let (input, output) = if matches!(self.fault, Fault::LateUsageZero) {
+                    (0, 0)
+                } else {
+                    (13, 9)
+                };
+                let value = if self.anthropic {
+                    serde_json::json!({"type":"message_delta", "usage":{
+                        "input_tokens":input,"output_tokens":output,
+                        "cache_read_input_tokens":0,"cache_creation_input_tokens":0
+                    }})
+                } else {
+                    serde_json::json!({"choices":[], "usage":{
+                        "prompt_tokens":input,"completion_tokens":output
+                    }})
+                };
+                on_event(mez_agent::SseEvent {
+                    name: None,
+                    data: value.to_string(),
+                })
+                .await;
+            }
+            if matches!(self.fault, Fault::CancelAfterUsage | Fault::LateUsageCancel) {
                 std::future::pending::<()>().await;
             }
             if matches!(self.fault, Fault::Transport | Fault::AbsentUsage) {
@@ -144,6 +179,9 @@ async fn shared_chat_stream_failures_preserve_decoded_expense() {
             Fault::PartialZero,
             Fault::EmptyCounters,
             Fault::CancelAfterUsage,
+            Fault::LateUsage,
+            Fault::LateUsageCancel,
+            Fault::LateUsageZero,
         ] {
             let sends = Arc::new(AtomicUsize::new(0));
             let transport = PartialUsageTransport {
@@ -241,7 +279,7 @@ async fn assert_expense<P: AsyncModelProvider>(
         .with_reported_usage(reported.clone());
     let observed =
         ObservedAsyncModelProvider::new(&provider, &observer, ProviderRequestPurpose::Execution);
-    if matches!(fault, Fault::CancelAfterUsage) {
+    if matches!(fault, Fault::CancelAfterUsage | Fault::LateUsageCancel) {
         let mut future = observed.send_request_async(request);
         std::future::poll_fn(|cx| {
             assert!(future.as_mut().poll(cx).is_pending());
@@ -259,7 +297,14 @@ async fn assert_expense<P: AsyncModelProvider>(
             "{family}: cancellation lost decoded expense"
         );
         let usage = retained[0].usage.unwrap();
-        assert_eq!((usage.input_tokens, usage.output_tokens), (11, 7));
+        assert_eq!(
+            (usage.input_tokens, usage.output_tokens),
+            if matches!(fault, Fault::LateUsageCancel) {
+                (13, 9)
+            } else {
+                (11, 7)
+            }
+        );
         assert!(!retained[0].succeeded);
         let reported = *reported.lock().unwrap();
         assert_eq!(reported.known_observations, 1);
@@ -273,6 +318,10 @@ async fn assert_expense<P: AsyncModelProvider>(
         (usage.input_tokens, usage.output_tokens),
         if matches!(fault, Fault::AbsentUsage) {
             (0, 0)
+        } else if matches!(fault, Fault::LateUsage) {
+            (13, 9)
+        } else if matches!(fault, Fault::LateUsageZero) {
+            (0, 0)
         } else if matches!(fault, Fault::PartialCounters) {
             (11, 9)
         } else if matches!(fault, Fault::PartialZero) {
@@ -284,6 +333,9 @@ async fn assert_expense<P: AsyncModelProvider>(
     );
     if matches!(fault, Fault::Transport | Fault::AbsentUsage) {
         assert_eq!(error.message(), "fixture transport cutoff");
+    }
+    if matches!(fault, Fault::LateUsage | Fault::LateUsageZero) && family != "deepseek" {
+        assert!(error.message().contains("JSON"), "{family}: {error:?}");
     }
     let observation = receiver.try_recv().unwrap();
     assert!(!observation.succeeded);

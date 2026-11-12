@@ -66,6 +66,10 @@ Known decoded usage remains incurred even when later MAAP validation rejects the
 provider's output. Chat adapters also retain already decoded counters when the
 stream ends in a transport, HTTP-status, decoder, or finalization failure. Missing
 usage remains unavailable; normalized counters alone do not prove full coverage.
+After the first streaming output error, subsequently received events still reach
+the decoder for usage retention, but emit no further progress and cannot turn
+that failed request into a successful result. This does not extend the transport
+deadline or start another exchange to seek missing usage.
 Cumulative stream frames replace only counters they actually report, including
 explicit zero. Missing fields preserve prior subtotals; cache-exclusive input
 components are retained independently before inclusive input is computed. A

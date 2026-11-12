@@ -540,10 +540,11 @@ where
             };
             // Capture before any fallible status/output suffix or consuming
             // finish. Reattach, never add, this same physical attempt's expense.
+            // Numeric zero must also replace an earlier error's stale prefix.
+            // It does not qualify receipt presence; that is retained separately.
             let incurred_usage = stream_decoder
                 .as_ref()
-                .map(|decoder| decoder.reported_usage())
-                .filter(|usage| !usage.is_zero());
+                .map(|decoder| decoder.reported_usage());
             let retain_usage = |error: MezError| match incurred_usage {
                 Some(usage) => error.with_provider_incurred_usage(usage),
                 None => error,
