@@ -104,6 +104,25 @@ impl ChatCompletionsDialect for OpenAiChatCompletionsDialect {
         parse_openai_chat_completions_http_response(response, request, provider_id, stream)
     }
 
+    fn response_usage(&self, body: &str) -> Option<mez_agent::ModelTokenUsage> {
+        let root: serde_json::Value = serde_json::from_str(body).ok()?;
+        let usage = root.get("usage")?;
+        [
+            "/prompt_tokens",
+            "/completion_tokens",
+            "/prompt_tokens_details/cached_tokens",
+            "/completion_tokens_details/reasoning_tokens",
+        ]
+        .iter()
+        .any(|path| {
+            usage
+                .pointer(path)
+                .and_then(serde_json::Value::as_u64)
+                .is_some()
+        })
+        .then(|| mez_agent::openai_chat_completions_usage(&root))
+    }
+
     fn effective_stream(&self, _request: &ModelRequest, _stream: bool) -> bool {
         self.options.streaming_enabled()
     }

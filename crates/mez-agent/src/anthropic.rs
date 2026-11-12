@@ -378,8 +378,10 @@ fn anthropic_request_id(value: Option<&serde_json::Value>) -> Option<&str> {
         .filter(|request_id| !request_id.trim().is_empty())
 }
 
-/// Extracts Anthropic token-usage and prompt-cache counters.
-fn anthropic_usage_from_value(value: Option<&serde_json::Value>) -> ModelTokenUsage {
+/// Extracts Anthropic token-usage and prompt-cache counters independently of
+/// output validity. Numeric defaults do not establish wire-field presence or
+/// per-dimension completeness; callers must qualify those from the source.
+pub fn anthropic_usage_from_value(value: Option<&serde_json::Value>) -> ModelTokenUsage {
     let Some(value) = value else {
         return ModelTokenUsage::default();
     };

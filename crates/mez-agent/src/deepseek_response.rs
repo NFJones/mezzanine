@@ -431,8 +431,9 @@ fn deepseek_provider_transcript_events_for_message(
     }]
 }
 
-/// Parses usage statistics from a DeepSeek Chat Completions response.
-fn parse_deepseek_usage(usage: &serde_json::Value) -> ModelTokenUsage {
+/// Parses usage statistics independently of DeepSeek output validation. Numeric
+/// defaults do not prove wire-field presence or per-dimension completeness.
+pub fn parse_deepseek_usage(usage: &serde_json::Value) -> ModelTokenUsage {
     ModelTokenUsage {
         input_tokens: usage
             .get("prompt_tokens")
@@ -442,7 +443,7 @@ fn parse_deepseek_usage(usage: &serde_json::Value) -> ModelTokenUsage {
             .get("completion_tokens")
             .and_then(serde_json::Value::as_u64)
             .unwrap_or(0),
-        reasoning_tokens: deepseek_reasoning_tokens_from_usage(usage),
+        reasoning_tokens: deepseek_reasoning_tokens_from_usage(usage).unwrap_or(0),
         cached_input_tokens: usage
             .get("prompt_cache_hit_tokens")
             .and_then(serde_json::Value::as_u64),
@@ -451,12 +452,16 @@ fn parse_deepseek_usage(usage: &serde_json::Value) -> ModelTokenUsage {
 }
 
 /// Extracts DeepSeek reasoning token usage from the documented nested shape.
-fn deepseek_reasoning_tokens_from_usage(usage: &serde_json::Value) -> u64 {
+/// Only numeric fields participate in precedence; explicit nested zero wins.
+fn deepseek_reasoning_tokens_from_usage(usage: &serde_json::Value) -> Option<u64> {
     usage
         .pointer("/completion_tokens_details/reasoning_tokens")
-        .or_else(|| usage.get("reasoning_tokens"))
         .and_then(serde_json::Value::as_u64)
-        .unwrap_or(0)
+        .or_else(|| {
+            usage
+                .get("reasoning_tokens")
+                .and_then(serde_json::Value::as_u64)
+        })
 }
 
 /// Accumulates one DeepSeek streaming tool-call delta across SSE events.
@@ -516,13 +521,8 @@ impl DeepSeekChatCompletionsStreamDecoder {
             {
                 self.usage.output_tokens = next.output_tokens;
             }
-            if usage
-                .pointer("/completion_tokens_details/reasoning_tokens")
-                .or_else(|| usage.get("reasoning_tokens"))
-                .and_then(serde_json::Value::as_u64)
-                .is_some()
-            {
-                self.usage.reasoning_tokens = next.reasoning_tokens;
+            if let Some(reasoning) = deepseek_reasoning_tokens_from_usage(usage) {
+                self.usage.reasoning_tokens = reasoning;
             }
             self.usage.cached_input_tokens =
                 next.cached_input_tokens.or(self.usage.cached_input_tokens);
@@ -925,6 +925,33 @@ mod tests {
             "reasoning_tokens": 3
         }));
         assert_eq!(flat.reasoning_tokens, 3);
+    }
+
+    /// Invalid nested aliases are omission, not authority to hide a numeric
+    /// flat fallback. A real nested zero still wins over the older alias.
+    #[test]
+    fn deepseek_usage_reasoning_alias_selects_first_numeric_counter() {
+        for (nested, expected) in [
+            (serde_json::Value::Null, 7),
+            (serde_json::json!("invalid"), 7),
+            (serde_json::json!(-1), 7),
+            (serde_json::json!(0), 0),
+            (serde_json::json!(9), 9),
+        ] {
+            let usage = serde_json::json!({"completion_tokens_details":{
+                "reasoning_tokens":nested}, "reasoning_tokens":7});
+            assert_eq!(parse_deepseek_usage(&usage).reasoning_tokens, expected);
+            let mut decoder = DeepSeekChatCompletionsStreamDecoder::default();
+            decoder.push_event(&crate::SseEvent {
+                name: None,
+                data: serde_json::json!({"choices":[], "usage":{"reasoning_tokens":5}}).to_string(),
+            });
+            decoder.push_event(&crate::SseEvent {
+                name: None,
+                data: serde_json::json!({"choices":[], "usage":usage}).to_string(),
+            });
+            assert_eq!(decoder.reported_usage().reasoning_tokens, expected);
+        }
     }
 
     /// Verifies DeepSeek content fallbacks can still produce a valid MAAP

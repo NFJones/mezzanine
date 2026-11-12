@@ -133,6 +133,20 @@ impl ChatCompletionsDialect for AnthropicMessagesDialect {
         ))
     }
 
+    fn response_usage(&self, body: &str) -> Option<mez_agent::ModelTokenUsage> {
+        let root: serde_json::Value = serde_json::from_str(body).ok()?;
+        let usage = root.get("usage")?;
+        [
+            "input_tokens",
+            "output_tokens",
+            "cache_read_input_tokens",
+            "cache_creation_input_tokens",
+        ]
+        .iter()
+        .any(|key| usage.get(key).and_then(serde_json::Value::as_u64).is_some())
+        .then(|| mez_agent::anthropic::anthropic_usage_from_value(Some(usage)))
+    }
+
     /// Builds incremental Anthropic state for one streaming Messages response.
     fn stream_decoder(
         &self,

@@ -63,7 +63,13 @@ library. A redirect is returned to the provider adapter as a non-success respons
 it cannot silently submit a second billable request. Explicit runtime/adapter
 retries retain their own lifecycle. Ordinary fetch and search routing is unchanged.
 Known decoded usage remains incurred even when later MAAP validation rejects the
-provider's output. Chat adapters also retain already decoded counters when the
+provider's output. Async chat adapters capture recognized unary counters before
+HTTP-status, envelope, MAAP and finish-state validation, including JSON error
+bodies returned to streaming requests. Adapter-internal retries retain each
+exchange separately, never charging the first request as the second's expense.
+Missing or invalid counters remain unavailable; a recognized explicit zero is
+retained, without claiming independent dimension completeness.
+Chat adapters also retain already decoded counters when the
 stream ends in a transport, HTTP-status, decoder, or finalization failure. Missing
 usage remains unavailable; normalized counters alone do not prove full coverage.
 When one streaming event carries both a provider error and usage, recognized

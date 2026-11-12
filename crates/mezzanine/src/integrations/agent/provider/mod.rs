@@ -812,13 +812,21 @@ pub struct ProviderWireObservationContext<'a> {
     retained_observations: AtomicU64,
 }
 
+/// Concrete adapter evidence overrides logical result totals, even when absent.
+/// Legacy providers can still infer usage from their result; that fallback must
+/// never turn a merged retry total or numeric default into a new wire receipt.
+#[derive(Clone, Copy)]
+enum WireUsageEvidence {
+    ResultFallback(Option<mez_agent::ModelTokenUsage>),
+    Concrete(Option<mez_agent::ModelTokenUsage>),
+}
+
 /// Content-free details captured from one final OpenAI Responses wire attempt.
 struct FinalWireObservation {
     final_wire_diagnostics: Option<OpenAiFinalWireDiagnostics>,
     response_diagnostics: Option<OpenAiResponseDiagnostics>,
     elapsed_ms: Option<u64>,
-    /// Decoder-qualified presence, including zero, not inferred from defaults.
-    reported_usage: Option<mez_agent::ModelTokenUsage>,
+    usage_evidence: WireUsageEvidence,
 }
 
 impl<'a> ProviderWireObservationContext<'a> {
@@ -851,11 +859,23 @@ impl<'a> ProviderWireObservationContext<'a> {
         retry_reason: Option<&str>,
         result: &Result<ModelResponse>,
     ) {
-        self.observe_with_reported_usage(request, attempt_index, retry_reason, None, result)
-            .await;
+        self.observe_with_final_wire(
+            request,
+            attempt_index,
+            retry_reason,
+            FinalWireObservation {
+                final_wire_diagnostics: None,
+                response_diagnostics: None,
+                elapsed_ms: None,
+                usage_evidence: WireUsageEvidence::ResultFallback(None),
+            },
+            result,
+        )
+        .await;
     }
 
-    /// Transfer qualified prefix presence before disarming cancellation custody.
+    /// Transfer concrete receipt presence before disarming cancellation custody.
+    /// None is authoritative absence, not permission to infer from merged totals.
     async fn observe_with_reported_usage(
         &self,
         request: &ModelRequest,
@@ -872,7 +892,7 @@ impl<'a> ProviderWireObservationContext<'a> {
                 final_wire_diagnostics: None,
                 response_diagnostics: None,
                 elapsed_ms: None,
-                reported_usage,
+                usage_evidence: WireUsageEvidence::Concrete(reported_usage),
             },
             result,
         )
@@ -888,25 +908,28 @@ impl<'a> ProviderWireObservationContext<'a> {
         final_wire: FinalWireObservation,
         result: &Result<ModelResponse>,
     ) {
-        let usage = result
-            .as_ref()
-            .ok()
-            .and_then(|response| {
-                response.latest_request_usage.or_else(|| {
-                    let usage = response.usage;
-                    (!usage.is_zero()
-                        || usage.cached_input_tokens.is_some()
-                        || usage.cache_write_input_tokens.is_some())
-                    .then_some(usage)
+        let usage = match final_wire.usage_evidence {
+            WireUsageEvidence::Concrete(usage) => usage,
+            WireUsageEvidence::ResultFallback(reported_usage) => result
+                .as_ref()
+                .ok()
+                .and_then(|response| {
+                    response.latest_request_usage.or_else(|| {
+                        let usage = response.usage;
+                        (!usage.is_zero()
+                            || usage.cached_input_tokens.is_some()
+                            || usage.cache_write_input_tokens.is_some())
+                        .then_some(usage)
+                    })
                 })
-            })
-            .or_else(|| {
-                result.as_ref().err().and_then(|error| {
-                    let usage = error.provider_incurred_usage();
-                    (!usage.is_zero()).then_some(usage)
+                .or_else(|| {
+                    result.as_ref().err().and_then(|error| {
+                        let usage = error.provider_incurred_usage();
+                        (!usage.is_zero()).then_some(usage)
+                    })
                 })
-            })
-            .or(final_wire.reported_usage);
+                .or(reported_usage),
+        };
         let failure_kind = result
             .as_ref()
             .err()
@@ -2912,9 +2935,11 @@ impl<T: AsyncProviderHttpTransport> AsyncModelProvider for OpenAiResponsesProvid
                             final_wire_diagnostics: Some(final_wire_diagnostics),
                             response_diagnostics,
                             elapsed_ms: Some(elapsed_ms),
-                            reported_usage: usage_custody
-                                .as_ref()
-                                .and_then(|owner| owner.reported_usage()),
+                            usage_evidence: WireUsageEvidence::ResultFallback(
+                                usage_custody
+                                    .as_ref()
+                                    .and_then(|owner| owner.reported_usage()),
+                            ),
                         },
                         &result,
                     )

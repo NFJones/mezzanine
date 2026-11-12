@@ -14,6 +14,8 @@ pub(super) struct StreamUsageCustody<'request, 'observer> {
     request: &'request ModelRequest,
     usage: Option<mez_agent::ModelTokenUsage>,
     retained_before: u64,
+    attempt_index: usize,
+    retry_reason: Option<&'static str>,
 }
 
 impl<'request, 'observer> StreamUsageCustody<'request, 'observer> {
@@ -21,18 +23,36 @@ impl<'request, 'observer> StreamUsageCustody<'request, 'observer> {
         context: &'request ProviderWireObservationContext<'observer>,
         request: &'request ModelRequest,
     ) -> Self {
+        Self::for_attempt(context, request, 1, None)
+    }
+
+    /// Each adapter-internal exchange needs its own custody generation and
+    /// ordinal. A settled first attempt cannot disarm a later attempt's guard.
+    pub(super) fn for_attempt(
+        context: &'request ProviderWireObservationContext<'observer>,
+        request: &'request ModelRequest,
+        attempt_index: usize,
+        retry_reason: Option<&'static str>,
+    ) -> Self {
         Self {
             context,
             request,
             usage: None,
             retained_before: context.retained_observations.load(Ordering::Acquire),
+            attempt_index,
+            retry_reason,
         }
     }
 
-    /// Replace the cumulative prefix, never add frames. Legacy numeric usage
+    /// Replace the cumulative prefix, never add frames. Explicit cache Option
+    /// fields qualify receipt presence even at zero; numeric defaults alone
     /// cannot qualify a zero-only report or independent dimension completeness.
     pub(super) fn update(&mut self, usage: mez_agent::ModelTokenUsage) {
-        if self.usage.is_some() || !usage.is_zero() {
+        if self.usage.is_some()
+            || !usage.is_zero()
+            || usage.cached_input_tokens.is_some()
+            || usage.cache_write_input_tokens.is_some()
+        {
             self.usage = Some(usage);
         }
     }
@@ -60,13 +80,13 @@ impl Drop for StreamUsageCustody<'_, '_> {
         if let Some(usage) = self.usage.take() {
             let observation = self.context.build_wire_observation(
                 self.request,
-                1,
-                None,
+                self.attempt_index,
+                self.retry_reason,
                 FinalWireObservation {
                     final_wire_diagnostics: None,
                     response_diagnostics: None,
                     elapsed_ms: None,
-                    reported_usage: None,
+                    usage_evidence: super::WireUsageEvidence::Concrete(None),
                 },
                 Some(usage),
                 false,

@@ -153,6 +153,26 @@ impl ChatCompletionsDialect for DeepSeekChatCompletionsDialect {
         build_deepseek_models_http_request(api_key, chat_endpoint, timeout_ms)
     }
 
+    fn response_usage(&self, body: &str) -> Option<mez_agent::ModelTokenUsage> {
+        let root: serde_json::Value = serde_json::from_str(body).ok()?;
+        let usage = root.get("usage")?;
+        [
+            "/prompt_tokens",
+            "/completion_tokens",
+            "/prompt_cache_hit_tokens",
+            "/completion_tokens_details/reasoning_tokens",
+            "/reasoning_tokens",
+        ]
+        .iter()
+        .any(|path| {
+            usage
+                .pointer(path)
+                .and_then(serde_json::Value::as_u64)
+                .is_some()
+        })
+        .then(|| mez_agent::deepseek_response::parse_deepseek_usage(usage))
+    }
+
     fn require_action_batch(
         &self,
         response: ModelResponse,

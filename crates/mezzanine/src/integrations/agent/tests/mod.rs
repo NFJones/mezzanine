@@ -1020,6 +1020,8 @@ mod action_results;
 mod agent_runtime;
 mod agent_shell;
 mod chat_stream_usage;
+mod chat_stream_zero_usage;
+mod chat_unary_usage;
 mod deepseek_provider;
 mod mcp_runtime;
 mod model_context;

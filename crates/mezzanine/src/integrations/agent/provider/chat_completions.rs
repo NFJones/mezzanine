@@ -106,6 +106,14 @@ pub trait ChatCompletionsDialect: Clone + Send + Sync + Default + 'static {
         stream: bool,
     ) -> Result<ModelResponse>;
 
+    /// Extracts recognized numeric usage from a unary JSON body before any
+    /// status/output refusal. None means no qualified counters, not zero. This
+    /// reuses the dialect's normalizer and grants no accepted-output authority
+    /// or independent dimension completeness. SSE uses its decoder instead.
+    fn response_usage(&self, _body: &str) -> Option<mez_agent::ModelTokenUsage> {
+        None
+    }
+
     /// Returns the stream parser mode that should be used for a request.
     fn effective_stream(&self, _request: &ModelRequest, stream: bool) -> bool {
         stream
@@ -542,9 +550,22 @@ where
             // finish. Reattach, never add, this same physical attempt's expense.
             // Numeric zero must also replace an earlier error's stale prefix.
             // It does not qualify receipt presence; that is retained separately.
-            let incurred_usage = stream_decoder
+            // A streaming request can return a unary JSON error body instead
+            // of SSE. Its recognized counters supersede decoder defaults.
+            let response_usage = response_result
                 .as_ref()
-                .map(|decoder| decoder.reported_usage());
+                .ok()
+                .and_then(|response| self.dialect.response_usage(&response.body));
+            if let Some(usage) = response_usage
+                && let Some(custody) = stream_usage.as_mut()
+            {
+                custody.update_reported(usage);
+            }
+            let incurred_usage = response_usage.or_else(|| {
+                stream_decoder
+                    .as_ref()
+                    .map(|decoder| decoder.reported_usage())
+            });
             let retain_usage = |error: MezError| match incurred_usage {
                 Some(usage) => error.with_provider_incurred_usage(usage),
                 None => error,
@@ -650,6 +671,14 @@ where
                 }
                 let mut retry_request = retry.request;
                 self.apply_extra_headers(&mut retry_request);
+                let mut retry_custody = observation.as_ref().map(|context| {
+                    super::stream_usage_custody::StreamUsageCustody::for_attempt(
+                        context,
+                        request,
+                        2,
+                        Some("provider_forced_maap"),
+                    )
+                });
                 let retry_response = match self.transport.send_async(&retry_request).await {
                     Ok(response) => response,
                     Err(error) => {
@@ -662,12 +691,31 @@ where
                         return result;
                     }
                 };
+                // The second physical exchange has its own expense. Never
+                // borrow the first attempt's retained prefix for this report.
+                let retry_usage = self.dialect.response_usage(&retry_response.body);
+                if let Some(usage) = retry_usage
+                    && let Some(custody) = retry_custody.as_mut()
+                {
+                    custody.update_reported(usage);
+                }
+                let retain_retry_usage = |error: MezError| match retry_usage {
+                    Some(usage) => error.with_provider_incurred_usage(usage),
+                    None => error,
+                };
                 if !(200..300).contains(&retry_response.status_code) {
-                    let result =
-                        Err(self.provider_status_error("Chat Completions", &retry_response));
+                    let result = Err(retain_retry_usage(
+                        self.provider_status_error("Chat Completions", &retry_response),
+                    ));
                     if let Some(observation) = observation.as_ref() {
                         observation
-                            .observe(request, 2, Some("provider_forced_maap"), &result)
+                            .observe_with_reported_usage(
+                                request,
+                                2,
+                                Some("provider_forced_maap"),
+                                retry_usage,
+                                &result,
+                            )
                             .await;
                     }
                     return result;
@@ -681,20 +729,35 @@ where
                 let retry_parsed = match retry_result {
                     Ok(parsed) => parsed,
                     Err(error) => {
-                        let result = Err(error);
+                        let result = Err(retain_retry_usage(error));
                         if let Some(observation) = observation.as_ref() {
                             observation
-                                .observe(request, 2, Some("provider_forced_maap"), &result)
+                                .observe_with_reported_usage(
+                                    request,
+                                    2,
+                                    Some("provider_forced_maap"),
+                                    retry_usage,
+                                    &result,
+                                )
                                 .await;
                         }
                         return result;
                     }
                 };
                 parsed = self.merge_retry_usage(retry_parsed, parsed);
-                let result = self.dialect.require_action_batch(parsed, request);
+                let result = self
+                    .dialect
+                    .require_action_batch(parsed, request)
+                    .map_err(retain_retry_usage);
                 if let Some(observation) = observation.as_ref() {
                     observation
-                        .observe(request, 2, Some("provider_forced_maap"), &result)
+                        .observe_with_reported_usage(
+                            request,
+                            2,
+                            Some("provider_forced_maap"),
+                            retry_usage,
+                            &result,
+                        )
                         .await;
                 }
                 result

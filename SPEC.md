@@ -8421,6 +8421,13 @@ failure handling. Explicit runtime or adapter retries remain separately owned;
 this transport rule MUST NOT change ordinary fetch/search routing policy.
 Known decoded provider usage MUST survive subsequent MAAP validation failure;
 rejecting malformed output MUST NOT erase already incurred inference expense.
+Recognized unary chat usage MUST be captured before HTTP-status, envelope,
+MAAP, or finish-state validation, including JSON error bodies returned to
+streaming requests. An adapter-internal retry MUST retain each concrete
+exchange's usage separately; first-attempt expense MUST NOT be borrowed as
+second-attempt usage. Missing/invalid counters MUST NOT fabricate receipt
+presence, while recognized explicit zero MUST remain distinguishable from
+absence. Numeric receipt presence alone does not prove dimension completeness.
 Known counters decoded from a chat stream MUST also survive transport cutoff,
 non-success HTTP status, and stream decoding/finalization refusal. Retaining
 normalized numeric counters does not establish missing-dimension coverage or
