@@ -135,7 +135,20 @@ usage-bearing chunk after all observed choices finish. Only that chunk's own
 fields complete dimensions; `[DONE]` and accumulated presence are insufficient.
 Conflicting final reports invalidate output and completeness; terminal regression
 retains the original expense and refusal. Malformed/excessive choice metadata
-keeps coverage incomplete. Anthropic stream finality is not yet qualified here.
+keeps coverage incomplete.
+Anthropic uses separate Messages grammar: an assistant unary message with a stop
+reason, or a message-start plus stop-reason delta and `message_stop` for SSE.
+Inclusive input is complete only with all three explicit checked components:
+uncached input, cache read and cache creation. Missing cache fields stay unknown,
+not zero. SSE final output comes only from the terminal delta, never start or
+prefix presence. A complete delta input report can replace the start report;
+changed partial input makes that dimension incomplete while preserving final
+output. Contradictory terminal reports invalidate output and completeness, and
+component regression retains expense plus sticky refusal even on cancellation.
+Simultaneously higher primary counters remain retained; this does not add cache
+component maxima together to invent a new inclusive total.
+All qualifications require successful HTTP completion; malformed MAAP can still
+retain qualified usage without authorizing its output.
 Only that qualified durable transfer frees local exposure; the original grant
 remains replay-only forever. Receipt or actor acknowledgment alone cannot release
 it. Older grants migrate as outstanding, even if old terminal expense exists.

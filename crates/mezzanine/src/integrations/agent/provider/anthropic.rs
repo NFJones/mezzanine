@@ -158,6 +158,28 @@ impl ChatCompletionsDialect for AnthropicMessagesDialect {
         })
     }
 
+    fn terminal_response_usage(
+        &self,
+        body: &str,
+    ) -> Option<(
+        mez_agent::ModelTokenUsage,
+        mez_agent::ModelTokenUsagePresence,
+    )> {
+        let value: serde_json::Value = serde_json::from_str(body).ok()?;
+        if value["type"] != "message"
+            || value["role"] != "assistant"
+            || !value["stop_reason"].as_str().is_some_and(|s| !s.is_empty())
+        {
+            return None;
+        }
+        self.response_usage(body).map(|(usage, _)| {
+            (
+                usage,
+                mez_agent::anthropic::anthropic_final_usage_presence(value.get("usage")),
+            )
+        })
+    }
+
     /// Builds incremental Anthropic state for one streaming Messages response.
     fn stream_decoder(
         &self,
@@ -186,6 +208,19 @@ impl ChatCompletionsStreamDecoder for AnthropicMessagesStreamDecoder {
 
     fn reported_usage_presence(&self) -> mez_agent::ModelTokenUsagePresence {
         AnthropicMessagesStreamDecoder::reported_usage_presence(self)
+    }
+
+    fn terminal_usage(
+        &self,
+    ) -> Option<(
+        mez_agent::ModelTokenUsage,
+        mez_agent::ModelTokenUsagePresence,
+    )> {
+        AnthropicMessagesStreamDecoder::terminal_usage(self)
+    }
+
+    fn terminal_usage_regressed(&self) -> bool {
+        AnthropicMessagesStreamDecoder::terminal_usage_regressed(self)
     }
 
     fn push_event(&mut self, event: &SseEvent) -> Result<Option<String>> {

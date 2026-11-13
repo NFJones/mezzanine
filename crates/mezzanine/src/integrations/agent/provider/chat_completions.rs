@@ -156,6 +156,20 @@ pub trait ChatCompletionsDialect: Clone + Send + Sync + Default + 'static {
         None
     }
 
+    /// Qualifies this dialect's own unary terminal fields, independently of
+    /// cumulative accounting presence and output/MAAP validity.
+    fn terminal_response_usage(
+        &self,
+        body: &str,
+    ) -> Option<(
+        mez_agent::ModelTokenUsage,
+        mez_agent::ModelTokenUsagePresence,
+    )> {
+        super::final_usage_custody::chat_body_is_terminal(body)
+            .then(|| self.response_usage(body))
+            .flatten()
+    }
+
     /// Returns the stream parser mode that should be used for a request.
     fn effective_stream(&self, _request: &ModelRequest, stream: bool) -> bool {
         stream
@@ -628,12 +642,12 @@ where
                 && let Some(custody) = stream_usage.as_mut()
             {
                 custody.update_reported_with_presence(usage, presence);
-                if response_result.as_ref().is_ok_and(|r| {
-                    (200..300).contains(&r.status_code)
-                        && super::final_usage_custody::chat_body_is_terminal(&r.body)
-                }) {
+                if let Ok(response) = &response_result
+                    && (200..300).contains(&response.status_code)
+                    && let Some(terminal) = self.dialect.terminal_response_usage(&response.body)
+                {
                     custody
-                        .finalize_unary_usage(usage, presence)
+                        .finalize_stream_usage(usage, presence, terminal)
                         .map_err(|error| error.with_provider_incurred_usage(usage))?;
                 }
             }
@@ -824,10 +838,11 @@ where
                 {
                     custody.update_reported_with_presence(usage, presence);
                     if (200..300).contains(&retry_response.status_code)
-                        && super::final_usage_custody::chat_body_is_terminal(&retry_response.body)
+                        && let Some(terminal) =
+                            self.dialect.terminal_response_usage(&retry_response.body)
                     {
                         custody
-                            .finalize_unary_usage(usage, presence)
+                            .finalize_stream_usage(usage, presence, terminal)
                             .map_err(|error| error.with_provider_incurred_usage(usage))?;
                     }
                 }

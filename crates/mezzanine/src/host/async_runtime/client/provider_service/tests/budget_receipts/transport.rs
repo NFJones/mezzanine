@@ -5,8 +5,8 @@
 use super::*;
 use crate::host::async_runtime::client::provider_service::budget_admission::BudgetAttemptAdmission;
 use crate::integrations::agent::provider::{
-    DeepSeekChatCompletionsProvider, OpenAiResponsesProvider, ProviderObservationReceipt,
-    ProviderTransportRetirement,
+    AnthropicMessagesProvider, DeepSeekChatCompletionsProvider, OpenAiResponsesProvider,
+    ProviderObservationReceipt, ProviderTransportRetirement,
 };
 use crate::integrations::http::ReqwestProviderHttpTransport;
 use futures_util::FutureExt;
@@ -92,6 +92,11 @@ impl AsyncProviderHttpTransport for Transport {
                             .ok()
                             .is_some_and(|value| {
                                 value["type"] == "response.completed"
+                                    || (value["type"] == "message_delta"
+                                        && value
+                                            .pointer("/delta/stop_reason")
+                                            .and_then(serde_json::Value::as_str)
+                                            .is_some())
                                     || (value["choices"].as_array().is_some_and(Vec::is_empty)
                                         && value.get("usage").is_some())
                             });
@@ -245,6 +250,10 @@ enum UnaryUsage {
     RegressedThenCancel,
     MissingChoiceIndex,
     ExcessChoices,
+    MissingCacheFields,
+    PartialInputChange,
+    AnthropicConflict,
+    MixedRegression,
 }
 
 impl UnaryUsage {
@@ -411,7 +420,99 @@ async fn qualify_usage(
         blocked_callback,
         fault,
         usage_case,
+        WireDialect::Chat,
+    )
+    .await;
+}
+
+#[derive(Clone, Copy)]
+enum WireDialect {
+    Chat,
+    DeepSeek,
+    Anthropic,
+}
+
+/// Anthropic start-input and terminal-delta output are separate evidence;
+/// actual HTTP, native receipt commit and actor ACK remain mandatory.
+#[tokio::test]
+async fn budget_wire_loopback_anthropic_final_dimensions() {
+    for stream in [false, true] {
+        for usage in [
+            UnaryUsage::Totals,
+            UnaryUsage::InputOnly,
+            UnaryUsage::OutputOnly,
+            UnaryUsage::CacheOnly,
+            UnaryUsage::MissingCacheFields,
+            UnaryUsage::Zero,
+            UnaryUsage::Nonterminal,
+            UnaryUsage::InvalidMaap,
+            UnaryUsage::HttpFailure,
+        ] {
+            qualify_dialect_usage(
+                false,
+                stream,
+                false,
+                false,
+                0,
+                usage,
+                WireDialect::Anthropic,
+            )
+            .await;
+        }
+    }
+}
+
+#[tokio::test]
+async fn budget_wire_loopback_anthropic_partial_cache_change_keeps_output_final() {
+    qualify_dialect_usage(
         false,
+        true,
+        false,
+        false,
+        0,
+        UnaryUsage::PartialInputChange,
+        WireDialect::Anthropic,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn budget_wire_loopback_anthropic_terminal_conflicts_and_missing_fields() {
+    for usage in [
+        UnaryUsage::MissingFinalUsage,
+        UnaryUsage::DoneOnly,
+        UnaryUsage::ConflictingFinal,
+        UnaryUsage::RegressedFinal,
+        UnaryUsage::AnthropicConflict,
+    ] {
+        qualify_dialect_usage(false, true, false, false, 0, usage, WireDialect::Anthropic).await;
+    }
+}
+
+#[tokio::test]
+async fn budget_wire_loopback_anthropic_regression_survives_callback_cancellation() {
+    qualify_dialect_usage(
+        false,
+        true,
+        true,
+        false,
+        0,
+        UnaryUsage::RegressedThenCancel,
+        WireDialect::Anthropic,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn budget_wire_loopback_anthropic_mixed_regression_conserves_larger_dimension() {
+    qualify_dialect_usage(
+        false,
+        true,
+        true,
+        false,
+        0,
+        UnaryUsage::MixedRegression,
+        WireDialect::Anthropic,
     )
     .await;
 }
@@ -434,7 +535,7 @@ async fn budget_wire_loopback_deepseek_stream_finality_and_cancellation() {
         UnaryUsage::ConflictingFinalRepeat,
         UnaryUsage::NonregressingConflict,
     ] {
-        qualify_dialect_usage(false, true, false, false, 0, usage, true).await;
+        qualify_dialect_usage(false, true, false, false, 0, usage, WireDialect::DeepSeek).await;
     }
     for deepseek in [false, true] {
         qualify_dialect_usage(
@@ -444,7 +545,11 @@ async fn budget_wire_loopback_deepseek_stream_finality_and_cancellation() {
             false,
             0,
             UnaryUsage::RegressedThenCancel,
-            deepseek,
+            if deepseek {
+                WireDialect::DeepSeek
+            } else {
+                WireDialect::Chat
+            },
         )
         .await;
     }
@@ -457,8 +562,10 @@ async fn qualify_dialect_usage(
     blocked_callback: bool,
     fault: u8,
     usage_case: UnaryUsage,
-    deepseek: bool,
+    dialect: WireDialect,
 ) {
+    let deepseek = matches!(dialect, WireDialect::DeepSeek);
+    let anthropic = matches!(dialect, WireDialect::Anthropic);
     let Prepared {
         service,
         dispatch,
@@ -501,7 +608,90 @@ async fn qualify_dialect_usage(
             bytes.extend_from_slice(&chunk[..read]);
         }
         entered.send(()).unwrap();
-        if stream && !responses {
+        if anthropic {
+            let text = if matches!(usage_case, UnaryUsage::InvalidMaap) {
+                serde_json::json!({"rationale":"fixture","actions":[{"type":"invalid_fixture_action"}]}).to_string()
+            } else {
+                serde_json::json!({"rationale":"fixture","actions":[{"type":"say","status":"final","content_type":"text/plain; charset=utf-8","text":"done"}]}).to_string()
+            };
+            let input = match usage_case {
+                UnaryUsage::OutputOnly => serde_json::json!({}),
+                UnaryUsage::CacheOnly => serde_json::json!({"cache_read_input_tokens":11}),
+                UnaryUsage::MissingCacheFields => serde_json::json!({"input_tokens":11}),
+                UnaryUsage::Zero => {
+                    serde_json::json!({"input_tokens":0,"cache_read_input_tokens":0,"cache_creation_input_tokens":0})
+                }
+                _ => {
+                    serde_json::json!({"input_tokens":3,"cache_read_input_tokens":5,"cache_creation_input_tokens":3})
+                }
+            };
+            let output = match usage_case {
+                UnaryUsage::InputOnly | UnaryUsage::CacheOnly => None,
+                UnaryUsage::Zero => Some(0),
+                _ => Some(3),
+            };
+            let stop = if matches!(usage_case, UnaryUsage::Nonterminal) {
+                None
+            } else {
+                Some("tool_use")
+            };
+            let status = if matches!(usage_case, UnaryUsage::HttpFailure) {
+                "500 Internal Server Error"
+            } else {
+                "200 OK"
+            };
+            if stream {
+                let mut input = input;
+                if let Some(output) = output {
+                    input["output_tokens"] = serde_json::json!(output);
+                }
+                let start = serde_json::json!({"type":"message_start","message":{"type":"message","role":"assistant","model":"test-model","usage":input}});
+                let block = serde_json::json!({"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"fixture-tool","name":"submit_maap_action_batch","input":serde_json::from_str::<serde_json::Value>(&text).unwrap()}});
+                let mut delta = serde_json::json!({"type":"message_delta","delta":{"stop_reason":stop},"usage":output.map(|output|serde_json::json!({"output_tokens":output})).unwrap_or(serde_json::json!({}))});
+                if matches!(usage_case, UnaryUsage::PartialInputChange) {
+                    delta["usage"]["cache_read_input_tokens"] = serde_json::json!(7);
+                }
+                if matches!(usage_case, UnaryUsage::MixedRegression) {
+                    delta["usage"] = serde_json::json!({"input_tokens":2,"cache_read_input_tokens":5,"cache_creation_input_tokens":3,"output_tokens":5});
+                }
+                if matches!(
+                    usage_case,
+                    UnaryUsage::RegressedThenCancel | UnaryUsage::RegressedFinal
+                ) {
+                    delta["usage"]["output_tokens"] = serde_json::json!(2);
+                }
+                if matches!(usage_case, UnaryUsage::MissingFinalUsage) {
+                    delta["usage"] = serde_json::json!({});
+                }
+                let mut data = format!(
+                    "data: {start}\n\ndata: {block}\n\ndata: {{\"type\":\"content_block_stop\",\"index\":0}}\n\n"
+                );
+                if !matches!(usage_case, UnaryUsage::DoneOnly) {
+                    data.push_str(&format!("data: {delta}\n\n"));
+                }
+                if matches!(
+                    usage_case,
+                    UnaryUsage::ConflictingFinal | UnaryUsage::AnthropicConflict
+                ) {
+                    delta["usage"]["output_tokens"] =
+                        serde_json::json!(if matches!(usage_case, UnaryUsage::AnthropicConflict) {
+                            5
+                        } else {
+                            2
+                        });
+                    data.push_str(&format!("data: {delta}\n\n"));
+                }
+                data.push_str("data: {\"type\":\"message_stop\"}\n\n");
+                socket.write_all(format!("HTTP/1.1 {status}\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n{:x}\r\n{data}\r\n0\r\n\r\n",data.len()).as_bytes()).await.unwrap();
+            } else {
+                let mut usage = input;
+                if let Some(output) = output {
+                    usage["output_tokens"] = serde_json::json!(output);
+                }
+                let body = serde_json::json!({"type":"message","role":"assistant","model":"test-model","stop_reason":stop,"content":[{"type":"tool_use","id":"fixture-tool","name":"submit_maap_action_batch","input":serde_json::from_str::<serde_json::Value>(&text).unwrap()}],"usage":usage}).to_string();
+                socket.write_all(format!("HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()).as_bytes()).await.unwrap();
+            }
+        } else if stream && !responses {
             let mut text = serde_json::json!({"rationale":"fixture","actions":[{"type":"say","status":"final","content_type":"text/plain; charset=utf-8","text":"done"}]}).to_string();
             if matches!(usage_case, UnaryUsage::InvalidMaap) {
                 text = serde_json::json!({"rationale":"fixture","actions":[{"type":"invalid_fixture_action"}]}).to_string();
@@ -674,7 +864,10 @@ async fn qualify_dialect_usage(
     let dropped = Arc::new(AtomicUsize::new(0));
     let event = Arc::new(tokio::sync::Notify::new());
     let callback_dropped = Arc::new(AtomicUsize::new(0));
-    let hold_after_terminal = matches!(usage_case, UnaryUsage::RegressedThenCancel);
+    let hold_after_terminal = matches!(
+        usage_case,
+        UnaryUsage::RegressedThenCancel | UnaryUsage::MixedRegression
+    );
     let blocked_callback = blocked_callback || hold_after_terminal;
     let transport = Transport {
         dropped: dropped.clone(),
@@ -683,6 +876,18 @@ async fn qualify_dialect_usage(
         callback_dropped: callback_dropped.clone(),
         hold_after_terminal,
     };
+    let native_anthropic = anthropic.then(|| {
+        AnthropicMessagesProvider::without_auth(Transport {
+            dropped: dropped.clone(),
+            event: event.clone(),
+            blocked_callback,
+            callback_dropped: callback_dropped.clone(),
+            hold_after_terminal,
+        })
+        .unwrap()
+        .with_endpoint(endpoint.clone())
+        .with_stream(stream)
+    });
     let (chat, response, native_deepseek) = if responses {
         (
             None,
@@ -725,12 +930,16 @@ async fn qualify_dialect_usage(
             None,
         )
     };
-    let provider: &dyn AsyncModelProvider = match &chat {
-        Some(p) => p,
-        None => match &response {
+    let provider: &dyn AsyncModelProvider = if let Some(provider) = &native_anthropic {
+        provider
+    } else {
+        match &chat {
             Some(p) => p,
-            None => native_deepseek.as_ref().unwrap(),
-        },
+            None => match &response {
+                Some(p) => p,
+                None => native_deepseek.as_ref().unwrap(),
+            },
+        }
     };
     let mut request = crate::integrations::agent::context::assemble_model_request(
         &dispatch.model_profile,
@@ -772,12 +981,19 @@ async fn qualify_dialect_usage(
     let deepseek_observed = native_deepseek.as_ref().map(|provider| {
         ObservedAsyncModelProvider::new(provider, &observer, ProviderRequestPurpose::Execution)
     });
-    let observed: &dyn AsyncModelProvider = match &chat_observed {
-        Some(provider) => provider,
-        None => match &responses_observed {
-            Some(p) => p,
-            None => deepseek_observed.as_ref().unwrap(),
-        },
+    let anthropic_observed = native_anthropic.as_ref().map(|provider| {
+        ObservedAsyncModelProvider::new(provider, &observer, ProviderRequestPurpose::Execution)
+    });
+    let observed: &dyn AsyncModelProvider = if let Some(provider) = &anthropic_observed {
+        provider
+    } else {
+        match &chat_observed {
+            Some(provider) => provider,
+            None => match &responses_observed {
+                Some(p) => p,
+                None => deepseek_observed.as_ref().unwrap(),
+            },
+        }
     };
     let (handle, actor) =
         crate::host::async_runtime::AsyncRuntimeSessionActor::new(service, Default::default())
@@ -914,10 +1130,11 @@ async fn qualify_dialect_usage(
                     | UnaryUsage::Incomplete
                     | UnaryUsage::Failed
                     | UnaryUsage::Cancelled
-                    | UnaryUsage::DoneOnly
                     | UnaryUsage::ConflictingFinal
                     | UnaryUsage::NonregressingConflict
-            ) || (responses && matches!(usage_case, UnaryUsage::Nonterminal))
+                    | UnaryUsage::AnthropicConflict
+            ) || (!anthropic && matches!(usage_case, UnaryUsage::DoneOnly))
+                || (responses && matches!(usage_case, UnaryUsage::Nonterminal))
             {
                 assert!(
                     result.is_err(),
@@ -931,14 +1148,21 @@ async fn qualify_dialect_usage(
             let observation = pending.snapshot().pop().unwrap();
             assert!(factory.native.has_transport_retirement(&observation));
             assert_eq!(observation.usage.is_some(), stream);
-            if matches!(usage_case, UnaryUsage::RegressedThenCancel) {
+            if matches!(
+                usage_case,
+                UnaryUsage::RegressedThenCancel | UnaryUsage::MixedRegression
+            ) {
                 assert!(pending.checkpoint(&observation).await.is_err());
                 assert_eq!(rows(&store, "budget_receipts"), 1);
                 assert_eq!(
                     store.budget_account(&member.root).unwrap().known,
                     UsageTotals {
                         input: 11,
-                        output: 3
+                        output: if matches!(usage_case, UnaryUsage::MixedRegression) {
+                            5
+                        } else {
+                            3
+                        }
                     }
                 );
                 let db = rusqlite::Connection::open(store.path()).unwrap();
@@ -992,7 +1216,20 @@ async fn qualify_dialect_usage(
             .unwrap();
         let snapshot: serde_json::Value = serde_json::from_str(&snapshot).unwrap();
         let complete = if !cancel {
-            usage_case.complete()
+            if anthropic && matches!(usage_case, UnaryUsage::MissingFinalUsage) {
+                (Some(11), None)
+            } else if matches!(usage_case, UnaryUsage::AnthropicConflict) {
+                (None, None)
+            } else if anthropic
+                && matches!(
+                    usage_case,
+                    UnaryUsage::MissingCacheFields | UnaryUsage::PartialInputChange
+                )
+            {
+                (None, Some(3))
+            } else {
+                usage_case.complete()
+            }
         } else {
             (None, None)
         };
@@ -1011,12 +1248,20 @@ async fn qualify_dialect_usage(
             known,
             if cancel && !stream {
                 UsageTotals::default()
-            } else if matches!(usage_case, UnaryUsage::NonregressingConflict) {
+            } else if matches!(usage_case, UnaryUsage::AnthropicConflict) {
+                UsageTotals {
+                    input: 11,
+                    output: 5,
+                }
+            } else if matches!(
+                usage_case,
+                UnaryUsage::PartialInputChange | UnaryUsage::NonregressingConflict
+            ) {
                 UsageTotals {
                     input: 13,
                     output: 3,
                 }
-            } else if stream && !matches!(usage_case, UnaryUsage::Zero) {
+            } else if stream && !anthropic && !matches!(usage_case, UnaryUsage::Zero) {
                 UsageTotals {
                     input: 11,
                     output: 3,

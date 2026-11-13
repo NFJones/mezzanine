@@ -23,6 +23,9 @@ use crate::{
 };
 use std::collections::BTreeMap;
 
+mod usage_finality;
+pub use usage_finality::anthropic_final_usage_presence;
+
 /// Default Anthropic Messages API version used when options omit one.
 pub const DEFAULT_ANTHROPIC_VERSION: &str = "2023-06-01";
 /// Default Anthropic Messages API endpoint.
@@ -701,6 +704,7 @@ pub struct AnthropicMessagesStreamDecoder {
     model: Option<String>,
     usage: ModelTokenUsage,
     usage_presence: crate::ModelTokenUsagePresence,
+    final_usage: usage_finality::MessagesUsage,
     // Raw cumulative component, never reconstructed from saturated totals.
     uncached_input_tokens: u64,
     stop_reason: Option<String>,
@@ -721,6 +725,34 @@ impl AnthropicMessagesStreamDecoder {
         self.usage_presence
     }
 
+    /// Split message-start input and terminal-delta output, qualified only by
+    /// message_stop. Neither output parsing nor cumulative presence proves it.
+    pub fn terminal_usage(&self) -> Option<(ModelTokenUsage, crate::ModelTokenUsagePresence)> {
+        self.final_usage.terminal_usage()
+    }
+
+    /// Sticky refusal transferred synchronously before a cancellable callback.
+    pub fn terminal_usage_regressed(&self) -> bool {
+        self.final_usage.regressed()
+    }
+
+    /// A contradictory report cannot lower known primary expense or erase a
+    /// simultaneous increase in the other dimension. Normalize the complete
+    /// report against the last accepted component state, then retain primary
+    /// maxima only: summing independently maximized cache components could
+    /// invent an inclusive total that no report ever supplied.
+    fn overlay_observed_usage(&mut self, raw: Option<&serde_json::Value>, regressed: bool) {
+        if regressed || self.final_usage.regressed() {
+            let mut candidate = self.usage;
+            let mut uncached = self.uncached_input_tokens;
+            anthropic_overlay_usage(&mut candidate, &mut uncached, raw);
+            self.usage.input_tokens = self.usage.input_tokens.max(candidate.input_tokens);
+            self.usage.output_tokens = self.usage.output_tokens.max(candidate.output_tokens);
+        } else {
+            anthropic_overlay_usage(&mut self.usage, &mut self.uncached_input_tokens, raw);
+        }
+    }
+
     /// Applies one complete SSE event and returns display-safe text progress.
     pub fn push_event(
         &mut self,
@@ -735,6 +767,9 @@ impl AnthropicMessagesStreamDecoder {
                 "Anthropic stream event was not JSON: {error}"
             ))
         })?;
+        let regressed = self
+            .final_usage
+            .observe(&value, event.name.as_deref(), self.usage);
         if event.name.as_deref() == Some("error")
             || value.get("type").and_then(serde_json::Value::as_str) == Some("error")
         {
@@ -742,11 +777,7 @@ impl AnthropicMessagesStreamDecoder {
             // the normal error path and do not touch content/model state.
             self.usage_presence
                 .merge(anthropic_usage_presence(value.get("usage")));
-            anthropic_overlay_usage(
-                &mut self.usage,
-                &mut self.uncached_input_tokens,
-                value.get("usage"),
-            );
+            self.overlay_observed_usage(value.get("usage"), regressed);
             return Err(
                 anthropic_provider_error_from_value(&value, "Anthropic stream error")
                     .unwrap_or_else(|| {
@@ -772,11 +803,7 @@ impl AnthropicMessagesStreamDecoder {
                 }
                 self.usage_presence
                     .merge(anthropic_usage_presence(value.pointer("/message/usage")));
-                anthropic_overlay_usage(
-                    &mut self.usage,
-                    &mut self.uncached_input_tokens,
-                    value.pointer("/message/usage"),
-                );
+                self.overlay_observed_usage(value.pointer("/message/usage"), regressed);
                 Ok(None)
             }
             Some("content_block_start") => {
@@ -857,11 +884,7 @@ impl AnthropicMessagesStreamDecoder {
                 }
                 self.usage_presence
                     .merge(anthropic_usage_presence(value.get("usage")));
-                anthropic_overlay_usage(
-                    &mut self.usage,
-                    &mut self.uncached_input_tokens,
-                    value.get("usage"),
-                );
+                self.overlay_observed_usage(value.get("usage"), regressed);
                 Ok(None)
             }
             Some("message_stop") => {
@@ -880,6 +903,11 @@ impl AnthropicMessagesStreamDecoder {
         agent_id: &str,
         requires_maap: bool,
     ) -> Result<AnthropicMessagesResponse, AnthropicResponseError> {
+        if self.final_usage.conflicting_report() {
+            return Err(
+                ProviderResponseError::invalid_state("Anthropic terminal usage changed").into(),
+            );
+        }
         let content = self
             .blocks
             .into_values()

@@ -16768,6 +16768,21 @@ presence or `[DONE]`. Conflicting final reports MUST invalidate completeness and
 output; terminal numeric regression MUST preserve expense and sticky refusal.
 Unknown or excessive choice metadata MUST degrade coverage, never fabricate it.
 This qualification MUST NOT be applied to Anthropic's different message grammar.
+Anthropic unary final fields require an assistant `message` with a nonempty stop
+reason and successful HTTP completion. Inclusive input requires explicit numeric
+uncached, cache-read and cache-creation components with a checked sum; missing
+cache components MUST NOT be fabricated as zero. Messages SSE MAY qualify input
+from the original message-start fields and output from the stop-reason delta's
+OWN fields only after `message_stop` and successful HTTP completion. A complete
+input report in that delta may replace the start report; a changed partial input
+report invalidates only input completeness, not positively reported final output.
+Start/prefix output presence MUST NOT complete missing final output. Conflicting
+terminal reports invalidate output/completeness; regression of any reported
+cumulative component preserves the prior expense and sticky refusal before any
+callback suspension. A simultaneous increase in another primary dimension MUST
+also be retained; independently maximized cache components MUST NOT be summed
+into an invented inclusive total. Missing terminal grammar or interrupted/HTTP-refused streams
+retain expense with incomplete coverage, not invented final counters.
 Terminal receipt and the original grant's retirement reference MUST commit in
 one transaction. A receipt committed without that reference MUST NOT later be
 upgraded into release. Lost ACK reconciliation MUST validate both original

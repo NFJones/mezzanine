@@ -117,7 +117,8 @@ impl<'request, 'observer> StreamUsageCustody<'request, 'observer> {
         self.context.finalize_unary_usage(usage, presence)
     }
 
-    /// Retain an explicit terminal event's own report separately from prefixes.
+    /// Retain dialect-qualified final fields separately from prefix presence.
+    /// Unary composite dimensions may require stricter presence as well.
     pub(super) fn finalize_stream_usage(
         &self,
         usage: mez_agent::ModelTokenUsage,
