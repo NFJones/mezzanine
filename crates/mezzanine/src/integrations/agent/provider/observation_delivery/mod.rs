@@ -15,7 +15,7 @@ use std::collections::BTreeMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use tokio::sync::Notify;
 
 /// A frozen original receipt, never permission to send or release exposure.
@@ -33,6 +33,7 @@ pub(crate) trait ProviderObservationReceiptFactory: Send + Sync {
     ) -> Result<Arc<dyn ProviderObservationReceipt>>;
 }
 
+#[derive(Clone)]
 enum BudgetCheckpoint {
     Planned,
     Unbudgeted,
@@ -44,9 +45,17 @@ enum BudgetCheckpoint {
 struct Entry {
     observation: ProviderWireRequestObservation,
     budget: BudgetCheckpoint,
+    capture: Option<Arc<Finalization>>,
     // Even a failed pure capture must retain its original native descriptor.
     _factory: Option<Arc<dyn ProviderObservationReceiptFactory>>,
     conflicted: bool,
+}
+
+/// Reserve the first exact final evidence before invoking its pure factory.
+/// Competing finalizers share capture without holding the journal map lock.
+struct Finalization {
+    observation: ProviderWireRequestObservation,
+    budget: OnceLock<BudgetCheckpoint>,
 }
 
 fn same_plan(
@@ -131,6 +140,7 @@ impl PendingProviderWireObservations {
             Entry {
                 observation,
                 budget: BudgetCheckpoint::Planned,
+                capture: None,
                 _factory: factory.cloned(),
                 conflicted: false,
             },
@@ -145,75 +155,97 @@ impl PendingProviderWireObservations {
         observation: ProviderWireRequestObservation,
         factory: Option<&Arc<dyn ProviderObservationReceiptFactory>>,
     ) -> bool {
-        let was_planned = {
+        let capture = {
             let mut entries = self.entries();
-            if let Some(original) = entries.get_mut(&observation.request_id) {
-                if original.conflicted {
-                    return false;
-                }
-                if !matches!(original.budget, BudgetCheckpoint::Planned) {
-                    if original.observation != observation {
-                        original.conflicted = true;
-                    }
-                    return false;
-                }
-                if !same_plan(original, &observation, factory) {
-                    original.conflicted = true;
-                    return false;
-                }
-                true
-            } else {
-                false
-            }
-        };
-        // Validate the plan before a factory can bind its immutable native
-        // descriptor. Pure capture still runs outside the journal mutex.
-        let budget = if let Some(factory) = factory {
-            self.0.budget_required.store(true, Ordering::Release);
-            match factory.freeze(&observation) {
-                Ok(receipt) => BudgetCheckpoint::Pending(receipt),
-                Err(error) => BudgetCheckpoint::Refused(error),
-            }
-        } else if self.0.budget_required.load(Ordering::Acquire) {
-            BudgetCheckpoint::Refused(MezError::invalid_state(
-                "original budget receipt unavailable",
-            ))
-        } else {
-            BudgetCheckpoint::Unbudgeted
-        };
-        let mut entries = self.entries();
-        if let Some(original) = entries.get_mut(&observation.request_id) {
+            let original = entries
+                .entry(observation.request_id.clone())
+                .or_insert_with(|| Entry {
+                    observation: observation.clone(),
+                    budget: BudgetCheckpoint::Planned,
+                    capture: None,
+                    _factory: factory.cloned(),
+                    conflicted: false,
+                });
             if original.conflicted {
                 return false;
             }
-            if matches!(original.budget, BudgetCheckpoint::Planned) {
-                if !same_plan(original, &observation, factory) {
-                    original.conflicted = true;
-                    return false;
-                }
-                original.observation = observation;
-                original.budget = budget;
-                return true;
-            }
-            if original.observation != observation {
+            if !same_plan(original, &observation, factory) {
                 original.conflicted = true;
+                return false;
             }
+            if !matches!(original.budget, BudgetCheckpoint::Planned) {
+                if original.observation != observation {
+                    original.conflicted = true;
+                }
+                return false;
+            }
+            let capture = original
+                .capture
+                .get_or_insert_with(|| {
+                    Arc::new(Finalization {
+                        observation: observation.clone(),
+                        budget: OnceLock::new(),
+                    })
+                })
+                .clone();
+            if capture.observation != observation {
+                original.conflicted = true;
+                return false;
+            }
+            if factory.is_some() {
+                self.0.budget_required.store(true, Ordering::Release);
+            }
+            capture
+        };
+        let budget = capture
+            .budget
+            .get_or_init(|| {
+                if let Some(factory) = factory {
+                    // A factory panic may follow partial immutable capture. Keep
+                    // its source and a sticky refusal, never invoke it again or
+                    // attach its potentially private payload to retained errors.
+                    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        factory.freeze(&observation)
+                    })) {
+                        Ok(Ok(receipt)) => BudgetCheckpoint::Pending(receipt),
+                        Ok(Err(error)) => BudgetCheckpoint::Refused(error),
+                        Err(_) => BudgetCheckpoint::Refused(MezError::invalid_state(
+                            "budget receipt capture panicked",
+                        )),
+                    }
+                } else if self.0.budget_required.load(Ordering::Acquire) {
+                    BudgetCheckpoint::Refused(MezError::invalid_state(
+                        "original budget receipt unavailable",
+                    ))
+                } else {
+                    BudgetCheckpoint::Unbudgeted
+                }
+            })
+            .clone();
+        self.finish_capture(&capture, budget)
+    }
+
+    /// Publish only into the exact reservation that performed capture. A late
+    /// finalizer cannot resurrect an ACKed entry or replace a reused map key.
+    fn finish_capture(&self, capture: &Arc<Finalization>, budget: BudgetCheckpoint) -> bool {
+        let mut entries = self.entries();
+        let Some(original) = entries.get_mut(&capture.observation.request_id) else {
+            // An exact competitor already finalized and ACKed. Do not
+            // resurrect the entry or emit another auxiliary usage report.
+            return false;
+        };
+        if !matches!(original.budget, BudgetCheckpoint::Planned)
+            || !original
+                .capture
+                .as_ref()
+                .is_some_and(|reserved| Arc::ptr_eq(reserved, capture))
+        {
             return false;
         }
-        if was_planned {
-            // Another exact finalizer completed and ACKed while capture ran.
-            // Do not resurrect its observation or emit another usage event.
-            return false;
-        }
-        entries.insert(
-            observation.request_id.clone(),
-            Entry {
-                observation,
-                budget,
-                _factory: factory.cloned(),
-                conflicted: false,
-            },
-        );
+        // Preserve the first valid captured expense even if conflicting
+        // evidence arrived during capture. The conflict still fences ACK.
+        original.observation = capture.observation.clone();
+        original.budget = budget;
         true
     }
 

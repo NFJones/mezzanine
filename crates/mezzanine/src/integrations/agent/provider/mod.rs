@@ -1101,9 +1101,13 @@ impl<'a> ProviderWireObservationContext<'a> {
         let newly_retained = self.observer.pending.as_ref().is_none_or(|pending| {
             pending.retain_with_receipt(observation.clone(), self.observer.budget_receipts.as_ref())
         });
-        if newly_retained
-            && let (Some(reported), Some(usage)) = (&self.observer.reported, observation.usage)
-        {
+        if !newly_retained {
+            // Refusal is not a custody handoff. Leave the original plan and
+            // stack fallback armed; an exact duplicate was already handed off
+            // by its first finalizer and needs no second generation advance.
+            return;
+        }
+        if let (Some(reported), Some(usage)) = (&self.observer.reported, observation.usage) {
             // Each concrete attempt emits one fresh wire identity above. Keep
             // only its disjoint counters, never response content or a growing
             // history of acknowledged observations.

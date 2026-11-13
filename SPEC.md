@@ -16701,6 +16701,10 @@ Completion or cancellation MUST finalize that same identity; cancellation before
 usage MUST retain unknown counters without charging a fabricated zero report.
 Only response evidence may change during finalization. Original subject, purpose,
 ordinal and retry reason MUST remain frozen, and conflicts MUST fence ACK.
+Rejected finalization MUST NOT publish a context handoff or disarm its original
+stack custody. Concurrent exact finalizers MUST share one reserved receipt
+capture outside the journal map lock. Capture panic MUST retain a sticky refusal
+and original source, never reopen capture or manufacture successful checkpointing.
 After an observed writer failure, a fresh positive absence query MAY permit one
 explicit retry of that same immutable bookkeeping operation, never inference or
 effects. Receipt acknowledgment alone MUST NOT release provider exposure or

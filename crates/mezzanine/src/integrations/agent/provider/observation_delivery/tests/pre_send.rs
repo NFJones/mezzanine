@@ -145,6 +145,205 @@ async fn check_native(
 
 struct CountingFactory(Arc<AtomicUsize>);
 struct Receipt;
+/// A refused finalization must leave stack custody armed on its original ID.
+#[test]
+fn rejected_finalization_does_not_publish_a_context_handoff() {
+    let fixture = fixture();
+    let context = crate::integrations::agent::provider::ProviderWireObservationContext::new(
+        &fixture.observer,
+        ProviderRequestPurpose::Execution,
+        "fixture".into(),
+        Ok(None),
+    );
+    context
+        .plan_wire_attempt(&fixture.request, 1, None)
+        .unwrap();
+    let original = fixture.pending.snapshot().pop().unwrap();
+    let mut changed = original.clone();
+    changed.model.push_str("-foreign");
+    context.retain_wire_observation(&changed);
+    assert_eq!(context.planned_wire_id(), Some(original.request_id));
+    assert_eq!(context.retained_observations.load(Ordering::Acquire), 0);
+    assert_eq!(fixture.reported.lock().unwrap().known_observations, 0);
+}
+
+/// Capture deliberately reads the journal while blocked: the map mutex must
+/// remain available, and an identical competing finalizer must reuse this work.
+struct BlockingFactory {
+    calls: Arc<AtomicUsize>,
+    started: std::sync::mpsc::Sender<()>,
+    release: Mutex<std::sync::mpsc::Receiver<()>>,
+    journal: std::sync::Weak<Journal>,
+}
+
+impl ProviderObservationReceiptFactory for BlockingFactory {
+    fn freeze(
+        &self,
+        _: &ProviderWireRequestObservation,
+    ) -> Result<Arc<dyn ProviderObservationReceipt>> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        let journal = PendingProviderWireObservations(self.journal.upgrade().unwrap());
+        assert_eq!(journal.len(), 1);
+        drop(journal);
+        self.started.send(()).unwrap();
+        self.release
+            .lock()
+            .unwrap()
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .unwrap();
+        Ok(Arc::new(Receipt))
+    }
+}
+
+#[tokio::test]
+async fn concurrent_finalization_captures_one_original_receipt() {
+    for planned in [true, false] {
+        qualify_concurrent_finalization(planned).await;
+    }
+}
+
+async fn qualify_concurrent_finalization(planned: bool) {
+    let completed = completed_evidence().await;
+    let pending = PendingProviderWireObservations::default();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let (started, ready) = std::sync::mpsc::channel();
+    let (release, blocked) = std::sync::mpsc::channel();
+    let factory: Arc<dyn ProviderObservationReceiptFactory> = Arc::new(BlockingFactory {
+        calls: calls.clone(),
+        started,
+        release: Mutex::new(blocked),
+        journal: Arc::downgrade(&pending.0),
+    });
+    if planned {
+        pending.plan(plan(&completed), Some(&factory)).unwrap();
+    }
+    let original = pending.clone();
+    let first_factory = factory.clone();
+    let first_observation = completed.clone();
+    let first = std::thread::spawn(move || {
+        original.retain_with_receipt(first_observation, Some(&first_factory))
+    });
+    ready
+        .recv_timeout(std::time::Duration::from_secs(10))
+        .unwrap();
+    let competing = pending.clone();
+    let second_factory = factory.clone();
+    let second_observation = completed.clone();
+    let second = std::thread::spawn(move || {
+        competing.retain_with_receipt(second_observation, Some(&second_factory))
+    });
+    // On the defective implementation this second callback announces itself
+    // immediately. On the repaired implementation it waits on original capture.
+    let duplicate = ready
+        .recv_timeout(std::time::Duration::from_millis(100))
+        .is_ok();
+    release.send(()).unwrap();
+    if duplicate {
+        release.send(()).unwrap();
+    }
+    let retained = usize::from(first.join().unwrap()) + usize::from(second.join().unwrap());
+    assert!(
+        !duplicate,
+        "a competing finalizer invoked receipt capture twice"
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(retained, 1);
+    pending.checkpoint(&completed).await.unwrap();
+    pending.acknowledge(&completed.request_id);
+    assert!(pending.is_empty());
+}
+
+struct PanickingFactory(Arc<AtomicUsize>);
+impl ProviderObservationReceiptFactory for PanickingFactory {
+    fn freeze(
+        &self,
+        _: &ProviderWireRequestObservation,
+    ) -> Result<Arc<dyn ProviderObservationReceipt>> {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        panic!("PRIVATE_CAPTURE_FAULT");
+    }
+}
+
+#[tokio::test]
+async fn capture_panic_retains_final_evidence_and_a_sticky_refusal() {
+    let completed = completed_evidence().await;
+    let pending = PendingProviderWireObservations::default();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let factory: Arc<dyn ProviderObservationReceiptFactory> =
+        Arc::new(PanickingFactory(calls.clone()));
+    pending.plan(plan(&completed), Some(&factory)).unwrap();
+    assert!(pending.retain_with_receipt(completed.clone(), Some(&factory)));
+    assert!(!pending.retain_with_receipt(completed.clone(), Some(&factory)));
+    let error = pending.checkpoint(&completed).await.unwrap_err();
+    assert!(!error.message().contains("PRIVATE_CAPTURE"));
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    pending.acknowledge(&completed.request_id);
+    assert_eq!(pending.snapshot(), vec![completed]);
+    assert!(Arc::strong_count(&factory) >= 2);
+}
+
+#[tokio::test]
+async fn late_capture_cannot_resurrect_or_finalize_a_successor_plan() {
+    let completed = completed_evidence().await;
+    let pending = PendingProviderWireObservations::default();
+    pending.plan(plan(&completed), None).unwrap();
+    assert!(pending.retain_with_receipt(completed.clone(), None));
+    let capture = pending
+        .entries()
+        .get(&completed.request_id)
+        .unwrap()
+        .capture
+        .clone()
+        .unwrap();
+    let budget = capture.budget.get().unwrap().clone();
+    pending.acknowledge(&completed.request_id);
+    assert!(!pending.finish_capture(&capture, budget.clone()));
+    assert!(pending.is_empty());
+    let successor = plan(&completed);
+    pending.plan(successor.clone(), None).unwrap();
+    assert!(!pending.finish_capture(&capture, budget));
+    assert_eq!(pending.snapshot(), vec![successor]);
+    assert!(pending.checkpoint(&completed).await.is_err());
+    assert!(pending.retain_with_receipt(completed.clone(), None));
+    pending.acknowledge(&completed.request_id);
+    assert!(pending.is_empty());
+}
+
+#[tokio::test]
+async fn conflicting_evidence_during_capture_preserves_original_expense_and_fence() {
+    let completed = completed_evidence().await;
+    let pending = PendingProviderWireObservations::default();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let (started, ready) = std::sync::mpsc::channel();
+    let (release, blocked) = std::sync::mpsc::channel();
+    let factory: Arc<dyn ProviderObservationReceiptFactory> = Arc::new(BlockingFactory {
+        calls: calls.clone(),
+        started,
+        release: Mutex::new(blocked),
+        journal: Arc::downgrade(&pending.0),
+    });
+    pending.plan(plan(&completed), Some(&factory)).unwrap();
+    let original = pending.clone();
+    let first_factory = factory.clone();
+    let first_observation = completed.clone();
+    let first = std::thread::spawn(move || {
+        original.retain_with_receipt(first_observation, Some(&first_factory))
+    });
+    ready
+        .recv_timeout(std::time::Duration::from_secs(10))
+        .unwrap();
+    let mut changed = completed.clone();
+    changed.usage.as_mut().unwrap().output_tokens += 1;
+    assert!(!pending.retain_with_receipt(changed, Some(&factory)));
+    release.send(()).unwrap();
+    assert!(first.join().unwrap());
+    assert_eq!(pending.snapshot(), vec![completed.clone()]);
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert!(pending.checkpoint(&completed).await.is_err());
+    pending.acknowledge(&completed.request_id);
+    assert_eq!(pending.len(), 1);
+}
+
 #[tokio::test]
 async fn required_plan_without_factory_never_polls_transport() {
     let fixture = fixture();

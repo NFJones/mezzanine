@@ -94,6 +94,9 @@ and cancellation finalize the same identity, including cancellation before any
 usage arrives. Missing counters stay unknown and do not create a zero expense
 report. Plans cannot be acknowledged as final evidence; a later retry gets its
 own identity and cannot rewrite the first exchange's retry reason.
+Rejected finalization does not disarm the original context's stack custody.
+Competing exact finalizers share one receipt capture outside the journal map
+lock; a capture panic retains a refused checkpoint and its original source.
 All journal-owned provider purposes wait for their own observation's actor ACK
 before returning or making an adapter-internal next exchange, including turn-less
 requests. Losing that consumer fails locally and keeps the original evidence for
