@@ -21,6 +21,11 @@ use crate::storage::token_usage::TokenUsageStore;
 use crate::storage::token_usage::budget::membership::BudgetMembership;
 use crate::storage::transcript::{AgentTranscriptStore, BudgetBindingLease};
 
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "physical-send admission assembly remains staged")
+)]
+pub(crate) mod admission_work;
 pub(crate) mod auxiliary;
 #[cfg_attr(
     not(test),

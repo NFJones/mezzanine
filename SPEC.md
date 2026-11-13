@@ -16688,6 +16688,12 @@ Frozen receipt clones MUST share one retained blocking writer and its original
 outcome. Cancelling an acknowledgment waiter MUST NOT detach or repeat that
 writer. Reconciliation MUST observe its actual join before querying the exact
 original receipt through a read-only worker; failed queries are not absence.
+Planned-attempt clones MUST likewise retain one actual authorization worker.
+Cancellation MUST NOT lose its original single-use permit or mint another one.
+Only a positively observed nonwriting hold may be explicitly reconsidered;
+an uncertain authorization requires actual join and fresh exact absence before
+one explicit transaction retry. Recovered committed evidence is never a new
+send permit. Retained authorization state MUST NOT form an idle source cycle.
 After an observed writer failure, a fresh positive absence query MAY permit one
 explicit retry of that same immutable bookkeeping operation, never inference or
 effects. Receipt acknowledgment alone MUST NOT release provider exposure or

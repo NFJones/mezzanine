@@ -86,6 +86,11 @@ impl BudgetIssuedAttempt {
 }
 
 impl BudgetSendPermit {
+    /// Evidence from this original grant; it cannot construct another permit.
+    pub(crate) fn outcome(&self) -> &BudgetAdmissionOutcome {
+        &self.outcome
+    }
+
     /// Worker-only consumption immediately before the concrete send. Failure
     /// retains durable exposure; it must not erase a possibly issued attempt.
     /// This grants only budget permission, never pause/Stop/approval bypass.

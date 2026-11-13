@@ -83,6 +83,11 @@ native binding and outstanding exposure together; a lost authorization reply
 can recover evidence, not another send permit. Terminal usage alone cannot
 release exposure. These internal ports do not enable production token budgets:
 physical-send, fair-waiting and worker-retirement integration remains required.
+The staged attempt owner also retains the actual authorization worker across
+canceled waiters. Its one original permit can be delivered only once; recovery
+of committed evidence never creates another. Explicit reconsideration of a
+nonwriting hold or retry after joined failure and fresh exact absence belongs
+to the existing request owner, not an automatic provider retry loop.
 All journal-owned provider purposes wait for their own observation's actor ACK
 before returning or making an adapter-internal next exchange, including turn-less
 requests. Losing that consumer fails locally and keeps the original evidence for

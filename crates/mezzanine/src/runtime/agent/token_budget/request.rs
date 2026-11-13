@@ -66,6 +66,7 @@ impl RuntimeBudgetRequestOwner {
             owner: self.clone(),
             attempt,
             wire: std::sync::OnceLock::new(),
+            admission: std::sync::OnceLock::new(),
         })))
     }
 }
@@ -75,6 +76,7 @@ struct AttemptSource {
     owner: RuntimeBudgetRequestOwner,
     attempt: BudgetAttempt,
     wire: std::sync::OnceLock<WireReceiptCapture>,
+    admission: std::sync::OnceLock<super::admission_work::SharedAdmission>,
 }
 
 /// Data and shared writer state only: no reverse reference to AttemptSource.
@@ -98,6 +100,22 @@ pub(crate) struct RuntimeBudgetAttemptWork(Arc<AttemptSource>);
     expect(dead_code, reason = "concrete attempt admission is downstream")
 )]
 impl RuntimeBudgetAttemptWork {
+    /// Capture before a cancellable admission wait. The existing request or
+    /// journal owner must retain this source through actual worker observation.
+    pub(crate) fn admission_owner(&self) -> super::admission_work::RuntimeBudgetAdmissionWork {
+        super::admission_work::RuntimeBudgetAdmissionWork::new(
+            self.clone(),
+            self.0.admission.get_or_init(Default::default).clone(),
+        )
+    }
+
+    pub(super) fn wrap_permit(&self, permit: BudgetSendPermit) -> RuntimeBudgetSendPermit {
+        RuntimeBudgetSendPermit {
+            source: self.0.clone(),
+            permit,
+        }
+    }
+
     /// Worker-only actual-admission port, not preparation-time permission. The
     /// existing frozen identity survives a held result or uncertain grant ACK.
     pub(crate) fn authorize(&self) -> Result<RuntimeBudgetAttemptAdmission> {
@@ -174,6 +192,12 @@ pub(crate) struct RuntimeBudgetSendPermit {
     expect(dead_code, reason = "physical-send driver integration is downstream")
 )]
 impl RuntimeBudgetSendPermit {
+    /// The retained worker stores only the native permit, never a reverse Arc
+    /// to the AttemptSource that owns that worker's shared state.
+    pub(super) fn into_native(self) -> BudgetSendPermit {
+        self.permit
+    }
+
     /// Consume once off actor immediately before the physical send, retaining
     /// original request/native custody for settlement and actual retirement.
     pub(crate) fn consume(self) -> Result<RuntimeBudgetIssuedAttempt> {

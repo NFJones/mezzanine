@@ -8,6 +8,7 @@ use crate::storage::token_usage::budget::reporting::BudgetReportingObservation;
 use mez_agent::token_budget::{UsageSnapshot, UsageTotals};
 use mez_agent::{ModelTokenUsage, ModelTokenUsageKey};
 
+mod admission_work;
 mod receipt_commit;
 
 async fn issued(scene: &mut Scene) -> crate::runtime::RuntimeAgentProviderDispatch {
