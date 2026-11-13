@@ -7,7 +7,9 @@
 //! under current policy, with pacing and ordinary lifecycle checks owned by the
 //! caller. Failed/uncertain authorization is never automatically repeated.
 
-use super::request::{RuntimeBudgetAttemptAdmission, RuntimeBudgetAttemptWork};
+use super::request::{
+    RuntimeBudgetAttemptAdmission, RuntimeBudgetAttemptWork, RuntimeBudgetUnusedAttempt,
+};
 use crate::error::{MezError, Result};
 use crate::storage::token_usage::budget::admission::{
     BudgetAdmissionHold, BudgetAdmissionOutcome, BudgetSendPermit,
@@ -89,6 +91,23 @@ impl RuntimeBudgetAdmissionWork {
         }
         observe_writer(&mut state).await;
         self.take_outcome(&mut state)
+    }
+
+    /// Join the actual writer and withdraw ONLY its retained original permit.
+    /// Evidence from a prior handoff/query cannot prove unused send authority.
+    /// No await separates withdrawal from transfer into non-send custody.
+    pub(crate) async fn retire_unused(&self) -> Result<Option<RuntimeBudgetUnusedAttempt>> {
+        let mut state = self.shared.0.lock().await;
+        observe_writer(&mut state).await;
+        if !matches!(state.writer, Writer::Completed(Ok(Outcome::Grant(_)))) {
+            return Ok(None);
+        }
+        match self.take_outcome(&mut state)? {
+            RuntimeBudgetAttemptAdmission::Authorized(permit) => Ok(Some(permit.retire_unused())),
+            _ => Err(MezError::invalid_state(
+                "budget unused permit custody changed",
+            )),
+        }
     }
 
     fn take_outcome(&self, state: &mut State) -> Result<RuntimeBudgetAttemptAdmission> {

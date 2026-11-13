@@ -16745,6 +16745,13 @@ receipt and retirement reference and MUST NOT issue another permit. New finite
 admission still MUST check current totals/policy and the entire unretired issued
 set, including concurrent calls authorized while unlimited. Production activation
 still requires complete provider coverage, fair waiting and effect inhibition.
+Cancellation during authorization MAY instead qualify terminal-unknown settlement
+by joining the actual original authorization writer and irreversibly withdrawing
+its still-retained, never-consumed permit into non-send custody. A grant recovered
+from storage, a record of a previously handed-out permit, missing transport, or
+actual join alone MUST NOT qualify this path. Withdrawn custody MUST survive canceled receipt
+waiters and failed writes; subtotal and terminal stages retain the same atomic
+release, reconciliation and explicit absence-qualified retry requirements.
 Completion or cancellation MUST finalize that same identity; cancellation before
 usage MUST retain unknown counters without charging a fabricated zero report.
 Only response evidence may change during finalization. Original subject, purpose,

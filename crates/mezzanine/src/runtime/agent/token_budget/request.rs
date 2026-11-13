@@ -282,6 +282,15 @@ impl RuntimeBudgetSendPermit {
         self.permit
     }
 
+    /// Withdraw original send authority without consuming or revalidating it.
+    /// The resulting owner exposes settlement only, never a send operation.
+    pub(crate) fn retire_unused(self) -> RuntimeBudgetUnusedAttempt {
+        RuntimeBudgetUnusedAttempt {
+            registered: RuntimeBudgetRegisteredAttempt(self.source),
+            permit: self.permit,
+        }
+    }
+
     /// Consume once off actor immediately before the physical send, retaining
     /// original request/native custody for settlement and actual retirement.
     pub(crate) fn consume(self) -> Result<RuntimeBudgetIssuedAttempt> {
@@ -322,44 +331,8 @@ impl RuntimeBudgetIssuedAttempt {
                 "budget transport retirement subject changed",
             ));
         }
-        let prefix = self.registered.freeze_wire_receipt(observation)?;
-        let evidence =
-            crate::storage::token_usage::budget::retirement::BudgetExposureRetirement::new(
-                self.outcome().clone(),
-                prefix.0.receipt.clone(),
-            );
-        let captured = self
-            .registered
-            .0
-            .retirement
-            .get_or_init(|| WireRetirementCapture {
-                receipt: BudgetReceiptId::new(
-                    crate::storage::token_usage::new_token_usage_event_id(),
-                )
-                .map_err(|e| MezError::invalid_state(e.to_string()))
-                .map(|id| BudgetReceipt {
-                    id,
-                    attempt: self.registered.0.attempt.clone(),
-                    snapshot: UsageSnapshot {
-                        terminal: true,
-                        ..Default::default()
-                    },
-                    reporting: None,
-                }),
-                evidence: evidence.clone(),
-                commit: Default::default(),
-            });
-        if captured.evidence != evidence {
-            return Err(MezError::conflict(
-                "budget original retirement evidence changed",
-            ));
-        }
-        Ok(RuntimeBudgetReceiptWork(Arc::new(ReceiptSource {
-            attempt: self.registered.clone(),
-            receipt: captured.receipt.clone()?,
-            retirement: Some(captured.evidence.clone()),
-            commit: std::sync::OnceLock::from(captured.commit.clone()),
-        })))
+        self.registered
+            .freeze_exposure_retirement(observation, self.outcome())
     }
 
     pub(crate) fn registered(&self) -> &RuntimeBudgetRegisteredAttempt {
@@ -375,11 +348,78 @@ impl RuntimeBudgetIssuedAttempt {
 #[derive(Debug, Clone)]
 pub(crate) struct RuntimeBudgetRegisteredAttempt(Arc<AttemptSource>);
 
+/// Irreversibly withdrawn original permit. Not Clone, reconstructible from
+/// evidence, or consumable by a transport. Retains its original native lease.
+#[derive(Debug)]
+pub(crate) struct RuntimeBudgetUnusedAttempt {
+    registered: RuntimeBudgetRegisteredAttempt,
+    permit: BudgetSendPermit,
+}
+
+impl RuntimeBudgetUnusedAttempt {
+    pub(crate) fn freeze_retirement_receipt(
+        &self,
+        observation: &crate::integrations::agent::provider::ProviderWireRequestObservation,
+    ) -> Result<RuntimeBudgetReceiptWork> {
+        if observation.usage.is_some()
+            || observation
+                .usage_presence
+                .is_some_and(|presence| presence.any())
+        {
+            return Err(MezError::conflict("unused budget attempt reported expense"));
+        }
+        self.registered
+            .freeze_exposure_retirement(observation, self.permit.outcome())
+    }
+}
+
 #[cfg_attr(
     not(test),
     expect(dead_code, reason = "receipt driver integration is downstream")
 )]
 impl RuntimeBudgetRegisteredAttempt {
+    /// Shared immutable terminal stage, called only by consumed-and-retired or
+    /// withdrawn-unused original custody. Descriptive grant evidence is not a
+    /// public entry point to qualify exposure release.
+    fn freeze_exposure_retirement(
+        &self,
+        observation: &crate::integrations::agent::provider::ProviderWireRequestObservation,
+        outcome: &BudgetAdmissionOutcome,
+    ) -> Result<RuntimeBudgetReceiptWork> {
+        let prefix = self.freeze_wire_receipt(observation)?;
+        let evidence =
+            crate::storage::token_usage::budget::retirement::BudgetExposureRetirement::new(
+                outcome.clone(),
+                prefix.0.receipt.clone(),
+            );
+        let captured = self.0.retirement.get_or_init(|| WireRetirementCapture {
+            receipt: BudgetReceiptId::new(crate::storage::token_usage::new_token_usage_event_id())
+                .map_err(|e| MezError::invalid_state(e.to_string()))
+                .map(|id| BudgetReceipt {
+                    id,
+                    attempt: self.0.attempt.clone(),
+                    snapshot: UsageSnapshot {
+                        terminal: true,
+                        ..Default::default()
+                    },
+                    reporting: None,
+                }),
+            evidence: evidence.clone(),
+            commit: Default::default(),
+        });
+        if captured.evidence != evidence {
+            return Err(MezError::conflict(
+                "budget original retirement evidence changed",
+            ));
+        }
+        Ok(RuntimeBudgetReceiptWork(Arc::new(ReceiptSource {
+            attempt: self.clone(),
+            receipt: captured.receipt.clone()?,
+            retirement: Some(captured.evidence.clone()),
+            commit: std::sync::OnceLock::from(captured.commit.clone()),
+        })))
+    }
+
     /// Pure original-subject binding before transport. Descriptor clones share
     /// this slot; neither an exact repeat nor a new factory can mint permission.
     pub(crate) fn plan_wire_receipt_subject(

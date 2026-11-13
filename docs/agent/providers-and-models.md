@@ -117,6 +117,13 @@ Only that qualified durable transfer frees local exposure; the original grant
 remains replay-only forever. Receipt or actor acknowledgment alone cannot release
 it. Older grants migrate as outstanding, even if old terminal expense exists.
 
+If cancellation occurs during authorization, the driver first joins its original
+worker. Only a still-retained, never-consumed original permit can be withdrawn
+into non-send custody and settled through the same two durable stages. A stored
+grant or a record of an already handed-out permit cannot substitute for that
+custody. A failed terminal write retains the original withdrawn owner and fences journal
+acknowledgment; retries require actual writer observation and positive absence.
+
 These internal allocation and accounting ports do **not** yet enable operational
 session budgets. Production assembly, fair waiting, complete terminal coverage,
 physical retirement, root-wide activity inhibition, policy controls, and their

@@ -15,7 +15,7 @@ use crate::integrations::agent::provider::{
 };
 use crate::runtime::{
     RuntimeBudgetAttemptAdmission, RuntimeBudgetAttemptWork, RuntimeBudgetIssuedAttempt,
-    RuntimeBudgetReceiptWork, RuntimeBudgetRequestOwner,
+    RuntimeBudgetReceiptWork, RuntimeBudgetRequestOwner, RuntimeBudgetUnusedAttempt,
 };
 use std::sync::{Arc, Mutex};
 
@@ -70,6 +70,8 @@ struct Phase {
     retired: Option<ProviderTransportRetirement>,
     // Retain the actual consumed grant independently of a canceled send future.
     issued: Option<RuntimeBudgetIssuedAttempt>,
+    // Original never-consumed permit withdrawn after its actual writer joins.
+    unused: Option<RuntimeBudgetUnusedAttempt>,
 }
 
 struct Source {
@@ -104,6 +106,21 @@ impl BudgetAttemptAdmission {
 
     /// Expose the same original immutable work to connected fault fixtures;
     /// these captures do no I/O and cannot create transport or release proof.
+    #[cfg(test)]
+    pub(super) fn unused_retirement_for_test(
+        &self,
+        observation: &ProviderWireRequestObservation,
+    ) -> Result<RuntimeBudgetReceiptWork> {
+        self.0
+            .phase
+            .lock()
+            .unwrap()
+            .unused
+            .as_ref()
+            .unwrap()
+            .freeze_retirement_receipt(observation)
+    }
+
     #[cfg(test)]
     pub(super) fn receipt_stages_for_test(
         &self,
@@ -175,6 +192,7 @@ impl ProviderObservationReceiptFactory for BudgetAttemptAdmission {
                 .lock()
                 .map_err(|_| suspended("budget attempt custody unavailable"))?;
             if phase.finalized.is_some() {
+                phase.unused = Some(permit.retire_unused());
                 return Err(suspended("budget attempt finalized during authorization"));
             }
             // No await between consumption and retaining its original custody.
@@ -266,17 +284,28 @@ impl ProviderObservationReceipt for Receipt {
                 return Ok(());
             };
             checkpoint_work(work).await?;
+            // Reconciliation above joined the original writer, but descriptive
+            // evidence alone is insufficient. Only a still-retained permit can
+            // be withdrawn, and transfer into Phase has no intervening await.
+            let unused = self.source.work.admission_owner().retire_unused().await?;
             let retirement = {
-                let phase = self
+                let mut phase = self
                     .source
                     .phase
                     .lock()
                     .map_err(|_| suspended("budget attempt custody unavailable"))?;
+                if let Some(unused) = unused {
+                    phase.unused = Some(unused);
+                }
                 match (&phase.issued, &phase.retired) {
                     (Some(issued), Some(proof)) => {
                         Some(issued.freeze_retirement_receipt(&self.observation, proof)?)
                     }
-                    _ => None,
+                    _ => phase
+                        .unused
+                        .as_ref()
+                        .map(|unused| unused.freeze_retirement_receipt(&self.observation))
+                        .transpose()?,
                 }
             };
             if let Some(work) = retirement {

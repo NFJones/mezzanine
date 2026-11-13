@@ -4,8 +4,9 @@
 //! its one-use permit is dropped. Recovery returns only immutable evidence,
 //! never another permit. Terminal expense is not local worker retirement:
 //! the separate retirement/receipt transaction requires original consumed grant
-//! custody and scoped transport evidence. Retirement never deletes this grant
-//! or supplies another permit; production assembly remains staged.
+//! custody and scoped transport evidence, or actual withdrawal of a retained
+//! never-consumed permit after its original writer joins. Retirement never
+//! deletes this grant or supplies another permit; production assembly remains staged.
 
 use super::*;
 use crate::storage::transcript::BudgetBindingLease;

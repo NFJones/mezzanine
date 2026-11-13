@@ -302,15 +302,18 @@ async fn budget_wire_actual_admission_controls_chat_and_responses_physical_polls
     }
 }
 
-#[tokio::test]
-async fn budget_wire_cancelled_authorization_keeps_original_worker_and_unknown_receipt() {
+async fn cancelled_authorization(fault: bool) {
     let Prepared {
         mut service,
         dispatch,
         store,
         member,
         mut root,
-    } = prepared_case(BudgetLimits::default()).await;
+    } = prepared_case(BudgetLimits {
+        input: TokenLimit::Limited(100),
+        output: TokenLimit::Unlimited,
+    })
+    .await;
     let pending = PendingProviderWireObservations::default();
     let calls = Arc::new(AtomicUsize::new(0));
     let provider = OpenAiCompatibleChatCompletionsProvider::without_auth(GateTransport {
@@ -347,6 +350,9 @@ async fn budget_wire_cancelled_authorization_keeps_original_worker_and_unknown_r
     let observed =
         ObservedAsyncModelProvider::new(&provider, &observer, ProviderRequestPurpose::Execution);
     let connection = rusqlite::Connection::open(store.path()).unwrap();
+    if fault {
+        connection.execute_batch("CREATE TRIGGER refuse_unused_retirement BEFORE UPDATE OF retired_receipt ON budget_admissions BEGIN SELECT RAISE(ABORT,'fixture'); END;").unwrap();
+    }
     connection.execute_batch("BEGIN IMMEDIATE;").unwrap();
     {
         let mut call = Box::pin(tokio::task::unconstrained(
@@ -367,17 +373,102 @@ async fn budget_wire_cancelled_authorization_keeps_original_worker_and_unknown_r
         );
     }
     connection.execute_batch("ROLLBACK;").unwrap();
+    let next = dispatch
+        .budget_owner
+        .as_ref()
+        .unwrap()
+        .prepare_attempt(
+            mez_agent::ModelTokenUsageKey::new(&request.provider, &request.model),
+            BudgetAttemptPurpose::Execution,
+        )
+        .unwrap()
+        .admission_owner();
+    if fault {
+        assert!(pending.checkpoint(&unknown).await.is_err());
+        assert_eq!(rows(&store, "budget_receipts"), 1);
+        assert!(
+            matches!(next.claim().await.unwrap(), RuntimeBudgetAttemptAdmission::Held(
+            crate::storage::token_usage::budget::admission::BudgetAdmissionHold::OutstandingExposure
+        ))
+        );
+        pending.acknowledge(&unknown.request_id);
+        assert_eq!(pending.len(), 1, "failed terminal stage must fence ACK");
+        let marked: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM budget_admissions WHERE retired_receipt IS NOT NULL",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(marked, 0);
+        let terminal = factory.unused_retirement_for_test(&unknown).unwrap();
+        let mut foreign = unknown.clone();
+        foreign.conversation_id = "foreign".into();
+        assert!(factory.unused_retirement_for_test(&foreign).is_err());
+        let mut expense = unknown.clone();
+        expense.usage = Some(Default::default());
+        assert!(factory.unused_retirement_for_test(&expense).is_err());
+        connection
+            .execute_batch("DROP TRIGGER refuse_unused_retirement;")
+            .unwrap();
+        assert!(
+            pending.checkpoint(&unknown).await.is_err(),
+            "no automatic write retry"
+        );
+        let owner = terminal.commit_owner();
+        assert!(owner.reconcile().await.unwrap().is_none());
+        owner.retry_after_absence().await.unwrap();
+    }
     pending.checkpoint(&unknown).await.unwrap();
-    assert_eq!(rows(&store, "budget_admissions"), 1);
-    assert_eq!(rows(&store, "budget_receipts"), 1);
-    assert_eq!(
-        store.budget_account(&member.root).unwrap().known,
-        UsageTotals::default()
+    pending.checkpoint(&unknown).await.unwrap();
+    let admissions = rows(&store, "budget_admissions");
+    let receipts = rows(&store, "budget_receipts");
+    let retired: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM budget_admissions WHERE retired_receipt IS NOT NULL",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let known = store.budget_account(&member.root).unwrap().known;
+    let transport_calls = calls.load(Ordering::SeqCst);
+    let next_admission = if fault {
+        next.retry_held().await
+    } else {
+        next.claim().await
+    };
+    let released_slot = matches!(
+        next_admission.unwrap(),
+        RuntimeBudgetAttemptAdmission::Authorized(_)
     );
-    assert_eq!(calls.load(Ordering::SeqCst), 0);
     pending.acknowledge(&unknown.request_id);
     assert!(pending.is_empty());
     service.terminate_all_pane_processes().unwrap();
-    drop((connection, observer, factory, work, dispatch, service));
+    drop((connection, observer, factory, work, next, dispatch, service));
     root.cleanup();
+    assert_eq!(admissions, 1, "original grant must remain replay evidence");
+    assert_eq!(
+        receipts, 2,
+        "unused original grant needs terminal settlement"
+    );
+    assert_eq!(
+        retired, 1,
+        "joined worker and original unused permit qualify release"
+    );
+    assert_eq!(known, UsageTotals::default());
+    assert_eq!(transport_calls, 0);
+    assert!(
+        released_slot,
+        "qualified retirement must free the finite root slot"
+    );
+}
+
+#[tokio::test]
+async fn budget_wire_cancelled_authorization_keeps_original_worker_and_unknown_receipt() {
+    cancelled_authorization(false).await;
+}
+
+#[tokio::test]
+async fn budget_wire_cancelled_authorization_retains_unused_custody_after_terminal_refusal() {
+    cancelled_authorization(true).await;
 }

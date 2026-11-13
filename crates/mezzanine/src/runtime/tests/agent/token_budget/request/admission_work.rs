@@ -120,6 +120,7 @@ async fn runtime_budget_admission_cancelled_waiters_share_one_worker_and_one_per
     assert_eq!(calls.load(Ordering::SeqCst), 1);
     assert_eq!(grants(&scene), 1);
     assert_eq!(clone.reconcile().await.unwrap(), Some(evidence));
+    assert!(clone.retire_unused().await.unwrap().is_none());
     assert!(clone.retry_held().await.is_err());
     assert!(clone.retry_after_absence().await.is_err());
     assert_eq!(
@@ -134,7 +135,15 @@ async fn runtime_budget_admission_cancelled_waiters_share_one_worker_and_one_per
 
 #[tokio::test]
 async fn runtime_budget_admission_hold_requires_explicit_current_policy_reconsideration() {
+    // An unstarted or held owner cannot invent unused grant custody.
     let (scene, _owner, work) = case().await;
+    assert!(
+        work.admission_owner()
+            .retire_unused()
+            .await
+            .unwrap()
+            .is_none()
+    );
     publish(
         &scene,
         BudgetLimits {
@@ -150,6 +159,7 @@ async fn runtime_budget_admission_hold_requires_explicit_current_policy_reconsid
     ));
     assert_eq!(grants(&scene), 0);
     // Publishing a new policy does not itself replay an authorization waiter.
+    assert!(admission.retire_unused().await.unwrap().is_none());
     publish(&scene, BudgetLimits::default()).await;
     assert!(matches!(
         admission.claim().await.unwrap(),
@@ -185,11 +195,64 @@ async fn runtime_budget_admission_commit_before_panic_recovers_evidence_never_pe
     assert!(admission.retry_held().await.is_err());
     assert!(admission.retry_after_absence().await.is_err());
     let outcome = admission.reconcile().await.unwrap().unwrap();
+    assert!(admission.retire_unused().await.unwrap().is_none());
     assert!(
         matches!(work.admission_owner().claim().await.unwrap(), RuntimeBudgetAttemptAdmission::PreviouslyAuthorized(evidence) if evidence == outcome)
     );
     assert!(admission.retry_after_absence().await.is_err());
     assert_eq!(grants(&scene), 1);
+}
+
+#[tokio::test]
+async fn runtime_budget_admission_unused_retirement_joins_and_withdraws_only_original_permit() {
+    let (scene, _owner, work) = case().await;
+    let admission = work.admission_owner();
+    let original = admission.clone();
+    let execute = work.clone();
+    let (started, ready) = tokio::sync::oneshot::channel();
+    let (release, blocked) = std::sync::mpsc::channel();
+    let waiter = tokio::spawn(async move {
+        original
+            .claim_with_for_test(move || {
+                let _ = started.send(());
+                blocked
+                    .recv()
+                    .map_err(|_| MezError::invalid_state("fixture gate closed"))?;
+                execute.authorize()
+            })
+            .await
+    });
+    ready.await.unwrap();
+    waiter.abort();
+    assert!(waiter.await.unwrap_err().is_cancelled());
+    {
+        let retirement = admission.retire_unused();
+        tokio::pin!(retirement);
+        assert!(futures_util::poll!(&mut retirement).is_pending());
+    }
+    assert_eq!(grants(&scene), 0);
+    release.send(()).unwrap();
+    let unused = admission.retire_unused().await.unwrap().unwrap();
+    assert_eq!(grants(&scene), 1);
+    assert!(admission.retire_unused().await.unwrap().is_none());
+    assert!(matches!(
+        admission.claim().await.unwrap(),
+        RuntimeBudgetAttemptAdmission::PreviouslyAuthorized(_)
+    ));
+    assert!(admission.retry_held().await.is_err());
+    assert!(admission.retry_after_absence().await.is_err());
+    // Withdrawing send authority alone is not the durable release operation.
+    let outstanding: i64 = rusqlite::Connection::open(scene.store.path())
+        .unwrap()
+        .query_row(
+            "SELECT COUNT(*) FROM budget_admissions WHERE retired_receipt IS NULL",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(outstanding, 1);
+    drop(unused);
+    assert!(admission.retire_unused().await.unwrap().is_none());
 }
 
 #[tokio::test]

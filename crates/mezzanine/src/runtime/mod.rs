@@ -236,7 +236,7 @@ pub(crate) use agent::token_budget::auxiliary::RuntimeBudgetAuxiliarySource;
 pub(crate) use agent::token_budget::request::{
     RuntimeBudgetAttemptAdmission, RuntimeBudgetAttemptWork, RuntimeBudgetIssuedAttempt,
     RuntimeBudgetReceiptWork, RuntimeBudgetRegisteredAttempt, RuntimeBudgetRequestOwner,
-    RuntimeBudgetSendPermit,
+    RuntimeBudgetSendPermit, RuntimeBudgetUnusedAttempt,
 };
 // Staged human confirmation contract only; accounting internals stay private.
 #[cfg_attr(

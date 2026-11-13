@@ -1,7 +1,8 @@
-//! Original consumed-grant retirement paired with immutable terminal evidence.
+//! Original grant retirement paired with immutable terminal evidence.
 //!
-//! The native driver qualifies actual scoped transport destruction before making
-//! this proposal. These data are not physical proof or send authority themselves.
+//! The native driver qualifies actual scoped transport destruction or withdraws
+//! a retained never-consumed permit after joining its original writer. These
+//! data are not physical proof or send authority themselves.
 //! The existing receipt transaction validates original grant/prefix and commits
 //! terminal-unknown evidence plus its release marker atomically. Original grants
 //! remain forever replay-only; neither stale membership nor lost ACK reissues work.
@@ -11,7 +12,7 @@ use super::receipts::{BudgetReceipt, BudgetReceiptOutcome};
 use super::*;
 use rusqlite::params;
 
-/// Pure proposal created from original issued custody, never from actor enqueue.
+/// Pure proposal from qualified original custody, never from actor enqueue.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct BudgetExposureRetirement {
     grant: BudgetAdmissionOutcome,
