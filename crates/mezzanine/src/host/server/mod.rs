@@ -1746,6 +1746,7 @@ fn host_error_name(kind: MezErrorKind) -> &'static str {
         MezErrorKind::NotFound => "not_found",
         MezErrorKind::Forbidden => "forbidden",
         MezErrorKind::RateLimited => "rate_limited",
+        MezErrorKind::BudgetSuspended => "budget_suspended",
         MezErrorKind::NotImplemented => "method_not_found",
     }
 }

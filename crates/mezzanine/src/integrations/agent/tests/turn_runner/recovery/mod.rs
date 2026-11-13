@@ -5,6 +5,7 @@
 use super::*;
 
 mod async_recovery;
+mod budget_suspension;
 mod capability;
 mod exact_patch;
 mod incomplete;

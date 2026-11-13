@@ -331,7 +331,9 @@ fn finish_wave(
                         state.input_tokens = next;
                     }
                     rejected.map(|()| EpochCompactionProviderCompletion::Accepted)
-                } else if malformed || class == ProviderErrorRetryClass::OutputLimit {
+                } else if class != ProviderErrorRetryClass::BudgetSuspended
+                    && (malformed || class == ProviderErrorRetryClass::OutputLimit)
+                {
                     state
                         .session
                         .as_mut()
@@ -355,11 +357,25 @@ fn finish_wave(
             Ok(EpochCompactionProviderCompletion::Repair(work)) => state.pending.push(work.id()),
             Ok(EpochCompactionProviderCompletion::Accepted) => {}
             Err(error) => {
-                if provider_error_retry_class(&error) != ProviderErrorRetryClass::RetryableTransport
-                {
+                if !matches!(
+                    provider_error_retry_class(&error),
+                    ProviderErrorRetryClass::RetryableTransport
+                        | ProviderErrorRetryClass::BudgetSuspended
+                ) {
                     state.failed = true;
                 }
-                if failure.is_none() {
+                // Every issued sibling has settled before this fold. A local
+                // hold must fence recovery for the whole wave even if an
+                // earlier sibling completed with a retryable transport error.
+                // Keep the first hold, including its original diagnostics.
+                if failure.is_none()
+                    || (provider_error_retry_class(&error)
+                        == ProviderErrorRetryClass::BudgetSuspended
+                        && failure.as_ref().is_some_and(|original| {
+                            provider_error_retry_class(original)
+                                != ProviderErrorRetryClass::BudgetSuspended
+                        }))
+                {
                     failure = Some(error);
                 }
             }

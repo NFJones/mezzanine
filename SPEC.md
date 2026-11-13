@@ -16732,6 +16732,13 @@ Stop and integrity gates. A sufficient raise/lift MUST clear only budget exhaust
 and fairly resume eligible work once, without a new prompt or uncertain-effect
 replay; clearing only one exhausted dimension is insufficient. Unrelated roots,
 manual terminals and authenticated human status/policy/Stop controls remain useful.
+The trusted native `budget_suspended` provider-event kind MUST take precedence
+over provider text and failure JSON. It MUST NOT consume malformed-output repair,
+context/output recovery, transport/incomplete retry or failure-summary inference
+allowances, including when transport retries are unlimited. Provider-authored
+wording alone MUST NOT manufacture this local suspension classification. The
+typed classification port alone does not implement reversible runtime holding
+or enable production budget enforcement.
 OpenAI generation-parameter omission requirements remain unconditional.
 
 Per dimension, explicit root finite/unlimited overrides primary defaults, then

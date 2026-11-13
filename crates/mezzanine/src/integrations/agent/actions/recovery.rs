@@ -27,6 +27,9 @@ use mez_agent::{
 /// requiring it classified an identical malformed output as terminal whenever the
 /// boundary withheld the text.
 pub(crate) fn maap_provider_error_is_repairable(error: &MezError) -> bool {
+    if error.kind() == crate::error::MezErrorKind::BudgetSuspended {
+        return false;
+    }
     mez_agent::provider_error_is_malformed_maap_output(error.message())
         || error.message().contains(
             "assistant message with 'tool_calls' must be followed by tool messages responding to each 'tool_call_id'",
@@ -322,6 +325,9 @@ pub(super) fn summarize_controller_failure_execution<P: ModelProvider>(
     previous_request: &ModelRequest,
     input: FailureSummaryInput<'_>,
 ) -> Option<AgentTurnExecution> {
+    if input.error.kind() == crate::error::MezErrorKind::BudgetSuspended {
+        return None;
+    }
     let mut negotiation = AgentFailureSummaryNegotiation::new(
         failure_summary_request(
             previous_request,
@@ -414,6 +420,9 @@ pub(super) async fn summarize_controller_failure_execution_async<P: AsyncModelPr
     previous_request: &ModelRequest,
     input: FailureSummaryInput<'_>,
 ) -> Option<AgentTurnExecution> {
+    if input.error.kind() == crate::error::MezErrorKind::BudgetSuspended {
+        return None;
+    }
     let mut negotiation = AgentFailureSummaryNegotiation::new(
         failure_summary_request(
             previous_request,
@@ -471,6 +480,102 @@ pub(super) async fn summarize_controller_failure_execution_async<P: AsyncModelPr
 mod tests {
     use super::*;
     use mez_agent::AllowedActionSet;
+
+    struct NoSummary;
+
+    impl ModelProvider for NoSummary {
+        fn provider_id(&self) -> &str {
+            "fixture"
+        }
+        fn send_request(&self, _: &ModelRequest) -> crate::Result<ModelResponse> {
+            panic!("budget suspension must not request a failure explanation")
+        }
+    }
+
+    impl AsyncModelProvider for NoSummary {
+        fn provider_id(&self) -> &str {
+            "fixture"
+        }
+        fn api_compatibility(&self) -> mez_agent::ProviderApiCompatibility {
+            mez_agent::ProviderApiCompatibility::OpenAiChatCompletions
+        }
+        fn send_request_async<'a>(
+            &'a self,
+            _: &'a ModelRequest,
+        ) -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = crate::Result<ModelResponse>> + Send + 'a>,
+        > {
+            panic!("budget suspension must not construct a failure explanation")
+        }
+    }
+
+    /// Direct callers outside the ordinary runner must honor the same fence.
+    #[tokio::test]
+    async fn budget_suspension_summary_entry_never_invokes_provider() {
+        let request = ModelRequest {
+            provider: "fixture".into(),
+            model: "fixture".into(),
+            model_capabilities: Default::default(),
+            max_input_tokens: None,
+            reasoning_effort: None,
+            thinking_enabled: None,
+            latency_preference: None,
+            prompt_cache_retention: None,
+            max_output_tokens: None,
+            temperature: None,
+            prompt_cache_session_id: None,
+            prompt_cache_lineage_id: None,
+            turn_id: "turn-1".into(),
+            agent_id: "agent-1".into(),
+            available_mcp_tools: Vec::new(),
+            memory_actions_enabled: false,
+            issue_actions_enabled: false,
+            interaction_kind: ModelInteractionKind::ActionExecution,
+            allowed_actions: AllowedActionSet::all_enabled(),
+            stop: None,
+            messages: Vec::new().into(),
+        };
+        let turn = AgentTurnRecord {
+            turn_id: "turn-1".into(),
+            conversation_id: "conversation-1".into(),
+            agent_id: "agent-1".into(),
+            pane_id: "%1".into(),
+            trigger: mez_agent::AgentTurnTrigger::UserPrompt,
+            started_at_unix_seconds: 0,
+            deadline_at_unix_millis: 0,
+            policy_profile: "ask".into(),
+            model_profile: "default".into(),
+            parent_turn_id: None,
+            cooperation_mode: None,
+            initial_capability: None,
+            state: AgentTurnState::Running,
+        };
+        let error = MezError::new(
+            crate::error::MezErrorKind::BudgetSuspended,
+            "provider MAAP output is malformed: retry context limit",
+        );
+        assert!(
+            summarize_provider_failure_execution(
+                &NoSummary,
+                &turn,
+                &request,
+                &error,
+                Default::default()
+            )
+            .is_none()
+        );
+        assert!(
+            summarize_provider_failure_execution_async(
+                &NoSummary,
+                &turn,
+                &request,
+                &error,
+                Default::default()
+            )
+            .await
+            .is_none()
+        );
+    }
 
     /// Verifies failure summaries retain the originating session catalog while
     /// their interaction mode separately restricts the response to `say`.

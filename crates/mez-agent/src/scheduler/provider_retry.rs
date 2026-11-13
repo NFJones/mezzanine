@@ -29,6 +29,7 @@ impl ProviderRetryRecovery {
             ProviderErrorRetryClass::OutputLimit => Some(Self::OutputLimit),
             ProviderErrorRetryClass::RetryableTransport => Some(Self::None),
             ProviderErrorRetryClass::RetryableIncomplete => Some(Self::None),
+            ProviderErrorRetryClass::BudgetSuspended => None,
             ProviderErrorRetryClass::NonRetryable => None,
         }
     }

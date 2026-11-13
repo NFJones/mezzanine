@@ -30,6 +30,7 @@ impl From<MezErrorKind> for mez_agent::ProviderErrorKind {
             MezErrorKind::NotFound => Self::NotFound,
             MezErrorKind::Forbidden => Self::Forbidden,
             MezErrorKind::RateLimited => Self::RateLimited,
+            MezErrorKind::BudgetSuspended => Self::BudgetSuspended,
             MezErrorKind::NotImplemented => Self::NotImplemented,
         }
     }
@@ -46,6 +47,7 @@ impl From<mez_agent::ProviderErrorKind> for MezErrorKind {
             mez_agent::ProviderErrorKind::NotFound => Self::NotFound,
             mez_agent::ProviderErrorKind::Forbidden => Self::Forbidden,
             mez_agent::ProviderErrorKind::RateLimited => Self::RateLimited,
+            mez_agent::ProviderErrorKind::BudgetSuspended => Self::BudgetSuspended,
             mez_agent::ProviderErrorKind::NotImplemented => Self::NotImplemented,
         }
     }
@@ -509,6 +511,9 @@ pub enum MezErrorKind {
     Forbidden,
     /// The authenticated caller exceeded a bounded admission budget.
     RateLimited,
+    /// Native budget admission suspended inference. Never inferred from provider
+    /// text, and never permission to run a repair, fallback or failure summary.
+    BudgetSuspended,
     /// Represents the Not Implemented case for this enumeration.
     ///
     /// Callers use this variant to describe one explicit state or command path

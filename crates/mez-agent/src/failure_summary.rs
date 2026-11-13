@@ -215,6 +215,9 @@ impl<Request> AgentFailureSummaryNegotiation<Request> {
         retry_class: ProviderErrorRetryClass,
         repairable_malformed_output: bool,
     ) -> AgentFailureSummaryProviderDecision {
+        if matches!(retry_class, ProviderErrorRetryClass::BudgetSuspended) {
+            return AgentFailureSummaryProviderDecision::Reject;
+        }
         if matches!(
             retry_class,
             ProviderErrorRetryClass::ContextLimit

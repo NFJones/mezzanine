@@ -468,6 +468,7 @@ fn error_kind_name(kind: MezErrorKind) -> &'static str {
         MezErrorKind::NotFound => "not_found",
         MezErrorKind::Forbidden => "forbidden",
         MezErrorKind::RateLimited => "rate_limited",
+        MezErrorKind::BudgetSuspended => "budget_suspended",
         MezErrorKind::NotImplemented => "not_implemented",
     }
 }
@@ -482,6 +483,7 @@ fn parse_error_kind(value: &str) -> Result<MezErrorKind> {
         "not_found" => Ok(MezErrorKind::NotFound),
         "forbidden" => Ok(MezErrorKind::Forbidden),
         "rate_limited" => Ok(MezErrorKind::RateLimited),
+        "budget_suspended" => Ok(MezErrorKind::BudgetSuspended),
         "not_implemented" => Ok(MezErrorKind::NotImplemented),
         _ => Err(MezError::invalid_state(
             "host administration replay journal contains an unknown error kind",

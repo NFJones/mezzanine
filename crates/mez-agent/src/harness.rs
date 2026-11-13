@@ -164,6 +164,9 @@ impl<Request> AgentTurnNegotiation<Request> {
         repairable_malformed_output: bool,
         retry_class: crate::ProviderErrorRetryClass,
     ) -> AgentTurnProviderFailureDecision {
+        if matches!(retry_class, crate::ProviderErrorRetryClass::BudgetSuspended) {
+            return AgentTurnProviderFailureDecision::ReturnToRuntime;
+        }
         if repairable_malformed_output && self.record_recovery_attempt() {
             return AgentTurnProviderFailureDecision::RecoverMalformedOutput {
                 attempt: self.recovery_attempts(),
@@ -172,6 +175,7 @@ impl<Request> AgentTurnNegotiation<Request> {
         match retry_class {
             crate::ProviderErrorRetryClass::ContextLimit
             | crate::ProviderErrorRetryClass::OutputLimit
+            | crate::ProviderErrorRetryClass::BudgetSuspended
             | crate::ProviderErrorRetryClass::RetryableTransport => {
                 AgentTurnProviderFailureDecision::ReturnToRuntime
             }

@@ -113,6 +113,32 @@ pub(super) fn provider_maap_parse_error(error: impl Into<MezError>, raw_text: &s
 mod tests {
     use super::*;
 
+    #[test]
+    fn budget_suspension_survives_native_event_envelope_round_trip() {
+        let message = "provider MAAP output is malformed: retry context length";
+        let payload = r#"{"type":"malformed_model_output","status_code":429}"#;
+        for kind in ["budget_suspended", "BudgetSuspended"] {
+            let error = provider_event_error_from_parts(
+                kind,
+                message,
+                Some(payload),
+                Some("original failure"),
+            );
+            assert_eq!(error.kind(), crate::error::MezErrorKind::BudgetSuspended);
+            assert_eq!(
+                provider_error_retry_class(&error),
+                ProviderErrorRetryClass::BudgetSuspended
+            );
+            assert_eq!(error.provider_raw_text(), Some("original failure"));
+            assert_eq!(error.provider_failure_json(), Some(payload));
+            assert!(
+                !crate::integrations::agent::actions::recovery::maap_provider_error_is_repairable(
+                    &error
+                )
+            );
+        }
+    }
+
     /// Malformed-MAAP errors classify NonRetryable for the in-process kind and
     /// for the async event-kind round-trip, regardless of incidental payload
     /// text, so the model-repair path owns recovery instead of transport retry.

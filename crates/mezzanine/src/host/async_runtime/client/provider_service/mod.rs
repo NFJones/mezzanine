@@ -2942,6 +2942,7 @@ fn provider_worker_error_kind(error: &MezError) -> &'static str {
         MezErrorKind::NotFound => "not_found",
         MezErrorKind::Forbidden => "forbidden",
         MezErrorKind::RateLimited => "rate_limited",
+        MezErrorKind::BudgetSuspended => "budget_suspended",
         MezErrorKind::NotImplemented => "not_implemented",
     }
 }

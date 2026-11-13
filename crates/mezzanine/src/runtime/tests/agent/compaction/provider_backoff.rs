@@ -4,6 +4,101 @@
 
 use super::*;
 
+/// Every already-issued sibling settles, but a hold must dominate transport
+/// failure regardless of completion order and must not acquire an actor retry.
+#[test]
+fn budget_suspension_mixed_compaction_wave_dominates_transport() {
+    for hold_first in [false, true] {
+        let (mut service, store, turn) = queued(
+            &format!("OLDER_SOURCE {}", "older ".repeat(3000)),
+            &format!("NEWER_SOURCE {}", "newer ".repeat(3000)),
+            None,
+        );
+        // Genuine rejection repacks the frozen source into concurrent nodes.
+        assert_eq!(
+            run_runtime_test_compaction_wave(&mut service, "%1", Err(context_error())).len(),
+            1
+        );
+        let task = service.take_pending_agent_compaction_task("%1").unwrap();
+        let conversation = task.conversation_id.clone();
+        let archive = store.inspect(&conversation).unwrap();
+        let before: u64 = service
+            .agent_token_usage_for_conversation(&conversation)
+            .values()
+            .map(|usage| usage.input_tokens)
+            .sum();
+        service.claim_agent_compaction_task_state("%1", task.clone());
+        let mut calls = 0usize;
+        let (result, requests) =
+            crate::test_support::compaction_source::execute_with_inference(&service, &task, |_| {
+                let hold = (calls == 0) == hold_first;
+                calls += 1;
+                let error = if hold {
+                    MezError::new(
+                        crate::error::MezErrorKind::BudgetSuspended,
+                        "fixture budget hold",
+                    )
+                } else {
+                    MezError::new(crate::error::MezErrorKind::Io, "fixture transport failure")
+                };
+                Err(
+                    error.with_provider_incurred_usage(mez_agent::ModelTokenUsage {
+                        input_tokens: 17,
+                        output_tokens: 3,
+                        ..Default::default()
+                    }),
+                )
+            });
+        assert!(
+            requests.len() >= 2,
+            "fixture must admit concurrent siblings"
+        );
+        let kind = result.as_ref().unwrap_err().kind();
+        let usage = result.as_ref().unwrap_err().provider_incurred_usage();
+        let event = crate::test_support::compaction_source::model_result_event(
+            "%1",
+            task.task_generation,
+            result,
+        );
+        assert!(
+            service
+                .apply_agent_compaction_transition(event)
+                .unwrap()
+                .applied
+        );
+        let requeued = service.agent_is_compacting("%1");
+        let after: u64 = service
+            .agent_token_usage_for_conversation(&conversation)
+            .values()
+            .map(|usage| usage.input_tokens)
+            .sum();
+        let unpublished = store.compaction_epoch(&conversation).unwrap().is_none();
+        let preserved = store.inspect(&conversation).unwrap().starts_with(&archive);
+        // Retire any RED-run retry without issuing another provider request.
+        if requeued {
+            service.cancel_current_agent_compaction_task("%1");
+        }
+        service.terminate_all_pane_processes().unwrap();
+        assert_eq!(
+            kind,
+            crate::error::MezErrorKind::BudgetSuspended,
+            "hold_first={hold_first}"
+        );
+        assert!(
+            !requeued,
+            "suspension cannot acquire an automatic transport retry"
+        );
+        assert_eq!(usage.input_tokens, calls as u64 * 17);
+        assert_eq!(usage.output_tokens, calls as u64 * 3);
+        assert_eq!(after - before, calls as u64 * 17);
+        assert!(unpublished && preserved);
+        assert_eq!(
+            service.agent_turn_ledger().turn(&turn).unwrap().state,
+            AgentTurnState::Failed
+        );
+    }
+}
+
 fn context_error() -> MezError {
     MezError::invalid_state("provider context length exceeded").with_provider_failure_json(
         r#"{"status_code":400,"error":{"code":"context_length_exceeded"}}"#,

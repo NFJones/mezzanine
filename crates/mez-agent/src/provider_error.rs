@@ -23,6 +23,8 @@ pub enum ProviderErrorKind {
     Forbidden,
     /// A provider rate-limit rejection.
     RateLimited,
+    /// A trusted local budget owner suspended inference, not a provider failure.
+    BudgetSuspended,
     /// An unsupported provider operation.
     NotImplemented,
 }
@@ -40,6 +42,7 @@ impl ProviderErrorKind {
             Self::NotFound => "not_found",
             Self::Forbidden => "forbidden",
             Self::RateLimited => "rate_limited",
+            Self::BudgetSuspended => "budget_suspended",
             Self::NotImplemented => "not_implemented",
         }
     }
@@ -59,6 +62,7 @@ impl ProviderErrorKind {
             "not_found" | "NotFound" => Some(Self::NotFound),
             "forbidden" | "Forbidden" => Some(Self::Forbidden),
             "rate_limited" | "RateLimited" => Some(Self::RateLimited),
+            "budget_suspended" | "BudgetSuspended" => Some(Self::BudgetSuspended),
             "not_implemented" | "NotImplemented" => Some(Self::NotImplemented),
             _ => None,
         }
@@ -78,6 +82,8 @@ pub enum ProviderErrorRetryClass {
     /// replacement of this inference, never partial-output continuation.
     /// This class always consumes the finite provider error budget.
     RetryableIncomplete,
+    /// Local budget suspension permits no recovery inference, including summaries.
+    BudgetSuspended,
     /// The provider failure should terminate the current recovery attempt.
     NonRetryable,
 }
@@ -246,6 +252,9 @@ pub fn classify_provider_error_retry(
     message: &str,
     provider_failure_json: Option<&str>,
 ) -> ProviderErrorRetryClass {
+    if kind == ProviderErrorKind::BudgetSuspended {
+        return ProviderErrorRetryClass::BudgetSuspended;
+    }
     if provider_error_is_malformed_maap_output(message) {
         return ProviderErrorRetryClass::NonRetryable;
     }
@@ -638,6 +647,65 @@ mod tests {
         provider_retry_after_delay_ms,
     };
     use crate::ProviderHttpTimeoutPhase;
+
+    /// Local admission authority outranks every provider diagnostic and never
+    /// consumes a repair/retry budget, even when transport retries are unlimited.
+    #[test]
+    fn budget_suspension_precedes_provider_recovery_and_preserves_budgets() {
+        let payload = r#"{"type":"malformed_model_output","status_code":429,"error":{"code":"context_length_exceeded"},"incomplete_details":{"reason":"max_messages"}}"#;
+        let class = classify_provider_error_retry(
+            ProviderErrorKind::BudgetSuspended,
+            "provider MAAP output is malformed: context limit; retry max_output_tokens",
+            Some(payload),
+        );
+        assert_eq!(class, ProviderErrorRetryClass::BudgetSuspended);
+        for unlimited in [false, true] {
+            let policy = ProviderRetryPolicy {
+                unlimited,
+                ..DEFAULT_PROVIDER_RETRY_POLICY
+            };
+            assert!(!policy.should_retry(0, class));
+            assert!(!policy.should_retry(u64::MAX, class));
+        }
+        let mut turn = crate::AgentTurnNegotiation::new((), 2);
+        assert_eq!(
+            turn.advance_provider_failure(true, class),
+            crate::AgentTurnProviderFailureDecision::ReturnToRuntime
+        );
+        assert_eq!(turn.recovery_attempts(), 0);
+        let mut summary = crate::AgentFailureSummaryNegotiation::new((), 2, 2);
+        assert_eq!(
+            summary.advance_provider_failure(class, true),
+            crate::AgentFailureSummaryProviderDecision::Reject
+        );
+        assert_eq!(
+            summary.advance_provider_failure(ProviderErrorRetryClass::NonRetryable, true),
+            crate::AgentFailureSummaryProviderDecision::RecoverMalformedOutput { attempt: 1 }
+        );
+        assert_eq!(
+            summary.advance_provider_failure(ProviderErrorRetryClass::RetryableTransport, false),
+            crate::AgentFailureSummaryProviderDecision::RetryProvider { attempt: 1 }
+        );
+        for name in ["budget_suspended", "BudgetSuspended"] {
+            assert_eq!(
+                ProviderErrorKind::from_event_name(name),
+                Some(ProviderErrorKind::BudgetSuspended)
+            );
+        }
+        assert_eq!(
+            ProviderErrorKind::BudgetSuspended.as_str(),
+            "budget_suspended"
+        );
+        // A provider-authored phrase alone never creates native hold authority.
+        assert_ne!(
+            classify_provider_error_retry(
+                ProviderErrorKind::InvalidState,
+                "budget_suspended",
+                None
+            ),
+            class
+        );
+    }
 
     /// Authoritative incomplete reason metadata, not a display summary, admits
     /// max_messages replacement retries. The finite error budget still applies

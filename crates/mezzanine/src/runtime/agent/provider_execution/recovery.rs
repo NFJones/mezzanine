@@ -56,6 +56,11 @@ pub(crate) fn decide_provider_failure_recovery(
     if !eligibility.current_owner {
         return Decision::Ignore;
     }
+    if error.kind() == crate::error::MezErrorKind::BudgetSuspended {
+        // No recovery effect may run. Root-lifecycle suspension is a separate
+        // consumer of this typed outcome, not a message-based repair decision.
+        return Decision::Terminal;
+    }
     if error.is_agent_request_assembly_failure() {
         return Decision::Terminal;
     }
@@ -142,6 +147,43 @@ mod tests {
     use crate::integrations::agent::provider::{
         provider_error_retry_class, provider_event_error_from_parts,
     };
+
+    #[test]
+    fn budget_suspension_never_selects_runtime_recovery_effects() {
+        let error = MezError::new(
+            crate::error::MezErrorKind::BudgetSuspended,
+            "provider MAAP output is malformed: context length exceeded; retry",
+        );
+        let available = ProviderFailureRecoveryEligibility {
+            current_owner: true,
+            repair_available: true,
+            context_available: true,
+            output_attempt: 1,
+            transport_available: true,
+        };
+        for class in [
+            provider_error_retry_class(&error),
+            ProviderErrorRetryClass::ContextLimit,
+            ProviderErrorRetryClass::OutputLimit,
+            ProviderErrorRetryClass::RetryableTransport,
+        ] {
+            assert_eq!(
+                decide_provider_failure_recovery(&error, class, available),
+                ProviderFailureRecoveryDecision::Terminal
+            );
+        }
+        assert_eq!(
+            decide_provider_failure_recovery(
+                &error,
+                provider_error_retry_class(&error),
+                ProviderFailureRecoveryEligibility {
+                    current_owner: false,
+                    ..available
+                }
+            ),
+            ProviderFailureRecoveryDecision::Ignore
+        );
+    }
 
     /// Direct errors and serialized worker envelopes must select the same
     /// recovery under identical captured budgets, without consuming attempts.

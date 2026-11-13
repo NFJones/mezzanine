@@ -39,6 +39,7 @@ fn runtime_provider_retry_class_name(retry_class: ProviderErrorRetryClass) -> &'
         ProviderErrorRetryClass::OutputLimit => "output_limit",
         ProviderErrorRetryClass::RetryableTransport => "retryable_transport",
         ProviderErrorRetryClass::RetryableIncomplete => "retryable_incomplete",
+        ProviderErrorRetryClass::BudgetSuspended => "budget_suspended",
         ProviderErrorRetryClass::NonRetryable => "non_retryable",
     }
 }

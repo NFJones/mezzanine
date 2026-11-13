@@ -1386,6 +1386,7 @@ impl RuntimeSessionService {
                         crate::error::MezErrorKind::NotFound => "not_found",
                         crate::error::MezErrorKind::Forbidden => "forbidden",
                         crate::error::MezErrorKind::RateLimited => "rate_limited",
+                        crate::error::MezErrorKind::BudgetSuspended => "budget_suspended",
                         crate::error::MezErrorKind::NotImplemented => "not_implemented",
                     };
                     if let Err(audit_error) = self.append_runtime_remote_initialize_rejection_audit(

@@ -5,6 +5,47 @@
 use super::*;
 use crate::runtime::AgentCompactionEvent;
 
+/// A genuine auxiliary wave must not turn misleading failure metadata into
+/// another malformed-output repair. Runtime reversible holding is downstream;
+/// this control proves no repair/publication and conservation of incurred usage.
+#[test]
+fn budget_suspension_compaction_wave_never_repairs_provider_output() {
+    let (mut service, store, turn) = replay_observed::queued();
+    let conversation = service
+        .agent_turn_ledger()
+        .turn(&turn)
+        .unwrap()
+        .conversation_id
+        .clone();
+    let prior: u64 = service
+        .agent_token_usage_for_conversation(&conversation)
+        .values()
+        .map(|u| u.input_tokens)
+        .sum();
+    let error = MezError::new(
+        crate::error::MezErrorKind::BudgetSuspended,
+        "provider MAAP output is malformed: context length exceeded; retry",
+    )
+    .with_provider_failure_json(r#"{"type":"malformed_model_output","status_code":429}"#)
+    .with_provider_incurred_usage(mez_agent::ModelTokenUsage {
+        input_tokens: 17,
+        ..Default::default()
+    });
+    assert_eq!(
+        run_runtime_test_compaction_wave(&mut service, "%1", Err(error)).len(),
+        1
+    );
+    assert!(!service.agent_is_compacting("%1"));
+    assert!(service.pending_agent_compaction_tasks().is_empty());
+    assert!(store.compaction_epoch(&conversation).unwrap().is_none());
+    let actual: u64 = service
+        .agent_token_usage_for_conversation(&conversation)
+        .values()
+        .map(|u| u.input_tokens)
+        .sum();
+    assert_eq!(actual - prior, 17);
+}
+
 fn failure(kind: &str) -> MezError {
     let kind = match kind {
         "io" => crate::error::MezErrorKind::Io,

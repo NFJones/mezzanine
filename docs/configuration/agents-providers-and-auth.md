@@ -94,6 +94,11 @@ write requires observing that writer and querying the original receipt; only a
 new positive absence query permits an explicit bookkeeping retry. Failed queries
 never count as acknowledgment or absence, and no provider request is replayed.
 This internal custody port does not enable production budget enforcement.
+The native `budget_suspended` classification also fences inference recovery:
+misleading provider text or JSON cannot trigger MAAP repair, context/output
+recovery, transport retry or a model-generated failure explanation. Known usage
+and the original error remain attached. This typed port is not yet the reversible
+root-lifecycle hold or production send-gate assembly.
 Budgeted observations retain that frozen receipt in the original wire journal
 before channel delivery. The staged handoff commits it before actor adoption;
 actor ACK alone cannot discard an uncommitted or conflicting receipt. One

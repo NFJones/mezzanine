@@ -1139,6 +1139,7 @@ fn provider_wire_failure_kind(error: &MezError) -> &'static str {
         crate::error::MezErrorKind::NotFound => "not_found",
         crate::error::MezErrorKind::Forbidden => "forbidden",
         crate::error::MezErrorKind::RateLimited => "rate_limited",
+        crate::error::MezErrorKind::BudgetSuspended => "budget_suspended",
         crate::error::MezErrorKind::NotImplemented => "not_implemented",
     }
 }
