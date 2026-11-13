@@ -103,6 +103,13 @@ exchange's known usage without making another transport call. Missing counters
 remain unknown, not zero. Receipt acknowledgment is not proof that issued
 provider exposure has retired.
 
+Native async sends also retain evidence that their exact local transport future
+and active callback futures were destroyed, including on cancellation. This transfer
+precedes normal receipt capture; it does not establish remote completion,
+complete counters, detached-worker retirement, or durable exposure release.
+Destructor failure cannot create that evidence; consumer failure fences the
+original journal while preserving its expense. No storage work runs from Drop.
+
 These internal allocation and accounting ports do **not** yet enable operational
 session budgets. Production assembly, fair waiting, complete terminal coverage,
 physical retirement, root-wide activity inhibition, policy controls, and their

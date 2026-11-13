@@ -111,6 +111,12 @@ pub trait ProviderHttpTransport {
 ///
 /// Implementors provide the concrete I/O or state transition boundary
 /// consumed by higher-level orchestration code.
+/// Native inference implementations must scope the concrete exchange and its
+/// decoder callbacks to the returned future: do not detach inference producers
+/// or observer tasks. Future destruction retires that LOCAL scope only; pooled
+/// connection maintenance and ambiguous remote completion/billing are separate.
+/// A transport with independently owned inference work needs its actual join
+/// evidence before it can participate in native budget exposure release.
 pub trait AsyncProviderHttpTransport: Send + Sync {
     /// Runs the send async operation for this subsystem.
     ///

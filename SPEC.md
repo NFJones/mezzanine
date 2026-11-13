@@ -16717,6 +16717,18 @@ before allocating its next descriptor. Refusal of that fresh admission MUST
 preserve prior known expense and MUST NOT poll another transport. Unlimited
 policy permits distinct outstanding issued exposures; receipt ACK alone still
 MUST NOT retire them. This staged allocation port is not production activation.
+Concrete native async sends MAY retain a sealed local-transport witness only
+after explicitly destroying their exact send future and active callback futures.
+The original factory MUST be captured before polling and retained through this
+transfer; neither Ready, actor ACK nor provider-task completion is a substitute.
+Transport attachment MUST be single-use for each original wire plan.
+A failed inner destructor MUST NOT attest retirement on a later wrapper Drop.
+A retirement-consumer panic MUST fence that original journal's checkpoint/ACK
+without discarding its first valid expense or unwinding through cancellation.
+The witness establishes only the destroyed local transport scope, not detached
+workers, complete counters, remote completion, or durable exposure release.
+No asynchronous work or storage mutation may start from its Drop. Production
+activation still requires terminal accounting and qualified durable release.
 Completion or cancellation MUST finalize that same identity; cancellation before
 usage MUST retain unknown counters without charging a fabricated zero report.
 Only response evidence may change during finalization. Original subject, purpose,

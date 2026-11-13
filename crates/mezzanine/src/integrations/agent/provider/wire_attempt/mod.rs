@@ -11,6 +11,7 @@ use super::*;
 pub(super) struct PlannedWireAttempt {
     pub(super) observation: ProviderWireRequestObservation,
     pub(super) factory: Option<Arc<dyn ProviderObservationReceiptFactory>>,
+    pub(super) transport_attached: bool,
 }
 
 impl ProviderWireRequestObservation {
@@ -66,6 +67,7 @@ impl ProviderWireObservationContext<'_> {
         *planned = Some(PlannedWireAttempt {
             observation,
             factory,
+            transport_attached: false,
         });
         Ok(())
     }

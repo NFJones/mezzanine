@@ -6,6 +6,7 @@ mod admission;
 mod internal_retry;
 mod pre_send;
 mod retirement;
+mod transport;
 
 use super::super::budget_receipts::BudgetObservationReceipts;
 use super::*;

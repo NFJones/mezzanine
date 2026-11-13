@@ -53,6 +53,14 @@ impl<'request, 'observer> StreamUsageCustody<'request, 'observer> {
         self.context.authorize_wire_attempt().await
     }
 
+    /// Captures the same original plan, without borrowing mutable usage or its
+    /// decoder while a transport callback is running.
+    pub(super) fn transport_owner(
+        &self,
+    ) -> super::Result<super::transport_custody::WireTransportOwner> {
+        self.context.transport_owner()
+    }
+
     /// Replace a cumulative prefix, never add frames. Primary source evidence
     /// qualifies zero independently of optional cache fields. Presence is not
     /// proof of final/composite coverage or worker retirement.

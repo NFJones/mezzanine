@@ -541,6 +541,10 @@ where
             if let Some(custody) = &stream_usage {
                 custody.before_send().await?;
             }
+            let transport_owner = stream_usage
+                .as_ref()
+                .map(|custody| custody.transport_owner())
+                .transpose()?;
             let response_result = if let Some(decoder) = stream_decoder.as_mut() {
                 let mut on_event = |event| {
                     forwarding.on_event(
@@ -558,11 +562,18 @@ where
                         progress.clone(),
                     )
                 };
-                self.transport
-                    .send_async_with_sse_events(&http_request, &mut on_event)
-                    .await
+                super::transport_custody::WireTransport::new(
+                    self.transport
+                        .send_async_with_sse_events(&http_request, &mut on_event),
+                    transport_owner,
+                )
+                .await
             } else {
-                self.transport.send_async(&http_request).await
+                super::transport_custody::WireTransport::new(
+                    self.transport.send_async(&http_request),
+                    transport_owner,
+                )
+                .await
             };
             // Capture before any fallible status/output suffix or consuming
             // finish. Reattach, never add, this same physical attempt's expense.
@@ -713,7 +724,17 @@ where
                         .await
                         .map_err(|error| error.with_provider_incurred_usage(parsed.usage))?;
                 }
-                let retry_response = match self.transport.send_async(&retry_request).await {
+                let transport_owner = retry_custody
+                    .as_ref()
+                    .map(|custody| custody.transport_owner())
+                    .transpose()
+                    .map_err(|error| error.with_provider_incurred_usage(parsed.usage))?;
+                let retry_response = match super::transport_custody::WireTransport::new(
+                    self.transport.send_async(&retry_request),
+                    transport_owner,
+                )
+                .await
+                {
                     Ok(response) => response,
                     Err(error) => {
                         let result = Err(error.into());

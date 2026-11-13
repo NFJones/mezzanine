@@ -506,6 +506,7 @@ mod errors;
 mod observation_delivery;
 mod openai_chat_completions;
 mod stream_usage_custody;
+mod transport_custody;
 mod wire_attempt;
 use crate::integrations::http::AsyncProviderHttpTransport;
 #[cfg(test)]
@@ -548,6 +549,7 @@ pub(crate) use observation_delivery::{
     ProviderObservationReceiptSource,
 };
 use openai_chat_completions::OpenAiChatCompletionsDialect;
+pub(crate) use transport_custody::ProviderTransportRetirement;
 
 use mez_agent::{CHATGPT_RESPONSES_ENDPOINT, OPENAI_RESPONSES_ENDPOINT};
 
@@ -2791,6 +2793,10 @@ impl<T: AsyncProviderHttpTransport> OpenAiResponsesProvider<T> {
             if let Some(custody) = usage_custody.as_ref() {
                 custody.before_send().await?;
             }
+            let transport_owner = usage_custody
+                .as_ref()
+                .map(|custody| custody.transport_owner())
+                .transpose()?;
             let response = if self.stream {
                 let mut on_event = |event| {
                     forwarding.on_event(
@@ -2810,11 +2816,18 @@ impl<T: AsyncProviderHttpTransport> OpenAiResponsesProvider<T> {
                         progress.clone(),
                     )
                 };
-                self.transport
-                    .send_async_with_sse_events(&http_request, &mut on_event)
-                    .await
+                transport_custody::WireTransport::new(
+                    self.transport
+                        .send_async_with_sse_events(&http_request, &mut on_event),
+                    transport_owner,
+                )
+                .await
             } else {
-                self.transport.send_async(&http_request).await
+                transport_custody::WireTransport::new(
+                    self.transport.send_async(&http_request),
+                    transport_owner,
+                )
+                .await
             };
             let response = response.map_err(|error| {
                 openai_error_with_incurred_usage(error.into(), stream_decoder.incurred_usage())

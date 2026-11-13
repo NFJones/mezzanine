@@ -54,6 +54,16 @@ pub(crate) trait ProviderObservationReceiptFactory: Send + Sync {
         Box::pin(async { Ok(()) })
     }
 
+    /// Synchronous custody transfer after the exact local transport future has
+    /// been destroyed. This is not durable settlement, actor ACK, complete wire
+    /// usage or remote billing/completion proof. Never start work from Drop.
+    fn transport_retired(
+        &self,
+        _observation: &ProviderWireRequestObservation,
+        _retirement: super::ProviderTransportRetirement,
+    ) {
+    }
+
     fn freeze(
         &self,
         observation: &ProviderWireRequestObservation,
@@ -291,6 +301,16 @@ impl PendingProviderWireObservations {
         original.observation = capture.observation.clone();
         original.budget = budget;
         true
+    }
+
+    /// Keep the original final expense capturable after failed evidence
+    /// transfer, while refusing checkpoint/ACK. No execution/retry authority.
+    pub(super) fn refuse_transport_retirement(&self, observation: &ProviderWireRequestObservation) {
+        if let Some(entry) = self.entries().get_mut(&observation.request_id)
+            && entry.observation.same_wire_subject(observation)
+        {
+            entry.conflicted = true;
+        }
     }
 
     /// Borrow only an already retained factory for duplicate evidence. This

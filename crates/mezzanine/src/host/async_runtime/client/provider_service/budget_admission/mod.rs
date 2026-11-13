@@ -9,7 +9,8 @@
 
 use super::*;
 use crate::integrations::agent::provider::{
-    ProviderObservationReceipt, ProviderObservationReceiptFactory, ProviderObservationReceiptSource,
+    ProviderObservationReceipt, ProviderObservationReceiptFactory,
+    ProviderObservationReceiptSource, ProviderTransportRetirement,
 };
 use crate::runtime::{
     RuntimeBudgetAttemptAdmission, RuntimeBudgetAttemptWork, RuntimeBudgetIssuedAttempt,
@@ -65,6 +66,7 @@ impl ProviderObservationReceiptSource for BudgetRequestAdmission {
 struct Phase {
     started: bool,
     finalized: Option<ProviderWireRequestObservation>,
+    retired: Option<ProviderTransportRetirement>,
     // Retain the actual consumed grant independently of a canceled send future.
     issued: Option<RuntimeBudgetIssuedAttempt>,
 }
@@ -83,6 +85,20 @@ impl BudgetAttemptAdmission {
             work,
             phase: Mutex::new(Phase::default()),
         }))
+    }
+
+    #[cfg(test)]
+    pub(super) fn has_transport_retirement(
+        &self,
+        observation: &ProviderWireRequestObservation,
+    ) -> bool {
+        self.0
+            .phase
+            .lock()
+            .unwrap()
+            .retired
+            .as_ref()
+            .is_some_and(|proof| proof.matches(observation))
     }
 }
 
@@ -149,6 +165,23 @@ impl ProviderObservationReceiptFactory for BudgetAttemptAdmission {
             );
             Ok(())
         })
+    }
+
+    fn transport_retired(
+        &self,
+        observation: &ProviderWireRequestObservation,
+        retirement: ProviderTransportRetirement,
+    ) {
+        // A failed/poisoned or foreign transfer remains unproven. Never turn
+        // cleanup into permission, disk I/O, or a second async owner.
+        if let Ok(mut phase) = self.0.phase.lock()
+            && phase.issued.is_some()
+            && phase.retired.is_none()
+            && retirement.matches(observation)
+            && self.0.work.plan_wire_receipt_subject(observation).is_ok()
+        {
+            phase.retired = Some(retirement);
+        }
     }
 
     fn freeze(
