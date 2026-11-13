@@ -35,6 +35,11 @@ use std::future::Future;
 use std::pin::Pin;
 use std::time::{Duration, Instant};
 
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "production budget activation remains staged")
+)]
+mod budget_admission;
 mod worker_ownership;
 use worker_ownership::{
     AgentProviderJoined, AgentProviderWorkerOwners, ProviderCleanupFailures,

@@ -98,6 +98,12 @@ When the staged native receipt factory is installed, planning checks the origina
 registered descriptor before transport. A foreign subject or reuse through a
 descriptor clone fails before sending; completed or refused final capture cannot
 reopen planning. This binding is not native send permission or exposure release.
+The opt-in per-exchange admission hook retains its original authorization worker
+before awaiting a newly issued one-use permit at the transport boundary. Held or
+previously authorized work cannot poll transport; cancellation recovers only the
+original receipt evidence. Production dispatch does not install this staged hook
+yet: fair waiting, reversible root holding, terminal coverage and physical
+exposure release remain required before budgets can be enabled.
 Rejected finalization does not disarm the original context's stack custody.
 Its first valid original-subject expense can still be retained; the sticky
 conflict continues to refuse checkpointing and acknowledgment.

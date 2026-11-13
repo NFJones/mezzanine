@@ -16702,6 +16702,12 @@ original registered descriptor before transport polling. Descriptor clones and
 replacement factories MUST NOT reset that binding. A completed or refused final
 capture MUST NOT reopen planning. Pure binding grants no spend or release
 authority; physical-send permission remains a separate required boundary.
+An installed per-exchange admission owner MUST retain the original authorization
+worker before awaiting it and consume only its newly delivered single-use permit
+at the transport boundary. A held or previously authorized outcome MUST NOT poll
+transport. Cancellation MUST reconcile that same owner for receipt evidence,
+never reconstruct a send permit. The staged hook alone does not activate budgets
+or establish fair waiting, terminal coverage, or physical exposure release.
 Completion or cancellation MUST finalize that same identity; cancellation before
 usage MUST retain unknown counters without charging a fabricated zero report.
 Only response evidence may change during finalization. Original subject, purpose,

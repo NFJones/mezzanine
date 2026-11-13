@@ -893,6 +893,31 @@ impl<'a> ProviderWireObservationContext<'a> {
         }
     }
 
+    /// Borrow the original factory retained by the pre-send journal. Neither a
+    /// canceled admission waiter nor a failed admission discards that source.
+    async fn authorize_wire_attempt(&self) -> Result<()> {
+        if self.observer.required_delivery_failed() {
+            return Err(MezError::invalid_state(
+                "provider observation acknowledgment unavailable",
+            ));
+        }
+        let planned = self
+            .planned_wire
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone()
+            .ok_or_else(|| MezError::invalid_state("provider wire attempt was not planned"))?;
+        if let Some(factory) = &self.observer.budget_receipts {
+            factory.before_send(&planned).await?;
+        }
+        if self.observer.required_delivery_failed() {
+            return Err(MezError::invalid_state(
+                "provider observation acknowledgment unavailable",
+            ));
+        }
+        Ok(())
+    }
+
     /// Emits one content-free observation for one concrete wire attempt.
     pub async fn observe(
         &self,
@@ -2732,6 +2757,9 @@ impl<T: AsyncProviderHttpTransport> OpenAiResponsesProvider<T> {
             );
             let mut stream_decoder = OpenAiResponsesStreamDecoder::default();
             let mut forwarding = SseProgressForwarder::default();
+            if let Some(custody) = usage_custody.as_ref() {
+                custody.before_send().await?;
+            }
             let response = if self.stream {
                 let mut on_event = |event| {
                     forwarding.on_event(

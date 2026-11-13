@@ -538,6 +538,9 @@ where
                     super::stream_usage_custody::StreamUsageCustody::new(context, request)
                 })
                 .transpose()?;
+            if let Some(custody) = &stream_usage {
+                custody.before_send().await?;
+            }
             let response_result = if let Some(decoder) = stream_decoder.as_mut() {
                 let mut on_event = |event| {
                     forwarding.on_event(
@@ -704,6 +707,12 @@ where
                     })
                     .transpose()
                     .map_err(|error| error.with_provider_incurred_usage(parsed.usage))?;
+                if let Some(custody) = &retry_custody {
+                    custody
+                        .before_send()
+                        .await
+                        .map_err(|error| error.with_provider_incurred_usage(parsed.usage))?;
+                }
                 let retry_response = match self.transport.send_async(&retry_request).await {
                     Ok(response) => response,
                     Err(error) => {

@@ -90,6 +90,56 @@ struct WireReceiptCapture {
     commit: super::receipt_commit::SharedReceiptCommit,
 }
 
+impl AttemptSource {
+    fn plan_wire_receipt_subject(
+        &self,
+        observation: &crate::integrations::agent::provider::ProviderWireRequestObservation,
+    ) -> Result<()> {
+        if self.wire.get().is_some() {
+            return Err(MezError::conflict(
+                "registered budget attempt already owns finalized evidence",
+            ));
+        }
+        self.bind_wire_receipt_subject(observation)
+    }
+
+    fn bind_wire_receipt_subject(
+        &self,
+        observation: &crate::integrations::agent::provider::ProviderWireRequestObservation,
+    ) -> Result<()> {
+        use crate::integrations::agent::provider::ProviderRequestPurpose as Purpose;
+        let original = &self.attempt;
+        let purpose = match original.purpose {
+            BudgetAttemptPurpose::Execution => Purpose::Execution,
+            BudgetAttemptPurpose::Routing => Purpose::Routing,
+            BudgetAttemptPurpose::Compaction => Purpose::Compaction,
+            BudgetAttemptPurpose::Memory => Purpose::Memory,
+            BudgetAttemptPurpose::Title
+            | BudgetAttemptPurpose::MacroJudge
+            | BudgetAttemptPurpose::SandboxAssessment
+            | BudgetAttemptPurpose::FailureSummary => Purpose::Auxiliary,
+        };
+        if observation.conversation_id != original.conversation
+            || observation.provider != original.model.provider
+            || observation.model != original.model.model
+            || observation.purpose != purpose
+            || observation.request_id.is_empty()
+            || observation.request_id.len() > 256
+        {
+            return Err(MezError::conflict(
+                "budget wire receipt original identity changed",
+            ));
+        }
+        let bound = self.wire_subject.get_or_init(|| observation.clone());
+        if !bound.same_wire_subject(observation) {
+            return Err(MezError::conflict(
+                "registered budget attempt already owns another exchange",
+            ));
+        }
+        Ok(())
+    }
+}
+
 /// Immutable original registration work; keep it until the ACK is reconciled.
 #[derive(Debug, Clone)]
 #[cfg_attr(
@@ -103,6 +153,35 @@ pub(crate) struct RuntimeBudgetAttemptWork(Arc<AttemptSource>);
     expect(dead_code, reason = "concrete attempt admission is downstream")
 )]
 impl RuntimeBudgetAttemptWork {
+    /// Bind the original subject before authorization. This pure operation
+    /// neither registers an attempt nor returns permission to send.
+    pub(crate) fn plan_wire_receipt_subject(
+        &self,
+        observation: &crate::integrations::agent::provider::ProviderWireRequestObservation,
+    ) -> Result<()> {
+        self.0.plan_wire_receipt_subject(observation)
+    }
+
+    /// Original positive admission evidence can recover a receipt descriptor,
+    /// never a send permit. The caller obtains it by exact read-only recovery.
+    pub(crate) fn registered_from_admission(
+        &self,
+        outcome: &BudgetAdmissionOutcome,
+    ) -> Result<RuntimeBudgetRegisteredAttempt> {
+        let original = &self.0.attempt;
+        if outcome.namespace != original.namespace
+            || outcome.attempt != original.id
+            || outcome.root != original.root
+            || outcome.conversation != original.conversation
+            || outcome.owner != self.0.owner.binding_owner
+        {
+            return Err(MezError::conflict(
+                "budget admission evidence changed owner",
+            ));
+        }
+        Ok(RuntimeBudgetRegisteredAttempt(self.0.clone()))
+    }
+
     /// Capture before a cancellable admission wait. The existing request or
     /// journal owner must retain this source through actual worker observation.
     pub(crate) fn admission_owner(&self) -> super::admission_work::RuntimeBudgetAdmissionWork {
@@ -190,10 +269,6 @@ pub(crate) struct RuntimeBudgetSendPermit {
     permit: BudgetSendPermit,
 }
 
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "physical-send driver integration is downstream")
-)]
 impl RuntimeBudgetSendPermit {
     /// The retained worker stores only the native permit, never a reverse Arc
     /// to the AttemptSource that owns that worker's shared state.
@@ -252,26 +327,14 @@ impl RuntimeBudgetRegisteredAttempt {
         &self,
         observation: &crate::integrations::agent::provider::ProviderWireRequestObservation,
     ) -> Result<()> {
-        if self.0.wire.get().is_some() {
-            return Err(MezError::conflict(
-                "registered budget attempt already owns finalized evidence",
-            ));
-        }
-        self.bind_wire_receipt_subject(observation)
+        self.0.plan_wire_receipt_subject(observation)
     }
 
     fn bind_wire_receipt_subject(
         &self,
         observation: &crate::integrations::agent::provider::ProviderWireRequestObservation,
     ) -> Result<()> {
-        self.validate_wire_subject(observation)?;
-        let original = self.0.wire_subject.get_or_init(|| observation.clone());
-        if !original.same_wire_subject(observation) {
-            return Err(MezError::conflict(
-                "registered budget attempt already owns another exchange",
-            ));
-        }
-        Ok(())
+        self.0.bind_wire_receipt_subject(observation)
     }
 
     /// Pure capture of a native wire subtotal, not final coverage or retirement.
@@ -304,36 +367,6 @@ impl RuntimeBudgetRegisteredAttempt {
     ) -> Result<BudgetReceipt> {
         self.bind_wire_receipt_subject(observation)?;
         self.capture_wire_usage(observation)
-    }
-
-    fn validate_wire_subject(
-        &self,
-        observation: &crate::integrations::agent::provider::ProviderWireRequestObservation,
-    ) -> Result<()> {
-        use crate::integrations::agent::provider::ProviderRequestPurpose as Purpose;
-        let original = &self.0.attempt;
-        let purpose = match original.purpose {
-            BudgetAttemptPurpose::Execution => Purpose::Execution,
-            BudgetAttemptPurpose::Routing => Purpose::Routing,
-            BudgetAttemptPurpose::Compaction => Purpose::Compaction,
-            BudgetAttemptPurpose::Memory => Purpose::Memory,
-            BudgetAttemptPurpose::Title
-            | BudgetAttemptPurpose::MacroJudge
-            | BudgetAttemptPurpose::SandboxAssessment
-            | BudgetAttemptPurpose::FailureSummary => Purpose::Auxiliary,
-        };
-        if observation.conversation_id != original.conversation
-            || observation.provider != original.model.provider
-            || observation.model != original.model.model
-            || observation.purpose != purpose
-            || observation.request_id.is_empty()
-            || observation.request_id.len() > 256
-        {
-            return Err(MezError::conflict(
-                "budget wire receipt original identity changed",
-            ));
-        }
-        Ok(())
     }
 
     fn capture_wire_usage(

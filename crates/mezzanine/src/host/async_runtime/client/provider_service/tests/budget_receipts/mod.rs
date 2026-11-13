@@ -2,6 +2,7 @@
 //! Admission is explicitly prepared before the fake physical exchange; this
 //! staged bridge does not claim production activation or retirement release.
 
+mod admission;
 mod pre_send;
 mod retirement;
 
@@ -67,7 +68,15 @@ struct Case {
     root: super::budget_custody::FixtureRoot,
 }
 
-async fn case(purpose: BudgetAttemptPurpose) -> Case {
+struct Prepared {
+    service: RuntimeSessionService,
+    dispatch: RuntimeAgentProviderDispatch,
+    store: TokenUsageStore,
+    member: BudgetMembership,
+    root: super::budget_custody::FixtureRoot,
+}
+
+async fn prepared_case(limits: BudgetLimits) -> Prepared {
     let (mut service, agent, turn) = super::incomplete::prepared_fixture("durable wire ACK").await;
     let path = service
         .agent_transcript_store()
@@ -102,7 +111,7 @@ async fn case(purpose: BudgetAttemptPurpose) -> Case {
         proposed: BudgetConfigPolicy {
             source: "primary".into(),
             digest: "b".repeat(64),
-            limits: BudgetLimits::default(),
+            limits,
         },
         supersedes: None,
     };
@@ -115,6 +124,24 @@ async fn case(purpose: BudgetAttemptPurpose) -> Case {
     })
     .await
     .unwrap();
+    Prepared {
+        service,
+        dispatch,
+        store,
+        member,
+        root,
+    }
+}
+
+async fn case(purpose: BudgetAttemptPurpose) -> Case {
+    let Prepared {
+        service,
+        dispatch,
+        store,
+        member,
+        root,
+    } = prepared_case(BudgetLimits::default()).await;
+    let owner = dispatch.budget_owner.as_ref().unwrap();
     let attempt = owner
         .prepare_attempt(
             mez_agent::ModelTokenUsageKey::new("local-chat", "test-model"),

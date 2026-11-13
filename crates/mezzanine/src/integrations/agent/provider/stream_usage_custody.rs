@@ -47,6 +47,12 @@ impl<'request, 'observer> StreamUsageCustody<'request, 'observer> {
         })
     }
 
+    /// Called only at the concrete transport boundary, not during request
+    /// preparation. This guard and its journal already own the frozen subject.
+    pub(super) async fn before_send(&self) -> super::Result<()> {
+        self.context.authorize_wire_attempt().await
+    }
+
     /// Replace a cumulative prefix, never add frames. Primary source evidence
     /// qualifies zero independently of optional cache fields. Presence is not
     /// proof of final/composite coverage or worker retirement.

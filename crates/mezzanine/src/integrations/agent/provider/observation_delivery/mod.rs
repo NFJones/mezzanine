@@ -34,6 +34,16 @@ pub(crate) trait ProviderObservationReceiptFactory: Send + Sync {
         Ok(())
     }
 
+    /// Optional native admission, after the journal owns the original plan and
+    /// immediately before transport polling. Receipt-only diagnostic factories
+    /// grant no permission; their existing behavior remains unchanged.
+    fn before_send<'a>(
+        &'a self,
+        _observation: &'a ProviderWireRequestObservation,
+    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
+        Box::pin(async { Ok(()) })
+    }
+
     fn freeze(
         &self,
         observation: &ProviderWireRequestObservation,
