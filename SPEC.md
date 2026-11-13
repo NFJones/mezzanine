@@ -16708,6 +16708,15 @@ at the transport boundary. A held or previously authorized outcome MUST NOT poll
 transport. Cancellation MUST reconcile that same owner for receipt evidence,
 never reconstruct a send permit. The staged hook alone does not activate budgets
 or establish fair waiting, terminal coverage, or physical exposure release.
+An installed request-owned receipt source MUST allocate a distinct original
+descriptor for each concrete exchange, including adapter-internal retries. The
+plan and journal MUST retain the exact selected factory before authorization;
+finalization and cancellation MUST NOT allocate or substitute another factory.
+An internal retry MUST wait for the prior durable receipt AND actor handoff
+before allocating its next descriptor. Refusal of that fresh admission MUST
+preserve prior known expense and MUST NOT poll another transport. Unlimited
+policy permits distinct outstanding issued exposures; receipt ACK alone still
+MUST NOT retire them. This staged allocation port is not production activation.
 Completion or cancellation MUST finalize that same identity; cancellation before
 usage MUST retain unknown counters without charging a fabricated zero report.
 Only response evidence may change during finalization. Original subject, purpose,

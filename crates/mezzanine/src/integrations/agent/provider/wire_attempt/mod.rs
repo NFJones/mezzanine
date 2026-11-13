@@ -5,6 +5,14 @@
 
 use super::*;
 
+/// One concrete subject and the exact descriptor selected for it. Clones retain
+/// custody only; they cannot allocate a replacement factory or a send permit.
+#[derive(Clone)]
+pub(super) struct PlannedWireAttempt {
+    pub(super) observation: ProviderWireRequestObservation,
+    pub(super) factory: Option<Arc<dyn ProviderObservationReceiptFactory>>,
+}
+
 impl ProviderWireRequestObservation {
     /// Compare only the pre-send subject using the journal's same contract.
     /// Counter/outcome equality is separately enforced on final receipt capture.
@@ -14,7 +22,7 @@ impl ProviderWireRequestObservation {
 }
 
 impl ProviderWireObservationContext<'_> {
-    fn planned_wire(&self) -> std::sync::MutexGuard<'_, Option<ProviderWireRequestObservation>> {
+    fn planned_wire(&self) -> std::sync::MutexGuard<'_, Option<PlannedWireAttempt>> {
         // This lock contains only content-free identity, never mutable grants.
         self.planned_wire
             .lock()
@@ -48,24 +56,54 @@ impl ProviderWireObservationContext<'_> {
                 "provider context already owns a wire attempt",
             ));
         }
+        let factory = match &self.observer.budget_receipt_source {
+            Some(source) => Some(source.for_exchange(&observation)?),
+            None => self.observer.budget_receipts.clone(),
+        };
         if let Some(pending) = &self.observer.pending {
-            pending.plan(observation.clone(), self.observer.budget_receipts.as_ref())?;
+            pending.plan(observation.clone(), factory.as_ref())?;
         }
-        *planned = Some(observation);
+        *planned = Some(PlannedWireAttempt {
+            observation,
+            factory,
+        });
         Ok(())
     }
 
     pub(super) fn planned_wire_id(&self) -> Option<String> {
         self.planned_wire()
             .as_ref()
-            .map(|observation| observation.request_id.clone())
+            .map(|planned| planned.observation.request_id.clone())
+    }
+
+    /// Select only the original plan's factory, never allocate during final
+    /// evidence transfer (including cancellation). Fixed legacy diagnostic
+    /// factories still support providers without native pre-send planning.
+    pub(super) fn planned_wire_factory(
+        &self,
+        id: &str,
+    ) -> Option<Arc<dyn ProviderObservationReceiptFactory>> {
+        self.planned_wire()
+            .as_ref()
+            .filter(|planned| planned.observation.request_id == id)
+            .map(|planned| planned.factory.clone())
+            .unwrap_or_else(|| {
+                if self.observer.budget_receipt_source.is_some() {
+                    self.observer
+                        .pending
+                        .as_ref()
+                        .and_then(|pending| pending.original_factory(id))
+                } else {
+                    self.observer.budget_receipts.clone()
+                }
+            })
     }
 
     pub(super) fn finish_planned_wire(&self, id: &str) {
         let mut planned = self.planned_wire();
         if planned
             .as_ref()
-            .is_some_and(|observation| observation.request_id == id)
+            .is_some_and(|planned| planned.observation.request_id == id)
         {
             *planned = None;
         }

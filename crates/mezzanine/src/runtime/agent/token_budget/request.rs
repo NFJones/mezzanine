@@ -42,10 +42,6 @@ impl RuntimeBudgetRequestOwner {
 
     /// Capture once for ONE planned concrete attempt, before any provider send.
     /// Retry of registration must reuse this value, not allocate another ID.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "concrete attempt admission is downstream")
-    )]
     pub(crate) fn prepare_attempt(
         &self,
         model: mez_agent::ModelTokenUsageKey,

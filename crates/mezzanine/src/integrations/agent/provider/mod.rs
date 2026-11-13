@@ -545,6 +545,7 @@ use mez_agent::{
 pub(crate) use observation_delivery::observe_and_acknowledge_for_test;
 pub(crate) use observation_delivery::{
     PendingProviderWireObservations, ProviderObservationReceipt, ProviderObservationReceiptFactory,
+    ProviderObservationReceiptSource,
 };
 use openai_chat_completions::OpenAiChatCompletionsDialect;
 
@@ -750,6 +751,7 @@ pub struct ProviderWireRequestObserver {
     claim_generation: Option<u64>,
     pending: Option<PendingProviderWireObservations>,
     budget_receipts: Option<std::sync::Arc<dyn ProviderObservationReceiptFactory>>,
+    budget_receipt_source: Option<std::sync::Arc<dyn ProviderObservationReceiptSource>>,
     reported: Option<SharedProviderReportedUsage>,
     /// A journal-owned observation lost its actor delivery channel. The
     /// observed adapter must fail locally instead of advancing private work.
@@ -774,6 +776,7 @@ impl ProviderWireRequestObserver {
             claim_generation: None,
             pending: None,
             budget_receipts: None,
+            budget_receipt_source: None,
             reported: None,
             delivery_failed: AtomicBool::new(false),
         }
@@ -803,6 +806,9 @@ impl ProviderWireRequestObserver {
         mut self,
         factory: std::sync::Arc<dyn ProviderObservationReceiptFactory>,
     ) -> Result<Self> {
+        if self.budget_receipts.is_some() || self.budget_receipt_source.is_some() {
+            return Err(MezError::conflict("budget receipt owner already installed"));
+        }
         self.pending
             .as_ref()
             .ok_or_else(|| {
@@ -810,6 +816,30 @@ impl ProviderWireRequestObserver {
             })?
             .require_budget_receipts()?;
         self.budget_receipts = Some(factory);
+        Ok(self)
+    }
+
+    /// Install one request-owned pure allocator before work begins. The selected
+    /// per-exchange factory is retained by the plan/journal, not reconstructed
+    /// from a final response. Production budget activation remains staged.
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "physical-attempt assembly remains staged")
+    )]
+    pub(crate) fn with_budget_receipt_source(
+        mut self,
+        source: std::sync::Arc<dyn ProviderObservationReceiptSource>,
+    ) -> Result<Self> {
+        if self.budget_receipts.is_some() || self.budget_receipt_source.is_some() {
+            return Err(MezError::conflict("budget receipt owner already installed"));
+        }
+        self.pending
+            .as_ref()
+            .ok_or_else(|| {
+                MezError::invalid_state("budget receipts require an original observation journal")
+            })?
+            .require_budget_receipts()?;
+        self.budget_receipt_source = Some(source);
         Ok(self)
     }
 
@@ -849,7 +879,7 @@ pub struct ProviderWireObservationContext<'a> {
     /// Handoff generation only, not another usage ledger or admission permit.
     retained_observations: AtomicU64,
     /// One native exchange's content-free identity, frozen before transport.
-    planned_wire: std::sync::Mutex<Option<ProviderWireRequestObservation>>,
+    planned_wire: std::sync::Mutex<Option<wire_attempt::PlannedWireAttempt>>,
 }
 
 /// Concrete adapter evidence overrides logical result totals, even when absent.
@@ -907,8 +937,8 @@ impl<'a> ProviderWireObservationContext<'a> {
             .unwrap_or_else(|error| error.into_inner())
             .clone()
             .ok_or_else(|| MezError::invalid_state("provider wire attempt was not planned"))?;
-        if let Some(factory) = &self.observer.budget_receipts {
-            factory.before_send(&planned).await?;
+        if let Some(factory) = &planned.factory {
+            factory.before_send(&planned.observation).await?;
         }
         if self.observer.required_delivery_failed() {
             return Err(MezError::invalid_state(
@@ -1123,8 +1153,9 @@ impl<'a> ProviderWireObservationContext<'a> {
     /// Retains one immutable completed or interrupted observation before any
     /// cancellable channel operation. Producer retirement still gates draining.
     fn retain_wire_observation(&self, observation: &ProviderWireRequestObservation) {
+        let factory = self.planned_wire_factory(&observation.request_id);
         let newly_retained = self.observer.pending.as_ref().is_none_or(|pending| {
-            pending.retain_with_receipt(observation.clone(), self.observer.budget_receipts.as_ref())
+            pending.retain_with_receipt(observation.clone(), factory.as_ref())
         });
         if !newly_retained {
             // Refusal is not a custody handoff. Leave the original plan and

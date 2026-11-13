@@ -93,6 +93,21 @@ retaining their required results and cleanup obligations.
 Results arriving later from MCP or network calls stay retained; Mez does not
 retry those calls.
 
+### Staged session-budget accounting
+
+The native budget integration retains one original descriptor per concrete
+exchange, including DeepSeek's internal structured-output retry. Its next
+descriptor is allocated only after the previous usage receipt commits and the
+actor adopts that observation. A refused next admission preserves the first
+exchange's known usage without making another transport call. Missing counters
+remain unknown, not zero. Receipt acknowledgment is not proof that issued
+provider exposure has retired.
+
+These internal allocation and accounting ports do **not** yet enable operational
+session budgets. Production assembly, fair waiting, complete terminal coverage,
+physical retirement, root-wide activity inhibition, policy controls, and their
+connected acceptance remain required; the ports alone are not a spending cap.
+
 ## Maintain the catalog
 
 Configured model records under `providers.<name>.models` hold reusable IDs,

@@ -9,13 +9,57 @@
 
 use super::*;
 use crate::integrations::agent::provider::{
-    ProviderObservationReceipt, ProviderObservationReceiptFactory,
+    ProviderObservationReceipt, ProviderObservationReceiptFactory, ProviderObservationReceiptSource,
 };
 use crate::runtime::{
     RuntimeBudgetAttemptAdmission, RuntimeBudgetAttemptWork, RuntimeBudgetIssuedAttempt,
-    RuntimeBudgetReceiptWork,
+    RuntimeBudgetReceiptWork, RuntimeBudgetRequestOwner,
 };
 use std::sync::{Arc, Mutex};
+
+/// Frozen request-local allocation, not another attempt ledger. The existing
+/// context serializes planning and its journal retains each allocated source.
+/// No descriptor is reconstructed from a result or shared with a later retry.
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "production assembly remains staged")
+)]
+pub(super) struct BudgetRequestAdmission {
+    owner: RuntimeBudgetRequestOwner,
+    model: mez_agent::ModelTokenUsageKey,
+    purpose: crate::storage::token_usage::budget::receipts::BudgetAttemptPurpose,
+}
+
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "production assembly remains staged")
+)]
+impl BudgetRequestAdmission {
+    pub(super) fn new(
+        owner: RuntimeBudgetRequestOwner,
+        model: mez_agent::ModelTokenUsageKey,
+        purpose: crate::storage::token_usage::budget::receipts::BudgetAttemptPurpose,
+    ) -> Self {
+        Self {
+            owner,
+            model,
+            purpose,
+        }
+    }
+}
+
+impl ProviderObservationReceiptSource for BudgetRequestAdmission {
+    fn for_exchange(
+        &self,
+        observation: &ProviderWireRequestObservation,
+    ) -> Result<Arc<dyn ProviderObservationReceiptFactory>> {
+        self.owner.validate_request(&observation.conversation_id)?;
+        let work = self
+            .owner
+            .prepare_attempt(self.model.clone(), self.purpose)?;
+        Ok(Arc::new(BudgetAttemptAdmission::new(work)))
+    }
+}
 
 #[derive(Default)]
 struct Phase {

@@ -24,6 +24,16 @@ pub(crate) trait ProviderObservationReceipt: Send + Sync {
     fn checkpoint(&self) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>>;
 }
 
+/// Request-owned pure allocator. Each call captures one distinct original
+/// descriptor; the wire plan and journal retain it before any admission await.
+/// This port performs no I/O and grants no permission or exposure release.
+pub(crate) trait ProviderObservationReceiptSource: Send + Sync {
+    fn for_exchange(
+        &self,
+        observation: &ProviderWireRequestObservation,
+    ) -> Result<Arc<dyn ProviderObservationReceiptFactory>>;
+}
+
 /// Pure, bounded capture before channel delivery; no filesystem or provider I/O.
 /// Each physical exchange needs its own original registered-attempt descriptor.
 pub(crate) trait ProviderObservationReceiptFactory: Send + Sync {
@@ -281,6 +291,17 @@ impl PendingProviderWireObservations {
         original.observation = capture.observation.clone();
         original.budget = budget;
         true
+    }
+
+    /// Borrow only an already retained factory for duplicate evidence. This
+    /// never allocates a descriptor or supplies permission to send again.
+    pub(super) fn original_factory(
+        &self,
+        id: &str,
+    ) -> Option<Arc<dyn ProviderObservationReceiptFactory>> {
+        self.entries()
+            .get(id)
+            .and_then(|entry| entry._factory.clone())
     }
 
     /// Runs only original bookkeeping, outside the synchronous journal lock.
