@@ -95,6 +95,8 @@ usage arrives. Missing counters stay unknown and do not create a zero expense
 report. Plans cannot be acknowledged as final evidence; a later retry gets its
 own identity and cannot rewrite the first exchange's retry reason.
 Rejected finalization does not disarm the original context's stack custody.
+Its first valid original-subject expense can still be retained; the sticky
+conflict continues to refuse checkpointing and acknowledgment.
 Competing exact finalizers share one receipt capture outside the journal map
 lock; a capture panic retains a refused checkpoint and its original source.
 All journal-owned provider purposes wait for their own observation's actor ACK

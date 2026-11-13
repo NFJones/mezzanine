@@ -166,9 +166,8 @@ impl PendingProviderWireObservations {
                     _factory: factory.cloned(),
                     conflicted: false,
                 });
-            if original.conflicted {
-                return false;
-            }
+            // Conflict fences checkpoint/ACK, not the first valid original
+            // expense handed back by stack custody after a refused subject.
             if !same_plan(original, &observation, factory) {
                 original.conflicted = true;
                 return false;

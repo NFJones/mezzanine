@@ -167,6 +167,49 @@ fn rejected_finalization_does_not_publish_a_context_handoff() {
     assert_eq!(fixture.reported.lock().unwrap().known_observations, 0);
 }
 
+#[tokio::test]
+async fn rejected_subject_keeps_original_drop_expense_without_clearing_conflict() {
+    let fixture = fixture();
+    let context = crate::integrations::agent::provider::ProviderWireObservationContext::new(
+        &fixture.observer,
+        ProviderRequestPurpose::Execution,
+        "fixture".into(),
+        Ok(None),
+    );
+    let mut custody =
+        crate::integrations::agent::provider::stream_usage_custody::StreamUsageCustody::new(
+            &context,
+            &fixture.request,
+        )
+        .unwrap();
+    let original = fixture.pending.snapshot().pop().unwrap();
+    let usage = mez_agent::ModelTokenUsage {
+        input_tokens: 17,
+        output_tokens: 5,
+        ..Default::default()
+    };
+    custody.update_with_presence(
+        usage,
+        mez_agent::ModelTokenUsagePresence {
+            input: true,
+            output: true,
+        },
+    );
+    let mut changed = original.clone();
+    changed.model.push_str("-foreign");
+    context.retain_wire_observation(&changed);
+    assert_eq!(context.planned_wire_id(), Some(original.request_id.clone()));
+    drop(custody);
+    let retained = fixture.pending.snapshot().pop().unwrap();
+    assert_eq!(retained.request_id, original.request_id);
+    assert_eq!(retained.model, original.model);
+    assert_eq!(retained.usage, Some(usage));
+    assert_eq!(fixture.reported.lock().unwrap().known_observations, 1);
+    assert!(fixture.pending.checkpoint(&retained).await.is_err());
+    fixture.pending.acknowledge(&retained.request_id);
+    assert_eq!(fixture.pending.snapshot(), vec![retained]);
+}
+
 /// Capture deliberately reads the journal while blocked: the map mutex must
 /// remain available, and an identical competing finalizer must reuse this work.
 struct BlockingFactory {
@@ -440,11 +483,12 @@ async fn planned_subject_and_factory_conflicts_refuse_before_native_receipt_capt
         let mut changed = completed.clone();
         change(&mut changed);
         assert!(!pending.retain_with_receipt(changed, Some(&factory)));
-        assert!(!pending.retain_with_receipt(completed.clone(), Some(&factory)));
         assert_eq!(calls.load(Ordering::SeqCst), 0);
+        assert!(pending.retain_with_receipt(completed.clone(), Some(&factory)));
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
         assert!(pending.checkpoint(&completed).await.is_err());
         pending.acknowledge(&planned.request_id);
-        assert_eq!(pending.snapshot(), vec![planned]);
+        assert_eq!(pending.snapshot(), vec![completed.clone()]);
     }
     let pending = PendingProviderWireObservations::default();
     let calls = Arc::new(AtomicUsize::new(0));
@@ -454,10 +498,13 @@ async fn planned_subject_and_factory_conflicts_refuse_before_native_receipt_capt
         Arc::new(CountingFactory(calls.clone()));
     let planned = plan(&completed);
     pending.plan(planned.clone(), Some(&original)).unwrap();
-    assert!(!pending.retain_with_receipt(completed, Some(&replacement)));
+    assert!(!pending.retain_with_receipt(completed.clone(), Some(&replacement)));
     assert_eq!(calls.load(Ordering::SeqCst), 0);
+    assert!(pending.retain_with_receipt(completed.clone(), Some(&original)));
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert!(pending.checkpoint(&completed).await.is_err());
     pending.acknowledge(&planned.request_id);
-    assert_eq!(pending.snapshot(), vec![planned]);
+    assert_eq!(pending.snapshot(), vec![completed]);
 }
 
 #[tokio::test]
