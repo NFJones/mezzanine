@@ -4,7 +4,7 @@
 //! a retained never-consumed permit after joining its original writer. These
 //! data are not physical proof or send authority themselves.
 //! The existing receipt transaction validates original grant/prefix and commits
-//! terminal-unknown evidence plus its release marker atomically. Original grants
+//! exact terminal evidence plus its release marker atomically. Original grants
 //! remain forever replay-only; neither stale membership nor lost ACK reissues work.
 
 use super::admission::BudgetAdmissionOutcome;
@@ -17,11 +17,34 @@ use rusqlite::params;
 pub(crate) struct BudgetExposureRetirement {
     grant: BudgetAdmissionOutcome,
     prefix: BudgetReceipt,
+    terminal: mez_agent::token_budget::UsageSnapshot,
 }
 
 impl BudgetExposureRetirement {
+    #[cfg(test)]
     pub(crate) fn new(grant: BudgetAdmissionOutcome, prefix: BudgetReceipt) -> Self {
-        Self { grant, prefix }
+        Self::with_terminal(
+            grant,
+            prefix,
+            mez_agent::token_budget::UsageSnapshot {
+                terminal: true,
+                ..Default::default()
+            },
+        )
+    }
+
+    /// Descriptive proposal only. The native owner independently qualifies any
+    /// complete dimensions; storage binds them to the exact original subtotal.
+    pub(crate) fn with_terminal(
+        grant: BudgetAdmissionOutcome,
+        prefix: BudgetReceipt,
+        terminal: mez_agent::token_budget::UsageSnapshot,
+    ) -> Self {
+        Self {
+            grant,
+            prefix,
+            terminal,
+        }
     }
 }
 
@@ -35,8 +58,9 @@ pub(super) fn initialize_schema(tx: &rusqlite::Transaction<'_>) -> Result<()> {
     Ok(())
 }
 
-/// Requires positive original subtotal transfer. A terminal-unknown receipt
-/// preserves that knowledge without claiming complete dimensions from a prefix.
+/// Requires positive original subtotal transfer and exact proposed finality.
+/// Qualified complete dimensions must equal that subtotal; unknown dimensions
+/// preserve prior knowledge without promoting it to complete coverage.
 pub(super) fn validate(
     connection: &Connection,
     receipt: &BudgetReceipt,
@@ -44,8 +68,15 @@ pub(super) fn validate(
 ) -> Result<Option<String>> {
     let prefix = &evidence.prefix;
     if !receipt.snapshot.terminal
-        || receipt.snapshot.input.is_some()
-        || receipt.snapshot.output.is_some()
+        || receipt.snapshot != evidence.terminal
+        || receipt
+            .snapshot
+            .input
+            .is_some_and(|value| prefix.snapshot.input != Some(value))
+        || receipt
+            .snapshot
+            .output
+            .is_some_and(|value| prefix.snapshot.output != Some(value))
         || receipt.reporting.is_some()
         || prefix.snapshot.terminal
         || prefix.id == receipt.id

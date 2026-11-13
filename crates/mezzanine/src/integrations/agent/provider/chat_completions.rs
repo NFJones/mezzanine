@@ -589,6 +589,14 @@ where
                 && let Some(custody) = stream_usage.as_mut()
             {
                 custody.update_reported_with_presence(usage, presence);
+                if response_result.as_ref().is_ok_and(|r| {
+                    (200..300).contains(&r.status_code)
+                        && super::final_usage_custody::chat_body_is_terminal(&r.body)
+                }) {
+                    custody
+                        .finalize_unary_usage(usage, presence)
+                        .map_err(|error| error.with_provider_incurred_usage(usage))?;
+                }
             }
             let incurred_usage = response_usage.map(|(usage, _)| usage).or_else(|| {
                 stream_decoder
@@ -759,6 +767,13 @@ where
                     && let Some(custody) = retry_custody.as_mut()
                 {
                     custody.update_reported_with_presence(usage, presence);
+                    if (200..300).contains(&retry_response.status_code)
+                        && super::final_usage_custody::chat_body_is_terminal(&retry_response.body)
+                    {
+                        custody
+                            .finalize_unary_usage(usage, presence)
+                            .map_err(|error| error.with_provider_incurred_usage(usage))?;
+                    }
                 }
                 let retain_retry_usage = |error: MezError| match retry_usage {
                     Some((usage, _)) => error.with_provider_incurred_usage(usage),

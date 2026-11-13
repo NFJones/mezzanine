@@ -95,7 +95,7 @@ impl<'a, T> WireTransport<'a, T> {
             .is_err()
                 && let Some(pending) = owner.pending
             {
-                pending.refuse_transport_retirement(&owner.observation);
+                pending.refuse_native_evidence(&owner.observation);
             }
         }
     }

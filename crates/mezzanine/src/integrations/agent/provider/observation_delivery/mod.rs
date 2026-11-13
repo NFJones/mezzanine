@@ -64,6 +64,16 @@ pub(crate) trait ProviderObservationReceiptFactory: Send + Sync {
     ) {
     }
 
+    /// Pure transfer of source-qualified final unary totals. Neither transport
+    /// completion nor a retained prefix supplies this separate evidence.
+    fn usage_finalized(
+        &self,
+        _observation: &ProviderWireRequestObservation,
+        _usage: super::ProviderFinalUsage,
+    ) -> Result<()> {
+        Ok(())
+    }
+
     fn freeze(
         &self,
         observation: &ProviderWireRequestObservation,
@@ -305,7 +315,7 @@ impl PendingProviderWireObservations {
 
     /// Keep the original final expense capturable after failed evidence
     /// transfer, while refusing checkpoint/ACK. No execution/retry authority.
-    pub(super) fn refuse_transport_retirement(&self, observation: &ProviderWireRequestObservation) {
+    pub(super) fn refuse_native_evidence(&self, observation: &ProviderWireRequestObservation) {
         if let Some(entry) = self.entries().get_mut(&observation.request_id)
             && entry.observation.same_wire_subject(observation)
         {

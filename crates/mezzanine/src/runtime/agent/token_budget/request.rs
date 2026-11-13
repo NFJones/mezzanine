@@ -319,20 +319,29 @@ pub(crate) struct RuntimeBudgetIssuedAttempt {
 )]
 impl RuntimeBudgetIssuedAttempt {
     /// Pure capture from consumed original custody AND sealed local retirement.
-    /// A separate unknown terminal snapshot never upgrades partial counters to
-    /// complete coverage. Its writer must follow the original subtotal's ACK.
+    /// Only separate source-qualified final evidence completes dimensions;
+    /// absent evidence never upgrades partial counters. Its writer follows the
+    /// original subtotal's ACK and retains independent transport qualification.
     pub(crate) fn freeze_retirement_receipt(
         &self,
         observation: &crate::integrations::agent::provider::ProviderWireRequestObservation,
         proof: &crate::integrations::agent::provider::ProviderTransportRetirement,
+        final_usage: Option<&crate::integrations::agent::provider::ProviderFinalUsage>,
     ) -> Result<RuntimeBudgetReceiptWork> {
         if !proof.matches(observation) {
             return Err(MezError::conflict(
                 "budget transport retirement subject changed",
             ));
         }
+        let terminal = final_usage
+            .map(|usage| usage.terminal_snapshot(observation))
+            .transpose()?
+            .unwrap_or(UsageSnapshot {
+                terminal: true,
+                ..Default::default()
+            });
         self.registered
-            .freeze_exposure_retirement(observation, self.outcome())
+            .freeze_exposure_retirement(observation, self.outcome(), terminal)
     }
 
     pub(crate) fn registered(&self) -> &RuntimeBudgetRegisteredAttempt {
@@ -368,8 +377,14 @@ impl RuntimeBudgetUnusedAttempt {
         {
             return Err(MezError::conflict("unused budget attempt reported expense"));
         }
-        self.registered
-            .freeze_exposure_retirement(observation, self.permit.outcome())
+        self.registered.freeze_exposure_retirement(
+            observation,
+            self.permit.outcome(),
+            UsageSnapshot {
+                terminal: true,
+                ..Default::default()
+            },
+        )
     }
 }
 
@@ -385,12 +400,14 @@ impl RuntimeBudgetRegisteredAttempt {
         &self,
         observation: &crate::integrations::agent::provider::ProviderWireRequestObservation,
         outcome: &BudgetAdmissionOutcome,
+        terminal: UsageSnapshot,
     ) -> Result<RuntimeBudgetReceiptWork> {
         let prefix = self.freeze_wire_receipt(observation)?;
         let evidence =
-            crate::storage::token_usage::budget::retirement::BudgetExposureRetirement::new(
+            crate::storage::token_usage::budget::retirement::BudgetExposureRetirement::with_terminal(
                 outcome.clone(),
                 prefix.0.receipt.clone(),
+                terminal,
             );
         let captured = self.0.retirement.get_or_init(|| WireRetirementCapture {
             receipt: BudgetReceiptId::new(crate::storage::token_usage::new_token_usage_event_id())
@@ -398,10 +415,7 @@ impl RuntimeBudgetRegisteredAttempt {
                 .map(|id| BudgetReceipt {
                     id,
                     attempt: self.0.attempt.clone(),
-                    snapshot: UsageSnapshot {
-                        terminal: true,
-                        ..Default::default()
-                    },
+                    snapshot: terminal,
                     reporting: None,
                 }),
             evidence: evidence.clone(),

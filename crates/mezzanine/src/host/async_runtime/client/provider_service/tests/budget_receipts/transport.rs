@@ -127,6 +127,13 @@ impl ProviderObservationReceiptFactory for Factory {
     ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
         self.native.before_send(o)
     }
+    fn usage_finalized(
+        &self,
+        o: &ProviderWireRequestObservation,
+        usage: crate::integrations::agent::provider::ProviderFinalUsage,
+    ) -> Result<()> {
+        self.native.usage_finalized(o, usage)
+    }
     fn transport_retired(
         &self,
         o: &ProviderWireRequestObservation,
@@ -191,6 +198,130 @@ async fn budget_wire_loopback_retirement_writer_faults_keep_original_custody() {
 }
 
 async fn qualify(responses: bool, stream: bool, cancel: bool, blocked_callback: bool, fault: u8) {
+    qualify_usage(
+        responses,
+        stream,
+        cancel,
+        blocked_callback,
+        fault,
+        UnaryUsage::Totals,
+    )
+    .await;
+}
+
+#[derive(Clone, Copy, Debug)]
+enum UnaryUsage {
+    Totals,
+    InputOnly,
+    OutputOnly,
+    CacheOnly,
+    ReasoningOnly,
+    Zero,
+    Nonterminal,
+    InvalidMaap,
+    Incomplete,
+    Failed,
+    Cancelled,
+    HttpFailure,
+    JsonInsteadOfSse,
+}
+
+impl UnaryUsage {
+    fn counters(self, responses: bool) -> serde_json::Value {
+        let (input, output, details_in, details_out) = if responses {
+            (
+                "input_tokens",
+                "output_tokens",
+                "input_tokens_details",
+                "output_tokens_details",
+            )
+        } else {
+            (
+                "prompt_tokens",
+                "completion_tokens",
+                "prompt_tokens_details",
+                "completion_tokens_details",
+            )
+        };
+        match self {
+            Self::InputOnly => serde_json::json!({input:11}),
+            Self::OutputOnly => serde_json::json!({output:3}),
+            Self::CacheOnly => serde_json::json!({details_in:{"cached_tokens":11}}),
+            Self::ReasoningOnly => serde_json::json!({details_out:{"reasoning_tokens":3}}),
+            Self::Zero => serde_json::json!({input:0,output:0}),
+            _ => serde_json::json!({input:11,output:3}),
+        }
+    }
+
+    fn totals(self) -> UsageTotals {
+        match self {
+            Self::InputOnly | Self::CacheOnly => UsageTotals {
+                input: 11,
+                output: 0,
+            },
+            Self::OutputOnly | Self::ReasoningOnly => UsageTotals {
+                input: 0,
+                output: 3,
+            },
+            Self::Zero => UsageTotals::default(),
+            _ => UsageTotals {
+                input: 11,
+                output: 3,
+            },
+        }
+    }
+
+    fn complete(self) -> (Option<u64>, Option<u64>) {
+        match self {
+            Self::InputOnly => (Some(11), None),
+            Self::OutputOnly => (None, Some(3)),
+            Self::CacheOnly | Self::ReasoningOnly | Self::Nonterminal | Self::HttpFailure => {
+                (None, None)
+            }
+            Self::Zero => (Some(0), Some(0)),
+            _ => (Some(11), Some(3)),
+        }
+    }
+}
+
+#[tokio::test]
+async fn budget_wire_loopback_unary_complete_dimensions_do_not_promote_subsets_or_prefixes() {
+    for responses in [false, true] {
+        for usage in [
+            UnaryUsage::InputOnly,
+            UnaryUsage::OutputOnly,
+            UnaryUsage::CacheOnly,
+            UnaryUsage::ReasoningOnly,
+            UnaryUsage::Zero,
+            UnaryUsage::Nonterminal,
+            UnaryUsage::InvalidMaap,
+            UnaryUsage::HttpFailure,
+        ] {
+            qualify_usage(responses, false, false, false, 0, usage).await;
+        }
+    }
+}
+
+#[tokio::test]
+async fn budget_wire_loopback_responses_terminal_failure_and_actual_json_shape_keep_final_usage() {
+    for usage in [
+        UnaryUsage::Incomplete,
+        UnaryUsage::Failed,
+        UnaryUsage::Cancelled,
+    ] {
+        qualify_usage(true, false, false, false, 0, usage).await;
+    }
+    qualify_usage(true, true, false, false, 0, UnaryUsage::JsonInsteadOfSse).await;
+}
+
+async fn qualify_usage(
+    responses: bool,
+    stream: bool,
+    cancel: bool,
+    blocked_callback: bool,
+    fault: u8,
+    usage_case: UnaryUsage,
+) {
     let Prepared {
         service,
         dispatch,
@@ -233,7 +364,7 @@ async fn qualify(responses: bool, stream: bool, cancel: bool, blocked_callback: 
             bytes.extend_from_slice(&chunk[..read]);
         }
         entered.send(()).unwrap();
-        if stream {
+        if stream && !matches!(usage_case, UnaryUsage::JsonInsteadOfSse) {
             let partial = serde_json::json!({"type":"response.in_progress","response":{"usage":{"input_tokens":11,"output_tokens":3}}});
             let text = serde_json::json!({"rationale":"fixture","actions":[{"type":"say","status":"final","content_type":"text/plain; charset=utf-8","text":"done"}]}).to_string();
             let delta = serde_json::json!({"type":"response.output_text.delta","delta":text});
@@ -249,9 +380,28 @@ async fn qualify(responses: bool, stream: bool, cancel: bool, blocked_callback: 
             }
         } else if !cancel {
             let text = serde_json::json!({"rationale":"fixture","actions":[{"type":"say","status":"final","content_type":"text/plain; charset=utf-8","text":"done"}]}).to_string();
-            let body = if responses { serde_json::json!({"model":"test-model","status":"completed","output_text":text,"usage":{"input_tokens":11,"output_tokens":3}}) }
-                else { serde_json::json!({"model":"test-model","choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":text}}],"usage":{"prompt_tokens":11,"completion_tokens":3}}) }.to_string();
-            socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
+            let text = if matches!(usage_case, UnaryUsage::InvalidMaap) {
+                serde_json::json!({"rationale":"fixture","actions":[{"type":"invalid_fixture_action"}]}).to_string()
+            } else {
+                text
+            };
+            let nonterminal = matches!(usage_case, UnaryUsage::Nonterminal);
+            let usage = usage_case.counters(responses);
+            let status = match usage_case {
+                UnaryUsage::Nonterminal => "in_progress",
+                UnaryUsage::Incomplete => "incomplete",
+                UnaryUsage::Failed => "failed",
+                UnaryUsage::Cancelled => "cancelled",
+                _ => "completed",
+            };
+            let body = if responses { serde_json::json!({"model":"test-model","status":status,"output_text":text,"usage":usage}) }
+                else { serde_json::json!({"model":"test-model","choices":[{"index":0,"finish_reason":if nonterminal {None} else {Some("stop")},"message":{"role":"assistant","content":text}}],"usage":usage}) }.to_string();
+            let http_status = if matches!(usage_case, UnaryUsage::HttpFailure) {
+                "500 Internal Server Error"
+            } else {
+                "200 OK"
+            };
+            socket.write_all(format!("HTTP/1.1 {http_status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
         }
         // Keep the exact server fixture owned until the client has explicitly
         // observed/destroyed its request future, even on ordinary success.
@@ -430,7 +580,23 @@ async fn qualify(responses: bool, stream: bool, cancel: bool, blocked_callback: 
             submit_pending_provider_observation(&handle, &pending, observation)
                 .await
                 .unwrap();
-            assert!(call.await.unwrap().action_batch.is_some());
+            let result = call.await;
+            if matches!(
+                usage_case,
+                UnaryUsage::InvalidMaap
+                    | UnaryUsage::HttpFailure
+                    | UnaryUsage::Incomplete
+                    | UnaryUsage::Failed
+                    | UnaryUsage::Cancelled
+            ) || (responses && matches!(usage_case, UnaryUsage::Nonterminal))
+            {
+                assert!(
+                    result.is_err(),
+                    "invalid/nonterminal output accepted: {usage_case:?}"
+                );
+            } else {
+                assert!(result.unwrap().action_batch.is_some());
+            }
         }
         if cancel {
             let observation = pending.snapshot().pop().unwrap();
@@ -472,18 +638,29 @@ async fn qualify(responses: bool, stream: bool, cancel: bool, blocked_callback: 
             .query_row("SELECT snapshot FROM budget_attempts", [], |r| r.get(0))
             .unwrap();
         let snapshot: serde_json::Value = serde_json::from_str(&snapshot).unwrap();
-        assert!(snapshot["terminal"]["input"].is_null());
-        assert!(snapshot["terminal"]["output"].is_null());
+        let complete = if !cancel && (!stream || matches!(usage_case, UnaryUsage::JsonInsteadOfSse))
+        {
+            usage_case.complete()
+        } else {
+            (None, None)
+        };
+        assert_eq!(
+            snapshot["terminal"]["input"].as_u64(),
+            complete.0,
+            "{usage_case:?}"
+        );
+        assert_eq!(
+            snapshot["terminal"]["output"].as_u64(),
+            complete.1,
+            "{usage_case:?}"
+        );
         let known = store.budget_account(&member.root).unwrap().known;
         assert_eq!(
             known,
             if cancel && !stream {
                 UsageTotals::default()
             } else {
-                UsageTotals {
-                    input: 11,
-                    output: 3,
-                }
+                usage_case.totals()
             }
         );
     };

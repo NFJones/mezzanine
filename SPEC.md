@@ -16738,6 +16738,17 @@ It MUST retain distinct immutable receipt IDs and cancellation-safe writer/query
 ownership for the subtotal and terminal stages. Terminal unknown counters MUST
 retain prior known expense without asserting complete dimensions; cache-only,
 reasoning-only and partial SSE prefixes MUST NOT be promoted to final coverage.
+An adapter MAY separately qualify final unary counters from a fully received
+successful HTTP response with an explicit terminal Responses status or all chat
+choices finished. It MUST bind that immutable evidence to the original wire
+subject, exact normalized values and independent primary-counter presence before
+fallible output/MAAP parsing. Only those positively reported primary dimensions
+may appear in the terminal receipt, exactly matching the committed subtotal.
+Missing primary dimensions, subset-only reports, nonterminal bodies and stream
+prefixes MUST remain incomplete. Evidence-transfer refusal or panic MUST fence
+the original journal without discarding its first expense. Final counters alone
+MUST NOT authorize release without original consumed custody and scoped transport
+retirement; successful parsing, HTTP completion or ACK alone is insufficient.
 Terminal receipt and the original grant's retirement reference MUST commit in
 one transaction. A receipt committed without that reference MUST NOT later be
 upgraded into release. Lost ACK reconciliation MUST validate both original

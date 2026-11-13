@@ -107,6 +107,16 @@ impl<'request, 'observer> StreamUsageCustody<'request, 'observer> {
         self.presence
     }
 
+    /// A fully received successful unary body, never an SSE prefix or an
+    /// inference from normal parsing/transport success alone.
+    pub(super) fn finalize_unary_usage(
+        &self,
+        usage: mez_agent::ModelTokenUsage,
+        presence: mez_agent::ModelTokenUsagePresence,
+    ) -> super::Result<()> {
+        self.context.finalize_unary_usage(usage, presence)
+    }
+
     /// Normal retention must receive the same qualified presence before it can
     /// disarm the fallback, even when every numeric counter is zero.
     pub(super) fn reported_usage(&self) -> Option<mez_agent::ModelTokenUsage> {

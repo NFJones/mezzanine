@@ -8,6 +8,77 @@ use crate::storage::token_usage::budget::retirement::BudgetExposureRetirement;
 use mez_agent::token_budget::TokenLimit;
 
 #[test]
+fn budget_retirement_complete_dimensions_match_original_prefix_and_survive_reopen() {
+    for (input, output) in [(Some(17), None), (None, Some(3)), (Some(0), Some(0))] {
+        let f = Fixture::new();
+        let (member, lease) = native(&f, "root", None);
+        publish(&f, TokenLimit::Limited(100), TokenLimit::Unlimited);
+        let original = attempt(&member, "issued");
+        let granted = authorized(grant(&f, &member, &lease, "issued"));
+        let prefix = receipt(
+            &original,
+            "prefix",
+            Some(input.unwrap_or(17)),
+            Some(output.unwrap_or(3)),
+            false,
+        );
+        f.store.commit_budget_receipt(&prefix).unwrap();
+        let terminal = receipt(&original, "terminal", input, output, true);
+        let evidence = BudgetExposureRetirement::with_terminal(
+            granted.clone(),
+            prefix.clone(),
+            terminal.snapshot,
+        );
+        let mut changed = terminal.clone();
+        changed.snapshot.input = Some(18);
+        let invalid = BudgetExposureRetirement::with_terminal(
+            granted.clone(),
+            prefix.clone(),
+            changed.snapshot,
+        );
+        assert!(
+            f.store
+                .commit_budget_retirement_receipt(&changed, &invalid)
+                .is_err()
+        );
+        let before = f.store.budget_account(&member.root).unwrap().known;
+        let outcome = f
+            .store
+            .commit_budget_retirement_receipt(&terminal, &evidence)
+            .unwrap();
+        assert_eq!(
+            outcome.known, before,
+            "terminal totals must not recharge the subtotal"
+        );
+        let reopened = TokenUsageStore::new(f.store.path());
+        assert_eq!(
+            reopened
+                .budget_retirement_receipt_outcome(&terminal, &evidence)
+                .unwrap(),
+            Some(outcome.clone())
+        );
+        assert_eq!(
+            reopened
+                .commit_budget_retirement_receipt(&terminal, &evidence)
+                .unwrap(),
+            outcome
+        );
+        assert_eq!(
+            reopened.budget_attempt_admission(&original).unwrap(),
+            Some(granted)
+        );
+        let db = f.store.open_budget().unwrap();
+        let stored: String = db
+            .query_row("SELECT snapshot FROM budget_attempts", [], |r| r.get(0))
+            .unwrap();
+        let stored: serde_json::Value = serde_json::from_str(&stored).unwrap();
+        assert_eq!(stored["terminal"]["input"].as_u64(), input);
+        assert_eq!(stored["terminal"]["output"].as_u64(), output);
+        assert_eq!(receipts::outstanding_attempts(&db).unwrap(), 0);
+    }
+}
+
+#[test]
 fn budget_retirement_unknown_preserves_subtotal_and_never_reissues_original_grant() {
     let f = Fixture::new();
     let (member, lease) = native(&f, "root", None);

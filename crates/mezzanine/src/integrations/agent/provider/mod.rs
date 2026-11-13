@@ -542,6 +542,8 @@ use mez_agent::{
     provider_error_detail as openai_provider_error_detail,
     provider_failure_json_with_retry_headers as openai_provider_failure_json_with_retry_headers,
 };
+mod final_usage_custody;
+pub(crate) use final_usage_custody::ProviderFinalUsage;
 #[cfg(test)]
 pub(crate) use observation_delivery::observe_and_acknowledge_for_test;
 pub(crate) use observation_delivery::{
@@ -2841,16 +2843,25 @@ impl<T: AsyncProviderHttpTransport> OpenAiResponsesProvider<T> {
                         (
                             usage,
                             mez_agent::openai_response::openai_responses_usage_presence(&value),
+                            matches!(
+                                value.get("status").and_then(|v| v.as_str()),
+                                Some("completed" | "incomplete" | "failed" | "cancelled")
+                            ),
                         )
                     })
                 });
-            if let Some((usage, presence)) = body_usage
+            if let Some((usage, presence, terminal)) = body_usage
                 && let Some(custody) = usage_custody.as_mut()
             {
                 custody.update_reported_with_presence(usage, presence);
+                if terminal && (200..300).contains(&response.status_code) {
+                    custody
+                        .finalize_unary_usage(usage, presence)
+                        .map_err(|error| error.with_provider_incurred_usage(usage))?;
+                }
             }
             let incurred_usage = body_usage
-                .map(|(usage, _)| usage)
+                .map(|(usage, _, _)| usage)
                 .or_else(|| stream_decoder.incurred_usage());
             let response_diagnostics = openai_response_diagnostics(&response);
             if !(200..300).contains(&response.status_code) {

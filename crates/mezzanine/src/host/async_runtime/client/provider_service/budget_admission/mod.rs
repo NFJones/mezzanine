@@ -6,11 +6,12 @@
 //! Receipt-only factories remain separate descriptive ports. This staged factory
 //! is not installed by production dispatch yet; fairness, reversible root holds,
 //! complete counter coverage and all-purpose assembly remain required. Qualified
-//! scoped retirement commits a separate terminal-unknown receipt after subtotals.
+//! scoped retirement commits a separate terminal receipt after subtotals, with
+//! unknown dimensions unless independent final unary evidence qualifies them.
 
 use super::*;
 use crate::integrations::agent::provider::{
-    ProviderObservationReceipt, ProviderObservationReceiptFactory,
+    ProviderFinalUsage, ProviderObservationReceipt, ProviderObservationReceiptFactory,
     ProviderObservationReceiptSource, ProviderTransportRetirement,
 };
 use crate::runtime::{
@@ -68,6 +69,7 @@ struct Phase {
     started: bool,
     finalized: Option<ProviderWireRequestObservation>,
     retired: Option<ProviderTransportRetirement>,
+    final_usage: Option<ProviderFinalUsage>,
     // Retain the actual consumed grant independently of a canceled send future.
     issued: Option<RuntimeBudgetIssuedAttempt>,
     // Original never-consumed permit withdrawn after its actual writer joins.
@@ -134,7 +136,11 @@ impl BudgetAttemptAdmission {
                 .freeze_wire_receipt(observation)
                 .unwrap(),
             issued
-                .freeze_retirement_receipt(observation, phase.retired.as_ref().unwrap())
+                .freeze_retirement_receipt(
+                    observation,
+                    phase.retired.as_ref().unwrap(),
+                    phase.final_usage.as_ref(),
+                )
                 .unwrap(),
         )
     }
@@ -224,6 +230,33 @@ impl ProviderObservationReceiptFactory for BudgetAttemptAdmission {
         }
     }
 
+    fn usage_finalized(
+        &self,
+        observation: &ProviderWireRequestObservation,
+        usage: ProviderFinalUsage,
+    ) -> Result<()> {
+        let mut phase = self
+            .0
+            .phase
+            .lock()
+            .map_err(|_| suspended("budget attempt custody unavailable"))?;
+        if phase.issued.is_none()
+            || phase.finalized.is_some()
+            || !usage.matches_subject(observation)
+        {
+            return Err(MezError::conflict("budget final usage custody changed"));
+        }
+        self.0.work.plan_wire_receipt_subject(observation)?;
+        if let Some(original) = &phase.final_usage {
+            if original != &usage {
+                return Err(MezError::conflict("budget final usage already captured"));
+            }
+        } else {
+            phase.final_usage = Some(usage);
+        }
+        Ok(())
+    }
+
     fn freeze(
         &self,
         observation: &ProviderWireRequestObservation,
@@ -298,9 +331,11 @@ impl ProviderObservationReceipt for Receipt {
                     phase.unused = Some(unused);
                 }
                 match (&phase.issued, &phase.retired) {
-                    (Some(issued), Some(proof)) => {
-                        Some(issued.freeze_retirement_receipt(&self.observation, proof)?)
-                    }
+                    (Some(issued), Some(proof)) => Some(issued.freeze_retirement_receipt(
+                        &self.observation,
+                        proof,
+                        phase.final_usage.as_ref(),
+                    )?),
                     _ => phase
                         .unused
                         .as_ref()

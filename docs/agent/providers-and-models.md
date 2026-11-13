@@ -113,6 +113,13 @@ original journal while preserving its expense. No storage work runs from Drop.
 The staged native driver commits known subtotals first, then a separate immutable
 terminal-unknown receipt together with an original-grant retirement reference.
 This conserves expense without treating partial counters as complete coverage.
+Recognized final unary reports carry separate original-subject/value/presence
+evidence before output parsing. Explicit terminal Responses statuses or finished
+chat choices qualify only positively reported primary dimensions, including true
+zero. Cache/reasoning-only reports retain their lower bounds without completing
+missing dimensions; stream prefixes and nonterminal bodies stay incomplete.
+Malformed MAAP cannot erase already qualified expense or final counters. Neither
+final-counter evidence nor transport retirement alone replaces the other.
 Only that qualified durable transfer frees local exposure; the original grant
 remains replay-only forever. Receipt or actor acknowledgment alone cannot release
 it. Older grants migrate as outstanding, even if old terminal expense exists.
