@@ -27,6 +27,13 @@ pub(crate) trait ProviderObservationReceipt: Send + Sync {
 /// Pure, bounded capture before channel delivery; no filesystem or provider I/O.
 /// Each physical exchange needs its own original registered-attempt descriptor.
 pub(crate) trait ProviderObservationReceiptFactory: Send + Sync {
+    /// Bind the immutable wire subject without I/O or spend permission. Native
+    /// descriptors override this before transport; diagnostic factories need no
+    /// additional subject binding beyond the original journal's own plan.
+    fn plan(&self, _observation: &ProviderWireRequestObservation) -> Result<()> {
+        Ok(())
+    }
+
     fn freeze(
         &self,
         observation: &ProviderWireRequestObservation,
@@ -121,7 +128,7 @@ impl PendingProviderWireObservations {
         observation: ProviderWireRequestObservation,
         factory: Option<&Arc<dyn ProviderObservationReceiptFactory>>,
     ) -> Result<()> {
-        let mut entries = self.entries();
+        let entries = self.entries();
         if entries.contains_key(&observation.request_id) {
             return Err(MezError::conflict(
                 "provider wire identity already retained",
@@ -134,6 +141,24 @@ impl PendingProviderWireObservations {
         }
         if factory.is_some() {
             self.0.budget_required.store(true, Ordering::Release);
+        }
+        // Pure native binding may inspect its own original custody. Never run
+        // factory code under the journal mutex, and publish no unfinished plan
+        // that another finalizer could adopt before binding succeeds.
+        drop(entries);
+        if let Some(factory) = factory {
+            factory.plan(&observation)?;
+        }
+        let mut entries = self.entries();
+        if entries.contains_key(&observation.request_id) {
+            return Err(MezError::conflict(
+                "provider wire identity already retained",
+            ));
+        }
+        if factory.is_none() && self.0.budget_required.load(Ordering::Acquire) {
+            return Err(MezError::invalid_state(
+                "original budget receipt unavailable before provider send",
+            ));
         }
         entries.insert(
             observation.request_id.clone(),

@@ -74,6 +74,10 @@ impl ProviderObservationReceipt for Receipt {
 }
 
 impl ProviderObservationReceiptFactory for BudgetObservationReceipts {
+    fn plan(&self, observation: &ProviderWireRequestObservation) -> Result<()> {
+        self.registered.plan_wire_receipt_subject(observation)
+    }
+
     fn freeze(
         &self,
         observation: &ProviderWireRequestObservation,

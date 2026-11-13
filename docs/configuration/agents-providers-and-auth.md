@@ -94,6 +94,10 @@ and cancellation finalize the same identity, including cancellation before any
 usage arrives. Missing counters stay unknown and do not create a zero expense
 report. Plans cannot be acknowledged as final evidence; a later retry gets its
 own identity and cannot rewrite the first exchange's retry reason.
+When the staged native receipt factory is installed, planning checks the original
+registered descriptor before transport. A foreign subject or reuse through a
+descriptor clone fails before sending; completed or refused final capture cannot
+reopen planning. This binding is not native send permission or exposure release.
 Rejected finalization does not disarm the original context's stack custody.
 Its first valid original-subject expense can still be retained; the sticky
 conflict continues to refuse checkpointing and acknowledgment.

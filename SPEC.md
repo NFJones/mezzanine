@@ -16697,6 +16697,11 @@ send permit. Retained authorization state MUST NOT form an idle source cycle.
 Native exchange identity MUST enter the original observation journal before
 transport polling or an admission await. A planned entry is not proof of a send,
 usage receipt, or permission, and MUST NOT be checkpointed or ACKed as final.
+An installed native receipt factory MUST validate and bind that subject to its
+original registered descriptor before transport polling. Descriptor clones and
+replacement factories MUST NOT reset that binding. A completed or refused final
+capture MUST NOT reopen planning. Pure binding grants no spend or release
+authority; physical-send permission remains a separate required boundary.
 Completion or cancellation MUST finalize that same identity; cancellation before
 usage MUST retain unknown counters without charging a fabricated zero report.
 Only response evidence may change during finalization. Original subject, purpose,

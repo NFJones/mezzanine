@@ -65,6 +65,7 @@ impl RuntimeBudgetRequestOwner {
         Ok(RuntimeBudgetAttemptWork(Arc::new(AttemptSource {
             owner: self.clone(),
             attempt,
+            wire_subject: std::sync::OnceLock::new(),
             wire: std::sync::OnceLock::new(),
             admission: std::sync::OnceLock::new(),
         })))
@@ -75,6 +76,8 @@ impl RuntimeBudgetRequestOwner {
 struct AttemptSource {
     owner: RuntimeBudgetRequestOwner,
     attempt: BudgetAttempt,
+    wire_subject:
+        std::sync::OnceLock<crate::integrations::agent::provider::ProviderWireRequestObservation>,
     wire: std::sync::OnceLock<WireReceiptCapture>,
     admission: std::sync::OnceLock<super::admission_work::SharedAdmission>,
 }
@@ -243,6 +246,34 @@ pub(crate) struct RuntimeBudgetRegisteredAttempt(Arc<AttemptSource>);
     expect(dead_code, reason = "receipt driver integration is downstream")
 )]
 impl RuntimeBudgetRegisteredAttempt {
+    /// Pure original-subject binding before transport. Descriptor clones share
+    /// this slot; neither an exact repeat nor a new factory can mint permission.
+    pub(crate) fn plan_wire_receipt_subject(
+        &self,
+        observation: &crate::integrations::agent::provider::ProviderWireRequestObservation,
+    ) -> Result<()> {
+        if self.0.wire.get().is_some() {
+            return Err(MezError::conflict(
+                "registered budget attempt already owns finalized evidence",
+            ));
+        }
+        self.bind_wire_receipt_subject(observation)
+    }
+
+    fn bind_wire_receipt_subject(
+        &self,
+        observation: &crate::integrations::agent::provider::ProviderWireRequestObservation,
+    ) -> Result<()> {
+        self.validate_wire_subject(observation)?;
+        let original = self.0.wire_subject.get_or_init(|| observation.clone());
+        if !original.same_wire_subject(observation) {
+            return Err(MezError::conflict(
+                "registered budget attempt already owns another exchange",
+            ));
+        }
+        Ok(())
+    }
+
     /// Pure capture of a native wire subtotal, not final coverage or retirement.
     /// Cache-only/reasoning-only evidence is a lower bound, never an invented
     /// missing primary zero. Original reporting remains on its existing path.
@@ -271,6 +302,14 @@ impl RuntimeBudgetRegisteredAttempt {
         &self,
         observation: &crate::integrations::agent::provider::ProviderWireRequestObservation,
     ) -> Result<BudgetReceipt> {
+        self.bind_wire_receipt_subject(observation)?;
+        self.capture_wire_usage(observation)
+    }
+
+    fn validate_wire_subject(
+        &self,
+        observation: &crate::integrations::agent::provider::ProviderWireRequestObservation,
+    ) -> Result<()> {
         use crate::integrations::agent::provider::ProviderRequestPurpose as Purpose;
         let original = &self.0.attempt;
         let purpose = match original.purpose {
@@ -294,6 +333,13 @@ impl RuntimeBudgetRegisteredAttempt {
                 "budget wire receipt original identity changed",
             ));
         }
+        Ok(())
+    }
+
+    fn capture_wire_usage(
+        &self,
+        observation: &crate::integrations::agent::provider::ProviderWireRequestObservation,
+    ) -> Result<BudgetReceipt> {
         let presence = observation.usage_presence.ok_or_else(|| {
             MezError::invalid_state("budget wire receipt requires qualified counter evidence")
         })?;

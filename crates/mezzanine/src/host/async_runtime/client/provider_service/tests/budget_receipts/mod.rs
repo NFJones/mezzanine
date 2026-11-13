@@ -2,6 +2,7 @@
 //! Admission is explicitly prepared before the fake physical exchange; this
 //! staged bridge does not claim production activation or retirement release.
 
+mod pre_send;
 mod retirement;
 
 use super::super::budget_receipts::BudgetObservationReceipts;
@@ -519,6 +520,7 @@ async fn budget_wire_receipt_invalid_counter_evidence_is_sticky_and_inert() {
         let sticky = factory.freeze(&original).is_err();
         let cloned = BudgetObservationReceipts::new(issued.registered().clone());
         let shared_refusal = cloned.freeze(&original).is_err();
+        let planning_sealed = cloned.plan(&original).is_err();
         let unchanged = rows(&store, "budget_receipts") == 0
             && rows(&store, "budget_admissions") == 1
             && store.budget_account(&member.root).unwrap().known == UsageTotals::default();
@@ -529,7 +531,7 @@ async fn budget_wire_receipt_invalid_counter_evidence_is_sticky_and_inert() {
         root.cleanup();
         assert!(refused, "{label}");
         assert!(
-            sticky && shared_refusal && unchanged,
+            sticky && shared_refusal && planning_sealed && unchanged,
             "{label}: refusal lost original custody"
         );
     }

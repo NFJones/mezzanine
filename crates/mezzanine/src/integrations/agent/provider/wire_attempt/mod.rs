@@ -5,6 +5,14 @@
 
 use super::*;
 
+impl ProviderWireRequestObservation {
+    /// Compare only the pre-send subject using the journal's same contract.
+    /// Counter/outcome equality is separately enforced on final receipt capture.
+    pub(crate) fn same_wire_subject(&self, observation: &Self) -> bool {
+        same_subject(self, observation)
+    }
+}
+
 impl ProviderWireObservationContext<'_> {
     fn planned_wire(&self) -> std::sync::MutexGuard<'_, Option<ProviderWireRequestObservation>> {
         // This lock contains only content-free identity, never mutable grants.
