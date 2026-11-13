@@ -1,7 +1,7 @@
-//! Final unary counter evidence, distinct from transport retirement and prefixes.
+//! Final counter evidence, distinct from transport retirement and prefixes.
 //!
-//! Only a native adapter's recognized, fully received successful unary report
-//! creates this value. Primary presence qualifies each dimension independently;
+//! Only a native adapter's recognized unary or explicit terminal stream report
+//! creates this value. Final presence qualifies each dimension independently;
 //! cache/reasoning subsets alone never become complete primary totals.
 
 use super::*;
@@ -35,6 +35,8 @@ pub(crate) struct ProviderFinalUsage {
     observation: ProviderWireRequestObservation,
     usage: mez_agent::ModelTokenUsage,
     presence: mez_agent::ModelTokenUsagePresence,
+    // None is an explicit retained regression refusal, NOT unknown coverage.
+    terminal: Option<UsageSnapshot>,
 }
 
 impl ProviderFinalUsage {
@@ -50,13 +52,10 @@ impl ProviderFinalUsage {
             || observation.usage != Some(self.usage)
             || observation.usage_presence != Some(self.presence)
         {
-            return Err(MezError::conflict("final unary usage evidence changed"));
+            return Err(MezError::conflict("final usage evidence changed"));
         }
-        Ok(UsageSnapshot {
-            input: self.presence.input.then_some(self.usage.input_tokens),
-            output: self.presence.output.then_some(self.usage.output_tokens),
-            terminal: true,
-        })
+        self.terminal
+            .ok_or_else(|| MezError::conflict("final stream usage regressed"))
     }
 }
 
@@ -67,6 +66,56 @@ impl ProviderWireObservationContext<'_> {
         &self,
         usage: mez_agent::ModelTokenUsage,
         presence: mez_agent::ModelTokenUsagePresence,
+    ) -> Result<()> {
+        self.finalize_usage(
+            usage,
+            presence,
+            Some(UsageSnapshot {
+                input: presence.input.then_some(usage.input_tokens),
+                output: presence.output.then_some(usage.output_tokens),
+                terminal: true,
+            }),
+        )
+    }
+
+    /// Terminal stream fields are distinct from the accumulated lower bound.
+    /// Storage still requires each qualified final total to match that bound;
+    /// contradictory totals refuse instead of erasing expense or releasing it.
+    pub(super) fn finalize_stream_usage(
+        &self,
+        usage: mez_agent::ModelTokenUsage,
+        presence: mez_agent::ModelTokenUsagePresence,
+        terminal: (
+            mez_agent::ModelTokenUsage,
+            mez_agent::ModelTokenUsagePresence,
+        ),
+    ) -> Result<()> {
+        self.finalize_usage(
+            usage,
+            presence,
+            Some(UsageSnapshot {
+                input: terminal.1.input.then_some(terminal.0.input_tokens),
+                output: terminal.1.output.then_some(terminal.0.output_tokens),
+                terminal: true,
+            }),
+        )
+    }
+
+    /// Transfer before callback suspension. Absence of a usable final report
+    /// must never erase a positively witnessed numeric-integrity refusal.
+    pub(super) fn refuse_stream_usage(
+        &self,
+        usage: mez_agent::ModelTokenUsage,
+        presence: mez_agent::ModelTokenUsagePresence,
+    ) -> Result<()> {
+        self.finalize_usage(usage, presence, None)
+    }
+
+    fn finalize_usage(
+        &self,
+        usage: mez_agent::ModelTokenUsage,
+        presence: mez_agent::ModelTokenUsagePresence,
+        terminal: Option<UsageSnapshot>,
     ) -> Result<()> {
         let plan = self
             .planned_wire
@@ -81,6 +130,7 @@ impl ProviderWireObservationContext<'_> {
             observation: plan.observation.clone(),
             usage,
             presence,
+            terminal,
         };
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             factory.usage_finalized(&plan.observation, proof)

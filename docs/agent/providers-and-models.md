@@ -120,6 +120,16 @@ zero. Cache/reasoning-only reports retain their lower bounds without completing
 missing dimensions; stream prefixes and nonterminal bodies stay incomplete.
 Malformed MAAP cannot erase already qualified expense or final counters. Neither
 final-counter evidence nor transport retirement alone replaces the other.
+Responses SSE likewise retains the explicit terminal event's own counters and
+presence, separately from accumulated prefixes. Missing final fields stay
+incomplete even when earlier frames reported them, and `[DONE]` alone does not
+complete coverage. Conflicting final reports lose completeness; regressing final
+totals preserve the prior prefix and refuse inconsistent durable release. Failed
+or incomplete output remains unusable despite its retained expense. Interrupted
+or HTTP-refused streams conservatively retain incomplete coverage.
+Once a terminal regression is observed, its refusal remains retained even across
+conflicting repeats or callback cancellation; it cannot become ordinary unknown
+coverage that frees the original exposure.
 Only that qualified durable transfer frees local exposure; the original grant
 remains replay-only forever. Receipt or actor acknowledgment alone cannot release
 it. Older grants migrate as outstanding, even if old terminal expense exists.

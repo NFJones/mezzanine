@@ -166,6 +166,10 @@ pub struct OpenAiResponsesStreamDecoder {
     /// output-limit continuation or execution authority.
     reported_usage: Option<ModelTokenUsage>,
     usage_presence: crate::ModelTokenUsagePresence,
+    /// The terminal event's own counters/presence, never merged with prefixes.
+    terminal_usage: Option<(ModelTokenUsage, crate::ModelTokenUsagePresence)>,
+    terminal_usage_conflicted: bool,
+    terminal_usage_regressed: bool,
     function_calls: BTreeMap<u64, OpenAiFunctionCallAccumulator>,
     completed_output_items: BTreeMap<u64, serde_json::Value>,
     completed_response_output: Option<Vec<serde_json::Value>>,
@@ -184,6 +188,21 @@ impl OpenAiResponsesStreamDecoder {
     /// Cumulative primary source counters, including zero; not remote finality.
     pub fn incurred_usage_presence(&self) -> crate::ModelTokenUsagePresence {
         self.usage_presence
+    }
+
+    /// Sticky integrity fact, not missing coverage. Conflicts or later repeats
+    /// cannot turn a witnessed terminal regression into release-eligible unknown.
+    pub fn terminal_usage_regressed(&self) -> bool {
+        self.terminal_usage_regressed
+    }
+
+    /// Source-qualified terminal-event report, independent of accumulated
+    /// prefix presence. Missing primary fields remain missing even when an
+    /// earlier event reported them. This is not transport retirement evidence.
+    pub fn terminal_usage(&self) -> Option<(ModelTokenUsage, crate::ModelTokenUsagePresence)> {
+        (!self.terminal_usage_conflicted)
+            .then_some(self.terminal_usage)
+            .flatten()
     }
 
     /// Applies one complete SSE event and returns display-safe text progress.
@@ -210,9 +229,42 @@ impl OpenAiResponsesStreamDecoder {
                 "OpenAI stream event was not JSON: {error}"
             ))
         })?;
-        self.reported_usage = overlay_openai_reported_usage(self.reported_usage, &value);
+        let event_type = value
+            .get("type")
+            .and_then(serde_json::Value::as_str)
+            .or(event.name.as_deref())
+            .unwrap_or_default();
+        let regressed = terminal_usage_regresses(self.reported_usage, &value, event_type);
+        self.terminal_usage_regressed |= regressed;
+        if !regressed {
+            self.reported_usage = overlay_openai_reported_usage(self.reported_usage, &value);
+        }
         self.usage_presence
             .merge(openai_responses_usage_presence(&value));
+        if matches!(
+            event_type,
+            "response.completed" | "response.incomplete" | "response.failed"
+        ) {
+            let terminal = (
+                reported_openai_usage(&value).unwrap_or_default(),
+                openai_responses_usage_presence(&value),
+            );
+            if self
+                .terminal_usage
+                .is_some_and(|original| original != terminal)
+            {
+                self.terminal_usage_conflicted = true;
+                return Err(ProviderResponseError::invalid_state(
+                    "OpenAI terminal usage report changed",
+                ));
+            }
+            self.terminal_usage = Some(terminal);
+        }
+        if regressed {
+            return Err(ProviderResponseError::invalid_state(
+                "OpenAI terminal usage regressed",
+            ));
+        }
         if let Some(error) = value.get("error").filter(|error| !error.is_null()) {
             let message = error
                 .get("message")
@@ -226,11 +278,6 @@ impl OpenAiResponsesStreamDecoder {
             self.usage = usage;
         }
 
-        let event_type = value
-            .get("type")
-            .and_then(serde_json::Value::as_str)
-            .or(event.name.as_deref())
-            .unwrap_or_default();
         if self.model.is_none() {
             self.model = value
                 .get("response")
@@ -480,6 +527,16 @@ pub fn parse_openai_responses_stream_body(
                     "OpenAI stream event was not JSON: {error}"
                 ))
             })?;
+            let event_type = value
+                .get("type")
+                .and_then(serde_json::Value::as_str)
+                .or(event_name)
+                .unwrap_or_default();
+            if terminal_usage_regresses(reported_usage, &value, event_type) {
+                return Err(ProviderResponseError::invalid_state(
+                    "OpenAI terminal usage regressed",
+                ));
+            }
             reported_usage = overlay_openai_reported_usage(reported_usage, &value);
             if let Some(error) = value.get("error").filter(|error| !error.is_null()) {
                 let message = error
@@ -494,11 +551,6 @@ pub fn parse_openai_responses_stream_body(
                 usage = reported;
             }
 
-            let event_type = value
-                .get("type")
-                .and_then(serde_json::Value::as_str)
-                .or(event_name)
-                .unwrap_or_default();
             if model.is_none() {
                 model = value
                     .get("response")
@@ -711,9 +763,29 @@ pub fn reported_openai_usage(value: &serde_json::Value) -> Option<ModelTokenUsag
     (has_counter || has_reasoning_counter || parsed != ModelTokenUsage::default()).then_some(parsed)
 }
 
-/// Overlays only observed cumulative fields, including explicit zero. Missing
-/// dimensions retain earlier knowledge; this never adds a final aggregate to
-/// its prefixes or infers per-dimension completeness from normalized counters.
+/// A terminal primary total cannot erase an already reported prefix. This
+/// check is deliberately separate from nonterminal explicit-zero replacement.
+fn terminal_usage_regresses(
+    previous: Option<ModelTokenUsage>,
+    value: &serde_json::Value,
+    kind: &str,
+) -> bool {
+    if !matches!(
+        kind,
+        "response.completed" | "response.incomplete" | "response.failed"
+    ) {
+        return false;
+    }
+    let (Some(previous), Some(next)) = (previous, reported_openai_usage(value)) else {
+        return false;
+    };
+    let presence = openai_responses_usage_presence(value);
+    (presence.input && next.input_tokens < previous.input_tokens)
+        || (presence.output && next.output_tokens < previous.output_tokens)
+}
+
+/// Overlays reported fields only after any terminal-regression check. Earlier
+/// nonterminal explicit-zero behavior remains a distinct source contract.
 fn overlay_openai_reported_usage(
     previous: Option<ModelTokenUsage>,
     value: &serde_json::Value,
@@ -1724,6 +1796,131 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(zero.incurred_usage(), Some(ModelTokenUsage::default()));
+    }
+
+    #[test]
+    fn openai_stream_terminal_usage_is_not_accumulated_prefix_presence() {
+        for usage in [
+            serde_json::json!({"input_tokens":13}),
+            serde_json::json!({"output_tokens":5}),
+            serde_json::json!({"input_tokens_details":{"cached_tokens":3}}),
+            serde_json::json!({"output_tokens_details":{"reasoning_tokens":2}}),
+            serde_json::json!({}),
+        ] {
+            let mut decoder = OpenAiResponsesStreamDecoder::default();
+            decoder.push_event(&crate::SseEvent { name:None, data:serde_json::json!({
+                "type":"response.in_progress","response":{"usage":{"input_tokens":13,"output_tokens":5}}
+            }).to_string() }).unwrap();
+            assert!(decoder.terminal_usage().is_none());
+            decoder
+                .push_event(&crate::SseEvent {
+                    name: None,
+                    data: "[DONE]".into(),
+                })
+                .unwrap();
+            assert!(decoder.terminal_usage().is_none());
+            let event = crate::SseEvent {
+                name: None,
+                data: serde_json::json!({
+                    "type":"response.completed","response":{"usage":usage}
+                })
+                .to_string(),
+            };
+            decoder.push_event(&event).unwrap();
+            let terminal = decoder.terminal_usage().unwrap();
+            assert_eq!(
+                terminal.1,
+                crate::ModelTokenUsagePresence {
+                    input: usage.get("input_tokens").and_then(|v| v.as_u64()).is_some(),
+                    output: usage
+                        .get("output_tokens")
+                        .and_then(|v| v.as_u64())
+                        .is_some(),
+                }
+            );
+            assert_eq!(
+                decoder.incurred_usage_presence(),
+                crate::ModelTokenUsagePresence {
+                    input: true,
+                    output: true
+                }
+            );
+            let known = decoder.incurred_usage().unwrap();
+            assert_eq!((known.input_tokens, known.output_tokens), (13, 5));
+            decoder.push_event(&event).unwrap();
+            assert_eq!(decoder.terminal_usage(), Some(terminal));
+        }
+    }
+
+    #[test]
+    fn openai_stream_terminal_usage_survives_error_suffix_but_conflict_stays_incomplete() {
+        for kind in ["response.failed", "response.incomplete"] {
+            let mut decoder = OpenAiResponsesStreamDecoder::default();
+            let event = crate::SseEvent { name:None,data:serde_json::json!({
+                "type":kind,"error":{"message":"fixture"},"response":{"usage":{"input_tokens":7}}
+            }).to_string() };
+            assert!(decoder.push_event(&event).is_err());
+            let (usage, presence) = decoder.terminal_usage().unwrap();
+            assert_eq!(usage.input_tokens, 7);
+            assert_eq!(
+                presence,
+                crate::ModelTokenUsagePresence {
+                    input: true,
+                    output: false
+                }
+            );
+        }
+        let mut decoder = OpenAiResponsesStreamDecoder::default();
+        let first = crate::SseEvent { name:None,data:serde_json::json!({
+            "type":"response.completed","response":{"usage":{"input_tokens":13,"output_tokens":5}}
+        }).to_string() };
+        decoder.push_event(&first).unwrap();
+        assert!(decoder.push_event(&crate::SseEvent { name:None,data:serde_json::json!({
+            "type":"response.completed","response":{"usage":{"input_tokens":17,"output_tokens":9}}
+        }).to_string() }).is_err());
+        assert!(decoder.terminal_usage().is_none());
+        let known = decoder.incurred_usage().unwrap();
+        assert_eq!((known.input_tokens, known.output_tokens), (17, 9));
+        assert!(decoder.push_event(&first).is_err());
+        assert!(decoder.terminal_usage_regressed());
+        assert!(
+            decoder.terminal_usage().is_none(),
+            "later data cannot clear the original conflict"
+        );
+    }
+
+    /// Terminal contradictions refuse before replacing the original prefix in
+    /// both public streaming entrypoints. Nonterminal zero compatibility stays
+    /// covered independently above.
+    #[test]
+    fn openai_stream_terminal_regression_retains_original_prefix() {
+        for usage in [
+            serde_json::json!({"input_tokens":10}),
+            serde_json::json!({"output_tokens":0}),
+        ] {
+            let first = crate::SseEvent { name:None,data:serde_json::json!({
+                "type":"response.in_progress","response":{"usage":{"input_tokens":11,"output_tokens":3}}
+            }).to_string() };
+            let last = crate::SseEvent {
+                name: None,
+                data: serde_json::json!({
+                    "type":"response.completed","response":{"usage":usage}
+                })
+                .to_string(),
+            };
+            let body = format!("data: {}\n\ndata: {}\n\n", first.data, last.data);
+            let mut decoder = OpenAiResponsesStreamDecoder::default();
+            decoder.push_event(&first).unwrap();
+            let error = decoder.push_event(&last).unwrap_err();
+            let retained = error.incurred_usage().unwrap();
+            assert_eq!((retained.input_tokens, retained.output_tokens), (11, 3));
+            let raw = decoder.terminal_usage().unwrap();
+            assert_eq!(raw.1.input, usage.get("input_tokens").is_some());
+            assert_eq!(raw.1.output, usage.get("output_tokens").is_some());
+            let error = parse_openai_responses_stream_body(&body, "fixture").unwrap_err();
+            let retained = error.incurred_usage().unwrap();
+            assert_eq!((retained.input_tokens, retained.output_tokens), (11, 3));
+        }
     }
 
     /// Both buffered and incremental SSE paths retain the last actual usage

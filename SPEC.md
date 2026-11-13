@@ -16749,6 +16749,18 @@ prefixes MUST remain incomplete. Evidence-transfer refusal or panic MUST fence
 the original journal without discarding its first expense. Final counters alone
 MUST NOT authorize release without original consumed custody and scoped transport
 retirement; successful parsing, HTTP completion or ACK alone is insufficient.
+For Responses SSE, `response.completed`, `response.incomplete` and
+`response.failed` MAY supply the terminal event's OWN numeric fields and primary
+presence after successful HTTP completion. Accumulated prefix presence MUST NOT
+complete a dimension omitted by that event; `[DONE]` alone is not final evidence.
+Contradictory terminal reports MUST invalidate complete coverage. A regressing
+terminal total MUST NOT overwrite its retained prefix or authorize durable release
+when it disagrees with the committed subtotal. Transport interruption or HTTP
+refusal retains prefix knowledge with incomplete coverage. Final-counter evidence
+does not authorize output or effects from a failed/incomplete response.
+A witnessed terminal regression MUST retain explicit refusal custody before any
+callback suspension. Conflict, repetition, HTTP failure or cancellation MUST NOT
+downgrade that refusal to the release-eligible unknown-coverage fallback.
 Terminal receipt and the original grant's retirement reference MUST commit in
 one transaction. A receipt committed without that reference MUST NOT later be
 upgraded into release. Lost ACK reconciliation MUST validate both original

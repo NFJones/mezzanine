@@ -64,7 +64,7 @@ pub(crate) trait ProviderObservationReceiptFactory: Send + Sync {
     ) {
     }
 
-    /// Pure transfer of source-qualified final unary totals. Neither transport
+    /// Pure transfer of source-qualified final totals. Neither transport
     /// completion nor a retained prefix supplies this separate evidence.
     fn usage_finalized(
         &self,

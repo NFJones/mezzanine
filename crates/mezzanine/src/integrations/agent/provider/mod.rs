@@ -2812,6 +2812,18 @@ impl<T: AsyncProviderHttpTransport> OpenAiResponsesProvider<T> {
                                     usage,
                                     stream_decoder.incurred_usage_presence(),
                                 );
+                                if stream_decoder.terminal_usage_regressed() {
+                                    custody
+                                        .refuse_stream_usage(
+                                            usage,
+                                            stream_decoder.incurred_usage_presence(),
+                                        )
+                                        .map_err(|_| {
+                                            mez_agent::ProviderResponseError::invalid_state(
+                                                "original stream usage refusal unavailable",
+                                            )
+                                        })?;
+                                }
                             }
                             result
                         },
@@ -2834,6 +2846,25 @@ impl<T: AsyncProviderHttpTransport> OpenAiResponsesProvider<T> {
             let response = response.map_err(|error| {
                 openai_error_with_incurred_usage(error.into(), stream_decoder.incurred_usage())
             })?;
+            // Only the terminal event's own report qualifies final dimensions.
+            // HTTP refusal or interrupted transport conservatively retains a
+            // prefix, never complete coverage inferred from stream progress.
+            if !stream_decoder.terminal_usage_regressed()
+                && (200..300).contains(&response.status_code)
+                && let (Some(custody), Some(usage), Some(terminal)) = (
+                    usage_custody.as_ref(),
+                    stream_decoder.incurred_usage(),
+                    stream_decoder.terminal_usage(),
+                )
+            {
+                custody
+                    .finalize_stream_usage(
+                        usage,
+                        stream_decoder.incurred_usage_presence(),
+                        terminal,
+                    )
+                    .map_err(|error| error.with_provider_incurred_usage(usage))?;
+            }
             // Unary JSON (including a JSON error returned to an SSE request)
             // carries its own source evidence before any output/status suffix.
             let body_usage = serde_json::from_str::<serde_json::Value>(&response.body)

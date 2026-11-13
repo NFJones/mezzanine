@@ -127,7 +127,7 @@ impl BudgetAttemptAdmission {
     pub(super) fn receipt_stages_for_test(
         &self,
         observation: &ProviderWireRequestObservation,
-    ) -> (RuntimeBudgetReceiptWork, RuntimeBudgetReceiptWork) {
+    ) -> (RuntimeBudgetReceiptWork, Result<RuntimeBudgetReceiptWork>) {
         let phase = self.0.phase.lock().unwrap();
         let issued = phase.issued.as_ref().unwrap();
         (
@@ -135,13 +135,11 @@ impl BudgetAttemptAdmission {
                 .registered()
                 .freeze_wire_receipt(observation)
                 .unwrap(),
-            issued
-                .freeze_retirement_receipt(
-                    observation,
-                    phase.retired.as_ref().unwrap(),
-                    phase.final_usage.as_ref(),
-                )
-                .unwrap(),
+            issued.freeze_retirement_receipt(
+                observation,
+                phase.retired.as_ref().unwrap(),
+                phase.final_usage.as_ref(),
+            ),
         )
     }
 }

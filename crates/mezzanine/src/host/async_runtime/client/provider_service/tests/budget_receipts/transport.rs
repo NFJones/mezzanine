@@ -1,5 +1,5 @@
 //! Real loopback HTTP -> exact local future destruction -> native factory ->
-//! durable subtotal + terminal-unknown retirement -> actor ACK. Reported partial
+//! durable subtotal + qualified terminal retirement -> actor ACK. Reported partial
 //! counters never become complete merely because the local transport retired.
 
 use super::*;
@@ -44,6 +44,7 @@ struct Transport {
     event: Arc<tokio::sync::Notify>,
     blocked_callback: bool,
     callback_dropped: Arc<AtomicUsize>,
+    hold_after_terminal: bool,
 }
 
 struct CallbackGuard(Arc<AtomicUsize>);
@@ -84,15 +85,21 @@ impl AsyncProviderHttpTransport for Transport {
     > {
         Box::pin(Tracked {
             inner: Some(Box::pin(async move {
-                let mut observed = |event| {
+                let mut observed = |event: mez_agent::SseEvent| {
+                    let selected = !self.hold_after_terminal
+                        || serde_json::from_str::<serde_json::Value>(&event.data)
+                            .ok()
+                            .is_some_and(|value| value["type"] == "response.completed");
                     let callback = on_event(event);
                     let event = self.event.clone();
-                    let blocked = self.blocked_callback;
+                    let blocked = self.blocked_callback && selected;
                     let guard = blocked.then(|| CallbackGuard(self.callback_dropped.clone()));
                     Box::pin(async move {
                         let _guard = guard;
                         callback.await;
-                        event.notify_one();
+                        if selected {
+                            event.notify_one();
+                        }
                         if blocked {
                             std::future::pending::<()>().await;
                         }
@@ -114,7 +121,7 @@ struct Factory {
     callback_dropped: Option<Arc<AtomicUsize>>,
     stages: std::sync::OnceLock<(
         crate::runtime::RuntimeBudgetReceiptWork,
-        crate::runtime::RuntimeBudgetReceiptWork,
+        Result<crate::runtime::RuntimeBudgetReceiptWork>,
     )>,
 }
 impl ProviderObservationReceiptFactory for Factory {
@@ -224,6 +231,13 @@ enum UnaryUsage {
     Cancelled,
     HttpFailure,
     JsonInsteadOfSse,
+    MissingFinalUsage,
+    DoneOnly,
+    ConflictingFinal,
+    RegressedFinal,
+    ConflictingFinalRepeat,
+    NonregressingConflict,
+    RegressedThenCancel,
 }
 
 impl UnaryUsage {
@@ -275,9 +289,15 @@ impl UnaryUsage {
         match self {
             Self::InputOnly => (Some(11), None),
             Self::OutputOnly => (None, Some(3)),
-            Self::CacheOnly | Self::ReasoningOnly | Self::Nonterminal | Self::HttpFailure => {
-                (None, None)
-            }
+            Self::CacheOnly
+            | Self::ReasoningOnly
+            | Self::Nonterminal
+            | Self::HttpFailure
+            | Self::MissingFinalUsage
+            | Self::DoneOnly
+            | Self::ConflictingFinal
+            | Self::ConflictingFinalRepeat
+            | Self::NonregressingConflict => (None, None),
             Self::Zero => (Some(0), Some(0)),
             _ => (Some(11), Some(3)),
         }
@@ -312,6 +332,34 @@ async fn budget_wire_loopback_responses_terminal_failure_and_actual_json_shape_k
         qualify_usage(true, false, false, false, 0, usage).await;
     }
     qualify_usage(true, true, false, false, 0, UnaryUsage::JsonInsteadOfSse).await;
+}
+
+#[tokio::test]
+async fn budget_wire_loopback_stream_final_fields_remain_distinct_from_prefixes() {
+    for usage in [
+        UnaryUsage::InputOnly,
+        UnaryUsage::OutputOnly,
+        UnaryUsage::CacheOnly,
+        UnaryUsage::ReasoningOnly,
+        UnaryUsage::Zero,
+        UnaryUsage::MissingFinalUsage,
+        UnaryUsage::DoneOnly,
+        UnaryUsage::Incomplete,
+        UnaryUsage::Failed,
+        UnaryUsage::InvalidMaap,
+        UnaryUsage::HttpFailure,
+        UnaryUsage::ConflictingFinal,
+        UnaryUsage::ConflictingFinalRepeat,
+        UnaryUsage::NonregressingConflict,
+        UnaryUsage::RegressedFinal,
+    ] {
+        qualify_usage(true, true, false, false, 0, usage).await;
+    }
+}
+
+#[tokio::test]
+async fn budget_wire_loopback_stream_regression_survives_active_callback_cancellation() {
+    qualify_usage(true, true, true, false, 0, UnaryUsage::RegressedThenCancel).await;
 }
 
 async fn qualify_usage(
@@ -365,16 +413,66 @@ async fn qualify_usage(
         }
         entered.send(()).unwrap();
         if stream && !matches!(usage_case, UnaryUsage::JsonInsteadOfSse) {
-            let partial = serde_json::json!({"type":"response.in_progress","response":{"usage":{"input_tokens":11,"output_tokens":3}}});
+            let prefix_usage = if matches!(usage_case, UnaryUsage::Zero) {
+                serde_json::json!({"input_tokens":0,"output_tokens":0})
+            } else {
+                serde_json::json!({"input_tokens":11,"output_tokens":3})
+            };
+            let partial = serde_json::json!({"type":"response.in_progress","response":{"usage":prefix_usage}});
             let text = serde_json::json!({"rationale":"fixture","actions":[{"type":"say","status":"final","content_type":"text/plain; charset=utf-8","text":"done"}]}).to_string();
+            let text = if matches!(usage_case, UnaryUsage::InvalidMaap) {
+                serde_json::json!({"rationale":"fixture","actions":[{"type":"invalid_fixture_action"}]}).to_string()
+            } else {
+                text
+            };
             let delta = serde_json::json!({"type":"response.output_text.delta","delta":text});
-            let terminal = serde_json::json!({"type":"response.completed","response":{"model":"test-model","status":"completed","output_text":text,"usage":{"input_tokens":11,"output_tokens":3}}});
-            let data = if cancel {
+            let usage = match usage_case {
+                UnaryUsage::MissingFinalUsage => serde_json::json!({}),
+                UnaryUsage::RegressedFinal | UnaryUsage::RegressedThenCancel => {
+                    serde_json::json!({"input_tokens":10,"output_tokens":3})
+                }
+                _ => usage_case.counters(true),
+            };
+            let kind = match usage_case {
+                UnaryUsage::Incomplete => "response.incomplete",
+                UnaryUsage::Failed => "response.failed",
+                _ => "response.completed",
+            };
+            let terminal = serde_json::json!({"type":kind,"response":{"model":"test-model","status":"completed","output_text":text,"usage":usage}});
+            let data = if cancel && !matches!(usage_case, UnaryUsage::RegressedThenCancel) {
                 format!("data: {partial}\n\n")
+            } else if matches!(usage_case, UnaryUsage::DoneOnly) {
+                format!("data: {partial}\n\ndata: {delta}\n\ndata: [DONE]\n\n")
+            } else if matches!(
+                usage_case,
+                UnaryUsage::ConflictingFinal
+                    | UnaryUsage::ConflictingFinalRepeat
+                    | UnaryUsage::NonregressingConflict
+            ) {
+                let mut changed = terminal.clone();
+                changed["response"]["usage"]["input_tokens"] =
+                    serde_json::json!(if matches!(usage_case, UnaryUsage::NonregressingConflict) {
+                        13
+                    } else {
+                        10
+                    });
+                let repeated = if matches!(usage_case, UnaryUsage::ConflictingFinalRepeat) {
+                    format!("data: {terminal}\n\n")
+                } else {
+                    String::new()
+                };
+                format!(
+                    "data: {partial}\n\ndata: {delta}\n\ndata: {terminal}\n\ndata: {changed}\n\n{repeated}"
+                )
             } else {
                 format!("data: {partial}\n\ndata: {delta}\n\ndata: {terminal}\n\n")
             };
-            socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n{:x}\r\n{data}\r\n", data.len()).as_bytes()).await.unwrap();
+            let status = if matches!(usage_case, UnaryUsage::HttpFailure) {
+                "500 Internal Server Error"
+            } else {
+                "200 OK"
+            };
+            socket.write_all(format!("HTTP/1.1 {status}\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n{:x}\r\n{data}\r\n", data.len()).as_bytes()).await.unwrap();
             if !cancel {
                 socket.write_all(b"0\r\n\r\n").await.unwrap();
             }
@@ -410,11 +508,14 @@ async fn qualify_usage(
     let dropped = Arc::new(AtomicUsize::new(0));
     let event = Arc::new(tokio::sync::Notify::new());
     let callback_dropped = Arc::new(AtomicUsize::new(0));
+    let hold_after_terminal = matches!(usage_case, UnaryUsage::RegressedThenCancel);
+    let blocked_callback = blocked_callback || hold_after_terminal;
     let transport = Transport {
         dropped: dropped.clone(),
         event: event.clone(),
         blocked_callback,
         callback_dropped: callback_dropped.clone(),
+        hold_after_terminal,
     };
     let (chat, response) = if responses {
         (
@@ -509,10 +610,45 @@ async fn qualify_usage(
             assert_eq!(factory.retired.load(Ordering::SeqCst), 1);
             assert!(factory.native.has_transport_retirement(&observation));
             assert_eq!(rows(&store, "budget_receipts"), 0);
+            if matches!(
+                usage_case,
+                UnaryUsage::RegressedFinal
+                    | UnaryUsage::ConflictingFinal
+                    | UnaryUsage::ConflictingFinalRepeat
+            ) {
+                assert!(pending.checkpoint(&observation).await.is_err());
+                assert_eq!(rows(&store, "budget_receipts"), 1);
+                assert_eq!(
+                    store.budget_account(&member.root).unwrap().known,
+                    UsageTotals {
+                        input: 11,
+                        output: 3
+                    }
+                );
+                let db = rusqlite::Connection::open(store.path()).unwrap();
+                assert_eq!(
+                    db.query_row(
+                        "SELECT COUNT(*) FROM budget_admissions WHERE retired_receipt IS NULL",
+                        [],
+                        |r| r.get::<_, i64>(0)
+                    )
+                    .unwrap(),
+                    1
+                );
+                pending.acknowledge(&observation.request_id);
+                assert_eq!(
+                    pending.len(),
+                    1,
+                    "contradictory final totals cannot authorize ACK"
+                );
+                drop(call);
+                return;
+            }
             if fault != 0 {
                 let (prefix, terminal) = factory.stages.get().unwrap();
                 prefix.commit_owner().commit().await.unwrap();
                 assert_eq!(rows(&store, "budget_receipts"), 1);
+                let terminal = terminal.as_ref().unwrap();
                 let owner = terminal.commit_owner();
                 match fault {
                     1 => {
@@ -588,6 +724,9 @@ async fn qualify_usage(
                     | UnaryUsage::Incomplete
                     | UnaryUsage::Failed
                     | UnaryUsage::Cancelled
+                    | UnaryUsage::DoneOnly
+                    | UnaryUsage::ConflictingFinal
+                    | UnaryUsage::NonregressingConflict
             ) || (responses && matches!(usage_case, UnaryUsage::Nonterminal))
             {
                 assert!(
@@ -602,6 +741,30 @@ async fn qualify_usage(
             let observation = pending.snapshot().pop().unwrap();
             assert!(factory.native.has_transport_retirement(&observation));
             assert_eq!(observation.usage.is_some(), stream);
+            if matches!(usage_case, UnaryUsage::RegressedThenCancel) {
+                assert!(pending.checkpoint(&observation).await.is_err());
+                assert_eq!(rows(&store, "budget_receipts"), 1);
+                assert_eq!(
+                    store.budget_account(&member.root).unwrap().known,
+                    UsageTotals {
+                        input: 11,
+                        output: 3
+                    }
+                );
+                let db = rusqlite::Connection::open(store.path()).unwrap();
+                assert_eq!(
+                    db.query_row(
+                        "SELECT COUNT(*) FROM budget_admissions WHERE retired_receipt IS NULL",
+                        [],
+                        |r| r.get::<_, i64>(0)
+                    )
+                    .unwrap(),
+                    1
+                );
+                pending.acknowledge(&observation.request_id);
+                assert_eq!(pending.len(), 1);
+                return;
+            }
             submit_pending_provider_observation(&handle, &pending, observation)
                 .await
                 .unwrap();
@@ -638,8 +801,7 @@ async fn qualify_usage(
             .query_row("SELECT snapshot FROM budget_attempts", [], |r| r.get(0))
             .unwrap();
         let snapshot: serde_json::Value = serde_json::from_str(&snapshot).unwrap();
-        let complete = if !cancel && (!stream || matches!(usage_case, UnaryUsage::JsonInsteadOfSse))
-        {
+        let complete = if !cancel {
             usage_case.complete()
         } else {
             (None, None)
@@ -659,6 +821,16 @@ async fn qualify_usage(
             known,
             if cancel && !stream {
                 UsageTotals::default()
+            } else if matches!(usage_case, UnaryUsage::NonregressingConflict) {
+                UsageTotals {
+                    input: 13,
+                    output: 3,
+                }
+            } else if stream && !matches!(usage_case, UnaryUsage::Zero) {
+                UsageTotals {
+                    input: 11,
+                    output: 3,
+                }
             } else {
                 usage_case.totals()
             }

@@ -117,6 +117,29 @@ impl<'request, 'observer> StreamUsageCustody<'request, 'observer> {
         self.context.finalize_unary_usage(usage, presence)
     }
 
+    /// Retain an explicit terminal event's own report separately from prefixes.
+    pub(super) fn finalize_stream_usage(
+        &self,
+        usage: mez_agent::ModelTokenUsage,
+        presence: mez_agent::ModelTokenUsagePresence,
+        terminal: (
+            mez_agent::ModelTokenUsage,
+            mez_agent::ModelTokenUsagePresence,
+        ),
+    ) -> super::Result<()> {
+        self.context
+            .finalize_stream_usage(usage, presence, terminal)
+    }
+
+    /// Retain numeric-integrity refusal before a callback can suspend.
+    pub(super) fn refuse_stream_usage(
+        &self,
+        usage: mez_agent::ModelTokenUsage,
+        presence: mez_agent::ModelTokenUsagePresence,
+    ) -> super::Result<()> {
+        self.context.refuse_stream_usage(usage, presence)
+    }
+
     /// Normal retention must receive the same qualified presence before it can
     /// disarm the fallback, even when every numeric counter is zero.
     pub(super) fn reported_usage(&self) -> Option<mez_agent::ModelTokenUsage> {
