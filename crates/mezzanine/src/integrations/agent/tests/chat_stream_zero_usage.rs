@@ -278,7 +278,9 @@ async fn assert_zero_receipt<P: AsyncModelProvider>(
         delivered
     };
     if absent && cancel {
-        assert!(retained.is_empty());
+        assert_eq!(retained.len(), 1);
+        assert_eq!(retained[0].usage, None);
+        assert_eq!(retained[0].failure_kind.as_deref(), Some("interrupted"));
     } else {
         assert_eq!(retained.len(), 1);
         let expected = (!absent).then_some(ModelTokenUsage {

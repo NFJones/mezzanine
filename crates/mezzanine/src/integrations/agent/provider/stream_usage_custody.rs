@@ -23,7 +23,7 @@ impl<'request, 'observer> StreamUsageCustody<'request, 'observer> {
     pub(super) fn new(
         context: &'request ProviderWireObservationContext<'observer>,
         request: &'request ModelRequest,
-    ) -> Self {
+    ) -> super::Result<Self> {
         Self::for_attempt(context, request, 1, None)
     }
 
@@ -34,8 +34,9 @@ impl<'request, 'observer> StreamUsageCustody<'request, 'observer> {
         request: &'request ModelRequest,
         attempt_index: usize,
         retry_reason: Option<&'static str>,
-    ) -> Self {
-        Self {
+    ) -> super::Result<Self> {
+        context.plan_wire_attempt(request, attempt_index, retry_reason)?;
+        Ok(Self {
             context,
             request,
             usage: None,
@@ -43,7 +44,7 @@ impl<'request, 'observer> StreamUsageCustody<'request, 'observer> {
             retained_before: context.retained_observations.load(Ordering::Acquire),
             attempt_index,
             retry_reason,
-        }
+        })
     }
 
     /// Replace a cumulative prefix, never add frames. Primary source evidence
@@ -106,7 +107,7 @@ impl Drop for StreamUsageCustody<'_, '_> {
         if self.context.retained_observations.load(Ordering::Acquire) != self.retained_before {
             return;
         }
-        if let Some(usage) = self.usage.take() {
+        {
             let observation = self.context.build_wire_observation(
                 self.request,
                 self.attempt_index,
@@ -116,9 +117,9 @@ impl Drop for StreamUsageCustody<'_, '_> {
                     response_diagnostics: None,
                     elapsed_ms: None,
                     usage_evidence: super::WireUsageEvidence::Concrete(None),
-                    usage_presence: self.presence,
+                    usage_presence: Some(self.presence.unwrap_or_default()),
                 },
-                Some(usage),
+                self.usage.take(),
                 false,
                 Some("interrupted".into()),
             );

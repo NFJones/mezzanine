@@ -532,9 +532,12 @@ where
                 None
             };
             let mut forwarding = SseProgressForwarder::default();
-            let mut stream_usage = observation.as_ref().map(|context| {
-                super::stream_usage_custody::StreamUsageCustody::new(context, request)
-            });
+            let mut stream_usage = observation
+                .as_ref()
+                .map(|context| {
+                    super::stream_usage_custody::StreamUsageCustody::new(context, request)
+                })
+                .transpose()?;
             let response_result = if let Some(decoder) = stream_decoder.as_mut() {
                 let mut on_event = |event| {
                     forwarding.on_event(
@@ -675,7 +678,7 @@ where
                         .observe_with_reported_usage(
                             request,
                             1,
-                            Some("provider_forced_maap"),
+                            None,
                             reported_usage,
                             &first_result,
                         )
@@ -689,14 +692,18 @@ where
                 }
                 let mut retry_request = retry.request;
                 self.apply_extra_headers(&mut retry_request);
-                let mut retry_custody = observation.as_ref().map(|context| {
-                    super::stream_usage_custody::StreamUsageCustody::for_attempt(
-                        context,
-                        request,
-                        2,
-                        Some("provider_forced_maap"),
-                    )
-                });
+                let mut retry_custody = observation
+                    .as_ref()
+                    .map(|context| {
+                        super::stream_usage_custody::StreamUsageCustody::for_attempt(
+                            context,
+                            request,
+                            2,
+                            Some("provider_forced_maap"),
+                        )
+                    })
+                    .transpose()
+                    .map_err(|error| error.with_provider_incurred_usage(parsed.usage))?;
                 let retry_response = match self.transport.send_async(&retry_request).await {
                     Ok(response) => response,
                     Err(error) => {

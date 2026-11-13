@@ -34,6 +34,7 @@ pub(crate) trait ProviderObservationReceiptFactory: Send + Sync {
 }
 
 enum BudgetCheckpoint {
+    Planned,
     Unbudgeted,
     Pending(Arc<dyn ProviderObservationReceipt>),
     Committed(Arc<dyn ProviderObservationReceipt>),
@@ -46,6 +47,19 @@ struct Entry {
     // Even a failed pure capture must retain its original native descriptor.
     _factory: Option<Arc<dyn ProviderObservationReceiptFactory>>,
     conflicted: bool,
+}
+
+fn same_plan(
+    original: &Entry,
+    observation: &ProviderWireRequestObservation,
+    factory: Option<&Arc<dyn ProviderObservationReceiptFactory>>,
+) -> bool {
+    let same_factory = match (original._factory.as_ref(), factory) {
+        (None, None) => true,
+        (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+        _ => false,
+    };
+    same_factory && super::wire_attempt::same_subject(&original.observation, observation)
 }
 
 #[derive(Default)]
@@ -91,13 +105,69 @@ impl PendingProviderWireObservations {
         Ok(())
     }
 
-    /// The checkpoint and observation enter the SAME journal before any await.
-    /// A failed freeze preserves the wire evidence and fences acknowledgment.
+    /// Retain a plan before transport or admission polling. It has no usage
+    /// receipt yet and cannot be checkpointed or acknowledged as final evidence.
+    pub(super) fn plan(
+        &self,
+        observation: ProviderWireRequestObservation,
+        factory: Option<&Arc<dyn ProviderObservationReceiptFactory>>,
+    ) -> Result<()> {
+        let mut entries = self.entries();
+        if entries.contains_key(&observation.request_id) {
+            return Err(MezError::conflict(
+                "provider wire identity already retained",
+            ));
+        }
+        if factory.is_none() && self.0.budget_required.load(Ordering::Acquire) {
+            return Err(MezError::invalid_state(
+                "original budget receipt unavailable before provider send",
+            ));
+        }
+        if factory.is_some() {
+            self.0.budget_required.store(true, Ordering::Release);
+        }
+        entries.insert(
+            observation.request_id.clone(),
+            Entry {
+                observation,
+                budget: BudgetCheckpoint::Planned,
+                _factory: factory.cloned(),
+                conflicted: false,
+            },
+        );
+        Ok(())
+    }
+
+    /// Finalizes one planned identity, or retains legacy completed evidence.
+    /// A receipt binds only final evidence; a plan is not a fabricated receipt.
     pub(crate) fn retain_with_receipt(
         &self,
         observation: ProviderWireRequestObservation,
         factory: Option<&Arc<dyn ProviderObservationReceiptFactory>>,
-    ) {
+    ) -> bool {
+        let was_planned = {
+            let mut entries = self.entries();
+            if let Some(original) = entries.get_mut(&observation.request_id) {
+                if original.conflicted {
+                    return false;
+                }
+                if !matches!(original.budget, BudgetCheckpoint::Planned) {
+                    if original.observation != observation {
+                        original.conflicted = true;
+                    }
+                    return false;
+                }
+                if !same_plan(original, &observation, factory) {
+                    original.conflicted = true;
+                    return false;
+                }
+                true
+            } else {
+                false
+            }
+        };
+        // Validate the plan before a factory can bind its immutable native
+        // descriptor. Pure capture still runs outside the journal mutex.
         let budget = if let Some(factory) = factory {
             self.0.budget_required.store(true, Ordering::Release);
             match factory.freeze(&observation) {
@@ -113,10 +183,27 @@ impl PendingProviderWireObservations {
         };
         let mut entries = self.entries();
         if let Some(original) = entries.get_mut(&observation.request_id) {
+            if original.conflicted {
+                return false;
+            }
+            if matches!(original.budget, BudgetCheckpoint::Planned) {
+                if !same_plan(original, &observation, factory) {
+                    original.conflicted = true;
+                    return false;
+                }
+                original.observation = observation;
+                original.budget = budget;
+                return true;
+            }
             if original.observation != observation {
                 original.conflicted = true;
             }
-            return;
+            return false;
+        }
+        if was_planned {
+            // Another exact finalizer completed and ACKed while capture ran.
+            // Do not resurrect its observation or emit another usage event.
+            return false;
         }
         entries.insert(
             observation.request_id.clone(),
@@ -127,6 +214,7 @@ impl PendingProviderWireObservations {
                 conflicted: false,
             },
         );
+        true
     }
 
     /// Runs only original bookkeeping, outside the synchronous journal lock.
@@ -152,6 +240,11 @@ impl PendingProviderWireObservations {
                 ));
             }
             match &entry.budget {
+                BudgetCheckpoint::Planned => {
+                    return Err(MezError::invalid_state(
+                        "provider wire attempt still owns unfinished evidence",
+                    ));
+                }
                 BudgetCheckpoint::Unbudgeted | BudgetCheckpoint::Committed(_) => return Ok(()),
                 BudgetCheckpoint::Refused(error) => return Err(error.clone()),
                 BudgetCheckpoint::Pending(receipt) => receipt.clone(),

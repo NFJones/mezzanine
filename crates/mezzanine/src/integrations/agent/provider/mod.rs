@@ -506,6 +506,7 @@ mod errors;
 mod observation_delivery;
 mod openai_chat_completions;
 mod stream_usage_custody;
+mod wire_attempt;
 use crate::integrations::http::AsyncProviderHttpTransport;
 #[cfg(test)]
 use crate::integrations::http::ProviderHttpTransport;
@@ -847,6 +848,8 @@ pub struct ProviderWireObservationContext<'a> {
     diagnostics_failed: bool,
     /// Handoff generation only, not another usage ledger or admission permit.
     retained_observations: AtomicU64,
+    /// One native exchange's content-free identity, frozen before transport.
+    planned_wire: std::sync::Mutex<Option<ProviderWireRequestObservation>>,
 }
 
 /// Concrete adapter evidence overrides logical result totals, even when absent.
@@ -886,6 +889,7 @@ impl<'a> ProviderWireObservationContext<'a> {
             openai_diagnostics,
             diagnostics_failed,
             retained_observations: AtomicU64::new(0),
+            planned_wire: Default::default(),
         }
     }
 
@@ -1026,7 +1030,9 @@ impl<'a> ProviderWireObservationContext<'a> {
         failure_kind: Option<String>,
     ) -> ProviderWireRequestObservation {
         ProviderWireRequestObservation {
-            request_id: self.observer.next_request_id(),
+            request_id: self
+                .planned_wire_id()
+                .unwrap_or_else(|| self.observer.next_request_id()),
             claim_generation: self.observer.claim_generation,
             attempt_index,
             retry_reason: retry_reason.map(str::to_string),
@@ -1092,7 +1098,12 @@ impl<'a> ProviderWireObservationContext<'a> {
     /// Retains one immutable completed or interrupted observation before any
     /// cancellable channel operation. Producer retirement still gates draining.
     fn retain_wire_observation(&self, observation: &ProviderWireRequestObservation) {
-        if let (Some(reported), Some(usage)) = (&self.observer.reported, observation.usage) {
+        let newly_retained = self.observer.pending.as_ref().is_none_or(|pending| {
+            pending.retain_with_receipt(observation.clone(), self.observer.budget_receipts.as_ref())
+        });
+        if newly_retained
+            && let (Some(reported), Some(usage)) = (&self.observer.reported, observation.usage)
+        {
             // Each concrete attempt emits one fresh wire identity above. Keep
             // only its disjoint counters, never response content or a growing
             // history of acknowledged observations.
@@ -1100,10 +1111,7 @@ impl<'a> ProviderWireObservationContext<'a> {
             reported.usage.add_assign(usage);
             reported.known_observations = reported.known_observations.saturating_add(1);
         }
-        if let Some(pending) = &self.observer.pending {
-            pending
-                .retain_with_receipt(observation.clone(), self.observer.budget_receipts.as_ref());
-        }
+        self.finish_planned_wire(&observation.request_id);
         self.retained_observations.fetch_add(1, Ordering::Release);
     }
 }
@@ -2990,7 +2998,8 @@ impl<T: AsyncProviderHttpTransport> AsyncModelProvider for OpenAiResponsesProvid
             let started_at = Instant::now();
             let mut usage_custody = observation
                 .as_ref()
-                .map(|context| stream_usage_custody::StreamUsageCustody::new(context, request));
+                .map(|context| stream_usage_custody::StreamUsageCustody::new(context, request))
+                .transpose()?;
             let completed = self
                 .send_openai_responses_http_request_async(
                     request,

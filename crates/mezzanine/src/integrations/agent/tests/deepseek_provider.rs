@@ -973,10 +973,8 @@ async fn deepseek_provider_retries_strict_maap_when_thinking_auto_tool_returns_p
     assert!(sequence(&first_observation.request_id) < sequence(&retry_observation.request_id));
     assert_eq!(first_observation.attempt_index, 1);
     assert_eq!(retry_observation.attempt_index, 2);
-    assert_eq!(
-        first_observation.retry_reason.as_deref(),
-        Some("provider_forced_maap")
-    );
+    // A later retry decision cannot rewrite the first exchange's frozen plan.
+    assert_eq!(first_observation.retry_reason, None);
     assert_eq!(
         retry_observation.retry_reason.as_deref(),
         Some("provider_forced_maap")

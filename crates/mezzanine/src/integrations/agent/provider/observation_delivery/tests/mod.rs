@@ -3,6 +3,7 @@
 //! This handoff is not durable budget settlement or native retirement proof.
 
 mod budget;
+mod pre_send;
 
 use super::*;
 use crate::error::Result;

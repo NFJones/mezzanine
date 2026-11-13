@@ -88,6 +88,12 @@ canceled waiters. Its one original permit can be delivered only once; recovery
 of committed evidence never creates another. Explicit reconsideration of a
 nonwriting hold or retry after joined failure and fresh exact absence belongs
 to the existing request owner, not an automatic provider retry loop.
+Native adapters also retain a planned exchange identity before transport polling.
+It is not a send permit or proof that a request reached the provider. Completion
+and cancellation finalize the same identity, including cancellation before any
+usage arrives. Missing counters stay unknown and do not create a zero expense
+report. Plans cannot be acknowledged as final evidence; a later retry gets its
+own identity and cannot rewrite the first exchange's retry reason.
 All journal-owned provider purposes wait for their own observation's actor ACK
 before returning or making an adapter-internal next exchange, including turn-less
 requests. Losing that consumer fails locally and keeps the original evidence for

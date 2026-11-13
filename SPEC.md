@@ -16694,6 +16694,13 @@ Only a positively observed nonwriting hold may be explicitly reconsidered;
 an uncertain authorization requires actual join and fresh exact absence before
 one explicit transaction retry. Recovered committed evidence is never a new
 send permit. Retained authorization state MUST NOT form an idle source cycle.
+Native exchange identity MUST enter the original observation journal before
+transport polling or an admission await. A planned entry is not proof of a send,
+usage receipt, or permission, and MUST NOT be checkpointed or ACKed as final.
+Completion or cancellation MUST finalize that same identity; cancellation before
+usage MUST retain unknown counters without charging a fabricated zero report.
+Only response evidence may change during finalization. Original subject, purpose,
+ordinal and retry reason MUST remain frozen, and conflicts MUST fence ACK.
 After an observed writer failure, a fresh positive absence query MAY permit one
 explicit retry of that same immutable bookkeeping operation, never inference or
 effects. Receipt acknowledgment alone MUST NOT release provider exposure or

@@ -233,7 +233,10 @@ async fn responses_primary_usage_presence_survives_failure_and_cancellation() {
                 delivered
             };
             if cancel && !known {
-                assert!(retained.is_empty());
+                assert_eq!(retained.len(), 1);
+                assert_eq!(retained[0].usage, None);
+                assert_eq!(retained[0].usage_presence, Some(presence));
+                assert_eq!(retained[0].failure_kind.as_deref(), Some("interrupted"));
             } else {
                 assert_eq!(retained.len(), 1);
                 assert_eq!(retained[0].usage_presence, Some(presence), "{usage:?}");
@@ -533,11 +536,11 @@ async fn responses_stream_cancellation_retains_original_expense() {
             assert_eq!(sends.load(Ordering::SeqCst), usize::from(poll));
             let retained = pending.snapshot();
             let expected = usage.filter(|_| poll);
-            assert_eq!(
-                retained.len(),
-                usize::from(expected.is_some()),
-                "{usage:?}/{poll}"
-            );
+            assert_eq!(retained.len(), usize::from(poll), "{usage:?}/{poll}");
+            if poll && expected.is_none() {
+                assert_eq!(retained[0].usage, None);
+                assert_eq!(retained[0].failure_kind.as_deref(), Some("interrupted"));
+            }
             let reported = *reported.lock().unwrap();
             assert_eq!(reported.known_observations, u64::from(expected.is_some()));
             if let Some((input, output)) = expected {
