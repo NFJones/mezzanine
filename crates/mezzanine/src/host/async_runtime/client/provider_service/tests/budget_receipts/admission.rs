@@ -5,6 +5,7 @@
 use super::*;
 use crate::host::async_runtime::client::provider_service::budget_admission::BudgetAttemptAdmission;
 use crate::integrations::agent::provider::OpenAiResponsesProvider;
+use futures_util::FutureExt;
 use mez_agent::token_budget::TokenLimit;
 
 struct GateTransport {
@@ -252,11 +253,11 @@ async fn boundary(responses: bool, stream: bool, held: bool) {
                     output: 3
                 }
             );
-            assert_eq!(rows(&store, "budget_receipts"), 1);
+            assert_eq!(rows(&store, "budget_receipts"), 2);
             assert_eq!(
                 rows(&store, "budget_admissions"),
                 1,
-                "receipt released issued exposure"
+                "retirement erased the original replay-only grant"
             );
             let next = Arc::new(BudgetAttemptAdmission::new(work.clone()));
             let mut changed = observation.clone();
@@ -266,7 +267,11 @@ async fn boundary(responses: bool, stream: bool, held: bool) {
         }
     };
     let control = async {
-        let result = tokio::time::timeout(std::time::Duration::from_secs(10), client).await;
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            std::panic::AssertUnwindSafe(client).catch_unwind(),
+        )
+        .await;
         handle.shutdown().await.unwrap();
         result
     };
@@ -283,7 +288,9 @@ async fn boundary(responses: bool, stream: bool, held: bool) {
         handle,
     ));
     root.cleanup();
-    result.expect("native admission boundary did not settle");
+    if let Err(panic) = result.expect("native admission boundary did not settle") {
+        std::panic::resume_unwind(panic);
+    }
 }
 
 #[tokio::test]

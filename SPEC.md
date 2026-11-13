@@ -16590,7 +16590,11 @@ remove lifetime receipts, and replay MUST NOT recreate a pruned reporting event.
 These repository ports MUST NOT claim actual per-send capture, durable worker
 acknowledgment or production admission enforcement before their integration.
 
-Telemetry schema18 adds native admission evidence in the same accounting store.
+Telemetry schema19 retains schema18 native admission evidence and adds a nullable
+original terminal-receipt retirement reference. Migration MUST leave every old
+grant outstanding, preserve old receipt/attempt bodies, and never infer release
+from terminal expense, missing workers or an old ACK. Original grants MUST remain
+replay-only after retirement; they MUST NOT be deleted to free capacity.
 A new authorization MUST atomically validate the exact active native membership,
 binding and retained inode, resolve current primary-derived policy plus root
 overrides, check known lifetime totals and outstanding exposure, and register
@@ -16727,8 +16731,20 @@ A retirement-consumer panic MUST fence that original journal's checkpoint/ACK
 without discarding its first valid expense or unwinding through cancellation.
 The witness establishes only the destroyed local transport scope, not detached
 workers, complete counters, remote completion, or durable exposure release.
-No asynchronous work or storage mutation may start from its Drop. Production
-activation still requires terminal accounting and qualified durable release.
+No asynchronous work or storage mutation may start from its Drop.
+The original consumed-grant owner MAY combine this scoped evidence with a
+positively committed original subtotal to propose terminal-unknown settlement.
+It MUST retain distinct immutable receipt IDs and cancellation-safe writer/query
+ownership for the subtotal and terminal stages. Terminal unknown counters MUST
+retain prior known expense without asserting complete dimensions; cache-only,
+reasoning-only and partial SSE prefixes MUST NOT be promoted to final coverage.
+Terminal receipt and the original grant's retirement reference MUST commit in
+one transaction. A receipt committed without that reference MUST NOT later be
+upgraded into release. Lost ACK reconciliation MUST validate both original
+receipt and retirement reference and MUST NOT issue another permit. New finite
+admission still MUST check current totals/policy and the entire unretired issued
+set, including concurrent calls authorized while unlimited. Production activation
+still requires complete provider coverage, fair waiting and effect inhibition.
 Completion or cancellation MUST finalize that same identity; cancellation before
 usage MUST retain unknown counters without charging a fabricated zero report.
 Only response evidence may change during finalization. Original subject, purpose,

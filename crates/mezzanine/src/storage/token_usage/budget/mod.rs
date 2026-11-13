@@ -18,6 +18,7 @@ pub(crate) mod policy_projection;
 pub(crate) mod publication;
 pub(crate) mod receipts;
 pub(crate) mod reporting;
+pub(crate) mod retirement;
 mod schema;
 
 use mez_agent::token_budget::{BudgetOverride, BudgetRootId, UsageTotals};
@@ -43,6 +44,11 @@ pub(super) fn initialize_policy_projection_schema(
 /// Adds only native authorization evidence, never grants for old attempts.
 pub(super) fn initialize_admission_schema(transaction: &rusqlite::Transaction<'_>) -> Result<()> {
     admission::initialize_schema(transaction)
+}
+
+/// Conservatively keeps every older grant outstanding; no inferred retirement.
+pub(super) fn initialize_retirement_schema(transaction: &rusqlite::Transaction<'_>) -> Result<()> {
+    retirement::initialize_schema(transaction)
 }
 
 /// Durable lifetime view; start boundary does not imply pre-feature coverage.

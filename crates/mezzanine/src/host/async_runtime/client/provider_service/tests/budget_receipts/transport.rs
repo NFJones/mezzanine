@@ -1,5 +1,6 @@
 //! Real loopback HTTP -> exact local future destruction -> native factory ->
-//! durable receipt -> actor ACK. No release or terminal-coverage claim follows.
+//! durable subtotal + terminal-unknown retirement -> actor ACK. Reported partial
+//! counters never become complete merely because the local transport retired.
 
 use super::*;
 use crate::host::async_runtime::client::provider_service::budget_admission::BudgetAttemptAdmission;
@@ -111,6 +112,10 @@ struct Factory {
     dropped: Arc<AtomicUsize>,
     retired: AtomicUsize,
     callback_dropped: Option<Arc<AtomicUsize>>,
+    stages: std::sync::OnceLock<(
+        crate::runtime::RuntimeBudgetReceiptWork,
+        crate::runtime::RuntimeBudgetReceiptWork,
+    )>,
 }
 impl ProviderObservationReceiptFactory for Factory {
     fn plan(&self, o: &ProviderWireRequestObservation) -> Result<()> {
@@ -152,7 +157,13 @@ impl ProviderObservationReceiptFactory for Factory {
             self.native.has_transport_retirement(o),
             "receipt preceded local transport retirement"
         );
-        self.native.freeze(o)
+        let receipt = self.native.freeze(o)?;
+        assert!(
+            self.stages
+                .set(self.native.receipt_stages_for_test(o))
+                .is_ok()
+        );
+        Ok(receipt)
     }
 }
 
@@ -160,17 +171,26 @@ impl ProviderObservationReceiptFactory for Factory {
 async fn budget_wire_loopback_transport_retirement_precedes_native_receipt_and_ack() {
     for (responses, stream) in [(false, false), (true, false), (true, true)] {
         for cancel in [false, true] {
-            qualify(responses, stream, cancel, false).await;
+            qualify(responses, stream, cancel, false, 0).await;
         }
     }
 }
 
 #[tokio::test]
 async fn budget_wire_loopback_transport_destroys_actively_blocked_sse_callback() {
-    qualify(true, true, true, true).await;
+    qualify(true, true, true, true, 0).await;
 }
 
-async fn qualify(responses: bool, stream: bool, cancel: bool, blocked_callback: bool) {
+/// The original real-HTTP request stays at its actor ACK barrier while exact
+/// terminal bookkeeping fails, loses its result, or outlives a canceled waiter.
+#[tokio::test]
+async fn budget_wire_loopback_retirement_writer_faults_keep_original_custody() {
+    for fault in 1..=3 {
+        qualify(true, false, false, false, fault).await;
+    }
+}
+
+async fn qualify(responses: bool, stream: bool, cancel: bool, blocked_callback: bool, fault: u8) {
     let Prepared {
         service,
         dispatch,
@@ -299,6 +319,7 @@ async fn qualify(responses: bool, stream: bool, cancel: bool, blocked_callback: 
         dropped: dropped.clone(),
         retired: AtomicUsize::new(0),
         callback_dropped: blocked_callback.then(|| callback_dropped.clone()),
+        stages: Default::default(),
     });
     let pending = PendingProviderWireObservations::default();
     let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
@@ -338,6 +359,74 @@ async fn qualify(responses: bool, stream: bool, cancel: bool, blocked_callback: 
             assert_eq!(factory.retired.load(Ordering::SeqCst), 1);
             assert!(factory.native.has_transport_retirement(&observation));
             assert_eq!(rows(&store, "budget_receipts"), 0);
+            if fault != 0 {
+                let (prefix, terminal) = factory.stages.get().unwrap();
+                prefix.commit_owner().commit().await.unwrap();
+                assert_eq!(rows(&store, "budget_receipts"), 1);
+                let owner = terminal.commit_owner();
+                match fault {
+                    1 => {
+                        let db = rusqlite::Connection::open(store.path()).unwrap();
+                        db.execute_batch("CREATE TRIGGER refuse_retirement BEFORE UPDATE OF retired_receipt ON budget_admissions BEGIN SELECT RAISE(ABORT,'fixture'); END;").unwrap();
+                        assert!(pending.checkpoint(&observation).await.is_err());
+                        assert_eq!(rows(&store, "budget_receipts"), 1);
+                        assert_eq!(db.query_row("SELECT COUNT(*) FROM budget_admissions WHERE retired_receipt IS NULL", [], |r| r.get::<_, i64>(0)).unwrap(), 1);
+                        db.execute_batch("DROP TRIGGER refuse_retirement;").unwrap();
+                        assert!(
+                            pending.checkpoint(&observation).await.is_err(),
+                            "refusal must remain sticky without explicit bookkeeping recovery"
+                        );
+                        assert!(owner.reconcile().await.unwrap().is_none());
+                        owner.retry_after_absence().await.unwrap();
+                    }
+                    2 => {
+                        let execute = terminal.clone();
+                        assert!(
+                            owner
+                                .commit_with_for_test(move || {
+                                    execute.execute()?;
+                                    panic!("fixture terminal result lost after physical commit");
+                                })
+                                .await
+                                .is_err()
+                        );
+                        assert_eq!(rows(&store, "budget_receipts"), 2);
+                        assert!(owner.reconcile().await.unwrap().is_some());
+                    }
+                    3 => {
+                        let execute = terminal.clone();
+                        let borrowed = owner.clone();
+                        let (started, ready) = tokio::sync::oneshot::channel();
+                        let (release_writer, blocked) = std::sync::mpsc::channel();
+                        let waiter = tokio::spawn(async move {
+                            borrowed
+                                .commit_with_for_test(move || {
+                                    let _ = started.send(());
+                                    blocked.recv().map_err(|_| {
+                                        MezError::invalid_state("fixture writer cleanup")
+                                    })?;
+                                    execute.execute()
+                                })
+                                .await
+                        });
+                        ready.await.unwrap();
+                        waiter.abort();
+                        assert!(waiter.await.unwrap_err().is_cancelled());
+                        assert_eq!(rows(&store, "budget_receipts"), 1);
+                        {
+                            let checkpoint = pending.checkpoint(&observation);
+                            tokio::pin!(checkpoint);
+                            assert!(futures_util::poll!(&mut checkpoint).is_pending());
+                        }
+                        release_writer.send(()).unwrap();
+                        assert!(owner.reconcile().await.unwrap().is_some());
+                    }
+                    _ => unreachable!(),
+                }
+                assert!(futures_util::poll!(&mut call).is_pending());
+                assert_eq!(factory.retired.load(Ordering::SeqCst), 1);
+                assert_eq!(pending.len(), 1);
+            }
             submit_pending_provider_observation(&handle, &pending, observation)
                 .await
                 .unwrap();
@@ -353,6 +442,11 @@ async fn qualify(responses: bool, stream: bool, cancel: bool, blocked_callback: 
         }
         assert!(pending.is_empty());
         assert_eq!(
+            rows(&store, "budget_receipts"),
+            2,
+            "retired transport must durably transfer subtotal and terminal-unknown evidence"
+        );
+        assert_eq!(
             (
                 dropped.load(Ordering::SeqCst),
                 factory.retired.load(Ordering::SeqCst)
@@ -362,8 +456,24 @@ async fn qualify(responses: bool, stream: bool, cancel: bool, blocked_callback: 
         assert_eq!(
             rows(&store, "budget_admissions"),
             1,
-            "transport witness alone released exposure"
+            "retirement must preserve the original replay-only grant"
         );
+        let db = rusqlite::Connection::open(store.path()).unwrap();
+        assert_eq!(
+            db.query_row(
+                "SELECT COUNT(*) FROM budget_admissions WHERE retired_receipt IS NULL",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+            0
+        );
+        let snapshot: String = db
+            .query_row("SELECT snapshot FROM budget_attempts", [], |r| r.get(0))
+            .unwrap();
+        let snapshot: serde_json::Value = serde_json::from_str(&snapshot).unwrap();
+        assert!(snapshot["terminal"]["input"].is_null());
+        assert!(snapshot["terminal"]["output"].is_null());
         let known = store.budget_account(&member.root).unwrap().known;
         assert_eq!(
             known,

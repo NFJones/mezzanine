@@ -110,6 +110,13 @@ complete counters, detached-worker retirement, or durable exposure release.
 Destructor failure cannot create that evidence; consumer failure fences the
 original journal while preserving its expense. No storage work runs from Drop.
 
+The staged native driver commits known subtotals first, then a separate immutable
+terminal-unknown receipt together with an original-grant retirement reference.
+This conserves expense without treating partial counters as complete coverage.
+Only that qualified durable transfer frees local exposure; the original grant
+remains replay-only forever. Receipt or actor acknowledgment alone cannot release
+it. Older grants migrate as outstanding, even if old terminal expense exists.
+
 These internal allocation and accounting ports do **not** yet enable operational
 session budgets. Production assembly, fair waiting, complete terminal coverage,
 physical retirement, root-wide activity inhibition, policy controls, and their

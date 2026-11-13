@@ -19,9 +19,9 @@ use super::{
     set_private_file_permissions, sqlite_i64,
 };
 
-/// Version18 adds durable native admission exposure. Older writers must not
-/// bypass authorization, reporting/receipt atomicity or policy fences.
-pub(super) const SCHEMA_VERSION: i64 = 18;
+/// Version19 retains original grants while atomically recording their terminal
+/// receipt-qualified local retirement. Old grants remain outstanding.
+pub(super) const SCHEMA_VERSION: i64 = 19;
 const SECONDS_PER_DAY: u64 = 86_400;
 
 /// One immutable provider/model usage delta.
@@ -416,7 +416,7 @@ fn initialize_schema(
                  PRAGMA user_version = 1;",
             )?;
         }
-        1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17
+        1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18
         | SCHEMA_VERSION => {}
         future if future > SCHEMA_VERSION => {
             return Err(MezError::invalid_state(format!(
@@ -573,6 +573,10 @@ fn initialize_schema(
     if version < 18 {
         super::budget::initialize_admission_schema(&transaction)?;
         transaction.execute_batch("PRAGMA user_version=18;")?;
+    }
+    if version < 19 {
+        super::budget::initialize_retirement_schema(&transaction)?;
+        transaction.execute_batch("PRAGMA user_version=19;")?;
     }
     transaction.commit()?;
     Ok(())

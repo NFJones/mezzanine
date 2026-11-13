@@ -3,9 +3,9 @@
 //! A committed authorization is issued exposure even if its reply is lost or
 //! its one-use permit is dropped. Recovery returns only immutable evidence,
 //! never another permit. Terminal expense is not local worker retirement:
-//! this initial boundary deliberately has no exposure-release operation. The
-//! provider-service retirement/receipt driver must supply that separate proof
-//! before production assembly can enable finite budgets.
+//! the separate retirement/receipt transaction requires original consumed grant
+//! custody and scoped transport evidence. Retirement never deletes this grant
+//! or supplies another permit; production assembly remains staged.
 
 use super::*;
 use crate::storage::transcript::BudgetBindingLease;
@@ -209,7 +209,7 @@ impl TokenUsageStore {
         }
         if limits.requires_serial_inference()
             && tx.query_row(
-                "SELECT EXISTS(SELECT 1 FROM budget_admissions WHERE root=?1)
+                "SELECT EXISTS(SELECT 1 FROM budget_admissions WHERE root=?1 AND retired_receipt IS NULL)
                  OR EXISTS(SELECT 1 FROM budget_attempts WHERE root=?1 AND terminal=0)",
                 [attempt.root.as_str()],
                 |r| r.get::<_, bool>(0),
@@ -253,7 +253,7 @@ impl TokenUsageStore {
     }
 }
 
-fn read_admission(
+pub(super) fn read_admission(
     connection: &Connection,
     attempt: &BudgetAttempt,
 ) -> Result<Option<BudgetAdmissionOutcome>> {

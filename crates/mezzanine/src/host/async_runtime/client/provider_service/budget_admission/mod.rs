@@ -5,7 +5,8 @@
 //! transport boundary. Cancellation/reconciliation never reconstruct permission.
 //! Receipt-only factories remain separate descriptive ports. This staged factory
 //! is not installed by production dispatch yet; fairness, reversible root holds,
-//! terminal coverage and physical retirement/release remain required.
+//! complete counter coverage and all-purpose assembly remain required. Qualified
+//! scoped retirement commits a separate terminal-unknown receipt after subtotals.
 
 use super::*;
 use crate::integrations::agent::provider::{
@@ -100,6 +101,26 @@ impl BudgetAttemptAdmission {
             .as_ref()
             .is_some_and(|proof| proof.matches(observation))
     }
+
+    /// Expose the same original immutable work to connected fault fixtures;
+    /// these captures do no I/O and cannot create transport or release proof.
+    #[cfg(test)]
+    pub(super) fn receipt_stages_for_test(
+        &self,
+        observation: &ProviderWireRequestObservation,
+    ) -> (RuntimeBudgetReceiptWork, RuntimeBudgetReceiptWork) {
+        let phase = self.0.phase.lock().unwrap();
+        let issued = phase.issued.as_ref().unwrap();
+        (
+            issued
+                .registered()
+                .freeze_wire_receipt(observation)
+                .unwrap(),
+            issued
+                .freeze_retirement_receipt(observation, phase.retired.as_ref().unwrap())
+                .unwrap(),
+        )
+    }
 }
 
 fn suspended(message: &'static str) -> MezError {
@@ -177,6 +198,7 @@ impl ProviderObservationReceiptFactory for BudgetAttemptAdmission {
         if let Ok(mut phase) = self.0.phase.lock()
             && phase.issued.is_some()
             && phase.retired.is_none()
+            && phase.finalized.is_none()
             && retirement.matches(observation)
             && self.0.work.plan_wire_receipt_subject(observation).is_ok()
         {
@@ -243,14 +265,37 @@ impl ProviderObservationReceipt for Receipt {
             let Some(work) = self.work().await? else {
                 return Ok(());
             };
-            let owner = work.commit_owner();
-            match owner.commit().await {
-                Ok(_) => Ok(()),
-                Err(original) => match owner.reconcile().await? {
-                    Some(_) => Ok(()),
-                    None => Err(original),
-                },
+            checkpoint_work(work).await?;
+            let retirement = {
+                let phase = self
+                    .source
+                    .phase
+                    .lock()
+                    .map_err(|_| suspended("budget attempt custody unavailable"))?;
+                match (&phase.issued, &phase.retired) {
+                    (Some(issued), Some(proof)) => {
+                        Some(issued.freeze_retirement_receipt(&self.observation, proof)?)
+                    }
+                    _ => None,
+                }
+            };
+            if let Some(work) = retirement {
+                checkpoint_work(work).await?;
             }
+            Ok(())
         })
+    }
+}
+
+/// One immutable writer/query owner per stage; cancellation never starts a
+/// replacement, and failure does not automatically repeat an uncertain write.
+async fn checkpoint_work(work: RuntimeBudgetReceiptWork) -> Result<()> {
+    let owner = work.commit_owner();
+    match owner.commit().await {
+        Ok(_) => Ok(()),
+        Err(original) => match owner.reconcile().await? {
+            Some(_) => Ok(()),
+            None => Err(original),
+        },
     }
 }

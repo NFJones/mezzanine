@@ -63,6 +63,7 @@ impl RuntimeBudgetRequestOwner {
             attempt,
             wire_subject: std::sync::OnceLock::new(),
             wire: std::sync::OnceLock::new(),
+            retirement: std::sync::OnceLock::new(),
             admission: std::sync::OnceLock::new(),
         })))
     }
@@ -75,6 +76,7 @@ struct AttemptSource {
     wire_subject:
         std::sync::OnceLock<crate::integrations::agent::provider::ProviderWireRequestObservation>,
     wire: std::sync::OnceLock<WireReceiptCapture>,
+    retirement: std::sync::OnceLock<WireRetirementCapture>,
     admission: std::sync::OnceLock<super::admission_work::SharedAdmission>,
 }
 
@@ -83,6 +85,14 @@ struct AttemptSource {
 struct WireReceiptCapture {
     observation: crate::integrations::agent::provider::ProviderWireRequestObservation,
     receipt: Result<BudgetReceipt>,
+    commit: super::receipt_commit::SharedReceiptCommit,
+}
+
+/// Data only, without a reverse AttemptSource reference or an idle Arc cycle.
+#[derive(Debug)]
+struct WireRetirementCapture {
+    receipt: Result<BudgetReceipt>,
+    evidence: crate::storage::token_usage::budget::retirement::BudgetExposureRetirement,
     commit: super::receipt_commit::SharedReceiptCommit,
 }
 
@@ -299,6 +309,59 @@ pub(crate) struct RuntimeBudgetIssuedAttempt {
     expect(dead_code, reason = "physical-send driver integration is downstream")
 )]
 impl RuntimeBudgetIssuedAttempt {
+    /// Pure capture from consumed original custody AND sealed local retirement.
+    /// A separate unknown terminal snapshot never upgrades partial counters to
+    /// complete coverage. Its writer must follow the original subtotal's ACK.
+    pub(crate) fn freeze_retirement_receipt(
+        &self,
+        observation: &crate::integrations::agent::provider::ProviderWireRequestObservation,
+        proof: &crate::integrations::agent::provider::ProviderTransportRetirement,
+    ) -> Result<RuntimeBudgetReceiptWork> {
+        if !proof.matches(observation) {
+            return Err(MezError::conflict(
+                "budget transport retirement subject changed",
+            ));
+        }
+        let prefix = self.registered.freeze_wire_receipt(observation)?;
+        let evidence =
+            crate::storage::token_usage::budget::retirement::BudgetExposureRetirement::new(
+                self.outcome().clone(),
+                prefix.0.receipt.clone(),
+            );
+        let captured = self
+            .registered
+            .0
+            .retirement
+            .get_or_init(|| WireRetirementCapture {
+                receipt: BudgetReceiptId::new(
+                    crate::storage::token_usage::new_token_usage_event_id(),
+                )
+                .map_err(|e| MezError::invalid_state(e.to_string()))
+                .map(|id| BudgetReceipt {
+                    id,
+                    attempt: self.registered.0.attempt.clone(),
+                    snapshot: UsageSnapshot {
+                        terminal: true,
+                        ..Default::default()
+                    },
+                    reporting: None,
+                }),
+                evidence: evidence.clone(),
+                commit: Default::default(),
+            });
+        if captured.evidence != evidence {
+            return Err(MezError::conflict(
+                "budget original retirement evidence changed",
+            ));
+        }
+        Ok(RuntimeBudgetReceiptWork(Arc::new(ReceiptSource {
+            attempt: self.registered.clone(),
+            receipt: captured.receipt.clone()?,
+            retirement: Some(captured.evidence.clone()),
+            commit: std::sync::OnceLock::from(captured.commit.clone()),
+        })))
+    }
+
     pub(crate) fn registered(&self) -> &RuntimeBudgetRegisteredAttempt {
         &self.registered
     }
@@ -353,6 +416,7 @@ impl RuntimeBudgetRegisteredAttempt {
         Ok(RuntimeBudgetReceiptWork(Arc::new(ReceiptSource {
             attempt: self.clone(),
             receipt: captured.receipt.clone()?,
+            retirement: None,
             commit: std::sync::OnceLock::from(captured.commit.clone()),
         })))
     }
@@ -441,6 +505,7 @@ impl RuntimeBudgetRegisteredAttempt {
         Ok(RuntimeBudgetReceiptWork(Arc::new(ReceiptSource {
             attempt: self.clone(),
             receipt,
+            retirement: None,
             commit: std::sync::OnceLock::new(),
         })))
     }
@@ -450,6 +515,7 @@ impl RuntimeBudgetRegisteredAttempt {
 struct ReceiptSource {
     attempt: RuntimeBudgetRegisteredAttempt,
     receipt: BudgetReceipt,
+    retirement: Option<crate::storage::token_usage::budget::retirement::BudgetExposureRetirement>,
     commit: std::sync::OnceLock<super::receipt_commit::SharedReceiptCommit>,
 }
 
@@ -470,6 +536,15 @@ impl RuntimeBudgetReceiptWork {
     /// Blocking-worker only; repeat ONLY this immutable bookkeeping work after
     /// reconciliation, never the provider/effects that produced its counters.
     pub(crate) fn execute(&self) -> Result<BudgetReceiptOutcome> {
+        if let Some(evidence) = &self.0.retirement {
+            return self
+                .0
+                .attempt
+                .0
+                .owner
+                .store
+                .commit_budget_retirement_receipt(&self.0.receipt, evidence);
+        }
         self.0
             .attempt
             .0
@@ -480,6 +555,15 @@ impl RuntimeBudgetReceiptWork {
 
     /// Query the original committed outcome without repeating settlement.
     pub(crate) fn reconcile(&self) -> Result<Option<BudgetReceiptOutcome>> {
+        if let Some(evidence) = &self.0.retirement {
+            return self
+                .0
+                .attempt
+                .0
+                .owner
+                .store
+                .budget_retirement_receipt_outcome(&self.0.receipt, evidence);
+        }
         self.0
             .attempt
             .0

@@ -141,6 +141,24 @@ impl TokenUsageStore {
         &self,
         receipt: &BudgetReceipt,
     ) -> Result<BudgetReceiptOutcome> {
+        self.commit_budget_receipt_inner(receipt, None)
+    }
+
+    /// The original driver supplies qualified retirement, never actor ACK alone.
+    /// Counter transfer and retirement marker share one transaction and outcome.
+    pub(crate) fn commit_budget_retirement_receipt(
+        &self,
+        receipt: &BudgetReceipt,
+        retirement: &super::retirement::BudgetExposureRetirement,
+    ) -> Result<BudgetReceiptOutcome> {
+        self.commit_budget_receipt_inner(receipt, Some(retirement))
+    }
+
+    fn commit_budget_receipt_inner(
+        &self,
+        receipt: &BudgetReceipt,
+        retirement: Option<&super::retirement::BudgetExposureRetirement>,
+    ) -> Result<BudgetReceiptOutcome> {
         receipt.attempt.validate()?;
         let body = encode(receipt)?;
         let mut connection = self.open_budget()?;
@@ -148,8 +166,20 @@ impl TokenUsageStore {
         if namespace(&tx)? != receipt.attempt.namespace {
             return Err(MezError::conflict("budget receipt namespace mismatch"));
         }
+        let retired = retirement
+            .map(|evidence| super::retirement::validate(&tx, receipt, evidence))
+            .transpose()?
+            .flatten();
         if let Some(outcome) = receipt_outcome(&tx, receipt)? {
+            if retirement.is_some() && retired.as_deref() != Some(receipt.id.as_str()) {
+                return Err(MezError::conflict(
+                    "receipt committed without original retirement",
+                ));
+            }
             return Ok(outcome);
+        }
+        if retired.is_some() {
+            return Err(MezError::conflict("retirement lost its original receipt"));
         }
         let (original, snapshot, root, conversation, terminal): (
             String,
@@ -256,6 +286,9 @@ impl TokenUsageStore {
                 encode(&outcome)?
             ],
         )?;
+        if retirement.is_some() {
+            super::retirement::mark_retired(&tx, receipt)?;
+        }
         tx.commit()?;
         Ok(outcome)
     }
@@ -293,7 +326,7 @@ pub(super) fn outstanding_attempts(connection: &Connection) -> Result<i64> {
     Ok(connection.query_row(
         "SELECT COUNT(*) FROM (
             SELECT id FROM budget_attempts WHERE terminal=0
-            UNION SELECT attempt FROM budget_admissions)",
+            UNION SELECT attempt FROM budget_admissions WHERE retired_receipt IS NULL)",
         [],
         |r| r.get(0),
     )?)
@@ -324,7 +357,7 @@ pub(super) fn attempt_registration(
     Ok(true)
 }
 
-fn receipt_outcome(
+pub(super) fn receipt_outcome(
     connection: &Connection,
     receipt: &BudgetReceipt,
 ) -> Result<Option<BudgetReceiptOutcome>> {

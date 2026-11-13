@@ -4,8 +4,9 @@
 //! receipt clones share the actual blocking handle and its immutable outcome.
 //! Cancelling an ACK waiter drops only a mutex borrow. Failed/uncertain writes
 //! are never automatically repeated: observe the writer, query the exact receipt,
-//! then explicitly retry bookkeeping only after positive absence. No operation
-//! here authorizes provider work, releases exposure or proves provider retirement.
+//! then explicitly retry bookkeeping only after positive absence. This owner
+//! cannot qualify physical retirement or authorize provider work. An already
+//! qualified terminal work item may atomically commit its original release.
 
 use super::request::RuntimeBudgetReceiptWork;
 use crate::error::{MezError, Result};

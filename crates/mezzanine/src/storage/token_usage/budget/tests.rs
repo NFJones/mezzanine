@@ -13,6 +13,7 @@ mod policy_projection;
 mod reconciliation;
 mod reporting;
 mod resolution;
+mod retirement;
 
 struct Fixture {
     store: TokenUsageStore,

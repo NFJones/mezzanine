@@ -24,7 +24,7 @@ impl ProviderObservationReceiptSource for CountedSource {
         let index = self.allocations.fetch_add(1, Ordering::SeqCst);
         assert_eq!(
             rows(&self.store, "budget_receipts"),
-            index as i64,
+            (index * 2) as i64,
             "retry allocated before prior durable expense"
         );
         self.inner.for_exchange(observation)
@@ -51,7 +51,7 @@ impl AsyncProviderHttpTransport for RetryTransport {
             let index = self.calls.fetch_add(1, Ordering::SeqCst);
             assert!(index < 2);
             assert_eq!(rows(&self.store, "budget_admissions"), (index + 1) as i64);
-            assert_eq!(rows(&self.store, "budget_receipts"), index as i64);
+            assert_eq!(rows(&self.store, "budget_receipts"), (index * 2) as i64);
             let message = if index == 0 {
                 serde_json::json!({"role":"assistant", "content":"I can help.", "reasoning_content":"thinking"})
             } else {
@@ -77,11 +77,19 @@ impl AsyncProviderHttpTransport for RetryTransport {
 #[tokio::test]
 async fn budget_wire_internal_retry_has_distinct_native_custody_after_durable_ack() {
     qualify(BudgetLimits::default(), true).await;
+    qualify(
+        BudgetLimits {
+            input: TokenLimit::Limited(100),
+            output: TokenLimit::Unlimited,
+        },
+        true,
+    )
+    .await;
 }
 
 /// Equality and one-token crossing independently exhaust either dimension.
-/// A higher finite limit is also held here because receipt ACK is deliberately
-/// NOT yet physical-retirement authority; this component must not release it.
+/// Physical retirement alone never permits a retry after known usage exhausts
+/// either dimension; raising the limit must still preserve original expense.
 #[tokio::test]
 async fn budget_wire_internal_retry_refusal_preserves_first_expense_and_exposure() {
     for limits in [
@@ -100,10 +108,6 @@ async fn budget_wire_internal_retry_refusal_preserves_first_expense_and_exposure
         BudgetLimits {
             input: TokenLimit::Unlimited,
             output: TokenLimit::limited(3).unwrap(),
-        },
-        BudgetLimits {
-            input: TokenLimit::limited(100).unwrap(),
-            output: TokenLimit::Unlimited,
         },
     ] {
         qualify(limits, false).await;
@@ -176,7 +180,7 @@ async fn qualify(limits: BudgetLimits, allowed: bool) {
         // Even positive durable settlement without actor adoption must not
         // allocate the next original descriptor or poll its transport.
         pending.checkpoint(&first).await.unwrap();
-        assert_eq!(rows(&store, "budget_receipts"), 1);
+        assert_eq!(rows(&store, "budget_receipts"), 2);
         assert!(futures_util::poll!(&mut call).is_pending());
         assert_eq!(factory.allocations.load(Ordering::SeqCst), 1);
         submit_pending_provider_observation(&handle, &pending, first.clone())
@@ -229,7 +233,7 @@ async fn qualify(limits: BudgetLimits, allowed: bool) {
             result.is_ok(),
             "internal retry lost original attempt custody: {result:?}"
         );
-        assert_eq!((sends, receipts, exposure), (2, 2, 2));
+        assert_eq!((sends, receipts, exposure), (2, 4, 2));
         assert_eq!(
             known,
             UsageTotals {
@@ -242,7 +246,7 @@ async fn qualify(limits: BudgetLimits, allowed: bool) {
         assert_eq!(error.kind(), MezErrorKind::BudgetSuspended);
         assert_eq!(error.provider_incurred_usage().input_tokens, 10);
         assert_eq!(error.provider_incurred_usage().output_tokens, 4);
-        assert_eq!((sends, receipts, exposure), (1, 1, 1));
+        assert_eq!((sends, receipts, exposure), (1, 2, 1));
         assert_eq!(
             known,
             UsageTotals {

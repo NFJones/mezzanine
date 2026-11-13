@@ -229,7 +229,7 @@ fn budget_admission_consumed_permit_retains_native_lifetime_custody() {
     drop(successor);
 }
 
-fn native(
+pub(super) fn native(
     f: &Fixture,
     conversation: &str,
     parent: Option<&BudgetMembership>,
@@ -247,7 +247,7 @@ fn native(
     (member, lease)
 }
 
-fn publish(f: &Fixture, input: TokenLimit, output: TokenLimit) {
+pub(super) fn publish(f: &Fixture, input: TokenLimit, output: TokenLimit) {
     let previous = f.store.budget_policy_projection().unwrap();
     let op = BudgetPolicyPublication {
         namespace: previous.namespace,
@@ -270,7 +270,7 @@ fn publish(f: &Fixture, input: TokenLimit, output: TokenLimit) {
         .unwrap();
 }
 
-fn grant(
+pub(super) fn grant(
     f: &Fixture,
     member: &BudgetMembership,
     lease: &BudgetBindingLease,
@@ -281,7 +281,7 @@ fn grant(
         .unwrap()
 }
 
-fn authorized(result: BudgetAttemptAdmission) -> BudgetAdmissionOutcome {
+pub(super) fn authorized(result: BudgetAttemptAdmission) -> BudgetAdmissionOutcome {
     match result {
         BudgetAttemptAdmission::Authorized(permit) => permit.consume().unwrap().outcome().clone(),
         other => panic!("expected authorization: {other:?}"),
