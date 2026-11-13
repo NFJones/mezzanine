@@ -5,7 +5,8 @@
 use super::*;
 use crate::host::async_runtime::client::provider_service::budget_admission::BudgetAttemptAdmission;
 use crate::integrations::agent::provider::{
-    OpenAiResponsesProvider, ProviderObservationReceipt, ProviderTransportRetirement,
+    DeepSeekChatCompletionsProvider, OpenAiResponsesProvider, ProviderObservationReceipt,
+    ProviderTransportRetirement,
 };
 use crate::integrations::http::ReqwestProviderHttpTransport;
 use futures_util::FutureExt;
@@ -89,7 +90,11 @@ impl AsyncProviderHttpTransport for Transport {
                     let selected = !self.hold_after_terminal
                         || serde_json::from_str::<serde_json::Value>(&event.data)
                             .ok()
-                            .is_some_and(|value| value["type"] == "response.completed");
+                            .is_some_and(|value| {
+                                value["type"] == "response.completed"
+                                    || (value["choices"].as_array().is_some_and(Vec::is_empty)
+                                        && value.get("usage").is_some())
+                            });
                     let callback = on_event(event);
                     let event = self.event.clone();
                     let blocked = self.blocked_callback && selected;
@@ -238,6 +243,8 @@ enum UnaryUsage {
     ConflictingFinalRepeat,
     NonregressingConflict,
     RegressedThenCancel,
+    MissingChoiceIndex,
+    ExcessChoices,
 }
 
 impl UnaryUsage {
@@ -295,6 +302,8 @@ impl UnaryUsage {
             | Self::HttpFailure
             | Self::MissingFinalUsage
             | Self::DoneOnly
+            | Self::MissingChoiceIndex
+            | Self::ExcessChoices
             | Self::ConflictingFinal
             | Self::ConflictingFinalRepeat
             | Self::NonregressingConflict => (None, None),
@@ -362,6 +371,31 @@ async fn budget_wire_loopback_stream_regression_survives_active_callback_cancell
     qualify_usage(true, true, true, false, 0, UnaryUsage::RegressedThenCancel).await;
 }
 
+/// Chat usage-only chunks must qualify their own dimensions after a choice
+/// finish, never borrow primary presence from an earlier cumulative prefix.
+#[tokio::test]
+async fn budget_wire_loopback_chat_stream_final_fields_are_independent() {
+    for usage in [
+        UnaryUsage::MissingChoiceIndex,
+        UnaryUsage::ExcessChoices,
+        UnaryUsage::Totals,
+        UnaryUsage::InputOnly,
+        UnaryUsage::OutputOnly,
+        UnaryUsage::CacheOnly,
+        UnaryUsage::ReasoningOnly,
+        UnaryUsage::Zero,
+        UnaryUsage::MissingFinalUsage,
+        UnaryUsage::InvalidMaap,
+        UnaryUsage::HttpFailure,
+        UnaryUsage::RegressedFinal,
+        UnaryUsage::ConflictingFinal,
+        UnaryUsage::ConflictingFinalRepeat,
+        UnaryUsage::NonregressingConflict,
+    ] {
+        qualify_usage(false, true, false, false, 0, usage).await;
+    }
+}
+
 async fn qualify_usage(
     responses: bool,
     stream: bool,
@@ -369,6 +403,61 @@ async fn qualify_usage(
     blocked_callback: bool,
     fault: u8,
     usage_case: UnaryUsage,
+) {
+    qualify_dialect_usage(
+        responses,
+        stream,
+        cancel,
+        blocked_callback,
+        fault,
+        usage_case,
+        false,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn budget_wire_loopback_deepseek_stream_finality_and_cancellation() {
+    for usage in [
+        UnaryUsage::MissingChoiceIndex,
+        UnaryUsage::ExcessChoices,
+        UnaryUsage::Totals,
+        UnaryUsage::InputOnly,
+        UnaryUsage::OutputOnly,
+        UnaryUsage::CacheOnly,
+        UnaryUsage::ReasoningOnly,
+        UnaryUsage::Zero,
+        UnaryUsage::MissingFinalUsage,
+        UnaryUsage::HttpFailure,
+        UnaryUsage::RegressedFinal,
+        UnaryUsage::ConflictingFinal,
+        UnaryUsage::ConflictingFinalRepeat,
+        UnaryUsage::NonregressingConflict,
+    ] {
+        qualify_dialect_usage(false, true, false, false, 0, usage, true).await;
+    }
+    for deepseek in [false, true] {
+        qualify_dialect_usage(
+            false,
+            true,
+            true,
+            false,
+            0,
+            UnaryUsage::RegressedThenCancel,
+            deepseek,
+        )
+        .await;
+    }
+}
+
+async fn qualify_dialect_usage(
+    responses: bool,
+    stream: bool,
+    cancel: bool,
+    blocked_callback: bool,
+    fault: u8,
+    usage_case: UnaryUsage,
+    deepseek: bool,
 ) {
     let Prepared {
         service,
@@ -412,7 +501,84 @@ async fn qualify_usage(
             bytes.extend_from_slice(&chunk[..read]);
         }
         entered.send(()).unwrap();
-        if stream && !matches!(usage_case, UnaryUsage::JsonInsteadOfSse) {
+        if stream && !responses {
+            let mut text = serde_json::json!({"rationale":"fixture","actions":[{"type":"say","status":"final","content_type":"text/plain; charset=utf-8","text":"done"}]}).to_string();
+            if matches!(usage_case, UnaryUsage::InvalidMaap) {
+                text = serde_json::json!({"rationale":"fixture","actions":[{"type":"invalid_fixture_action"}]}).to_string();
+            }
+            let prefix_usage = if matches!(usage_case, UnaryUsage::Zero) {
+                serde_json::json!({"prompt_tokens":0,"completion_tokens":0})
+            } else {
+                serde_json::json!({"prompt_tokens":11,"completion_tokens":3})
+            };
+            let mut prefix = serde_json::json!({"model":"test-model","choices":[{"index":0,"delta":{"content":text},"finish_reason":null}],"usage":prefix_usage});
+            let mut finish =
+                serde_json::json!({"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]});
+            if matches!(usage_case, UnaryUsage::MissingChoiceIndex) {
+                prefix["choices"][0]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("index");
+            } else if matches!(usage_case, UnaryUsage::ExcessChoices) {
+                for index in 1..65 {
+                    prefix["choices"]
+                        .as_array_mut()
+                        .unwrap()
+                        .push(serde_json::json!({"index":index,"delta":{},"finish_reason":null}));
+                    finish["choices"]
+                        .as_array_mut()
+                        .unwrap()
+                        .push(serde_json::json!({"index":index,"delta":{},"finish_reason":"stop"}));
+                }
+            }
+            let usage = if matches!(usage_case, UnaryUsage::MissingFinalUsage) {
+                serde_json::json!({})
+            } else if matches!(
+                usage_case,
+                UnaryUsage::RegressedFinal | UnaryUsage::RegressedThenCancel
+            ) {
+                serde_json::json!({"prompt_tokens":10,"completion_tokens":3})
+            } else if deepseek && matches!(usage_case, UnaryUsage::CacheOnly) {
+                serde_json::json!({"prompt_cache_hit_tokens":11})
+            } else {
+                usage_case.counters(false)
+            };
+            let terminal = serde_json::json!({"choices":[],"usage":usage});
+            let mut data = format!("data: {prefix}\n\n");
+            if !cancel || matches!(usage_case, UnaryUsage::RegressedThenCancel) {
+                data.push_str(&format!("data: {finish}\n\ndata: {terminal}\n\n"));
+                if matches!(
+                    usage_case,
+                    UnaryUsage::ConflictingFinal
+                        | UnaryUsage::ConflictingFinalRepeat
+                        | UnaryUsage::NonregressingConflict
+                ) {
+                    let mut changed = terminal.clone();
+                    changed["usage"]["prompt_tokens"] = serde_json::json!(if matches!(
+                        usage_case,
+                        UnaryUsage::NonregressingConflict
+                    ) {
+                        13
+                    } else {
+                        10
+                    });
+                    data.push_str(&format!("data: {changed}\n\n"));
+                    if matches!(usage_case, UnaryUsage::ConflictingFinalRepeat) {
+                        data.push_str(&format!("data: {terminal}\n\n"));
+                    }
+                }
+                data.push_str("data: [DONE]\n\n");
+            }
+            let status = if matches!(usage_case, UnaryUsage::HttpFailure) {
+                "500 Internal Server Error"
+            } else {
+                "200 OK"
+            };
+            socket.write_all(format!("HTTP/1.1 {status}\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n{:x}\r\n{data}\r\n",data.len()).as_bytes()).await.unwrap();
+            if !cancel {
+                socket.write_all(b"0\r\n\r\n").await.unwrap();
+            }
+        } else if stream && !matches!(usage_case, UnaryUsage::JsonInsteadOfSse) {
             let prefix_usage = if matches!(usage_case, UnaryUsage::Zero) {
                 serde_json::json!({"input_tokens":0,"output_tokens":0})
             } else {
@@ -517,7 +683,7 @@ async fn qualify_usage(
         callback_dropped: callback_dropped.clone(),
         hold_after_terminal,
     };
-    let (chat, response) = if responses {
+    let (chat, response, native_deepseek) = if responses {
         (
             None,
             Some(
@@ -531,6 +697,18 @@ async fn qualify_usage(
                 )
                 .unwrap(),
             ),
+            None,
+        )
+    } else if deepseek {
+        (
+            None,
+            None,
+            Some(
+                DeepSeekChatCompletionsProvider::without_auth(transport)
+                    .unwrap()
+                    .with_endpoint(endpoint)
+                    .with_stream(stream),
+            ),
         )
     } else {
         (
@@ -539,14 +717,20 @@ async fn qualify_usage(
                     .unwrap()
                     .with_provider_id("local-chat")
                     .unwrap()
+                    .with_streaming_options_for_test(stream)
+                    .unwrap()
                     .with_endpoint(endpoint),
             ),
+            None,
             None,
         )
     };
     let provider: &dyn AsyncModelProvider = match &chat {
         Some(p) => p,
-        None => response.as_ref().unwrap(),
+        None => match &response {
+            Some(p) => p,
+            None => native_deepseek.as_ref().unwrap(),
+        },
     };
     let mut request = crate::integrations::agent::context::assemble_model_request(
         &dispatch.model_profile,
@@ -585,9 +769,15 @@ async fn qualify_usage(
     let responses_observed = response.as_ref().map(|provider| {
         ObservedAsyncModelProvider::new(provider, &observer, ProviderRequestPurpose::Execution)
     });
+    let deepseek_observed = native_deepseek.as_ref().map(|provider| {
+        ObservedAsyncModelProvider::new(provider, &observer, ProviderRequestPurpose::Execution)
+    });
     let observed: &dyn AsyncModelProvider = match &chat_observed {
         Some(provider) => provider,
-        None => responses_observed.as_ref().unwrap(),
+        None => match &responses_observed {
+            Some(p) => p,
+            None => deepseek_observed.as_ref().unwrap(),
+        },
     };
     let (handle, actor) =
         crate::host::async_runtime::AsyncRuntimeSessionActor::new(service, Default::default())

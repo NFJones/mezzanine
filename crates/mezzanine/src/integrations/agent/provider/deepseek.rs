@@ -211,6 +211,19 @@ fn deepseek_required_maap_response(
 }
 
 impl ChatCompletionsStreamDecoder for DeepSeekChatCompletionsStreamDecoder {
+    fn terminal_usage(
+        &self,
+    ) -> Option<(
+        mez_agent::ModelTokenUsage,
+        mez_agent::ModelTokenUsagePresence,
+    )> {
+        DeepSeekChatCompletionsStreamDecoder::terminal_usage(self)
+    }
+
+    fn terminal_usage_regressed(&self) -> bool {
+        DeepSeekChatCompletionsStreamDecoder::terminal_usage_regressed(self)
+    }
+
     fn reported_usage(&self) -> mez_agent::ModelTokenUsage {
         DeepSeekChatCompletionsStreamDecoder::reported_usage(self)
     }

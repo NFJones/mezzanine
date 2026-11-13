@@ -130,6 +130,12 @@ or HTTP-refused streams conservatively retain incomplete coverage.
 Once a terminal regression is observed, its refusal remains retained even across
 conflicting repeats or callback cancellation; it cannot become ordinary unknown
 coverage that frees the original exposure.
+OpenAI-compatible and DeepSeek Chat Completions streams separately qualify the
+usage-bearing chunk after all observed choices finish. Only that chunk's own
+fields complete dimensions; `[DONE]` and accumulated presence are insufficient.
+Conflicting final reports invalidate output and completeness; terminal regression
+retains the original expense and refusal. Malformed/excessive choice metadata
+keeps coverage incomplete. Anthropic stream finality is not yet qualified here.
 Only that qualified durable transfer frees local exposure; the original grant
 remains replay-only forever. Receipt or actor acknowledgment alone cannot release
 it. Older grants migrate as outstanding, even if old terminal expense exists.

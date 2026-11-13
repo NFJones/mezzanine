@@ -497,9 +497,20 @@ pub struct DeepSeekChatCompletionsStreamDecoder {
     usage: ModelTokenUsage,
     usage_presence: crate::ModelTokenUsagePresence,
     finish_reason: Option<String>,
+    final_usage: crate::chat_stream_usage::ChatStreamUsage,
 }
 
 impl DeepSeekChatCompletionsStreamDecoder {
+    /// Terminal report's own counters/presence, independent of merged prefixes.
+    pub fn terminal_usage(&self) -> Option<(ModelTokenUsage, crate::ModelTokenUsagePresence)> {
+        self.final_usage.terminal_usage()
+    }
+
+    /// Sticky numeric-integrity refusal; not ordinary missing final coverage.
+    pub fn terminal_usage_regressed(&self) -> bool {
+        self.final_usage.regressed()
+    }
+
     /// Returns retained normalized counters independently of output usability.
     /// Zero here does not prove that missing wire dimensions were reported.
     pub fn reported_usage(&self) -> ModelTokenUsage {
@@ -520,6 +531,13 @@ impl DeepSeekChatCompletionsStreamDecoder {
         let Ok(value) = serde_json::from_str::<serde_json::Value>(data) else {
             return None;
         };
+        let report = value
+            .get("usage")
+            .filter(|usage| usage.is_object())
+            .map(|usage| (parse_deepseek_usage(usage), deepseek_usage_presence(usage)));
+        if self.final_usage.observe(&value, self.usage, report) {
+            return None;
+        }
         if self.model.is_none() {
             self.model = value
                 .get("model")
@@ -605,6 +623,13 @@ impl DeepSeekChatCompletionsStreamDecoder {
 
     /// Finalizes accumulated stream state into the existing response projection.
     pub fn finish(mut self, request: &ModelRequest) -> DeepSeekResponseResult<DeepSeekResponse> {
+        if self.final_usage.regressed() || self.final_usage.conflicting_report() {
+            return Err(ProviderResponseError::invalid_state(
+                "final DeepSeek stream usage contradicted retained expense",
+            )
+            .with_incurred_usage(self.usage)
+            .into());
+        }
         if deepseek_thinking_enabled_for_request(request)
             || request.model.to_ascii_lowercase().contains("r1")
         {

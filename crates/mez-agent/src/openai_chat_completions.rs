@@ -994,9 +994,20 @@ pub struct OpenAiChatCompletionsStreamDecoder {
     finish_reason: Option<String>,
     valid_json_events: usize,
     terminal: bool,
+    final_usage: crate::chat_stream_usage::ChatStreamUsage,
 }
 
 impl OpenAiChatCompletionsStreamDecoder {
+    /// The terminal report's own fields, never accumulated prefix presence.
+    pub fn terminal_usage(&self) -> Option<(ModelTokenUsage, crate::ModelTokenUsagePresence)> {
+        self.final_usage.terminal_usage()
+    }
+
+    /// Sticky terminal numeric-integrity refusal, independent of completeness.
+    pub fn terminal_usage_regressed(&self) -> bool {
+        self.final_usage.regressed()
+    }
+
     /// Returns the latest cumulative usage observation without accepting output.
     /// Failed stream/MAAP parsing must not discard counters already received.
     pub fn reported_usage(&self) -> ModelTokenUsage {
@@ -1040,6 +1051,24 @@ impl OpenAiChatCompletionsStreamDecoder {
         })?;
         // An error and its expense can share a received event. Capture only
         // accounting before rejecting it; no rejected output becomes usable.
+        let report = value
+            .get("usage")
+            .filter(|usage| usage.is_object())
+            .map(|_| {
+                (
+                    openai_chat_completions_usage(&value),
+                    openai_chat_completions_usage_presence(&value),
+                )
+            });
+        if self
+            .final_usage
+            .observe(&value, self.reported_usage(), report)
+        {
+            return Err(ProviderResponseError::invalid_state(
+                "final Chat Completions usage regressed",
+            )
+            .into());
+        }
         if let Some(usage) = value.get("usage").and_then(serde_json::Value::as_object) {
             let mut next = usage.clone();
             // Carry only known numeric fields from earlier cumulative frames,
@@ -1090,6 +1119,12 @@ impl OpenAiChatCompletionsStreamDecoder {
             .with_provider_failure_json(
                 serde_json::json!({"provider": "openai_chat_completions", "stream_error": true})
                     .to_string(),
+            )
+            .into());
+        }
+        if self.final_usage.conflicting_report() {
+            return Err(ProviderResponseError::invalid_state(
+                "final Chat Completions usage conflicted",
             )
             .into());
         }

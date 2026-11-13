@@ -273,6 +273,19 @@ fn parse_openai_chat_completions_http_response(
 }
 
 impl ChatCompletionsStreamDecoder for OpenAiChatCompletionsStreamDecoder {
+    fn terminal_usage(
+        &self,
+    ) -> Option<(
+        mez_agent::ModelTokenUsage,
+        mez_agent::ModelTokenUsagePresence,
+    )> {
+        OpenAiChatCompletionsStreamDecoder::terminal_usage(self)
+    }
+
+    fn terminal_usage_regressed(&self) -> bool {
+        OpenAiChatCompletionsStreamDecoder::terminal_usage_regressed(self)
+    }
+
     fn reported_usage(&self) -> mez_agent::ModelTokenUsage {
         OpenAiChatCompletionsStreamDecoder::reported_usage(self)
     }

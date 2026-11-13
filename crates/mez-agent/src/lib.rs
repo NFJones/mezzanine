@@ -32,6 +32,8 @@ pub mod anthropic;
 pub mod auth;
 /// Provider-independent automatic model-sizing policy.
 pub mod auto_sizing;
+/// Internal terminal-report qualification shared by Chat Completions decoders.
+mod chat_stream_usage;
 /// Model-facing live configuration mutation contracts.
 pub mod config_change;
 /// Provider-independent agent context validation contracts.

@@ -16761,6 +16761,13 @@ does not authorize output or effects from a failed/incomplete response.
 A witnessed terminal regression MUST retain explicit refusal custody before any
 callback suspension. Conflict, repetition, HTTP failure or cancellation MUST NOT
 downgrade that refusal to the release-eligible unknown-coverage fallback.
+OpenAI-compatible and DeepSeek Chat Completions SSE MAY qualify a usage-bearing
+chunk only once every observed choice has a nonempty finish reason. Each final
+dimension MUST come from that chunk's own numeric fields, not merged prefix
+presence or `[DONE]`. Conflicting final reports MUST invalidate completeness and
+output; terminal numeric regression MUST preserve expense and sticky refusal.
+Unknown or excessive choice metadata MUST degrade coverage, never fabricate it.
+This qualification MUST NOT be applied to Anthropic's different message grammar.
 Terminal receipt and the original grant's retirement reference MUST commit in
 one transaction. A receipt committed without that reference MUST NOT later be
 upgraded into release. Lost ACK reconciliation MUST validate both original

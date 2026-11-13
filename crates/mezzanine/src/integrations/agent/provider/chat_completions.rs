@@ -37,6 +37,22 @@ pub trait ChatCompletionsStreamDecoder: Send {
     /// Cumulative primary-counter evidence, independent of output/finality.
     fn reported_usage_presence(&self) -> mez_agent::ModelTokenUsagePresence;
 
+    /// Dialect-qualified final report, not cumulative presence or output success.
+    /// Other wire grammars remain incomplete until explicitly implemented.
+    fn terminal_usage(
+        &self,
+    ) -> Option<(
+        mez_agent::ModelTokenUsage,
+        mez_agent::ModelTokenUsagePresence,
+    )> {
+        None
+    }
+
+    /// Sticky terminal regression must transfer refusal before callback suspension.
+    fn terminal_usage_regressed(&self) -> bool {
+        false
+    }
+
     /// Applies one complete SSE event and returns display-safe text progress.
     fn push_event(&mut self, event: &SseEvent) -> Result<Option<String>>;
 
@@ -47,6 +63,23 @@ pub trait ChatCompletionsStreamDecoder: Send {
         request: &ModelRequest,
         provider_id: &str,
     ) -> Result<ModelResponse>;
+}
+
+#[cfg(test)]
+impl<T: AsyncProviderHttpTransport>
+    ChatCompletionsProvider<T, super::openai_chat_completions::OpenAiChatCompletionsDialect>
+{
+    /// Exercise the real dialect option; the shell stream flag does not override it.
+    pub(crate) fn with_streaming_options_for_test(mut self, stream: bool) -> Result<Self> {
+        self.dialect =
+            super::openai_chat_completions::OpenAiChatCompletionsDialect::from_provider_options(
+                &BTreeMap::from([(
+                    "streaming".into(),
+                    if stream { "enabled" } else { "disabled" }.into(),
+                )]),
+            )?;
+        Ok(self)
+    }
 }
 
 /// Provider-specific behavior required by the Chat Completions transport shell.
@@ -556,6 +589,12 @@ where
                                     decoder.reported_usage(),
                                     decoder.reported_usage_presence(),
                                 );
+                                if decoder.terminal_usage_regressed() {
+                                    custody.refuse_stream_usage(
+                                        decoder.reported_usage(),
+                                        decoder.reported_usage_presence(),
+                                    )?;
+                                }
                             }
                             result
                         },
@@ -622,6 +661,23 @@ where
                     return result;
                 }
             };
+            if (200..300).contains(&response.status_code)
+                && response_usage.is_none()
+                && let (Some(decoder), Some(custody)) =
+                    (stream_decoder.as_ref(), stream_usage.as_ref())
+                && !decoder.terminal_usage_regressed()
+                && let Some(terminal) = decoder.terminal_usage()
+            {
+                custody
+                    .finalize_stream_usage(
+                        decoder.reported_usage(),
+                        decoder.reported_usage_presence(),
+                        terminal,
+                    )
+                    .map_err(|error| {
+                        error.with_provider_incurred_usage(decoder.reported_usage())
+                    })?;
+            }
             if !(200..300).contains(&response.status_code) {
                 let result = Err(retain_usage(
                     self.provider_status_error("Chat Completions", &response),
