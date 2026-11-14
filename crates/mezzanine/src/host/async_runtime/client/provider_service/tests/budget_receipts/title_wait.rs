@@ -23,6 +23,16 @@ async fn budget_monitored_title_post_resume_retirement_withdraws_native_grant() 
 }
 
 #[tokio::test]
+async fn budget_monitored_title_stop_without_turn_cannot_resume() {
+    qualify(Release::Stopped).await;
+}
+
+#[tokio::test]
+async fn budget_monitored_title_navigation_stop_cannot_bypass_retirement() {
+    qualify(Release::NavigationStopped).await;
+}
+
+#[tokio::test]
 async fn budget_monitored_title_human_pause_is_orthogonal_in_both_release_orders() {
     qualify(Release::BudgetFirst).await;
     qualify(Release::HumanFirst).await;
@@ -33,6 +43,8 @@ enum Release {
     Budget,
     Retired,
     RetiredAfterResume,
+    Stopped,
+    NavigationStopped,
     BudgetFirst,
     HumanFirst,
 }
@@ -60,7 +72,12 @@ async fn qualify(release: Release) {
     service
         .execute_agent_shell_command(&primary, "/stop")
         .unwrap();
-    if release != Release::Budget {
+    if release == Release::NavigationStopped {
+        service
+            .execute_agent_shell_command(&primary, "/shell-mode native")
+            .unwrap();
+    }
+    if !matches!(release, Release::Budget | Release::NavigationStopped) {
         // There is no physical shell in this fixture; do not invent a PID for
         // the browser's production native lifecycle target checks.
         service
@@ -193,6 +210,19 @@ async fn qualify(release: Release) {
                 .execute_agent_shell_command(primary.clone(), "/help".into())
                 .await
                 .unwrap();
+            if release == Release::NavigationStopped {
+                let accepted = handle
+                    .execute_agent_shell_command(primary.clone(), "/cd /".into())
+                    .await
+                    .unwrap();
+                assert!(accepted.contains(r#""body":null"#), "{accepted}");
+            }
+            if matches!(release, Release::Stopped | Release::NavigationStopped) {
+                handle
+                    .execute_agent_shell_command(primary.clone(), "/stop".into())
+                    .await
+                    .unwrap();
+            }
             if release == Release::Retired {
                 handle
                     .execute_terminal_command(primary.clone(), "kill-pane -t %1".into())
@@ -351,7 +381,13 @@ async fn qualify(release: Release) {
         std::panic::resume_unwind(panic);
     }
     assert!(no_claim && !duplicate.applied);
-    if matches!(release, Release::Retired | Release::RetiredAfterResume) {
+    if matches!(
+        release,
+        Release::Retired
+            | Release::RetiredAfterResume
+            | Release::Stopped
+            | Release::NavigationStopped
+    ) {
         assert!(
             served.is_err(),
             "retired title unexpectedly contacted the provider"

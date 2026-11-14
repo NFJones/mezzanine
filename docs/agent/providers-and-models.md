@@ -161,6 +161,10 @@ when authorization finishes after actor resume; the unused original grant is
 withdrawn and settled without HTTP. Admission ordered before retirement remains
 issued exposure and is not implicitly rolled back.
 
+Human `/stop` also retires the invoking conversation's queued or claimed title,
+including a parked title without a live ordinary turn. Original expense custody
+remains available for late settlement; a later policy release cannot revive it.
+
 This title-only connection still retains the existing optional-title concurrency
 slot. It does not implement auxiliary fair requeue, compaction/memory waits,
 root-wide effect gates, or production membership activation.

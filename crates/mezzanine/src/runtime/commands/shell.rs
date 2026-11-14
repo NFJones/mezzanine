@@ -526,6 +526,11 @@ impl RuntimeSessionService {
             ));
         }
         let slash_invocation = parse_slash_command(input).ok().flatten();
+        // Every accepted Stop route, including pending navigation/loop source,
+        // retires this conversation's optional title before an early return.
+        let title_cancelled = slash_invocation.as_ref().is_some_and(|invocation| {
+            invocation.name == "stop" && invocation.args.trim().is_empty()
+        }) && self.cancel_agent_session_title_for_pane(&pane_id);
         if let Some(invocation) = slash_invocation
             .as_ref()
             .filter(|invocation| invocation.name == "cd")
@@ -796,66 +801,49 @@ impl RuntimeSessionService {
         });
         let mut steering_accepted = false;
         let response = match (|| -> Result<String> {
-            let response =
-                if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
-                    outcome.as_ref()
-                    && command == "exit"
-                {
-                    let exit = self.request_agent_shell_exit_for_pane(&pane_id)?;
-                    let exit_outcome = AgentShellCommandOutcome::Mutated {
-                        command: "exit".to_string(),
-                        body: format!(
-                            "pane={} session={} visibility={} stopped_turn={}",
-                            pane_id,
-                            exit.conversation_id,
-                            agent_shell_visibility_json_name(exit.visibility),
-                            exit.stopped_turn_id.as_deref().unwrap_or("none")
-                        ),
-                        visibility: exit.visibility,
-                    };
-                    runtime_agent_shell_command_response_json(&pane_id, input, Some(&exit_outcome))
-                } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
-                    outcome.as_ref()
-                    && command == "stop"
-                {
-                    // Retire queued/claimed memory publication even without an
-                    // ordinary turn. Issued accounting owners remain available
-                    // for late expense; cancellation does not prove remote I/O
-                    // has stopped and never replays the auxiliary request.
-                    // A prepared resume must not adopt after Stop. Its worker
-                    // retains read/cleanup custody until actual completion.
-                    let command_cancelled = self.agent.cancel_agent_command(&pane_id);
-                    let remember_cancelled = self.fail_agent_remember_task(&pane_id);
-                    if self.agent_is_compacting(&pane_id) {
-                        let cancelled = self.cancel_current_agent_compaction_task(&pane_id);
-                        if self.agent_shell_pane_has_live_turn(&pane_id) {
-                            let stopped = self.stop_agent_turn_for_pane(&pane_id)?;
-                            runtime_agent_shell_stop_response_json(&pane_id, input, &stopped)
-                        } else {
-                            self.resume_agent_compaction_steering(&pane_id)?;
-                            let stop_outcome = AgentShellCommandOutcome::Mutated {
-                                command: "stop".to_string(),
-                                body: format!(
-                                    "pane={} compaction_cancelled={}",
-                                    pane_id,
-                                    cancelled.had_task()
-                                ),
-                                visibility: self.agent_shell_visibility_for_pane(&pane_id)?,
-                            };
-                            runtime_agent_shell_command_response_json(
-                                &pane_id,
-                                input,
-                                Some(&stop_outcome),
-                            )
-                        }
-                    } else if (remember_cancelled || command_cancelled)
-                        && !self.agent_shell_pane_has_live_turn(&pane_id)
-                    {
+            let response = if let Some(AgentShellCommandOutcome::RequiresRuntime {
+                command, ..
+            }) = outcome.as_ref()
+                && command == "exit"
+            {
+                let exit = self.request_agent_shell_exit_for_pane(&pane_id)?;
+                let exit_outcome = AgentShellCommandOutcome::Mutated {
+                    command: "exit".to_string(),
+                    body: format!(
+                        "pane={} session={} visibility={} stopped_turn={}",
+                        pane_id,
+                        exit.conversation_id,
+                        agent_shell_visibility_json_name(exit.visibility),
+                        exit.stopped_turn_id.as_deref().unwrap_or("none")
+                    ),
+                    visibility: exit.visibility,
+                };
+                runtime_agent_shell_command_response_json(&pane_id, input, Some(&exit_outcome))
+            } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
+                outcome.as_ref()
+                && command == "stop"
+            {
+                // Retire queued/claimed memory publication even without an
+                // ordinary turn. Issued accounting owners remain available
+                // for late expense; cancellation does not prove remote I/O
+                // has stopped and never replays the auxiliary request.
+                // A prepared resume must not adopt after Stop. Its worker
+                // retains read/cleanup custody until actual completion.
+                let command_cancelled = self.agent.cancel_agent_command(&pane_id);
+                let remember_cancelled = self.fail_agent_remember_task(&pane_id);
+                if self.agent_is_compacting(&pane_id) {
+                    let cancelled = self.cancel_current_agent_compaction_task(&pane_id);
+                    if self.agent_shell_pane_has_live_turn(&pane_id) {
+                        let stopped = self.stop_agent_turn_for_pane(&pane_id)?;
+                        runtime_agent_shell_stop_response_json(&pane_id, input, &stopped)
+                    } else {
+                        self.resume_agent_compaction_steering(&pane_id)?;
                         let stop_outcome = AgentShellCommandOutcome::Mutated {
                             command: "stop".to_string(),
                             body: format!(
-                                "pane={} remember_cancelled={} command_cancelled={}",
-                                pane_id, remember_cancelled, command_cancelled
+                                "pane={} compaction_cancelled={}",
+                                pane_id,
+                                cancelled.had_task()
                             ),
                             visibility: self.agent_shell_visibility_for_pane(&pane_id)?,
                         };
@@ -864,487 +852,399 @@ impl RuntimeSessionService {
                             input,
                             Some(&stop_outcome),
                         )
-                    } else {
-                        let stopped = self.stop_agent_turn_for_pane(&pane_id)?;
-                        runtime_agent_shell_stop_response_json(&pane_id, input, &stopped)
                     }
-                } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
-                    outcome.as_ref()
-                    && command == "model"
+                } else if (remember_cancelled || command_cancelled || title_cancelled)
+                    && !self.agent_shell_pane_has_live_turn(&pane_id)
                 {
-                    let model_outcome = self.execute_agent_shell_model_command(&pane_id, input)?;
-                    runtime_agent_shell_command_response_json(&pane_id, input, Some(&model_outcome))
-                } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
-                    outcome.as_ref()
-                    && command == "latency"
-                {
-                    let latency_outcome =
-                        self.execute_agent_shell_latency_command(&pane_id, input)?;
-                    runtime_agent_shell_command_response_json(
-                        &pane_id,
-                        input,
-                        Some(&latency_outcome),
-                    )
-                } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
-                    outcome.as_ref()
-                    && command == "auth-status"
-                {
-                    let auth_outcome = self.execute_agent_shell_auth_status_command(input)?;
-                    runtime_agent_shell_command_response_json(&pane_id, input, Some(&auth_outcome))
-                } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
-                    outcome.as_ref()
-                    && command == "thinking"
-                {
-                    let thinking_outcome =
-                        self.execute_agent_shell_thinking_command(&pane_id, input)?;
-                    runtime_agent_shell_command_response_json(
-                        &pane_id,
-                        input,
-                        Some(&thinking_outcome),
-                    )
-                } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
-                    outcome.as_ref()
-                    && command == "plan"
-                {
-                    let plan_outcome = self.execute_agent_shell_plan_command(&pane_id, input)?;
-                    runtime_agent_shell_command_response_json(&pane_id, input, Some(&plan_outcome))
-                } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
-                    outcome.as_ref()
-                    && command == "compact"
-                {
-                    let compact_outcome =
-                        self.execute_agent_shell_compact_command(&pane_id, input)?;
-                    runtime_agent_shell_command_response_json(
-                        &pane_id,
-                        input,
-                        Some(&compact_outcome),
-                    )
-                } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
-                    outcome.as_ref()
-                    && command == "routing"
-                {
-                    let routing_outcome =
-                        self.execute_agent_shell_routing_command(&pane_id, input)?;
-                    runtime_agent_shell_command_response_json(
-                        &pane_id,
-                        input,
-                        Some(&routing_outcome),
-                    )
-                } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
-                    outcome.as_ref()
-                    && command == "personality"
-                {
-                    let personality_outcome =
-                        self.execute_agent_shell_personality_command(&pane_id, input)?;
-                    runtime_agent_shell_command_response_json(
-                        &pane_id,
-                        input,
-                        Some(&personality_outcome),
-                    )
-                } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
-                    outcome.as_ref()
-                    && command == "list-personalities"
-                {
-                    let personalities_outcome =
-                        self.execute_agent_shell_list_personalities_command(&pane_id, input)?;
-                    runtime_agent_shell_command_response_json(
-                        &pane_id,
-                        input,
-                        Some(&personalities_outcome),
-                    )
-                } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
-                    outcome.as_ref()
-                    && command == "resume"
-                {
-                    let resume_outcome =
-                        self.execute_agent_shell_resume_command(&pane_id, input)?;
-                    runtime_agent_shell_command_response_json(
-                        &pane_id,
-                        input,
-                        Some(&resume_outcome),
-                    )
-                } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
-                    outcome.as_ref()
-                    && command == "cd"
-                {
-                    return Err(MezError::invalid_state(
-                        "native navigation requires the deferred command executor",
-                    ));
-                } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
-                    outcome.as_ref()
-                    && command == "fork"
-                {
-                    let fork_outcome =
-                        self.execute_agent_shell_fork_command(primary_client_id, &pane_id, input)?;
-                    runtime_agent_shell_command_response_json(&pane_id, input, Some(&fork_outcome))
-                } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
-                    outcome.as_ref()
-                    && command == "name-session"
-                {
-                    let name_outcome =
-                        self.execute_agent_shell_name_session_command(&pane_id, input)?;
-                    runtime_agent_shell_command_response_json(&pane_id, input, Some(&name_outcome))
-                } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
-                    outcome.as_ref()
-                    && command == "objective"
-                {
-                    let objective_outcome =
-                        self.execute_agent_shell_objective_command(&pane_id, input)?;
-                    runtime_agent_shell_command_response_json(
-                        &pane_id,
-                        input,
-                        Some(&objective_outcome),
-                    )
-                } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
-                    outcome.as_ref()
-                    && command == "list-macros"
-                {
-                    let macros_outcome = self.execute_agent_shell_list_macros_command(&pane_id)?;
-                    runtime_agent_shell_command_response_json(
-                        &pane_id,
-                        input,
-                        Some(&macros_outcome),
-                    )
-                } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
-                    outcome.as_ref()
-                    && command == "list-skills"
-                {
-                    let skills_outcome = self.execute_agent_shell_list_skills_command(&pane_id)?;
-                    runtime_agent_shell_command_response_json(
-                        &pane_id,
-                        input,
-                        Some(&skills_outcome),
-                    )
-                } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
-                    outcome.as_ref()
-                    && command == "sync-builtin-skills"
-                {
-                    let skills_outcome = self.execute_agent_shell_sync_builtin_skills_command()?;
-                    runtime_agent_shell_command_response_json(
-                        &pane_id,
-                        input,
-                        Some(&skills_outcome),
-                    )
-                } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
-                    outcome.as_ref()
-                    && command == "list-modified-files"
-                {
-                    let modified_outcome =
-                        self.execute_agent_shell_list_modified_files_command(&pane_id);
-                    runtime_agent_shell_command_response_json(
-                        &pane_id,
-                        input,
-                        Some(&modified_outcome),
-                    )
-                } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
-                    outcome.as_ref()
-                    && command == "copy-context"
-                {
-                    let context_outcome =
-                        self.execute_agent_shell_copy_context_command(&pane_id, input)?;
-                    runtime_agent_shell_command_response_json(
-                        &pane_id,
-                        input,
-                        Some(&context_outcome),
-                    )
-                } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
-                    outcome.as_ref()
-                    && command == "copy-trace-log"
-                {
-                    let trace_outcome =
-                        self.execute_agent_shell_copy_trace_log_command(&pane_id, input)?;
-                    runtime_agent_shell_command_response_json(&pane_id, input, Some(&trace_outcome))
-                } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
-                    outcome.as_ref()
-                    && command == "copy-patches"
-                {
-                    let patches_outcome =
-                        self.execute_agent_shell_copy_patches_command(&pane_id, input)?;
-                    runtime_agent_shell_command_response_json(
-                        &pane_id,
-                        input,
-                        Some(&patches_outcome),
-                    )
-                } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
-                    outcome.as_ref()
-                    && command == "debug-config"
-                {
-                    let debug_outcome = self.execute_agent_shell_debug_config_command(input)?;
-                    runtime_agent_shell_command_response_json(&pane_id, input, Some(&debug_outcome))
-                } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
-                    outcome.as_ref()
-                    && command == "init"
-                {
-                    let init_outcome = self.execute_agent_shell_init_command(
-                        &pane_id,
-                        input,
-                        queue_external_effects_for_adapter,
-                    )?;
-                    runtime_agent_shell_command_response_json(&pane_id, input, Some(&init_outcome))
-                } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
-                    outcome.as_ref()
-                    && command == "copy"
-                {
-                    let copy_outcome = self.execute_agent_shell_copy_command(&pane_id, input)?;
-                    runtime_agent_shell_command_response_json(&pane_id, input, Some(&copy_outcome))
-                } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
-                    outcome.as_ref()
-                    && command == "permissions"
-                {
-                    let permissions_outcome =
-                        self.execute_agent_shell_permissions_command(&pane_id, input)?;
-                    runtime_agent_shell_command_response_json(
-                        &pane_id,
-                        input,
-                        Some(&permissions_outcome),
-                    )
-                } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
-                    outcome.as_ref()
-                    && command == "approval"
-                {
-                    let approval_outcome =
-                        self.execute_agent_shell_approval_command(&pane_id, input)?;
-                    runtime_agent_shell_command_response_json(
-                        &pane_id,
-                        input,
-                        Some(&approval_outcome),
-                    )
-                } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
-                    outcome.as_ref()
-                    && command == "approve"
-                {
-                    let approve_outcome = self.execute_agent_shell_approve_command(
-                        primary_client_id,
-                        &pane_id,
-                        input,
-                    )?;
-                    runtime_agent_shell_command_response_json(
-                        &pane_id,
-                        input,
-                        Some(&approve_outcome),
-                    )
-                } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
-                    outcome.as_ref()
-                    && command == "sandbox"
-                {
-                    let sandbox_outcome = self
-                        .execute_agent_shell_sandbox_command(
-                            primary_client_id,
-                            &pane_id,
-                            input,
-                            origin,
-                        )
-                        .unwrap_or_else(|error| AgentShellCommandOutcome::Presented {
-                            command: "sandbox".to_string(),
-                            body: format!("Sandbox error: {}", error.message()),
-                            presentation: AgentShellPresentation::ErrorNotice,
-                        });
-                    runtime_agent_shell_command_response_json(
-                        &pane_id,
-                        input,
-                        Some(&sandbox_outcome),
-                    )
-                } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
-                    outcome.as_ref()
-                    && command == "compaction-mode"
-                {
-                    let mode_outcome = self
-                        .execute_compaction_mode_command(primary_client_id, &pane_id, input, origin)
-                        .unwrap_or_else(|error| AgentShellCommandOutcome::Presented {
-                            command: "compaction-mode".to_string(),
-                            body: format!("Compaction mode error: {}", error.message()),
-                            presentation: AgentShellPresentation::ErrorNotice,
-                        });
-                    runtime_agent_shell_command_response_json(&pane_id, input, Some(&mode_outcome))
-                } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
-                    outcome.as_ref()
-                    && command == "shell-mode"
-                {
-                    let shell_mode_outcome = self
-                        .execute_agent_shell_shell_mode_command(
-                            primary_client_id,
-                            &pane_id,
-                            input,
-                            origin,
-                        )
-                        .unwrap_or_else(|error| AgentShellCommandOutcome::Presented {
-                            command: "shell-mode".to_string(),
-                            body: format!("Shell mode error: {}", error.message()),
-                            presentation: AgentShellPresentation::ErrorNotice,
-                        });
-                    runtime_agent_shell_command_response_json(
-                        &pane_id,
-                        input,
-                        Some(&shell_mode_outcome),
-                    )
-                } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
-                    outcome.as_ref()
-                    && command == "memory"
-                {
-                    let memory_outcome = self.execute_agent_shell_memory_command(
-                        primary_client_id,
-                        &pane_id,
-                        input,
-                    )?;
-                    runtime_agent_shell_command_response_json(
-                        &pane_id,
-                        input,
-                        Some(&memory_outcome),
-                    )
-                } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
-                    outcome.as_ref()
-                    && command == "issue"
-                {
-                    let issue_outcome = issues::execute_agent_shell_issue_command(
-                        self,
-                        primary_client_id,
-                        &pane_id,
-                        input,
-                    )?;
-                    runtime_agent_shell_command_response_json(&pane_id, input, Some(&issue_outcome))
-                } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
-                    outcome.as_ref()
-                    && command == "context-doc"
-                {
-                    let context_document_outcome = self
-                        .execute_agent_shell_context_document_command(
-                            primary_client_id,
-                            &pane_id,
-                            input,
-                        )?;
-                    runtime_agent_shell_command_response_json(
-                        &pane_id,
-                        input,
-                        Some(&context_document_outcome),
-                    )
-                } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
-                    outcome.as_ref()
-                    && command == "editor-recovery"
-                {
-                    let recovery_outcome = self.execute_agent_shell_editor_recovery_command(
-                        primary_client_id,
-                        &pane_id,
-                        input,
-                    )?;
-                    runtime_agent_shell_command_response_json(
-                        &pane_id,
-                        input,
-                        Some(&recovery_outcome),
-                    )
-                } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
-                    outcome.as_ref()
-                    && command == "show-approvals"
-                {
-                    let show_outcome =
-                        self.execute_agent_shell_show_approvals_command(&pane_id, input)?;
-                    runtime_agent_shell_command_response_json(&pane_id, input, Some(&show_outcome))
-                } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
-                    outcome.as_ref()
-                    && command == "show-context"
-                {
-                    let show_outcome =
-                        self.execute_agent_shell_show_context_command(&pane_id, input)?;
-                    runtime_agent_shell_command_response_json(&pane_id, input, Some(&show_outcome))
-                } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
-                    outcome.as_ref()
-                    && command == "show-issues"
-                {
-                    let show_outcome =
-                        self.execute_agent_shell_show_issues_command(&pane_id, input)?;
-                    runtime_agent_shell_command_response_json(&pane_id, input, Some(&show_outcome))
-                } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
-                    outcome.as_ref()
-                    && command == "show-memories"
-                {
-                    let show_outcome =
-                        self.execute_agent_shell_show_memories_command(&pane_id, input)?;
-                    runtime_agent_shell_command_response_json(&pane_id, input, Some(&show_outcome))
-                } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
-                    outcome.as_ref()
-                    && command == "remember"
-                {
-                    let remember_outcome =
-                        self.execute_agent_shell_remember_command(&pane_id, input)?;
-                    runtime_agent_shell_command_response_json(
-                        &pane_id,
-                        input,
-                        Some(&remember_outcome),
-                    )
-                } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
-                    outcome.as_ref()
-                    && command == "loop"
-                {
-                    let loop_outcome = self.execute_agent_shell_loop_command(&pane_id, input)?;
-                    runtime_agent_shell_command_response_json(&pane_id, input, Some(&loop_outcome))
-                } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
-                    outcome.as_ref()
-                    && command == "reset-status"
-                {
-                    let reset_outcome = self.execute_agent_shell_reset_status_command(&pane_id)?;
-                    runtime_agent_shell_command_response_json(&pane_id, input, Some(&reset_outcome))
-                } else if let Some(
-                    AgentShellCommandOutcome::Display { command, .. }
-                    | AgentShellCommandOutcome::RequiresRuntime { command, .. },
-                ) = outcome.as_ref()
-                    && command == "status"
-                {
-                    let status_outcome = self.execute_agent_shell_status_command(
-                        primary_client_id,
-                        &pane_id,
-                        input,
-                    )?;
-                    runtime_agent_shell_command_response_json(
-                        &pane_id,
-                        input,
-                        Some(&status_outcome),
-                    )
-                } else if let Some(AgentShellCommandOutcome::Mutated { command, .. }) =
-                    outcome.as_ref()
-                    && matches!(command.as_str(), "clear" | "new")
-                {
-                    if let Some(conversation_id) = replaced_conversation_id.as_deref() {
-                        self.clear_received_peer_message_presentations_for_conversation(
-                            &pane_id,
-                            conversation_id,
-                        );
-                    }
-                    let cleared = self.clear_agent_shell_terminal_view(&pane_id)?;
-                    let mut clear_outcome = outcome.as_ref().cloned().ok_or_else(|| {
-                        MezError::invalid_state("clear/new command outcome was missing")
-                    })?;
-                    if let AgentShellCommandOutcome::Mutated { body, .. } = &mut clear_outcome {
-                        body.push_str(&format!(" terminal_view_cleared={cleared}"));
-                    }
-                    runtime_agent_shell_command_response_json(&pane_id, input, Some(&clear_outcome))
-                } else if let Some(outcome) = outcome.as_ref() {
-                    runtime_agent_shell_command_response_json(&pane_id, input, Some(outcome))
+                    let stop_outcome = AgentShellCommandOutcome::Mutated {
+                        command: "stop".to_string(),
+                        body: format!(
+                            "pane={} remember_cancelled={} command_cancelled={} title_cancelled={}",
+                            pane_id, remember_cancelled, command_cancelled, title_cancelled
+                        ),
+                        visibility: self.agent_shell_visibility_for_pane(&pane_id)?,
+                    };
+                    runtime_agent_shell_command_response_json(&pane_id, input, Some(&stop_outcome))
                 } else {
-                    if let Some(turn_id) =
-                        self.inject_agent_steering_with_display(&pane_id, input, display_input)?
-                    {
-                        steering_accepted = true;
-                        let visibility = self.agent_shell_visibility_for_pane(&pane_id)?;
-                        let steer_outcome = AgentShellCommandOutcome::Mutated {
-                            command: "prompt".to_string(),
-                            body: format!(
-                                "pane={} agent_prompt_turn={} injected_user_input=true",
-                                pane_id, turn_id
-                            ),
-                            visibility,
-                        };
-                        runtime_agent_shell_command_response_json(
-                            &pane_id,
-                            input,
-                            Some(&steer_outcome),
-                        )
-                    } else if parse_macro_prompt_invocation(input).is_some() {
-                        let started = self.start_agent_macro_prompt_turn(&pane_id, input)?;
-                        runtime_agent_shell_prompt_turn_response_json(&pane_id, input, &started)
-                    } else {
-                        let started = self.start_agent_prompt_turn(&pane_id, input)?;
-                        runtime_agent_shell_prompt_turn_response_json(&pane_id, input, &started)
-                    }
-                };
+                    let stopped = self.stop_agent_turn_for_pane(&pane_id)?;
+                    runtime_agent_shell_stop_response_json(&pane_id, input, &stopped)
+                }
+            } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
+                outcome.as_ref()
+                && command == "model"
+            {
+                let model_outcome = self.execute_agent_shell_model_command(&pane_id, input)?;
+                runtime_agent_shell_command_response_json(&pane_id, input, Some(&model_outcome))
+            } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
+                outcome.as_ref()
+                && command == "latency"
+            {
+                let latency_outcome = self.execute_agent_shell_latency_command(&pane_id, input)?;
+                runtime_agent_shell_command_response_json(&pane_id, input, Some(&latency_outcome))
+            } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
+                outcome.as_ref()
+                && command == "auth-status"
+            {
+                let auth_outcome = self.execute_agent_shell_auth_status_command(input)?;
+                runtime_agent_shell_command_response_json(&pane_id, input, Some(&auth_outcome))
+            } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
+                outcome.as_ref()
+                && command == "thinking"
+            {
+                let thinking_outcome =
+                    self.execute_agent_shell_thinking_command(&pane_id, input)?;
+                runtime_agent_shell_command_response_json(&pane_id, input, Some(&thinking_outcome))
+            } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
+                outcome.as_ref()
+                && command == "plan"
+            {
+                let plan_outcome = self.execute_agent_shell_plan_command(&pane_id, input)?;
+                runtime_agent_shell_command_response_json(&pane_id, input, Some(&plan_outcome))
+            } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
+                outcome.as_ref()
+                && command == "compact"
+            {
+                let compact_outcome = self.execute_agent_shell_compact_command(&pane_id, input)?;
+                runtime_agent_shell_command_response_json(&pane_id, input, Some(&compact_outcome))
+            } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
+                outcome.as_ref()
+                && command == "routing"
+            {
+                let routing_outcome = self.execute_agent_shell_routing_command(&pane_id, input)?;
+                runtime_agent_shell_command_response_json(&pane_id, input, Some(&routing_outcome))
+            } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
+                outcome.as_ref()
+                && command == "personality"
+            {
+                let personality_outcome =
+                    self.execute_agent_shell_personality_command(&pane_id, input)?;
+                runtime_agent_shell_command_response_json(
+                    &pane_id,
+                    input,
+                    Some(&personality_outcome),
+                )
+            } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
+                outcome.as_ref()
+                && command == "list-personalities"
+            {
+                let personalities_outcome =
+                    self.execute_agent_shell_list_personalities_command(&pane_id, input)?;
+                runtime_agent_shell_command_response_json(
+                    &pane_id,
+                    input,
+                    Some(&personalities_outcome),
+                )
+            } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
+                outcome.as_ref()
+                && command == "resume"
+            {
+                let resume_outcome = self.execute_agent_shell_resume_command(&pane_id, input)?;
+                runtime_agent_shell_command_response_json(&pane_id, input, Some(&resume_outcome))
+            } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
+                outcome.as_ref()
+                && command == "cd"
+            {
+                return Err(MezError::invalid_state(
+                    "native navigation requires the deferred command executor",
+                ));
+            } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
+                outcome.as_ref()
+                && command == "fork"
+            {
+                let fork_outcome =
+                    self.execute_agent_shell_fork_command(primary_client_id, &pane_id, input)?;
+                runtime_agent_shell_command_response_json(&pane_id, input, Some(&fork_outcome))
+            } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
+                outcome.as_ref()
+                && command == "name-session"
+            {
+                let name_outcome =
+                    self.execute_agent_shell_name_session_command(&pane_id, input)?;
+                runtime_agent_shell_command_response_json(&pane_id, input, Some(&name_outcome))
+            } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
+                outcome.as_ref()
+                && command == "objective"
+            {
+                let objective_outcome =
+                    self.execute_agent_shell_objective_command(&pane_id, input)?;
+                runtime_agent_shell_command_response_json(&pane_id, input, Some(&objective_outcome))
+            } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
+                outcome.as_ref()
+                && command == "list-macros"
+            {
+                let macros_outcome = self.execute_agent_shell_list_macros_command(&pane_id)?;
+                runtime_agent_shell_command_response_json(&pane_id, input, Some(&macros_outcome))
+            } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
+                outcome.as_ref()
+                && command == "list-skills"
+            {
+                let skills_outcome = self.execute_agent_shell_list_skills_command(&pane_id)?;
+                runtime_agent_shell_command_response_json(&pane_id, input, Some(&skills_outcome))
+            } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
+                outcome.as_ref()
+                && command == "sync-builtin-skills"
+            {
+                let skills_outcome = self.execute_agent_shell_sync_builtin_skills_command()?;
+                runtime_agent_shell_command_response_json(&pane_id, input, Some(&skills_outcome))
+            } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
+                outcome.as_ref()
+                && command == "list-modified-files"
+            {
+                let modified_outcome =
+                    self.execute_agent_shell_list_modified_files_command(&pane_id);
+                runtime_agent_shell_command_response_json(&pane_id, input, Some(&modified_outcome))
+            } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
+                outcome.as_ref()
+                && command == "copy-context"
+            {
+                let context_outcome =
+                    self.execute_agent_shell_copy_context_command(&pane_id, input)?;
+                runtime_agent_shell_command_response_json(&pane_id, input, Some(&context_outcome))
+            } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
+                outcome.as_ref()
+                && command == "copy-trace-log"
+            {
+                let trace_outcome =
+                    self.execute_agent_shell_copy_trace_log_command(&pane_id, input)?;
+                runtime_agent_shell_command_response_json(&pane_id, input, Some(&trace_outcome))
+            } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
+                outcome.as_ref()
+                && command == "copy-patches"
+            {
+                let patches_outcome =
+                    self.execute_agent_shell_copy_patches_command(&pane_id, input)?;
+                runtime_agent_shell_command_response_json(&pane_id, input, Some(&patches_outcome))
+            } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
+                outcome.as_ref()
+                && command == "debug-config"
+            {
+                let debug_outcome = self.execute_agent_shell_debug_config_command(input)?;
+                runtime_agent_shell_command_response_json(&pane_id, input, Some(&debug_outcome))
+            } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
+                outcome.as_ref()
+                && command == "init"
+            {
+                let init_outcome = self.execute_agent_shell_init_command(
+                    &pane_id,
+                    input,
+                    queue_external_effects_for_adapter,
+                )?;
+                runtime_agent_shell_command_response_json(&pane_id, input, Some(&init_outcome))
+            } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
+                outcome.as_ref()
+                && command == "copy"
+            {
+                let copy_outcome = self.execute_agent_shell_copy_command(&pane_id, input)?;
+                runtime_agent_shell_command_response_json(&pane_id, input, Some(&copy_outcome))
+            } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
+                outcome.as_ref()
+                && command == "permissions"
+            {
+                let permissions_outcome =
+                    self.execute_agent_shell_permissions_command(&pane_id, input)?;
+                runtime_agent_shell_command_response_json(
+                    &pane_id,
+                    input,
+                    Some(&permissions_outcome),
+                )
+            } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
+                outcome.as_ref()
+                && command == "approval"
+            {
+                let approval_outcome =
+                    self.execute_agent_shell_approval_command(&pane_id, input)?;
+                runtime_agent_shell_command_response_json(&pane_id, input, Some(&approval_outcome))
+            } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
+                outcome.as_ref()
+                && command == "approve"
+            {
+                let approve_outcome =
+                    self.execute_agent_shell_approve_command(primary_client_id, &pane_id, input)?;
+                runtime_agent_shell_command_response_json(&pane_id, input, Some(&approve_outcome))
+            } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
+                outcome.as_ref()
+                && command == "sandbox"
+            {
+                let sandbox_outcome = self
+                    .execute_agent_shell_sandbox_command(primary_client_id, &pane_id, input, origin)
+                    .unwrap_or_else(|error| AgentShellCommandOutcome::Presented {
+                        command: "sandbox".to_string(),
+                        body: format!("Sandbox error: {}", error.message()),
+                        presentation: AgentShellPresentation::ErrorNotice,
+                    });
+                runtime_agent_shell_command_response_json(&pane_id, input, Some(&sandbox_outcome))
+            } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
+                outcome.as_ref()
+                && command == "compaction-mode"
+            {
+                let mode_outcome = self
+                    .execute_compaction_mode_command(primary_client_id, &pane_id, input, origin)
+                    .unwrap_or_else(|error| AgentShellCommandOutcome::Presented {
+                        command: "compaction-mode".to_string(),
+                        body: format!("Compaction mode error: {}", error.message()),
+                        presentation: AgentShellPresentation::ErrorNotice,
+                    });
+                runtime_agent_shell_command_response_json(&pane_id, input, Some(&mode_outcome))
+            } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
+                outcome.as_ref()
+                && command == "shell-mode"
+            {
+                let shell_mode_outcome = self
+                    .execute_agent_shell_shell_mode_command(
+                        primary_client_id,
+                        &pane_id,
+                        input,
+                        origin,
+                    )
+                    .unwrap_or_else(|error| AgentShellCommandOutcome::Presented {
+                        command: "shell-mode".to_string(),
+                        body: format!("Shell mode error: {}", error.message()),
+                        presentation: AgentShellPresentation::ErrorNotice,
+                    });
+                runtime_agent_shell_command_response_json(
+                    &pane_id,
+                    input,
+                    Some(&shell_mode_outcome),
+                )
+            } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
+                outcome.as_ref()
+                && command == "memory"
+            {
+                let memory_outcome =
+                    self.execute_agent_shell_memory_command(primary_client_id, &pane_id, input)?;
+                runtime_agent_shell_command_response_json(&pane_id, input, Some(&memory_outcome))
+            } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
+                outcome.as_ref()
+                && command == "issue"
+            {
+                let issue_outcome = issues::execute_agent_shell_issue_command(
+                    self,
+                    primary_client_id,
+                    &pane_id,
+                    input,
+                )?;
+                runtime_agent_shell_command_response_json(&pane_id, input, Some(&issue_outcome))
+            } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
+                outcome.as_ref()
+                && command == "context-doc"
+            {
+                let context_document_outcome = self.execute_agent_shell_context_document_command(
+                    primary_client_id,
+                    &pane_id,
+                    input,
+                )?;
+                runtime_agent_shell_command_response_json(
+                    &pane_id,
+                    input,
+                    Some(&context_document_outcome),
+                )
+            } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
+                outcome.as_ref()
+                && command == "editor-recovery"
+            {
+                let recovery_outcome = self.execute_agent_shell_editor_recovery_command(
+                    primary_client_id,
+                    &pane_id,
+                    input,
+                )?;
+                runtime_agent_shell_command_response_json(&pane_id, input, Some(&recovery_outcome))
+            } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
+                outcome.as_ref()
+                && command == "show-approvals"
+            {
+                let show_outcome =
+                    self.execute_agent_shell_show_approvals_command(&pane_id, input)?;
+                runtime_agent_shell_command_response_json(&pane_id, input, Some(&show_outcome))
+            } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
+                outcome.as_ref()
+                && command == "show-context"
+            {
+                let show_outcome =
+                    self.execute_agent_shell_show_context_command(&pane_id, input)?;
+                runtime_agent_shell_command_response_json(&pane_id, input, Some(&show_outcome))
+            } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
+                outcome.as_ref()
+                && command == "show-issues"
+            {
+                let show_outcome = self.execute_agent_shell_show_issues_command(&pane_id, input)?;
+                runtime_agent_shell_command_response_json(&pane_id, input, Some(&show_outcome))
+            } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
+                outcome.as_ref()
+                && command == "show-memories"
+            {
+                let show_outcome =
+                    self.execute_agent_shell_show_memories_command(&pane_id, input)?;
+                runtime_agent_shell_command_response_json(&pane_id, input, Some(&show_outcome))
+            } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
+                outcome.as_ref()
+                && command == "remember"
+            {
+                let remember_outcome =
+                    self.execute_agent_shell_remember_command(&pane_id, input)?;
+                runtime_agent_shell_command_response_json(&pane_id, input, Some(&remember_outcome))
+            } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
+                outcome.as_ref()
+                && command == "loop"
+            {
+                let loop_outcome = self.execute_agent_shell_loop_command(&pane_id, input)?;
+                runtime_agent_shell_command_response_json(&pane_id, input, Some(&loop_outcome))
+            } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
+                outcome.as_ref()
+                && command == "reset-status"
+            {
+                let reset_outcome = self.execute_agent_shell_reset_status_command(&pane_id)?;
+                runtime_agent_shell_command_response_json(&pane_id, input, Some(&reset_outcome))
+            } else if let Some(
+                AgentShellCommandOutcome::Display { command, .. }
+                | AgentShellCommandOutcome::RequiresRuntime { command, .. },
+            ) = outcome.as_ref()
+                && command == "status"
+            {
+                let status_outcome =
+                    self.execute_agent_shell_status_command(primary_client_id, &pane_id, input)?;
+                runtime_agent_shell_command_response_json(&pane_id, input, Some(&status_outcome))
+            } else if let Some(AgentShellCommandOutcome::Mutated { command, .. }) = outcome.as_ref()
+                && matches!(command.as_str(), "clear" | "new")
+            {
+                if let Some(conversation_id) = replaced_conversation_id.as_deref() {
+                    self.clear_received_peer_message_presentations_for_conversation(
+                        &pane_id,
+                        conversation_id,
+                    );
+                }
+                let cleared = self.clear_agent_shell_terminal_view(&pane_id)?;
+                let mut clear_outcome = outcome.as_ref().cloned().ok_or_else(|| {
+                    MezError::invalid_state("clear/new command outcome was missing")
+                })?;
+                if let AgentShellCommandOutcome::Mutated { body, .. } = &mut clear_outcome {
+                    body.push_str(&format!(" terminal_view_cleared={cleared}"));
+                }
+                runtime_agent_shell_command_response_json(&pane_id, input, Some(&clear_outcome))
+            } else if let Some(outcome) = outcome.as_ref() {
+                runtime_agent_shell_command_response_json(&pane_id, input, Some(outcome))
+            } else {
+                if let Some(turn_id) =
+                    self.inject_agent_steering_with_display(&pane_id, input, display_input)?
+                {
+                    steering_accepted = true;
+                    let visibility = self.agent_shell_visibility_for_pane(&pane_id)?;
+                    let steer_outcome = AgentShellCommandOutcome::Mutated {
+                        command: "prompt".to_string(),
+                        body: format!(
+                            "pane={} agent_prompt_turn={} injected_user_input=true",
+                            pane_id, turn_id
+                        ),
+                        visibility,
+                    };
+                    runtime_agent_shell_command_response_json(&pane_id, input, Some(&steer_outcome))
+                } else if parse_macro_prompt_invocation(input).is_some() {
+                    let started = self.start_agent_macro_prompt_turn(&pane_id, input)?;
+                    runtime_agent_shell_prompt_turn_response_json(&pane_id, input, &started)
+                } else {
+                    let started = self.start_agent_prompt_turn(&pane_id, input)?;
+                    runtime_agent_shell_prompt_turn_response_json(&pane_id, input, &started)
+                }
+            };
             Ok(response)
         })() {
             Ok(response) => response,

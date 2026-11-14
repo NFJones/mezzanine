@@ -972,6 +972,18 @@ impl RuntimeSessionService {
         pending || claimed
     }
 
+    /// Stop targets this pane's current conversation, never a retained expense
+    /// owner's old binding. Cancellation preserves original accounting custody.
+    pub(crate) fn cancel_agent_session_title_for_pane(&mut self, pane: &str) -> bool {
+        let conversation = self
+            .agent_shell_store()
+            .get(pane)
+            .map(|session| session.session_id.clone());
+        conversation
+            .as_deref()
+            .is_some_and(|id| self.cancel_agent_session_title_task(id))
+    }
+
     /// Applies one generated-title worker result through actor-owned state.
     ///
     /// The title is persisted only on success. Every other outcome records a

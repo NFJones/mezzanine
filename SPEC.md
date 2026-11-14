@@ -16788,6 +16788,9 @@ An admission ordered before retirement remains issued exposure, not rollback.
 This title-only connection retains the existing
 optional-title slot; it does not establish fair auxiliary requeue or activate
 production budgets.
+Human `/stop` MUST retire queued and claimed generated-title publication for the
+invoking conversation even when no ordinary turn is live. Original late-expense
+custody MUST survive; lifting budget policy MUST NOT revive that stopped title.
 Missing ownership MUST NOT manufacture a root or silently activate budgeting.
 An internal retry MUST wait for the prior durable receipt AND actor handoff
 before allocating its next descriptor. Refusal of that fresh admission MUST
