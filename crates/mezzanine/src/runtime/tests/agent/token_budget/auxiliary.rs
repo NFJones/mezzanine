@@ -359,6 +359,15 @@ async fn runtime_budget_auxiliary_title_reclaim_cannot_borrow_predecessor_hold()
     let admission = work.admission_owner();
     let outcome = admission.claim().await.unwrap();
     let held = admission.capture_held().await.unwrap();
+    let waiter = std::sync::Arc::new(());
+    scene
+        .service
+        .park_budget_title_claim(
+            held.clone(),
+            std::sync::Arc::downgrade(&waiter),
+            crate::runtime::current_unix_millis(),
+        )
+        .unwrap();
     // Actual no-I/O rollback, not task retirement or worker cancellation.
     scene
         .service
@@ -375,6 +384,10 @@ async fn runtime_budget_auxiliary_title_reclaim_cannot_borrow_predecessor_hold()
         && held.matches_owner(owner)
         && held.matches_owner(&owner.clone())
         && !held.matches_owner(successor);
+    let resume_refused = scene
+        .service
+        .resume_budget_title_claim(&held, crate::runtime::current_unix_millis())
+        .is_err();
     let inert = rusqlite::Connection::open(scene.store.path()).unwrap().query_row(
         "SELECT (SELECT COUNT(*) FROM budget_attempts) + (SELECT COUNT(*) FROM budget_receipts) + (SELECT COUNT(*) FROM budget_admissions)",
         [], |row| row.get::<_, i64>(0),
@@ -386,7 +399,138 @@ async fn runtime_budget_auxiliary_title_reclaim_cannot_borrow_predecessor_hold()
         outcome,
         RuntimeBudgetAttemptAdmission::Held(BudgetAdmissionHold::PolicyUnavailable)
     ));
-    assert!(isolated && inert);
+    assert!(isolated && inert && resume_refused);
+}
+
+/// Only the original live positive hold can exclude lease time. Duplicate park
+/// and resume are inert; caller destruction or epoch revocation restores expiry.
+#[tokio::test]
+async fn runtime_budget_title_wait_lease_exclusion_and_retirement_are_exact() {
+    use crate::storage::token_usage::budget::receipts::BudgetAttemptPurpose;
+    for (retire_waiter, revoke_epoch) in [(false, false), (true, false), (false, true)] {
+        let (mut scene, _primary, conversation) = setup();
+        scene
+            .service
+            .schedule_runtime_agent_session_title(&conversation, Some("Original title lease"))
+            .unwrap();
+        let dispatch = scene
+            .service
+            .pending_agent_session_title_dispatch_id(&conversation)
+            .unwrap()
+            .to_owned();
+        prepare(
+            &mut scene,
+            &RuntimeBudgetAuxiliarySource::Title {
+                conversation: conversation.clone(),
+                dispatch: dispatch.clone(),
+            },
+        )
+        .await
+        .unwrap();
+        let title = scene
+            .service
+            .claim_agent_session_title_dispatch(&conversation, &dispatch)
+            .unwrap()
+            .unwrap();
+        let work = title
+            .budget_owner
+            .as_ref()
+            .unwrap()
+            .prepare_attempt(
+                mez_agent::ModelTokenUsageKey::new("openai", "gpt-test"),
+                BudgetAttemptPurpose::Title,
+            )
+            .unwrap();
+        let admission = work.admission_owner();
+        admission.claim().await.unwrap();
+        let held = admission.capture_held().await.unwrap();
+        let waiter = std::sync::Arc::new(());
+        let now = crate::runtime::current_unix_millis();
+        let parked = scene
+            .service
+            .park_budget_title_claim(held.clone(), std::sync::Arc::downgrade(&waiter), now)
+            .unwrap();
+        let duplicate = scene
+            .service
+            .park_budget_title_claim(held.clone(), std::sync::Arc::downgrade(&waiter), now + 100)
+            .unwrap();
+        let foreign = std::sync::Arc::new(());
+        let refused_foreign = scene
+            .service
+            .park_budget_title_claim(held.clone(), std::sync::Arc::downgrade(&foreign), now + 200)
+            .is_err();
+        let future = now + 600_000;
+        let no_expiry = scene
+            .service
+            .reap_expired_agent_session_title_claims(future)
+            .unwrap()
+            .is_empty()
+            && scene.service.claimed_agent_session_title_task_ids() == vec![conversation.clone()];
+        let qualified = scene.service.budget_title_claim_is_quiescent(&conversation);
+        let (released, expired) = if retire_waiter || revoke_epoch {
+            if revoke_epoch {
+                // A fresh native reconsideration revokes this capture even if
+                // it again returns the same descriptive PolicyUnavailable hold.
+                admission.retry_held().await.unwrap();
+            } else {
+                drop(waiter);
+            }
+            let refused = scene
+                .service
+                .resume_budget_title_claim(&held, future)
+                .is_err()
+                && !scene.service.budget_title_claim_is_quiescent(&conversation);
+            scene
+                .service
+                .reap_expired_agent_session_title_claims(future)
+                .unwrap();
+            (
+                refused,
+                scene
+                    .service
+                    .claimed_agent_session_title_task_ids()
+                    .is_empty(),
+            )
+        } else {
+            let resumed = scene
+                .service
+                .resume_budget_title_claim(&held, future)
+                .unwrap();
+            let duplicate = scene
+                .service
+                .resume_budget_title_claim(&held, future + 200_000)
+                .unwrap();
+            let retained = scene
+                .service
+                .reap_expired_agent_session_title_claims(future + 200_000)
+                .unwrap()
+                .is_empty()
+                && !scene
+                    .service
+                    .claimed_agent_session_title_task_ids()
+                    .is_empty();
+            // Duplicate resume must NOT extend the original finite allowance.
+            scene
+                .service
+                .reap_expired_agent_session_title_claims(future + 300_001)
+                .unwrap();
+            (
+                resumed && duplicate && retained,
+                scene
+                    .service
+                    .claimed_agent_session_title_task_ids()
+                    .is_empty(),
+            )
+        };
+        let stale = scene
+            .service
+            .resume_budget_title_claim(&held, future + 400_000)
+            .is_err();
+        drop((held, admission, work, title));
+        drop(scene);
+        assert!(parked && duplicate && refused_foreign && no_expiry && qualified);
+        assert!(released && expired && stale);
+    }
 }
 
 async fn prepare(scene: &mut Scene, source: &RuntimeBudgetAuxiliarySource) -> Result<()> {

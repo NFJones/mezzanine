@@ -37,7 +37,7 @@ async fn budget_monitored_original_future_requires_human_and_budget_release() {
     }
 }
 
-async fn browser_input(
+pub(super) async fn browser_input(
     handle: &crate::host::async_runtime::AsyncRuntimeSessionHandle,
     primary: &mez_core::ids::ClientId,
     bytes: &[u8],
@@ -60,7 +60,7 @@ async fn browser_input(
 }
 
 /// Reassemble the sole fixture row's wrapped cells, excluding browser help.
-async fn assert_browser_paused(
+pub(super) async fn assert_browser_paused(
     handle: &crate::host::async_runtime::AsyncRuntimeSessionHandle,
     pane: &str,
     expected: bool,

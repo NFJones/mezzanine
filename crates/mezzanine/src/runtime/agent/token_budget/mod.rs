@@ -48,6 +48,7 @@ pub(crate) mod request;
 )]
 pub(crate) mod resolution;
 mod resume;
+pub(crate) mod title_wait;
 mod transitions;
 pub(crate) use resume::RuntimeBudgetResumeCapture;
 
@@ -927,6 +928,9 @@ impl RuntimeSessionService {
             store: entry.store.clone(),
             origin: self.capture_agent_accounting_origin_for_pane(&turn.pane_id),
             auxiliary: None,
+            title_fence: None,
+            #[cfg(test)]
+            title_grant_gate: None,
         };
         owner.validate_request(&turn.conversation_id)?;
         Ok(Some(owner))

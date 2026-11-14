@@ -109,14 +109,26 @@ impl RuntimeSessionService {
         &self,
         task: &crate::runtime::RuntimeAgentSessionTitleTask,
     ) -> Result<Option<RuntimeBudgetRequestOwner>> {
-        self.claim_runtime_budget_auxiliary(
+        let mut owner = self.claim_runtime_budget_auxiliary(
             task.budget_capture.as_ref(),
             RuntimeBudgetAuxiliaryClaim::Title {
                 conversation: task.conversation_id.clone(),
                 dispatch: task.dispatch_id.clone(),
                 attempt: task.attempt_id.clone(),
             },
-        )
+        )?;
+        if let Some(owner) = &mut owner {
+            owner.title_fence = self
+                .agent
+                .claimed_agent_session_title_tasks
+                .get(&task.conversation_id)
+                .filter(|claim| {
+                    claim.task.dispatch_id == task.dispatch_id
+                        && claim.task.attempt_id == task.attempt_id
+                })
+                .map(|claim| claim.budget_fence.capture());
+        }
+        Ok(owner)
     }
 
     /// Missing capture stays unavailable under enabled assembly. Queue owners
@@ -270,6 +282,9 @@ impl RuntimeSessionService {
             store: entry.store.clone(),
             origin: capture.origin.clone(),
             auxiliary: Some(claim),
+            title_fence: None,
+            #[cfg(test)]
+            title_grant_gate: None,
         }))
     }
 }

@@ -30,9 +30,24 @@ pub(crate) struct RuntimeBudgetRequestOwner {
     /// Retained through every concrete attempt/journal clone. This narrows
     /// expense allocation only; task liveness requires separate actor checks.
     pub(super) auxiliary: Option<super::auxiliary::RuntimeBudgetAuxiliaryClaim>,
+    /// Current title claim only; never keeps publication authority alive.
+    pub(in crate::runtime::agent) title_fence:
+        Option<std::sync::Weak<std::sync::atomic::AtomicBool>>,
+    #[cfg(test)]
+    pub(super) title_grant_gate: Option<Arc<(tokio::sync::Notify, tokio::sync::Notify)>>,
 }
 
 impl RuntimeBudgetRequestOwner {
+    /// Request-local acceptance seam: gate after actor resume but before fresh
+    /// native reconsideration, without retaining an unobserved local permit.
+    #[cfg(test)]
+    pub(crate) fn gate_title_grant_for_tests(
+        &mut self,
+        gate: Arc<(tokio::sync::Notify, tokio::sync::Notify)>,
+    ) {
+        self.title_grant_gate = Some(gate);
+    }
+
     /// Pure exact-subject check. This is neither a policy permit nor disk I/O.
     pub(crate) fn validate_request(&self, conversation: &str) -> Result<()> {
         if self.member.conversation != conversation
@@ -232,6 +247,36 @@ impl RuntimeBudgetAttemptWork {
             && owner.validate_request(&owner.member.conversation).is_ok()
     }
 
+    pub(super) fn auxiliary_claim(&self) -> Option<&super::auxiliary::RuntimeBudgetAuxiliaryClaim> {
+        self.0.owner.auxiliary.as_ref()
+    }
+
+    /// Called only after the native binding validation. This atomic admission
+    /// point orders against claim retirement; no await or I/O follows before
+    /// the original permit is consumed. Prior admission remains issued exposure.
+    fn title_is_live(&self) -> bool {
+        if !matches!(
+            self.0.owner.auxiliary,
+            Some(super::auxiliary::RuntimeBudgetAuxiliaryClaim::Title { .. })
+        ) {
+            return true;
+        }
+        self.0
+            .owner
+            .title_fence
+            .as_ref()
+            .and_then(std::sync::Weak::upgrade)
+            .is_some_and(|live| live.load(std::sync::atomic::Ordering::SeqCst))
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn await_title_grant_for_tests(&self) {
+        if let Some(gate) = &self.0.owner.title_grant_gate {
+            gate.0.notify_one();
+            gate.1.notified().await;
+        }
+    }
+
     pub(super) fn wrap_permit(&self, permit: BudgetSendPermit) -> RuntimeBudgetSendPermit {
         RuntimeBudgetSendPermit {
             source: self.0.clone(),
@@ -322,6 +367,33 @@ pub(crate) struct RuntimeBudgetSendPermit {
 }
 
 impl RuntimeBudgetSendPermit {
+    /// Outer errors are native binding failures; an inner refusal retains the
+    /// exact unused permit for withdrawal and durable terminal settlement.
+    pub(crate) fn consume_if_current(
+        self,
+    ) -> Result<std::result::Result<RuntimeBudgetIssuedAttempt, RuntimeBudgetUnusedAttempt>> {
+        if !matches!(
+            self.source.owner.auxiliary,
+            Some(super::auxiliary::RuntimeBudgetAuxiliaryClaim::Title { .. })
+        ) {
+            return Ok(Ok(self.consume()?));
+        }
+        let source = self.source;
+        match self
+            .permit
+            .consume_if_live(|| RuntimeBudgetAttemptWork(source.clone()).title_is_live())?
+        {
+            Ok(issued) => Ok(Ok(RuntimeBudgetIssuedAttempt {
+                registered: RuntimeBudgetRegisteredAttempt(source),
+                issued,
+            })),
+            Err(permit) => Ok(Err(RuntimeBudgetUnusedAttempt {
+                registered: RuntimeBudgetRegisteredAttempt(source),
+                permit,
+            })),
+        }
+    }
+
     /// The retained worker stores only the native permit, never a reverse Arc
     /// to the AttemptSource that owns that worker's shared state.
     pub(super) fn into_native(self) -> BudgetSendPermit {

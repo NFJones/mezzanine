@@ -6,7 +6,8 @@
 //! Receipt-only factories remain separate descriptive ports. Configured dispatch
 //! installs this source only when it already owns activated budget membership;
 //! monitored ordinary workers retain that same future through paced holds and
-//! actor-owned timer adoption. Membership activation and auxiliary waits remain staged.
+//! actor-owned timer adoption. Titles use their actual claim-local fence; fair
+//! auxiliary requeue and membership activation remain staged.
 //! Qualified scoped retirement commits a separate terminal receipt after subtotals,
 //! with unknown dimensions unless independent dialect evidence qualifies them.
 
@@ -146,21 +147,40 @@ impl Source {
         reason: crate::storage::token_usage::budget::admission::BudgetAdmissionHold,
         previous: Option<&crate::storage::token_usage::budget::admission::BudgetAdmissionWaitState>,
     ) -> Result<crate::storage::token_usage::budget::admission::BudgetAdmissionWaitState> {
-        let agent = AgentId::opaque(observation.agent_id.clone())
-            .ok_or_else(|| suspended("original budget agent unavailable"))?;
-        let generation = observation
-            .claim_generation
-            .ok_or_else(|| suspended("original budget claim unavailable"))?;
+        let ordinary = if capture.is_title() {
+            None
+        } else {
+            Some((
+                AgentId::opaque(observation.agent_id.clone())
+                    .ok_or_else(|| suspended("original budget agent unavailable"))?,
+                observation
+                    .claim_generation
+                    .ok_or_else(|| suspended("original budget claim unavailable"))?,
+            ))
+        };
+        let title_waiter = Arc::new(());
         let mut delay = 100u64;
-        while !handle
-            .park_budget_provider_claim(
-                agent.clone(),
-                observation.turn_id.clone(),
-                generation,
-                capture.clone(),
-            )
-            .await?
-        {
+        loop {
+            let parked = match &ordinary {
+                Some((agent, generation)) => {
+                    handle
+                        .park_budget_provider_claim(
+                            agent.clone(),
+                            observation.turn_id.clone(),
+                            *generation,
+                            capture.clone(),
+                        )
+                        .await?
+                }
+                None => {
+                    handle
+                        .park_budget_title_claim(capture.clone(), Arc::downgrade(&title_waiter))
+                        .await?
+                }
+            };
+            if parked {
+                break;
+            }
             tokio::time::sleep(Duration::from_millis(delay)).await;
             delay = delay.saturating_mul(2).min(2000);
         }
@@ -173,6 +193,14 @@ impl Source {
         // belongs to the acknowledged original park, not active execution.
         tokio::time::sleep(Duration::from_millis(delay)).await;
         loop {
+            // A title has no ordinary-turn liveness monitor. Revalidate its
+            // actual claim on every paced read, even while policy stays zero;
+            // retained late-expense custody cannot keep cancelled work alive.
+            if ordinary.is_none() {
+                handle
+                    .park_budget_title_claim(capture.clone(), Arc::downgrade(&title_waiter))
+                    .await?;
+            }
             let state = owner.observe_held().await?;
             // Avoid pointless writer churn while numerically exhausted, while
             // projection is updating, or finite roots still drain exposure.
@@ -182,15 +210,23 @@ impl Source {
                     && (!limits.requires_serial_inference() || !state.root_outstanding)
             });
             if reconsider_changed_hold(&state, previous, reason) && may_reconsider {
-                while !handle
-                    .reacquire_budget_provider_claim(
-                        agent.clone(),
-                        observation.turn_id.clone(),
-                        generation,
-                        capture.clone(),
-                    )
-                    .await?
-                {
+                loop {
+                    let ready = match &ordinary {
+                        Some((agent, generation)) => {
+                            handle
+                                .reacquire_budget_provider_claim(
+                                    agent.clone(),
+                                    observation.turn_id.clone(),
+                                    *generation,
+                                    capture.clone(),
+                                )
+                                .await?
+                        }
+                        None => handle.resume_budget_title_claim(capture.clone()).await?,
+                    };
+                    if ready {
+                        break;
+                    }
                     tokio::time::sleep(Duration::from_millis(delay)).await;
                     delay = delay.saturating_mul(2).min(2000);
                 }
@@ -343,6 +379,8 @@ impl ProviderObservationReceiptFactory for BudgetAttemptAdmission {
                 );
                 // Fair selection and actor timer adoption precede this exact
                 // original positive hold's fresh native authorization.
+                #[cfg(test)]
+                self.0.work.await_title_grant_for_tests().await;
                 admission = owner
                     .retry_held()
                     .await
@@ -364,11 +402,18 @@ impl ProviderObservationReceiptFactory for BudgetAttemptAdmission {
             }
             // No await between consumption and retaining its original custody.
             // The adapter then polls only this exchange's transport future.
-            phase.issued = Some(
-                permit
-                    .consume()
-                    .map_err(|_| suspended("original budget send custody invalidated"))?,
-            );
+            match permit
+                .consume_if_current()
+                .map_err(|_| suspended("original budget send custody invalidated"))?
+            {
+                Ok(issued) => phase.issued = Some(issued),
+                Err(unused) => {
+                    // A native grant may have completed after title retirement.
+                    // Retain withdrawal/receipt custody; never silently drop it.
+                    phase.unused = Some(unused);
+                    return Err(suspended("original budget send custody invalidated"));
+                }
+            }
             Ok(())
         })
     }

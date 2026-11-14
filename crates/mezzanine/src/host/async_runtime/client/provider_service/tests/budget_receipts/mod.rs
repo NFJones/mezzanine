@@ -9,6 +9,7 @@ mod internal_retry;
 mod pre_send;
 mod retirement;
 mod routing;
+mod title_wait;
 mod transport;
 mod waiting;
 

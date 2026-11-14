@@ -999,6 +999,42 @@ impl AsyncRuntimeSessionHandle {
             .await?
     }
 
+    /// Park only the exact positively held title, not its late accounting owner.
+    pub(crate) async fn park_budget_title_claim(
+        &self,
+        capture: crate::runtime::RuntimeBudgetHeldAttempt,
+        waiter: std::sync::Weak<()>,
+    ) -> Result<bool> {
+        self.request(|reply| AsyncRuntimeRequest::ParkBudgetTitleClaim {
+            capture,
+            waiter,
+            reply,
+        })
+        .await?
+    }
+
+    /// Read-only acceptance observation; never manufactures a park or task.
+    #[cfg(test)]
+    pub(crate) async fn budget_title_claim_is_quiescent(
+        &self,
+        conversation: String,
+    ) -> Result<bool> {
+        self.request(|reply| AsyncRuntimeRequest::BudgetTitleClaimIsQuiescent {
+            conversation,
+            reply,
+        })
+        .await?
+    }
+
+    /// A true reply restores this title's lease, never native send permission.
+    pub(crate) async fn resume_budget_title_claim(
+        &self,
+        capture: crate::runtime::RuntimeBudgetHeldAttempt,
+    ) -> Result<bool> {
+        self.request(|reply| AsyncRuntimeRequest::ResumeBudgetTitleClaim { capture, reply })
+            .await?
+    }
+
     /// Adopt scheduler parking and original-key cancellation together. A false
     /// reply is provably unmutated timer pressure; callers retain and pace the
     /// same capture. Dropped replies are not authorization or retirement proof.

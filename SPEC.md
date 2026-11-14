@@ -16773,6 +16773,21 @@ ordinary purpose before allocating an attempt. A held capture MUST NOT match
 an ordinary owner or another auxiliary task solely through equal membership.
 Retained expense identity does not prove current task liveness or grant resume
 authority after retirement.
+For staged monitored-title suspension, lease exclusion MUST require the actual
+current title publication claim, its exact dispatch/claimed attempt and native
+membership, a still-positive original hold, and the original waiting future's
+live lifetime witness. Late-expense ownership alone MUST NOT qualify. Duplicate
+park MUST retain the first parked clock; duplicate resume MUST NOT extend the
+lease twice. Human Pause MUST remain independent, and a retired/replaced claim
+MUST NOT gain send authority after policy release. Actor resume MUST precede
+fresh native authorization. After native binding validation, final title send
+admission MUST check the original claim-local retirement fence without I/O or
+await before permit consumption. Retirement before that point MUST retain the
+unconsumed original grant for withdrawal and terminal settlement, with no send.
+An admission ordered before retirement remains issued exposure, not rollback.
+This title-only connection retains the existing
+optional-title slot; it does not establish fair auxiliary requeue or activate
+production budgets.
 Missing ownership MUST NOT manufacture a root or silently activate budgeting.
 An internal retry MUST wait for the prior durable receipt AND actor handoff
 before allocating its next descriptor. Refusal of that fresh admission MUST

@@ -3118,6 +3118,36 @@ impl AsyncRuntimeSessionActor {
                 let _ = reply.send(Ok(self.service.agent_turn_is_running(&turn_id)));
                 false
             }
+            #[cfg(test)]
+            AsyncRuntimeRequest::BudgetTitleClaimIsQuiescent {
+                conversation,
+                reply,
+            } => {
+                let _ = reply.send(Ok(self
+                    .service
+                    .budget_title_claim_is_quiescent(&conversation)));
+                false
+            }
+            AsyncRuntimeRequest::ParkBudgetTitleClaim {
+                capture,
+                waiter,
+                reply,
+            } => {
+                let result = self.service.park_budget_title_claim(
+                    capture,
+                    waiter,
+                    crate::runtime::current_unix_millis(),
+                );
+                let _ = reply.send(result);
+                false
+            }
+            AsyncRuntimeRequest::ResumeBudgetTitleClaim { capture, reply } => {
+                let result = self
+                    .service
+                    .resume_budget_title_claim(&capture, crate::runtime::current_unix_millis());
+                let _ = reply.send(result);
+                false
+            }
             AsyncRuntimeRequest::ParkBudgetProviderClaim {
                 agent_id,
                 turn_id,

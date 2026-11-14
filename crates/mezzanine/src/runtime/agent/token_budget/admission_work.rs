@@ -77,6 +77,17 @@ pub(crate) struct RuntimeBudgetHeldAttempt {
 }
 
 impl RuntimeBudgetHeldAttempt {
+    pub(crate) fn is_title(&self) -> bool {
+        matches!(
+            self.work.auxiliary_claim(),
+            Some(super::auxiliary::RuntimeBudgetAuxiliaryClaim::Title { .. })
+        )
+    }
+
+    pub(super) fn auxiliary_claim(&self) -> Option<&super::auxiliary::RuntimeBudgetAuxiliaryClaim> {
+        self.work.auxiliary_claim()
+    }
+
     pub(crate) fn matches_owner(&self, owner: &super::request::RuntimeBudgetRequestOwner) -> bool {
         self.epoch.upgrade().is_some() && self.work.matches_owner(owner)
     }

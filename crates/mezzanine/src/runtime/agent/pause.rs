@@ -283,7 +283,10 @@ impl RuntimeSessionService {
                 .agent
                 .claimed_agent_session_title_tasks
                 .values()
-                .any(|claim| claim.task.pane_id == pane)
+                .any(|claim| {
+                    claim.task.pane_id == pane
+                        && !self.budget_title_claim_is_quiescent(&claim.task.conversation_id)
+                })
     }
 
     /// Returns the exact resume fence owned by the retained human pause.

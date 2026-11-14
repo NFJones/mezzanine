@@ -850,7 +850,7 @@ impl RuntimeSessionService {
             return Ok(None);
         };
         task.attempt_id = crate::storage::token_usage::new_token_usage_event_id();
-        let budget_owner = match self.claim_runtime_budget_title(&task) {
+        let mut budget_owner = match self.claim_runtime_budget_title(&task) {
             Ok(owner) => owner,
             Err(error) => {
                 self.restore_pending_agent_session_title_task(task);
@@ -905,10 +905,16 @@ impl RuntimeSessionService {
         self.agent
             .session_title_tasks
             .note_claim(conversation_id, claimed_at_unix_ms);
+        let budget_fence = super::token_budget::title_wait::TitleClaimFence::new();
+        if let Some(owner) = &mut budget_owner {
+            owner.title_fence = Some(budget_fence.capture());
+        }
         self.agent.claimed_agent_session_title_tasks.insert(
             conversation_id.to_string(),
             RuntimeAgentSessionTitleClaim {
                 task: task.clone(),
+                budget_wait: None,
+                budget_fence,
                 claimed_at_unix_ms,
                 timeout_ms: SESSION_TITLE_CLAIM_TIMEOUT_MS,
             },
@@ -939,9 +945,7 @@ impl RuntimeSessionService {
             .session_title_accounting_owners
             .remove(&task.attempt_id);
         task.attempt_id.clear();
-        self.agent
-            .claimed_agent_session_title_tasks
-            .remove(task.conversation_id.as_str());
+        self.take_agent_session_title_claim(task.conversation_id.as_str());
         self.agent
             .session_title_tasks
             .note_claim_cleared(&task.conversation_id);
@@ -962,9 +966,7 @@ impl RuntimeSessionService {
             .remove(conversation_id)
             .is_some();
         let claimed = self
-            .agent
-            .claimed_agent_session_title_tasks
-            .remove(conversation_id)
+            .take_agent_session_title_claim(conversation_id)
             .is_some();
         self.agent.session_title_tasks.cancel(conversation_id);
         pending || claimed
@@ -1019,9 +1021,7 @@ impl RuntimeSessionService {
                     return Ok(RuntimeTransition::default());
                 }
                 if !bound {
-                    self.agent
-                        .claimed_agent_session_title_tasks
-                        .remove(&conversation_id);
+                    self.take_agent_session_title_claim(&conversation_id);
                     self.agent.session_title_tasks.retire(&conversation_id);
                     return Ok(RuntimeTransition::default());
                 }
@@ -1059,11 +1059,7 @@ impl RuntimeSessionService {
         conversation_id: &str,
         title: &str,
     ) -> MezResult<RuntimeTransition> {
-        let Some(claim) = self
-            .agent
-            .claimed_agent_session_title_tasks
-            .remove(conversation_id)
-        else {
+        let Some(claim) = self.take_agent_session_title_claim(conversation_id) else {
             return Ok(RuntimeTransition::default());
         };
         let task = claim.task;
@@ -1134,9 +1130,7 @@ impl RuntimeSessionService {
         let task = claim.task;
         // The attempt is settled before the retry gates run, so re-admission sees
         // the cleared claim rather than refusing the retry as already scheduled.
-        self.agent
-            .claimed_agent_session_title_tasks
-            .remove(conversation_id);
+        self.take_agent_session_title_claim(conversation_id);
         let retry_allowed = self
             .agent
             .session_title_tasks
@@ -1259,6 +1253,9 @@ impl RuntimeSessionService {
     ) -> MezResult<Vec<RuntimeSideEffect>> {
         let mut side_effects = Vec::new();
         for conversation_id in self.agent.session_title_tasks.expired_claims(now_unix_ms) {
+            if self.budget_title_claim_is_quiescent(&conversation_id) {
+                continue;
+            }
             let Some(claim) = self
                 .agent
                 .claimed_agent_session_title_tasks

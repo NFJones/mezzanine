@@ -103,6 +103,23 @@ impl BudgetIssuedAttempt {
 }
 
 impl BudgetSendPermit {
+    /// Revalidate native custody before the caller's final local admission
+    /// point. Refusal returns THIS unconsumed grant for exact withdrawal; a
+    /// successful check is followed only by moves, never another I/O or await.
+    pub(crate) fn consume_if_live(
+        self,
+        live: impl FnOnce() -> bool,
+    ) -> Result<std::result::Result<BudgetIssuedAttempt, Self>> {
+        self.lease.revalidate()?;
+        if !live() {
+            return Ok(Err(self));
+        }
+        Ok(Ok(BudgetIssuedAttempt {
+            outcome: self.outcome,
+            _lease: self.lease,
+        }))
+    }
+
     /// Evidence from this original grant; it cannot construct another permit.
     pub(crate) fn outcome(&self) -> &BudgetAdmissionOutcome {
         &self.outcome

@@ -144,9 +144,26 @@ send. A still-live positive nonwriting budget hold is quiescent for human Pause,
 while independent issued effects and persistence still keep it Pausing. Human
 Resume clears only that human gate: the original frozen request, claim and budget
 wait survive, without replacement guidance or another provider continuation.
-Revoked or active holds cannot supply this nonwriting proof. This does not
-activate memberships or establish turn-less auxiliary waits or root-wide effect
-gates.
+Revoked or active holds cannot supply this nonwriting proof.
+
+Monitored generated-title requests also retain their original future on a
+positive hold. The existing title claim holds one bounded wait record, qualified
+by the exact conversation, dispatch, claim attempt and current native membership.
+Each paced check revalidates the actual publication claim, not the separate
+late-expense owner. Only a live waiting future can exclude its parked interval
+from the title lease; duplicate park/resume cannot extend it twice. Human Pause
+stays independent, and closing/replacing the original claim cannot authorize a
+send after policy release. Actor adoption restores the remaining lease before
+fresh native authorization, never supplies that authorization itself.
+The final atomic claim check follows native binding validation immediately
+before permit consumption. Retirement wins if it precedes that check, including
+when authorization finishes after actor resume; the unused original grant is
+withdrawn and settled without HTTP. Admission ordered before retirement remains
+issued exposure and is not implicitly rolled back.
+
+This title-only connection still retains the existing optional-title concurrency
+slot. It does not implement auxiliary fair requeue, compaction/memory waits,
+root-wide effect gates, or production membership activation.
 
 Native async sends also retain evidence that their exact local transport future
 and active callback futures were destroyed, including on cancellation. This transfer

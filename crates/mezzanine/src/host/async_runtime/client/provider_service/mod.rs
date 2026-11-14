@@ -1290,6 +1290,7 @@ async fn dispatch_agent_provider_side_effects(
                     Err(_) => continue,
                 };
                 let owner = ProviderWorkerOwner::title(&dispatch);
+                let budget_waiter = handle.clone();
                 spawn_owned_agent_provider_worker(
                     workers,
                     owners,
@@ -1298,7 +1299,13 @@ async fn dispatch_agent_provider_side_effects(
                         handle.clone(),
                         dispatch,
                         drains.clone(),
-                        execute_runtime_agent_session_title_dispatch,
+                        move |dispatch, observer| {
+                            execute_runtime_agent_session_title_dispatch_with_waiter(
+                                dispatch,
+                                observer,
+                                Some(budget_waiter),
+                            )
+                        },
                     ),
                 );
             }
@@ -2787,9 +2794,20 @@ async fn execute_runtime_agent_remember_dispatch(
 ///
 /// The reply is sanitized here so only a bounded title or a stable bounded
 /// reason crosses the worker boundary; raw provider text never crosses it.
+#[cfg(test)]
 async fn execute_runtime_agent_session_title_dispatch(
     dispatch: RuntimeAgentSessionTitleDispatch,
     observer: ProviderWireRequestObserver,
+) -> (AgentSessionTitleOutcome, mez_agent::ModelTokenUsage) {
+    execute_runtime_agent_session_title_dispatch_with_waiter(dispatch, observer, None).await
+}
+
+/// Retain this original title future through a positively nonwriting hold.
+/// Direct fixtures without a monitored actor keep the existing refusal path.
+async fn execute_runtime_agent_session_title_dispatch_with_waiter(
+    dispatch: RuntimeAgentSessionTitleDispatch,
+    observer: ProviderWireRequestObserver,
+    budget_waiter: Option<AsyncRuntimeSessionHandle>,
 ) -> (AgentSessionTitleOutcome, mez_agent::ModelTokenUsage) {
     let RuntimeAgentSessionTitleDispatch {
         budget_owner: _budget_owner,
@@ -2805,10 +2823,22 @@ async fn execute_runtime_agent_session_title_dispatch(
             Default::default(),
         );
     }
+    let installed = match (_budget_owner.as_ref(), budget_waiter) {
+        (Some(owner), Some(handle)) => {
+            let clock = crate::integrations::agent::provider::budget_deadline::ProviderBudgetDeadline::default();
+            observer
+                .with_budget_deadline(clock.clone())
+                .with_budget_receipt_source(std::sync::Arc::new(
+                    budget_admission::BudgetRequestAdmission::new(owner.clone())
+                        .with_waiter(handle, clock),
+                ))
+        }
+        (owner, _) => budget_admission::install_request_source(observer, owner),
+    };
     session_title_response_outcome(
         observed_dispatch_provider_request(
             &provider,
-            &match budget_admission::install_request_source(observer, _budget_owner.as_ref()) {
+            &match installed {
                 Ok(observer) => observer,
                 Err(_) => {
                     return (
