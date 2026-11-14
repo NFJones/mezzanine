@@ -10,6 +10,7 @@ mod fork_fixtures;
 mod fork_inheritance;
 /// Immutable compacted-parent source and cutoff qualification.
 mod fork_source;
+mod interrupted_persistence;
 mod legacy_identity;
 mod lifecycle;
 mod metadata;
@@ -20,3 +21,4 @@ mod resume_prompt;
 mod saved_sessions;
 mod session_titles;
 mod snapshots;
+mod startup_recovery;

@@ -19,6 +19,7 @@ type ReceiptRowClaims<'a> = BTreeMap<(&'a str, u64), &'a TranscriptEntry>;
 fn ordinary_receipt_claims(receipts: &[StoredReceipt]) -> Result<ReceiptRowClaims<'_>> {
     let mut rows = BTreeMap::new();
     let mut origins = BTreeMap::new();
+    let mut placements = BTreeMap::new();
     for (_, receipt, entries) in receipts {
         for entry in entries {
             let key = (receipt.conversation_id.as_str(), entry.sequence);
@@ -33,6 +34,14 @@ fn ordinary_receipt_claims(receipts: &[StoredReceipt]) -> Result<ReceiptRowClaim
         }
         if let Some(accounting) = &receipt.row_accounting {
             for (sequence, origin) in accounting.origins() {
+                if placements
+                    .insert((receipt.conversation_id.as_str(), *origin), *sequence)
+                    .is_some_and(|previous| previous != *sequence)
+                {
+                    return Err(MezError::conflict(
+                        "recovery append occurrence has multiple placements",
+                    ));
+                }
                 let key = (receipt.conversation_id.as_str(), *sequence);
                 if origins
                     .insert(key, *origin)
@@ -99,8 +108,30 @@ impl AgentTranscriptStore {
         }
         let mut select =
             connection.prepare_cached("SELECT origin FROM origins WHERE sequence=?1")?;
+        let mut sql =
+            String::from("SELECT EXISTS(SELECT 1 FROM origins WHERE origin=?1 AND sequence<>?2");
+        if version >= 4 {
+            sql.push_str(" UNION SELECT 1 FROM row_digests WHERE origin=?1 AND sequence<>?2");
+        }
+        if version >= 5 {
+            sql.push_str(" UNION SELECT 1 FROM execution_sources WHERE origin=?1 AND sequence<>?2");
+        }
+        sql.push(')');
+        let mut original_placement = connection.prepare_cached(&sql)?;
         let mut placed = BTreeMap::new();
         for (sequence, expected) in accounting.origins() {
+            // Detect an existing occurrence at another position before raw
+            // append or receipt admission. SQLite publication is too late: its
+            // rollback cannot undo bytes already appended to history.tsv.
+            let elsewhere: bool = original_placement.query_row(
+                params![String::from(*expected), sequence.to_string()],
+                |row| row.get(0),
+            )?;
+            if elsewhere {
+                return Err(MezError::conflict(
+                    "ordinary append occurrence already has a different original placement",
+                ));
+            }
             let current: Option<String> = select
                 .query_row([sequence.to_string()], |row| row.get(0))
                 .optional()?;
@@ -139,6 +170,17 @@ impl AgentTranscriptStore {
         for (_, receipt, rows) in pending {
             if receipt.conversation_id != batch.conversation_id() {
                 continue;
+            }
+            if let Some(previous) = &receipt.row_accounting {
+                for (sequence, origin) in accounting.origins() {
+                    if previous.origins().iter().any(|(old_sequence, old_origin)| {
+                        old_origin == origin && old_sequence != sequence
+                    }) {
+                        return Err(MezError::conflict(
+                            "pending append occurrence already has a different placement",
+                        ));
+                    }
+                }
             }
             for row in rows {
                 if let Some(expected) = accounting.origins().get(&row.sequence)

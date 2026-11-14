@@ -110,6 +110,8 @@ pub(crate) enum ConversationTranscriptRead<'a> {
     All,
     /// Validated rows owned by one turn plus global catalog snapshots.
     ForTurn(&'a str),
+    /// Turn rows plus exact inherited occurrences needed for continuation dedup.
+    ForTurnAndOccurrences(&'a str, &'a BTreeSet<mez_agent::ContextBlockOccurrenceId>),
     /// Validated committed rows through an actor-captured fork boundary.
     Through(u64),
     Latest(usize),
@@ -3221,7 +3223,41 @@ impl AgentTranscriptStore {
         turn_id: &str,
         committed_prefix_required: bool,
         pending: &[TranscriptEntry],
+        occurrences: Option<&BTreeSet<mez_agent::ContextBlockOccurrenceId>>,
     ) -> Result<ConversationTranscriptView> {
+        let selected = |entry: &TranscriptEntry| -> Result<bool> {
+            if entry.turn_id == turn_id
+                || matches!(
+                    mez_agent::TranscriptContextEvent::from_transcript_content(&entry.content),
+                    Some(mez_agent::TranscriptContextEvent::McpCatalogSnapshot { .. })
+                )
+            {
+                return Ok(true);
+            }
+            if let Some(occurrences) = occurrences
+                && entry.role == mez_agent::TranscriptRole::System
+                && let Some(control) =
+                    mez_agent::transcript::TranscriptExecutionStateRecord::from_transcript_content(
+                        &entry.content,
+                    )?
+            {
+                return Ok(control
+                    .state()
+                    .members()
+                    .iter()
+                    .any(|(id, _)| occurrences.contains(id)));
+            }
+            if let Some(occurrences) = occurrences
+                && entry.role == mez_agent::TranscriptRole::System
+                && let Some(record) =
+                    mez_agent::transcript::TranscriptContextRecord::from_transcript_content(
+                        &entry.content,
+                    )?
+            {
+                return Ok(occurrences.contains(&record.record().occurrence_id()));
+            }
+            Ok(false)
+        };
         let path = self.existing_transcript_path_for(conversation_id)?;
         if !path.exists() && committed_prefix_required {
             return Err(MezError::invalid_state(
@@ -3270,12 +3306,7 @@ impl AgentTranscriptStore {
                         "transcript snapshot sequence has conflicting contents",
                     ));
                 }
-                if entry.turn_id == turn_id
-                    || matches!(
-                        mez_agent::TranscriptContextEvent::from_transcript_content(&entry.content),
-                        Some(mez_agent::TranscriptContextEvent::McpCatalogSnapshot { .. })
-                    )
-                {
+                if selected(&entry)? {
                     committed.push(entry);
                 }
                 line.clear();
@@ -3297,12 +3328,7 @@ impl AgentTranscriptStore {
             next = next.checked_add(1).ok_or_else(|| {
                 MezError::invalid_state("transcript logical history sequence overflow")
             })?;
-            if receipt.turn_id == turn_id
-                || matches!(
-                    mez_agent::TranscriptContextEvent::from_transcript_content(&receipt.content),
-                    Some(mez_agent::TranscriptContextEvent::McpCatalogSnapshot { .. })
-                )
-            {
+            if selected(receipt)? {
                 logical.push(receipt.clone());
             }
         }
@@ -3453,12 +3479,19 @@ impl AgentTranscriptStore {
         // committed history. The full read validates and collects in one pass.
         let committed = match read {
             ConversationTranscriptRead::All => self.inspect_validated_transcript(conversation_id),
-            ConversationTranscriptRead::ForTurn(turn_id) => {
+            ConversationTranscriptRead::ForTurn(turn_id)
+            | ConversationTranscriptRead::ForTurnAndOccurrences(turn_id, _) => {
                 let view = self.inspect_validated_transcript_for_turn(
                     conversation_id,
                     turn_id,
                     committed_prefix_required,
                     pending,
+                    match read {
+                        ConversationTranscriptRead::ForTurnAndOccurrences(_, occurrences) => {
+                            Some(occurrences)
+                        }
+                        _ => None,
+                    },
                 )?;
                 if let Some(stable) = stable.as_deref_mut() {
                     for row in &view.logical {
@@ -5582,7 +5615,13 @@ impl AgentTranscriptStore {
             excluded.insert(conversation_id.clone());
             let deletion = (|| {
                 let _conversation_lock = self.acquire_conversation_lock(&conversation_id)?;
-                if protected_conversation_ids.contains(&conversation_id) {
+                if protected_conversation_ids.contains(&conversation_id)
+                    || self.startup_refusal_is_retained(&conversation_id)?
+                    || self.has_unsettled_append_receipts_locked(
+                        &conversation_id,
+                        &_conversation_lock,
+                    )?
+                {
                     return Ok(false);
                 }
                 let Some(record) = catalog::record_for_mutation(self, &conversation_id)? else {

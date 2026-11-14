@@ -6,7 +6,8 @@
 
 use mez_agent::ContextSourceKind;
 use mez_agent::transcript::{
-    TranscriptContextEvent, TranscriptContextRecord, TranscriptEntry, TranscriptRole,
+    TranscriptContextEvent, TranscriptContextRecord, TranscriptEntry,
+    TranscriptExecutionStateRecord, TranscriptRole,
 };
 
 /// Returns the durable identity of one transcript row without volatile
@@ -19,6 +20,19 @@ pub(crate) fn canonical_transcript_entry_identity(entry: &TranscriptEntry) -> (S
         TranscriptRole::System => 3,
     };
     if entry.role == TranscriptRole::System
+        && let Ok(Some(control)) =
+            TranscriptExecutionStateRecord::from_transcript_content(&entry.content)
+    {
+        // Exact lifecycle state belongs to its original group across turns.
+        // A changed interval/frontier/state remains a distinct revision and
+        // still requires the original-producer qualification before append.
+        return (
+            control.state().group().to_string(),
+            role,
+            entry.content.clone(),
+        );
+    }
+    if entry.role == TranscriptRole::System
         && let Ok(Some(record)) = TranscriptContextRecord::from_transcript_content(&entry.content)
     {
         let owner = if matches!(
@@ -27,7 +41,10 @@ pub(crate) fn canonical_transcript_entry_identity(entry: &TranscriptEntry) -> (S
         ) {
             String::new()
         } else {
-            entry.turn_id.clone()
+            // An interrupted continuation can project an earlier occurrence
+            // under a new turn. Its original identity is conversation-scoped;
+            // changing turn attribution cannot make it a second append.
+            String::from(record.record().occurrence_id())
         };
         return (owner, role, accounted_occurrence_identity(record));
     }

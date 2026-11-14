@@ -11873,6 +11873,15 @@ completion and canonical pending-history capture. Typed authored occurrences
 retain their actual IDs. Exact retries MUST reuse the original proposal;
 cancelling a queued append and creating another at the same physical slot MUST
 allocate new unaccounted occurrences even when every raw field is equal.
+An interrupted continuation MUST preserve original occurrence identity across
+turn ids. Its imported projection boundary MAY advance only over the original
+occurrences present in checked committed or admitted pending history; this does
+not acknowledge persistence. Stopping before the first provider response MUST
+persist the original task admission as well as interruption evidence. Later
+projection MUST select the current correcting prompt rather than the earlier
+retained prompt. Accounted occurrence deduplication MUST span turns, and append
+admission MUST refuse an occurrence already placed or reserved at another row
+before publishing its receipt or raw bytes.
 Committed overlap MUST match the original placement before captured pending
 work can adopt it. IDs remain descriptive and MUST NOT replace claim-generation,
 source, execution or durability checks.
@@ -21816,6 +21825,33 @@ published from an exclusive private staging inode with file and directory sync.
 Sorted conversation locks MUST precede the session checkpoint lock; a shared
 legacy recovery backup lock follows it. An empty published checkpoint MUST
 remain authoritative and MUST NOT resurrect legacy bindings on restart.
+
+Ordinary daemon startup MUST isolate failures in canonically routed conversation
+append receipts without discarding or replacing refused source, original receipts
+or required identity state. Preflight refusal MUST leave that conversation's bytes
+unchanged; a failed replay MUST retain any original-owned partial publication and
+its receipt for checked recovery. Startup MUST preflight every recoverable inventory before
+replaying independent healthy conversations, withhold refused bindings and their
+persistent dependent children, and report each refusal explicitly. Before later
+checkpoints can omit a refused binding, startup MUST durably preserve the complete
+exact original active checkpoint in a private content-addressed
+`startup-refusal-<session-key>-<sha256>.json` backup in that same namespace. Changed
+checkpoint source or failed preservation MUST refuse startup. The affected pane
+MAY remain a user shell and start a fresh conversation; explicit resume of refused
+history MUST retain its ordinary integrity checks. Unknown receipt filenames or
+unroutable namespace failures remain startup errors. This isolation MUST NOT
+repair source, settle failed receipts, infer missing prompts, resume interrupted
+work or bypass qualified original-store native/message/budget recovery. Strict
+global recovery and qualified native restore retain their existing error behavior.
+Refused conversations and withheld persistent children MUST retain a durable
+automatic-retention veto under `.startup-refusals-v1/<conversation-id>`, even
+after their active binding is replaced or another daemon launches. This marker
+grants no usable history or recovery authority. Age/count retention MUST also
+preserve unsettled append owners; explicit user deletion retains its existing
+separate semantics.
+The refusal MUST veto model-history adoption until the saved source is repaired
+and the refusal is explicitly cleared. Clearing a refusal MUST NOT bypass any
+ordinary receipt, identity, replay, native or budget integrity checks.
 
 Within that envelope, active metadata row8 introduced the original actual
 native shell incarnation as an optional fixed16-byte UUIDv4/RFC4122 value.

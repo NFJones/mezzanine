@@ -178,10 +178,21 @@ impl AgentTranscriptStore {
 
     /// Acquires the exclusive advisory lock shared by one conversation's mutations.
     pub(super) fn acquire_conversation_lock(&self, conversation_id: &str) -> Result<File> {
-        let file = self.open_conversation_lock(conversation_id)?;
-        flock(&file, FlockOperation::LockExclusive).map_err(std::io::Error::from)?;
+        let file = self.acquire_conversation_lock_without_recovery(conversation_id)?;
         self.recover_replay_raw_revision_locked(conversation_id)?;
         self.recover_row_origins_rewrite_locked(conversation_id)?;
+        Ok(file)
+    }
+
+    /// Owns only the original mutation lock, without inspecting or recovering
+    /// source. Refusal publication needs this even when recovery itself fails.
+    /// Callers must not use this lease to adopt or mutate transcript history.
+    pub(super) fn acquire_conversation_lock_without_recovery(
+        &self,
+        conversation_id: &str,
+    ) -> Result<File> {
+        let file = self.open_conversation_lock(conversation_id)?;
+        flock(&file, FlockOperation::LockExclusive).map_err(std::io::Error::from)?;
         Ok(file)
     }
 

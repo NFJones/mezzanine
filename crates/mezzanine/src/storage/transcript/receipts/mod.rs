@@ -46,6 +46,7 @@ pub(super) mod custody;
 mod initial_projection;
 /// Ordinary occurrence publication follows the exact original append proposal.
 mod ordinary_accounting;
+mod startup;
 pub(crate) use custody::CustodyAppendReceipt;
 
 const RECEIPT_VERSION: u64 = 1;
@@ -947,8 +948,17 @@ impl AgentTranscriptStore {
             .into_iter()
             .filter(|(_, receipt, _)| receipt.custody_plan().is_none())
             .collect::<Vec<_>>();
-        self.preflight_initial_projection_receipts(&receipts)?;
-        let claimed = self.preflight_ordinary_accounting_receipts(&receipts)?;
+        self.preflight_append_recovery(&receipts)?;
+        self.replay_append_receipts(receipts)
+    }
+
+    /// Checks the entire selected recovery inventory before replay writes rows.
+    fn preflight_append_recovery(
+        &self,
+        receipts: &[(PathBuf, AppendReceipt, Vec<TranscriptEntry>)],
+    ) -> Result<()> {
+        self.preflight_initial_projection_receipts(receipts)?;
+        let claimed = self.preflight_ordinary_accounting_receipts(receipts)?;
         // Detect conflicting committed history across every conversation
         // before replay mutates any archive. The append path repeats these
         // checks under its conversation lock when it actually writes.
@@ -991,6 +1001,14 @@ impl AgentTranscriptStore {
                 })?;
             }
         }
+        Ok(())
+    }
+
+    /// Replays only inventories already checked by the caller's recovery policy.
+    fn replay_append_receipts(
+        &self,
+        receipts: Vec<(PathBuf, AppendReceipt, Vec<TranscriptEntry>)>,
+    ) -> Result<()> {
         let mut receipts = receipts
             .into_iter()
             .map(|(_, receipt, entries)| (receipt, entries))

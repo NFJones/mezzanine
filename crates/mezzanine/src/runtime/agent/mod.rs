@@ -2420,6 +2420,34 @@ impl RuntimeSessionService {
         };
 
         let mut resumed = continuation.context.clone();
+        // The stopped turn may have published more source since its original
+        // import. Only occurrences actually present in this checked fresh
+        // history belong to the continued turn's imported prefix. Pending
+        // admitted rows qualify here too; this is not a durability receipt.
+        let imported = fresh
+            .chronology()
+            .iter()
+            .filter(|event| event.sequence().get() <= imported_history_sequence_high_water)
+            .map(|event| (event.record().occurrence_id(), event))
+            .collect::<BTreeMap<_, _>>();
+        let continued_history_high_water = resumed
+            .chronology()
+            .iter()
+            .filter(|event| {
+                event.sequence().get() > continuation.imported_history_sequence_high_water
+            })
+            .take_while(|event| {
+                imported
+                    .get(&event.record().occurrence_id())
+                    .is_some_and(|source| {
+                        source.block() == event.block()
+                            && source.execution_group_id() == event.execution_group_id()
+                            && source.provider_owner() == event.provider_owner()
+                    })
+            })
+            .map(|event| event.sequence().get())
+            .last()
+            .unwrap_or(continuation.imported_history_sequence_high_water);
         if resumed.has_replay_owner() {
             // A correcting user prompt explicitly supersedes the task. Keep
             // the original prompt's bytes/record/framing instead of rewriting
@@ -2461,12 +2489,7 @@ impl RuntimeSessionService {
             resumed.set_metadata(fresh.metadata().clone());
             let remapped_prompt = resumed.chronology()[start + prompt].sequence();
             resumed.validate_durable()?;
-            return Ok((
-                resumed,
-                true,
-                continuation.imported_history_sequence_high_water,
-                remapped_prompt,
-            ));
+            return Ok((resumed, true, continued_history_high_water, remapped_prompt));
         }
         resumed.archive_active_user_prompt()?;
         resumed.replace_stable_slots(fresh.stable_slots().to_vec())?;
@@ -2516,7 +2539,7 @@ impl RuntimeSessionService {
         Ok((
             resumed,
             true,
-            continuation.imported_history_sequence_high_water,
+            continued_history_high_water,
             remapped_prompt.ok_or_else(|| {
                 MezError::invalid_state("continued prompt event identity unavailable")
             })?,

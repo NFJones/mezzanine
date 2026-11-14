@@ -57,6 +57,30 @@ daemon; add
 
 ## Foreground service options
 
+Ordinary daemon launch recovers independent transcript append receipts before
+restoring saved agent bindings. If a conversation's receipt conflicts with its
+saved source, the daemon reports that conversation as not restored and leaves
+its pane available as a user shell. Healthy conversations can still restore.
+The refused transcript, receipt, and identity database remain in place; a new
+conversation can be started without repairing or discarding the old one.
+
+Before a later checkpoint can replace a refused binding, its complete original
+checkpoint is preserved under
+`agent-sessions/.active-agent-session-metadata-v1/startup-refusal-<session-key>-<sha256>.json`
+in the configuration root. The runtime diagnostic records the backup path.
+Repairing the saved conversation remains a separate operation: deleting its
+receipt or rebuilding its identity database does not establish valid history.
+Explicit resume still validates the saved source. Unknown receipt filenames,
+failed checkpoint preservation, and qualified native continuity failures still
+refuse startup.
+Isolated conversations and dependent children also receive a durable retention
+hold under `agent-sessions/.startup-refusals-v1/`, so automatic age/count cleanup
+cannot discard their source after the active binding changes. Explicit deletion
+remains a separate user action.
+The refusal also blocks adopting that conversation as model history. After
+repair, its hold must be explicitly cleared before resume; clearing it grants
+no recovery authority and does not skip source validation.
+
 ### Harness bootstrap
 
 #### Offline installed-native support matrix

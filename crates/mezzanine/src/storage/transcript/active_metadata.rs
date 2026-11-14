@@ -669,6 +669,51 @@ impl AgentTranscriptStore {
         checkpoint_records(&path, &checkpoint, id)
     }
 
+    /// Preserves the complete original binding checkpoint before startup skips
+    /// a refused conversation. The content-addressed private backup survives
+    /// later normal checkpoints and grants no live/native restoration authority.
+    /// A concurrent checkpoint change refuses isolation rather than backing up
+    /// a different source from the runtime's captured records.
+    pub(crate) fn preserve_refused_startup_metadata(
+        &self,
+        id: &str,
+        records: &[AgentSessionMetadata],
+    ) -> Result<PathBuf> {
+        let _lock = self.lock_agent_session_metadata(id)?;
+        let path = self.agent_session_metadata_checkpoint_file(id);
+        let bytes = read_snapshot(&path)?.ok_or_else(|| {
+            MezError::conflict("startup recovery checkpoint disappeared before preservation")
+        })?;
+        let checkpoint: Checkpoint = serde_json::from_slice(&bytes).map_err(|_| {
+            MezError::invalid_state("startup recovery checkpoint cannot be decoded")
+        })?;
+        if checkpoint_records(&path, &checkpoint, id)? != records {
+            return Err(MezError::conflict(
+                "startup recovery checkpoint changed before preservation",
+            ));
+        }
+        let directory = self.root.join(DIRECTORY);
+        let backup = directory.join(format!(
+            "startup-refusal-{}-{}.json",
+            session_key(id),
+            source_digest(&bytes)
+        ));
+        let mut stage = Stage::create(&directory)?;
+        stage.file.write_all(&bytes)?;
+        stage.file.sync_all()?;
+        match fs::hard_link(&stage.path, &backup) {
+            Ok(()) => fs::remove_file(&stage.path)?,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                if read_snapshot_with_links(&backup, true)?.as_deref() != Some(bytes.as_slice()) {
+                    return Err(MezError::conflict("startup recovery backup changed"));
+                }
+            }
+            Err(error) => return Err(error.into()),
+        }
+        File::open(&directory)?.sync_all()?;
+        Ok(backup)
+    }
+
     /// Replaces only this session's bindings. Other sessions and legacy writers
     /// use independent files, so no shared read/merge can lose their updates.
     pub fn save_agent_session_metadata(

@@ -158,6 +158,7 @@ impl RuntimeSessionService {
         };
         let session_id = self.session.id.as_str().to_string();
         let records = store.load_agent_session_metadata(&session_id)?;
+        let records = self.prepare_startup_transcript_restore(&store, records)?;
         self.restore_agent_sessions_from_records(store, records, true)
     }
 
@@ -172,7 +173,9 @@ impl RuntimeSessionService {
         // This restoration runs during session startup before the actor owns
         // the service. Reconcile accepted worker receipts before validating
         // counted history; missing or conflicting rows still fail closed.
-        store.recover_append_receipts()?;
+        if !checkpoint {
+            store.recover_append_receipts()?;
+        }
         let budget_records = records
             .iter()
             .filter(|record| runtime_pane_by_id(&self.session, &record.pane_id).is_ok())

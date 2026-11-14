@@ -18,6 +18,7 @@ use super::{
 use crate::storage::token_usage::new_token_usage_event_id;
 use crate::storage::transcript::{ConversationTranscriptRead, canonical_transcript_entry_identity};
 use mez_agent::TranscriptContextEvent;
+use std::collections::BTreeSet;
 
 mod checked_source;
 mod physical_source;
@@ -50,6 +51,8 @@ pub(crate) struct RuntimeBookkeepingTranscriptReadWork {
     compaction_epoch: u64,
     committed_prefix_required: bool,
     pending: Vec<TranscriptEntry>,
+    /// Exact inherited occurrences may already belong to an earlier turn.
+    occurrences: BTreeSet<mez_agent::ContextBlockOccurrenceId>,
     /// Completion handoff reads keep their original store/frontier/epoch even
     /// after the live pane moves. They confer no authority on a later binding.
     frozen_completion: bool,
@@ -91,7 +94,10 @@ impl RuntimeBookkeepingTranscriptReadWork {
                 if self.frozen_completion {
                     ConversationTranscriptRead::All
                 } else {
-                    ConversationTranscriptRead::ForTurn(&self.turn_id)
+                    ConversationTranscriptRead::ForTurnAndOccurrences(
+                        &self.turn_id,
+                        &self.occurrences,
+                    )
                 },
                 self.committed_prefix_required,
                 &self.pending,
@@ -270,6 +276,7 @@ impl RuntimeBookkeepingCandidate {
             epoch: u64,
             committed_prefix_required: bool,
             frozen_completion: bool,
+            occurrences: &'a BTreeSet<mez_agent::ContextBlockOccurrenceId>,
             pending: Vec<Entry<'a>>,
             persistence_key: &'a (String, String),
             entries: Vec<Entry<'a>>,
@@ -290,6 +297,7 @@ impl RuntimeBookkeepingCandidate {
             epoch: self.read.compaction_epoch,
             committed_prefix_required: self.read.committed_prefix_required,
             frozen_completion: self.read.frozen_completion,
+            occurrences: &self.read.occurrences,
             pending: self
                 .read
                 .pending
@@ -390,7 +398,13 @@ impl RuntimeSessionService {
             match self
                 .capture_bookkeeping_transcript_read(candidate.read.store.clone(), &candidate.turn)
             {
-                Ok(read) => read,
+                Ok(mut read) => {
+                    // Cleanup may already have moved or removed live context.
+                    // Refresh archive/pending ownership, never the original
+                    // producer's immutable occurrence selection.
+                    read.occurrences.clone_from(&candidate.read.occurrences);
+                    read
+                }
                 Err(error) => {
                     read_capture_error = Some(Box::new(error));
                     candidate.read.clone()
@@ -565,14 +579,15 @@ impl RuntimeSessionService {
                 Err(error) => return self.block_bookkeeping_after_error(candidate, error),
             }
         } else {
-            (
-                Self::new_runtime_transcript_entries(
-                    projection,
-                    &history,
-                    first_sequence.unwrap_or(sequence),
-                ),
-                0,
-            )
+            let entries = match Self::new_runtime_transcript_entries(
+                projection,
+                &history,
+                first_sequence.unwrap_or(sequence),
+            ) {
+                Ok(entries) => entries,
+                Err(error) => return self.block_bookkeeping_after_error(candidate, error),
+            };
+            (entries, 0)
         };
         let admission = if candidate.read.frozen_completion {
             Self::check_detached_terminal_compaction_handoff_admission(&history, &mut entries)
@@ -721,7 +736,19 @@ impl RuntimeSessionService {
     ) -> Result<(Vec<TranscriptEntry>, u64)> {
         use crate::runtime::persistence::RuntimeTranscriptNextSequence;
         let mut identities = BTreeMap::<_, BTreeMap<_, u64>>::new();
+        let mut original_producers = BTreeMap::new();
         for row in existing {
+            if row.role == TranscriptRole::System
+                && let Some(record) =
+                    mez_agent::transcript::TranscriptContextRecord::from_transcript_content(
+                        &row.content,
+                    )?
+            {
+                original_producers.insert(
+                    record.record().occurrence_id(),
+                    (&row.turn_id, &row.agent_id, &row.pane_id),
+                );
+            }
             identities
                 .entry(canonical_transcript_entry_identity(row))
                 .or_default()
@@ -737,6 +764,22 @@ impl RuntimeSessionService {
         let mut through = 0u64;
         for mut entry in entries {
             let identity = canonical_transcript_entry_identity(&entry);
+            if !identities.contains_key(&identity)
+                && entry.role == TranscriptRole::System
+                && let Some(control) =
+                    mez_agent::transcript::TranscriptExecutionStateRecord::from_transcript_content(
+                        &entry.content,
+                    )?
+                && control.state().members().iter().any(|(id, _)| {
+                    original_producers.get(id).is_some_and(|producer| {
+                        *producer != (&entry.turn_id, &entry.agent_id, &entry.pane_id)
+                    })
+                })
+            {
+                return Err(MezError::conflict(
+                    "execution lifecycle revision changed its original producer",
+                ));
+            }
             let attribution = (
                 entry.conversation_id.clone(),
                 entry.agent_id.clone(),
@@ -842,6 +885,17 @@ impl RuntimeSessionService {
             compaction_epoch: self.agent_compaction_epoch(&turn.pane_id),
             committed_prefix_required,
             pending,
+            occurrences: self
+                .agent_turn_contexts()
+                .get(&turn.turn_id)
+                .map(|context| {
+                    context
+                        .chronology()
+                        .iter()
+                        .map(|event| event.record().occurrence_id())
+                        .collect()
+                })
+                .unwrap_or_default(),
             frozen_completion: false,
         })
     }
@@ -1156,7 +1210,7 @@ impl RuntimeSessionService {
                 execution,
             )?;
             let mut entries =
-                Self::new_runtime_transcript_entries(entries, &existing_entries, first_sequence);
+                Self::new_runtime_transcript_entries(entries, &existing_entries, first_sequence)?;
             self.check_terminal_compaction_handoff_admission(
                 turn,
                 &existing_entries,
@@ -1218,7 +1272,7 @@ impl RuntimeSessionService {
                 execution,
             )?;
             let mut entries =
-                Self::new_runtime_transcript_entries(entries, &existing_entries, first_sequence);
+                Self::new_runtime_transcript_entries(entries, &existing_entries, first_sequence)?;
             self.check_terminal_compaction_handoff_admission(
                 turn,
                 &existing_entries,
@@ -1257,23 +1311,13 @@ impl RuntimeSessionService {
         entries: Vec<TranscriptEntry>,
         existing_entries: &[TranscriptEntry],
         first_sequence: u64,
-    ) -> Vec<TranscriptEntry> {
-        let mut identities = existing_entries
-            .iter()
-            .map(canonical_transcript_entry_identity)
-            .collect::<std::collections::BTreeSet<_>>();
-        let mut sequence = first_sequence;
-        entries
-            .into_iter()
-            .filter_map(|mut entry| {
-                if !identities.insert(canonical_transcript_entry_identity(&entry)) {
-                    return None;
-                }
-                entry.sequence = sequence;
-                sequence = sequence.saturating_add(1);
-                Some(entry)
-            })
-            .collect()
+    ) -> Result<Vec<TranscriptEntry>> {
+        Self::new_completion_transcript_entries(
+            entries,
+            existing_entries,
+            crate::runtime::persistence::RuntimeTranscriptNextSequence::Next(first_sequence),
+        )
+        .map(|(entries, _)| entries)
     }
 
     /// Persists the originating prompt and available settled observations when
@@ -1353,9 +1397,17 @@ impl RuntimeSessionService {
         };
         let first_persistence = first_sequence == 1;
         let projection = RuntimeTranscriptProjection::live(self, &turn.turn_id);
-        let mut entries = projection.prompt_boundary_transcript_entries_for_turn(
+        let mut entries = Vec::new();
+        projection.insert_initial_user_transcript_event(
+            &mut entries,
             &turn.conversation_id,
             first_sequence,
+            created_at_unix_seconds,
+            turn,
+        )?;
+        projection.insert_prompt_boundary_transcript_events(
+            &mut entries,
+            &turn.conversation_id,
             created_at_unix_seconds,
             turn,
         )?;
@@ -1368,6 +1420,12 @@ impl RuntimeSessionService {
         )?;
         let interrupted_block =
             mez_agent::transcript::interrupted_turn_context_block(&prompt, reason, &evidence);
+        projection.append_execution_state_controls(
+            &mut entries,
+            &turn.conversation_id,
+            created_at_unix_seconds,
+            turn,
+        )?;
         let interrupted_record = mez_agent::ContextBlockRecord::allocate(&interrupted_block)?;
         let interrupted_event = TranscriptContextEvent::InterruptedTurn {
             prompt,
@@ -1416,7 +1474,7 @@ impl RuntimeSessionService {
         let read = self.capture_bookkeeping_transcript_read(store.clone(), turn)?;
         let existing_entries = read.execute()?;
         read.check_owner(self)?;
-        entries = Self::new_runtime_transcript_entries(entries, &existing_entries, first_sequence);
+        entries = Self::new_runtime_transcript_entries(entries, &existing_entries, first_sequence)?;
         self.check_terminal_compaction_handoff_admission(turn, &existing_entries, &mut entries)?;
         if entries.is_empty() {
             return Ok(0);

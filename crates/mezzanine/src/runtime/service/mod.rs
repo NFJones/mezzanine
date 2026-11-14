@@ -215,6 +215,7 @@ mod mcp_helpers;
 mod mcp_runtime;
 mod native_custody;
 mod persistence;
+mod startup_recovery;
 mod stores;
 mod transcript_restore;
 pub(crate) use native_custody::PreparedNativeCustodyContext;

@@ -140,9 +140,30 @@ impl CustodyTranscriptLease {
         // Share the exact bookkeeping identity while holding the same physical
         // append lease. Prefix rows already committed by another producer must
         // not move behind this input or appear twice on a later Stop.
+        let mut occurrences = std::collections::BTreeSet::new();
+        for row in prefix.iter() {
+            if row.conversation_id != self.conversation_id {
+                return Err(unavailable());
+            }
+            if row.role == TranscriptRole::System
+                && let Some(record) =
+                    mez_agent::transcript::TranscriptContextRecord::from_transcript_content(
+                        &row.content,
+                    )?
+            {
+                occurrences.insert(record.record().occurrence_id());
+            }
+        }
         let committed = self.store.conversation_transcript_view_locked(
             &self.conversation_id,
-            super::super::ConversationTranscriptRead::ForTurn(&input.turn_id),
+            if occurrences.is_empty() {
+                super::super::ConversationTranscriptRead::ForTurn(&input.turn_id)
+            } else {
+                super::super::ConversationTranscriptRead::ForTurnAndOccurrences(
+                    &input.turn_id,
+                    &occurrences,
+                )
+            },
             false,
             &[],
             &self.lease,
@@ -150,9 +171,28 @@ impl CustodyTranscriptLease {
         let mut seen = committed
             .committed
             .iter()
-            .map(super::super::canonical_transcript_entry_identity)
-            .collect::<std::collections::BTreeSet<_>>();
-        prefix.retain(|row| seen.insert(super::super::canonical_transcript_entry_identity(row)));
+            .map(|row| {
+                (
+                    super::super::canonical_transcript_entry_identity(row),
+                    (row.agent_id.clone(), row.pane_id.clone()),
+                )
+            })
+            .collect::<std::collections::BTreeMap<_, _>>();
+        for row in prefix.iter() {
+            if let Some((agent, pane)) =
+                seen.get(&super::super::canonical_transcript_entry_identity(row))
+                && (agent != &row.agent_id || pane != &row.pane_id)
+            {
+                return Err(unavailable());
+            }
+        }
+        prefix.retain(|row| {
+            seen.insert(
+                super::super::canonical_transcript_entry_identity(row),
+                (row.agent_id.clone(), row.pane_id.clone()),
+            )
+            .is_none()
+        });
         let first = self.store.next_sequence(&self.conversation_id)?;
         for (index, row) in prefix
             .iter_mut()

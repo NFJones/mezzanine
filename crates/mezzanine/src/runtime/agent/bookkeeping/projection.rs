@@ -249,7 +249,7 @@ impl<'a> RuntimeTranscriptProjection<'a> {
     /// Typed history can retain earlier UserInstruction events with the same
     /// label. Those original occurrences must never be reattributed to this
     /// turn merely because they precede its newly admitted prompt.
-    fn insert_initial_user_transcript_event(
+    pub(super) fn insert_initial_user_transcript_event(
         &self,
         entries: &mut Vec<TranscriptEntry>,
         conversation_id: &str,
@@ -258,7 +258,7 @@ impl<'a> RuntimeTranscriptProjection<'a> {
         turn: &AgentTurnRecord,
     ) -> Result<()> {
         let Some(event) = self.context.and_then(|context| {
-            context.chronology().iter().find(|event| {
+            context.chronology().iter().rev().find(|event| {
                 event.sequence().get() > self.imported_history_high_water
                     && event.block().source == ContextSourceKind::UserInstruction
                     && event.block().label == "user prompt"
@@ -305,7 +305,7 @@ impl<'a> RuntimeTranscriptProjection<'a> {
     }
 
     /// Inserts exact prompt-boundary context before its owning user entry.
-    fn insert_prompt_boundary_transcript_events(
+    pub(super) fn insert_prompt_boundary_transcript_events(
         &self,
         entries: &mut Vec<TranscriptEntry>,
         conversation_id: &str,
@@ -563,7 +563,7 @@ impl<'a> RuntimeTranscriptProjection<'a> {
     /// Captures actual producer lifecycle after exact source rows. Imported
     /// groups cannot borrow this turn's origin; mixed old/new groups require
     /// the original captured history to qualify that origin independently.
-    fn append_execution_state_controls(
+    pub(super) fn append_execution_state_controls(
         &self,
         entries: &mut Vec<TranscriptEntry>,
         conversation: &str,

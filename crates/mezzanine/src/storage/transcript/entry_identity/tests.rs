@@ -47,6 +47,7 @@ fn accounted_identity_preserves_occurrence_and_semantic_revision() {
     moved.sequence = 9000;
     moved.created_at_unix_seconds = 9000;
     moved.pane_id = "different-pane".to_owned();
+    moved.turn_id = "continued-turn".to_owned();
     assert_eq!(identity, canonical_transcript_entry_identity(&moved));
     let changed = ContextBlock::user_event("user", "revised source");
     assert_ne!(

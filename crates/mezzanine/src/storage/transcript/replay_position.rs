@@ -233,7 +233,9 @@ impl AgentTranscriptStore {
             &[mez_agent::TranscriptEntry],
         ) -> Result<(T, Vec<(u64, mez_agent::ContextBlockRecord)>)>,
     ) -> Result<(ConversationReplaySnapshot, T)> {
+        self.require_no_startup_refusal(conversation_id)?;
         let lease = self.acquire_conversation_lock(conversation_id)?;
+        self.require_no_startup_refusal(conversation_id)?;
         self.check_replay_compatibility_locked(conversation_id)?;
         self.validate_terminal_compaction_handoffs_locked(conversation_id)?;
         self.recover_accounted_appends_for_replay_locked(conversation_id, &lease)?;
@@ -364,7 +366,9 @@ impl AgentTranscriptStore {
         conversation_id: &str,
         required_archive: bool,
     ) -> Result<ResumeReplaySnapshot> {
+        self.require_no_startup_refusal(conversation_id)?;
         let (lease, presentation_entries, _) = self.lock_presentation_snapshot(conversation_id)?;
+        self.require_no_startup_refusal(conversation_id)?;
         self.check_replay_compatibility_locked(conversation_id)?;
         self.validate_terminal_compaction_handoffs_locked(conversation_id)?;
         let replay = self.replay_epoch_snapshot_locked(conversation_id)?;
