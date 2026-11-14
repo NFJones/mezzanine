@@ -8,6 +8,7 @@ mod exposure;
 mod internal_retry;
 mod pre_send;
 mod retirement;
+mod routing;
 mod transport;
 
 use super::super::budget_receipts::BudgetObservationReceipts;
