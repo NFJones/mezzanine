@@ -168,7 +168,7 @@ impl ChatCompletionsDialect for AnthropicMessagesDialect {
         let value: serde_json::Value = serde_json::from_str(body).ok()?;
         if value["type"] != "message"
             || value["role"] != "assistant"
-            || !value["stop_reason"].as_str().is_some_and(|s| !s.is_empty())
+            || value["stop_reason"].as_str().is_none_or(|s| s.is_empty())
         {
             return None;
         }
