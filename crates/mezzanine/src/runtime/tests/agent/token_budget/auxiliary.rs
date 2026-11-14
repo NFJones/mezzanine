@@ -273,7 +273,7 @@ async fn qualify_manual_compaction(raw_tail: bool) {
     drop(dispatch);
 }
 
-fn setup() -> (Scene, mez_core::ids::ClientId, String) {
+pub(super) fn setup() -> (Scene, mez_core::ids::ClientId, String) {
     // Every test uses a real original constructor birth and private stores.
     let mut scene = Scene::new();
     scene.service.set_config_root(scene._root.to_path_buf());
@@ -533,7 +533,10 @@ async fn runtime_budget_title_wait_lease_exclusion_and_retirement_are_exact() {
     }
 }
 
-async fn prepare(scene: &mut Scene, source: &RuntimeBudgetAuxiliarySource) -> Result<()> {
+pub(super) async fn prepare(
+    scene: &mut Scene,
+    source: &RuntimeBudgetAuxiliarySource,
+) -> Result<()> {
     let work = scene
         .service
         .prepare_runtime_budget_auxiliary(source)?

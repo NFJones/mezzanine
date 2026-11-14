@@ -16779,8 +16779,19 @@ remember dispatch MUST borrow a weak send fence owned by its actual actor claim.
 Stop, completion and replacement MUST revoke that fence before removing the
 claim. Final native permit consumption MUST check it after binding validation,
 without intervening I/O or await; an unused grant MUST settle without HTTP.
-An already admitted request retains its original expense after Stop. These
-claim/expense boundaries alone do not implement memory suspension or fair requeue.
+An already admitted request retains its original expense after Stop.
+Monitored remember requests with activated membership MUST retain their original
+future through positive nonwriting budget holds. One bounded wait on the actual
+claim MUST validate the exact observation, native membership, hold epoch and
+original future lifetime on each paced read. Only that current non-resumed hold
+is quiescent for human Pause. Actor resume MUST preserve independent human gates
+and precede fresh native authorization; Stop MUST remain retired after a lift.
+The shared parking clock records only acknowledged suspension. This memory
+connection does not enforce a cumulative active allowance: existing independent
+per-exchange HTTP deadlines still begin at transport execution. A future memory
+allowance consumer MUST preserve the original finite allowance across parks,
+not reset it on release. This connection alone does not establish fair auxiliary
+capacity release/requeue, compaction suspension or production budget activation.
 For staged monitored-title suspension, lease exclusion MUST require the actual
 current title publication claim, its exact dispatch/claimed attempt and native
 membership, a still-positive original hold, and the original waiting future's

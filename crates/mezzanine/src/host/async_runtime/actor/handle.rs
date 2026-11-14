@@ -999,13 +999,13 @@ impl AsyncRuntimeSessionHandle {
             .await?
     }
 
-    /// Park only the exact positively held title, not its late accounting owner.
-    pub(crate) async fn park_budget_title_claim(
+    /// Park the exact held auxiliary, never its retained late expense owner.
+    pub(crate) async fn park_budget_auxiliary_claim(
         &self,
         capture: crate::runtime::RuntimeBudgetHeldAttempt,
         waiter: std::sync::Weak<()>,
     ) -> Result<bool> {
-        self.request(|reply| AsyncRuntimeRequest::ParkBudgetTitleClaim {
+        self.request(|reply| AsyncRuntimeRequest::ParkBudgetAuxiliaryClaim {
             capture,
             waiter,
             reply,
@@ -1026,12 +1026,19 @@ impl AsyncRuntimeSessionHandle {
         .await?
     }
 
-    /// A true reply restores this title's lease, never native send permission.
-    pub(crate) async fn resume_budget_title_claim(
+    /// Read-only acceptance observation of the existing memory claim.
+    #[cfg(test)]
+    pub(crate) async fn budget_remember_claim_is_quiescent(&self, pane: String) -> Result<bool> {
+        self.request(|reply| AsyncRuntimeRequest::BudgetRememberClaimIsQuiescent { pane, reply })
+            .await?
+    }
+
+    /// Adopt original auxiliary resume, never native send permission.
+    pub(crate) async fn resume_budget_auxiliary_claim(
         &self,
         capture: crate::runtime::RuntimeBudgetHeldAttempt,
     ) -> Result<bool> {
-        self.request(|reply| AsyncRuntimeRequest::ResumeBudgetTitleClaim { capture, reply })
+        self.request(|reply| AsyncRuntimeRequest::ResumeBudgetAuxiliaryClaim { capture, reply })
             .await?
     }
 

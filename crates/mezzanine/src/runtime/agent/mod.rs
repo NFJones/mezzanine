@@ -4063,7 +4063,11 @@ impl RuntimeSessionService {
             });
         self.agent.claimed_agent_remember_tasks.insert(
             pane_id,
-            token_budget::claim_fence::RememberClaim { task, budget_fence },
+            token_budget::claim_fence::RememberClaim {
+                task,
+                budget_fence,
+                budget_wait: None,
+            },
         );
         fence
     }

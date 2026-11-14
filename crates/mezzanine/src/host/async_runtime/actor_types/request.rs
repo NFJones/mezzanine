@@ -1035,14 +1035,19 @@ pub(in crate::host::async_runtime) enum AsyncRuntimeRequest {
         conversation: String,
         reply: oneshot::Sender<Result<bool>>,
     },
-    /// Parks a positively nonwriting original title claim without inventing a turn.
-    ParkBudgetTitleClaim {
+    #[cfg(test)]
+    BudgetRememberClaimIsQuiescent {
+        pane: String,
+        reply: oneshot::Sender<Result<bool>>,
+    },
+    /// Parks a positively nonwriting original auxiliary without inventing a turn.
+    ParkBudgetAuxiliaryClaim {
         capture: crate::runtime::RuntimeBudgetHeldAttempt,
         waiter: std::sync::Weak<()>,
         reply: oneshot::Sender<Result<bool>>,
     },
-    /// Revalidates the exact claimed title and excludes its original parked span.
-    ResumeBudgetTitleClaim {
+    /// Revalidates the exact auxiliary claim before the original future resumes.
+    ResumeBudgetAuxiliaryClaim {
         capture: crate::runtime::RuntimeBudgetHeldAttempt,
         reply: oneshot::Sender<Result<bool>>,
     },
@@ -1805,8 +1810,8 @@ impl AsyncRuntimeRequest {
             | Self::CompleteBookkeepingCandidate { .. }
             | Self::PendingAgentProviderTasks { .. }
             | Self::AgentTurnIsRunning { .. }
-            | Self::ParkBudgetTitleClaim { .. }
-            | Self::ResumeBudgetTitleClaim { .. }
+            | Self::ParkBudgetAuxiliaryClaim { .. }
+            | Self::ResumeBudgetAuxiliaryClaim { .. }
             | Self::ParkBudgetProviderClaim { .. }
             | Self::ReacquireBudgetProviderClaim { .. }
             | Self::AgentCompactionClaimIsCurrent { .. }
@@ -1850,6 +1855,8 @@ impl AsyncRuntimeRequest {
             Self::RecordClaimedAgentProviderTaskForTests { .. } => Family::Provider,
             #[cfg(test)]
             Self::BudgetTitleClaimIsQuiescent { .. } => Family::Provider,
+            #[cfg(test)]
+            Self::BudgetRememberClaimIsQuiescent { .. } => Family::Provider,
             Self::SubmitRuntimeEvents { .. } => Family::Event,
             Self::DrainRuntimeSideEffects { .. }
             | Self::QueueRuntimeSideEffects { .. }

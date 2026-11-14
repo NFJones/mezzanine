@@ -77,6 +77,13 @@ pub(crate) struct RuntimeBudgetHeldAttempt {
 }
 
 impl RuntimeBudgetHeldAttempt {
+    pub(crate) fn is_remember(&self) -> bool {
+        matches!(
+            self.work.auxiliary_claim(),
+            Some(super::auxiliary::RuntimeBudgetAuxiliaryClaim::Remember { .. })
+        )
+    }
+
     pub(crate) fn is_title(&self) -> bool {
         matches!(
             self.work.auxiliary_claim(),

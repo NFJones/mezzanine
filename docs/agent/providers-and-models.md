@@ -132,7 +132,19 @@ fence; dispatch and late-expense clones borrow it weakly. Stop, completion and
 replacement revoke that fence before removing the claim. A final native check
 after binding validation prevents an unissued retired request from sending,
 settling any unused grant instead. Requests admitted before Stop still settle
-their original known expense. This is not yet memory suspension or fair requeue.
+their original known expense.
+
+For activated memberships, monitored remember requests now keep that same future
+through a positive budget hold. The actual claim keeps one
+bounded wait, qualified by its original observation, native membership, positive
+hold epoch and the waiting future's lifetime. Paced reads recheck it even while
+policy remains exhausted. A current non-resumed hold is quiescent for human Pause;
+lifting policy cannot clear human Pause or revive Stop. Actor resume precedes
+fresh native authorization. The shared clock records acknowledged parking, but
+remember has no cumulative active-allowance consumer yet; existing per-exchange
+HTTP deadlines begin at transport execution. Connecting a finite original memory
+allowance without resetting it across parks remains unfinished, as does fair
+auxiliary capacity release/requeue.
 
 The runtime also has a staged retained-claim parking port. It accepts only a
 sealed capture of an observed nonwriting hold, releases scheduler capacity while
@@ -173,9 +185,9 @@ Human `/stop` also retires the invoking conversation's queued or claimed title,
 including a parked title without a live ordinary turn. Original expense custody
 remains available for late settlement; a later policy release cannot revive it.
 
-This title-only connection still retains the existing optional-title concurrency
-slot. It does not implement auxiliary fair requeue, compaction/memory waits,
-root-wide effect gates, or production membership activation.
+The title connection still retains the existing optional-title concurrency
+slot. Neither title nor memory parking implements auxiliary fair requeue,
+compaction waits, root-wide effect gates, or production membership activation.
 
 Native async sends also retain evidence that their exact local transport future
 and active callback futures were destroyed, including on cancellation. This transfer

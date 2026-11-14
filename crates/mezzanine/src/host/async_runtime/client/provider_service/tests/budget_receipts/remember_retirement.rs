@@ -26,23 +26,65 @@ async fn budget_remember_stop_after_send_preserves_original_expense() {
     qualify(Disposition::IssuedStop).await;
 }
 
+#[tokio::test]
+async fn budget_remember_original_future_resumes_after_policy_release() {
+    qualify(Disposition::HeldRelease).await;
+}
+
+#[tokio::test]
+async fn budget_remember_held_stop_cannot_resume_after_policy_release() {
+    qualify(Disposition::HeldStop).await;
+}
+
+#[tokio::test]
+async fn budget_remember_human_pause_is_orthogonal_in_both_release_orders() {
+    qualify(Disposition::BudgetFirst).await;
+    qualify(Disposition::HumanFirst).await;
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Disposition {
     Current,
     Stopped,
     Replaced,
     IssuedStop,
+    HeldRelease,
+    HeldStop,
+    BudgetFirst,
+    HumanFirst,
 }
 
 async fn qualify(disposition: Disposition) {
-    let stopped = matches!(disposition, Disposition::Stopped | Disposition::Replaced);
+    let stopped = matches!(
+        disposition,
+        Disposition::Stopped | Disposition::Replaced | Disposition::HeldStop
+    );
+    let held = matches!(
+        disposition,
+        Disposition::HeldRelease
+            | Disposition::HeldStop
+            | Disposition::BudgetFirst
+            | Disposition::HumanFirst
+    );
+    let human = matches!(
+        disposition,
+        Disposition::BudgetFirst | Disposition::HumanFirst
+    );
     let Prepared {
         mut service,
         dispatch,
         store,
         member,
         mut root,
-    } = prepared_case(BudgetLimits::default()).await;
+    } = prepared_case(if held {
+        BudgetLimits {
+            input: mez_agent::token_budget::TokenLimit::Limited(0),
+            output: mez_agent::token_budget::TokenLimit::Unlimited,
+        }
+    } else {
+        BudgetLimits::default()
+    })
+    .await;
     drop(dispatch);
     let primary = service
         .session()
@@ -56,6 +98,12 @@ async fn qualify(disposition: Disposition) {
         .execute_agent_shell_command(&primary, "/stop")
         .unwrap();
     service.set_config_root(root.0.as_ref().unwrap().clone());
+    if human {
+        service
+            .session_mut_for_tests()
+            .set_pane_live_state("%1", false)
+            .unwrap();
+    }
     service
         .execute_agent_shell_command(
             &primary,
@@ -83,7 +131,7 @@ async fn qualify(disposition: Disposition) {
     assert!(service.agent_remember_observation_matches("%1", &observation));
     // Model a genuine already-claimed worker not yet polled by its executor.
     // Stop retires content authority while the dispatch/journal owns expense.
-    if stopped {
+    if stopped && !held {
         service
             .execute_agent_shell_command(&primary, "/stop")
             .unwrap();
@@ -175,15 +223,99 @@ async fn qualify(disposition: Disposition) {
     let (handle, actor) =
         crate::host::async_runtime::AsyncRuntimeSessionActor::new(service, Default::default())
             .unwrap();
+    let waiter = handle.clone();
     let worker = tokio::spawn(monitor_runtime_agent_remember_dispatch(
         handle.clone(),
         "%1".into(),
         dispatch,
         drains.clone(),
-        execute_runtime_agent_remember_dispatch,
+        move |dispatch, observer| {
+            execute_runtime_agent_remember_dispatch_with_waiter(dispatch, observer, Some(waiter))
+        },
     ));
     let control = async {
         let mut worker = worker;
+        let retained_original = if held {
+            let parked = tokio::time::timeout(Duration::from_secs(5), async {
+                loop {
+                    if handle
+                        .budget_remember_claim_is_quiescent("%1".into())
+                        .await
+                        .unwrap()
+                    {
+                        return true;
+                    }
+                    if worker.is_finished() {
+                        return false;
+                    }
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                }
+            })
+            .await
+            .unwrap_or(false);
+            let mut retained = parked
+                && !worker.is_finished()
+                && sends.load(Ordering::SeqCst) == 0
+                && rows(&store, "budget_attempts") == 0;
+            if disposition == Disposition::HeldStop {
+                handle
+                    .execute_agent_shell_command(primary.clone(), "/stop".into())
+                    .await
+                    .unwrap();
+            }
+            if human {
+                waiting::browser_input(&handle, &primary, b"/list-agents --all\r").await;
+                waiting::browser_input(&handle, &primary, b"p").await;
+                waiting::assert_browser_paused(&handle, "%1", true).await;
+                if disposition == Disposition::HumanFirst {
+                    waiting::browser_input(&handle, &primary, b"p").await;
+                    tokio::time::sleep(Duration::from_millis(2100)).await;
+                    retained &= handle
+                        .budget_remember_claim_is_quiescent("%1".into())
+                        .await
+                        .unwrap()
+                        && sends.load(Ordering::SeqCst) == 0
+                        && rows(&store, "budget_attempts") == 0;
+                }
+            }
+            let writer = store.clone();
+            tokio::task::spawn_blocking(move || {
+                let projection = writer.budget_policy_projection().unwrap();
+                let prior = projection.committed.unwrap();
+                let operation = BudgetPolicyPublication {
+                    namespace: projection.namespace,
+                    id: BudgetReceiptId::new("remember-release").unwrap(),
+                    expected_revision: projection.revision,
+                    previous_digest: prior.digest,
+                    proposed: BudgetConfigPolicy {
+                        source: prior.source,
+                        digest: "e".repeat(64),
+                        limits: BudgetLimits::default(),
+                    },
+                    supersedes: None,
+                };
+                writer.begin_budget_policy_publication(&operation).unwrap();
+                writer
+                    .reconcile_budget_policy_publication(&operation, &operation.proposed.digest)
+                    .unwrap();
+            })
+            .await
+            .unwrap();
+            if disposition == Disposition::BudgetFirst {
+                tokio::time::sleep(Duration::from_millis(2100)).await;
+                waiting::assert_browser_paused(&handle, "%1", true).await;
+                retained &= handle
+                    .budget_remember_claim_is_quiescent("%1".into())
+                    .await
+                    .unwrap()
+                    && sends.load(Ordering::SeqCst) == 0
+                    && rows(&store, "budget_attempts") == 0;
+                waiting::browser_input(&handle, &primary, b"p").await;
+            }
+            retained
+        } else {
+            true
+        };
         let stop_result = if disposition == Disposition::IssuedStop {
             let result = tokio::time::timeout(Duration::from_secs(10), sent.notified()).await;
             if result.is_ok() {
@@ -223,9 +355,10 @@ async fn qualify(disposition: Disposition) {
             .await
             .unwrap();
         handle.shutdown().await.unwrap();
-        (result, cleanup, served, stop_result)
+        (result, cleanup, served, stop_result, retained_original)
     };
-    let ((result, cleanup, served, stop_result), mut exit) = tokio::join!(control, actor.run());
+    let ((result, cleanup, served, stop_result, retained_original), mut exit) =
+        tokio::join!(control, actor.run());
     exit.service.terminate_all_pane_processes().unwrap();
     let known = store.budget_account(&member.root).unwrap().known;
     let attempts = rows(&store, "budget_attempts");
@@ -239,6 +372,10 @@ async fn qualify(disposition: Disposition) {
         root.cleanup();
     }
     cleanup.unwrap().unwrap();
+    assert!(
+        retained_original,
+        "remember original future terminalized instead of parking"
+    );
     if let Some(result) = stop_result {
         result.expect("physical send did not reach the server");
     }
@@ -248,8 +385,12 @@ async fn qualify(disposition: Disposition) {
         .unwrap()
         .unwrap();
     assert_eq!(outstanding, 0);
-    assert_eq!(attempts, 1);
-    assert!(receipts > 0, "unused or issued native grant must settle");
+    if disposition == Disposition::HeldStop {
+        assert_eq!((attempts, receipts), (0, 0));
+    } else {
+        assert_eq!(attempts, 1);
+        assert!(receipts > 0, "unused or issued native grant must settle");
+    }
     if stopped {
         assert!(
             served.is_err(),

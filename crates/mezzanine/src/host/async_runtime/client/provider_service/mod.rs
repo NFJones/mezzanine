@@ -1261,6 +1261,7 @@ async fn dispatch_agent_provider_side_effects(
                     Err(_) => continue,
                 };
                 let owner = ProviderWorkerOwner::remember(&dispatch);
+                let budget_waiter = handle.clone();
                 spawn_owned_agent_provider_worker(
                     workers,
                     owners,
@@ -1270,7 +1271,13 @@ async fn dispatch_agent_provider_side_effects(
                         pane_id,
                         dispatch,
                         drains.clone(),
-                        execute_runtime_agent_remember_dispatch,
+                        move |dispatch, observer| {
+                            execute_runtime_agent_remember_dispatch_with_waiter(
+                                dispatch,
+                                observer,
+                                Some(budget_waiter),
+                            )
+                        },
                     ),
                 );
             }
@@ -2734,9 +2741,22 @@ async fn execute_runtime_agent_compaction_dispatch(
 }
 
 /// Executes one model-backed durable memory generation request.
+#[cfg(test)]
 async fn execute_runtime_agent_remember_dispatch(
     dispatch: RuntimeAgentRememberDispatch,
     observer: ProviderWireRequestObserver,
+) -> Result<mez_agent::ModelResponse> {
+    execute_runtime_agent_remember_dispatch_with_waiter(dispatch, observer, None).await
+}
+
+/// Monitored memory keeps this original future through a positive hold. Its
+/// shared clock records acknowledged parks; unlike ordinary turns, remember
+/// has no cumulative active-allowance consumer yet. Per-exchange HTTP deadlines
+/// remain independent. Direct fixtures retain the no-wait refusal path.
+async fn execute_runtime_agent_remember_dispatch_with_waiter(
+    dispatch: RuntimeAgentRememberDispatch,
+    observer: ProviderWireRequestObserver,
+    budget_waiter: Option<AsyncRuntimeSessionHandle>,
 ) -> Result<mez_agent::ModelResponse> {
     let RuntimeAgentRememberDispatch {
         budget_owner: _budget_owner,
@@ -2746,7 +2766,18 @@ async fn execute_runtime_agent_remember_dispatch(
     if let Some(owner) = &_budget_owner {
         owner.validate_request(&task.conversation_id)?;
     }
-    let observer = budget_admission::install_request_source(observer, _budget_owner.as_ref())?;
+    let observer = match (_budget_owner.as_ref(), budget_waiter) {
+        (Some(owner), Some(handle)) => {
+            let clock = crate::integrations::agent::provider::budget_deadline::ProviderBudgetDeadline::default();
+            observer
+                .with_budget_deadline(clock.clone())
+                .with_budget_receipt_source(std::sync::Arc::new(
+                    budget_admission::BudgetRequestAdmission::new(owner.clone())
+                        .with_waiter(handle, clock),
+                ))?
+        }
+        (owner, _) => budget_admission::install_request_source(observer, owner)?,
+    };
     match provider {
         RuntimeAgentProviderDispatchProvider::OpenAi(provider) => {
             observed_provider_request(

@@ -42,6 +42,7 @@ pub(crate) mod provider_wait;
 )]
 pub(crate) mod receipt_commit;
 mod reclamation;
+mod remember_wait;
 pub(crate) mod request;
 #[cfg_attr(
     not(test),

@@ -81,6 +81,15 @@ impl RuntimeSessionService {
             .pending_agent_remember_tasks
             .get(pane)
             .ok_or_else(|| MezError::conflict("original budget memory task unavailable"))?;
+        self.runtime_budget_remember_owner(task)
+    }
+
+    /// Revalidate the same frozen task at claim and while parked; never borrow
+    /// a pending successor or reconstruct origin from current pane state.
+    pub(super) fn runtime_budget_remember_owner(
+        &self,
+        task: &crate::runtime::RuntimeAgentRememberTask,
+    ) -> Result<Option<RuntimeBudgetRequestOwner>> {
         self.claim_runtime_budget_auxiliary(
             task.budget_capture.as_ref(),
             RuntimeBudgetAuxiliaryClaim::Remember {

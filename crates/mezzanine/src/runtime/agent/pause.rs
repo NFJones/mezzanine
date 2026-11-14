@@ -278,7 +278,8 @@ impl RuntimeSessionService {
                 .claimed_agent_compaction_tasks
                 .keys()
                 .any(|(owner, _)| owner == pane)
-            || self.agent.claimed_agent_remember_tasks.contains_key(pane)
+            || (self.agent.claimed_agent_remember_tasks.contains_key(pane)
+                && !self.budget_remember_claim_is_quiescent(pane))
             || self
                 .agent
                 .claimed_agent_session_title_tasks

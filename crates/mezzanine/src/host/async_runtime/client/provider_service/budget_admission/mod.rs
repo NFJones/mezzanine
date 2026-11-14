@@ -147,7 +147,7 @@ impl Source {
         reason: crate::storage::token_usage::budget::admission::BudgetAdmissionHold,
         previous: Option<&crate::storage::token_usage::budget::admission::BudgetAdmissionWaitState>,
     ) -> Result<crate::storage::token_usage::budget::admission::BudgetAdmissionWaitState> {
-        let ordinary = if capture.is_title() {
+        let ordinary = if capture.is_title() || capture.is_remember() {
             None
         } else {
             Some((
@@ -158,7 +158,7 @@ impl Source {
                     .ok_or_else(|| suspended("original budget claim unavailable"))?,
             ))
         };
-        let title_waiter = Arc::new(());
+        let auxiliary_waiter = Arc::new(());
         let mut delay = 100u64;
         loop {
             let parked = match &ordinary {
@@ -174,7 +174,10 @@ impl Source {
                 }
                 None => {
                     handle
-                        .park_budget_title_claim(capture.clone(), Arc::downgrade(&title_waiter))
+                        .park_budget_auxiliary_claim(
+                            capture.clone(),
+                            Arc::downgrade(&auxiliary_waiter),
+                        )
                         .await?
                 }
             };
@@ -193,12 +196,12 @@ impl Source {
         // belongs to the acknowledged original park, not active execution.
         tokio::time::sleep(Duration::from_millis(delay)).await;
         loop {
-            // A title has no ordinary-turn liveness monitor. Revalidate its
+            // Turn-less auxiliaries have no ordinary-turn monitor. Revalidate the
             // actual claim on every paced read, even while policy stays zero;
             // retained late-expense custody cannot keep cancelled work alive.
             if ordinary.is_none() {
                 handle
-                    .park_budget_title_claim(capture.clone(), Arc::downgrade(&title_waiter))
+                    .park_budget_auxiliary_claim(capture.clone(), Arc::downgrade(&auxiliary_waiter))
                     .await?;
             }
             let state = owner.observe_held().await?;
@@ -222,7 +225,11 @@ impl Source {
                                 )
                                 .await?
                         }
-                        None => handle.resume_budget_title_claim(capture.clone()).await?,
+                        None => {
+                            handle
+                                .resume_budget_auxiliary_claim(capture.clone())
+                                .await?
+                        }
                     };
                     if ready {
                         break;

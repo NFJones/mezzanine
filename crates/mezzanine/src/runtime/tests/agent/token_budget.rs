@@ -9,6 +9,7 @@ mod auxiliary;
 mod checkpoint;
 mod descendants;
 mod reclamation;
+mod remember_wait;
 mod request;
 mod resolution;
 mod transitions;

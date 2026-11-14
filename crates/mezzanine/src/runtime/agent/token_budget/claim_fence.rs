@@ -27,4 +27,5 @@ impl AuxiliaryClaimFence {
 pub(crate) struct RememberClaim {
     pub(crate) task: crate::runtime::RuntimeAgentRememberTask,
     pub(crate) budget_fence: AuxiliaryClaimFence,
+    pub(crate) budget_wait: Option<super::remember_wait::RememberWait>,
 }

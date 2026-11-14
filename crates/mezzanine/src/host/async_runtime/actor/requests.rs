@@ -3128,12 +3128,12 @@ impl AsyncRuntimeSessionActor {
                     .budget_title_claim_is_quiescent(&conversation)));
                 false
             }
-            AsyncRuntimeRequest::ParkBudgetTitleClaim {
+            AsyncRuntimeRequest::ParkBudgetAuxiliaryClaim {
                 capture,
                 waiter,
                 reply,
             } => {
-                let result = self.service.park_budget_title_claim(
+                let result = self.service.park_budget_auxiliary_claim(
                     capture,
                     waiter,
                     crate::runtime::current_unix_millis(),
@@ -3141,10 +3141,15 @@ impl AsyncRuntimeSessionActor {
                 let _ = reply.send(result);
                 false
             }
-            AsyncRuntimeRequest::ResumeBudgetTitleClaim { capture, reply } => {
+            #[cfg(test)]
+            AsyncRuntimeRequest::BudgetRememberClaimIsQuiescent { pane, reply } => {
+                let _ = reply.send(Ok(self.service.budget_remember_claim_is_quiescent(&pane)));
+                false
+            }
+            AsyncRuntimeRequest::ResumeBudgetAuxiliaryClaim { capture, reply } => {
                 let result = self
                     .service
-                    .resume_budget_title_claim(&capture, crate::runtime::current_unix_millis());
+                    .resume_budget_auxiliary_claim(&capture, crate::runtime::current_unix_millis());
                 let _ = reply.send(result);
                 false
             }
