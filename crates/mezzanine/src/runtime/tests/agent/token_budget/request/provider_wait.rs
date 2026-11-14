@@ -5,6 +5,228 @@ use super::*;
 use crate::runtime::agent::token_budget::admission_work::RuntimeBudgetHeldAttempt;
 use crate::runtime::{RuntimeBudgetAttemptAdmission, RuntimeBudgetAttemptWork, RuntimeSideEffect};
 
+/// Human inhibition is independent of a positively nonwriting provider hold.
+/// Exercise the actual authorized lifecycle operation, not scheduler flag edits.
+#[tokio::test]
+async fn runtime_budget_provider_wait_genuine_human_resume_preserves_original_claim() {
+    for stage in 0..3 {
+        let (mut scene, dispatch, work, capture) = held().await;
+        let turn = &dispatch.turn;
+        let agent = AgentId::opaque(turn.agent_id.clone()).unwrap();
+        let primary = scene
+            .service
+            .attach_primary("budget-human", true, Size::new(80, 24).unwrap(), 120)
+            .unwrap();
+        scene
+            .service
+            .session
+            .set_pane_live_state(&turn.pane_id, false)
+            .unwrap();
+        let target = scene
+            .service
+            .capture_agent_lifecycle_target(&primary, &turn.pane_id)
+            .unwrap();
+        let now = crate::runtime::current_unix_millis();
+        let deadline = scene
+            .service
+            .agent_turn_ledger()
+            .turn(&turn.turn_id)
+            .unwrap()
+            .deadline_at_unix_millis;
+        let early_pause = if stage == 0 {
+            Some(
+                scene
+                    .service
+                    .pause_agent_lifecycle_target(&primary, &target)
+                    .unwrap(),
+            )
+        } else {
+            None
+        };
+        scene
+            .service
+            .park_budget_provider_claim(&agent, &turn.turn_id, 7, capture.clone(), now)
+            .unwrap();
+        if stage == 2 {
+            scene
+                .service
+                .requeue_budget_provider_claim(&agent, &turn.turn_id, 7, &capture)
+                .unwrap();
+        }
+        let generation = early_pause.unwrap_or_else(|| {
+            scene
+                .service
+                .pause_agent_lifecycle_target(&primary, &target)
+                .unwrap()
+        });
+        assert_eq!(
+            scene.service.agent_human_pause_status(&turn.pane_id),
+            Some("paused"),
+            "positive hold is not an issued inference: stage {stage}"
+        );
+        assert!(scene.service.agent_turn_is_running(&turn.turn_id));
+        // Positive budget quiescence does not settle independent persistence.
+        scene
+            .service
+            .mark_agent_provider_persistence_pending(&turn.turn_id);
+        assert_eq!(
+            scene.service.agent_human_pause_status(&turn.pane_id),
+            Some("pausing")
+        );
+        assert!(
+            scene
+                .service
+                .resume_agent_lifecycle_target(&primary, &target, generation)
+                .is_err()
+        );
+        scene
+            .service
+            .clear_agent_provider_persistence_pending(&turn.turn_id);
+        assert!(
+            !scene
+                .service
+                .budget_provider_claim_can_resume(&turn.turn_id, 7)
+        );
+        assert!(
+            scene
+                .service
+                .resume_budget_provider_claim(&agent, &turn.turn_id, 7, &capture, now + 2000)
+                .is_err()
+        );
+        assert!(
+            scene
+                .service
+                .resume_agent_lifecycle_target(&primary, &target, generation + 1)
+                .is_err()
+        );
+        assert!(
+            scene
+                .service
+                .resume_agent_lifecycle_target(&primary, &target, generation)
+                .unwrap()
+        );
+        // Resume clears HUMAN inhibition only. The held claim/future and its
+        // budget wait remain owned; no provider continuation is synthesized.
+        assert!(
+            scene
+                .service
+                .budget_provider_claim_is_parked(&turn.turn_id, 7)
+        );
+        assert!(
+            scene
+                .service
+                .agent_provider_claim_matches(&agent, &turn.turn_id, 7)
+        );
+        assert!(!scene.service.agent_provider_task_is_pending(&turn.turn_id));
+        assert!(capture.matches_owner(dispatch.budget_owner.as_ref().unwrap()));
+        scene
+            .service
+            .requeue_budget_provider_claim(&agent, &turn.turn_id, 7, &capture)
+            .unwrap();
+        scene
+            .service
+            .resume_budget_provider_claim(&agent, &turn.turn_id, 7, &capture, now + 5000)
+            .unwrap();
+        if deadline != 0 {
+            assert_eq!(
+                scene
+                    .service
+                    .agent_turn_ledger()
+                    .turn(&turn.turn_id)
+                    .unwrap()
+                    .deadline_at_unix_millis,
+                deadline + 5000
+            );
+        }
+        // Once active again, a mere retained entry is not nonwriting proof.
+        let generation = scene
+            .service
+            .pause_agent_lifecycle_target(&primary, &target)
+            .unwrap();
+        assert_eq!(
+            scene.service.agent_human_pause_status(&turn.pane_id),
+            Some("pausing")
+        );
+        assert!(
+            scene
+                .service
+                .resume_agent_lifecycle_target(&primary, &target, generation)
+                .is_err()
+        );
+        assert!(matches!(
+            work.admission_owner().retry_held().await.unwrap(),
+            RuntimeBudgetAttemptAdmission::Held(_)
+        ));
+    }
+}
+
+/// A revoked positive hold is no longer proof that the original native work is
+/// nonwriting. Human Resume must remain inhibited rather than borrowing it.
+#[tokio::test]
+async fn runtime_budget_provider_wait_human_resume_refuses_revoked_hold() {
+    let (mut scene, dispatch, work, capture) = held().await;
+    let turn = &dispatch.turn;
+    let agent = AgentId::opaque(turn.agent_id.clone()).unwrap();
+    let primary = scene
+        .service
+        .attach_primary("budget-revoked", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    scene
+        .service
+        .session
+        .set_pane_live_state(&turn.pane_id, false)
+        .unwrap();
+    let target = scene
+        .service
+        .capture_agent_lifecycle_target(&primary, &turn.pane_id)
+        .unwrap();
+    scene
+        .service
+        .park_budget_provider_claim(
+            &agent,
+            &turn.turn_id,
+            7,
+            capture,
+            crate::runtime::current_unix_millis(),
+        )
+        .unwrap();
+    let generation = scene
+        .service
+        .pause_agent_lifecycle_target(&primary, &target)
+        .unwrap();
+    assert!(
+        scene
+            .service
+            .budget_provider_claim_is_quiescent(&turn.turn_id)
+    );
+    assert!(matches!(
+        work.admission_owner().retry_held().await.unwrap(),
+        RuntimeBudgetAttemptAdmission::Held(_)
+    ));
+    assert!(
+        !scene
+            .service
+            .budget_provider_claim_is_quiescent(&turn.turn_id)
+    );
+    assert_eq!(
+        scene.service.agent_human_pause_status(&turn.pane_id),
+        Some("pausing")
+    );
+    assert!(
+        scene
+            .service
+            .resume_agent_lifecycle_target(&primary, &target, generation)
+            .is_err()
+    );
+    assert!(scene.service.agent_turn_is_human_paused(&turn.turn_id));
+    assert!(
+        scene
+            .service
+            .agent_provider_claim_matches(&agent, &turn.turn_id, 7)
+    );
+    assert!(!scene.service.agent_provider_task_is_pending(&turn.turn_id));
+}
+
 /// Public host requests must adopt their timer effects before replying. An old
 /// callback after the cancellation cannot fail the still-retained producer;
 /// duplicate reacquisition replies cannot create another timer or inference.

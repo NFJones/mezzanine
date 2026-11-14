@@ -16736,8 +16736,16 @@ interval from its finite active allowance; release MUST NOT grant fresh time.
 Mandatory claim cancellation MUST be adopted before fallible sibling pumping;
 queue pressure or retained pump failure MUST NOT destroy the held producer.
 Stop MUST retire that original producer and journal without a send. This
-connection does not activate memberships or qualify
-turn-less auxiliary waiting, human Resume, or root-wide effect inhibition.
+connection does not activate memberships or qualify turn-less auxiliary waiting
+or root-wide effect inhibition. An exact still-live positive nonwriting budget
+hold is quiescent for human Pause, not an issued inference merely because its
+original claim is retained. Independent issued work and persistence MUST still
+inhibit Resume. Human Pause after fair selection MUST release that capacity
+without terminalizing the original Running ledger or changing its first parked
+clock. Exact authorized human Resume MUST clear only the human reason and retain
+that frozen request/claim/capture; it MUST NOT append replacement model guidance,
+offer another provider continuation, or clear budget exhaustion. Active, revoked,
+stale or rebound holds MUST NOT qualify as nonwriting proof.
 An installed request-owned receipt source MUST allocate a distinct original
 descriptor for each concrete exchange, including adapter-internal retries. The
 plan and journal MUST retain the exact selected factory before authorization;

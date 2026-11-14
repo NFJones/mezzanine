@@ -126,8 +126,13 @@ paced read shows a free global slot, even if counts cycled back to an earlier
 value. These observations never reserve capacity or grant send authority.
 Queue pressure and sibling startup failure retain the waiter and its original
 timer obligation. Stop still retires the original producer/journal without a
-send. This does not activate memberships
-or establish human Resume, turn-less auxiliary waits, or root-wide effect gates.
+send. A still-live positive nonwriting budget hold is quiescent for human Pause,
+while independent issued effects and persistence still keep it Pausing. Human
+Resume clears only that human gate: the original frozen request, claim and budget
+wait survive, without replacement guidance or another provider continuation.
+Revoked or active holds cannot supply this nonwriting proof. This does not
+activate memberships or establish turn-less auxiliary waits or root-wide effect
+gates.
 
 Native async sends also retain evidence that their exact local transport future
 and active callback futures were destroyed, including on cancellation. This transfer

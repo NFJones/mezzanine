@@ -77,7 +77,9 @@ impl RuntimeSessionService {
 
     /// Explicitly removes one human gate after current authority and quiescence
     /// checks. Resume supplies one trusted continuation, never redispatches a
-    /// completed action or treats peer text as user authority.
+    /// completed action or treats peer text as user authority. An exact positive
+    /// nonwriting budget hold instead retains its already-frozen original
+    /// request: Resume clears only the human reason, not its budget gate.
     #[allow(dead_code)] // Administrative browser consumes this operation.
     pub(crate) fn resume_agent_lifecycle_target(
         &mut self,
@@ -116,6 +118,16 @@ impl RuntimeSessionService {
                 .cloned()
                 .ok_or_else(|| MezError::conflict("retained pause task unavailable"))?;
             self.ensure_completion_required_gates_ready(turn_id)?;
+            if self.budget_provider_claim_is_quiescent(turn_id) {
+                // No request has been issued from this positive hold. Resume
+                // removes only the human reason; the original worker still
+                // owns budget waiting, fair selection and fresh authorization.
+                // Do not append new model guidance or offer a replacement turn
+                // over its already-frozen request/context.
+                self.agent.agent_scheduler.set_human_paused(turn_id, false);
+                self.agent.human_pauses.remove(&target.pane_id);
+                return Ok(true);
+            }
             // Stage fallible fair admission while human inhibition is still
             // intact. Queue-full must not append guidance or consume approvals.
             let admitted_peer_wait = self
@@ -246,7 +258,8 @@ impl RuntimeSessionService {
     /// Checks issued owners only; pending native dispatch markers are not effects.
     fn human_pause_has_issued_work(&self, pane: &str, turn: Option<&str>) -> bool {
         let turn_work = turn.is_some_and(|turn| {
-            self.agent.claimed_agent_provider_tasks.contains_key(turn)
+            (self.agent.claimed_agent_provider_tasks.contains_key(turn)
+                && !self.budget_provider_claim_is_quiescent(turn))
                 || self.agent.pending_agent_provider_persistence.contains(turn)
                 || !self.agent_worker_attempts_for_turn(turn).is_empty()
                 || self
@@ -358,6 +371,10 @@ impl RuntimeSessionService {
                 continue;
             };
             if self.human_pause_has_issued_work(&pause.target.pane_id, Some(turn_id)) {
+                continue;
+            }
+            if self.budget_provider_claim_is_quiescent(turn_id) {
+                self.pause_quiescent_budget_provider_claim(turn_id)?;
                 continue;
             }
             if self

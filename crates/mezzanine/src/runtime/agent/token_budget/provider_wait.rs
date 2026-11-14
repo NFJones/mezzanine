@@ -32,6 +32,51 @@ pub(super) struct ProviderWait {
 }
 
 impl RuntimeSessionService {
+    /// A retained claim is quiescent only while its exact positive nonwriting
+    /// capture remains live and it has not resumed. This is not permission to
+    /// send, retire the worker, or ignore independent issued effects.
+    pub(crate) fn budget_provider_claim_is_quiescent(&self, turn: &str) -> bool {
+        let Some(wait) = self.agent.budget_memberships.provider_waits.get(turn) else {
+            return false;
+        };
+        let Some(record) = self.agent_turn_ledger().turn(turn) else {
+            return false;
+        };
+        let Some(agent) = AgentId::opaque(record.agent_id.clone()) else {
+            return false;
+        };
+        wait.phase != Phase::Active
+            && self
+                .budget_wait_turn(&agent, turn, wait.generation, &wait.capture)
+                .is_ok()
+    }
+
+    /// Human pause may arrive after fair selection but before the original
+    /// future resumes. Release that selected capacity without terminalizing its
+    /// ledger or replacing its capture/first inactive clock.
+    pub(in crate::runtime::agent) fn pause_quiescent_budget_provider_claim(
+        &mut self,
+        turn: &str,
+    ) -> Result<()> {
+        if !self.budget_provider_claim_is_quiescent(turn) {
+            return Err(MezError::conflict(
+                "original nonwriting budget hold changed",
+            ));
+        }
+        if self
+            .agent
+            .agent_scheduler
+            .running_turns()
+            .any(|work| work.turn_id == turn)
+        {
+            self.agent.agent_scheduler.wait_running(turn)?;
+            if let Some(wait) = self.agent.budget_memberships.provider_waits.get_mut(turn) {
+                wait.phase = Phase::Waiting;
+            }
+        }
+        Ok(())
+    }
+
     fn budget_wait_turn(
         &self,
         agent: &AgentId,
