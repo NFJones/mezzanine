@@ -177,6 +177,247 @@ async fn runtime_budget_admission_hold_requires_explicit_current_policy_reconsid
     assert!(admission.retry_held().await.is_err());
 }
 
+/// Wait observations are read-only snapshots, not fresh grant/retry authority.
+/// Policy, expense and issued exposure remain independently observable.
+#[tokio::test]
+async fn runtime_budget_admission_wait_observes_changes_without_authorizing() {
+    let (scene, owner, work) = case().await;
+    let admission = work.admission_owner();
+    assert!(admission.observe_held().await.is_err());
+    publish(
+        &scene,
+        BudgetLimits {
+            input: TokenLimit::Limited(0),
+            output: TokenLimit::Unlimited,
+        },
+    )
+    .await;
+    assert!(matches!(
+        admission.claim().await.unwrap(),
+        RuntimeBudgetAttemptAdmission::Held(BudgetAdmissionHold::Exhausted { .. })
+    ));
+    let initial = admission.observe_held().await.unwrap();
+    assert_eq!(initial.limits.unwrap().input, TokenLimit::Limited(0));
+    assert_eq!(initial.known, UsageTotals::default());
+    assert!(!initial.root_outstanding);
+    assert_eq!(initial.outstanding_attempts, 0);
+    assert_eq!(admission.observe_held().await.unwrap(), initial);
+    publish(&scene, BudgetLimits::default()).await;
+    let changed = admission.observe_held().await.unwrap();
+    assert!(changed.revisions.projection > initial.revisions.projection);
+    assert_eq!(changed.revisions.accounting, initial.revisions.accounting);
+    assert_eq!(grants(&scene), 0);
+    // The original hold remains sticky until a caller explicitly reconsiders.
+    assert!(matches!(
+        admission.claim().await.unwrap(),
+        RuntimeBudgetAttemptAdmission::Held(_)
+    ));
+    let sibling = owner
+        .prepare_attempt(
+            ModelTokenUsageKey::new("openai", "gpt-test"),
+            BudgetAttemptPurpose::Memory,
+        )
+        .unwrap();
+    let RuntimeBudgetAttemptAdmission::Authorized(permit) =
+        sibling.admission_owner().claim().await.unwrap()
+    else {
+        panic!("unlimited sibling grant expected");
+    };
+    let issued = tokio::task::spawn_blocking(move || permit.consume())
+        .await
+        .unwrap()
+        .unwrap();
+    let outstanding = admission.observe_held().await.unwrap();
+    assert!(outstanding.root_outstanding);
+    assert_eq!(outstanding.outstanding_attempts, 1);
+    let receipt = issued
+        .registered()
+        .freeze_receipt(
+            UsageSnapshot {
+                input: Some(11),
+                output: Some(3),
+                terminal: true,
+            },
+            None,
+        )
+        .unwrap();
+    settle(receipt).await.unwrap();
+    let settled = admission.observe_held().await.unwrap();
+    assert_eq!(
+        settled.known,
+        UsageTotals {
+            input: 11,
+            output: 3
+        }
+    );
+    assert!(settled.revisions.accounting > outstanding.revisions.accounting);
+    assert!(settled.root_outstanding, "expense is not local retirement");
+    assert_eq!(settled.outstanding_attempts, 1);
+    assert_eq!(grants(&scene), 1, "observations minted authorization");
+    assert!(matches!(
+        admission.retry_held().await.unwrap(),
+        RuntimeBudgetAttemptAdmission::Authorized(_)
+    ));
+    assert!(
+        admission.observe_held().await.is_err(),
+        "issued work became a waiter"
+    );
+}
+
+/// A publication fence is not unlimited policy; root overrides remain explicit,
+/// and native/store failures cannot be converted into an empty account view.
+#[tokio::test]
+async fn runtime_budget_admission_wait_policy_and_original_binding_fences() {
+    use crate::storage::token_usage::budget::operations::BudgetPolicyOperation;
+    use mez_agent::token_budget::BudgetOverride;
+    let (scene, owner, work) = case().await;
+    publish(
+        &scene,
+        BudgetLimits {
+            input: TokenLimit::Limited(0),
+            output: TokenLimit::Unlimited,
+        },
+    )
+    .await;
+    let admission = work.admission_owner();
+    assert!(matches!(
+        admission.claim().await.unwrap(),
+        RuntimeBudgetAttemptAdmission::Held(_)
+    ));
+    let before = admission.observe_held().await.unwrap();
+    let policy = BudgetPolicyOperation {
+        id: "wait-root-override".into(),
+        namespace: owner.member.namespace.clone(),
+        root: owner.member.root.clone(),
+        input: Some(BudgetOverride::Explicit(TokenLimit::Unlimited)),
+        output: None,
+    };
+    let store = scene.store.clone();
+    tokio::task::spawn_blocking(move || store.commit_budget_policy(&policy))
+        .await
+        .unwrap()
+        .unwrap();
+    let overridden = admission.observe_held().await.unwrap();
+    assert!(overridden.revisions.root_policy > before.revisions.root_policy);
+    assert_eq!(overridden.revisions.projection, before.revisions.projection);
+    assert_eq!(overridden.limits.unwrap().input, TokenLimit::Unlimited);
+    let projection = scene.store.budget_policy_projection().unwrap();
+    let operation = BudgetPolicyPublication {
+        namespace: projection.namespace,
+        id: BudgetReceiptId::new("wait-updating").unwrap(),
+        expected_revision: projection.revision,
+        previous_digest: projection.committed.unwrap().digest,
+        proposed: BudgetConfigPolicy {
+            source: "primary".into(),
+            digest: "d".repeat(64),
+            limits: BudgetLimits::default(),
+        },
+        supersedes: None,
+    };
+    let store = scene.store.clone();
+    tokio::task::spawn_blocking(move || store.begin_budget_policy_publication(&operation))
+        .await
+        .unwrap()
+        .unwrap();
+    let updating = admission.observe_held().await.unwrap();
+    assert!(
+        updating.limits.is_none(),
+        "pending publication became unlimited"
+    );
+    assert!(updating.revisions.projection > overridden.revisions.projection);
+    assert_eq!(grants(&scene), 0);
+    let original = scene
+        .store
+        .budget_binding_owner(&owner.member)
+        .unwrap()
+        .unwrap();
+    let connection = rusqlite::Connection::open(scene.store.path()).unwrap();
+    connection
+        .execute(
+            "UPDATE budget_bindings SET owner='foreign-wait-owner' WHERE conversation=?1",
+            [&owner.member.conversation],
+        )
+        .unwrap();
+    assert!(admission.observe_held().await.is_err());
+    connection
+        .execute(
+            "UPDATE budget_bindings SET owner=?1 WHERE conversation=?2",
+            [&original, &owner.member.conversation],
+        )
+        .unwrap();
+    drop(connection);
+    assert_eq!(admission.observe_held().await.unwrap(), updating);
+    let moved = scene.store.path().with_extension("wait-moved");
+    std::fs::rename(scene.store.path(), &moved).unwrap();
+    let refused = admission.observe_held().await.is_err();
+    let absent = !scene.store.path().exists();
+    std::fs::rename(&moved, scene.store.path()).unwrap();
+    assert!(
+        refused && absent,
+        "wait observation recreated a missing store"
+    );
+    assert_eq!(admission.observe_held().await.unwrap(), updating);
+}
+
+/// Canceling the borrowed reader wait retains the actual native reader. Both
+/// its replacement waiter and original journal drain must join it, not detach
+/// it or fabricate an empty dependency snapshot.
+#[tokio::test]
+async fn runtime_budget_admission_cancelled_wait_reader_keeps_original_custody() {
+    for drain in [false, true] {
+        let (scene, _owner, work) = case().await;
+        publish(
+            &scene,
+            BudgetLimits {
+                input: TokenLimit::Limited(0),
+                output: TokenLimit::Unlimited,
+            },
+        )
+        .await;
+        let admission = work.admission_owner();
+        assert!(matches!(
+            admission.claim().await.unwrap(),
+            RuntimeBudgetAttemptAdmission::Held(_)
+        ));
+        let original = admission.clone();
+        let read = work.clone();
+        let (started, ready) = tokio::sync::oneshot::channel();
+        let (release, gate) = std::sync::mpsc::channel();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let count = calls.clone();
+        let waiter = tokio::spawn(async move {
+            original
+                .observe_held_with_for_test(move || {
+                    count.fetch_add(1, Ordering::SeqCst);
+                    let _ = started.send(());
+                    gate.recv()
+                        .map_err(|_| MezError::invalid_state("wait reader gate closed"))?;
+                    read.observe_admission_wait()
+                })
+                .await
+        });
+        ready.await.unwrap();
+        waiter.abort();
+        assert!(waiter.await.unwrap_err().is_cancelled());
+        if drain {
+            let reconcile = admission.reconcile();
+            tokio::pin!(reconcile);
+            assert!(futures_util::poll!(&mut reconcile).is_pending());
+            release.send(()).unwrap();
+            assert!(reconcile.await.unwrap().is_none());
+        } else {
+            let replacement = admission
+                .observe_held_with_for_test(|| panic!("canceled wait reader was replaced"));
+            tokio::pin!(replacement);
+            assert!(futures_util::poll!(&mut replacement).is_pending());
+            release.send(()).unwrap();
+            assert_eq!(replacement.await.unwrap().known, UsageTotals::default());
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(grants(&scene), 0);
+    }
+}
+
 #[tokio::test]
 async fn runtime_budget_admission_commit_before_panic_recovers_evidence_never_permission() {
     let (scene, _owner, work) = case().await;

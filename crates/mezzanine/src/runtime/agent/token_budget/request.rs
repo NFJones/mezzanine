@@ -232,6 +232,17 @@ impl RuntimeBudgetAttemptWork {
         self.0.owner.store.budget_attempt_admission(&self.0.attempt)
     }
 
+    /// Worker-only wait dependency observation from this original request's
+    /// store and native binding. A changed snapshot cannot authorize any send.
+    pub(crate) fn observe_admission_wait(
+        &self,
+    ) -> Result<crate::storage::token_usage::budget::admission::BudgetAdmissionWaitState> {
+        let owner = &self.0.owner;
+        owner
+            .store
+            .budget_admission_wait_state(&owner.member, &owner.binding_owner, &owner.lease)
+    }
+
     /// Blocking-worker only. A successful database registration is NOT a spend
     /// permit, proof of a send, or authority to repeat an uncertain remote call.
     pub(crate) fn execute(&self) -> Result<RuntimeBudgetRegisteredAttempt> {

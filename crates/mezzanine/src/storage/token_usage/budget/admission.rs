@@ -25,6 +25,18 @@ pub(crate) struct BudgetAdmissionRevisions {
     pub accounting: u64,
 }
 
+/// One read-only snapshot for pacing an already-held original request. This is
+/// descriptive, never a grant: the actual authorization transaction must still
+/// recheck membership, current policy, counters and exposure before a send.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct BudgetAdmissionWaitState {
+    pub revisions: BudgetAdmissionRevisions,
+    pub limits: Option<BudgetLimits>,
+    pub known: UsageTotals,
+    pub root_outstanding: bool,
+    pub outstanding_attempts: i64,
+}
+
 /// Durable grant evidence. Cloning/deserializing it grants no send authority.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -117,6 +129,66 @@ pub(super) fn initialize_schema(tx: &rusqlite::Transaction<'_>) -> Result<()> {
 }
 
 impl TokenUsageStore {
+    /// Observe dependencies through one existing-store read transaction. The
+    /// native binding is checked, but no attempt, receipt, lease or policy is
+    /// installed/refreshed. An absent/replaced store is unavailable, never zero.
+    pub(crate) fn budget_admission_wait_state(
+        &self,
+        member: &BudgetMembership,
+        owner: &str,
+        lease: &BudgetBindingLease,
+    ) -> Result<BudgetAdmissionWaitState> {
+        validate_id(owner)?;
+        if !lease.matches(member, owner) {
+            return Err(MezError::conflict("budget wait native subject mismatch"));
+        }
+        lease.revalidate()?;
+        let mut connection = self.open_budget_query()?;
+        let tx = connection.transaction()?;
+        if namespace(&tx)? != member.namespace {
+            return Err(MezError::conflict("budget wait namespace mismatch"));
+        }
+        let original = membership::membership(&tx, &member.conversation)?;
+        let binding: Option<String> = tx
+            .query_row(
+                "SELECT owner FROM budget_bindings WHERE conversation=?1",
+                [&member.conversation],
+                |r| r.get(0),
+            )
+            .optional()?;
+        if original != Some((member.clone(), BudgetMembershipState::Active))
+            || binding.as_deref() != Some(owner)
+        {
+            return Err(MezError::conflict(
+                "budget wait original binding unavailable",
+            ));
+        }
+        let projection = policy_projection::read_projection(&tx)?;
+        let account = account(&tx, &member.root)?;
+        let limits = projection.admission_policy().map(|defaults| BudgetLimits {
+            input: account.input_override.resolve(defaults.input),
+            output: account.output_override.resolve(defaults.output),
+        });
+        let root_outstanding = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM budget_admissions WHERE root=?1 AND retired_receipt IS NULL)
+             OR EXISTS(SELECT 1 FROM budget_attempts WHERE root=?1 AND terminal=0)",
+            [member.root.as_str()], |r| r.get(0),
+        )?;
+        let state = BudgetAdmissionWaitState {
+            revisions: BudgetAdmissionRevisions {
+                projection: projection.revision,
+                root_policy: account.policy_revision,
+                accounting: account.accounting_revision,
+            },
+            limits,
+            known: account.known,
+            root_outstanding,
+            outstanding_attempts: receipts::outstanding_attempts(&tx)?,
+        };
+        lease.revalidate()?;
+        Ok(state)
+    }
+
     /// Existing-store read-only reconciliation. A lost grant reply is never
     /// repaired by granting again, even after a later policy edit or restart.
     pub(crate) fn budget_attempt_admission(

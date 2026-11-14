@@ -12,7 +12,7 @@ use super::request::{
 };
 use crate::error::{MezError, Result};
 use crate::storage::token_usage::budget::admission::{
-    BudgetAdmissionHold, BudgetAdmissionOutcome, BudgetSendPermit,
+    BudgetAdmissionHold, BudgetAdmissionOutcome, BudgetAdmissionWaitState, BudgetSendPermit,
 };
 use std::sync::Arc;
 use tokio::{sync::Mutex, task::JoinHandle};
@@ -46,6 +46,7 @@ enum Writer {
 struct State {
     writer: Writer,
     query: Option<JoinHandle<Result<Option<BudgetAdmissionOutcome>>>>,
+    wait_query: Option<JoinHandle<Result<BudgetAdmissionWaitState>>>,
     recovered: Option<BudgetAdmissionOutcome>,
     retry_after_absence: bool,
 }
@@ -66,6 +67,36 @@ pub(crate) struct RuntimeBudgetAdmissionWork {
 impl RuntimeBudgetAdmissionWork {
     pub(super) fn new(work: RuntimeBudgetAttemptWork, shared: SharedAdmission) -> Self {
         Self { work, shared }
+    }
+
+    /// Observe current dependencies only after a positively nonwriting hold.
+    /// Retains the actual reader across cancellation; clones join that reader
+    /// instead of spawning replacements. Caller owns pacing, fair reacquisition
+    /// and lifecycle checks; this method never retries authorization or sends.
+    pub(crate) async fn observe_held(&self) -> Result<BudgetAdmissionWaitState> {
+        let work = self.work.clone();
+        self.observe_held_using(move || work.observe_admission_wait())
+            .await
+    }
+
+    async fn observe_held_using<F>(&self, query: F) -> Result<BudgetAdmissionWaitState>
+    where
+        F: FnOnce() -> Result<BudgetAdmissionWaitState> + Send + 'static,
+    {
+        let mut state = self.shared.0.lock().await;
+        if state.recovered.is_some()
+            || !matches!(state.writer, Writer::Completed(Ok(Outcome::Held(_))))
+        {
+            return Err(MezError::invalid_state(
+                "budget wait observation requires original hold",
+            ));
+        }
+        if state.wait_query.is_none() {
+            state.wait_query = Some(tokio::task::spawn_blocking(query));
+        }
+        observe_wait_query(&mut state)
+            .await?
+            .ok_or_else(|| MezError::invalid_state("budget wait observation unavailable"))
     }
 
     /// Delivers at most one original permit. Clones share its actual worker;
@@ -147,6 +178,7 @@ impl RuntimeBudgetAdmissionWork {
     /// No internal timer/loop, fresh identity, or retry of an uncertain grant.
     pub(crate) async fn retry_held(&self) -> Result<RuntimeBudgetAttemptAdmission> {
         let mut state = self.shared.0.lock().await;
+        observe_wait_query(&mut state).await?;
         observe_query(&mut state).await?;
         if state.recovered.is_some()
             || !matches!(state.writer, Writer::Completed(Ok(Outcome::Held(_))))
@@ -174,6 +206,9 @@ impl RuntimeBudgetAdmissionWork {
         F: FnOnce() -> Result<Option<BudgetAdmissionOutcome>> + Send + 'static,
     {
         let mut state = self.shared.0.lock().await;
+        // The original journal's cancellation drain also joins a retained wait
+        // reader before its native source/store can be retired.
+        observe_wait_query(&mut state).await?;
         observe_writer(&mut state).await;
         if let Some(outcome) = &state.recovered {
             return Ok(Some(outcome.clone()));
@@ -231,6 +266,17 @@ impl RuntimeBudgetAdmissionWork {
         self.reconcile_using(query).await
     }
 
+    #[cfg(test)]
+    pub(crate) async fn observe_held_with_for_test<F>(
+        &self,
+        query: F,
+    ) -> Result<BudgetAdmissionWaitState>
+    where
+        F: FnOnce() -> Result<BudgetAdmissionWaitState> + Send + 'static,
+    {
+        self.observe_held_using(query).await
+    }
+
     /// Scheduling-only probe: never joins or takes a completed grant result.
     #[cfg(test)]
     pub(crate) async fn worker_finished_for_test(&self) -> bool {
@@ -245,6 +291,17 @@ where
     Writer::Running(tokio::task::spawn_blocking(move || {
         authorize().map(Outcome::capture)
     }))
+}
+
+async fn observe_wait_query(state: &mut State) -> Result<Option<BudgetAdmissionWaitState>> {
+    let Some(handle) = &mut state.wait_query else {
+        return Ok(None);
+    };
+    let result = handle.await;
+    state.wait_query = None;
+    result
+        .map_err(|_| MezError::invalid_state("budget wait reader join failed"))?
+        .map(Some)
 }
 
 async fn observe_writer(state: &mut State) {
