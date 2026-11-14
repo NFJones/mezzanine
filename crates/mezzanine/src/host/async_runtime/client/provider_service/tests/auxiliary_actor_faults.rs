@@ -1134,6 +1134,210 @@ fn assert_exact_failure(owner: &Owner, conversation: &str, event: &RuntimeEvent)
 /// A completed, reported request whose response content is never published.
 /// Its counters are synthetic; the observed product adapter owns wire identity.
 struct ReportedMemoryProvider(std::sync::Arc<std::sync::atomic::AtomicUsize>);
+/// Synthetic provider failure at the observed adapter boundary. Explicit totals
+/// may include earlier calls; the last cutoff is not an aggregate substitute.
+struct IncurredFailureProvider {
+    incurred: Option<mez_agent::ModelTokenUsage>,
+    cutoff: bool,
+}
+
+impl IncurredFailureProvider {
+    fn error(&self) -> MezError {
+        let mut error = MezError::invalid_state("auxiliary fixture provider failure");
+        if self.cutoff {
+            error =
+                error.with_provider_output_limit_state(mez_agent::ProviderOutputLimitState::new(
+                    "local-chat",
+                    "openai-responses",
+                    "max_output_tokens",
+                    None,
+                    "",
+                    0,
+                    0,
+                    mez_agent::ModelTokenUsage {
+                        input_tokens: 2,
+                        output_tokens: 1,
+                        ..Default::default()
+                    },
+                    mez_agent::ProviderOutputLimitContinuationDisposition::ContinueVisibleText,
+                ));
+        }
+        if let Some(usage) = self.incurred {
+            error = error.with_provider_incurred_usage(usage);
+        }
+        error
+    }
+}
+
+impl AsyncModelProvider for IncurredFailureProvider {
+    fn provider_id(&self) -> &str {
+        "local-chat"
+    }
+    fn api_compatibility(&self) -> mez_agent::ProviderApiCompatibility {
+        mez_agent::ProviderApiCompatibility::OpenAiResponses
+    }
+    fn send_request_async<'a>(
+        &'a self,
+        _request: &'a ModelRequest,
+    ) -> Pin<Box<dyn Future<Output = Result<ModelResponse>> + Send + 'a>> {
+        Box::pin(async move { Err(self.error()) })
+    }
+}
+
+/// The terminal error and journal describe the same expense, not two charges.
+/// Real claim/monitor/actor delivery must retain cumulative error totals for
+/// memory and titles, keep cutoff-only fallback, and never invent missing cost.
+/// All actors and native roots retire before the desired-behavior assertions,
+/// including on the pre-repair RED run. This is not physical HTTP qualification.
+#[tokio::test]
+async fn auxiliary_typed_errors_conserve_expense_through_monitor_and_actor() {
+    let aggregate = mez_agent::ModelTokenUsage {
+        input_tokens: 17,
+        output_tokens: 3,
+        ..Default::default()
+    };
+    let mut results = Vec::new();
+    for family in [Family::Remember, Family::Title] {
+        for (incurred, cutoff) in [
+            (Some(aggregate), false),
+            (Some(aggregate), true),
+            (None, true),
+            (None, false),
+        ] {
+            let provider = IncurredFailureProvider { incurred, cutoff };
+            let expected = provider.error().provider_incurred_usage();
+            let (root, service, primary, conversation) = queued_fixture(family);
+            let observation = service
+                .pending_agent_remember_observation_id("%1")
+                .map(str::to_owned);
+            let title_dispatch = service
+                .pending_agent_session_title_dispatch_id(&conversation)
+                .map(str::to_owned);
+            let (handle, actor) =
+                AsyncRuntimeSessionActor::new(service, Default::default()).unwrap();
+            let actor = tokio::spawn(actor.run());
+            let drains: ProviderObservationDrains = Default::default();
+            let result = match family {
+                Family::Remember => {
+                    let dispatch = handle
+                        .claim_agent_remember_task("%1".into(), observation.unwrap())
+                        .await
+                        .unwrap()
+                        .unwrap();
+                    monitor_runtime_agent_remember_dispatch(
+                        handle.clone(),
+                        "%1".into(),
+                        dispatch,
+                        drains.clone(),
+                        move |dispatch, observer| async move {
+                            observed_provider_request(
+                                &provider,
+                                &observer,
+                                ProviderRequestPurpose::Memory,
+                                &dispatch.task.request,
+                            )
+                            .await
+                        },
+                    )
+                    .await
+                    .unwrap()
+                }
+                Family::Title => {
+                    let dispatch = handle
+                        .claim_agent_session_title_task(
+                            conversation.clone(),
+                            title_dispatch.unwrap(),
+                        )
+                        .await
+                        .unwrap()
+                        .unwrap();
+                    monitor_runtime_agent_session_title_dispatch(
+                        handle.clone(),
+                        dispatch,
+                        drains.clone(),
+                        move |dispatch, observer| async move {
+                            session_title_response_outcome(
+                                observed_provider_request(
+                                    &provider,
+                                    &observer,
+                                    ProviderRequestPurpose::Title,
+                                    &dispatch.task.request,
+                                )
+                                .await,
+                            )
+                        },
+                    )
+                    .await
+                    .unwrap()
+                }
+                Family::Compaction => unreachable!(),
+            };
+            let (event, completed) = result.as_ref().unwrap();
+            assert!(!completed);
+            let terminal_usage = match event {
+                RuntimeEvent::AgentRemember(AgentRememberEvent::Failed {
+                    usage, message, ..
+                }) => {
+                    assert_eq!(message, "auxiliary fixture provider failure");
+                    *usage
+                }
+                RuntimeEvent::AgentSessionTitle(AgentSessionTitleEvent::WorkerSettled {
+                    usage,
+                    outcome: AgentSessionTitleOutcome::Rejected(_),
+                    ..
+                }) => *usage,
+                _ => panic!("ordinary error must retain failure outcome"),
+            };
+            let duplicate = event.clone();
+            let mut report = AsyncAgentProviderPollReport {
+                polls: 0,
+                executions: 0,
+                idle_polls: 0,
+                terminal_state: RuntimeLifecycleState::Running,
+            };
+            record_joined_agent_provider_worker(Ok(Ok(result)), &handle, &mut report)
+                .await
+                .unwrap();
+            assert_replay_ignored(&handle, duplicate).await;
+            assert!(drains.lock().unwrap().is_empty());
+            handle
+                .execute_agent_shell_command(primary, "/help".into())
+                .await
+                .unwrap();
+            handle.shutdown().await.unwrap();
+            let mut exit = actor.await.unwrap();
+            let usage = exit
+                .service
+                .agent_token_usage_for_conversation(&conversation);
+            let key = mez_agent::ModelTokenUsageKey::new("local-chat", "test");
+            let accounted = usage.get(&key).copied().unwrap_or_default();
+            let roots = exit.service.terminate_all_pane_processes().unwrap().len();
+            assert_eq!(roots, usize::from(matches!(family, Family::Title)));
+            drop((exit, handle, drains));
+            let path = root.0.clone();
+            drop(root);
+            assert!(!path.exists(), "settled fixture must remove its exact root");
+            results.push((
+                matches!(family, Family::Title),
+                cutoff,
+                expected,
+                terminal_usage,
+                accounted,
+            ));
+        }
+    }
+    for (title, cutoff, expected, terminal, accounted) in results {
+        assert_eq!(
+            terminal, expected,
+            "title={title}, cutoff={cutoff}: terminal expense"
+        );
+        assert_eq!(
+            accounted, expected,
+            "title={title}, cutoff={cutoff}: original expense once"
+        );
+    }
+}
+
 impl AsyncModelProvider for ReportedMemoryProvider {
     fn provider_id(&self) -> &str {
         "local-chat"

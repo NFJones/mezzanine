@@ -103,6 +103,13 @@ exchange's known usage without making another transport call. Missing counters
 remain unknown, not zero. Receipt acknowledgment is not proof that issued
 provider exposure has retired.
 
+Memory and generated-title worker failures retain explicit cumulative incurred
+usage independently of the failure outcome or title sanitization. If cumulative
+usage is absent, reported output-cutoff usage remains the fallback; a last-call
+cutoff never replaces an explicit aggregate. The original actor accounting owner
+settles that expense once, including when its terminal event is delivered again.
+This does not turn a rejected auxiliary result into success or authorize a retry.
+
 Configured dispatch attaches the native source whenever its original budget
 owner is present. Each exchange freezes its actual request provider/model and
 code-owned purpose rather than borrowing the worker profile or response model.

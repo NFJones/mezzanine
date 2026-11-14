@@ -2362,10 +2362,7 @@ fn remember_worker_event(
             RuntimeEvent::AgentRemember(AgentRememberEvent::Failed {
                 pane_id,
                 observation_id,
-                usage: error
-                    .provider_output_limit_state()
-                    .map(|state| state.usage)
-                    .unwrap_or_default(),
+                usage: error.provider_incurred_usage(),
                 kind: provider_worker_error_kind(&error).to_string(),
                 message: error.message().to_string(),
                 provider_failure_json: error.provider_failure_json().map(str::to_string),
@@ -2845,10 +2842,7 @@ fn session_title_response_outcome(
             (outcome, response.usage)
         }
         Err(error) => {
-            let usage = error
-                .provider_output_limit_state()
-                .map(|state| state.usage)
-                .unwrap_or_default();
+            let usage = error.provider_incurred_usage();
             (
                 AgentSessionTitleOutcome::Rejected(
                     session_title_failure_reason(&error).to_string(),
