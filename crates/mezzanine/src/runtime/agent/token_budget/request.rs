@@ -197,6 +197,28 @@ impl RuntimeBudgetAttemptWork {
         )
     }
 
+    /// Pure comparison with a current actor capture. This original request's
+    /// native lease and binding remain mandatory; equal root labels alone do
+    /// not authorize parking or attach another request's expense owner.
+    pub(super) fn matches_claim(&self, agent: &str, turn: &str, generation: u64) -> bool {
+        self.0.wire_subject.get().is_some_and(|subject| {
+            subject.agent_id == agent
+                && subject.turn_id == turn
+                && subject.claim_generation == Some(generation)
+        })
+    }
+
+    pub(super) fn matches_owner(&self, owner: &RuntimeBudgetRequestOwner) -> bool {
+        let original = &self.0.owner;
+        original.member == owner.member
+            && original.binding_owner == owner.binding_owner
+            && original.store.path() == owner.store.path()
+            && original
+                .validate_request(&owner.member.conversation)
+                .is_ok()
+            && owner.validate_request(&owner.member.conversation).is_ok()
+    }
+
     pub(super) fn wrap_permit(&self, permit: BudgetSendPermit) -> RuntimeBudgetSendPermit {
         RuntimeBudgetSendPermit {
             source: self.0.clone(),

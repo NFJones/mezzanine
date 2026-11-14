@@ -16712,6 +16712,17 @@ at the transport boundary. A held or previously authorized outcome MUST NOT poll
 transport. Cancellation MUST reconcile that same owner for receipt evidence,
 never reconstruct a send permit. The staged hook alone does not activate budgets
 or establish fair waiting, terminal coverage, or physical exposure release.
+An original positively nonwriting hold MAY produce a sealed process-local
+capture for scheduler parking. Reconsideration or recovered authorization MUST
+revoke that capture; an unstarted, failed, or issued attempt MUST NOT produce it.
+Parking MUST retain the exact current claim, conversation, binding and ledger
+liveness while releasing only scheduler capacity. Fair reacquisition MUST resume
+the original inference owner, never queue a replacement provider continuation.
+The host MUST adopt cancellation/rearming of the original claim deadline before
+resuming that future, then obtain fresh native authorization. Old timer callbacks
+MUST NOT shorten its remaining active lease. Overlapping inactive periods MUST
+be excluded once, and budget release MUST NOT clear independent human pause.
+These staged runtime ports alone do not enable host waiting or budget activation.
 An installed request-owned receipt source MUST allocate a distinct original
 descriptor for each concrete exchange, including adapter-internal retries. The
 plan and journal MUST retain the exact selected factory before authorization;

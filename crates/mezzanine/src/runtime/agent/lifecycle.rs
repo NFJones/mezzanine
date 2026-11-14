@@ -375,6 +375,7 @@ impl RuntimeSessionService {
         self.agent
             .agent_turn_peer_wait_started_at_ms
             .remove(turn_id);
+        self.retire_budget_provider_wait(turn_id);
         self.agent.agent_turn_peer_wait_wake_pending.remove(turn_id);
         self.retire_request_wait_edge(turn_id);
         self.agent
@@ -833,6 +834,19 @@ impl RuntimeSessionService {
                 let _ = self.agent.agent_scheduler.cancel(&turn.turn_id);
                 self.finish_agent_turn_without_shell_session(&turn, AgentTurnState::Interrupted)?;
                 continue;
+            }
+            // A budget waiter retains its ORIGINAL inference claim and ledger
+            // liveness. Fair selection must never offer a new continuation.
+            match self.reacquire_budget_provider_claim(&turn) {
+                Ok(true) => {
+                    started = started.saturating_add(1);
+                    continue;
+                }
+                Ok(false) => {}
+                Err(error) => {
+                    self.fail_scheduler_started_turn(&turn)?;
+                    return Err(error);
+                }
             }
             let previous_state = turn.state;
             let startup_result = (|| -> Result<()> {

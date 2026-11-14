@@ -9,6 +9,7 @@ use mez_agent::token_budget::{UsageSnapshot, UsageTotals};
 use mez_agent::{ModelTokenUsage, ModelTokenUsageKey};
 
 mod admission_work;
+mod provider_wait;
 mod receipt_commit;
 
 async fn issued(scene: &mut Scene) -> crate::runtime::RuntimeAgentProviderDispatch {

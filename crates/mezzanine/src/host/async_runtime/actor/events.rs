@@ -899,7 +899,7 @@ impl AsyncRuntimeSessionActor {
                 self.timers
                     .provider_claim
                     .remove(timer.key.owner_id.as_str());
-                self.apply_provider_claim_timer_event(&timer.key)
+                self.apply_provider_claim_timer_event(&timer.key, timer.now_ms)
             }
             RuntimeTimerKind::CompactionClaim => {
                 if !self.timers.compaction_claim.remove(&timer.key) {
@@ -1089,10 +1089,28 @@ impl AsyncRuntimeSessionActor {
     pub(super) fn apply_provider_claim_timer_event(
         &mut self,
         key: &RuntimeTimerKey,
+        now_ms: u64,
     ) -> Result<RuntimeTransition> {
-        let applied = self
-            .service
-            .fail_expired_claimed_agent_provider_task(&key.owner_id, key.generation)?;
+        let applied = self.service.fail_expired_claimed_agent_provider_task_at(
+            &key.owner_id,
+            key.generation,
+            now_ms,
+        )?;
+        if !applied
+            && let Some(delay_ms) = self.service.budget_provider_claim_timer_remaining(
+                &key.owner_id,
+                key.generation,
+                now_ms,
+            )
+        {
+            return Ok(RuntimeTransition {
+                applied: false,
+                side_effects: vec![RuntimeSideEffect::ScheduleTimer {
+                    key: key.clone(),
+                    delay_ms,
+                }],
+            });
+        }
         let mut side_effects = if applied {
             self.pending_provider_dispatch_side_effects()?
         } else {

@@ -29,6 +29,11 @@ pub(crate) mod admission_work;
 pub(crate) mod auxiliary;
 #[cfg_attr(
     not(test),
+    allow(dead_code, reason = "retained provider wait assembly remains staged")
+)]
+pub(crate) mod provider_wait;
+#[cfg_attr(
+    not(test),
     allow(
         dead_code,
         reason = "durable provider receipt integration is downstream"
@@ -119,6 +124,7 @@ pub(crate) struct RuntimeBudgetMemberships {
     /// ordinary production resume/fork or pretend to enforce finite limits.
     enabled: bool,
     entries: BTreeMap<String, Entry>,
+    provider_waits: BTreeMap<String, provider_wait::ProviderWait>,
     #[cfg(test)]
     fail_restore_after_install: bool,
 }

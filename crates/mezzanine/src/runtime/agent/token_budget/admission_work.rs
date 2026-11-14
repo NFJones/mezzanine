@@ -14,7 +14,7 @@ use crate::error::{MezError, Result};
 use crate::storage::token_usage::budget::admission::{
     BudgetAdmissionHold, BudgetAdmissionOutcome, BudgetAdmissionWaitState, BudgetSendPermit,
 };
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 use tokio::{sync::Mutex, task::JoinHandle};
 
 #[derive(Debug)]
@@ -49,6 +49,9 @@ struct State {
     wait_query: Option<JoinHandle<Result<BudgetAdmissionWaitState>>>,
     recovered: Option<BudgetAdmissionOutcome>,
     retry_after_absence: bool,
+    /// Only the retained Held state owns this epoch. Captures borrow it weakly
+    /// so reconsideration revokes them before any new native writer can run.
+    hold_epoch: Option<Arc<()>>,
 }
 
 /// Contains no idle reverse reference to the original AttemptSource. Even a
@@ -64,9 +67,51 @@ pub(crate) struct RuntimeBudgetAdmissionWork {
     shared: SharedAdmission,
 }
 
+/// Sealed, revocable evidence of an observed nonwriting hold on one original
+/// attempt. It supplies no grant, retry, or scheduler-resume authority. The
+/// actor must still validate its current claim and original membership owner.
+#[derive(Debug, Clone)]
+pub(crate) struct RuntimeBudgetHeldAttempt {
+    work: RuntimeBudgetAttemptWork,
+    epoch: Weak<()>,
+}
+
+impl RuntimeBudgetHeldAttempt {
+    pub(crate) fn matches_owner(&self, owner: &super::request::RuntimeBudgetRequestOwner) -> bool {
+        self.epoch.upgrade().is_some() && self.work.matches_owner(owner)
+    }
+
+    pub(super) fn matches_claim(&self, agent: &str, turn: &str, generation: u64) -> bool {
+        self.epoch.upgrade().is_some() && self.work.matches_claim(agent, turn, generation)
+    }
+
+    pub(super) fn same_capture(&self, other: &Self) -> bool {
+        self.epoch.ptr_eq(&other.epoch) && self.epoch.upgrade().is_some()
+    }
+}
+
 impl RuntimeBudgetAdmissionWork {
     pub(super) fn new(work: RuntimeBudgetAttemptWork, shared: SharedAdmission) -> Self {
         Self { work, shared }
+    }
+
+    /// Capture only an already joined, positively nonwriting original hold.
+    /// No store read or writer starts here; cancellation cannot lose native
+    /// work. All clones share the same epoch until explicit reconsideration.
+    pub(crate) async fn capture_held(&self) -> Result<RuntimeBudgetHeldAttempt> {
+        let mut state = self.shared.0.lock().await;
+        if state.recovered.is_some()
+            || !matches!(state.writer, Writer::Completed(Ok(Outcome::Held(_))))
+        {
+            return Err(MezError::invalid_state(
+                "budget parking requires original hold",
+            ));
+        }
+        let epoch = Arc::downgrade(state.hold_epoch.get_or_insert_with(|| Arc::new(())));
+        Ok(RuntimeBudgetHeldAttempt {
+            work: self.work.clone(),
+            epoch,
+        })
     }
 
     /// Observe current dependencies only after a positively nonwriting hold.
@@ -187,6 +232,7 @@ impl RuntimeBudgetAdmissionWork {
                 "budget authorization retry requires an observed hold",
             ));
         }
+        state.hold_epoch = None;
         let work = self.work.clone();
         state.writer = spawn(move || work.authorize());
         observe_writer(&mut state).await;
@@ -328,6 +374,7 @@ async fn observe_query(state: &mut State) -> Result<Option<BudgetAdmissionOutcom
     state.retry_after_absence =
         matches!(&result, Ok(None)) && matches!(state.writer, Writer::Completed(Err(_)));
     if let Ok(Some(outcome)) = &result {
+        state.hold_epoch = None;
         state.recovered = Some(outcome.clone());
     }
     result

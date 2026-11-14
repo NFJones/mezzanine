@@ -112,6 +112,15 @@ output/MAAP repair rounds keep the summary purpose. This connection does not
 enable production membership or supply fair budget waiting, root-wide effect
 inhibition, live policy publication or user controls; those remain staged.
 
+The runtime also has a staged retained-claim parking port. It accepts only a
+sealed capture of an observed nonwriting hold, releases scheduler capacity while
+keeping the original claim and conversation live, and fairly reacquires without
+offering another provider continuation. Reconsideration revokes old captures.
+The caller must adopt original claim-timer cancellation/rearming before resuming
+that same inference future and obtaining fresh authorization. This is not yet
+host wait-loop, human Resume, or turn-less auxiliary integration; it does not
+enable production waiting or clear another lifecycle hold.
+
 Native async sends also retain evidence that their exact local transport future
 and active callback futures were destroyed, including on cancellation. This transfer
 precedes normal receipt capture; it does not establish remote completion,

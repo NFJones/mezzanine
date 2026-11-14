@@ -2112,6 +2112,7 @@ impl RuntimeSessionService {
     /// Clears the provider-worker claim lease for a settled turn.
     pub(crate) fn clear_claimed_agent_provider_task(&mut self, turn_id: &str) {
         self.agent.claimed_agent_provider_tasks.remove(turn_id);
+        self.retire_budget_provider_wait(turn_id);
     }
 
     /// Returns frozen claim attribution without exposing mutable claim storage.
@@ -2147,10 +2148,22 @@ impl RuntimeSessionService {
     ///
     /// Stale timer generations are ignored so a late timer from an older claim
     /// cannot fail a turn whose provider work has already been retried.
+    #[cfg(test)]
     pub(crate) fn fail_expired_claimed_agent_provider_task(
         &mut self,
         turn_id: &str,
         generation: u64,
+    ) -> Result<bool> {
+        self.fail_expired_claimed_agent_provider_task_at(turn_id, generation, current_unix_millis())
+    }
+
+    /// The actor supplies one clock snapshot for both expiry and rearming.
+    /// Reading time independently for those decisions can lose the last timer.
+    pub(crate) fn fail_expired_claimed_agent_provider_task_at(
+        &mut self,
+        turn_id: &str,
+        generation: u64,
+        now_ms: u64,
     ) -> Result<bool> {
         let Some(claim) = self
             .agent
@@ -2165,6 +2178,15 @@ impl RuntimeSessionService {
             return Ok(false);
         }
         if claim.generation != generation {
+            return Ok(false);
+        }
+        if self.budget_provider_claim_is_parked(turn_id, generation) {
+            return Ok(false);
+        }
+        if self
+            .budget_provider_claim_timer_remaining(turn_id, generation, now_ms)
+            .is_some()
+        {
             return Ok(false);
         }
         let Some(turn) = self

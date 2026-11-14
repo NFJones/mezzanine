@@ -4634,7 +4634,8 @@ impl RuntimeSessionService {
             .unwrap_or_else(|| self.agent_native_shell_timeout_ms())
     }
 
-    /// Starts excluding parked peer-wait time from one active turn's deadline.
+    /// Starts one inactive interval shared by peer, human, and budget waits.
+    /// Overlapping reasons retain the earliest clock, not additive durations.
     pub(crate) fn park_agent_turn_deadline(&mut self, turn_id: &str, now_ms: u64) {
         self.agent
             .agent_turn_peer_wait_started_at_ms
@@ -4642,9 +4643,17 @@ impl RuntimeSessionService {
             .or_insert(now_ms);
     }
 
-    /// Restores a parked turn's active deadline by its elapsed peer-wait time.
+    /// Restores active time only after independent human/budget holds permit it.
     pub(crate) fn resume_agent_turn_deadline(&mut self, turn_id: &str, now_ms: u64) -> Result<()> {
-        if self.agent_turn_is_human_paused(turn_id) {
+        if self.agent_turn_is_human_paused(turn_id)
+            || self
+                .agent
+                .claimed_agent_provider_tasks
+                .get(turn_id)
+                .is_some_and(|claim| {
+                    self.budget_provider_claim_is_parked(turn_id, claim.generation)
+                })
+        {
             return Ok(());
         }
         let Some(parked_at_ms) = self
