@@ -9,17 +9,96 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 #[tokio::test]
 async fn budget_monitored_original_future_resumes_after_policy_release() {
-    qualify(false, false).await;
+    qualify(false, false, None).await;
 }
 
 #[tokio::test]
 async fn budget_monitored_original_future_stop_never_sends_after_release() {
-    qualify(true, false).await;
+    qualify(true, false, None).await;
 }
 
 #[tokio::test]
 async fn budget_monitored_original_future_survives_full_fair_queue() {
-    qualify(false, true).await;
+    qualify(false, true, None).await;
+}
+
+#[derive(Clone, Copy)]
+enum HumanRelease {
+    BudgetFirst,
+    HumanFirst,
+}
+
+/// Actual attached browser input clears only its own inhibition reason. The
+/// same physical producer must outlive both orders without a replacement offer.
+#[tokio::test]
+async fn budget_monitored_original_future_requires_human_and_budget_release() {
+    for order in [HumanRelease::BudgetFirst, HumanRelease::HumanFirst] {
+        qualify(false, false, Some(order)).await;
+    }
+}
+
+async fn browser_input(
+    handle: &crate::host::async_runtime::AsyncRuntimeSessionHandle,
+    primary: &mez_core::ids::ClientId,
+    bytes: &[u8],
+) {
+    use crate::host::terminal::{AttachedTerminalClientStepPlan, TerminalClientLoopAction};
+    handle
+        .apply_attached_terminal_step_plan(
+            primary.clone(),
+            AttachedTerminalClientStepPlan {
+                actions: vec![TerminalClientLoopAction::ForwardToPane(bytes.to_vec())],
+                output_lines: Vec::new(),
+                output_line_style_spans: Vec::new(),
+                input_hangup: false,
+                output_hangup: false,
+                error_roles: Vec::new(),
+            },
+        )
+        .await
+        .unwrap();
+}
+
+/// Reassemble the sole fixture row's wrapped cells, excluding browser help.
+async fn assert_browser_paused(
+    handle: &crate::host::async_runtime::AsyncRuntimeSessionHandle,
+    pane: &str,
+    expected: bool,
+) {
+    let view = handle
+        .render_client_view(
+            mez_mux::presentation::ClientViewRole::Primary,
+            mez_mux::layout::Size::new(120, 40).unwrap(),
+            crate::host::terminal::TerminalClientLoopConfig::default(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    let text = view.lines.join("\n");
+    assert!(
+        text.contains("Live session agents"),
+        "agent browser was not mounted: {text}"
+    );
+    let cell = |column| -> String {
+        view.lines
+            .iter()
+            .skip_while(|line| !line.contains('├'))
+            .skip(1)
+            .take_while(|line| line.contains('│'))
+            .filter_map(|line| line.split('│').nth(column))
+            .map(str::trim)
+            .collect()
+    };
+    assert_eq!(
+        cell(1),
+        format!("agent-{pane}"),
+        "wrong browser target: {text}"
+    );
+    assert_eq!(
+        cell(7),
+        if expected { "paused" } else { "running" },
+        "unexpected original agent pause state: {text}"
+    );
 }
 
 async fn publish(store: TokenUsageStore) {
@@ -50,7 +129,7 @@ async fn publish(store: TokenUsageStore) {
     .unwrap();
 }
 
-async fn qualify(stop: bool, pressure: bool) {
+async fn qualify(stop: bool, pressure: bool, human: Option<HumanRelease>) {
     let Prepared {
         mut service,
         mut dispatch,
@@ -62,6 +141,14 @@ async fn qualify(stop: bool, pressure: bool) {
         output: TokenLimit::Unlimited,
     })
     .await;
+    if human.is_some() {
+        // The fixture has no physical pane shell. Qualify the existing native
+        // lifecycle target by declaring that process-free pane, not a fake PID.
+        service
+            .session_mut_for_tests()
+            .set_pane_live_state(&dispatch.turn.pane_id, false)
+            .unwrap();
+    }
     if !stop {
         let deadline = crate::runtime::current_unix_millis() + 3_000;
         service
@@ -173,6 +260,7 @@ async fn qualify(stop: bool, pressure: bool) {
         let body = serde_json::json!({"model":"test-model","choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":text}}],"usage":{"prompt_tokens":11,"completion_tokens":3}}).to_string();
         socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
     });
+    let dispatch_pane = dispatch.turn.pane_id.clone();
     let turn = dispatch.turn.turn_id.clone();
     let agent = AgentId::opaque(dispatch.turn.agent_id.clone()).unwrap();
     let drains: ProviderObservationDrains = Default::default();
@@ -200,6 +288,14 @@ async fn qualify(stop: bool, pressure: bool) {
                 assert_eq!(sends.load(Ordering::SeqCst), 0);
                 assert_eq!(rows(&store, "budget_attempts"), 0);
                 assert!(handle.agent_turn_is_running(&turn).await.unwrap());
+                if human.is_some() {
+                    browser_input(&handle, &primary, b"/list-agents --all\r").await;
+                    // The sole row is the original registered agent; verify
+                    // its ID and state before using its retained target.
+                    assert_browser_paused(&handle, &dispatch_pane, false).await;
+                    browser_input(&handle, &primary, b"p").await;
+                    assert_browser_paused(&handle, &dispatch_pane, true).await;
+                }
                 if !stop {
                     // Exceed the ORIGINAL actor/runner deadline while the same
                     // worker is parked. A fixed wall-clock wrapper fails here.
@@ -223,7 +319,38 @@ async fn qualify(stop: bool, pressure: bool) {
                         .await
                         .unwrap();
                 }
-                publish(store.clone()).await;
+                if let Some(order) = human {
+                    match order {
+                        HumanRelease::BudgetFirst => publish(store.clone()).await,
+                        HumanRelease::HumanFirst => {
+                            browser_input(&handle, &primary, b"p").await;
+                            assert_browser_paused(&handle, &dispatch_pane, false).await;
+                        }
+                    }
+                    // Beyond the maximum paced admission poll: lifting only
+                    // one reason must not issue HTTP or destroy this worker.
+                    tokio::time::sleep(Duration::from_millis(2_100)).await;
+                    if worker.as_ref().unwrap().is_finished() {
+                        let ended = worker.take().unwrap().await.unwrap();
+                        panic!(
+                            "worker ended after only one release: sends={}, outcome={:?}",
+                            sends.load(Ordering::SeqCst),
+                            ended.map(|event| event.is_some())
+                        );
+                    }
+                    assert_eq!(sends.load(Ordering::SeqCst), 0);
+                    assert_eq!(rows(&store, "budget_attempts"), 0);
+                    match order {
+                        HumanRelease::BudgetFirst => {
+                            assert_browser_paused(&handle, &dispatch_pane, true).await;
+                            browser_input(&handle, &primary, b"p").await;
+                            assert_browser_paused(&handle, &dispatch_pane, false).await;
+                        }
+                        HumanRelease::HumanFirst => publish(store.clone()).await,
+                    }
+                } else {
+                    publish(store.clone()).await;
+                }
                 if let Some((first, _)) = &sibling {
                     // Beyond the driver's maximum paced poll interval: release
                     // has reached real QueueFull, not merely a parked policy.
