@@ -500,6 +500,7 @@ mod openai_response_diagnostics_tests {
 // Model provider traits and OpenAI Responses adapter.
 
 mod anthropic;
+pub(crate) mod budget_deadline;
 mod chat_completions;
 mod deepseek;
 mod errors;
@@ -757,6 +758,7 @@ pub(crate) type SharedProviderReportedUsage =
 
 /// Actor-bound observation sink shared by every provider call in one worker.
 pub struct ProviderWireRequestObserver {
+    budget_deadline: Option<budget_deadline::ProviderBudgetDeadline>,
     conversation_id: String,
     pane_id: String,
     sender: tokio::sync::mpsc::Sender<ProviderWireRequestObservation>,
@@ -783,6 +785,7 @@ impl ProviderWireRequestObserver {
     ) -> Self {
         Self {
             conversation_id: conversation_id.into(),
+            budget_deadline: None,
             pane_id: pane_id.into(),
             sender,
             claim_generation: None,
@@ -792,6 +795,19 @@ impl ProviderWireRequestObserver {
             reported: None,
             delivery_failed: AtomicBool::new(false),
         }
+    }
+
+    /// Associates observations with the immutable issued expense owner.
+    pub(crate) fn with_budget_deadline(
+        mut self,
+        clock: budget_deadline::ProviderBudgetDeadline,
+    ) -> Self {
+        self.budget_deadline = Some(clock);
+        self
+    }
+
+    pub(crate) fn budget_deadline(&self) -> Option<&budget_deadline::ProviderBudgetDeadline> {
+        self.budget_deadline.as_ref()
     }
 
     /// Associates observations with the immutable issued expense owner.

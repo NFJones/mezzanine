@@ -1029,6 +1029,24 @@ pub(in crate::host::async_runtime) enum AsyncRuntimeRequest {
         /// boundary and should remain aligned with the owning type invariant.
         reply: oneshot::Sender<Result<bool>>,
     },
+    /// Parks the original positively held provider claim. False means bounded
+    /// timer capacity is unavailable before any wait mutation, not success.
+    ParkBudgetProviderClaim {
+        agent_id: AgentId,
+        turn_id: String,
+        generation: u64,
+        capture: crate::runtime::RuntimeBudgetHeldAttempt,
+        reply: oneshot::Sender<Result<bool>>,
+    },
+    /// Fairly reacquires the same claim and adopts its timer before true. False
+    /// retains the original wait; neither result is native send authority.
+    ReacquireBudgetProviderClaim {
+        agent_id: AgentId,
+        turn_id: String,
+        generation: u64,
+        capture: crate::runtime::RuntimeBudgetHeldAttempt,
+        reply: oneshot::Sender<Result<bool>>,
+    },
     /// Checks an already issued compaction claim without claiming or dispatching
     /// new work. A stopped/replaced generation must not keep its producer alive.
     AgentCompactionClaimIsCurrent {
@@ -1770,6 +1788,8 @@ impl AsyncRuntimeRequest {
             | Self::CompleteBookkeepingCandidate { .. }
             | Self::PendingAgentProviderTasks { .. }
             | Self::AgentTurnIsRunning { .. }
+            | Self::ParkBudgetProviderClaim { .. }
+            | Self::ReacquireBudgetProviderClaim { .. }
             | Self::AgentCompactionClaimIsCurrent { .. }
             | Self::QueueProviderPollTimerIfNeeded { .. }
             | Self::PrepareConfiguredAgentProviderTask { .. }

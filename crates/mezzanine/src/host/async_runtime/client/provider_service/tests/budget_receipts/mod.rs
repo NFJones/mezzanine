@@ -10,6 +10,7 @@ mod pre_send;
 mod retirement;
 mod routing;
 mod transport;
+mod waiting;
 
 use super::super::budget_receipts::BudgetObservationReceipts;
 use super::*;

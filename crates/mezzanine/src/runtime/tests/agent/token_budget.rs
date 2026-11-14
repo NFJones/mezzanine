@@ -47,7 +47,12 @@ impl AsRef<std::path::Path> for OwnedRoot {
 }
 impl Drop for OwnedRoot {
     fn drop(&mut self) {
-        fs::remove_dir_all(&self.0).unwrap();
+        fs::remove_dir_all(&self.0).unwrap_or_else(|error| {
+            panic!(
+                "owned budget fixture cleanup retained {}: {error}",
+                self.0.display()
+            )
+        });
         assert!(!self.0.exists());
     }
 }

@@ -1638,6 +1638,7 @@ async fn monitor_runtime_agent_provider_dispatch(
 ) -> Result<AsyncAgentProviderWorkerResult> {
     let pane_id = dispatch.turn.pane_id.clone();
     let claim_generation = dispatch.claim_generation;
+    let budget_waiter = handle.clone();
     monitor_agent_provider_future(
         handle,
         agent_id,
@@ -1646,7 +1647,13 @@ async fn monitor_runtime_agent_provider_dispatch(
         claim_generation,
         drains,
         move |progress, observations, pending| {
-            execute_runtime_agent_provider_dispatch(dispatch, Some(progress), observations, pending)
+            execute_runtime_agent_provider_dispatch_with_waiter(
+                dispatch,
+                Some(progress),
+                observations,
+                pending,
+                Some(budget_waiter),
+            )
         },
     )
     .await
@@ -2457,7 +2464,7 @@ async fn execute_observed_provider_turn<P: AsyncModelProvider>(
         issue_actions_enabled: inputs.issue_actions_enabled,
     };
     runner
-        .run_turn_async_ref_with_previous_request_and_progress(
+        .run_turn_with_budget_deadline(
             &mut ledger,
             inputs.turn.clone(),
             inputs.context,
@@ -2466,6 +2473,7 @@ async fn execute_observed_provider_turn<P: AsyncModelProvider>(
             previous_request,
             inputs.progress.clone(),
             inputs.turn_limits,
+            observer.budget_deadline(),
         )
         .await
 }
@@ -2475,11 +2483,29 @@ async fn execute_observed_provider_turn<P: AsyncModelProvider>(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
+#[cfg(test)]
 async fn execute_runtime_agent_provider_dispatch(
     dispatch: RuntimeAgentProviderDispatch,
     output_progress_sender: Option<tokio::sync::mpsc::Sender<mez_agent::StreamingSayEvent>>,
     observation_sender: tokio::sync::mpsc::Sender<ProviderWireRequestObservation>,
     pending_observations: PendingProviderWireObservations,
+) -> Result<RuntimeAgentProviderWorkerOutcome> {
+    execute_runtime_agent_provider_dispatch_with_waiter(
+        dispatch,
+        output_progress_sender,
+        observation_sender,
+        pending_observations,
+        None,
+    )
+    .await
+}
+
+async fn execute_runtime_agent_provider_dispatch_with_waiter(
+    dispatch: RuntimeAgentProviderDispatch,
+    output_progress_sender: Option<tokio::sync::mpsc::Sender<mez_agent::StreamingSayEvent>>,
+    observation_sender: tokio::sync::mpsc::Sender<ProviderWireRequestObservation>,
+    pending_observations: PendingProviderWireObservations,
+    budget_waiter: Option<AsyncRuntimeSessionHandle>,
 ) -> Result<RuntimeAgentProviderWorkerOutcome> {
     let RuntimeAgentProviderDispatch {
         claim_generation,
@@ -2522,8 +2548,18 @@ async fn execute_runtime_agent_provider_dispatch(
     )
     .with_claim_generation(claim_generation)
     .with_pending_observations(pending_observations);
-    let execution_observer =
-        budget_admission::install_request_source(execution_observer, _budget_owner.as_ref())?;
+    let execution_observer = match (_budget_owner.as_ref(), budget_waiter) {
+        (Some(owner), Some(handle)) => {
+            let clock = crate::integrations::agent::provider::budget_deadline::ProviderBudgetDeadline::default();
+            execution_observer
+                .with_budget_deadline(clock.clone())
+                .with_budget_receipt_source(std::sync::Arc::new(
+                    budget_admission::BudgetRequestAdmission::new(owner.clone())
+                        .with_waiter(handle, clock),
+                ))?
+        }
+        (owner, _) => budget_admission::install_request_source(execution_observer, owner)?,
+    };
     let auxiliary_purpose = if sandbox_failure_assessment_request.is_some() {
         ProviderRequestPurpose::SandboxAssessment
     } else {

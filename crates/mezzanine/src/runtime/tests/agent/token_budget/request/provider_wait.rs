@@ -5,6 +5,250 @@ use super::*;
 use crate::runtime::agent::token_budget::admission_work::RuntimeBudgetHeldAttempt;
 use crate::runtime::{RuntimeBudgetAttemptAdmission, RuntimeBudgetAttemptWork, RuntimeSideEffect};
 
+/// Public host requests must adopt their timer effects before replying. An old
+/// callback after the cancellation cannot fail the still-retained producer;
+/// duplicate reacquisition replies cannot create another timer or inference.
+#[tokio::test]
+async fn runtime_budget_provider_wait_host_adopts_original_timer_edges() {
+    use crate::runtime::{
+        RuntimeEvent, RuntimeEventBatch, RuntimeTimerKey, RuntimeTimerKind, TimerEvent,
+    };
+    let (mut scene, dispatch, _work, capture) = held().await;
+    let turn = &dispatch.turn;
+    let agent = AgentId::opaque(turn.agent_id.clone()).unwrap();
+    let key = RuntimeTimerKey::new(RuntimeTimerKind::ProviderClaim, &turn.turn_id, 7);
+    let service = std::mem::replace(&mut scene.service, test_runtime_service());
+    let (handle, actor) =
+        crate::host::async_runtime::AsyncRuntimeSessionActor::new(service, Default::default())
+            .unwrap();
+    let client = async {
+        handle
+            .queue_runtime_side_effects(vec![RuntimeSideEffect::ScheduleTimer {
+                key: key.clone(),
+                delay_ms: 30_000,
+            }])
+            .await
+            .unwrap();
+        let _ = handle.drain_timer_side_effects(64).await.unwrap();
+        assert!(handle.park_budget_provider_claim(
+            agent.clone(), turn.turn_id.clone(), 8, capture.clone(),
+        ).await.is_err());
+        // Polling submits the typed request, then dropping its borrowed waiter
+        // discards the reply, not actor mutation. Same-lane observation below
+        // orders the retry after that original accepted request.
+        let mut lost_reply = Box::pin(handle.park_budget_provider_claim(
+            agent.clone(),
+            turn.turn_id.clone(),
+            7,
+            capture.clone(),
+        ));
+        assert!(matches!(
+            futures_util::poll!(&mut lost_reply),
+            std::task::Poll::Pending
+        ));
+        drop(lost_reply);
+        assert!(handle.agent_turn_is_running(&turn.turn_id).await.unwrap());
+        let canceled = handle.drain_timer_side_effects(64).await.unwrap();
+        assert_eq!(
+            canceled
+                .iter()
+                .filter(|effect| matches!(effect,
+            RuntimeSideEffect::CancelTimer { key: actual } if actual == &key))
+                .count(),
+            1
+        );
+        assert!(handle.park_budget_provider_claim(
+            agent.clone(), turn.turn_id.clone(), 7, capture.clone(),
+        ).await.unwrap());
+        assert!(
+            handle
+                .drain_timer_side_effects(64)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        let mut stale = RuntimeEventBatch::new();
+        stale.push(RuntimeEvent::Timer(TimerEvent {
+            key: key.clone(),
+            now_ms: crate::runtime::current_unix_millis() + 60_000,
+        }));
+        handle.submit_runtime_events(stale).await.unwrap();
+        assert!(handle.agent_turn_is_running(&turn.turn_id).await.unwrap());
+        assert!(
+            handle
+                .reacquire_budget_provider_claim(
+                    agent.clone(),
+                    turn.turn_id.clone(),
+                    7,
+                    capture.clone()
+                )
+                .await
+                .unwrap()
+        );
+        let resumed = handle.drain_timer_side_effects(64).await.unwrap();
+        assert_eq!(resumed.iter().filter(|effect| matches!(effect,
+            RuntimeSideEffect::ScheduleTimer { key: actual, delay_ms } if actual == &key && *delay_ms > 0
+        )).count(), 1);
+        assert!(
+            handle
+                .reacquire_budget_provider_claim(agent, turn.turn_id.clone(), 7, capture)
+                .await
+                .unwrap()
+        );
+        let duplicate = handle.drain_timer_side_effects(64).await.unwrap();
+        assert!(!duplicate.iter().any(|effect| matches!(effect,
+            RuntimeSideEffect::ScheduleTimer { key: actual, .. } if actual == &key)));
+        assert!(
+            handle
+                .pending_agent_provider_tasks()
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        handle.shutdown().await.unwrap();
+    };
+    let ((), exit) = tokio::join!(client, actor.run());
+    scene.service = exit.service;
+}
+
+/// Both queue pressure and a sibling's post-admission startup failure must keep
+/// the original claim and mandatory cancellation. Recovery uses the SAME host
+/// request/capture, not a replacement inference or a new scheduler claim.
+#[tokio::test]
+async fn runtime_budget_provider_wait_host_retains_pressure_and_sibling_failure() {
+    for inject_failure in [false, true] {
+        let (mut scene, dispatch, _work, capture) = held().await;
+        let turn = &dispatch.turn;
+        let agent = AgentId::opaque(turn.agent_id.clone()).unwrap();
+        let primary = scene
+            .service
+            .attach_primary(
+                "budget-host-pressure",
+                true,
+                Size::new(80, 24).unwrap(),
+                120,
+            )
+            .unwrap();
+        let first = scene
+            .service
+            .session
+            .split_active_pane(&primary, SplitDirection::Vertical)
+            .unwrap();
+        let second = scene
+            .service
+            .session
+            .split_active_pane(&primary, SplitDirection::Horizontal)
+            .unwrap();
+        for pane in [&first, &second] {
+            scene
+                .service
+                .agent_shell_store_mut()
+                .enter_or_resume(pane.as_str())
+                .unwrap();
+            mark_test_pane_ready(&mut scene.service, pane.as_str());
+        }
+        scene
+            .service
+            .agent_scheduler_mut()
+            .set_queue_limits(1, usize::MAX)
+            .unwrap();
+        let sibling = scene
+            .service
+            .start_agent_prompt_turn(first.as_str(), "first sibling")
+            .unwrap();
+        if inject_failure {
+            scene
+                .service
+                .fail_next_scheduler_start_post_admission_for_tests();
+        }
+        let service = std::mem::replace(&mut scene.service, test_runtime_service());
+        let (handle, actor) =
+            crate::host::async_runtime::AsyncRuntimeSessionActor::new(service, Default::default())
+                .unwrap();
+        let client = async {
+            assert!(
+                handle
+                    .park_budget_provider_claim(
+                        agent.clone(),
+                        turn.turn_id.clone(),
+                        7,
+                        capture.clone()
+                    )
+                    .await
+                    .unwrap()
+            );
+            let effects = handle.drain_timer_side_effects(64).await.unwrap();
+            assert_eq!(effects.iter().filter(|effect| matches!(effect,
+                RuntimeSideEffect::CancelTimer { key } if key.owner_id == turn.turn_id && key.generation == 7
+            )).count(), 1);
+            assert!(handle.agent_turn_is_running(&turn.turn_id).await.unwrap());
+            if !inject_failure {
+                assert!(
+                    handle
+                        .agent_turn_is_running(&sibling.turn_id)
+                        .await
+                        .unwrap()
+                );
+                handle
+                    .execute_agent_shell_command(primary.clone(), "queued sibling".into())
+                    .await
+                    .unwrap();
+                // This is the connected host result consumed by the paced
+                // admission loop: false, not a terminal QueueFull error.
+                assert!(
+                    !handle
+                        .reacquire_budget_provider_claim(
+                            agent.clone(),
+                            turn.turn_id.clone(),
+                            7,
+                            capture.clone()
+                        )
+                        .await
+                        .unwrap()
+                );
+                assert!(handle.agent_turn_is_running(&turn.turn_id).await.unwrap());
+                handle
+                    .execute_agent_shell_command(primary.clone(), "/stop".into())
+                    .await
+                    .unwrap();
+                handle
+                    .execute_terminal_command(primary.clone(), format!("select-pane -t {first}"))
+                    .await
+                    .unwrap();
+                handle
+                    .execute_agent_shell_command(primary.clone(), "/stop".into())
+                    .await
+                    .unwrap();
+            } else {
+                assert!(
+                    !handle
+                        .agent_turn_is_running(&sibling.turn_id)
+                        .await
+                        .unwrap()
+                );
+            }
+            assert!(
+                handle
+                    .reacquire_budget_provider_claim(agent, turn.turn_id.clone(), 7, capture)
+                    .await
+                    .unwrap()
+            );
+            assert!(handle.agent_turn_is_running(&turn.turn_id).await.unwrap());
+            assert!(
+                handle
+                    .pending_agent_provider_tasks()
+                    .await
+                    .unwrap()
+                    .iter()
+                    .all(|task| task.turn_id != turn.turn_id)
+            );
+            handle.shutdown().await.unwrap();
+        };
+        let ((), exit) = tokio::join!(client, actor.run());
+        scene.service = exit.service;
+    }
+}
+
 async fn held() -> (
     Scene,
     crate::runtime::RuntimeAgentProviderDispatch,

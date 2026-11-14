@@ -109,17 +109,25 @@ code-owned purpose rather than borrowing the worker profile or response model.
 Title, macro judgment, sandbox assessment and failure summary stay distinct in
 the budget ledger; their diagnostic category remains `auxiliary`. Failure-summary
 output/MAAP repair rounds keep the summary purpose. This connection does not
-enable production membership or supply fair budget waiting, root-wide effect
-inhibition, live policy publication or user controls; those remain staged.
+enable production membership, root-wide effect inhibition, live policy
+publication or user controls; those remain staged.
 
 The runtime also has a staged retained-claim parking port. It accepts only a
 sealed capture of an observed nonwriting hold, releases scheduler capacity while
 keeping the original claim and conversation live, and fairly reacquires without
 offering another provider continuation. Reconsideration revokes old captures.
 The caller must adopt original claim-timer cancellation/rearming before resuming
-that same inference future and obtaining fresh authorization. This is not yet
-host wait-loop, human Resume, or turn-less auxiliary integration; it does not
-enable production waiting or clear another lifecycle hold.
+that same inference future and obtaining fresh authorization. Monitored ordinary
+workers now connect this path for already activated memberships: they retain the
+original future and finite active-time allowance, excluding only acknowledged
+parking. Read-only checks run at 100ms to 2s intervals. Relevant changes permit
+fair reacquisition; a fresh capacity refusal can also be reconsidered when a
+paced read shows a free global slot, even if counts cycled back to an earlier
+value. These observations never reserve capacity or grant send authority.
+Queue pressure and sibling startup failure retain the waiter and its original
+timer obligation. Stop still retires the original producer/journal without a
+send. This does not activate memberships
+or establish human Resume, turn-less auxiliary waits, or root-wide effect gates.
 
 Native async sends also retain evidence that their exact local transport future
 and active callback futures were destroyed, including on cancellation. This transfer

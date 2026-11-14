@@ -656,6 +656,7 @@ impl<'a, P: AsyncModelProvider> AgentTurnRunner<'a, P> {
     /// input item across actor-separated action continuations. Other providers
     /// ignore the optional baseline through their default preparation hook.
     #[allow(clippy::too_many_arguments)]
+    #[cfg(test)]
     pub async fn run_turn_async_ref_with_previous_request_and_progress(
         &self,
         ledger: &mut AgentTurnLedger,
@@ -673,6 +674,69 @@ impl<'a, P: AsyncModelProvider> AgentTurnRunner<'a, P> {
             progress,
             provider_interaction_index: std::sync::atomic::AtomicUsize::new(0),
         };
+        self.run_turn_with_deadline(
+            ledger,
+            turn,
+            context,
+            allowed_actions,
+            interaction_kind,
+            limits,
+            environment,
+            None,
+        )
+        .await
+    }
+
+    /// Original monitored worker's active deadline; no policy or fresh allowance
+    /// comes from the clock. Ordinary callers retain the fixed timeout above.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn run_turn_with_budget_deadline(
+        &self,
+        ledger: &mut AgentTurnLedger,
+        turn: AgentTurnRecord,
+        context: &AgentContext,
+        allowed_actions: Option<AllowedActionSet>,
+        interaction_kind: Option<mez_agent::ModelInteractionKind>,
+        previous_request: Option<&ModelRequest>,
+        progress: Option<tokio::sync::mpsc::Sender<mez_agent::StreamingSayEvent>>,
+        limits: AgentTurnLimits,
+        clock: Option<
+            &crate::integrations::agent::provider::budget_deadline::ProviderBudgetDeadline,
+        >,
+    ) -> Result<AgentTurnExecution> {
+        let environment = ProductAgentTurnEnvironment {
+            runner: self,
+            previous_request,
+            progress,
+            provider_interaction_index: std::sync::atomic::AtomicUsize::new(0),
+        };
+        self.run_turn_with_deadline(
+            ledger,
+            turn,
+            context,
+            allowed_actions,
+            interaction_kind,
+            limits,
+            environment,
+            clock,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn run_turn_with_deadline(
+        &self,
+        ledger: &mut AgentTurnLedger,
+        turn: AgentTurnRecord,
+        context: &AgentContext,
+        allowed_actions: Option<AllowedActionSet>,
+        interaction_kind: Option<mez_agent::ModelInteractionKind>,
+        limits: AgentTurnLimits,
+        environment: ProductAgentTurnEnvironment<'_, '_, P>,
+        clock: Option<
+            &crate::integrations::agent::provider::budget_deadline::ProviderBudgetDeadline,
+        >,
+    ) -> Result<AgentTurnExecution> {
         let now_unix_millis = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|duration| duration.as_millis().min(u128::from(u64::MAX)) as u64)
@@ -690,20 +754,25 @@ impl<'a, P: AsyncModelProvider> AgentTurnRunner<'a, P> {
             ..limits
         };
         let turn_id = turn.turn_id.clone();
-        match tokio::time::timeout(
-            std::time::Duration::from_millis(limits.timeout_ms),
-            mez_agent::run_agent_turn_async_with_limits(
-                &environment,
-                ledger,
-                turn,
-                context,
-                allowed_actions,
-                interaction_kind,
-                limits,
-            ),
-        )
-        .await
-        {
+        // Keep the large lower state machine off each enclosing adapter frame;
+        // adding a deadline projection must not multiply stack storage.
+        let future = Box::pin(mez_agent::run_agent_turn_async_with_limits(
+            &environment,
+            ledger,
+            turn,
+            context,
+            allowed_actions,
+            interaction_kind,
+            limits,
+        ));
+        let allowance = std::time::Duration::from_millis(limits.timeout_ms);
+        let result = match clock {
+            Some(clock) => clock.timeout(allowance, future).await,
+            None => tokio::time::timeout(allowance, future)
+                .await
+                .map_err(|_| ()),
+        };
+        match result {
             Ok(result) => result,
             Err(_) => {
                 ledger.finish_turn(&turn_id, mez_agent::AgentTurnState::Failed)?;

@@ -999,6 +999,45 @@ impl AsyncRuntimeSessionHandle {
             .await?
     }
 
+    /// Adopt scheduler parking and original-key cancellation together. A false
+    /// reply is provably unmutated timer pressure; callers retain and pace the
+    /// same capture. Dropped replies are not authorization or retirement proof.
+    pub(crate) async fn park_budget_provider_claim(
+        &self,
+        agent_id: AgentId,
+        turn_id: String,
+        generation: u64,
+        capture: crate::runtime::RuntimeBudgetHeldAttempt,
+    ) -> Result<bool> {
+        self.request(|reply| AsyncRuntimeRequest::ParkBudgetProviderClaim {
+            agent_id,
+            turn_id,
+            generation,
+            capture,
+            reply,
+        })
+        .await?
+    }
+
+    /// Return true only after fair selection and original timer rearm adoption.
+    /// The original future still needs fresh native authorization before send.
+    pub(crate) async fn reacquire_budget_provider_claim(
+        &self,
+        agent_id: AgentId,
+        turn_id: String,
+        generation: u64,
+        capture: crate::runtime::RuntimeBudgetHeldAttempt,
+    ) -> Result<bool> {
+        self.request(|reply| AsyncRuntimeRequest::ReacquireBudgetProviderClaim {
+            agent_id,
+            turn_id,
+            generation,
+            capture,
+            reply,
+        })
+        .await?
+    }
+
     /// Queues a provider-poll timer when pending provider work exists and no
     /// provider-poll generation is already scheduled.
     pub async fn queue_provider_poll_timer_if_needed(

@@ -3118,6 +3118,88 @@ impl AsyncRuntimeSessionActor {
                 let _ = reply.send(Ok(self.service.agent_turn_is_running(&turn_id)));
                 false
             }
+            AsyncRuntimeRequest::ParkBudgetProviderClaim {
+                agent_id,
+                turn_id,
+                generation,
+                capture,
+                reply,
+            } => {
+                // Two bounded timers (claim cancel and optional provider poll).
+                // No await/interleaving occurs between this conservative reserve
+                // check, service mutation and committed lane adoption.
+                let result = if self.available_committed_side_effect_capacity() < 2 {
+                    Ok(false)
+                } else {
+                    (|| {
+                        let now = crate::runtime::current_unix_millis();
+                        let transition = self.service.park_budget_provider_claim(
+                            &agent_id, &turn_id, generation, capture, now,
+                        )?;
+                        // Mandatory original cancellation precedes ALL fallible
+                        // sibling pumping. A retained sibling refusal cannot
+                        // destroy the parked worker or its timer ownership.
+                        self.admit_committed_side_effects(transition.side_effects)?;
+                        self.service.pump_budget_provider_wait(&turn_id);
+                        self.admit_committed_side_effects(
+                            self.service
+                                .provider_poll_timer_transition(
+                                    self.timers.provider_poll.is_some(),
+                                    now,
+                                    0,
+                                )
+                                .side_effects,
+                        )?;
+                        Ok(true)
+                    })()
+                };
+                let _ = reply.send(result);
+                false
+            }
+            AsyncRuntimeRequest::ReacquireBudgetProviderClaim {
+                agent_id,
+                turn_id,
+                generation,
+                capture,
+                reply,
+            } => {
+                let result = if self.available_committed_side_effect_capacity() < 2 {
+                    Ok(false)
+                } else {
+                    (|| {
+                        let pumped = self.service.try_requeue_budget_provider_claim(
+                            &agent_id, &turn_id, generation, &capture,
+                        )?;
+                        let now = crate::runtime::current_unix_millis();
+                        let ready = pumped
+                            && self
+                                .service
+                                .budget_provider_claim_can_resume(&turn_id, generation);
+                        let mut effects = if ready {
+                            self.service
+                                .resume_budget_provider_claim(
+                                    &agent_id, &turn_id, generation, &capture, now,
+                                )?
+                                .side_effects
+                        } else {
+                            Vec::new()
+                        };
+                        effects.extend(
+                            self.service
+                                .provider_poll_timer_transition(
+                                    self.timers.provider_poll.is_some(),
+                                    now,
+                                    0,
+                                )
+                                .side_effects,
+                        );
+                        self.admit_committed_side_effects(effects)?;
+                        Ok(ready)
+                    })()
+                };
+                let _ = reply.send(result);
+                false
+            }
             AsyncRuntimeRequest::AgentCompactionClaimIsCurrent {
                 pane_id,
                 task_generation,

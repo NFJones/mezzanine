@@ -15,6 +15,10 @@ use mez_agent::token_budget::{BudgetAttemptId, BudgetLimits};
 use receipts::BudgetAttempt;
 use rusqlite::{OptionalExtension, params};
 
+/// Shared bound for native authorization and descriptive wait pacing. A free
+/// slot is not a reservation; the granting transaction must recheck it.
+pub(crate) const MAX_OUTSTANDING_BUDGET_ATTEMPTS: i64 = 4096;
+
 /// Exact independent revisions observed in the granting writer transaction.
 /// Global projection and root override revisions cannot be summed or aliased.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -294,7 +298,7 @@ impl TokenUsageStore {
         }
         // Count the union: a terminal receipt does not retire authorized work.
         let outstanding = receipts::outstanding_attempts(&tx)?;
-        if outstanding >= 4096 {
+        if outstanding >= MAX_OUTSTANDING_BUDGET_ATTEMPTS {
             return Ok(BudgetAttemptAdmission::Held(BudgetAdmissionHold::Capacity));
         }
         let outcome = BudgetAdmissionOutcome {

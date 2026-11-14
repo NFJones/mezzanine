@@ -26,6 +26,9 @@ pub(super) struct ProviderWait {
     generation: u64,
     started_at_ms: u64,
     phase: Phase,
+    // First pump failure remains with this bounded original wait, not a new
+    // recovery source. Failed pumping never permits native reconsideration.
+    pump_failure: Option<MezError>,
 }
 
 impl RuntimeSessionService {
@@ -121,6 +124,7 @@ impl RuntimeSessionService {
                 generation,
                 started_at_ms: now_ms,
                 phase: Phase::Waiting,
+                pump_failure: None,
             },
         );
         self.park_agent_turn_deadline(turn, now_ms);
@@ -134,6 +138,7 @@ impl RuntimeSessionService {
 
     /// A dependency observation only permits requesting fair reacquisition, not
     /// another inference. Queue refusal preserves the original Waiting entry.
+    #[cfg(test)]
     pub(crate) fn requeue_budget_provider_claim(
         &mut self,
         agent: &AgentId,
@@ -141,6 +146,24 @@ impl RuntimeSessionService {
         generation: u64,
         capture: &RuntimeBudgetHeldAttempt,
     ) -> Result<()> {
+        if self.try_requeue_budget_provider_claim(agent, turn, generation, capture)? {
+            Ok(())
+        } else {
+            Err(MezError::invalid_state(
+                "original budget scheduler remains unavailable",
+            ))
+        }
+    }
+
+    /// False preserves the same wait under positively unmutated queue pressure
+    /// or a retained pump refusal. Ownership errors remain errors, not retries.
+    pub(crate) fn try_requeue_budget_provider_claim(
+        &mut self,
+        agent: &AgentId,
+        turn: &str,
+        generation: u64,
+        capture: &RuntimeBudgetHeldAttempt,
+    ) -> Result<bool> {
         self.budget_wait_turn(agent, turn, generation, capture)?;
         let wait = self
             .agent
@@ -150,14 +173,39 @@ impl RuntimeSessionService {
             .filter(|wait| wait.generation == generation && wait.capture.same_capture(capture))
             .ok_or_else(|| MezError::conflict("original budget wait unavailable"))?;
         if wait.phase == Phase::Waiting {
-            self.agent.agent_scheduler.requeue_waiting(turn)?;
+            if let Err(error) = self.agent.agent_scheduler.requeue_waiting(turn) {
+                if error.kind() == mez_agent::SchedulerErrorKind::QueueFull {
+                    return Ok(false);
+                }
+                return Err(error.into());
+            }
             // Exact entry remains present; no external work can run on the actor.
             if let Some(wait) = self.agent.budget_memberships.provider_waits.get_mut(turn) {
                 wait.phase = Phase::Reacquiring;
             }
         }
-        self.start_ready_agent_turns()?;
-        Ok(())
+        Ok(self.pump_budget_provider_wait(turn))
+    }
+
+    /// Sibling startup can fail after mutating its own scheduler state. Keep
+    /// that first cause and refuse this wait's resume until pumping succeeds;
+    /// never drop an already-produced claim-timer cancellation for it.
+    pub(crate) fn pump_budget_provider_wait(&mut self, turn: &str) -> bool {
+        match self.start_ready_agent_turns() {
+            Ok(_) => true,
+            Err(error) => {
+                if let Some(wait) = self.agent.budget_memberships.provider_waits.get_mut(turn)
+                    && wait.pump_failure.is_none()
+                {
+                    eprintln!(
+                        "mezzanine: retained budget scheduler pump refused ({:?})",
+                        error.kind()
+                    );
+                    wait.pump_failure = Some(error);
+                }
+                false
+            }
+        }
     }
 
     /// Called only by the existing scheduler AFTER it selected this work. Return
@@ -242,6 +290,21 @@ impl RuntimeSessionService {
                 delay_ms: remaining,
             }],
         })
+    }
+
+    /// Descriptive fair-selection state, after the caller validated the original
+    /// capture with requeue. This never grants native send authority.
+    pub(crate) fn budget_provider_claim_can_resume(&self, turn: &str, generation: u64) -> bool {
+        !self.agent_turn_is_human_paused(turn)
+            && self
+                .agent
+                .budget_memberships
+                .provider_waits
+                .get(turn)
+                .is_some_and(|wait| {
+                    wait.generation == generation
+                        && matches!(wait.phase, Phase::Ready | Phase::Active)
+                })
     }
 
     pub(crate) fn budget_provider_claim_is_parked(&self, turn: &str, generation: u64) -> bool {

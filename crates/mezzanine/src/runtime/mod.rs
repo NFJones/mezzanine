@@ -225,6 +225,9 @@ pub struct RuntimeSessionService {
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 mod agent;
+pub(crate) use agent::token_budget::admission_work::{
+    RuntimeBudgetAdmissionWork, RuntimeBudgetHeldAttempt,
+};
 pub(crate) use agent::token_budget::auxiliary::RuntimeBudgetAuxiliarySource;
 #[cfg_attr(
     not(test),

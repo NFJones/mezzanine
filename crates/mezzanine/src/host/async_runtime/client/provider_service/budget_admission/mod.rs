@@ -5,7 +5,8 @@
 //! transport boundary. Cancellation/reconciliation never reconstruct permission.
 //! Receipt-only factories remain separate descriptive ports. Configured dispatch
 //! installs this source only when it already owns activated budget membership;
-//! production membership activation, fairness and reversible holds remain staged.
+//! monitored ordinary workers retain that same future through paced holds and
+//! actor-owned timer adoption. Membership activation and auxiliary waits remain staged.
 //! Qualified scoped retirement commits a separate terminal receipt after subtotals,
 //! with unknown dimensions unless independent dialect evidence qualifies them.
 
@@ -25,11 +26,27 @@ use std::sync::{Arc, Mutex};
 /// No descriptor is reconstructed from a result or shared with a later retry.
 pub(super) struct BudgetRequestAdmission {
     owner: RuntimeBudgetRequestOwner,
+    waiter: Option<AsyncRuntimeSessionHandle>,
+    deadline: Option<crate::integrations::agent::provider::budget_deadline::ProviderBudgetDeadline>,
 }
 
 impl BudgetRequestAdmission {
     pub(super) fn new(owner: RuntimeBudgetRequestOwner) -> Self {
-        Self { owner }
+        Self {
+            owner,
+            waiter: None,
+            deadline: None,
+        }
+    }
+
+    pub(super) fn with_waiter(
+        mut self,
+        handle: AsyncRuntimeSessionHandle,
+        deadline: crate::integrations::agent::provider::budget_deadline::ProviderBudgetDeadline,
+    ) -> Self {
+        self.waiter = Some(handle);
+        self.deadline = Some(deadline);
+        self
     }
 }
 
@@ -56,7 +73,11 @@ impl ProviderObservationReceiptSource for BudgetRequestAdmission {
             mez_agent::ModelTokenUsageKey::new(&observation.provider, &observation.model),
             purpose,
         )?;
-        Ok(Arc::new(BudgetAttemptAdmission::new(work)))
+        Ok(Arc::new(BudgetAttemptAdmission::retaining(
+            work,
+            self.waiter.clone(),
+            self.deadline.clone(),
+        )))
     }
 }
 
@@ -89,16 +110,119 @@ struct Phase {
 struct Source {
     work: RuntimeBudgetAttemptWork,
     phase: Mutex<Phase>,
+    waiter: Option<AsyncRuntimeSessionHandle>,
+    deadline: Option<crate::integrations::agent::provider::budget_deadline::ProviderBudgetDeadline>,
+}
+
+fn reconsider_changed_hold(
+    state: &crate::storage::token_usage::budget::admission::BudgetAdmissionWaitState,
+    previous: Option<&crate::storage::token_usage::budget::admission::BudgetAdmissionWaitState>,
+    reason: crate::storage::token_usage::budget::admission::BudgetAdmissionHold,
+) -> bool {
+    use crate::storage::token_usage::budget::admission::{
+        BudgetAdmissionHold, MAX_OUTSTANDING_BUDGET_ATTEMPTS,
+    };
+    // A global count can cycle while this root's monotonic revisions do not.
+    // The previous observation predates this fresh native Capacity refusal,
+    // so equality cannot inhibit a currently available slot forever.
+    state.outstanding_attempts < MAX_OUTSTANDING_BUDGET_ATTEMPTS
+        && (previous != Some(state) || reason == BudgetAdmissionHold::Capacity)
+}
+
+#[cfg(test)]
+mod wait_races;
+
+impl Source {
+    /// Stay inside the original adapter future and journal. Descriptive changes
+    /// or a currently available slot after a fresh Capacity refusal permit fair
+    /// reacquisition, never a send. Polling is paced 100ms..2s and cancellable;
+    /// it never creates a request or retries uncertain native authorization.
+    async fn wait_for_reacquisition(
+        &self,
+        handle: &AsyncRuntimeSessionHandle,
+        owner: &crate::runtime::RuntimeBudgetAdmissionWork,
+        capture: crate::runtime::RuntimeBudgetHeldAttempt,
+        observation: &ProviderWireRequestObservation,
+        reason: crate::storage::token_usage::budget::admission::BudgetAdmissionHold,
+        previous: Option<&crate::storage::token_usage::budget::admission::BudgetAdmissionWaitState>,
+    ) -> Result<crate::storage::token_usage::budget::admission::BudgetAdmissionWaitState> {
+        let agent = AgentId::opaque(observation.agent_id.clone())
+            .ok_or_else(|| suspended("original budget agent unavailable"))?;
+        let generation = observation
+            .claim_generation
+            .ok_or_else(|| suspended("original budget claim unavailable"))?;
+        let mut delay = 100u64;
+        while !handle
+            .park_budget_provider_claim(
+                agent.clone(),
+                observation.turn_id.clone(),
+                generation,
+                capture.clone(),
+            )
+            .await?
+        {
+            tokio::time::sleep(Duration::from_millis(delay)).await;
+            delay = delay.saturating_mul(2).min(2000);
+        }
+        let _inactive = self
+            .deadline
+            .as_ref()
+            .ok_or_else(|| suspended("original budget active clock unavailable"))?
+            .park()?;
+        // Even a repeatedly raced fresh Capacity refusal is paced. This time
+        // belongs to the acknowledged original park, not active execution.
+        tokio::time::sleep(Duration::from_millis(delay)).await;
+        loop {
+            let state = owner.observe_held().await?;
+            // Avoid pointless writer churn while numerically exhausted, while
+            // projection is updating, or finite roots still drain exposure.
+            let may_reconsider = state.limits.is_some_and(|limits| {
+                !limits.input.exhausted(state.known.input)
+                    && !limits.output.exhausted(state.known.output)
+                    && (!limits.requires_serial_inference() || !state.root_outstanding)
+            });
+            if reconsider_changed_hold(&state, previous, reason) && may_reconsider {
+                while !handle
+                    .reacquire_budget_provider_claim(
+                        agent.clone(),
+                        observation.turn_id.clone(),
+                        generation,
+                        capture.clone(),
+                    )
+                    .await?
+                {
+                    tokio::time::sleep(Duration::from_millis(delay)).await;
+                    delay = delay.saturating_mul(2).min(2000);
+                }
+                return Ok(state);
+            }
+            tokio::time::sleep(Duration::from_millis(delay)).await;
+            delay = delay.saturating_mul(2).min(2000);
+        }
+    }
 }
 
 /// One factory per original attempt, never shared as authority for a retry.
 pub(super) struct BudgetAttemptAdmission(Arc<Source>);
 
 impl BudgetAttemptAdmission {
+    #[cfg(test)]
     pub(super) fn new(work: RuntimeBudgetAttemptWork) -> Self {
+        Self::retaining(work, None, None)
+    }
+
+    fn retaining(
+        work: RuntimeBudgetAttemptWork,
+        waiter: Option<AsyncRuntimeSessionHandle>,
+        deadline: Option<
+            crate::integrations::agent::provider::budget_deadline::ProviderBudgetDeadline,
+        >,
+    ) -> Self {
         Self(Arc::new(Source {
             work,
             phase: Mutex::new(Phase::default()),
+            waiter,
+            deadline,
         }))
     }
 
@@ -188,13 +312,42 @@ impl ProviderObservationReceiptFactory for BudgetAttemptAdmission {
                 }
                 phase.started = true;
             }
-            let admission = self
-                .0
-                .work
-                .admission_owner()
+            let owner = self.0.work.admission_owner();
+            let mut admission = owner
                 .claim()
                 .await
                 .map_err(|_| suspended("original budget authorization unavailable"))?;
+            let mut previous = None;
+            while let RuntimeBudgetAttemptAdmission::Held(reason) = &admission {
+                use crate::storage::token_usage::budget::admission::BudgetAdmissionHold;
+                let Some(handle) = &self.0.waiter else { break };
+                if *reason == BudgetAdmissionHold::RegistrationOnly {
+                    break;
+                }
+                let capture = owner
+                    .capture_held()
+                    .await
+                    .map_err(|_| suspended("original budget hold custody unavailable"))?;
+                previous = Some(
+                    self.0
+                        .wait_for_reacquisition(
+                            handle,
+                            &owner,
+                            capture,
+                            observation,
+                            *reason,
+                            previous.as_ref(),
+                        )
+                        .await
+                        .map_err(|_| suspended("original budget wait unavailable"))?,
+                );
+                // Fair selection and actor timer adoption precede this exact
+                // original positive hold's fresh native authorization.
+                admission = owner
+                    .retry_held()
+                    .await
+                    .map_err(|_| suspended("original budget reconsideration unavailable"))?;
+            }
             let RuntimeBudgetAttemptAdmission::Authorized(permit) = admission else {
                 return Err(suspended(
                     "original budget authorization held or already issued",

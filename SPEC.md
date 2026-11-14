@@ -16722,7 +16722,22 @@ The host MUST adopt cancellation/rearming of the original claim deadline before
 resuming that future, then obtain fresh native authorization. Old timer callbacks
 MUST NOT shorten its remaining active lease. Overlapping inactive periods MUST
 be excluded once, and budget release MUST NOT clear independent human pause.
-These staged runtime ports alone do not enable host waiting or budget activation.
+These staged runtime ports alone do not enable budget activation. A monitored
+ordinary worker with an already activated membership MUST retain its original
+future at a positive hold, adopt claim cancellation/rearm on the actor, and use
+cancellable read-only checks paced from 100ms up to 2s. Only changed descriptive
+policy/accounting/exposure/capacity state may trigger another reconsideration of
+the same positive hold after fair reacquisition. A fresh native Capacity refusal
+MAY also be reconsidered after a paced read shows a free global slot: counts can
+cycle without changing that root's revisions. A descriptive read never reserves
+capacity or authorizes a send. Registration-only evidence MUST NOT be retried as
+authorization. The original runner MUST exclude only its acknowledged parked
+interval from its finite active allowance; release MUST NOT grant fresh time.
+Mandatory claim cancellation MUST be adopted before fallible sibling pumping;
+queue pressure or retained pump failure MUST NOT destroy the held producer.
+Stop MUST retire that original producer and journal without a send. This
+connection does not activate memberships or qualify
+turn-less auxiliary waiting, human Resume, or root-wide effect inhibition.
 An installed request-owned receipt source MUST allocate a distinct original
 descriptor for each concrete exchange, including adapter-internal retries. The
 plan and journal MUST retain the exact selected factory before authorization;
